@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
 import type { SessionMeta } from '@agentistics/core'
-import { teamDocId, toTeamDoc, fromTeamDoc, parseIngestBody } from './team-store'
+import { teamDocId, toTeamDoc, fromTeamDoc, parseIngestBody, stampCiSessions } from './team-store'
 
 function session(id: string, harness: SessionMeta['harness'] = 'claude'): SessionMeta {
   return {
@@ -51,6 +51,83 @@ test('round-trip toTeamDoc→fromTeamDoc preserves the session fields', () => {
   expect(meta.project_path).toBe(s.project_path)
 })
 
+test('toTeamDoc redacts a credential pasted into first_prompt (central-side defence)', () => {
+  // The exact shape that leaked in production: a connection string as the opening message.
+  const s = { ...session('s1'), first_prompt: 'MONGO_URL=mongodb+srv://appuser:s3cr3tP4ssw0rd@cluster.mongodb.net/db' }
+  const doc = toTeamDoc(s, 'acme', 'm1', 'devA')
+  expect(doc.first_prompt).not.toContain('s3cr3tP4ssw0rd')
+  expect(doc.first_prompt).toContain('[REDACTED]')
+  // The host survives, so the session is still recognisable in a list.
+  expect(doc.first_prompt).toContain('cluster.mongodb.net')
+  expect(s.first_prompt).toContain('s3cr3tP4ssw0rd') // input not mutated
+})
+
+test('toTeamDoc redacts the session title too', () => {
+  // Assembled at runtime: a token-shaped literal in a committed file trips GitHub push protection.
+  const tok = ['ghp', '_', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0123456789'].join('')
+  const s = { ...session('s1'), title: `debug ${tok} failure` }
+  expect(toTeamDoc(s, 'acme', 'm1', 'devA').title).not.toContain(tok)
+})
+
+test('toTeamDoc leaves an ordinary prompt exactly as it was', () => {
+  const s = { ...session('s1'), first_prompt: 'reduce token usage, input_tokens=123' }
+  expect(toTeamDoc(s, 'acme', 'm1', 'devA').first_prompt).toBe('reduce token usage, input_tokens=123')
+})
+
+// --- timestamps: BSON Dates in Mongo, ISO strings on the wire -------------------------------
+
+test('toTeamDoc stores timestamps as BSON Dates, never as strings', () => {
+  const s = session('s1')
+  s.start_time = '2026-06-01T10:00:00.000Z'
+  s.end_time = '2026-06-01T11:30:00.000Z'
+  s.user_message_timestamps = ['2026-06-01T10:05:00.000Z', '2026-06-01T10:20:00.000Z']
+  const doc = toTeamDoc(s, 'acme', 'm1', 'devA')
+  expect(doc.start_time).toBeInstanceOf(Date)
+  expect(doc.end_time).toBeInstanceOf(Date)
+  expect(doc.start_time!.toISOString()).toBe('2026-06-01T10:00:00.000Z')
+  expect(doc.user_message_timestamps).toHaveLength(2)
+  for (const t of doc.user_message_timestamps) expect(t).toBeInstanceOf(Date)
+})
+
+test('an unknown start_time is stored as null, not as an empty string posing as a date', () => {
+  const s = session('s1')
+  s.start_time = '' // adapters report '' when the harness gave them no start time
+  expect(toTeamDoc(s, 'acme', 'm1', 'devA').start_time).toBeNull()
+})
+
+test('a session with no end_time leaves the field ABSENT rather than writing null on every doc', () => {
+  const doc = toTeamDoc(session('s1'), 'acme', 'm1', 'devA')
+  expect('end_time' in doc).toBe(false)
+})
+
+test('round-trip preserves every timestamp exactly, back as ISO strings', () => {
+  const s = session('s1')
+  s.start_time = '2026-06-01T10:00:00.000Z'
+  s.end_time = '2026-06-01T11:30:00.000Z'
+  s.user_message_timestamps = ['2026-06-01T10:05:00.000Z']
+  const meta = fromTeamDoc(toTeamDoc(s, 'acme', 'm1', 'devA'))
+  expect(meta.start_time).toBe(s.start_time)
+  expect(meta.end_time).toBe(s.end_time)
+  expect(meta.user_message_timestamps).toEqual(s.user_message_timestamps)
+})
+
+test('fromTeamDoc reads a LEGACY doc whose dates are still strings', () => {
+  // A doc written before the migration, or by an older central in a mixed-version fleet, must
+  // read identically — otherwise the dashboard renders "Invalid Date" for that member.
+  const legacy = { ...toTeamDoc(session('s1'), 'acme', 'm1', 'devA'), start_time: '2026-06-01T10:00:00.000Z' }
+  expect(fromTeamDoc(legacy).start_time).toBe('2026-06-01T10:00:00.000Z')
+})
+
+test('fromTeamDoc survives a PROJECTED doc that omits the date fields', () => {
+  // loadTagSessionsFromMongo projects a narrow field set; the omitted timestamps must not throw.
+  const { start_time, end_time, user_message_timestamps, ...projected } =
+    toTeamDoc(session('s1'), 'acme', 'm1', 'devA')
+  void start_time; void end_time; void user_message_timestamps
+  const meta = fromTeamDoc(projected)
+  expect(meta.start_time).toBe('')
+  expect(meta.user_message_timestamps).toEqual([])
+})
+
 test('parseIngestBody accepts a valid body', () => {
   const raw = { org: 'acme', user: 'devA', sessions: [session('s1')] }
   const r = parseIngestBody(raw)
@@ -86,4 +163,26 @@ test('parseIngestBody rejects a non-array sessions field', () => {
 test('parseIngestBody rejects a session without a session_id', () => {
   const r = parseIngestBody({ org: 'acme', user: 'devA', sessions: [{ harness: 'claude' }] })
   expect(r.ok).toBe(false)
+})
+
+test('stampCiSessions sets git_remote + ci without mutating input', () => {
+  const s = session('s1')
+  const [out] = stampCiSessions([s], 'github.com/org/repo', true)
+  expect(out!.git_remote).toBe('github.com/org/repo')
+  expect(out!.ci).toBe(true)
+  // original untouched
+  expect(s.git_remote).toBeUndefined()
+  expect(s.ci).toBeUndefined()
+})
+
+test('stampCiSessions overrides whatever the runner reported', () => {
+  const s = { ...session('s1'), git_remote: 'github.com/attacker/evil', ci: false }
+  const [out] = stampCiSessions([s], 'github.com/org/repo', true)
+  expect(out!.git_remote).toBe('github.com/org/repo')
+  expect(out!.ci).toBe(true)
+})
+
+test('stampCiSessions with no repo and no ci is a passthrough (same ref)', () => {
+  const arr = [session('s1')]
+  expect(stampCiSessions(arr, undefined, false)).toBe(arr)
 })

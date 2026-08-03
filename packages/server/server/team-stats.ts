@@ -17,7 +17,9 @@ interface MemberStatsDoc {
   org: string
   user: string       // cached display name (read-time resolution overrides for the dashboard)
   statsCache: StatsCache
-  updatedAt: string
+  /** BSON Date — see mongo-dates.ts. Not read by any consumer today; kept as an operational
+   *  freshness marker, which is precisely the kind of field that must be queryable. */
+  updatedAt: Date
 }
 
 async function statsCol() {
@@ -30,7 +32,7 @@ export async function upsertMemberStats(org: string, memberId: string, user: str
   const col = await statsCol()
   await col.replaceOne(
     { _id: memberId },
-    { org, user, statsCache, updatedAt: new Date().toISOString() },
+    { org, user, statsCache, updatedAt: new Date() },
     { upsert: true },
   )
 }

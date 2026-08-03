@@ -2,8 +2,21 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Users, Plus, Trash2, Copy, CheckCheck, RefreshCw, AlertCircle, Pencil, Check, X, RotateCw } from 'lucide-react'
 import type { MemberPresence } from '@agentistics/core'
 import { copyText } from '../lib/clipboard'
+import { useIsMobile } from '../hooks/useIsMobile'
 
-// ── Types ──────────────────────────────────────────────────────────────────
+/** Shared 5-column grid for the desktop members table (status · user · label · last-seen · actions).
+ *  minmax(0,…) lets the flexible columns actually shrink so long values ellipsize instead of
+ *  forcing overflow — the root cause of the cramped desktop layout. */
+const GRID_COLS = 'auto minmax(0, 1.5fr) minmax(0, 1fr) auto auto'
+
+/** Small uppercase field label prefixed to each value on the mobile stacked-card layout,
+ *  standing in for the (hidden) table header. */
+const mobileFieldLabel: React.CSSProperties = {
+  fontSize: 9.5, fontWeight: 700, color: 'var(--text-tertiary)',
+  letterSpacing: '0.06em', textTransform: 'uppercase', flexShrink: 0,
+}
+
+// Types
 
 export interface TeamMember {
   id: string
@@ -15,7 +28,7 @@ export interface TeamMember {
   latencyMs?: number | null
 }
 
-// ── i18n ──────────────────────────────────────────────────────────────────
+// i18n
 
 const COPY = {
   title:           { en: 'Members (central admin)',               pt: 'Membros (admin central)' },
@@ -59,14 +72,19 @@ const COPY = {
   revokeConfirmTitle: { en: 'Remove this machine?',              pt: 'Remover esta máquina?' },
   revokeConfirmBody:  { en: 'This revokes the token and deletes ALL of this machine\'s data on the central. The machine will be disconnected.', pt: 'Isso revoga o token e apaga TODOS os dados dessa máquina na central. A máquina será desconectada.' },
   rotateConfirmTitle: { en: 'Rotate token?',                     pt: 'Rotacionar token?' },
-  rotateConfirmBody:  { en: 'This machine\'s current token stops working; it will need the new token. History is preserved.', pt: 'O token atual desta máquina para de funcionar; ela precisará do novo token. O histórico é preservado.' },
+  // Says what a rotation does AND what it costs. "History is preserved" alone was true of the
+  // sessions and silently false of the machine's identity: memberId is derived from the token, so
+  // to the account's other machines the rotated machine is a machine they have never seen — they
+  // pin its key on first sight and announce it, by design. Any sealed message still waiting for
+  // the old identity cannot be re-addressed (the recipient is inside the seal) and is dropped.
+  rotateConfirmBody:  { en: 'This machine\'s current token stops working; it will need the new token. History is preserved — sessions, stats, workflows and tags move with it. Its identity here is derived from the token, so the account\'s other machines will see it as a new machine and announce it; any sealed message still waiting for it is lost.', pt: 'O token atual desta máquina para de funcionar; ela precisará do novo token. O histórico é preservado — sessões, estatísticas, workflows e tags acompanham a máquina. A identidade dela aqui vem do token, então as outras máquinas da conta a verão como uma máquina nova e a anunciarão; qualquer mensagem selada ainda à espera dela é perdida.' },
 } satisfies Record<string, { en: string; pt: string }>
 
 function t(key: keyof typeof COPY, lang: 'en' | 'pt'): string {
   return COPY[key][lang]
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// Helpers
 
 function relativeTime(isoStr: string, lang: 'en' | 'pt'): string {
   const diff = Date.now() - new Date(isoStr).getTime()
@@ -87,7 +105,7 @@ function relativeTime(isoStr: string, lang: 'en' | 'pt'): string {
   return 'just now'
 }
 
-// ── Main component ────────────────────────────────────────────────────────
+// Main component
 
 interface Props {
   lang: 'en' | 'pt'
@@ -98,6 +116,7 @@ interface Props {
 }
 
 export function TeamMembers({ lang, presence }: Props) {
+  const isMobile = useIsMobile()
   const [members, setMembers] = useState<TeamMember[]>([])
   const [loading, setLoading] = useState(true)
   const [loadErr, setLoadErr] = useState<string | null>(null)
@@ -403,6 +422,7 @@ export function TeamMembers({ lang, presence }: Props) {
         </div>
       )}
 
+
       {/* Load error */}
       {loadErr && (
         <div style={{
@@ -424,21 +444,23 @@ export function TeamMembers({ lang, presence }: Props) {
           overflow: 'hidden',
           marginBottom: 20,
         }}>
-          {/* Table header */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'auto 1.2fr 1fr 1fr auto',
-            gap: 0,
-            background: 'var(--bg-elevated)',
-            borderBottom: '1px solid var(--border)',
-            padding: '7px 12px',
-          }}>
-            {[t('status', lang), t('user', lang), t('label', lang), t('lastSeen', lang), ''].map((h, i) => (
-              <div key={i} style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-                {h}
-              </div>
-            ))}
-          </div>
+          {/* Table header — desktop only; on mobile each row becomes a self-labelled card. */}
+          {!isMobile && (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: GRID_COLS,
+              columnGap: 14,
+              background: 'var(--bg-elevated)',
+              borderBottom: '1px solid var(--border)',
+              padding: '7px 12px',
+            }}>
+              {[t('status', lang), t('user', lang), t('label', lang), t('lastSeen', lang), ''].map((h, i) => (
+                <div key={i} style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                  {h}
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Rows */}
           {loading ? (
@@ -460,11 +482,10 @@ export function TeamMembers({ lang, presence }: Props) {
               <div
                 key={m.id}
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'auto 1.2fr 1fr 1fr auto',
-                  gap: 0,
-                  alignItems: 'center',
-                  padding: '9px 12px',
+                  ...(isMobile
+                    ? { display: 'flex', flexDirection: 'column', gap: 8 }
+                    : { display: 'grid', gridTemplateColumns: GRID_COLS, columnGap: 14, alignItems: 'center' }),
+                  padding: isMobile ? '12px 12px' : '9px 12px',
                   borderBottom: i < members.length - 1 ? '1px solid var(--border)' : 'none',
                   background: 'var(--bg-card)',
                   transition: 'background 0.1s',
@@ -584,20 +605,23 @@ export function TeamMembers({ lang, presence }: Props) {
                   </div>
                 )}
 
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: 8 }}>
-                  {m.label}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, fontSize: 12, color: 'var(--text-secondary)', paddingRight: isMobile ? 0 : 8 }}>
+                  {isMobile && <span style={mobileFieldLabel}>{t('label', lang)}</span>}
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{m.label}</span>
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', paddingRight: 8 }}>
-                  {m.lastSeenAt ? relativeTime(m.lastSeenAt, lang) : t('never', lang)}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-tertiary)', paddingRight: isMobile ? 0 : 8, whiteSpace: 'nowrap' }}>
+                  {isMobile && <span style={mobileFieldLabel}>{t('lastSeen', lang)}</span>}
+                  <span>{m.lastSeenAt ? relativeTime(m.lastSeenAt, lang) : t('never', lang)}</span>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: isMobile ? 'stretch' : 'flex-end', marginTop: isMobile ? 4 : 0 }}>
                   <button
                     onClick={() => { setRotateErr(null); setConfirmRotateId(m.id) }}
                     disabled={rotating[m.id] || renamingId === m.id}
                     title={t('rotate', lang)}
                     style={{
-                      display: 'flex', alignItems: 'center', gap: 4,
-                      padding: '4px 8px', borderRadius: 6,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                      flex: isMobile ? 1 : undefined,
+                      padding: isMobile ? '8px 8px' : '4px 8px', borderRadius: 6,
                       border: '1px solid var(--border)',
                       background: 'transparent',
                       color: rotating[m.id] || renamingId === m.id ? 'var(--text-tertiary)' : 'var(--text-secondary)',
@@ -617,8 +641,9 @@ export function TeamMembers({ lang, presence }: Props) {
                     disabled={revoking[m.id] || renamingId === m.id}
                     title={t('revoke', lang)}
                     style={{
-                      display: 'flex', alignItems: 'center', gap: 4,
-                      padding: '4px 8px', borderRadius: 6,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                      flex: isMobile ? 1 : undefined,
+                      padding: isMobile ? '8px 8px' : '4px 8px', borderRadius: 6,
                       border: '1px solid rgba(239,68,68,0.3)',
                       background: 'rgba(239,68,68,0.06)',
                       color: revoking[m.id] || renamingId === m.id ? 'var(--text-tertiary)' : '#ef4444',
@@ -689,7 +714,7 @@ export function TeamMembers({ lang, presence }: Props) {
       </div>
 
       <form onSubmit={e => { void handleMint(e) }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10, marginBottom: 10 }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 4 }}>
               {t('userLabel', lang)}
@@ -872,7 +897,7 @@ export function TeamMembers({ lang, presence }: Props) {
   )
 }
 
-// ── Confirmation modal ──────────────────────────────────────────────────────
+// Confirmation modal
 
 interface ConfirmModalProps {
   title: string

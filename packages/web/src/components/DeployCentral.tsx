@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
 import { Server, Copy, CheckCheck, AlertTriangle, Terminal, RefreshCw } from 'lucide-react'
+import { useIsMobile } from '../hooks/useIsMobile'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// Types
 
 interface DeployResult {
   env: string
@@ -10,7 +11,7 @@ interface DeployResult {
 
 type OsPlatform = 'linux' | 'macos' | 'windows'
 
-// ── Static autostart snippets (member-side, keep local agentop running) ───────
+// Static autostart snippets (member-side, keep local agentop running)
 // NOTE: The server-side counterpart is autostartSnippet() in
 // packages/server/server/deploy.ts — keep them in sync when content changes.
 
@@ -75,10 +76,11 @@ const DEFAULT_EXEC_PATH: Record<OsPlatform, string> = {
   windows: 'agentop',
 }
 
-// ── Small helpers ─────────────────────────────────────────────────────────────
+// Small helpers
 
 function CopyBlock({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false)
+  const isMobile = useIsMobile()
 
   function copy() {
     void navigator.clipboard.writeText(text).then(() => {
@@ -106,7 +108,8 @@ function CopyBlock({ text, label }: { text: string; label?: string }) {
       }}>
         <pre style={{
           margin: 0,
-          padding: '10px 44px 10px 12px',
+          // No room for a floating button on a phone — the copy control moves below the block.
+          padding: isMobile ? '10px 12px' : '10px 44px 10px 12px',
           fontSize: 11.5,
           fontFamily: 'monospace',
           color: 'var(--text-primary)',
@@ -121,17 +124,22 @@ function CopyBlock({ text, label }: { text: string; label?: string }) {
           onClick={copy}
           title={copied ? 'Copied!' : 'Copy'}
           style={{
-            position: 'absolute', top: 8, right: 8,
             background: 'var(--bg-elevated)',
             border: '1px solid var(--border)',
-            borderRadius: 6,
             cursor: 'pointer',
             color: copied ? 'var(--accent-green)' : 'var(--text-tertiary)',
-            display: 'flex', alignItems: 'center', padding: '3px 5px',
+            display: 'flex', alignItems: 'center',
             transition: 'color 0.15s',
+            fontFamily: 'inherit', fontSize: 12, fontWeight: 600, gap: 6,
+            ...(isMobile
+              // Full-width control under the block: copying is the actual task on a phone, and a
+              // 19px floating icon is unhittable.
+              ? { width: '100%', minHeight: 44, justifyContent: 'center', borderRadius: '0 0 8px 8px', borderWidth: '1px 0 0' }
+              : { position: 'absolute' as const, top: 8, right: 8, borderRadius: 6, padding: '3px 5px' }),
           }}
         >
           {copied ? <CheckCheck size={13} /> : <Copy size={13} />}
+          {isMobile && (copied ? 'Copied' : 'Copy')}
         </button>
       </div>
     </div>
@@ -147,6 +155,7 @@ function InputField({
   placeholder?: string
   type?: string
 }) {
+  const isMobile = useIsMobile()
   return (
     <div style={{ flex: 1 }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 4 }}>
@@ -159,11 +168,12 @@ function InputField({
         placeholder={placeholder}
         style={{
           width: '100%', boxSizing: 'border-box',
-          padding: '7px 10px',
+          padding: isMobile ? '10px 10px' : '7px 10px',
           background: 'var(--bg-elevated)',
           border: '1px solid var(--border)',
           borderRadius: 7,
-          fontSize: 13, fontFamily: 'monospace',
+          // 16px minimum on mobile: below it, iOS Safari auto-zooms the viewport on focus.
+          fontSize: isMobile ? 16 : 13, fontFamily: 'monospace',
           color: 'var(--text-primary)',
           outline: 'none',
         }}
@@ -174,7 +184,7 @@ function InputField({
   )
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+// Main component
 
 export function DeployCentral({ pt }: { pt: boolean }) {
   const [org, setOrg] = useState('default')
@@ -235,8 +245,8 @@ export function DeployCentral({ pt }: { pt: boolean }) {
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
             {pt
-              ? 'Gera um central.env com senha e segredo de sessão únicos + o comando para subir o Docker.'
-              : 'Generates a central.env with a one-time password + session secret and the command to start Docker.'}
+              ? 'Gera um central.env com um segredo de sessão único + o comando para subir o Docker. A conta de owner é criada no navegador, no primeiro acesso.'
+              : 'Generates a central.env with a one-time session secret and the command to start Docker. The owner account is created in the browser on first access.'}
           </div>
         </div>
       </div>
@@ -311,8 +321,8 @@ export function DeployCentral({ pt }: { pt: boolean }) {
             <AlertTriangle size={14} style={{ color: '#f97316', flexShrink: 0, marginTop: 1 }} />
             <div style={{ fontSize: 12, color: '#f97316', lineHeight: 1.5, fontWeight: 500 }}>
               {pt
-                ? 'Este central.env contém uma senha e um segredo de sessão gerados uma única vez. Salve-os agora — eles não serão exibidos novamente.'
-                : 'This central.env contains a one-time generated password and session secret. Save them now — they will not be shown again.'}
+                ? 'Este central.env contém um segredo de sessão gerado uma única vez. Salve-o agora — ele não será exibido novamente. Ao subir, o central imprime no log um token de setup de uso único: use-o no navegador para criar a conta de owner.'
+                : 'This central.env contains a one-time generated session secret. Save it now — it will not be shown again. On first boot the central prints a one-time setup token to its log: use it in the browser to create the owner account.'}
             </div>
           </div>
 

@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
-import { lastActivityMs, isLive, LIVE_THRESHOLD_MIN } from './sessionLive'
-import type { SessionMeta } from '@agentistics/core'
+import { lastActivityMs, isLive, LIVE_THRESHOLD_MIN, liveEmptyNotice } from './sessionLive'
+import type { LiveUnavailableReason, SessionMeta } from '@agentistics/core'
 
 function base(over: Partial<SessionMeta>): SessionMeta {
   return {
@@ -34,4 +34,51 @@ test('isLive true within threshold, false outside', () => {
   const deadS = base({ end_time: '2026-07-07T11:30:00Z' })
   expect(isLive(liveS, now, LIVE_THRESHOLD_MIN)).toBe(true)
   expect(isLive(deadS, now, LIVE_THRESHOLD_MIN)).toBe(false)
+})
+
+// --- what an empty "Open now" is allowed to claim ------------------------------------------------
+
+const ALL_REASONS: LiveUnavailableReason[] =
+  ['not-linux', 'no-proc', 'container-isolated', 'permission-denied', 'capability-off']
+
+test('a non-empty panel says nothing', () => {
+  expect(liveEmptyNotice({ count: 1, lang: 'en' })).toBeNull()
+  expect(liveEmptyNotice({ count: 3, lang: 'pt', unavailable: 'no-proc' })).toBeNull()
+})
+
+test('an empty panel with detection working says only that nothing is open', () => {
+  const en = liveEmptyNotice({ count: 0, lang: 'en' })
+  expect(en).toEqual({ title: 'No sessions open right now.', detail: '' })
+  expect(liveEmptyNotice({ count: 0, lang: 'pt' })?.detail).toBe('')
+})
+
+test('every impossible configuration explains itself in both languages, and none is a bare zero', () => {
+  let checked = 0
+  for (const reason of ALL_REASONS) {
+    const en = liveEmptyNotice({ count: 0, lang: 'en', unavailable: reason })
+    const pt = liveEmptyNotice({ count: 0, lang: 'pt', unavailable: reason })
+    expect(en).not.toBeNull()
+    expect(pt).not.toBeNull()
+    // It must never read as "nobody is working" — that is the whole point of the branch.
+    expect(en!.title).not.toBe('No sessions open right now.')
+    expect(en!.detail.length).toBeGreaterThan(30)
+    expect(pt!.detail.length).toBeGreaterThan(30)
+    // Genuinely translated, not the English string twice.
+    expect(pt!.detail).not.toBe(en!.detail)
+    expect(pt!.title).not.toBe(en!.title)
+    checked++
+  }
+  // Guards the loop: a reason added to the union without copy must fail here, not pass silently.
+  expect(checked).toBe(ALL_REASONS.length)
+  expect(checked).toBe(5)
+})
+
+test('a central explains the member channel instead of its own host', () => {
+  // Its own /proc is irrelevant there, so the reason must not leak into the sentence.
+  const en = liveEmptyNotice({ count: 0, lang: 'en', central: true, unavailable: 'container-isolated' })
+  expect(en!.title).toContain('No machine is reporting')
+  expect(en!.detail).toContain('does not share')
+  expect(en!.detail).not.toContain('pid: host')
+  const pt = liveEmptyNotice({ count: 0, lang: 'pt', central: true })
+  expect(pt!.detail).toContain('não compartilha')
 })

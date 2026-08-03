@@ -1,4 +1,5 @@
-import type { SessionMeta } from '@agentistics/core'
+import type { SessionMeta, TurnEvent } from '@agentistics/core'
+import { activeMinutesOf } from '@agentistics/core'
 
 /** Pure: parse a Copilot events.jsonl string into a normalized SessionMeta.
  *  Returns null when the content has no usable lines. */
@@ -30,6 +31,12 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
 
   const userMessageTimestamps: string[] = []
   const messageHours: number[] = []
+  // Per-turn timeline for computeActiveTime() (docs/harness-contract.md). Copilot brackets every
+  // turn itself: `assistant.turn_start` opens one, `assistant.turn_end` closes it, and an `abort` /
+  // `session.shutdown` closes one the CLI never got to end. The bracket span IS the measurement, so
+  // it is expressed as open/close markers and computeActiveTime does the arithmetic — computing the
+  // span here too would be a second source of truth for one number.
+  const turnEvents: TurnEvent[] = []
 
   for (const raw of lines) {
     let e: any
@@ -42,6 +49,12 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     if (ts) {
       if (!startTime) startTime = ts
       endTime = ts
+    }
+    let turnEvent: TurnEvent | null = null
+    const tsMs = ts ? Date.parse(ts) : NaN
+    if (!Number.isNaN(tsMs)) {
+      turnEvent = { ts: tsMs }
+      turnEvents.push(turnEvent)
     }
 
     if (type === 'session.start') {
@@ -56,7 +69,7 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
       userMessages++
       if (ts) {
         userMessageTimestamps.push(ts)
-        messageHours.push(new Date(ts).getUTCHours())
+        messageHours.push(new Date(ts).getHours())
       }
       // Capture first user prompt
       if (!firstPrompt && typeof data.content === 'string') {
@@ -64,8 +77,16 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
       }
     } else if (type === 'assistant.turn_start') {
       assistantTurns++
+      if (turnEvent) turnEvent.userPrompt = true
+    } else if (type === 'assistant.turn_end') {
+      if (turnEvent) turnEvent.turnEnd = true
     } else if (type === 'session.info') {
       if (data.infoType === 'mcp') usesMcp = true
+    } else if (type === 'abort') {
+      // The turn ended here even though no turn_end was written (the user aborted it). Without
+      // this the open turn would run to the last line of the file, which can be hours of idle —
+      // measured on a real session: aborted at 20:13:05, file ends 23:34.
+      if (turnEvent) turnEvent.turnEnd = true
     } else if (type === 'session.error') {
       toolErrors++
     } else if (type === 'mcp.tool_call') {
@@ -74,6 +95,8 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
         mcpToolNamesSet.add(data.toolName)
       }
     } else if (type === 'session.shutdown') {
+      // The CLI exited: any turn still open ended here, not at whatever line closes the file.
+      if (turnEvent) turnEvent.turnEnd = true
       // Extract per-model token metrics — sum across all models present
       const modelMetrics = data.modelMetrics
       if (modelMetrics && typeof modelMetrics === 'object') {
@@ -112,6 +135,7 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     start_time: startTime || endTime || '',
     end_time: endTime || undefined,
     duration_minutes: durationMinutes,
+    active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
     assistant_message_count: assistantTurns,
     tool_counts: {},
@@ -144,4 +168,49 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     mcp_tool_call_count: mcpToolCallCount,
     mcp_tool_names: mcpToolNamesSet.size > 0 ? Array.from(mcpToolNamesSet) : undefined,
   }
+}
+
+/** The flat `key: value` block Copilot writes next to each session's events. Not YAML in general —
+ *  every value here is a scalar on one line — so a hand-rolled reader avoids a dependency and
+ *  cannot be tripped by nested structures it would not know what to do with anyway. */
+export interface CopilotWorkspace {
+  cwd?: string
+  /** `owner/name` as GitHub reports it. */
+  repository?: string
+  /** `github` for github.com; anything else is an enterprise host we cannot name from here. */
+  hostType?: string
+  branch?: string
+  /** Session name. Copilot auto-generates one (`user_named: false`) unless the user renamed it. */
+  name?: string
+}
+
+export function parseCopilotWorkspace(text: string): CopilotWorkspace {
+  const out: CopilotWorkspace = {}
+  for (const line of text.split('\n')) {
+    const sep = line.indexOf(':')
+    if (sep <= 0 || line.startsWith(' ') || line.startsWith('#')) continue
+    const key = line.slice(0, sep).trim()
+    let value = line.slice(sep + 1).trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    }
+    if (!value) continue
+    switch (key) {
+      case 'cwd': out.cwd = value; break
+      case 'repository': out.repository = value; break
+      case 'host_type': out.hostType = value; break
+      case 'branch': out.branch = value; break
+      case 'name': out.name = value; break
+      default: break
+    }
+  }
+  return out
+}
+
+/** `repository` + `host_type` → the same protocol-less key every other harness is grouped by.
+ *  Only github.com can be named with confidence; an enterprise host is not recorded here, and
+ *  guessing one would file the sessions under a repo that does not exist. */
+export function copilotGitRemote(ws: CopilotWorkspace): string | undefined {
+  if (!ws.repository || ws.hostType !== 'github') return undefined
+  return `github.com/${ws.repository}`
 }

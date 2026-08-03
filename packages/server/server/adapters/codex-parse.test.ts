@@ -30,8 +30,10 @@ test('parses a codex rollout (real envelope format) into a SessionMeta', () => {
   expect(s!._source).toBe('jsonl')
   // first_prompt = text of the first user_message
   expect(s!.first_prompt).toBe('hi')
-  // message_hours: user_message at 18:25:53Z (hour=18) + agent_message at 18:25:55Z (hour=18)
-  expect(s!.message_hours).toEqual([18, 18])
+  // message_hours: user_message at 18:25:53Z + agent_message at 18:25:55Z, bucketed on the LOCAL
+  // clock (same convention as the Claude pipeline), so the expected hour follows the host's zone.
+  const localHour = new Date('2026-05-25T18:25:53.000Z').getHours()
+  expect(s!.message_hours).toEqual([localHour, localHour])
   // user_message_timestamps: only the user_message line
   expect(s!.user_message_timestamps).toEqual(['2026-05-25T18:25:53.000Z'])
 })

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, formatModel, getModelColor, formatProjectName, setHomeDir, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches } from './types'
+import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, projectFolder, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName, canonicalProjectPath, HARNESS_ORDER } from './types'
 import type { ModelUsage, StatsCache } from './types'
 
 describe('mergeStatsCaches', () => {
@@ -46,7 +46,7 @@ describe('mergeStatsCaches', () => {
   })
 })
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// Helpers
 
 function usage(overrides: Partial<ModelUsage> = {}): ModelUsage {
   return {
@@ -60,7 +60,7 @@ function usage(overrides: Partial<ModelUsage> = {}): ModelUsage {
   }
 }
 
-// ── getModelPrice ─────────────────────────────────────────────────────────────
+// getModelPrice
 
 describe('getModelPrice', () => {
   test('retorna preço exato para modelo conhecido', () => {
@@ -102,7 +102,7 @@ describe('getModelPrice', () => {
   })
 })
 
-// ── calcCost ──────────────────────────────────────────────────────────────────
+// calcCost
 
 describe('calcCost', () => {
   test('zero tokens → custo zero', () => {
@@ -153,7 +153,7 @@ describe('calcCost', () => {
   })
 })
 
-// ── formatModel ───────────────────────────────────────────────────────────────
+// formatModel
 
 describe('formatModel', () => {
   test('retorna nome legível para modelos conhecidos', () => {
@@ -167,7 +167,7 @@ describe('formatModel', () => {
   })
 })
 
-// ── getModelColor ─────────────────────────────────────────────────────────────
+// getModelColor
 
 describe('getModelColor', () => {
   test('opus tem cor âmbar', () => {
@@ -187,31 +187,50 @@ describe('getModelColor', () => {
   })
 })
 
-// ── formatProjectName ─────────────────────────────────────────────────────────
+// formatProjectName
 
 describe('formatProjectName', () => {
   test('retorna "Unknown" para string vazia', () => {
-    setHomeDir('')
     expect(formatProjectName('')).toBe('Unknown')
   })
 
-  test('substitui homeDir por ~/', () => {
-    setHomeDir('/home/user')
-    expect(formatProjectName('/home/user/projetos/app')).toBe('~/projetos/app')
+  // The home directory is NEVER abbreviated: on a central the same `~/app` would be three
+  // different people's folders, and `~` would resolve against the central's own home rather than
+  // the machine the session came from. The username is part of the path's identity.
+  test('keeps the full path even inside the home directory', () => {
+    expect(formatProjectName('/home/user/projetos/app')).toBe('/home/user/projetos/app')
   })
 
-  test('homeDir exato retorna "~ (home)"', () => {
-    setHomeDir('/home/user')
-    expect(formatProjectName('/home/user')).toBe('~ (home)')
+  test('the home directory itself is shown in full', () => {
+    expect(formatProjectName('/home/user')).toBe('/home/user')
+  })
+
+  test('windows separators are normalized without abbreviating', () => {
+    expect(formatProjectName('C:\\Users\\bryan\\app')).toBe('C:/Users/bryan/app')
   })
 
   test('caminho fora do home retorna caminho completo', () => {
-    setHomeDir('/home/user')
     expect(formatProjectName('/opt/apps/servidor')).toBe('/opt/apps/servidor')
   })
 })
 
-// ── OpenAI/Codex pricing ────────────────────────────────────────────────────────
+describe('projectFolder', () => {
+  test('keeps only the folder name', () => {
+    expect(projectFolder('/home/mithrandir/agentistics')).toBe('agentistics')
+    expect(projectFolder('C:\\Users\\bryan\\app')).toBe('app')
+  })
+
+  test('a trailing slash does not yield an empty name', () => {
+    expect(projectFolder('/home/user/app/')).toBe('app')
+  })
+
+  test('a name with no separator is returned as is, and an empty path stays Unknown', () => {
+    expect(projectFolder('app')).toBe('app')
+    expect(projectFolder('')).toBe('Unknown')
+  })
+})
+
+// OpenAI/Codex pricing
 
 test('gpt-5.5 resolves to a non-fallback price', () => {
   const price = getModelPrice('gpt-5.5')
@@ -231,7 +250,7 @@ test('formatModel renders gpt-5.5 readably', () => {
   expect(formatModel('gpt-5.5')).toBe('GPT-5.5')
 })
 
-// ── Google/Gemini pricing ────────────────────────────────────────────────────────
+// Google/Gemini pricing
 
 test('gemini-3-flash-preview resolves to a non-fallback price', () => {
   const price = getModelPrice('gemini-3-flash-preview')
@@ -257,10 +276,53 @@ test('gemini-2.5-flash resolves to correct price', () => {
   expect(price.output).toBe(2.5)
 })
 
-// ── HARNESS_CAPABILITIES ──────────────────────────────────────────────────────
+// HARNESS_CAPABILITIES
 
-test('HARNESS_CAPABILITIES declares all four harnesses', () => {
-  expect(Object.keys(HARNESS_CAPABILITIES).sort()).toEqual(['claude', 'codex', 'copilot', 'gemini'])
+test('HARNESS_CAPABILITIES declares every harness', () => {
+  expect(Object.keys(HARNESS_CAPABILITIES).sort()).toEqual(['antigravity', 'claude', 'codex', 'copilot', 'gemini', 'kimi'])
+})
+
+test('kimi reports tokens, model and cost', () => {
+  expect(HARNESS_CAPABILITIES.kimi.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.kimi.model).toBe(true)
+  expect(HARNESS_CAPABILITIES.kimi.cost).toBe(true)
+})
+
+test('a model Kimi routed to is priced from its own provider, not a default', () => {
+  // Kimi stamps `google/gemini-3.5-flash-lite`; the adapter strips the prefix so this resolves.
+  const price = getModelPrice('gemini-3.5-flash-lite')
+  expect(price.input).toBe(0.3)
+  expect(price.output).toBe(2.5)
+  // Distinct from the shared fallback, which is what a wrong lookup would return.
+  expect(price.output).not.toBe(getModelPrice('totally-unknown-model').output)
+})
+
+test('antigravity reports tokens/cost/model (decoded from the gen_metadata protobuf)', () => {
+  expect(HARNESS_CAPABILITIES.antigravity.tokens).toBe(true)
+  expect(HARNESS_CAPABILITIES.antigravity.cost).toBe(true)
+  expect(HARNESS_CAPABILITIES.antigravity.model).toBe(true)
+  expect(HARNESS_CAPABILITIES.antigravity.tools).toBe(true)
+  // Subagents are their own conversations, not agent invocations on the parent.
+  expect(HARNESS_CAPABILITIES.antigravity.agents).toBe(false)
+  // D6: line counts are NOT trustworthy — removals need TargetContent, which agy does not write
+  // on its normal edit path, so lines_removed is structurally 0. N/A beats a confident fake 0.
+  expect(HARNESS_CAPABILITIES.antigravity.gitLines).toBe(false)
+})
+
+test('antigravity model ids resolve to real Gemini pricing, never the Sonnet fallback', () => {
+  const fallback = getModelPrice('totally-unknown-model')
+  for (const id of ['gemini-3.6-flash', 'gemini-3.6-flash-tiered']) {
+    const price = getModelPrice(id)
+    expect(price.input).toBe(1.5)
+    expect(price.output).toBe(7.5)
+    expect(price.cacheRead).toBe(0.15)
+    expect(price).not.toEqual(fallback)
+  }
+  // agy can also drive Claude models; the existing prefix match must still win.
+  expect(getModelPrice('claude-opus-4-6-thinking').output).toBe(25)
+  // The more specific flash-lite key must not be shadowed by `gemini-3.5-flash`.
+  expect(getModelPrice('gemini-3.5-flash-lite').output).toBe(2.5)
+  expect(getModelPrice('gemini-3.5-flash').output).toBe(9)
 })
 
 test('claude is fully capable; gemini and copilot have tokens/cost/model', () => {
@@ -282,4 +344,206 @@ test('claude is fully capable; gemini and copilot have tokens/cost/model', () =>
   expect(HARNESS_CAPABILITIES.copilot.tools).toBe(false)
   expect(HARNESS_CAPABILITIES.copilot.agents).toBe(false)
   expect(HARNESS_CAPABILITIES.copilot.gitLines).toBe(true)
+})
+
+test('dynamicWorkflows capability is Claude-only', () => {
+  expect(HARNESS_CAPABILITIES.claude.dynamicWorkflows).toBe(true)
+  expect(HARNESS_CAPABILITIES.codex.dynamicWorkflows).toBe(false)
+  expect(HARNESS_CAPABILITIES.gemini.dynamicWorkflows).toBe(false)
+  expect(HARNESS_CAPABILITIES.copilot.dynamicWorkflows).toBe(false)
+  expect(HARNESS_CAPABILITIES.antigravity.dynamicWorkflows).toBe(false)
+})
+
+describe('normalizeGitRemote', () => {
+  test('collapses https, ssh, scp, and git protocols to host/org/repo', () => {
+    const cases: [string, string][] = [
+      ['https://github.com/org/repo.git', 'github.com/org/repo'],
+      ['https://github.com/org/repo', 'github.com/org/repo'],
+      ['git@github.com:org/repo.git', 'github.com/org/repo'],
+      ['git@github.com:org/repo', 'github.com/org/repo'],
+      ['ssh://git@github.com/org/repo', 'github.com/org/repo'],
+      ['ssh://git@github.com:22/org/repo.git', 'github.com/org/repo'],
+      ['git://github.com/org/repo.git', 'github.com/org/repo'],
+      ['github.com/org/repo', 'github.com/org/repo'],
+    ]
+    for (const [input, expected] of cases) {
+      expect(normalizeGitRemote(input)).toBe(expected)
+    }
+  })
+
+  test('strips embedded credentials incl. CI tokens', () => {
+    expect(normalizeGitRemote('https://user:token@github.com/org/repo.git')).toBe('github.com/org/repo')
+    expect(normalizeGitRemote('https://x-access-token:ghs_abc123@github.com/org/repo')).toBe('github.com/org/repo')
+  })
+
+  test('lowercases host but preserves path case', () => {
+    expect(normalizeGitRemote('https://GitHub.com/Org/Repo.git')).toBe('github.com/Org/Repo')
+  })
+
+  test('handles trailing slashes and nested paths (self-hosted / subgroups)', () => {
+    expect(normalizeGitRemote('https://gitlab.example.com/group/subgroup/repo.git/')).toBe('gitlab.example.com/group/subgroup/repo')
+  })
+
+  test('returns "" for non-remotes, local paths, and junk', () => {
+    expect(normalizeGitRemote('')).toBe('')
+    expect(normalizeGitRemote(undefined)).toBe('')
+    expect(normalizeGitRemote(null)).toBe('')
+    expect(normalizeGitRemote('file:///home/user/repo.git')).toBe('')
+    expect(normalizeGitRemote('/home/user/repo')).toBe('')
+    expect(normalizeGitRemote('justastring')).toBe('')
+  })
+
+  test('is idempotent — normalizing an already-normalized value is a no-op', () => {
+    const once = normalizeGitRemote('git@github.com:org/repo.git')
+    expect(normalizeGitRemote(once)).toBe(once)
+  })
+})
+
+describe('repoShortName', () => {
+  test('drops the host, keeping org/repo', () => {
+    expect(repoShortName('github.com/org/repo')).toBe('org/repo')
+    expect(repoShortName('gitlab.example.com/group/subgroup/repo')).toBe('group/subgroup/repo')
+    expect(repoShortName('')).toBe('')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// D8 — prefix matching must not resolve a TRUNCATED id to a `-lite` price
+// ---------------------------------------------------------------------------
+
+describe('getModelPrice prefix resolution', () => {
+  const FALLBACK = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+
+  test('every id the Antigravity harness actually reports resolves to its REAL price', () => {
+    // Suffixed ids must hit their base model, never the Sonnet fallback.
+    expect(getModelPrice('gemini-3.6-flash')).toEqual(MODEL_PRICING['gemini-3.6-flash']!)
+    expect(getModelPrice('gemini-3.6-flash-tiered')).toEqual(MODEL_PRICING['gemini-3.6-flash']!)
+    expect(getModelPrice('claude-opus-4-6-thinking')).toEqual(MODEL_PRICING['claude-opus-4-6']!)
+    for (const id of ['gemini-3.6-flash', 'gemini-3.6-flash-tiered', 'claude-opus-4-6-thinking']) {
+      expect(getModelPrice(id)).not.toEqual(FALLBACK)
+    }
+  })
+
+  test('the LONGEST matching key wins, regardless of key order in the table', () => {
+    expect(getModelPrice('gemini-3.5-flash-lite')).toEqual(MODEL_PRICING['gemini-3.5-flash-lite']!)
+    expect(getModelPrice('gemini-3.5-flash-lite-preview')).toEqual(MODEL_PRICING['gemini-3.5-flash-lite']!)
+    expect(getModelPrice('gemini-3.5-flash')).toEqual(MODEL_PRICING['gemini-3.5-flash']!)
+  })
+
+  test('a truncated family id never resolves to a cheaper -lite price', () => {
+    // The bug: `key.startsWith(modelId)` used to return whichever key came first, so
+    // 'gemini-3.5' silently got Flash-Lite pricing.
+    expect(getModelPrice('gemini-3.5')).toEqual(MODEL_PRICING['gemini-3.5-flash']!)
+    expect(getModelPrice('gemini-3.5')).not.toEqual(MODEL_PRICING['gemini-3.5-flash-lite']!)
+    expect(getModelPrice('gemini-3.1')).toEqual(MODEL_PRICING['gemini-3.1-pro']!)
+  })
+
+  test('a version-less id still resolves to its dated key', () => {
+    expect(getModelPrice('claude-haiku-4-5')).toEqual(MODEL_PRICING['claude-haiku-4-5-20251001']!)
+  })
+
+  test('a partial word is not a match — it falls back', () => {
+    expect(getModelPrice('gemini-3.5-fl')).toEqual(FALLBACK)
+    expect(getModelPrice('')).toEqual(FALLBACK)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Multi-model sessions (Antigravity parent + folded sub-agent children)
+// ---------------------------------------------------------------------------
+
+describe('sessionModelUsage / sessionCostUSD', () => {
+  const base = {
+    input_tokens: 100, output_tokens: 10,
+    cache_read_input_tokens: 50, cache_creation_input_tokens: 0,
+  }
+
+  test('a single-model session yields one entry priced by `model`', () => {
+    const entries = sessionModelUsage({ ...base, model: 'gemini-3.6-flash' })
+    expect(entries).toHaveLength(1)
+    expect(entries[0]![0]).toBe('gemini-3.6-flash')
+    expect(entries[0]![1].inputTokens).toBe(100)
+    expect(sessionCostUSD({ ...base, model: 'gemini-3.6-flash' })).toBeCloseTo(
+      calcCost({ inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 50, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 }, 'gemini-3.6-flash'),
+      12,
+    )
+  })
+
+  test('a multi-model session is priced per model, not at its single label rate', () => {
+    const s = {
+      ...base,
+      model: 'claude-opus-4-6-thinking',
+      model_usage: {
+        'claude-opus-4-6-thinking': { inputTokens: 60, outputTokens: 6, cacheReadInputTokens: 30, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 },
+        'gemini-3.6-flash-tiered': { inputTokens: 40, outputTokens: 4, cacheReadInputTokens: 20, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 },
+      },
+    }
+    const cost = sessionCostUSD(s)!
+    const atOpusOnly = calcCost({ inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 50, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0 }, 'claude-opus-4-6-thinking')
+    expect(cost).toBeLessThan(atOpusOnly)
+    expect(cost).toBeCloseTo(
+      calcCost(s.model_usage['claude-opus-4-6-thinking']!, 'claude-opus-4-6-thinking')
+      + calcCost(s.model_usage['gemini-3.6-flash-tiered']!, 'gemini-3.6-flash-tiered'),
+      12,
+    )
+  })
+
+  test('no model at all → null, so the caller can use its blended fallback', () => {
+    expect(sessionCostUSD({ ...base })).toBeNull()
+    expect(sessionCostUSD({ ...base }, 'gemini-3.6-flash')).not.toBeNull()
+  })
+})
+
+// --- worktrees are not projects -----------------------------------------------------------------
+
+test('canonicalProjectPath folds a worktree back into its project', () => {
+  const proj = '/home/u/projects/pulsar'
+  expect(canonicalProjectPath(`${proj}/.claude/worktrees/bridge-cse_01HDS3hvd6yDjaWPxedhPrUc`)).toBe(proj)
+  // The decoded-path variant that loses the leading dot and doubles the slash.
+  expect(canonicalProjectPath('/home/u/prontuario//claude/worktrees/filtro/metricas')).toBe('/home/u/prontuario')
+})
+
+test('canonicalProjectPath leaves a real project path alone', () => {
+  expect(canonicalProjectPath('/home/u/projects/pulsar')).toBe('/home/u/projects/pulsar')
+  expect(canonicalProjectPath('')).toBe('')
+  // A directory merely NAMED worktrees is not a worktree root.
+  expect(canonicalProjectPath('/home/u/worktrees/thing')).toBe('/home/u/worktrees/thing')
+  expect(canonicalProjectPath('/home/u/.claude')).toBe('/home/u/.claude')
+})
+
+test('HARNESS_ORDER lists every harness exactly once', () => {
+  // The regression this guards: five places used to hardcode the list as a plain array, which
+  // TypeScript accepts with a member missing — a new harness silently vanished from the Compare
+  // page, the filter bar and the consolidate store.
+  expect([...HARNESS_ORDER].sort()).toEqual(Object.keys(HARNESS_CAPABILITIES).sort() as typeof HARNESS_ORDER)
+  expect(new Set(HARNESS_ORDER).size).toBe(HARNESS_ORDER.length)
+})
+
+test('a gpt-5.6 variant is priced as itself, not as legacy gpt-5', () => {
+  // Regression: `gpt-5.6-terra` (what Codex actually reports) prefix-matched the legacy `gpt-5`
+  // row and was priced at 1.25/10 instead of 2.5/15 — every Codex session cost half of the truth.
+  expect(getModelPrice('gpt-5.6-terra').input).toBe(2.5)
+  expect(getModelPrice('gpt-5.6-terra').output).toBe(15)
+  expect(getModelPrice('gpt-5.6-sol').output).toBe(30)
+  expect(getModelPrice('gpt-5.6-luna').output).toBe(6)
+  // The legacy rows still resolve for old sessions.
+  expect(getModelPrice('gpt-5').output).toBe(10)
+  expect(getModelPrice('gpt-5-mini').output).toBe(2)
+})
+
+test('current Anthropic models are priced as themselves, not as the fallback', () => {
+  // Regression: `claude-opus-4-8` and `claude-opus-5` were absent from the table AND from the live
+  // scrape's name map, so 39 of the heaviest sessions on a real machine were priced at Sonnet's
+  // 3/15 instead of Opus's 5/25 — a ~40% understatement, with nothing on screen to hint at it.
+  for (const id of ['claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7']) {
+    expect(getModelPrice(id).input).toBe(5)
+    expect(getModelPrice(id).output).toBe(25)
+  }
+  expect(getModelPrice('claude-fable-5').output).toBe(50)
+  // Sonnet 5 introductory pricing, in effect through 2026-08-31.
+  expect(getModelPrice('claude-sonnet-5').output).toBe(10)
+  // None of them may collide with the fallback rate.
+  const fallback = getModelPrice('a-model-that-does-not-exist')
+  expect(fallback.output).toBe(15)
+  expect(getModelPrice('claude-opus-5').output).not.toBe(fallback.output)
 })

@@ -25,7 +25,6 @@ export function ActivityHeatmap({ data, weeks = 26 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerW, setContainerW] = useState(0)
   const [tooltip, setTooltip] = useState<{ x: number; y: number; day: HeatmapDay & { dateObj: Date } } | null>(null)
-  const [animKey, setAnimKey] = useState(0)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -36,10 +35,14 @@ export function ActivityHeatmap({ data, weeks = 26 }: Props) {
     return () => ro.disconnect()
   }, [])
 
-  // Re-trigger animation when data changes
+  // Animate ONCE, on mount. Re-triggering on every `data` change made the whole grid fade in
+  // again on each live refresh — a constant flicker on a panel whose job is to sit still and be
+  // read. The entrance is a nice touch the first time and noise every time after.
+  const [entering, setEntering] = useState(true)
   useEffect(() => {
-    setAnimKey(k => k + 1)
-  }, [data])
+    const t = setTimeout(() => setEntering(false), 700)
+    return () => clearTimeout(t)
+  }, [])
 
   const dataMap = new Map(data.map(d => [d.date, d]))
   const today = new Date()
@@ -87,7 +90,17 @@ export function ActivityHeatmap({ data, weeks = 26 }: Props) {
     : undefined
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', width: '100%' }}>
+    // Centred and capped: the SVG scales to the container, so on a wide card the cells stretched
+    // to the left edge and left a band of dead space under them. A max width keeps the cells at a
+    // sane size and the margin centres the grid instead of pinning it left.
+    <div ref={containerRef} style={{
+      // Full width — the SVG keeps its own aspect ratio, so capping the width only made the grid
+      // smaller without buying anything, and it shrank the expanded modal too.
+      position: 'relative', width: '100%',
+      // Centred vertically: the heatmap is shorter than the chart it shares a stretched row with,
+      // so without this it hugged the top and left a band of empty card beneath it.
+      height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center',
+    }}>
       <style>{`
         @keyframes heatmap-fade-in {
           from { opacity: 0; transform: scale(0.6); }
@@ -144,7 +157,7 @@ export function ActivityHeatmap({ data, weeks = 26 }: Props) {
 
             return (
               <rect
-                key={`${animKey}-${dateStr}`}
+                key={dateStr}
                 x={x}
                 y={y}
                 width={cellSize}
@@ -154,7 +167,7 @@ export function ActivityHeatmap({ data, weeks = 26 }: Props) {
                   fill: intensity === 0 ? 'var(--heatmap-empty)' : `rgba(var(--heatmap-active-color), ${intensity})`,
                   cursor: d ? 'pointer' : 'default',
                   transformOrigin: `${x + cellSize / 2}px ${y + cellSize / 2}px`,
-                  animation: `heatmap-fade-in 0.3s ease ${delay}s both`,
+                  ...(entering ? { animation: `heatmap-fade-in 0.3s ease ${delay}s both` } : null),
                 }}
                 onMouseEnter={e => {
                   if (!d) return

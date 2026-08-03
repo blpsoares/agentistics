@@ -21,16 +21,16 @@ function calcCostUSD(input: number, output: number, cacheRead: number, cacheWrit
   }, model);
 }
 
-// ─── Multi-harness helpers ────────────────────────────────────────────────────
+// Multi-harness helpers
 // agentistics tracks several harnesses (Claude Code, Codex CLI, Gemini CLI,
-// Copilot CLI). Sessions carry a `harness` field; legacy/missing defaults to claude.
+// Copilot CLI, Antigravity CLI). Sessions carry a `harness` field; legacy/missing defaults to claude.
 
-const HARNESS_IDS = ["claude", "codex", "gemini", "copilot"] as const;
+const HARNESS_IDS = ["claude", "codex", "gemini", "copilot", "antigravity"] as const;
 const HARNESS_PARAM = {
   type: "string",
   enum: ["all", ...HARNESS_IDS],
   description:
-    "Scope to one harness (claude | codex | gemini | copilot), or 'all' (default) for the unified view across every harness.",
+    "Scope to one harness (claude | codex | gemini | copilot | antigravity), or 'all' (default) for the unified view across every harness.",
 } as const;
 
 type AnySession = Record<string, any>;
@@ -175,7 +175,7 @@ function fillGaps(
   }
 }
 
-// ─── Server ─────────────────────────────────────────────────────────────────
+// Server
 
 const server = new Server(
   { name: "agentistics", version: "1.0.0" },
@@ -186,7 +186,7 @@ const TOOLS: Tool[] = [
   {
     name: "agentistics_summary",
     description:
-      "Get an overview of AI coding usage metrics (across all tracked harnesses — Claude Code, Codex, Gemini, Copilot — or scoped to one): total tokens, estimated cost, sessions, streak, most used model, and top project. Good starting point for any metrics question.",
+      "Get an overview of AI coding usage metrics (across all tracked harnesses — Claude Code, Codex, Gemini, Copilot, Antigravity — or scoped to one): total tokens, estimated cost, sessions, streak, most used model, and top project. Good starting point for any metrics question.",
     inputSchema: { type: "object", properties: { harness: HARNESS_PARAM }, required: [] },
   },
   {

@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { parseCopilotEvents } from './copilot-parse'
+import { parseCopilotEvents, parseCopilotWorkspace, copilotGitRemote } from './copilot-parse'
 
 // Minimal real-world-shaped sample — no session.shutdown (crashed/no clean exit)
 const SAMPLE_NO_SHUTDOWN = [
@@ -78,7 +78,9 @@ test('parses a copilot events.jsonl without shutdown into a SessionMeta', () => 
   expect(s!.duration_minutes).toBeGreaterThan(0)
   // user.message at 00:06:00Z → hour=0, timestamp captured
   expect(s!.user_message_timestamps).toEqual(['2026-02-23T00:06:00.000Z'])
-  expect(s!.message_hours).toEqual([0])
+  // Hours are bucketed on the LOCAL clock (same convention as the Claude pipeline), so derive the
+  // expectation from the host zone instead of pinning a UTC hour.
+  expect(s!.message_hours).toEqual([new Date('2026-02-23T00:06:00.000Z').getHours()])
 })
 
 test('extracts tokens, model, and code changes from session.shutdown', () => {
@@ -105,7 +107,10 @@ test('extracts tokens, model, and code changes from session.shutdown', () => {
     '2026-02-23T00:06:00.000Z',
     '2026-02-23T01:00:00.000Z',
   ])
-  expect(s!.message_hours).toEqual([0, 1])
+  expect(s!.message_hours).toEqual([
+    new Date('2026-02-23T00:06:00.000Z').getHours(),
+    new Date('2026-02-23T01:00:00.000Z').getHours(),
+  ])
 })
 
 test('returns null on empty content', () => {
@@ -142,4 +147,49 @@ test('skips malformed JSON lines gracefully', () => {
   expect(s).not.toBeNull()
   expect(s!.session_id).toBe('ok-id')
   expect(s!.user_message_count).toBe(1)
+})
+
+// --- workspace.yaml: the identity events.jsonl does not carry -----------------------------------
+
+const REAL_WORKSPACE = `id: 155dfe66-173e-4397-b5e9-9f7062d456ba
+cwd: /home/padawan/prontuario
+git_root: /home/padawan/prontuario
+repository: blpsoares/prontuario
+host_type: github
+branch: main
+client_name: github/cli
+name: Salve Coding Session
+user_named: false
+summary_count: 0
+created_at: 2026-07-27T22:37:43.507Z
+`
+
+test('parseCopilotWorkspace reads the fields the session needs', () => {
+  const ws = parseCopilotWorkspace(REAL_WORKSPACE)
+  expect(ws.cwd).toBe('/home/padawan/prontuario')
+  expect(ws.repository).toBe('blpsoares/prontuario')
+  expect(ws.hostType).toBe('github')
+  expect(ws.branch).toBe('main')
+  expect(ws.name).toBe('Salve Coding Session')
+})
+
+test('parseCopilotWorkspace survives junk without throwing', () => {
+  expect(parseCopilotWorkspace('')).toEqual({})
+  expect(parseCopilotWorkspace('no-colon-here\n\n# comment: x')).toEqual({})
+  // A quoted value keeps its content, not its quotes.
+  expect(parseCopilotWorkspace('name: "Quoted Name"').name).toBe('Quoted Name')
+  // An indented line belongs to a nested structure we do not read.
+  expect(parseCopilotWorkspace('outer:\n  cwd: /nested').cwd).toBeUndefined()
+})
+
+test('a github repository becomes the same remote key every other harness uses', () => {
+  expect(copilotGitRemote(parseCopilotWorkspace(REAL_WORKSPACE))).toBe('github.com/blpsoares/prontuario')
+})
+
+test('a non-github host is left unattributed rather than guessed', () => {
+  // The enterprise hostname is not recorded anywhere in this file, and inventing one would file the
+  // sessions under a repository that does not exist.
+  expect(copilotGitRemote({ repository: 'org/repo', hostType: 'ghes' })).toBeUndefined()
+  expect(copilotGitRemote({ hostType: 'github' })).toBeUndefined()
+  expect(copilotGitRemote({})).toBeUndefined()
 })

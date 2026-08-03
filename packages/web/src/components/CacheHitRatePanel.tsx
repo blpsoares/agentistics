@@ -1,6 +1,6 @@
 import React from 'react'
 import { Zap, Lightbulb, TrendingDown, TrendingUp, Info } from 'lucide-react'
-import { formatModel, getModelColor } from '@agentistics/core'
+import { formatModel, getModelColor, fmtCost } from '@agentistics/core'
 import type { Lang, HarnessId } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { NAtag } from './NAtag'
@@ -32,16 +32,6 @@ function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
   return String(n)
-}
-
-function fmtCost(usd: number, currency: 'USD' | 'BRL', rate: number): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (Math.abs(brl) < 0.005) return 'R$0,00'
-    return `R$${brl.toFixed(2).replace('.', ',')}`
-  }
-  if (Math.abs(usd) < 0.01) return 'USD 0.00'
-  return `USD ${usd.toFixed(2)}`
 }
 
 type Tier = 'low' | 'medium' | 'high'
@@ -223,11 +213,7 @@ export function CacheHitRatePanel({
         </div>
 
         {/* Money impact */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: 8,
-        }}>
+        <div className="ag-grid cols-3" style={{ gap: 8 }}>
           <Stat
             label={pt ? 'Economia bruta' : 'Gross savings'}
             value={fmtCost(grossSavedUSD, currency, brlRate)}

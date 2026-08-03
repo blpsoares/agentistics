@@ -1,6 +1,6 @@
 {
   "name": "@agentistics/server",
-  "version": "1.7.3",
+  "version": "1.7.5",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@agentistics/core": "workspace:*",
+    "@agentistics/tui": "workspace:*",
+    "jose": "^6.2.3",
     "mongodb": "^6.12.0"
   }
 }

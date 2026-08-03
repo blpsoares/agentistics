@@ -1,6 +1,6 @@
 {
   "name": "agentistics",
-  "version": "1.7.3",
+  "version": "1.7.5",
   "description": "Local analytics dashboard for AI coding assistants — tracks tokens, cost, sessions, and activity from ~/.claude/",
   "keywords": [
     "claude",
@@ -23,18 +23,26 @@
   ],
   "scripts": {
     "dev:api": "bun run --cwd packages/server server/index.ts",
+    "cli": "bun packages/server/bin/cli.ts",
     "dev:ui": "bun run --cwd packages/web dev",
     "dev": "bun run --bun concurrently \"bun run dev:api\" \"bun run dev:ui\"",
+    "dev:central": "AGENTISTICS_TEAM_CENTRAL=1 bun --watch --env-file=central.env packages/server/server/index.ts",
+    "dev:ui:central": "WEB_PORT=48080 bun run --cwd packages/web dev",
+    "dev:central:all": "bun run --bun concurrently \"bun run dev:central\" \"bun run dev:ui:central\"",
     "build": "bun run --cwd packages/web build",
+    "bin": "bun build:binary && mkdir -p ~/.local/bin && cp -f ./release/agentop ~/.local/bin/.agentop.new && mv -f ~/.local/bin/.agentop.new ~/.local/bin/agentop",
+    "restart:all": "bun run bin && agentop restart all --rebuild",
     "build:assets": "bun run packages/server/scripts/embed-dist.ts",
     "build:binary": "bun run build && bun run build:assets && bun build --compile packages/server/bin/cli.ts --outfile ./release/agentop",
     "build:binary:windows": "bun run build && bun run build:assets && bun build --compile --target=bun-windows-x64 packages/server/bin/cli.ts --outfile ./release/agentop.exe",
     "build:desktop": "bun run build:binary:windows && cd packages/desktop && cargo tauri build",
     "preview": "bun run --cwd packages/web preview",
     "watch": "bun run --cwd packages/server server/otel-watcher.ts",
-    "watch:cli": "bun run packages/web/src/tui/index.ts",
+    "watch:cli": "bun run packages/tui/src/index.tsx",
     "up:central": "bash central.sh up",
     "init:central": "bash central.sh init",
+    "central": "bun packages/server/bin/cli.ts server --central",
+    "central:bg": "bun packages/server/bin/cli.ts server --central --bg",
     "stub": "bun run packages/server/scripts/ensure-type-stub.ts",
     "test": "bun test",
     "prepare": "husky",
@@ -51,15 +59,15 @@
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
     "husky": "^9.1.7",
+    "ink-testing-library": "^4.0.0",
+    "playwright": "^1.62.1",
     "vite": "^8.0.7"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
-    "@inquirer/prompts": "^8.4.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@inquirer/core": "^11.1.8",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.57.2",
     "@opentelemetry/resources": "^1.30.1",

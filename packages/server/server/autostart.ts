@@ -15,47 +15,126 @@
 import { homedir, platform, userInfo } from 'os'
 import { join, resolve } from 'path'
 import { mkdir, writeFile, readFile, unlink } from 'fs/promises'
+import { existsSync } from 'fs'
 
-export type AutostartMode = 'server' | 'central' | 'watch'
+export type AutostartMode = 'server' | 'central' | 'watch' | 'machine'
 
 export interface AutostartResult {
   ok: boolean
   message: string
 }
 
-const MODES: AutostartMode[] = ['server', 'central', 'watch']
+const MODES: AutostartMode[] = ['server', 'central', 'watch', 'machine']
 
-// --- .bashrc update-check hook markers (kept stable so uninstall is exact) ---
+// --- shell-rc update-check hook markers (kept stable so uninstall is exact) ---
 const HOOK_BEGIN = '# >>> agentop update check >>>'
 const HOOK_END = '# <<< agentop update check <<<'
+// POSIX one-liner — valid in both bash and zsh (the two shells we manage).
+const HOOK_LINE = 'command -v agentop >/dev/null 2>&1 && agentop check-update 2>/dev/null'
 
-/**
- * Best-effort repo root, used only by the `central` mode command.
- *
- * ASSUMPTION: this file lives at `<repoRoot>/packages/server/server/autostart.ts`,
- * so the repo root is three directories up from `import.meta.dir`. When running
- * from the compiled binary that path does not exist; in that case we fall back
- * to the current working directory. Either way the resulting command is only a
- * best-effort default the user can edit in the generated unit file.
- */
-function repoRoot(): string {
-  try {
-    return resolve(import.meta.dir, '..', '..', '..')
-  } catch {
-    return process.cwd()
-  }
+/** Shell rc files we manage the update-check hook in. Different login shells source
+ *  different files (bash → ~/.bashrc, zsh → ~/.zshrc), so a bash-only hook was invisible
+ *  to zsh users. We install into whichever of these already exist. */
+function hookRcCandidates(): string[] {
+  return [join(homedir(), '.bashrc'), join(homedir(), '.zshrc')]
 }
 
-/** The exact shell command each mode's service should run. */
-export function serviceCommandFor(mode: AutostartMode): string {
+/** Pure: append the guarded hook block to rc `content` when absent. Returns null when the
+ *  block is already present (idempotent no-op). */
+export function addHookBlock(content: string): string | null {
+  if (content.includes(HOOK_BEGIN)) return null
+  return content + `\n${HOOK_BEGIN}\n${HOOK_LINE}\n${HOOK_END}\n`
+}
+
+/** Pure: remove the guarded hook block from rc `content`. Returns null when absent, or
+ *  throws when the block is corrupt (a BEGIN with no matching END). */
+export function removeHookBlock(content: string): string | null {
+  const beginIdx = content.indexOf(HOOK_BEGIN)
+  if (beginIdx === -1) return null
+  const endIdx = content.indexOf(HOOK_END, beginIdx)
+  if (endIdx === -1) throw new Error('corrupt hook block')
+  // Consume the newline addHookBlock prepended before BEGIN and the one after END, so this is
+  // an exact inverse of addHookBlock (no stray blank line left behind).
+  let start = beginIdx
+  if (start > 0 && content[start - 1] === '\n') start -= 1
+  let end = endIdx + HOOK_END.length
+  if (content[end] === '\n') end += 1
+  return content.slice(0, start) + content.slice(end)
+}
+
+/** ~/.bashrc → "~/.bashrc" for user-facing messages. */
+function tildeRc(rc: string): string {
+  return rc.replace(homedir(), '~')
+}
+
+/**
+ * Locate the repo checkout holding `central.sh`, used only by the `central` mode command.
+ *
+ * The old version derived it as three directories up from `import.meta.dir` and guarded that
+ * with a try/catch. `resolve` does not throw, so the guard never fired: under the COMPILED
+ * BINARY `import.meta.dir` is Bun's virtual root (`/$bunfs/root`), three up is `/`, and the
+ * unit shipped `ExecStart=bash /central.sh up` — a service that exits 127 and is restarted
+ * every 5 seconds forever. Existence is the only thing that distinguishes a real checkout from
+ * a path that merely parses, so check for the file rather than assuming the layout.
+ *
+ * Returns null when no candidate holds the script — see `serviceCommandFor`.
+ */
+function findCentralScript(): string | null {
+  const candidates = [
+    // Running from source: <repoRoot>/packages/server/server/autostart.ts
+    resolve(import.meta.dir, '..', '..', '..'),
+    // Compiled binary invoked from inside a checkout.
+    process.cwd(),
+  ]
+  for (const dir of candidates) {
+    const script = join(dir, 'central.sh')
+    if (existsSync(script)) return script
+  }
+  return null
+}
+
+/**
+ * Locate `docker-compose.machine.yml`, the same way `findCentralScript` locates `central.sh` — it
+ * only exists in a repo checkout, so a boot unit for the Docker `machine` runtime can only be
+ * written from one. Returns null otherwise, which `serviceCommandFor('machine')` turns into a
+ * refusal rather than a unit whose `ExecStart` cannot resolve.
+ */
+function findMachineCompose(): string | null {
+  const candidates = [
+    resolve(import.meta.dir, '..', '..', '..'),
+    process.cwd(),
+  ]
+  for (const dir of candidates) {
+    const compose = join(dir, 'docker-compose.machine.yml')
+    if (existsSync(compose)) return compose
+  }
+  return null
+}
+
+/**
+ * The exact shell command each mode's service should run, or null when this machine cannot run
+ * that mode at all. `central` needs `central.sh`, which only exists in a repo checkout; from an
+ * installed binary there is nothing to point at. Null means the caller must REFUSE — the same
+ * rule the control center applies to a rebuild it cannot perform: absent beats present-and-failing.
+ */
+export function serviceCommandFor(mode: AutostartMode): string | null {
   const bin = process.execPath
   switch (mode) {
     case 'server':
       return `${bin} server`
     case 'watch':
       return `${bin} watch`
-    case 'central':
-      return `bash ${join(repoRoot(), 'central.sh')} up`
+    case 'central': {
+      const script = findCentralScript()
+      return script ? `bash ${script} up` : null
+    }
+    case 'machine': {
+      // No `--build`: the boot-time unit brings back whatever image is already there. A rebuild
+      // is a deliberate action (the control center's "Rebuild & restart"), never something that
+      // should happen silently every time the machine reboots.
+      const compose = findMachineCompose()
+      return compose ? `docker compose -f ${compose} up -d` : null
+    }
   }
 }
 
@@ -63,7 +142,7 @@ function unitPath(mode: AutostartMode): string {
   return join(homedir(), '.config', 'systemd', 'user', `agentop-${mode}.service`)
 }
 
-function unitContents(mode: AutostartMode): string {
+function unitContents(mode: AutostartMode, command: string): string {
   return [
     '[Unit]',
     `Description=agentop ${mode} (agentistics autostart)`,
@@ -72,7 +151,7 @@ function unitContents(mode: AutostartMode): string {
     '',
     '[Service]',
     'Type=simple',
-    `ExecStart=${serviceCommandFor(mode)}`,
+    `ExecStart=${command}`,
     'Restart=on-failure',
     'RestartSec=5',
     '',
@@ -128,70 +207,83 @@ function notSupported(action: string): AutostartResult {
 }
 
 /**
- * Appends a single guarded line to ~/.bashrc that runs `agentop check-update`
- * on every terminal open (and thus at boot for login shells). Idempotent.
+ * Appends a single guarded line to each present shell rc (~/.bashrc and ~/.zshrc) that runs
+ * `agentop check-update` on every terminal open (and thus at boot for login shells). Installs
+ * into whichever candidates already exist; if NEITHER exists, creates ~/.bashrc as the default.
+ * Idempotent per file.
  */
 export async function installUpdateHook(): Promise<AutostartResult> {
-  const rc = join(homedir(), '.bashrc')
-  let existing = ''
-  try {
-    existing = await readFile(rc, 'utf8')
-  } catch {
-    existing = ''
+  const candidates = hookRcCandidates()
+  const present: string[] = []
+  for (const rc of candidates) {
+    try { await readFile(rc, 'utf8'); present.push(rc) } catch { /* missing */ }
   }
-  if (existing.includes(HOOK_BEGIN)) {
-    return { ok: true, message: 'Update-check hook already present in ~/.bashrc.' }
+  // If the user has neither rc yet, seed ~/.bashrc (the historical default).
+  const targets = present.length ? present : [join(homedir(), '.bashrc')]
+
+  const touched: string[] = []
+  for (const rc of targets) {
+    let existing = ''
+    try { existing = await readFile(rc, 'utf8') } catch { existing = '' }
+    const next = addHookBlock(existing)
+    if (next === null) { touched.push(`${tildeRc(rc)} (already present)`); continue }
+    try {
+      await writeFile(rc, next, 'utf8')
+      touched.push(tildeRc(rc))
+    } catch (err: any) {
+      return { ok: false, message: `Could not write ${tildeRc(rc)}: ${err?.message ?? err}` }
+    }
   }
-  const block =
-    `\n${HOOK_BEGIN}\n` +
-    `command -v agentop >/dev/null 2>&1 && agentop check-update 2>/dev/null\n` +
-    `${HOOK_END}\n`
-  try {
-    await writeFile(rc, existing + block, 'utf8')
-    return { ok: true, message: 'Added update-check hook to ~/.bashrc.' }
-  } catch (err: any) {
-    return { ok: false, message: `Could not write ~/.bashrc: ${err?.message ?? err}` }
-  }
+  return { ok: true, message: `Update-check hook ensured in: ${touched.join(', ')}.` }
 }
 
-/** Removes the guarded update-check block from ~/.bashrc (exact marker match). */
+/** Removes the guarded update-check block from every present shell rc (exact marker match). */
 export async function uninstallUpdateHook(): Promise<AutostartResult> {
-  const rc = join(homedir(), '.bashrc')
-  let existing = ''
-  try {
-    existing = await readFile(rc, 'utf8')
-  } catch {
-    return { ok: true, message: 'No ~/.bashrc found — nothing to remove.' }
+  const candidates = hookRcCandidates()
+  const removedFrom: string[] = []
+  for (const rc of candidates) {
+    let existing = ''
+    try { existing = await readFile(rc, 'utf8') } catch { continue /* no such rc */ }
+    let next: string | null
+    try {
+      next = removeHookBlock(existing)
+    } catch {
+      return { ok: false, message: `${tildeRc(rc)} has a corrupt hook block — remove it manually.` }
+    }
+    if (next === null) continue // not present in this file
+    try {
+      await writeFile(rc, next, 'utf8')
+      removedFrom.push(tildeRc(rc))
+    } catch (err: any) {
+      return { ok: false, message: `Could not write ${tildeRc(rc)}: ${err?.message ?? err}` }
+    }
   }
-  const beginIdx = existing.indexOf(HOOK_BEGIN)
-  if (beginIdx === -1) {
-    return { ok: true, message: 'Update-check hook not present in ~/.bashrc.' }
-  }
-  const endIdx = existing.indexOf(HOOK_END, beginIdx)
-  if (endIdx === -1) {
-    return { ok: false, message: '~/.bashrc has a corrupt hook block — remove it manually.' }
-  }
-  // Trim the leading newline we inserted before HOOK_BEGIN, if present.
-  let start = beginIdx
-  if (start > 0 && existing[start - 1] === '\n') start -= 1
-  const after = existing.slice(endIdx + HOOK_END.length).replace(/^\n/, '')
-  const next = existing.slice(0, start) + (after ? '\n' + after : '\n')
-  try {
-    await writeFile(rc, next, 'utf8')
-    return { ok: true, message: 'Removed update-check hook from ~/.bashrc.' }
-  } catch (err: any) {
-    return { ok: false, message: `Could not write ~/.bashrc: ${err?.message ?? err}` }
-  }
+  return removedFrom.length
+    ? { ok: true, message: `Removed update-check hook from: ${removedFrom.join(', ')}.` }
+    : { ok: true, message: 'Update-check hook not present in any shell rc — nothing to remove.' }
 }
 
 /** Enables an agentop autostart service for the given mode (Linux/systemd). */
 export async function enableAutostart(mode: AutostartMode): Promise<AutostartResult> {
   if (platform() !== 'linux') return notSupported('enable')
 
+  // Refuse before writing anything. A unit whose ExecStart cannot resolve is not a partial
+  // success — it is a service systemd restarts every 5 seconds for the life of the machine.
+  const command = serviceCommandFor(mode)
+  if (!command) {
+    const missing = mode === 'machine' ? 'docker-compose.machine.yml' : 'central.sh'
+    return {
+      ok: false,
+      message: `Cannot enable agentop-${mode} here: ${missing} was not found. ` +
+        `That file lives in the repository checkout, so run this from one ` +
+        `(the installed binary has nothing to point the service at).`,
+    }
+  }
+
   const path = unitPath(mode)
   try {
     await mkdir(join(homedir(), '.config', 'systemd', 'user'), { recursive: true })
-    await writeFile(path, unitContents(mode), 'utf8')
+    await writeFile(path, unitContents(mode, command), 'utf8')
   } catch (err: any) {
     return { ok: false, message: `Could not write unit file ${path}: ${err?.message ?? err}` }
   }
@@ -260,6 +352,18 @@ export async function disableAutostart(mode: AutostartMode): Promise<AutostartRe
  * `agentop server` has no service to bounce. `central` is redirected to `agentop central restart`
  * (that path rebuilds/restarts the Docker service, which a systemctl bounce can't do).
  */
+/** Is `mode` installed as a systemd user unit? The one fact that decides whether a restart goes
+ *  through systemd or through the detached process the control center starts. */
+export async function unitInstalled(mode: AutostartMode): Promise<boolean> {
+  if (platform() !== 'linux') return false
+  try {
+    await readFile(unitPath(mode), 'utf8')
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function restartAutostart(mode: AutostartMode): Promise<AutostartResult> {
   if (platform() !== 'linux') return notSupported('restart')
 

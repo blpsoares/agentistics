@@ -6,7 +6,9 @@ import {
   Activity, CalendarDays, CalendarClock, Gauge,
 } from 'lucide-react'
 import type { AppContext } from './app-context'
-import { formatProjectName, fmt, fmtDuration, fmtCost, fmtFull } from '@agentistics/core'
+import { sessionTime } from './sessionTime'
+import { widerValue } from './statCardSize'
+import { projectFolder, fmt, fmtDuration, fmtCost, fmtFull } from '@agentistics/core'
 import { StatCard } from '../components/StatCard'
 import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
 import { HighlightsBoard } from '../components/HighlightsBoard'
@@ -82,7 +84,7 @@ function kpiCard(
 }
 
 export const CATALOG: CatalogItem[] = [
-  // ── KPI cards ──────────────────────────────────────────────────────────────
+  // KPI cards
   {
     id: 'kpi.messages', labelPt: 'Mensagens', labelEn: 'Messages', category: 'kpi',
     icon: MessageSquare, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
@@ -132,6 +134,9 @@ export const CATALOG: CatalogItem[] = [
       <StatCard
         label={lang === 'pt' ? 'Custo estimado' : 'Est. cost'}
         value={fmtCost(derived.totalCostUSD, currency, brlRate)}
+        // Same rule as the HomePage cost card: size by the wider currency so switching
+        // USD ⇄ BRL leaves the headline alone.
+        sizeBasis={widerValue(fmtCost(derived.totalCostUSD, 'USD', brlRate), fmtCost(derived.totalCostUSD, 'BRL', brlRate))}
         sub={lang === 'pt' ? 'preços da API Anthropic' : 'Anthropic API pricing'}
         icon={<TrendingUp size={15} />}
         accent="var(--anthropic-orange)"
@@ -160,14 +165,22 @@ export const CATALOG: CatalogItem[] = [
     render: ({ derived, lang, filters }) => (
       <StatCard
         label={lang === 'pt' ? 'Sessão mais longa' : 'Longest session'}
-        value={derived.longestSession?.duration_minutes ? fmtDuration(derived.longestSession.duration_minutes * 60_000) : '—'}
+        value={(() => {
+          // Active time is the headline; the wall clock moves to the sub-line — same rule as the
+          // HomePage KPI, since this is the same card in the custom layout.
+          const t = sessionTime(derived.longestSession, lang)
+          return derived.longestSession ? (t.active ?? t.elapsed) : '—'
+        })()}
+        valueTitle={derived.longestSession ? sessionTime(derived.longestSession, lang).tooltip : undefined}
         sub={derived.longestSession ? (() => {
+          const t = sessionTime(derived.longestSession, lang)
           const msgs = (derived.longestSession!.user_message_count ?? 0) + (derived.longestSession!.assistant_message_count ?? 0)
-          const msgStr = `${msgs} ${lang === 'pt' ? 'mensagens' : 'messages'}`
+          const msgStr = `${t.activeLabel} · ${t.elapsed} ${t.elapsedLabel} · ${msgs} msgs`
           if (filters.projects.length === 0 && derived.longestSession!.project_path)
-            return `${msgStr} · ${formatProjectName(derived.longestSession!.project_path)}`
+            return `${msgStr} · ${projectFolder(derived.longestSession!.project_path)}`
           return msgStr
         })() : ''}
+        subNoWrap
         icon={<Clock size={15} />}
         accent="var(--accent-purple)"
       />
@@ -232,7 +245,7 @@ export const CATALOG: CatalogItem[] = [
     ),
   },
 
-  // ── Activity & charts ──────────────────────────────────────────────────────
+  // Activity & charts
   {
     id: 'activity.chart', labelPt: 'Gráfico de atividade (completo)', labelEn: 'Activity chart (full)', category: 'activity',
     icon: BarChart2, defaultW: 8, defaultH: 7, minW: 4, minH: 4,
@@ -301,7 +314,7 @@ export const CATALOG: CatalogItem[] = [
     ),
   },
 
-  // ── Costs ──────────────────────────────────────────────────────────────────
+  // Costs
   {
     id: 'costs.models', labelPt: 'Uso por modelo', labelEn: 'Model usage', category: 'costs',
     icon: TrendingUp, defaultW: 12, defaultH: 7, minW: 6, minH: 4,
@@ -337,7 +350,7 @@ export const CATALOG: CatalogItem[] = [
     ),
   },
 
-  // ── Projects ───────────────────────────────────────────────────────────────
+  // Projects
   {
     id: 'projects.top', labelPt: 'Principais projetos', labelEn: 'Top projects', category: 'projects',
     icon: FolderOpen, defaultW: 7, defaultH: 7, minW: 4, minH: 4,
@@ -357,7 +370,7 @@ export const CATALOG: CatalogItem[] = [
     ),
   },
 
-  // ── Tools / Agents ─────────────────────────────────────────────────────────
+  // Tools / Agents
   {
     id: 'tools.metrics', labelPt: 'Métricas de ferramentas (completo)', labelEn: 'Tool metrics (full)', category: 'tools',
     icon: Wrench, defaultW: 12, defaultH: 8, minW: 6, minH: 4,
@@ -397,7 +410,7 @@ export const CATALOG: CatalogItem[] = [
     ),
   },
 
-  // ── Sessions / Highlights ──────────────────────────────────────────────────
+  // Sessions / Highlights
   {
     id: 'sessions.highlights', labelPt: 'Recordes (Highlights)', labelEn: 'Highlights', category: 'sessions',
     icon: Trophy, defaultW: 12, defaultH: 6, minW: 6, minH: 3,

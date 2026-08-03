@@ -4,11 +4,12 @@ import {
 } from 'lucide-react'
 import { format, parseISO, subDays } from 'date-fns'
 import type { AppData, Filters, Lang, ModelUsage, SessionMeta, HarnessId } from '@agentistics/core'
-import { formatModel, formatProjectName, calcCost, sessionLabel, fmt, fmtCost, fmtFull } from '@agentistics/core'
+import { sessionTime } from '../lib/sessionTime'
+import { formatModel, formatProjectName, repoShortName, calcCost, sessionLabel, fmt, fmtCost, fmtFull } from '@agentistics/core'
 import { useDerivedStats, blendedCostPerToken, type HarnessSummary } from '../hooks/useData'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// Types
 
 export type PDFTheme = 'light' | 'dark'
 
@@ -23,7 +24,7 @@ interface Colors {
 
 interface HeatmapDay { date: string; value: number; sessions: number; tools: number }
 
-// ── Constants ──────────────────────────────────────────────────────────────────
+// Constants
 
 export const COLORS: Record<PDFTheme, Colors> = {
   light: {
@@ -59,7 +60,7 @@ export const DATE_OPTIONS = [
   { value: '90d',  labelPt: '90 dias',   labelEn: '90 days' },
 ] as const
 
-// ── Helper formatters ──────────────────────────────────────────────────────────
+// Helper formatters
 // Token/count values go through the shared `fmt()` (K/M abbreviated) and costs
 // through the shared `fmtCost()` (thousands-separated, e.g. "USD 4,729.65") from
 // @agentistics/core — never inline ad-hoc formatting here.
@@ -96,7 +97,7 @@ function bucketize(
   return buckets
 }
 
-// ── Mini chart components (all use inline styles + actual hex colors) ──────────
+// Mini chart components (all use inline styles + actual hex colors)
 
 function SectionTitle({ title, c }: { title: string; c: Colors }) {
   return (
@@ -464,7 +465,8 @@ function MiniSessionsTable({ sessions, c, lang, currency, brlRate, blendedRates 
   sessions: SessionMeta[]; c: Colors; lang: Lang; currency: 'USD' | 'BRL'; brlRate: number
   blendedRates: { input: number; output: number }
 }) {
-  const cols = '90px 1fr 48px 40px 40px 62px'
+  // The duration column carries "3h 12m ativo · 958h decorrido", so it needs real width.
+  const cols = '84px 1fr 150px 40px 40px 62px'
   const headers = [lang === 'pt' ? 'Data' : 'Date', lang === 'pt' ? 'Projeto' : 'Project',
     lang === 'pt' ? 'Dur.' : 'Dur.', 'Msgs', 'Tools', lang === 'pt' ? 'Custo' : 'Cost']
   return (
@@ -489,7 +491,7 @@ function MiniSessionsTable({ sessions, c, lang, currency, brlRate, blendedRates 
           <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 6, padding: '4px 0', borderBottom: `1px solid ${c.border}40`, alignItems: 'center' }}>
             <div style={{ color: c.textSec }}>{s.start_time ? format(parseISO(s.start_time), 'MM/dd HH:mm') : '—'}</div>
             <div style={{ color: c.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatProjectName(s.project_path || '')}</div>
-            <div style={{ color: c.textSec }}>{s.duration_minutes ? fmtDur(s.duration_minutes) : '—'}</div>
+            <div style={{ color: c.textSec }}>{sessionTime(s, lang).combined}</div>
             <div style={{ color: c.orange, fontWeight: 600 }}>{msgs}</div>
             <div style={{ color: c.textSec }}>{tools}</div>
             <div style={{ color: c.textSec }}>{fmtCost(costUSD, currency, brlRate)}</div>
@@ -527,8 +529,12 @@ function MiniHighlightsSection({ sessions, c, lang }: {
 
   // sessions[0] is guaranteed defined because of the sessions.length === 0 guard above
   const firstSession = sessions[0]!
-  const longestSession = sessions.reduce((b, s) =>
-    (s.duration_minutes ?? 0) > (b.duration_minutes ?? 0) ? s : b, firstSession)
+  // Ranked by ACTIVE time (same rule as the dashboard's HighlightsBoard) — wall clock crowns
+  // whichever session merely stayed open longest. See lib/sessionTime.ts.
+  const anyActive = sessions.some(s => s.active_minutes !== undefined)
+  const sessionRank = (s: SessionMeta) =>
+    anyActive ? (s.active_minutes ?? -1) : (s.duration_minutes ?? 0)
+  const longestSession = sessions.reduce((b, s) => sessionRank(s) > sessionRank(b) ? s : b, firstSession)
   const mostInputTokens = sessions.reduce((b, s) =>
     (s.input_tokens ?? 0) > (b.input_tokens ?? 0) ? s : b, firstSession)
   const mostOutputTokens = sessions.reduce((b, s) =>
@@ -550,7 +556,9 @@ function MiniHighlightsSection({ sessions, c, lang }: {
   }
   const topProjectEntry = Object.entries(projectSessionCounts).sort((a, b) => b[1] - a[1])[0]
 
-  const avgDuration = avg(sessions.map(s => s.duration_minutes ?? 0).filter(v => v > 0))
+  const avgDuration = avg(sessions
+    .map(s => anyActive ? (s.active_minutes ?? 0) : (s.duration_minutes ?? 0))
+    .filter(v => v > 0))
   const avgInput    = avg(sessions.map(s => s.input_tokens ?? 0).filter(v => v > 0))
   const avgOutput   = avg(sessions.map(s => s.output_tokens ?? 0).filter(v => v > 0))
   const avgMessages = avg(sessions.map(s => (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)).filter(v => v > 0))
@@ -564,8 +572,8 @@ function MiniHighlightsSection({ sessions, c, lang }: {
   const records = [
     {
       label: pt ? 'Sessão mais longa' : 'Longest session',
-      value: fmtDuration(longestSession.duration_minutes ?? 0),
-      badge: multiplier(longestSession.duration_minutes ?? 0, avgDuration),
+      value: sessionTime(longestSession, pt ? 'pt' : 'en').combined,
+      badge: multiplier(sessionRank(longestSession), avgDuration),
       prompt: truncate(sessionLabel(longestSession), 80),
       project: formatProjectName(longestSession.project_path ?? ''),
       accent: '#a855f7',
@@ -654,7 +662,7 @@ function MiniHighlightsSection({ sessions, c, lang }: {
   )
 }
 
-// ── Standalone PDF generation (used by PDFDirectExporter and ExportPage) ──────
+// Standalone PDF generation (used by PDFDirectExporter and ExportPage)
 
 export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme, filename?: string): Promise<void> {
   const resolvedFilename = filename ?? `claude-stats-${format(new Date(), 'yyyy-MM-dd')}.pdf`
@@ -716,7 +724,7 @@ export async function runPDFCapture(el: HTMLElement, pdfTheme: PDFTheme, filenam
   }
 }
 
-// ── Direct PDF export (no modal) — renders content offscreen and downloads ───
+// Direct PDF export (no modal) — renders content offscreen and downloads
 
 export interface PDFDirectExporterProps {
   data: AppData
@@ -794,11 +802,11 @@ export function PDFDirectExporter({ data, range, currentFilters, lang, currency,
   )
 }
 
-// ── Compare section — rendered INSIDE the unified report when the "compare"
+// Compare section — rendered INSIDE the unified report when the "compare"
 // section is enabled. Content mirrors the harness-comparison view (overview
 // cards, comparison table, usage by hour/dow, activity, peaks, cost by model)
 // but as one section among others, not a standalone whole-page mode. Always
-// fed the same filtered summaries as the rest of the report (see ExportPage). ──
+// fed the same filtered summaries as the rest of the report (see ExportPage).
 
 function CompareSectionContent({ summaries, harnesses, c, pt, currency, brlRate }: {
   summaries: Record<HarnessId, HarnessSummary>
@@ -1145,7 +1153,7 @@ function CompareSectionContent({ summaries, harnesses, c, pt, currency, brlRate 
   )
 }
 
-// ── PDF Content (the exportable A4 page, 794px wide) ─────────────────────────
+// PDF Content (the exportable A4 page, 794px wide)
 
 export interface PDFContentProps {
   pdfTheme: PDFTheme
@@ -1184,6 +1192,16 @@ export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, 
     ? pdfFilters.models.length === 1 ? formatModel(pdfFilters.models[0]!) : `${pdfFilters.models.length} models`
     : null
 
+  // Scope labels for the report header — so a repo/project-filtered PDF says what it covers.
+  const repoLabel = pdfFilters.repos && pdfFilters.repos.length > 0
+    ? pdfFilters.repos.length === 1
+      ? (pdfFilters.repos[0] === '' ? (pt ? 'Sem repositório' : 'No repository') : repoShortName(pdfFilters.repos[0]!))
+      : `${pdfFilters.repos.length} ${pt ? 'repositórios' : 'repos'}`
+    : null
+  const projectLabel = pdfFilters.projects && pdfFilters.projects.length > 0
+    ? pdfFilters.projects.length === 1 ? formatProjectName(pdfFilters.projects[0]!) : `${pdfFilters.projects.length} ${pt ? 'projetos' : 'projects'}`
+    : null
+
   // Harness-aware title: use the harness label when filtered to a specific harness,
   // otherwise fall back to the neutral 'agentistics' brand name.
   const harnessTitle = pdfFilters.harness
@@ -1208,6 +1226,8 @@ export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, 
             <div style={{ fontSize: 20, fontWeight: 700, color: c.text, lineHeight: 1 }}>{harnessTitle}</div>
             <div style={{ fontSize: 11, color: c.textSec, marginTop: 3 }}>
               {pt ? 'Relatório de uso' : 'Usage Report'} · {periodLabel}
+              {repoLabel && ` · ${repoLabel}`}
+              {projectLabel && ` · ${projectLabel}`}
               {modelLabel && ` · ${modelLabel}`}
             </div>
           </div>
@@ -1232,7 +1252,10 @@ export function PDFContent({ pdfTheme, sectionOrder, derived, pdfFilters, lang, 
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
                 <KPICard label={pt ? 'Sequência' : 'Streak'} value={`${derived.streak}d`} sub={pt ? 'dias consec.' : 'consecutive'} accent={c.red} c={c} />
-                <KPICard label={pt ? 'Sessão mais longa' : 'Longest session'} value={derived.longestSession?.duration_minutes ? fmtDur(derived.longestSession.duration_minutes) : '—'} sub="" accent={c.purple} c={c} />
+                <KPICard label={pt ? 'Sessão mais longa' : 'Longest session'}
+                  value={derived.longestSession ? (sessionTime(derived.longestSession, pt ? 'pt' : 'en').active ?? sessionTime(derived.longestSession, pt ? 'pt' : 'en').elapsed) : '—'}
+                  sub={derived.longestSession ? `${sessionTime(derived.longestSession, pt ? 'pt' : 'en').elapsed} ${pt ? 'decorrido' : 'elapsed'}` : ''}
+                  accent={c.purple} c={c} />
                 <KPICard label="Commits" value={fmt(derived.gitCommits)} sub={derived.gitPushes > 0 ? `${fmt(derived.gitPushes)} pushes` : `via ${harnessTitle}`} accent={c.cyan} c={c} />
                 <KPICard label={pt ? 'Arquivos' : 'Files'} value={fmt(derived.filesModified)} sub={`+${fmt(derived.linesAdded)} / -${fmt(derived.linesRemoved)}`} accent={c.green} c={c} />
               </div>

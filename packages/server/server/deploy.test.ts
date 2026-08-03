@@ -12,19 +12,18 @@ import { generateEnvFile, autostartSnippet } from './deploy'
 // ---------------------------------------------------------------------------
 
 describe('generateEnvFile', () => {
-  it('includes the supplied password and session secret', () => {
+  it('includes the supplied session secret and never a shared dashboard password', () => {
     const out = generateEnvFile({
-      password: 'supersecretpassword',
       sessionSecret: 'abc123sessionkey',
       mongoUrl: 'mongodb://mongo:27017/?replicaSet=rs0',
     })
-    expect(out).toContain('AGENTISTICS_TEAM_PASSWORD=supersecretpassword')
     expect(out).toContain('AGENTISTICS_TEAM_SESSION_SECRET=abc123sessionkey')
+    // A central authenticates accounts; the owner is created via the one-time setup token.
+    expect(out).not.toContain('AGENTISTICS_TEAM_PASSWORD')
   })
 
   it('includes MONGO_URL as provided', () => {
     const out = generateEnvFile({
-      password: 'pw',
       sessionSecret: 'sec',
       mongoUrl: 'mongodb://mongo:27017/?replicaSet=rs0',
     })
@@ -33,7 +32,6 @@ describe('generateEnvFile', () => {
 
   it('sets AGENTISTICS_TEAM_CENTRAL=1', () => {
     const out = generateEnvFile({
-      password: 'pw',
       sessionSecret: 'sec',
       mongoUrl: 'mongodb://mongo:27017',
     })
@@ -42,7 +40,6 @@ describe('generateEnvFile', () => {
 
   it('uses default mongoDb and teamOrg when omitted', () => {
     const out = generateEnvFile({
-      password: 'pw',
       sessionSecret: 'sec',
       mongoUrl: 'mongodb://mongo:27017',
     })
@@ -52,7 +49,6 @@ describe('generateEnvFile', () => {
 
   it('uses custom mongoDb and teamOrg when provided', () => {
     const out = generateEnvFile({
-      password: 'pw',
       sessionSecret: 'sec',
       mongoUrl: 'mongodb://mongo:27017',
       mongoDb: 'mydb',
@@ -64,7 +60,6 @@ describe('generateEnvFile', () => {
 
   it('uses default appPort 47291 when omitted', () => {
     const out = generateEnvFile({
-      password: 'pw',
       sessionSecret: 'sec',
       mongoUrl: 'mongodb://mongo:27017',
     })
@@ -73,7 +68,6 @@ describe('generateEnvFile', () => {
 
   it('uses custom appPort when provided', () => {
     const out = generateEnvFile({
-      password: 'pw',
       sessionSecret: 'sec',
       mongoUrl: 'mongodb://mongo:27017',
       appPort: 8080,
@@ -83,7 +77,6 @@ describe('generateEnvFile', () => {
 
   it('includes the ingest token when provided', () => {
     const out = generateEnvFile({
-      password: 'pw',
       sessionSecret: 'sec',
       mongoUrl: 'mongodb://mongo:27017',
       ingestToken: 'tok-xyz',
@@ -93,7 +86,6 @@ describe('generateEnvFile', () => {
 
   it('ends with a newline', () => {
     const out = generateEnvFile({
-      password: 'pw',
       sessionSecret: 'sec',
       mongoUrl: 'mongodb://mongo:27017',
     })

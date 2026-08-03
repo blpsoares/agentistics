@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Workflow as WorkflowIcon, ChevronDown, ChevronRight, Search } from 'lucide-react'
+import { Workflow as WorkflowIcon, ChevronDown, ChevronRight, Search, FileCode, GitBranch } from 'lucide-react'
 import type { WorkflowRun, WorkflowAgent, SessionMeta } from '@agentistics/core'
-import { getModelPrice, fmtCost, fmt, sessionLabel } from '@agentistics/core'
+import { getModelPrice, fmtCost, fmt, sessionLabel, formatProjectName, repoShortName } from '@agentistics/core'
+import { DYNAMIC_WORKFLOWS_DOC } from '../lib/harness'
+import { DocLink } from '../components/DocLink'
 import type { AppContext } from '../lib/app-context'
 import { Section } from '../components/Section'
 import { getDateRangeFilter } from '../hooks/useData'
@@ -77,8 +79,9 @@ export default function WorkflowsPage() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 4 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>
           <span style={{ color: 'var(--anthropic-orange)' }}><WorkflowIcon size={16} /></span>
-          Workflows
+          Dynamic Workflows
           <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--text-tertiary)' }}>({filtered.length})</span>
+          <DocLink href={DYNAMIC_WORKFLOWS_DOC} title={pt ? 'O que é Dynamic Workflows? (doc da Anthropic)' : 'What is Dynamic Workflows? (Anthropic docs)'} size={14} />
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
           {pt
@@ -179,10 +182,11 @@ function RunBlock({ run, pt, rate, currency, groupBy, query, sessionById }: {
 }) {
   const [open, setOpen] = useState(true)
   const statusColor = run.status === 'completed' ? '#22c55e' : run.status === 'partial' ? '#eab308' : '#ef4444'
-  const sessionDisplay = (() => {
-    const s = sessionById.get(run.sessionId)
-    return s ? sessionLabel(s) : run.sessionId.slice(0, 8)
-  })()
+  const s = sessionById.get(run.sessionId)
+  const sessionDisplay = s ? sessionLabel(s) : run.sessionId.slice(0, 8)
+  const project = s?.project_path ? formatProjectName(s.project_path) : ''
+  // Repo shown only when the session is linked to a git remote; omitted otherwise.
+  const repo = s?.git_remote ? repoShortName(s.git_remote) : ''
 
   // Apply the in-tab agent search, then group.
   const agents = useMemo(() => {
@@ -227,6 +231,16 @@ function RunBlock({ run, pt, rate, currency, groupBy, query, sessionById }: {
             <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)', border: '1px solid rgba(217,119,6,0.3)', borderRadius: 5, padding: '1px 7px' }}>{run.user}</span>
           )}
           <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 400 }}>{pt ? 'sessão' : 'session'}: {sessionDisplay}</span>
+          {project && (
+            <span title={project} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <FileCode size={11} style={{ flexShrink: 0 }} /> {project}
+            </span>
+          )}
+          {repo && (
+            <span title={repo} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <GitBranch size={11} style={{ flexShrink: 0 }} /> {repo}
+            </span>
+          )}
         </span>
       }
     >

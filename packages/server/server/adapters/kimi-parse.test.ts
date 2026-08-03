@@ -1,0 +1,149 @@
+import { test, expect } from 'bun:test'
+import {
+  parseKimiState, kimiAgentIds, stripProvider, accumulateKimiWire, buildKimiSession,
+} from './kimi-parse'
+
+/** Real event shapes, trimmed. A turn is: turn.prompt → step.begin → tool.call/result → step.end,
+ *  with a usage.record alongside the step.end that repeats its numbers exactly. */
+const T0 = 1785191518480
+const wire = (lines: unknown[]): string => lines.map(l => JSON.stringify(l)).join('\n')
+
+const usageRecord = (over: Partial<Record<string, number>> = {}) => ({
+  type: 'usage.record',
+  model: 'google/gemini-3.5-flash-lite',
+  usage: { inputOther: 100, output: 10, inputCacheRead: 50, inputCacheCreation: 5, ...over },
+  usageScope: 'turn',
+  time: T0 + 1000,
+})
+const stepEndEcho = (over: Partial<Record<string, number>> = {}) => ({
+  type: 'context.append_loop_event',
+  event: {
+    type: 'step.end', turnId: '0', step: 1,
+    // Byte-identical to the usage.record above — this is the trap.
+    usage: { inputOther: 100, output: 10, inputCacheRead: 50, inputCacheCreation: 5, ...over },
+    finishReason: 'end_turn',
+  },
+  time: T0 + 1000,
+})
+const userPrompt = (text: string, time = T0) => ({
+  type: 'turn.prompt', input: [{ type: 'text', text }], origin: { kind: 'user' }, time,
+})
+
+test('token counts come from usage.record only — step.end repeats them', () => {
+  // Summing both sources doubled every figure on real data.
+  const totals = accumulateKimiWire(wire([userPrompt('salve'), usageRecord(), stepEndEcho()]))
+  expect(totals.inputTokens).toBe(100)
+  expect(totals.outputTokens).toBe(10)
+  expect(totals.cacheRead).toBe(50)
+  expect(totals.cacheCreation).toBe(5)
+})
+
+test('usage records accumulate across turns rather than replacing each other', () => {
+  // They are per-turn increments, not a running total (unlike Codex, where the last one wins).
+  const totals = accumulateKimiWire(wire([
+    userPrompt('one'), usageRecord(), stepEndEcho(),
+    usageRecord({ inputOther: 200, output: 20 }), stepEndEcho({ inputOther: 200, output: 20 }),
+  ]))
+  expect(totals.inputTokens).toBe(300)
+  expect(totals.outputTokens).toBe(30)
+})
+
+test('the model loses its provider prefix so the pricing table can key on it', () => {
+  expect(stripProvider('google/gemini-3.5-flash-lite')).toBe('gemini-3.5-flash-lite')
+  expect(stripProvider('kimi-k2')).toBe('kimi-k2')
+  expect(stripProvider('')).toBe('')
+  const totals = accumulateKimiWire(wire([userPrompt('x'), usageRecord()]))
+  expect(totals.model).toBe('gemini-3.5-flash-lite')
+})
+
+test('tools are counted from the nested loop events, with MCP recognised by its prefix', () => {
+  const totals = accumulateKimiWire(wire([
+    userPrompt('x'),
+    { type: 'context.append_loop_event', event: { type: 'tool.call', name: 'Bash' }, time: T0 },
+    { type: 'context.append_loop_event', event: { type: 'tool.call', name: 'Read' }, time: T0 },
+    { type: 'context.append_loop_event', event: { type: 'tool.call', name: 'Read' }, time: T0 },
+    { type: 'context.append_loop_event', event: { type: 'tool.call', name: 'mcp__db__query' }, time: T0 },
+  ]))
+  expect(totals.toolCounts).toEqual({ Bash: 1, Read: 2, mcp__db__query: 1 })
+  expect(totals.usesMcp).toBe(true)
+})
+
+test('a failed tool result is counted once, however it reports the failure', () => {
+  const totals = accumulateKimiWire(wire([
+    userPrompt('x'),
+    { type: 'context.append_loop_event', event: { type: 'tool.result', isError: true }, time: T0 },
+    { type: 'context.append_loop_event', event: { type: 'tool.result', exitCode: 127 }, time: T0 },
+    { type: 'context.append_loop_event', event: { type: 'tool.result', status: 'error' }, time: T0 },
+    // Success in three flavours — none of these count.
+    { type: 'context.append_loop_event', event: { type: 'tool.result', exitCode: 0 }, time: T0 },
+    { type: 'context.append_loop_event', event: { type: 'tool.result', status: 'ok' }, time: T0 },
+    { type: 'context.append_loop_event', event: { type: 'tool.result' }, time: T0 },
+  ]))
+  expect(totals.toolErrors).toBe(3)
+})
+
+test('only genuine user turns become prompts and activity hours', () => {
+  const totals = accumulateKimiWire(wire([
+    userPrompt('first'),
+    { type: 'turn.prompt', input: [{ type: 'text', text: 'replayed' }], origin: { kind: 'system' }, time: T0 },
+    userPrompt('second', T0 + 60_000),
+  ]))
+  expect(totals.userPrompts).toBe(2)
+  expect(totals.firstPrompt).toBe('first')
+  expect(totals.hours.length).toBe(2)
+  expect(totals.hours[0]).toBe(new Date(T0).getHours()) // local clock, like every other adapter
+})
+
+test('malformed lines are skipped instead of throwing', () => {
+  const totals = accumulateKimiWire([
+    'not json',
+    '{"type":"usage.record"}',            // no usage object
+    JSON.stringify(userPrompt('ok')),
+    '{"type":"context.append_loop_event"}', // no event
+    '',
+  ].join('\n'))
+  expect(totals.userPrompts).toBe(1)
+  expect(totals.inputTokens).toBe(0)
+})
+
+test('a session with no user turn is dropped, like a bootstrap stub', () => {
+  const totals = accumulateKimiWire(wire([usageRecord(), stepEndEcho()]))
+  expect(buildKimiSession('id', { createdAt: '2026-07-27T22:00:00.000Z' }, totals)).toBeNull()
+})
+
+test('state.json supplies the identity the wire does not carry', () => {
+  const totals = accumulateKimiWire(wire([userPrompt('salve'), usageRecord(), stepEndEcho()]))
+  const s = buildKimiSession('c72d917d', {
+    title: 'salve',
+    workDir: '/home/padawan',
+    createdAt: '2026-07-27T22:26:15.061Z',
+    updatedAt: '2026-07-27T22:35:50.015Z',
+  }, totals)!
+  expect(s.harness).toBe('kimi')
+  expect(s.title).toBe('salve')
+  expect(s.project_path).toBe('/home/padawan')
+  expect(s.duration_minutes).toBe(10)
+  expect(s.input_tokens).toBe(100)
+})
+
+test('the workDir falls back to the global index when state.json has none', () => {
+  const totals = accumulateKimiWire(wire([userPrompt('x'), usageRecord()]))
+  const s = buildKimiSession('id', { createdAt: '2026-07-27T22:00:00.000Z' }, totals, '/from/index')!
+  expect(s.project_path).toBe('/from/index')
+})
+
+test('every agent of a session is read, so sub-agent work is not lost', () => {
+  const state = parseKimiState(JSON.stringify({
+    agents: { main: { parentAgentId: null }, 'agent_1': { parentAgentId: 'main' } },
+  }))
+  expect(kimiAgentIds(state).sort()).toEqual(['agent_1', 'main'])
+  // A session with no agent map still reads the default agent.
+  expect(kimiAgentIds(null)).toEqual(['main'])
+  expect(kimiAgentIds({})).toEqual(['main'])
+})
+
+test('parseKimiState tolerates a missing or broken file', () => {
+  expect(parseKimiState('')).toBeNull()
+  expect(parseKimiState('{oops')).toBeNull()
+  expect(parseKimiState('{"title":"t"}')?.title).toBe('t')
+})

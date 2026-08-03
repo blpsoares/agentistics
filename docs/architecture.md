@@ -158,7 +158,7 @@ Every machine picks one role, persisted at `preferences.team.mode`:
 - **`up`** — ensures `central.env` exists (offers `init`), then builds and `--force-recreate`s the containers.
 - **`down`** — stops the containers but **keeps the data volume** (only `down -v` wipes it, which mints a new `instanceId` — see reconciliation below).
 
-`central.env` variables: `APP_PORT` (default `48080`), `BIND_IP` (default `0.0.0.0`; set to a Tailscale IP to restrict exposure to a private tailnet without a public listener), `AGENTISTICS_TEAM_PASSWORD` (dashboard login), `AGENTISTICS_TEAM_SESSION_SECRET` (HMAC cookie key — kept **separate** from the password), `AGENTISTICS_TEAM_ORG`, `AGENTISTICS_TEAM_INGEST_TOKEN` (optional shared secret), `AGENTISTICS_CENTRAL_USER` (set when the central also contributes its own machine's data).
+`central.env` variables: `APP_PORT` (default `48080`), `BIND_IP` (default `127.0.0.1` — this host only, which is all a tunnel or reverse proxy needs; set `0.0.0.0` for the LAN or a Tailscale IP for a private tailnet), `AGENTISTICS_TEAM_SESSION_SECRET` (HMAC cookie key — **never** derived from the password; leave empty and a random one is generated and persisted), `AGENTISTICS_EXPOSURE` (`local`/`lan`/`public` — see [exposure.md](exposure.md)), `AGENTISTICS_TRUST_PROXY`, `AGENTISTICS_ALLOWED_ORIGINS`. The full security model — threat model, trust boundaries, request pipeline and the limits of each control — is in [security.md](security.md), `AGENTISTICS_TEAM_ORG`, `AGENTISTICS_TEAM_INGEST_TOKEN` (optional shared secret), `AGENTISTICS_CENTRAL_USER` (set when the central also contributes its own machine's data).
 
 ### Restart policy — both services survive a host reboot
 
@@ -198,6 +198,62 @@ The members panel (`TeamMembers.tsx`, central Settings → Team) can **mint**, *
 ### Notifications
 
 `packages/web/src/lib/notifications.ts` is a small external store rendered by `NotificationToasts.tsx` (auto-dismiss, animated) and `NotificationBell.tsx` (history + unread badge). Notifications carry a `code` (+ `meta`) and are localized **at render time** (`NOTIFICATION_TEXT`, pt/en) so they follow the language toggle. The server emits them via `broadcastNotification()` (SSE). Fired on member auth/connection errors, "removed from central", "machine connected", and "update available".
+
+### Per-connection repository sharing
+
+A member can push to more than one central (`preferences.team.connections: TeamConnection[]`) and can restrict what each connection receives **per connection** — a repo or project hidden from central A can still go to central B. Rules apply across **two dimensions** — repository (`git_remote`) and project (`project_path`) — and each connection picks one of **two modes**: `denylist` ("share everything except…", the default and the legacy behaviour) or `allowlist` ("share only…"). The full design is `docs/superpowers/specs/2026-07-28-multi-central-and-repo-sharing-design.md` plus its Plan 4 addendum; this is what shipped from it. Three layers:
+
+- **The pure decision layer — `server/share-rules.ts`.** `sessionShared(session, rules, index)` is the one predicate that decides whether a session may leave the machine for a given connection, where `rules` is `{ mode: 'denylist' | 'allowlist', sources: ReadonlySet<string> }` keyed as `` `${type}:${value}` `` (`repo:<canonical key>`, `project:<project_path>`, or the fixed `none:` bucket for sessions that resolve to no repository at all). A session **matches** a source when: `repo` — its canonical repo key equals the value (including via `buildPathRepoIndex`, for adapters that never stamp a remote); `project` — its `project_path` equals the value; `none` — it resolves to no repository. In **denylist** mode a session is shared unless it matches SOME source ("deny wins across dimensions": matching a blocked repo denies it even if its project is not listed). In **allowlist** mode a session is shared only if it matches SOME source — and an allowlist with an EMPTY source set shares NOTHING, deliberately; the opposite reading is exactly the one that would leak everything. The `conflictPaths` rule (a directory known to hold more than one repo) survives unchanged in both modes: denylist shares such a path only if every repo under it is shared; allowlist shares it only if some repo is allowed and none is excluded — a workspace holding a shared and a blocked repo would otherwise leak the blocked one's `first_prompt` under the shared key. `filterShared` / `filterSharedWorkflows` apply the predicate to sessions and workflow runs; a run whose owning session is unknown is dropped, never kept. `buildSplitStatsCache` is the attribution-split half — see below. Every function is pure and fails closed: uncertain attribution means "not shared", never "shared by default".
+- **The push path — `server/team-rules.ts` + `server/team-uploader.ts`.** `planRulesReconcile` is the pure detector that runs every push cycle per connection: it diffs the current denylist's signature against the last-persisted one, computes which previously-sent session/run ids the *current* denylist now excludes (`forgetIds`/`forgetRuns` — see below), and advances the seal ledger (see the attribution split). `team-uploader.ts` calls `filterShared`/`filterSharedWorkflows` before every push and `buildSplitStatsCache` before every statsCache push — a restricted connection never sees the unfiltered store.
+- **The central — `server/team-forget.ts` + `server/team-capabilities.ts`.** `POST /api/team/forget` deletes named sessions (+ their workflow runs) scoped to the token's own `memberId`; `GET /api/team/policy` advertises `capabilities: [..., 'forget.sessions']` so a member can tell whether a central understands the route at all.
+
+**The attribution split.** `stats-cache.json`'s aggregates cannot be filtered per-session — a day's row is a sum, not a list. `buildSplitStatsCache` (`share-rules.ts`) solves this by splitting the cache at **`attributionBoundary(real)`: the day *after* Claude's own `lastComputedDate` rollup watermark**, not wherever the consolidate store happens to begin. Days at or before the watermark are Claude's rollup verbatim — nobody, including this machine, can decompose them by repository, because the store is measurably a strict subset of what Claude already rolled up. Days at or after it are rebuilt from-scratch from the (denylist-filtered) session store, which is exact because the same store produced the field being subtracted from. **Totals never shrink**: the prehistory block travels unfiltered, only the decomposable window is filtered, which is what keeps a restricted machine's own dashboard numbers reconcilable with what it pushes.
+
+As Claude's watermark advances, a day that is decomposable today becomes part of the untouchable rollup tomorrow — so each cycle, while a day is still decomposable, the denied delta for that day is measured and, the moment the watermark crosses it, **sealed**: kept forever and subtracted from the rollup row from then on. Un-blocking a repo does not un-seal a day; a sealed day's excluded volume cannot be restored to a central because there is no longer a decomposable row to add it back to.
+
+**The split cache is selected by the declared rule, `sourcesRestrict(conn.shareMode, conn.sources)` — never by comparing filtered vs. unfiltered counts.** A count-based switch fails open on a cold consolidate store (`0 < 0` is false) and flips without any corresponding user action. Allowlist mode is **always** a restriction, even with an empty source list — that is the strictest case, not the absence of one; denylist mode is a restriction only once it names at least one source (the legacy `hasRestrictions` behaviour, kept for the read migration). On the restricted path there is **no fallback to the unsplit cache, ever**: `buildSplitStatsCache` returns `null` whenever it cannot build a faithful split (no attribution boundary, an unreadable real cache, the cold-store signature), and the push omits `statsCache` entirely rather than shipping the unfiltered one. `withUnresolvedSources` — the fail-closed default applied the moment a connection acquires its first restriction — applies to **denylist mode only**: in allowlist mode the unattributed (`none:`) bucket is already hidden by default like everything not explicitly listed, so there is nothing to add.
+
+**The removal sequence** (`team-forget-client.ts`'s `runForgetSequence`, triggered by `planRulesReconcile` finding `forgetIds`/`forgetRuns`) is what withdraws sessions already pushed before a repo was blocked:
+
+0. capability check (`connectionCanForget`) + `GET /api/team/whoami` proves which identity the central will act on — the trigger is **denial, never absence**: a session merely missing from a short-read store is never mistaken for a session that became denied.
+1. write the removal journal to disk **before** the first delete — a crash mid-sequence resumes from the journal at boot; deleting an already-deleted id is a no-op.
+2. `POST /api/team/forget { sessionIds }` in batches of 500, asserting on the response **body** (`ok === true`), never on `res.ok` — a reverse proxy can turn a 404 into a 200 HTML page.
+3. advance the sent-state **per acked batch**, never up front, so an interrupted sequence is resumable rather than self-defeating.
+4. push the rebuilt split statsCache in the same cycle.
+5. delete the journal only once the cache push has landed.
+
+The central-side delete is a **scoped delete of named sessions**, never a purge — the member's `memberStats` document is never touched, so no *other* machine's machine/team filter degrades while a removal runs. `POST /api/team/forget` is minted-token-only with no legacy `{org,user}` fallback (deliberately unlike `POST /api/team/leave`), and a central that does not advertise `forget.sessions` gets `canForget: false` and a disabled rules editor — never a fallback to a destructive full purge.
+
+See [security.md](security.md) for the precise guarantee this gives a user, and its five explicit non-guarantees.
+
+## Repository dimension (group by git remote)
+
+Metrics can be grouped **by repository** — the git remote — independently of the local checkout path or which machine produced the session. So a repo's usage aggregates across every dev's laptop *and* its CI runs, even though those live on different machines with different paths.
+
+### The key — `normalizeGitRemote`
+
+`normalizeGitRemote(url)` in `@agentistics/core` collapses any remote form (https / ssh / scp / git, with or without credentials / port / `.git`) into a stable, **protocol-less** key `host/org/repo` (e.g. `github.com/org/repo`). It is the **single source of truth** — repos are never keyed by parsing the local path. `repoShortName(remote)` drops the host for display (`org/repo`); a session with no resolvable remote falls into the "no linked repository" bucket (shown, never hidden).
+
+### How it is captured and threaded
+
+- `server/git.ts getGitRemote(projectPath)` reads `remote.origin.url` and normalizes it (same Windows/WSL + no-prompt guards as the other git helpers).
+- `server/data.ts scanProjectDir` resolves the remote **once per project** and **stamps `SessionMeta.git_remote` onto every session** (plus `ServerProject.gitRemote`). Because it lives on the session, the remote travels into the consolidate store → team uploader → Mongo — the central has no filesystem access to members' repos, so per-session is the only place it can live.
+- Frontend: `useDerivedStats` builds `repoStats` (per-remote aggregate) and honors a `Filters.repos` filter, scoping cost/tokens session-side like a project filter. The **Repositories** page (`RepositoriesPage` → `RepoDetailPage`) renders cards → per-repo detail (Overview / Members / Actions / Sessions / Workflows).
+
+### GitHub Actions — `SessionMeta.ci` + repo registration
+
+An ephemeral Claude Code Actions runner pushes its metrics with `agentop ci-push` → `POST /api/team/ingest`, so a repo's dashboard shows **local devs + cloud agents together**. Attribution is **server-authoritative**: the central stamps `git_remote` + `ci: true` + `user = github-actions` from a *verified* identity (`stampCiSessions`) — a runner can never mis-report its repo. Two auth paths:
+
+- **Keyless GitHub OIDC (recommended)** — the runner presents a short-lived GitHub-signed JWT; the central verifies it against GitHub's JWKS (`server/team-oidc.ts`, via `jose`: issuer / audience / expiry) and checks the `repository` claim against the **registered-repos allowlist**. No secret stored. Enabled by `AGENTISTICS_OIDC_AUDIENCE` on the central.
+- **Repo-bound static token (fallback)** — minted by registration, stored only as a sha256 hash, sent as `Authorization: Bearer`.
+
+**Registering a repo** is an admin action (central **Settings → Team → Repositories**, the `TeamRepos` panel, or `POST /api/team/repos`). It allowlists the normalized remote and mints the fallback CI token; the panel also generates a ready-to-paste workflow push step. Re-registering **rotates** the token; unregistering revokes it (both drop that repo's CI data). CI sessions are keyed by `ciMemberId` (`repo:<remote>`) and power the **Repositories → Actions** view.
+
+### Ingest-only hardening
+
+A cloud runner needs the central reachable without exposing the dashboard. `AGENTISTICS_INGEST_ONLY=1` makes a central serve **only** `POST /api/team/ingest` (404 for everything else, gated right after the OPTIONS handler in `index.ts`) — run it as a public ingest instance sharing Mongo with a separate private dashboard instance.
+
+See [`docs/github-actions.md`](./github-actions.md) for the end-to-end GitHub Actions setup.
 
 ## CLI (`agentop`)
 

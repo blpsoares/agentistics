@@ -11,9 +11,17 @@
  */
 
 import { listMembers, mintToken, revokeToken, rotateToken } from './team-tokens'
+import { registerRepo, listRepos, unregisterRepo } from './team-repos'
 import { getTeamCollection } from './mongo'
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const
+
+/** Best-effort, fire-and-forget local dashboard refresh (§ live-refresh). Dynamic import mirrors
+ *  `team-connections.ts`'s own nudges — `sse.ts` is a heavier, request-handling module and this
+ *  keeps it out of the load path of every other route. Never throws, never delays the response. */
+function notifyLocalDashboards(): void {
+  void import('./sse').then(m => m.triggerSseNotification()).catch(() => { /* best-effort */ })
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/team/members
@@ -53,8 +61,20 @@ export async function handleMembers(_req: Request): Promise<Response> {
  * Mint a new ingest token. Returns the plaintext token once.
  * Body: { user: string; label: string }
  * Response: { token: string }  — store it now; it is not saved server-side.
+ *
+ * Live-refresh: notifies this machine's own connected dashboards once the mint has actually
+ * succeeded — a new machine used to appear on the Team Members panel only on its next poll,
+ * unlike revoke/rotate/rename, which already refresh immediately.
+ *
+ * `deps` is injectable for tests — the defaults hit the real `~/.agentistics`-adjacent Mongo
+ * collection (`mintToken`) and the real SSE machinery (`notify`), neither of which a test may do.
  */
-export async function handleMintToken(req: Request): Promise<Response> {
+export async function handleMintToken(
+  req: Request,
+  deps: { mintToken?: typeof mintToken; notify?: () => void } = {},
+): Promise<Response> {
+  const _mintToken = deps.mintToken ?? mintToken
+  const _notify = deps.notify ?? notifyLocalDashboards
   let body: unknown
   try {
     body = await req.json()
@@ -83,7 +103,8 @@ export async function handleMintToken(req: Request): Promise<Response> {
   }
 
   try {
-    const token = await mintToken(user, label)
+    const token = await _mintToken(user, label)
+    _notify()
     return new Response(JSON.stringify({ token }), {
       status: 200,
       headers: JSON_CT,
@@ -158,7 +179,8 @@ export async function handleRevokeToken(req: Request): Promise<Response> {
 
 /**
  * Rotate a member's token by its hash id. Mints a fresh token and migrates the
- * member's history (sessions + stats) to the new identity key.
+ * member's history (sessions, stats, workflows, tags, and the sealed-envelope key) to the new
+ * identity key. See `rotateToken` for the full list, including the one thing it cannot carry.
  * Body: { id: string }  — `id` is the SHA-256 hash of the current token.
  * Response: { token: string }  — the new plaintext token; store it now, it is not saved.
  * Returns 404 { error: 'not found' } if no token with that id exists.
@@ -185,14 +207,14 @@ export async function handleRotateToken(req: Request): Promise<Response> {
   }
 
   try {
-    const token = await rotateToken(id)
-    if (token === null) {
+    const rotated = await rotateToken(id)
+    if (rotated === null) {
       return new Response(JSON.stringify({ error: 'not found' }), {
         status: 404,
         headers: JSON_CT,
       })
     }
-    return new Response(JSON.stringify({ token }), {
+    return new Response(JSON.stringify({ token: rotated.token }), {
       status: 200,
       headers: JSON_CT,
     })
@@ -201,5 +223,73 @@ export async function handleRotateToken(req: Request): Promise<Response> {
       JSON.stringify({ error: e instanceof Error ? e.message : String(e) }),
       { status: 500, headers: JSON_CT },
     )
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Repositories — GitHub Actions registration (central admin only)
+// ---------------------------------------------------------------------------
+
+/** GET /api/team/repos → { repos: RepoInfo[] } */
+export async function handleListRepos(_req: Request): Promise<Response> {
+  try {
+    const repos = await listRepos()
+    return new Response(JSON.stringify({ repos }), { status: 200, headers: JSON_CT })
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), { status: 500, headers: JSON_CT })
+  }
+}
+
+/**
+ * POST /api/team/repos — register a repository and mint its CI ingest token.
+ * Body: { url: string, name?: string }  — `url` is any git remote form (https/ssh/scp).
+ * Response: { token: string, remote: string } — the token is shown once; store it as the
+ * repo's GitHub Actions secret. Re-registering an existing repo rotates its token.
+ */
+export async function handleRegisterRepo(req: Request): Promise<Response> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return new Response(JSON.stringify({ error: 'invalid JSON' }), { status: 400, headers: JSON_CT })
+  }
+  const raw = body as Record<string, unknown>
+  const url = typeof raw?.url === 'string' ? raw.url.trim() : ''
+  if (!url) {
+    return new Response(JSON.stringify({ error: 'url required' }), { status: 400, headers: JSON_CT })
+  }
+  try {
+    const result = await registerRepo(url)
+    if (!result.ok) {
+      return new Response(JSON.stringify({ error: result.error }), { status: 400, headers: JSON_CT })
+    }
+    return new Response(JSON.stringify({ token: result.token, remote: result.remote }), { status: 200, headers: JSON_CT })
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), { status: 500, headers: JSON_CT })
+  }
+}
+
+/**
+ * DELETE /api/team/repos — unregister a repository (revokes its CI token + CI sessions).
+ * Body: { remote: string }  — any remote form; normalized server-side.
+ * Response: { ok: boolean }
+ */
+export async function handleUnregisterRepo(req: Request): Promise<Response> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return new Response(JSON.stringify({ error: 'invalid JSON' }), { status: 400, headers: JSON_CT })
+  }
+  const raw = body as Record<string, unknown>
+  const remote = typeof raw?.remote === 'string' ? raw.remote.trim() : ''
+  if (!remote) {
+    return new Response(JSON.stringify({ error: 'remote required' }), { status: 400, headers: JSON_CT })
+  }
+  try {
+    const ok = await unregisterRepo(remote)
+    return new Response(JSON.stringify({ ok }), { status: ok ? 200 : 404, headers: JSON_CT })
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), { status: 500, headers: JSON_CT })
   }
 }

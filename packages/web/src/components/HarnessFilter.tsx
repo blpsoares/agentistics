@@ -117,5 +117,5 @@ const miniBtn: React.CSSProperties = {
   flex: 1, padding: '5px 8px', borderRadius: 6,
   border: '1px solid var(--border)', background: 'var(--bg-elevated)',
   color: 'var(--text-secondary)', fontSize: 11, fontWeight: 500,
-  cursor: 'pointer', fontFamily: 'inherit',
+  cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
 }

@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Bell, AlertCircle, AlertTriangle, Info, CheckCircle2, Trash2 } from 'lucide-react'
-import { useNotifications, markAllRead, clearNotifications, resolveNotification, type NotificationType } from '../lib/notifications'
+import { useNavigate } from 'react-router-dom'
+import { Bell, AlertCircle, AlertTriangle, Info, CheckCircle2, Trash2, X } from 'lucide-react'
+import { useNotifications, markAllRead, clearNotifications, dismissNotification, resolveNotification, notificationLink, type NotificationType } from '../lib/notifications'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 const ICON: Record<NotificationType, { color: string; Icon: typeof AlertCircle }> = {
   error:   { color: '#ef4444', Icon: AlertCircle },
@@ -29,6 +31,8 @@ interface Props {
 export function NotificationBell({ lang, buttonStyle }: Props) {
   const pt = lang === 'pt'
   const notes = useNotifications()
+  const isMobile = useIsMobile()
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const unread = notes.filter(n => !n.read).length
@@ -87,12 +91,15 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
               <button
                 onClick={() => clearNotifications()}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 4, padding: '3px 7px', borderRadius: 6,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                  padding: isMobile ? '0 12px' : '3px 7px', minHeight: isMobile ? 44 : undefined,
+                  borderRadius: 6,
                   border: '1px solid var(--border)', background: 'transparent',
                   color: 'var(--text-tertiary)', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit',
                 }}
               >
-                <Trash2 size={11} />{pt ? 'Limpar' : 'Clear'}
+                {/* "tudo" matters now that each row has its own remove button. */}
+                <Trash2 size={11} />{pt ? 'Limpar tudo' : 'Clear all'}
               </button>
             )}
           </div>
@@ -105,11 +112,28 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
             notes.map(n => {
               const { color, Icon } = ICON[n.type]
               const { title, message } = resolveNotification(n, lang)
+              // A notification about a decision opens that decision — see `notificationLink`.
+              const link = notificationLink(n)
+              const go = () => { if (!link) return; setOpen(false); navigate(link) }
               return (
-                <div key={n.id} style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 9,
-                  padding: '10px 12px', borderBottom: '1px solid var(--border)',
-                }}>
+                // THE WHOLE ROW is the link, not a box inside it. The handler used to sit on the
+                // inner text block, so a click on the row's padding, its icon or the timestamp
+                // column did nothing at all — a link whose hit area is a subset of what looks like
+                // the link reads as "clicking the notification does nothing".
+                <div
+                  key={n.id}
+                  role={link ? 'button' : undefined}
+                  tabIndex={link ? 0 : undefined}
+                  onClick={link ? go : undefined}
+                  onKeyDown={link ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go() } }) : undefined}
+                  onMouseEnter={link ? (e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-elevated)' }) : undefined}
+                  onMouseLeave={link ? (e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent' }) : undefined}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 9,
+                    padding: '10px 12px', borderBottom: '1px solid var(--border)',
+                    background: 'transparent', cursor: link ? 'pointer' : undefined,
+                  }}
+                >
                   <Icon size={15} color={color} style={{ flexShrink: 0, marginTop: 1 }} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
@@ -119,9 +143,35 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
                       </div>
                     )}
                   </div>
-                  <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                    {relTime(n.ts, pt)}
-                  </span>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0,
+                    alignSelf: 'flex-start',
+                  }}>
+                    <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
+                      {relTime(n.ts, pt)}
+                    </span>
+                    {/* Per-item delete. Always visible, never hover-only: the bell is rendered on
+                        mobile too, where hover does not exist, and the hit area is a full 44px
+                        there (the icon stays small — only the touch target grows). */}
+                    <button
+                      // The row navigates, so its own controls must not: without this, removing a
+                      // notification would also open whatever it linked to.
+                      onClick={e => { e.stopPropagation(); dismissNotification(n.id) }}
+                      title={pt ? 'Remover notificação' : 'Remove notification'}
+                      aria-label={pt ? 'Remover notificação' : 'Remove notification'}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: isMobile ? 44 : 22, height: isMobile ? 44 : 22,
+                        marginRight: isMobile ? -10 : 0,
+                        padding: 0, borderRadius: 6, border: 'none', background: 'transparent',
+                        color: 'var(--text-tertiary)', cursor: 'pointer',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)' }}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
                 </div>
               )
             })

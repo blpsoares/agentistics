@@ -18,14 +18,41 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { TEAM_CENTRAL, TEAM_PASSWORD, TEAM_SESSION_SECRET, TEAM_TLS, CENTRAL_USER } from './config'
+import { getAccount } from './accounts'
+import { CAPS, PROFILE } from './exposure'
+import type { Principal } from './iam-types'
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const COOKIE_NAME = 'agentistics_session'
-const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+const COOKIE_BASE = 'agentistics_session'
+const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000 // absolute cap
+/** Sliding window: a session unused for this long is dead even inside its absolute lifetime. */
+export const IDLE_TIMEOUT_MS = 12 * 60 * 60 * 1000
+/** Reissue the cookie at most this often, so an active user never hits the idle wall. */
+export const SESSION_REFRESH_MS = 15 * 60 * 1000
 const MAX_AGE_SECONDS = SESSION_DURATION_MS / 1000
+
+/**
+ * `__Host-` requires Secure + Path=/ + no Domain. It stops a sibling subdomain (or a network
+ * attacker over plain HTTP) from overwriting the session cookie — the strongest integrity
+ * guarantee available for a cookie. Only usable when the cookie is Secure, so a plain-HTTP
+ * local instance keeps the bare name.
+ */
+export function cookieName(secure: boolean): string {
+  return secure ? `__Host-${COOKIE_BASE}` : COOKIE_BASE
+}
+
+function secureCookies(): boolean {
+  return TEAM_TLS || CAPS.requireSecureCookies
+}
+
+/** Read the session cookie under either name — flipping TLS on must not log everyone out. */
+function readSessionCookie(req: Request): string | undefined {
+  const cookies = parseCookies(req.headers.get('cookie'))
+  return cookies[cookieName(true)] ?? cookies[cookieName(false)]
+}
 
 // Content-Type only — callers spread CORS_HEADERS from index.ts.
 const JSON_CT = { 'Content-Type': 'application/json' } as const
@@ -68,6 +95,106 @@ export function verifySession(
   return constantTimeEqual(mac, expected)
 }
 
+// ---------------------------------------------------------------------------
+// Principal-carrying session (IAM) — additive; coexists with the legacy
+// password session above until Phase 2 switches login over to accounts.
+// Cookie value: `${expiryMs}.${accountId}.${sessionVersion}.${HMAC(payload)}`.
+// ---------------------------------------------------------------------------
+
+export interface PrincipalCookie {
+  accountId: string
+  sessionVersion: number
+  issuedAtMs: number
+}
+
+/** Sign a principal session. The signed payload is `expiryMs.accountId.sessionVersion.issuedAt`. */
+export function signPrincipalSession(
+  expiryMs: number,
+  accountId: string,
+  sessionVersion: number,
+  secret: string,
+  issuedAtMs: number,
+): string {
+  const payload = `${expiryMs}.${accountId}.${sessionVersion}.${issuedAtMs}`
+  const mac = createHmac('sha256', secret).update(payload).digest('hex')
+  return `${payload}.${mac}`
+}
+
+/**
+ * Verify a principal session cookie:
+ *   - splits off the trailing `.mac`, verifies HMAC over the payload (constant-time),
+ *   - parses `expiryMs.accountId.sessionVersion`, checks expiry > nowMs.
+ * Returns { accountId, sessionVersion } or null for any malformed/expired/tampered cookie.
+ */
+export function verifyPrincipalSession(
+  cookieValue: string | undefined,
+  secret: string,
+  nowMs: number,
+): PrincipalCookie | null {
+  if (!cookieValue) return null
+  const lastDot = cookieValue.lastIndexOf('.')
+  if (lastDot === -1) return null
+  const payload = cookieValue.slice(0, lastDot)
+  const mac = cookieValue.slice(lastDot + 1)
+  const expected = createHmac('sha256', secret).update(payload).digest('hex')
+  if (!constantTimeEqual(mac, expected)) return null
+  const parts = payload.split('.')
+  if (parts.length !== 4) return null
+  const expiry = parseInt(parts[0]!, 10)
+  const accountId = parts[1]!
+  const sessionVersion = parseInt(parts[2]!, 10)
+  const issuedAtMs = parseInt(parts[3]!, 10)
+  if (isNaN(expiry) || expiry <= nowMs) return null
+  if (!accountId || isNaN(sessionVersion) || isNaN(issuedAtMs)) return null
+  // Idle timeout: a cookie last reissued more than IDLE_TIMEOUT_MS ago is dead even though
+  // its absolute expiry is still days away. Active use refreshes it (see SESSION_REFRESH_MS).
+  if (nowMs - issuedAtMs > IDLE_TIMEOUT_MS) return null
+  return { accountId, sessionVersion, issuedAtMs }
+}
+
+// ---------------------------------------------------------------------------
+// MFA challenge — the short-lived token handed out between "password accepted" and
+// "second factor accepted". It is NOT a session: it grants nothing on its own, and it is
+// domain-separated from session cookies so one can never be replayed as the other.
+// ---------------------------------------------------------------------------
+
+/** How long the user has to type the code before restarting the login. */
+export const MFA_CHALLENGE_TTL_MS = 5 * 60 * 1000
+const MFA_DOMAIN = 'mfa-challenge'
+
+export function signMfaChallenge(
+  accountId: string,
+  sessionVersion: number,
+  secret: string,
+  expiryMs: number,
+): string {
+  const payload = `${expiryMs}.${accountId}.${sessionVersion}`
+  const mac = createHmac('sha256', secret).update(`${MFA_DOMAIN}.${payload}`).digest('hex')
+  return `${payload}.${mac}`
+}
+
+export function verifyMfaChallenge(
+  value: string | undefined,
+  secret: string,
+  nowMs: number,
+): { accountId: string; sessionVersion: number } | null {
+  if (!value) return null
+  const lastDot = value.lastIndexOf('.')
+  if (lastDot === -1) return null
+  const payload = value.slice(0, lastDot)
+  const mac = value.slice(lastDot + 1)
+  const expected = createHmac('sha256', secret).update(`${MFA_DOMAIN}.${payload}`).digest('hex')
+  if (!constantTimeEqual(mac, expected)) return null
+  const parts = payload.split('.')
+  if (parts.length !== 3) return null
+  const expiry = parseInt(parts[0]!, 10)
+  const accountId = parts[1]!
+  const sessionVersion = parseInt(parts[2]!, 10)
+  if (isNaN(expiry) || expiry <= nowMs) return null
+  if (!accountId || isNaN(sessionVersion)) return null
+  return { accountId, sessionVersion }
+}
+
 /**
  * Minimal cookie header parser. Splits on `;` and on the first `=`.
  * Handles cookie values containing `=` (e.g. base64).
@@ -103,8 +230,12 @@ export function constantTimeEqual(a: string, b: string): boolean {
 // ---------------------------------------------------------------------------
 
 function makeCookieHeader(value: string, maxAge: number): string {
-  const secure = TEAM_TLS ? '; Secure' : ''
-  return `${COOKIE_NAME}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure}`
+  const secure = secureCookies()
+  // SameSite=Strict: the dashboard is never legitimately entered by a cross-site POST, and
+  // Strict is what the OWASP cheat sheet recommends for an internal tool / admin panel.
+  const flags = [`${cookieName(secure)}=${value}`, 'HttpOnly', 'SameSite=Strict', 'Path=/', `Max-Age=${maxAge}`]
+  if (secure) flags.push('Secure')
+  return flags.join('; ')
 }
 
 // ---------------------------------------------------------------------------
@@ -182,10 +313,25 @@ export function handleSession(req: Request): Response {
   const required = Boolean(TEAM_PASSWORD)
   const authed = isAuthed(req)
   const aggregatorOnly = TEAM_CENTRAL && !CENTRAL_USER
-  return new Response(JSON.stringify({ authed, required, central: TEAM_CENTRAL, aggregatorOnly }), {
-    status: 200,
-    headers: JSON_CT,
-  })
+  return new Response(
+    JSON.stringify({
+      authed,
+      required,
+      central: TEAM_CENTRAL,
+      aggregatorOnly,
+      // The exposure profile and the local capabilities it grants. The web app uses these to
+      // hide affordances the server would refuse anyway (see capability-guard.ts) — the flags
+      // are a UI hint, never the enforcement point.
+      profile: PROFILE,
+      capabilities: {
+        localShell: CAPS.localShell,
+        localChat: CAPS.localChat,
+        localTranscripts: CAPS.localTranscripts,
+        mcpAdmin: CAPS.mcpAdmin,
+      },
+    }),
+    { status: 200, headers: JSON_CT },
+  )
 }
 
 /**
@@ -195,9 +341,7 @@ export function handleSession(req: Request): Response {
  */
 export function isAuthed(req: Request): boolean {
   if (!TEAM_PASSWORD) return true
-  const cookieHeader = req.headers.get('cookie')
-  const cookies = parseCookies(cookieHeader)
-  return verifySession(cookies[COOKIE_NAME], TEAM_SESSION_SECRET, Date.now())
+  return verifySession(readSessionCookie(req), TEAM_SESSION_SECRET, Date.now())
 }
 
 /**
@@ -207,7 +351,46 @@ export function isAuthed(req: Request): boolean {
  * when TEAM_PASSWORD is unset (no-password deployments).
  */
 export function hasValidSession(req: Request): boolean {
-  const cookieHeader = req.headers.get('cookie')
-  const cookies = parseCookies(cookieHeader)
-  return verifySession(cookies[COOKIE_NAME], TEAM_SESSION_SECRET, Date.now())
+  return verifySession(readSessionCookie(req), TEAM_SESSION_SECRET, Date.now())
+}
+
+/**
+ * Resolve the authenticated principal for a request, or null.
+ * Verifies the principal cookie, loads the account, and rejects if the account's
+ * sessionVersion no longer matches the cookie (revocation / password change / logout-all).
+ * Role + memberships are read FRESH from the DB so permission changes take effect immediately.
+ */
+export async function getPrincipal(req: Request): Promise<Principal | null> {
+  return (await getPrincipalSession(req))?.principal ?? null
+}
+
+/**
+ * Like getPrincipal, but also reports the cookie's issue time and the account's session
+ * generation — everything the gate needs to decide on a sliding refresh. Kept separate so
+ * `Principal` stays a pure authorization identity (accountId + role + memberships) and every
+ * authz test fixture can keep constructing one without session bookkeeping.
+ */
+export async function getPrincipalSession(
+  req: Request,
+): Promise<{ principal: Principal; issuedAtMs: number; sessionVersion: number } | null> {
+  const parsed = verifyPrincipalSession(readSessionCookie(req), TEAM_SESSION_SECRET, Date.now())
+  if (!parsed) return null
+  const account = await getAccount(parsed.accountId)
+  if (!account) return null
+  if (account.sessionVersion !== parsed.sessionVersion) return null
+  return {
+    principal: { accountId: account._id, role: account.role, memberships: account.memberships },
+    issuedAtMs: parsed.issuedAtMs,
+    sessionVersion: account.sessionVersion,
+  }
+}
+
+/**
+ * Build a Set-Cookie header string for a freshly-issued principal session (7-day expiry).
+ * Reuses the module's cookie internals so login/bootstrap flows never re-implement them.
+ */
+export function makePrincipalSessionCookieHeader(accountId: string, sessionVersion: number): string {
+  const now = Date.now()
+  const value = signPrincipalSession(now + SESSION_DURATION_MS, accountId, sessionVersion, TEAM_SESSION_SECRET, now)
+  return makeCookieHeader(value, MAX_AGE_SECONDS)
 }

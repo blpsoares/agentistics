@@ -12,7 +12,7 @@ import {
 } from '../components/PDFExportModal'
 import type { PDFTheme, SectionId, ChartMetric } from '../components/PDFExportModal'
 
-// ── Config group helpers ────────────────────────────────────────────────────────
+// Config group helpers
 
 /** A titled, bordered group card used to divide the options bar into clear sections. */
 function OptionsGroup({ title, headerRight, children, grow }: {
@@ -38,7 +38,7 @@ function OptionsGroup({ title, headerRight, children, grow }: {
   )
 }
 
-// ── Export Page ────────────────────────────────────────────────────────────────
+// Export Page
 
 export default function ExportPage() {
   const { data, lang, currency, brlRate, filters: appFilters } = useOutletContext<AppContext>()
@@ -197,7 +197,7 @@ export default function ExportPage() {
         </div>
       </div>
 
-      {/* ── Options bar: well-divided groups, wraps on small widths ─────────────── */}
+      {/*  Options bar: well-divided groups, wraps on small widths  */}
       <div style={{
         display: 'flex', flexDirection: 'column', gap: 14,
         background: 'var(--bg-card)', border: '1px solid var(--border)',
@@ -408,7 +408,7 @@ export default function ExportPage() {
         )}
       </div>
 
-      {/* ── Live preview — full width, below the options bar ────────────────────── */}
+      {/*  Live preview — full width, below the options bar  */}
       <div style={{
         background: 'var(--bg-base)',
         border: '1px solid var(--border)',

@@ -11,7 +11,7 @@ import {
   AlertTriangle, Copy,
 } from 'lucide-react'
 
-// ── Attachment type (Nay only handles images + text files) ────────────────────
+// Attachment type (Nay only handles images + text files)
 type NayAttachment = {
   id: string
   name: string
@@ -160,7 +160,7 @@ const BADGE_COLORS: Record<string, string> = {
   Powerful: 'var(--accent-purple)',
 }
 
-// ── Audio ─────────────────────────────────────────────────────────────────────
+// Audio
 
 function createPlayFn(ctxRef: React.MutableRefObject<AudioContext | null>) {
   return function playNotification() {
@@ -187,7 +187,7 @@ function createPlayFn(ctxRef: React.MutableRefObject<AudioContext | null>) {
   }
 }
 
-// ── Markdown renderer ─────────────────────────────────────────────────────────
+// Markdown renderer
 
 interface CodeBlockProps { lang: string; code: string; onRun?: (c: string) => void }
 
@@ -450,7 +450,7 @@ function MarkdownContent({
   )
 }
 
-// ── Tool activity bubble ──────────────────────────────────────────────────────
+// Tool activity bubble
 
 function ToolActivity({ tools, live, pt }: { tools: string[]; live: boolean; pt: boolean }) {
   const [expanded, setExpanded] = useState(false)
@@ -498,7 +498,7 @@ function ToolActivity({ tools, live, pt }: { tools: string[]; live: boolean; pt:
   )
 }
 
-// ── Message component ─────────────────────────────────────────────────────────
+// Message component
 
 function Message({
   msg, isLiveStreaming, currentTools, onRun, onNavigate, onPdfExport, pt,
@@ -637,7 +637,7 @@ function Message({
   )
 }
 
-// ── Model picker ──────────────────────────────────────────────────────────────
+// Model picker
 
 function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) => void }) {
   const [selected, setSelected] = useState<ChatModelId>(DEFAULT_CHAT_MODEL)
@@ -729,7 +729,7 @@ function ModelPicker({ lang, onPick }: { lang: Lang; onPick: (id: ChatModelId) =
   )
 }
 
-// ── Harness setup guidance panel ─────────────────────────────────────────────
+// Harness setup guidance panel
 
 function CopyableCode({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -854,7 +854,7 @@ function HarnessErrorHelp({ harness }: { harness: HarnessChatStatus }) {
   )
 }
 
-// ── Nay backend harness types + localStorage helpers ─────────────────────────
+// Nay backend harness types + localStorage helpers
 
 const NAY_HARNESS_KEY = 'agentistics-nay-backend-harness'
 
@@ -867,7 +867,7 @@ function saveNayHarnessId(id: string) {
   try { localStorage.setItem(NAY_HARNESS_KEY, id) } catch { /* ignore */ }
 }
 
-// ── Nay floating window localStorage helpers ──────────────────────────────────
+// Nay floating window localStorage helpers
 
 const NAY_POS_KEY  = 'agentistics-nay-chat-pos'
 const NAY_SIZE_KEY = 'agentistics-nay-chat-size'
@@ -899,7 +899,7 @@ function saveNaySize(size: { w: number; h: number }) {
   try { localStorage.setItem(NAY_SIZE_KEY, JSON.stringify(size)) } catch { /* ignore */ }
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+// Main component
 
 
 interface TtyChatProps {
@@ -1179,7 +1179,7 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
     setOpen(v => !v)
   }
 
-  // ── Nay floating window drag/resize handlers ──────────────────────────────
+  // Nay floating window drag/resize handlers
 
   const onNayHeaderMouseDown = useCallback((e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('button')) return
@@ -1589,7 +1589,8 @@ export function TtyChat({ lang, chatModel, chatSoundEnabled, chatSoundId = 'ping
           ? (pt ? 'Abrir painel' : 'Open panel')
           : (pt ? 'Chat com Nay' : 'Chat with Nay')}
         style={{
-          position: 'fixed', bottom: isMobile ? 68 : 24, right: 24, zIndex: 300,
+          // Sits above the mobile nav, whose height grows by the home-indicator inset in a PWA.
+          position: 'fixed', bottom: isMobile ? 'calc(12px + var(--mobile-nav-h))' : 24, right: 24, zIndex: 300,
           width: 46, height: 46, borderRadius: '50%',
           border: nayDetached
             ? '1.5px solid var(--border)'
