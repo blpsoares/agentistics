@@ -154,5 +154,8 @@ export async function extractWorkflowRuns(
       },
     })
   }
-  return runs
+  // Drop empty runs: a workflow whose per-agent transcripts are missing (never captured, or
+  // cleaned) yields only the declared phase skeleton with zero agents — no tokens, no cost,
+  // "nothing ran" everywhere. These carry no information, so don't surface them.
+  return runs.filter(r => r.agents.length > 0)
 }

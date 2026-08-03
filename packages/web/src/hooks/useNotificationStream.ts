@@ -1,33 +1,31 @@
 import { useEffect } from 'react'
-import { pushNotification, type NotificationType } from '../lib/notifications'
-
-interface ServerNotification {
-  type?: NotificationType
-  code?: string
-  meta?: Record<string, unknown>
-  title?: string
-  message?: string
-}
+import { refreshNotifications } from '../lib/notifications'
 
 /**
- * Subscribe to the server's SSE `notification` events and surface them via the store.
- * The member's uploader emits these on connection/auth errors (and recovery). We push
- * the raw `{ type, code, meta }` — localization happens at RENDER time (resolveNotification)
- * so the text follows the language toggle even after the notification was created. Unknown
- * codes fall back to any raw title/message in the payload.
+ * Loads the notification history from the server on mount, then subscribes to the SSE
+ * `notification` events and re-reads it whenever one arrives.
+ *
+ * The client does NOT write what it receives here: `broadcastNotification` already persisted the
+ * notification server-side before emitting it, so re-posting it from every open tab would be a
+ * duplicate write and would mint ids the other devices don't share. Reading back keeps one row
+ * per event, with the server's id, dismissible from any device.
+ *
+ * The SSE frame's `data` is deliberately IGNORED — it carries no notification body (see
+ * `sse.ts` `broadcastNotification`): `/api/events` is an unauthenticated broadcast with no
+ * principal attached, so shipping `code`/`meta`/`subject` on it would hand every open tab the
+ * full notification regardless of the role/team scoping `GET /api/notifications` applies. The
+ * event's mere arrival is the whole signal; this always re-fetches the already-scoped endpoint.
+ *
+ * Localization still happens at RENDER time (resolveNotification) from the stored `code` + `meta`,
+ * so the text follows the language toggle even for notifications received long ago.
  */
 export function useNotificationStream(_lang: 'pt' | 'en'): void {
   useEffect(() => {
+    void refreshNotifications()
     const es = new EventSource('/api/events')
-    const handler = (e: MessageEvent) => {
-      let n: ServerNotification = {}
-      try { n = JSON.parse(e.data) as ServerNotification } catch { return }
-      // Require either a code (localized at render) or a raw title.
-      if (!n.code && !n.title) return
-      pushNotification({ type: n.type ?? 'info', code: n.code, meta: n.meta, title: n.title, message: n.message })
-    }
-    es.addEventListener('notification', handler as EventListener)
+    const handler = () => { void refreshNotifications() }
+    es.addEventListener('notification', handler)
     es.onerror = () => { /* browser auto-reconnects */ }
-    return () => { es.removeEventListener('notification', handler as EventListener); es.close() }
+    return () => { es.removeEventListener('notification', handler); es.close() }
   }, [])
 }

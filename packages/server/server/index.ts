@@ -1,12 +1,17 @@
 // embeddedDist is loaded inside server/sse.ts (conditional on SERVE_STATIC=1)
 
 import { readFile } from 'node:fs/promises'
-import { PORT, WEB_PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG } from './config'
+import { PORT, WEB_PORT, TEAM_CENTRAL, TEAM_PASSWORD, TEAM_ORG, INGEST_ONLY } from './config'
 import type { Server, ServerWebSocket } from 'bun'
+import type { LiveProcess, LiveUnavailableReason, SessionMeta } from '@agentistics/core'
 import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
-import { readPreferences, writePreferences, type Preferences } from './preferences'
+import { readPreferences, writePreferences, redactPreferences, guardTeamConnectionsWipe, PreferencesLockTimeoutError, type Preferences } from './preferences'
+import {
+  readStoredNotifications, addStoredNotification, markStoredNotificationsRead,
+  dismissStoredNotification, clearStoredNotifications, localViewer, type NotificationInput,
+} from './notifications-store'
 import { streamViaClaude, execCommand, ensureNayChat, ensureClaudeChat, CLAUDE_CHAT_DIR, type ChatMessage, type ChatModelId, type ChatAttachment } from './chat-tty'
 import { getChatDriver, chatHarnessStatus } from './chat-drivers/index'
 import { listMcpServers, removeMcpServer } from './mcp-list'
@@ -15,11 +20,55 @@ import { listClaudeSessions, getClaudeSessionMessages, type ClaudeSessionSummary
 import { listCodexSessions, getCodexSessionMessages, type CodexSessionSummary, type CodexSessionMessage } from './codex-sessions'
 import { listGeminiSessions, getGeminiSessionMessages, type GeminiSessionSummary, type GeminiSessionMessage } from './gemini-sessions'
 import { listCopilotSessions, getCopilotSessionMessages, type CopilotSessionSummary, type CopilotSessionMessage } from './copilot-sessions'
-import { PROJECTS_DIR } from './config'
+import { PROJECTS_DIR, AGENTISTICS_DATA_DIR } from './config'
 import { safeReadDir } from './utils'
 import { decodeProjectDir } from './git'
 import { getEnabledAdapters } from './adapters/types'
-import { handleLogin, handleLogout, handleSession, isAuthed, hasValidSession } from './auth'
+import { handleLogout, handleSession, getPrincipal, getPrincipalSession, makePrincipalSessionCookieHeader, SESSION_REFRESH_MS } from './auth'
+import { routeCapability, capabilityDenied } from './capability-guard'
+
+/**
+ * The LOCAL half of a live snapshot: which assistants are running on THIS host.
+ *
+ * Reads /proc, so it is gated on `CAPS.localProcesses` — a process cwd is usually a repository
+ * name, and an exposed instance has no business reporting the host's directories. It is gated HERE
+ * rather than in `capability-guard.ts` on purpose: `/api/live-sessions` and `/api/data` also carry
+ * the members' OWN self-reported snapshots on a central, which are not this host's state and must
+ * keep working when local power is revoked. Blanket-guarding the paths would have taken the
+ * central's "Open now" panel down with them.
+ *
+ * Never throws: a failed read degrades to "unavailable", never to a confident empty list.
+ */
+async function readLocalLiveSnapshot(sessions: SessionMeta[]): Promise<{
+  liveSessionIds: string[]
+  liveProcesses: LiveProcess[]
+  liveUnavailable?: LiveUnavailableReason
+}> {
+  if (!CAPS.localProcesses) {
+    return { liveSessionIds: [], liveProcesses: [], liveUnavailable: 'capability-off' }
+  }
+  try {
+    const { getLiveSnapshot } = await import('./live-sessions')
+    return await getLiveSnapshot(sessions)
+  } catch {
+    return { liveSessionIds: [], liveProcesses: [], liveUnavailable: 'no-proc' }
+  }
+}
+import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
+import { CAPS, PROFILE } from './exposure'
+import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
+import { resolveClientIp } from './client-ip'
+import { corsHeadersFor } from './cors'
+import { csrfVerdict } from './csrf'
+import { securityHeaders } from './security-headers'
+import { TRUST_PROXY, ALLOWED_ORIGINS, TEAM_TLS, TEAM_SESSION_SECRET_ENV, TEAM_SESSION_SECRET, setResolvedSessionSecret } from './config'
+import { validateSecret, ensureSessionSecret } from './secret-store'
+import { requiresStepUp, verifyStepUp, STEPUP_HEADER } from './stepup'
+import { writeAudit, ensureAuditIndexes, listAudit } from './audit'
+import { safeError } from './errors'
+import { LIMITS } from './limits'
+import { canSeeMemberNames } from './iam-view'
+import { buildNotificationAuthorityContext } from './notifications-context'
 import {
   readEnvConfig,
   writeEnvConfig,
@@ -42,6 +91,8 @@ import { getArchiveMode } from './preferences'
 import { registerAgent, unregisterAgent, onAgentMessage, onAgentPong, setPresenceChangeHook } from './team-agent'
 import { startAgentClient, reconcileNow } from './team-agent-client'
 import { validateIngestToken } from './team-tokens'
+import { getAccount } from './accounts'
+import { getTeam } from './teams'
 
 // ---------------------------------------------------------------------------
 // Reads the first `cwd` field found in a JSONL session file.
@@ -74,10 +125,16 @@ void (async () => {
   if (mode === 'full') {
     fullSync().catch(err => console.warn('[archive] startup sync failed:', String(err)))
   }
-  if (mode && mode !== 'off') {
-    buildApiResponse().catch(err => console.warn('[archive] startup consolidation failed:', String(err)))
-  }
+  // Warm the response cache at boot so the FIRST user request is served instantly instead of paying
+  // the full cold build (tens of seconds on a busy central). Runs for every mode — non-'off' modes
+  // also persist the consolidated per-session store as a side effect; 'off' just warms the cache.
+  buildApiResponse().catch(err => console.warn('[startup] cache warm-up failed:', String(err)))
 })()
+
+// Once-per-install move of the legacy single-connection team state files into the
+// per-connection layout (see team-migrate.ts). Never call this from readPreferencesFrom.
+await import('./team-migrate').then(m => m.migrateTeamStateOnce()).catch(err =>
+  console.warn('[team-migrate] state migration failed (will retry next boot):', err instanceof Error ? err.message : String(err)))
 
 void setupFileWatcher()
 if (TEAM_CENTRAL) {
@@ -87,53 +144,133 @@ if (TEAM_CENTRAL) {
   // per request (not cached), so this needs no cache invalidation and no debounce.
   setPresenceChangeHook(() => notifySseClients())
 }
+
+// IAM bootstrap init (central only): ensure indexes + Default team, backfill teamId, and —
+// when no owner exists yet — mint a one-time setup token and print it to the logs.
+if (TEAM_CENTRAL) {
+  // Resolve the session-signing secret before anything can mint a cookie. A bad explicit value
+  // is fatal on purpose: booting with a session key equal to the shared dashboard password is
+  // worse than not booting, because every account becomes forgeable and nobody notices.
+  if (TEAM_SESSION_SECRET_ENV) {
+    const v = validateSecret(TEAM_SESSION_SECRET_ENV, TEAM_PASSWORD)
+    if (!v.ok) {
+      console.error(`[server] refusing to start: AGENTISTICS_TEAM_SESSION_SECRET is invalid (${v.reason}).`)
+      console.error('[server] generate one with: openssl rand -hex 32')
+      process.exit(1)
+    }
+    setResolvedSessionSecret(TEAM_SESSION_SECRET_ENV)
+  } else {
+    // Bounded: the secret must be settled before any cookie is minted, but an unreachable
+    // database must not keep the server from ever listening. On timeout we keep the
+    // per-process random secret already in config.ts — safe, just not durable.
+    try {
+      const secret = await Promise.race([
+        ensureSessionSecret(),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), 10_000)),
+      ])
+      if (secret) {
+        setResolvedSessionSecret(secret)
+        console.log('[server] using the persisted random session secret (set AGENTISTICS_TEAM_SESSION_SECRET to pin your own).')
+      } else {
+        console.warn('[server] database unreachable — using a per-process session secret; sessions will not survive a restart.')
+      }
+    } catch {
+      console.warn('[server] could not persist a session secret — using a per-process one; sessions will not survive a restart.')
+    }
+  }
+
+  void (async () => {
+    try {
+      const { ensureAccountIndexes, hasAnyOwner, purgeUnknownTeamsFromAccounts } = await import('./accounts')
+      const { backfillTokenTeamIds, purgeUnknownTeamsFromMachines } = await import('./team-tokens')
+      const { backfillRepoTeamIds } = await import('./team-repos')
+      await ensureAccountIndexes()
+      await (await import('./reset-requests')).ensureResetRequestIndexes().catch(() => {})
+      // Convert any date still stored as a STRING into a BSON Date. Runs before everything that
+      // reads a timestamp, is idempotent (a migrated DB matches no documents), and never throws —
+      // a central must still boot when it cannot run. See mongo-dates.ts.
+      try {
+        const { migrateStringDatesToBson } = await import('./mongo-dates')
+        const { getMongoDb } = await import('./mongo')
+        const changed = await migrateStringDatesToBson(await getMongoDb(), { log: m => console.log(m) })
+        if (changed.length > 0) {
+          const total = changed.reduce((n, r) => n + r.converted, 0)
+          const stuck = changed.reduce((n, r) => n + r.unconvertible, 0)
+          console.log(`[mongo-dates] migrated ${total} string date(s) to BSON Date` +
+            (stuck > 0 ? ` — ${stuck} value(s) were not parseable and were left untouched for inspection` : ''))
+        }
+      } catch (e) { console.warn('[mongo-dates] migration skipped:', e instanceof Error ? e.message : e) }
+      await ensureAuditIndexes()
+      // No Default team is seeded — machines/accounts are loose until assigned to real teams.
+      await backfillTokenTeamIds()
+      await backfillRepoTeamIds()
+      // Retroactively purge references to deleted teams (orphaned before the delete-cascade existed).
+      try {
+        const { listTeams } = await import('./teams')
+        const validTeamIds = (await listTeams()).map(t => t._id)
+        await purgeUnknownTeamsFromMachines(validTeamIds)
+        await purgeUnknownTeamsFromAccounts(validTeamIds)
+      } catch { /* best-effort */ }
+      if (!(await hasAnyOwner())) {
+        const { getBootstrapDoc, generateBootstrapToken } = await import('./bootstrap')
+        const existing = await getBootstrapDoc()
+        if (!existing || existing.consumedAt || !existing.tokenHash) {
+          const token = await generateBootstrapToken(new Date())
+          console.log(
+            '\n' +
+            '========================================================\n' +
+            '  agentistics — OWNER SETUP REQUIRED\n' +
+            '  No owner account exists yet. Create it with this\n' +
+            '  one-time setup token (POST /api/iam/bootstrap):\n\n' +
+            `      ${token}\n\n` +
+            '  Keep it secret. It is shown only once.\n' +
+            '========================================================\n',
+          )
+        } else {
+          // Deliberately NOT reissued here: a boot that minted a second token would silently
+          // invalidate one the operator may still be holding. Name the command that does it.
+          console.log(
+            '\n[agentistics] Owner setup pending — a setup token was already issued (see earlier\n' +
+            '  logs). Lost it? Reissue with:  ./central.sh setup-token\n' +
+            '  (standalone: agentop central setup-token)\n',
+          )
+        }
+      }
+    } catch (err) {
+      console.error('[agentistics] IAM bootstrap init skipped:', err instanceof Error ? err.message : err)
+    }
+  })()
+}
+
 import('./team-uploader').then(m => m.startUploader()).catch(err => console.error('[team-uploader] failed to start:', err))
 startAgentClient()
 maybeSpawnWatcher()
 // Periodic best-effort re-check so a long-running daemon surfaces new releases
 // without a page reload (broadcasts an SSE notification when an update appears).
 try { startVersionRecheck() } catch (err) { console.warn('[version] recheck failed to start:', String(err)) }
-ensureNayChat(PORT).catch(err => console.error('[nay-chat] failed to initialize:', err))
-ensureClaudeChat().catch(err => console.error('[claude-chat] failed to initialize:', err))
+// `err.message`, not the error object: Bun renders a thrown Error here with a source snippet and
+// a full stack, so one optional side feature failing to start printed ten lines that read like the
+// server itself had crashed. The message is what a reader can act on; the stack belongs to a bug
+// report, not to every boot.
+ensureNayChat(PORT).catch(err => console.warn('[nay-chat] failed to initialize:', err instanceof Error ? err.message : String(err)))
+ensureClaudeChat().catch(err => console.warn('[claude-chat] failed to initialize:', err instanceof Error ? err.message : String(err)))
 
 
 // ---------------------------------------------------------------------------
-// CORS headers
+// CORS is computed per request from the caller's Origin against an explicit allowlist
+// (see cors.ts). The old wildcard `Access-Control-Allow-Origin: *` let any web page probe
+// this instance from a victim's network. `corsHeadersFor` emits no ACAO at all for an
+// unknown origin, which is the right answer for a same-origin dashboard.
 // ---------------------------------------------------------------------------
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-}
-
-// Routes that are always public (no auth gate applied)
-const AUTH_PUBLIC = new Set([
-  '/api/team/login',
-  '/api/team/logout',
-  '/api/team/session',
-  '/api/team/ingest',
-  '/api/team/leave',
-  '/api/team/policy',
-  // WebSocket upgrade for the member→central reverse channel; auth is via
-  // validateIngestToken (Bearer token in the Upgrade request headers).
-  '/api/team/whoami',
-  '/api/team/agent',
-])
-
-// Admin routes that require a real session cookie even on a passwordless central
-const ADMIN_PATHS = new Set([
-  '/api/team/members',
-  '/api/team/tokens',
-  '/api/team/tokens/rotate',
-  '/api/team/config',
-])
+// Route tables (AUTH_PUBLIC / ADMIN_PATHS / MFA_EXEMPT) live in index-routes.ts so the
+// authorization regression suite can assert them without booting the server.
 
 // ---------------------------------------------------------------------------
 // Bun HTTP server
 // ---------------------------------------------------------------------------
 
-type WSData = { user: string; isAgent?: boolean }
+type WSData = { user: string; memberId: string; isAgent?: boolean }
 
 // Shared WS + request handlers, so the binary can bind the SAME logic to two ports below:
 // PORT (47291 = api + mcp) and WEB_PORT (47292 = the web dashboard you open).
@@ -144,7 +281,37 @@ const _wsHandlers = {
   close(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; unregisterAgent(ws) },
 }
 
+/**
+ * Outer handler: runs the router, then stamps the OWASP baseline security headers on whatever
+ * it produced. Doing it here (rather than at ~60 individual call sites) means a newly added
+ * route cannot forget them. SSE responses set their headers before the first flush, so
+ * mutating `res.headers` afterwards is still safe.
+ */
 async function handleRequest(req: Request, server: Server<WSData>): Promise<Response | undefined> {
+  const res = await handleRequestInner(req, server)
+  if (!res) return res // WebSocket upgrade handed off
+  const isApi = new URL(req.url).pathname.startsWith('/api/')
+  for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi }))) {
+    res.headers.set(k, v)
+  }
+  // A sliding-session refresh recorded by the auth gate. Appended (not set) so a route that
+  // issues its own cookie — login, logout — is never overwritten.
+  const refreshed = refreshedCookies.get(req)
+  if (refreshed) {
+    refreshedCookies.delete(req)
+    if (!res.headers.has('Set-Cookie')) res.headers.append('Set-Cookie', refreshed)
+  }
+  return res
+}
+
+/**
+ * Per-request channel for a sliding-session cookie refresh: the auth gate decides, the outer
+ * wrapper attaches. Keyed by the Request object (WeakMap) so concurrent requests never share
+ * state and nothing leaks if a handler throws.
+ */
+const refreshedCookies = new WeakMap<Request, string>()
+
+async function handleRequestInner(req: Request, server: Server<WSData>): Promise<Response | undefined> {
     const url = new URL(req.url)
     // Collapse repeated slashes in the path. A member whose endpoint has a trailing slash
     // builds URLs like `//api/team/ingest` / `//api/team/agent`; without this they'd miss the
@@ -152,34 +319,176 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     // or fail the WS upgrade — making pushes/presence look fine while nothing lands.
     if (url.pathname.includes('//')) url.pathname = url.pathname.replace(/\/{2,}/g, '/')
 
+    // Per-request CORS. Every `...CORS_HEADERS` spread below keeps working unchanged.
+    const CORS_HEADERS = corsHeadersFor(req.headers.get('origin'), ALLOWED_ORIGINS, !SERVE_STATIC)
+
+    /** JSON response carrying this request's CORS headers. */
+    const json = (body: unknown, status = 200): Response =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+
     if (req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS })
     }
 
     // ---------------------------------------------------------------------------
-    // Auth gate (Phase 3): when central + password set, all /api/* routes require
-    // a valid session cookie except the public allowlist below.
+    // Ingest-only hardening: a public-facing central that accepts CI pushes but
+    // exposes nothing else. Everything except POST /api/team/ingest → 404, so an
+    // exposed instance leaks no dashboard, no data, no login — only a token-gated
+    // write endpoint. Pair with a separate PRIVATE dashboard instance on the same Mongo.
+    // POST /api/team/forget is allowed too: a machine pushing to a public ingest instance
+    // must also be able to withdraw sessions it no longer shares, and the route is just as
+    // token-gated (inside the handler) as ingest itself — 404ing it here would strand a
+    // machine's crash-journaled removals against exactly the central it pushed them to.
+    // ---------------------------------------------------------------------------
+    if (INGEST_ONLY && !(
+      (url.pathname === '/api/team/ingest' && req.method === 'POST') ||
+      (url.pathname === '/api/team/forget' && req.method === 'POST')
+    )) {
+      return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+    }
+
+    // The caller's real IP, resolved once per request. Forwarded headers are only believed
+    // when AGENTISTICS_TRUST_PROXY=1 (see client-ip.ts) — otherwise the socket address wins.
+    const clientIp = resolveClientIp({
+      socketAddress: server.requestIP(req)?.address ?? null,
+      headers: req.headers,
+      trustProxy: TRUST_PROXY,
+    })
+
+    // ---------------------------------------------------------------------------
+    // Rate limiting. Auth endpoints get the strict rule, token-bearing endpoints their own,
+    // and everything else under /api a generous ceiling so a single client cannot scrape the
+    // whole dataset in a loop. `unknown` IPs share one bucket on purpose — fail closed.
+    // ---------------------------------------------------------------------------
+    if (url.pathname.startsWith('/api/')) {
+      const rule = rateRuleFor(url.pathname)
+      const key = rule === RULES.api ? `ip:${clientIp}:api` : `ip:${clientIp}:${url.pathname}`
+      const verdict = limiter.check(key, rule)
+      if (!verdict.allowed) {
+        if (rule === RULES.loginAttempts) void writeAudit({ action: 'rate.blocked', ip: clientIp, meta: { path: url.pathname } })
+        const res = tooManyRequests(verdict.retryAfterSec)
+        const headers = new Headers(res.headers)
+        for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+        return new Response(res.body, { status: res.status, headers })
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // CSRF defence in depth (see csrf.ts). SameSite=Strict is the first line; this rejects any
+    // unsafe method that carries a session cookie without proving same-origin provenance.
+    // Token-authenticated machine clients send no cookie and are exempt.
+    // ---------------------------------------------------------------------------
+    if (url.pathname.startsWith('/api/')) {
+      const verdict = csrfVerdict({
+        method: req.method,
+        origin: req.headers.get('origin'),
+        secFetchSite: req.headers.get('sec-fetch-site'),
+        host: url.host,
+        hasCookie: req.headers.has('cookie'),
+        allowlist: ALLOWED_ORIGINS,
+        dev: !SERVE_STATIC,
+      })
+      if (!verdict.ok) {
+        return new Response(JSON.stringify({ error: 'csrf_blocked' }), {
+          status: 403,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Local-capability guard. Routes that execute shell commands, spawn coding-assistant
+    // CLIs, read the host's raw transcripts, or edit ~/.claude.json are unreachable
+    // whenever the exposure profile revokes the capability (see exposure.ts). Checked
+    // BEFORE auth on purpose: an exposed instance never even reveals whether the caller
+    // is authenticated, and no account role can talk its way into a shell.
+    // ---------------------------------------------------------------------------
+    {
+      const needed = routeCapability(url.pathname)
+      if (needed) {
+        const denied = capabilityDenied(needed)
+        if (denied) {
+          void writeAudit({ action: 'capability.denied', ip: clientIp, meta: { path: url.pathname, capability: needed } })
+          return new Response(denied.body, {
+            status: denied.status,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Auth gate (Phase 5): account-principal auth on the central.
+    // All /api/* routes require a valid account session except the public allowlist.
     // Static assets are always served (the SPA + login UI must load without auth).
     // ---------------------------------------------------------------------------
-    if (
-      TEAM_CENTRAL &&
-      TEAM_PASSWORD &&
-      url.pathname.startsWith('/api/') &&
-      !AUTH_PUBLIC.has(url.pathname) &&
-      !isAuthed(req)
-    ) {
-      return new Response(JSON.stringify({ error: 'auth required' }), {
-        status: 401,
-        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-      })
+    if (TEAM_CENTRAL && url.pathname.startsWith('/api/') && !AUTH_PUBLIC.has(url.pathname)) {
+      const session = await getPrincipalSession(req)
+      if (!session) {
+        return new Response(JSON.stringify({ error: 'auth required' }), { status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      }
+      // Admin routes require the owner.
+      if (isAdminPath(url.pathname) && session.principal.role !== 'owner') {
+        void writeAudit({ action: 'authz.denied', ip: clientIp, actorId: session.principal.accountId, meta: { path: url.pathname } })
+        return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      }
+      // On an internet-exposed instance an owner must hold a second factor: their account can
+      // reach every team's data and every admin route, so a single leaked password would be the
+      // whole instance. Until they enrol, only the enrolment and identity routes answer.
+      if (CAPS.requireMfaForOwner && session.principal.role === 'owner' && !MFA_EXEMPT.has(url.pathname)) {
+        const { isMfaEnabled } = await import('./mfa-store')
+        if (!(await isMfaEnabled(session.principal.accountId).catch(() => true))) {
+          return new Response(JSON.stringify({ error: 'mfa_enrollment_required' }), {
+            status: 403,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+      }
+      // Step-up ("sudo mode"): a session cookie proves who you are, not that you are still at
+      // the keyboard. Operations that destroy data or mint a credential additionally require a
+      // fresh grant from POST /api/iam/stepup, presented in X-Stepup. This does not prevent a
+      // cookie being stolen — it bounds what the theft is worth.
+      if (requiresStepUp(req.method, url.pathname)) {
+        const granted = verifyStepUp(
+          req.headers.get(STEPUP_HEADER),
+          session.principal.accountId,
+          session.sessionVersion,
+          TEAM_SESSION_SECRET,
+          Date.now(),
+        )
+        if (!granted) {
+          void writeAudit({
+            action: 'stepup.missing',
+            ip: clientIp,
+            actorId: session.principal.accountId,
+            meta: { path: url.pathname, method: req.method },
+          })
+          return new Response(JSON.stringify({ error: 'stepup_required' }), {
+            status: 403,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+      }
+      // Sliding session: reissue the cookie periodically so an active user is never logged out
+      // at the idle wall, while an abandoned session still dies IDLE_TIMEOUT_MS after last use.
+      if (Date.now() - session.issuedAtMs > SESSION_REFRESH_MS) {
+        refreshedCookies.set(req, makePrincipalSessionCookieHeader(session.principal.accountId, session.sessionVersion))
+      }
     }
 
-    // Admin gate: admin routes require a real session even on a passwordless central.
-    if (TEAM_CENTRAL && ADMIN_PATHS.has(url.pathname) && !hasValidSession(req)) {
-      return new Response(JSON.stringify({ error: 'auth required' }), { status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
-    }
 
     if (url.pathname === '/api/events' && req.method === 'GET') {
+      // Each SSE client holds a socket and a controller for as long as it stays connected, so an
+      // unbounded count is a free way to exhaust the process (OWASP API4).
+      if (sseClients.size >= LIMITS.sseClients) {
+        return new Response(JSON.stringify({ error: 'too_many_streams' }), {
+          status: 503,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
           sseClients.add(controller)
@@ -219,12 +528,34 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
+    }
+
+    // The pricing table itself, with per-model provenance. Separate from /api/rates (which the
+    // dashboard polls for the BRL rate) so a table this size is only paid for when it is opened.
+    if (url.pathname === '/api/pricing' && req.method === 'GET') {
+      const { getRates, getPricingOrigins } = await import('./rates')
+      const rates = await getRates()
+      const { origins, communityFetchedAt, communityOk } = getPricingOrigins()
+      const models = Object.entries(rates.pricing)
+        .map(([id, price]) => ({ id, ...price, origin: origins[id] ?? 'builtin' }))
+        .sort((a, b) => a.id.localeCompare(b.id))
+      return new Response(JSON.stringify({
+        models,
+        fetchedAt: rates.fetchedAt,
+        communityFetchedAt,
+        communityOk,
+        sources: {
+          official: { label: 'Anthropic', url: 'https://platform.claude.com/docs/en/about-claude/pricing' },
+          community: { label: 'LiteLLM', url: 'https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json' },
+        },
+      }), { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
     }
 
     if (url.pathname === '/api/rates' && req.method === 'GET') {
@@ -240,8 +571,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -263,7 +595,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
             })
             send('done', {})
           } catch (err) {
-            send('error', { message: err instanceof Error ? err.message : String(err) })
+            send('error', safeError(err, { verbose: PROFILE === 'local' }).body)
           } finally {
             try { controller.close() } catch { /* already closed */ }
           }
@@ -281,16 +613,73 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       })
     }
 
+    // ---- Notification history -------------------------------------------------------------
+    // Persisted server-side (this machine's, or this central's — never mixed) so the bell shows
+    // the SAME history on the desktop and on a phone, and only empties when the user says so.
+    if (url.pathname === '/api/notifications') {
+      try {
+        // Who is asking. On a central every request carries a principal, and read/dismiss state is
+        // per account; on a solo/member machine there are no accounts at all and `getPrincipal`
+        // is always null — that instance has exactly one user, represented by `localViewer`.
+        const principal = await getPrincipal(req)
+        const viewer = principal
+          ? {
+              id: principal.accountId,
+              canSeeNames: canSeeMemberNames(principal),
+              multiTenant: true,
+              // Role/team scoping (owner sees all; a manager sees their teams' subjects; a plain
+              // user sees their own machines and teams) — see notifications-authority.ts. Built
+              // fresh per request, same as `canSeeMemberNames` above.
+              entitlement: { principal, ctx: await buildNotificationAuthorityContext() },
+            }
+          : localViewer
+
+        if (req.method === 'GET') {
+          return json(await readStoredNotifications(viewer))
+        }
+        // POST creates a CLIENT-originated notification (the ones detected in the browser, e.g.
+        // an available update or a failed central connection). Server-originated ones are already
+        // persisted by broadcastNotification, so clients never re-post what arrives over SSE.
+        if (req.method === 'POST') {
+          const body = await req.json() as NotificationInput
+          if (!body?.type || (!body.code && !body.title)) {
+            return json({ error: 'type and either code or title are required' }, 400)
+          }
+          return json(await addStoredNotification({
+            type: body.type, code: body.code, meta: body.meta, title: body.title, message: body.message,
+          }, viewer))
+        }
+        // PATCH marks everything read (opening the bell). Kept separate from DELETE: reading a
+        // notification and removing it are different intents.
+        if (req.method === 'PATCH') {
+          return json(await markStoredNotificationsRead(viewer))
+        }
+        // DELETE ?id=<id> removes one; DELETE with no id clears the history.
+        if (req.method === 'DELETE') {
+          const id = url.searchParams.get('id')
+          return json(id ? await dismissStoredNotification(id, viewer) : await clearStoredNotifications(viewer))
+        }
+        return json({ error: 'method not allowed' }, 405)
+      } catch (err) {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return json(safe.body, 500)
+      }
+    }
+
     if (url.pathname === '/api/preferences' && req.method === 'GET') {
       try {
-        const prefs = await readPreferences()
+        // Secrets never leave the process: the UI adds a connection by POSTing a token and every
+        // other use (probe, leave, test) runs server-side, so nothing here needs one.
+        const prefs = redactPreferences(await readPreferences())
         return new Response(JSON.stringify(prefs), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -299,7 +688,22 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
     if (url.pathname === '/api/preferences' && req.method === 'PUT') {
       try {
-        const body = await req.json() as Preferences
+        let body = await req.json() as Preferences
+        // C1: never let a PUT wipe `connections[]`. An old cached tab still PUTs a full flat solo
+        // `team` object to disconnect (the current UI uses DELETE /api/team/connections/:id), and
+        // that payload carries `connections: []` — which mergeTeamPayload honours as an explicit
+        // replacement, deleting every OTHER central and its token in the process.
+        if (body.team !== undefined) {
+          const storedCount = (await readPreferences()).team?.connections?.length ?? 0
+          const guard = guardTeamConnectionsWipe(body.team, storedCount)
+          if (guard.guarded) {
+            console.warn(
+              `[preferences] PUT carried an empty connections array while ${storedCount} connection(s) are stored — ` +
+              'preserving them. Use DELETE /api/team/connections/:id to disconnect one.',
+            )
+            body = { ...body, team: guard.team }
+          }
+        }
         await writePreferences(body)
         // On an archive-mode change, refresh the cache and immediately persist:
         // 'full' also mirrors raw files; any non-off mode warms a build that
@@ -321,14 +725,25 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           reconcileNow()
           import('./team-uploader').then(m => m.pushNow()).catch(() => {})
         }
-        const updated = await readPreferences()
+        // Redacted on the way out too — the response is the same document the GET returns.
+        const updated = redactPreferences(await readPreferences())
         return new Response(JSON.stringify(updated), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        // R4: a lock timeout is transient contention, not a bad request — a 400/500 tells the
+        // caller "this will never work", a 503+Retry-After tells it "try again shortly", which is
+        // the true state of the world (another process is mid-write).
+        if (err instanceof PreferencesLockTimeoutError) {
+          return new Response(JSON.stringify({ error: 'another process is writing preferences — retry shortly' }), {
+            status: 503,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '2' },
+          })
+        }
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -382,8 +797,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
@@ -521,7 +937,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        return new Response(JSON.stringify({ ok: false, error: String(err) }), {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -614,8 +1030,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -665,8 +1082,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -710,8 +1128,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
@@ -730,8 +1149,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -748,8 +1168,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -765,8 +1186,9 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -779,14 +1201,36 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     if (url.pathname === '/api/live-sessions' && req.method === 'GET') {
       try {
         const data = await buildApiResponse()
-        const { getLiveSessionIds } = await import('./live-sessions')
-        const liveSessionIds = await getLiveSessionIds(data.sessions).catch(() => [])
-        return new Response(JSON.stringify({ liveSessionIds }), {
+        // The LOCAL half reads /proc. On a profile that has revoked host power it is skipped
+        // entirely — but the route still answers, because on a central its other half is the
+        // members' own self-reported snapshots, which are not host state and stay available.
+        const snapshot = await readLocalLiveSnapshot(data.sessions)
+        // Same member merge as /api/data — this is the endpoint the Sessions page polls, so
+        // without it a central's "Open now" would only ever move on a full data rebuild.
+        if (TEAM_CENTRAL) {
+          try {
+            const { collectMemberLive } = await import('./team-live')
+            const { scopeAppDataToTeams, dataTeamIdsOf } = await import('./team-scope')
+            const principal = await getPrincipal(req)
+            let visibleUsers: Set<string> | null = null
+            if (principal && principal.role !== 'owner') {
+              const { listMachines } = await import('./team-tokens')
+              const machines = await listMachines().catch(() => [])
+              const owned = new Set(machines.filter(m => m.accountIds.includes(principal.accountId)).map(m => m.id))
+              const scoped = scopeAppDataToTeams(data, dataTeamIdsOf(principal), owned)
+              visibleUsers = new Set(scoped.sessions.map(s => s.user).filter((u): u is string => !!u))
+            }
+            const team = collectMemberLive(visibleUsers)
+            snapshot.liveSessionIds = [...new Set([...snapshot.liveSessionIds, ...team.liveSessionIds])]
+            snapshot.liveProcesses = [...snapshot.liveProcesses, ...team.liveProcesses]
+          } catch { /* best-effort — the local snapshot still stands */ }
+        }
+        return new Response(JSON.stringify(snapshot), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch {
-        return new Response(JSON.stringify({ liveSessionIds: [] }), {
+        return new Response(JSON.stringify({ liveSessionIds: [], liveProcesses: [] }), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -795,7 +1239,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
     if (url.pathname === '/api/data' && req.method === 'GET') {
       try {
-        const data = await buildApiResponse()
+        let data = await buildApiResponse()
         // Presence is live (in-memory sockets + heartbeat) — merge it in AFTER the cached
         // build so online/offline + latency stay fresh without recomputing the whole response.
         let extra: { presence?: unknown; includeOfflineData?: boolean } = {}
@@ -809,19 +1253,51 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
             getCentralConfig().catch(() => null),
           ])
           extra = { presence, includeOfflineData: cfg?.includeOfflineData ?? true }
+          // Apply per-team scoping for non-owner principals. A non-owner sees sessions from the
+          // teams they MANAGE (see dataTeamIdsOf — belonging is not reading) PLUS any machine they
+          // own — so a plain user keeps their own data, and their machines never disappear just
+          // because they have no team.
+          const principal = await getPrincipal(req)
+          if (principal && principal.role !== 'owner') {
+            const { scopeAppDataToTeams, dataTeamIdsOf } = await import('./team-scope')
+            const { listMachines } = await import('./team-tokens')
+            const machines = await listMachines().catch(() => [])
+            const owned = new Set(machines.filter(m => m.accountIds.includes(principal.accountId)).map(m => m.id))
+            data = scopeAppDataToTeams(data, dataTeamIdsOf(principal), owned)
+          }
         }
         // Live open-session detection — computed per request (not part of the cached build)
         // so it reflects `claude` processes in real time.
-        const { getLiveSessionIds } = await import('./live-sessions')
-        const liveSessionIds = await getLiveSessionIds(data.sessions).catch(() => [])
-        return new Response(JSON.stringify({ ...data, liveSessionIds, ...extra }), {
+        const local = await readLocalLiveSnapshot(data.sessions)
+        let { liveSessionIds, liveProcesses } = local
+        const liveUnavailable = local.liveUnavailable
+        // Central: members report their own open assistants over the reverse channel, because
+        // getLiveSnapshot reads /proc and a member's processes are not on this machine. Scoped to
+        // the members whose sessions survived the scoping above, so a principal never learns that
+        // a machine they cannot see is running, nor reads its cwd off an unmatched process.
+        if (TEAM_CENTRAL) {
+          try {
+            const { collectMemberLive } = await import('./team-live')
+            const principal = await getPrincipal(req)
+            const visibleUsers = principal && principal.role !== 'owner'
+              ? new Set(data.sessions.map(s => s.user).filter((u): u is string => !!u))
+              : null
+            const team = collectMemberLive(visibleUsers)
+            liveSessionIds = [...new Set([...liveSessionIds, ...team.liveSessionIds])]
+            liveProcesses = [...liveProcesses, ...team.liveProcesses]
+          } catch { /* best-effort — the local snapshot still stands */ }
+        }
+        return new Response(JSON.stringify({
+          ...data, liveSessionIds, liveProcesses,
+          ...(liveUnavailable ? { liveUnavailable } : {}), ...extra,
+        }), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error('[/api/data error]', message)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error('[/api/data]', safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -833,10 +1309,7 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     // ---------------------------------------------------------------------------
 
     if (url.pathname === '/api/team/login' && req.method === 'POST') {
-      const res = await handleLogin(req)
-      const headers = new Headers(res.headers)
-      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
-      return new Response(res.body, { status: res.status, headers })
+      return new Response(JSON.stringify({ ok: false, error: 'shared-password login retired; use account login' }), { status: 410, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
     }
 
     if (url.pathname === '/api/team/logout' && req.method === 'POST') {
@@ -853,22 +1326,229 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       return new Response(res.body, { status: res.status, headers })
     }
 
-    // GET /api/team/status — member-side live connection status for the status pill.
-    // Reports this machine's last successful contact with the central + current error state.
+    if (url.pathname === '/api/iam/login/mfa' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamLoginMfa } = await import('./iam-handlers')
+      const res = await handleIamLoginMfa(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/stepup' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleStepUp } = await import('./iam-handlers')
+      const res = await handleStepUp(req, clientIp)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/reset-request' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleResetRequest } = await import('./iam-handlers')
+      const res = await handleResetRequest(req, clientIp)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/reset-requests') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleResetRequests } = await import('./iam-handlers')
+      const res = await handleResetRequests(req, url)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/recover' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleRecover } = await import('./iam-handlers')
+      const res = await handleRecover(req, clientIp)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/mfa' || url.pathname.startsWith('/api/iam/mfa/')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleMfa } = await import('./iam-handlers')
+      const res = await handleMfa(req, url.pathname, clientIp)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // Owner-only (enforced by isAdminPath in the gate above): the security event log.
+    if (url.pathname === '/api/iam/audit' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const limit = parseInt(url.searchParams.get('limit') ?? '200', 10)
+      const events = await listAudit({ limit: Number.isFinite(limit) ? limit : 200 })
+      return new Response(JSON.stringify({ events }), {
+        status: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname === '/api/iam/status' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamStatus } = await import('./iam-handlers')
+      const res = await handleIamStatus()
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/bootstrap' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleBootstrap } = await import('./iam-handlers')
+      const res = await handleBootstrap(req, { ip: clientIp })
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/login' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamLogin } = await import('./iam-handlers')
+      // A successful login clears this IP's login bucket, so someone who mistyped twice
+      // before getting it right is not left one attempt away from a block.
+      const res = await handleIamLogin(req, {
+        ip: clientIp,
+        onSuccess: () => limiter.reset(`ip:${clientIp}:${url.pathname}`),
+      })
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/logout' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleLogout } = await import('./auth')
+      const res = handleLogout(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/me' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleIamMe } = await import('./iam-handlers')
+      const res = await handleIamMe(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/change-password' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleChangePassword } = await import('./iam-handlers')
+      const res = await handleChangePassword(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/accounts' && (req.method === 'GET' || req.method === 'POST' || req.method === 'PATCH' || req.method === 'DELETE')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleAccounts } = await import('./iam-handlers')
+      const res = await handleAccounts(req, clientIp)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/teams' && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleTeams } = await import('./iam-handlers')
+      const res = await handleTeams(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/iam/machines' && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleMachines } = await import('./iam-handlers')
+      const res = await handleMachines(req, clientIp)
+      // Revoke/rotate change the member set — refresh dashboards.
+      if ((req.method === 'DELETE' || req.method === 'POST') && res.status >= 200 && res.status < 300) {
+        const { triggerSseNotification } = await import('./sse'); triggerSseNotification()
+      }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // GET /api/team/status — member-side connection status for the settings panel + status
+    // pill, one entry per connection (see team-connections.ts). Reads cached values only — the
+    // uploader's own push cycle measures latency, so this route never blocks on the network.
     if (url.pathname === '/api/team/status' && req.method === 'GET') {
-      const [{ readPreferences }, { getUploaderStatus }] = await Promise.all([
-        import('./preferences'),
-        import('./team-uploader'),
-      ])
-      const team = (await readPreferences()).team
-      const st = getUploaderStatus()
-      return new Response(JSON.stringify({
-        mode: team?.mode ?? 'solo',
-        user: team?.user ?? '',
-        endpoint: team?.endpoint ?? '',
-        lastSuccessAt: st.lastSuccessAt,
-        errKind: st.errKind,
-      }), { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+      const { handleTeamStatus } = await import('./team-connections')
+      const res = await handleTeamStatus(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // GET /api/team/profile — which machine profile this server serves. `agentop member connect`
+    // prefers to hand a new connection to a running server (so it is picked up without a restart)
+    // but can only find one by PORT, and a machine's identity is its DATA DIR: a second profile
+    // (an isolated HOME / AGENTISTICS_DIR, or the Docker machine beside the native one) holding
+    // this port would otherwise be handed another machine's connection, token included. The CLI
+    // asks here first and delegates only on an exact match; a server too old to answer is treated
+    // as "not ours". The caller states the dir it means and gets back only yes/no — the route
+    // never discloses a filesystem path, so it stays harmless on an exposed central.
+    if (url.pathname === '/api/team/profile' && req.method === 'GET') {
+      const want = url.searchParams.get('dataDir') ?? ''
+      return new Response(JSON.stringify({ match: !!want && want === AGENTISTICS_DATA_DIR }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      })
+    }
+
+    // Connection lifecycle — add/rotate, rename, delete, probe. See team-connections.ts for the
+    // uniqueness rules (known endpoint updates in place; a token owned by another connection is
+    // refused) and why DELETE calls the central's /api/team/leave before removing state.
+    if (url.pathname === '/api/team/connections' && req.method === 'POST') {
+      const { handleAddConnection } = await import('./team-connections')
+      const res = await handleAddConnection(req)
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname.startsWith('/api/team/connections/') && req.method === 'PATCH') {
+      const id = url.pathname.slice('/api/team/connections/'.length)
+      const { handlePatchConnection } = await import('./team-connections')
+      // handlePatchConnection notifies internally (its own `deps.notify`), and only when the
+      // write actually changed something — a blind trigger here on every 200 would also wake
+      // dashboards for a no-op PATCH (e.g. re-sending the same label).
+      const res = await handlePatchConnection(req, id)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname.startsWith('/api/team/connections/') && url.pathname.endsWith('/probe') && req.method === 'POST') {
+      const id = url.pathname.slice('/api/team/connections/'.length, -'/probe'.length)
+      const { handleProbeConnection } = await import('./team-connections')
+      const res = await handleProbeConnection(req, id)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname.startsWith('/api/team/connections/') && req.method === 'DELETE') {
+      const id = url.pathname.slice('/api/team/connections/'.length)
+      const { handleDeleteConnection } = await import('./team-connections')
+      const res = await handleDeleteConnection(req, id)
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
     }
 
     // ---------------------------------------------------------------------------
@@ -951,6 +1631,52 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       return new Response(res.body, { status: res.status, headers })
     }
 
+    // Repositories — GitHub Actions registration (admin-gated on the central).
+    if (url.pathname === '/api/team/repos' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleListRepos } = await import('./team-admin')
+      const res = await handleListRepos(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/team/repos' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleRegisterRepo } = await import('./team-admin')
+      const res = await handleRegisterRepo(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    if (url.pathname === '/api/team/repos' && req.method === 'DELETE') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleUnregisterRepo } = await import('./team-admin')
+      const res = await handleUnregisterRepo(req)
+      if (res.status === 200) { const { triggerSseNotification } = await import('./sse'); triggerSseNotification() }
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // Tags (B5) — saved groupings of repos/projects/machines/teams/accounts. The handler owns the
+    // authority rules: writes require every source to be visible to the caller, and every response
+    // is aggregate-only (never the sessions behind a tag).
+    //
+    // Served in EVERY mode, not just on a central. On a solo/member machine the handler swaps the
+    // Mongo store for ~/.agentistics/tags.json and the team session set for the local one; the
+    // central's cookie gate above is untouched. This used to 404 with a plain-TEXT body, which the
+    // frontend then fed to JSON.parse — the Tags page died on a SyntaxError instead of working.
+    if ((url.pathname === '/api/tags' || url.pathname.startsWith('/api/tags/'))
+        && ['GET', 'POST', 'PATCH', 'DELETE'].includes(req.method)) {
+      const { handleTags } = await import('./tags-handlers')
+      const res = await handleTags(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
     if (url.pathname === '/api/team/test-connection' && req.method === 'POST') {
       const { handleTeamTestConnection } = await import('./team-uploader')
       const res = await handleTeamTestConnection(req)
@@ -989,6 +1715,67 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       return new Response(res.body, { status: res.status, headers })
     }
 
+    // POST /api/team/forget — a member deletes NAMED sessions of its own (repository sharing
+    // rules, §7). Minted-token-only, inside the handler; see team-forget.ts for why there is no
+    // legacy branch. Central-only, like every other team ingest route.
+    if (url.pathname === '/api/team/forget' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleTeamForget } = await import('./team-forget')
+      const res = await handleTeamForget(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // GET /api/team/account-repos — a member asks what repositories this central holds for ITS
+    // OWN ACCOUNT, so it can detect locally that a sibling machine still sends one it just hid.
+    // The request names no repository and carries no rule; the comparison happens on the caller.
+    // Minted-token-only, scoped to the token's owner accounts. See team-account-repos.ts.
+    if (url.pathname === '/api/team/account-repos' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleAccountRepos } = await import('./team-account-repos')
+      const res = await handleAccountRepos(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // /api/team/keys — the sealed-envelope public-key directory (CENTRAL). Minted-token-only
+    // inside the handler, scoped to the token's owner accounts. Public keys only; the private half
+    // never leaves the machine that generated it. See envelope-routes.ts.
+    if (url.pathname === '/api/team/keys' && (req.method === 'GET' || req.method === 'POST')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleEnvelopeKeys } = await import('./envelope-routes')
+      const res = await handleEnvelopeKeys(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // /api/team/envelopes — the sealed mailbox (CENTRAL): deposit for the account's other
+    // machines, fetch mine, delete on acknowledgement. The central stores ciphertext and routing
+    // metadata only, and cannot open any of it.
+    if (url.pathname === '/api/team/envelopes' && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { handleEnvelopes } = await import('./envelope-routes')
+      const res = await handleEnvelopes(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
+    // /api/team/proposals — LOCAL, same-origin: the restriction proposals this machine has
+    // received and decrypted, and the dismissal of one. Reading them changes nothing; APPLYING one
+    // is the ordinary PATCH /api/team/connections/:id the user's click performs, never a server
+    // path triggered by a message arriving (see envelope-inbox.ts).
+    if (url.pathname === '/api/team/proposals' && (req.method === 'GET' || req.method === 'DELETE')) {
+      const { handleProposals } = await import('./envelope-proposals')
+      const res = await handleProposals(req)
+      const headers = new Headers(res.headers)
+      for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
+      return new Response(res.body, { status: res.status, headers })
+    }
+
     // POST /api/team/leave-central — member proxy: tells the central to drop this member's
     // data, then the web resets the local config to solo. Keeps the token server-side.
     if (url.pathname === '/api/team/leave-central' && req.method === 'POST') {
@@ -1015,12 +1802,10 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
         const { randomBytes } = await import('node:crypto')
         const { generateEnvFile } = await import('./deploy')
 
-        const password = randomBytes(24).toString('hex')
         const sessionSecret = randomBytes(32).toString('hex')
         const mongoUrl = 'mongodb://mongo:27017/?replicaSet=rs0'
 
         const env = generateEnvFile({
-          password,
           sessionSecret,
           mongoUrl,
           mongoDb: 'agentistics',
@@ -1033,15 +1818,15 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
         return new Response(JSON.stringify({
           env,
           command: 'docker compose --env-file central.env up -d',
-          password,
           sessionSecret,
         }), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return new Response(JSON.stringify({ error: message }), {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1055,8 +1840,13 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
     // ---------------------------------------------------------------------------
     if (url.pathname === '/api/team/policy' && req.method === 'GET') {
       const { getCentralConfig, getInstanceId } = await import('./central-config')
+      const { CENTRAL_CAPABILITIES } = await import('./team-capabilities')
       const [config, instanceId] = await Promise.all([getCentralConfig(), getInstanceId()])
-      return new Response(JSON.stringify({ pushIntervalSec: config.pushIntervalSec, instanceId }), {
+      return new Response(JSON.stringify({
+        pushIntervalSec: config.pushIntervalSec,
+        instanceId,
+        capabilities: CENTRAL_CAPABILITIES,
+      }), {
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
@@ -1078,11 +1868,17 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
     if (url.pathname === '/api/team/config' && req.method === 'PUT') {
       if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
-      let body: { pushIntervalSec?: unknown; includeOfflineData?: unknown }
+      let body: { pushIntervalSec?: unknown; includeOfflineData?: unknown; publicUrl?: unknown; requireDeleteConfirmText?: unknown; includeDeletedMembers?: unknown }
       try {
-        body = await req.json() as { pushIntervalSec?: unknown; includeOfflineData?: unknown }
+        body = await req.json() as { pushIntervalSec?: unknown; includeOfflineData?: unknown; publicUrl?: unknown; requireDeleteConfirmText?: unknown; includeDeletedMembers?: unknown }
       } catch {
         return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (body.publicUrl !== undefined && typeof body.publicUrl !== 'string') {
+        return new Response(JSON.stringify({ error: 'publicUrl must be a string' }), {
           status: 400,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1099,12 +1895,53 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      const { setPushInterval, setIncludeOfflineData, getCentralConfig } = await import('./central-config')
+      // Turning the typed-delete guard OFF weakens a safety net for everyone on this central, so
+      // it is owner-only — unlike the other fields, which any admin session may set.
+      // Same owner-only rule: this changes what EVERY viewer of this central sees.
+      if (body.includeDeletedMembers !== undefined) {
+        if (typeof body.includeDeletedMembers !== 'boolean') {
+          return new Response(JSON.stringify({ error: 'includeDeletedMembers must be a boolean' }), {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const { getPrincipal } = await import('./auth')
+        const { can } = await import('./iam-caps')
+        const principal = await getPrincipal(req)
+        if (!principal || !can(principal, 'central:config')) {
+          return new Response(JSON.stringify({ error: 'forbidden' }), {
+            status: 403,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+      }
+      if (body.requireDeleteConfirmText !== undefined) {
+        if (typeof body.requireDeleteConfirmText !== 'boolean') {
+          return new Response(JSON.stringify({ error: 'requireDeleteConfirmText must be a boolean' }), {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const { getPrincipal } = await import('./auth')
+        const { can } = await import('./iam-caps')
+        const principal = await getPrincipal(req)
+        if (!principal || !can(principal, 'central:config')) {
+          return new Response(JSON.stringify({ error: 'forbidden' }), {
+            status: 403,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+      }
+      const { setPushInterval, setIncludeOfflineData, setPublicUrl, setRequireDeleteConfirmText, setIncludeDeletedMembers, getCentralConfig } = await import('./central-config')
       if (typeof body.pushIntervalSec === 'number') await setPushInterval(body.pushIntervalSec)
       if (typeof body.includeOfflineData === 'boolean') await setIncludeOfflineData(body.includeOfflineData)
+      if (typeof body.publicUrl === 'string') await setPublicUrl(body.publicUrl)
+      if (typeof body.requireDeleteConfirmText === 'boolean') await setRequireDeleteConfirmText(body.requireDeleteConfirmText)
+      if (typeof body.includeDeletedMembers === 'boolean') await setIncludeDeletedMembers(body.includeDeletedMembers)
       const config = await getCentralConfig()
       // A policy change (offline-data default) affects every viewer → nudge them to refetch.
-      if (typeof body.includeOfflineData === 'boolean') triggerSseNotification()
+      // Both policies change what everyone sees → nudge open dashboards to refetch.
+      if (typeof body.includeOfflineData === 'boolean' || typeof body.includeDeletedMembers === 'boolean') triggerSseNotification()
       return new Response(JSON.stringify(config), {
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -1133,7 +1970,11 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
-      const upgraded = server.upgrade(req, { data: { user: tokenResult.user, isAgent: true as const } })
+      // memberId (the token hash) identifies the MACHINE, and travels so the live-session registry
+      // can key snapshots per machine — a person with two machines sends two independent snapshots.
+      const upgraded = server.upgrade(req, {
+        data: { user: tokenResult.user, memberId: tokenResult.memberId, isAgent: true as const },
+      })
       if (upgraded) return // WebSocket handshake handed off to the websocket: {} handler
       return new Response(JSON.stringify({ error: 'upgrade failed' }), {
         status: 500,
@@ -1163,7 +2004,28 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
       const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
       const tokenResult = await validateIngestToken(bearer)
       if (tokenResult.ok) {
-        return new Response(JSON.stringify({ ok: true, user: tokenResult.user, org: TEAM_ORG }), {
+        // For machine tokens (bound to an account), also surface the machine's
+        // bound identity: machineName (token label), teamId, team name, and the owner's email.
+        // Only non-secret account fields are exposed — never passwordHash.
+        const body: { ok: true; user: string; org: string; machineName?: string; teamId?: string; email?: string; team?: string } = {
+          ok: true,
+          user: tokenResult.user,
+          org: TEAM_ORG,
+        }
+        // machineName (token label) + teamId are available for EVERY machine token, not just
+        // account-bound ones — so a machine always shows its own name + owner user, even legacy
+        // (no-account) tokens. email requires the linked account.
+        if (tokenResult.label) body.machineName = tokenResult.label
+        if (tokenResult.teamId) {
+          body.teamId = tokenResult.teamId
+          const t = await getTeam(tokenResult.teamId)
+          if (t) body.team = t.name
+        }
+        if (tokenResult.accountId) {
+          const account = await getAccount(tokenResult.accountId)
+          if (account?.email) body.email = account.email
+        }
+        return new Response(JSON.stringify(body), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1191,12 +2053,12 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
 
 try {
 // PORT (47291) is always the api + mcp endpoint.
-Bun.serve<WSData>({ port: PORT, idleTimeout: 60, websocket: _wsHandlers, fetch: handleRequest })
+Bun.serve<WSData>({ port: PORT, idleTimeout: 60, maxRequestBodySize: LIMITS.ingestBodyBytes, websocket: _wsHandlers, fetch: handleRequest })
 // Binary mode also serves the web dashboard on WEB_PORT (47292) — that's the URL you open.
 // Same handler → the SPA's same-origin `/api/*` calls resolve against 47292 and just work,
 // while 47291 stays the dedicated api + mcp port.
 if (SERVE_STATIC) {
-  Bun.serve<WSData>({ port: WEB_PORT, idleTimeout: 60, websocket: _wsHandlers, fetch: handleRequest })
+  Bun.serve<WSData>({ port: WEB_PORT, idleTimeout: 60, maxRequestBodySize: LIMITS.ingestBodyBytes, websocket: _wsHandlers, fetch: handleRequest })
 }
 
 const _ESC = '\x1b'
@@ -1208,7 +2070,7 @@ const _EM  = `${_ESC}[92m`
 const _CY  = `${_ESC}[96m`
 const _WH  = `${_ESC}[97m`
 
-const _SEP = `${_D}${'─'.repeat(44)}${_R}`
+const _SEP = `${_D}${''.repeat(44)}${_R}`
 const _DOT = `${_EM}●${_R}`
 const _URL = (u: string) => `${_CY}${_B}${u}${_R}`
 

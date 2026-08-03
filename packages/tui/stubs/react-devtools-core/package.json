@@ -1,0 +1,7 @@
+{
+  "name": "react-devtools-core",
+  "version": "0.0.0-stub",
+  "private": true,
+  "type": "module",
+  "main": "index.js"
+}

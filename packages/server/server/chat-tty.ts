@@ -230,14 +230,29 @@ export async function registerMcpGlobally(port: number): Promise<void> {
     if (urlOk && pathOk) return // already up to date
   } catch { /* read or parse failed — proceed with registration */ }
 
-  // Use the official CLI to register at user scope
-  const proc = Bun.spawn(
-    ['claude', 'mcp', 'add', '-s', 'user', 'agentistics',
-      '-e', `AGENTISTICS_API=${apiUrl}`,
-      '--', 'bun', 'run', mcpScript],
-    { stdout: 'pipe', stderr: 'pipe' },
-  )
-  await proc.exited
+  // Use the official CLI to register at user scope.
+  //
+  // A MISSING `claude` binary is a normal state, not a failure: every container image ships
+  // without it (the central and the Docker machine both), and so does any host that runs
+  // agentistics without Claude Code installed. It used to throw ENOENT out of here into the
+  // boot's `.catch(err => console.error(…, err))`, which Bun renders as a ten-line stack with a
+  // source snippet — a startup that looks broken while everything except nay-chat is fine.
+  // Anything else (a permission error, a crashing CLI) still propagates and is still loud.
+  try {
+    const proc = Bun.spawn(
+      ['claude', 'mcp', 'add', '-s', 'user', 'agentistics',
+        '-e', `AGENTISTICS_API=${apiUrl}`,
+        '--', 'bun', 'run', mcpScript],
+      { stdout: 'pipe', stderr: 'pipe' },
+    )
+    await proc.exited
+  } catch (err) {
+    if ((err as { code?: string })?.code === 'ENOENT') {
+      console.info('[nay-chat] the Claude CLI is not on PATH — nay-chat stays unavailable; everything else runs normally.')
+      return
+    }
+    throw err
+  }
 }
 
 export type ChatAttachment = {

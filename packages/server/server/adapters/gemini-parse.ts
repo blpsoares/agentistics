@@ -1,4 +1,5 @@
-import type { SessionMeta } from '@agentistics/core'
+import type { SessionMeta, TurnEvent } from '@agentistics/core'
+import { activeMinutesOf } from '@agentistics/core'
 
 /** Pure: parse a Gemini CLI chat file (rich JSON format or JSONL streaming format) into a
  *  normalized SessionMeta. Returns null when the content has no usable data.
@@ -74,11 +75,21 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
   const userMessageTimestamps: string[] = []
   const toolCounts: Record<string, number> = {}
   let hasGenuineContent = false
+  // Per-turn timeline for computeActiveTime() (docs/harness-contract.md). Gemini records no
+  // duration of its own, so every turn is reconstructed from the message timestamps: a genuine
+  // user message opens a turn, the model's last message before the next prompt closes it.
+  const turnEvents: TurnEvent[] = []
 
   if (Array.isArray(parsed.messages)) {
     for (const msg of parsed.messages) {
       const msgType = msg.type as string | undefined
       const timestamp = msg.timestamp as string | undefined
+      const tsMs = timestamp ? Date.parse(timestamp) : NaN
+      let turnEvent: TurnEvent | null = null
+      if (!Number.isNaN(tsMs)) {
+        turnEvent = { ts: tsMs }
+        turnEvents.push(turnEvent)
+      }
 
       if (msgType === 'gemini') {
         // Extract token data from the rich format
@@ -108,7 +119,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
         assistantMessages++
 
         if (timestamp) {
-          const h = new Date(timestamp).getUTCHours()
+          const h = new Date(timestamp).getHours()
           if (!isNaN(h)) messageHours.push(h)
         }
       } else if (msgType === 'user') {
@@ -116,6 +127,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
         if (isGenuineUserMessage(text)) {
           hasGenuineContent = true
           userMessages++
+          if (turnEvent) turnEvent.userPrompt = true
 
           if (!firstPrompt && text) {
             // Use displayContent if available (stripped of injected file contents)
@@ -125,7 +137,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
 
           if (timestamp) {
             userMessageTimestamps.push(timestamp)
-            const h = new Date(timestamp).getUTCHours()
+            const h = new Date(timestamp).getHours()
             if (!isNaN(h)) messageHours.push(h)
           }
         }
@@ -146,6 +158,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
     start_time: startTime || lastUpdated || '',
     end_time: lastUpdated || undefined,
     duration_minutes: durationMinutes,
+    active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
     assistant_message_count: assistantMessages,
     tool_counts: toolCounts,
@@ -256,10 +269,19 @@ function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
   const messageHours: number[] = []
   const userMessageTimestamps: string[] = []
   let hasGenuineContent = false
+  // Same reconstruction as parseRichJson — see computeActiveTime() / docs/harness-contract.md.
+  const turnEvents: TurnEvent[] = []
 
   for (const msg of messages) {
     const isUser = msg.type === 'user'
     const isAssistant = msg.type === 'model' || msg.type === 'gemini'
+
+    const tsMs = msg.timestamp ? Date.parse(msg.timestamp) : NaN
+    let turnEvent: TurnEvent | null = null
+    if (!Number.isNaN(tsMs)) {
+      turnEvent = { ts: tsMs }
+      turnEvents.push(turnEvent)
+    }
 
     let counted = false
     if (isAssistant) {
@@ -269,12 +291,13 @@ function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
     } else if (isUser && isGenuineUserMessage(msg.text ?? '')) {
       hasGenuineContent = true
       userMessages++
+      if (turnEvent) turnEvent.userPrompt = true
       if (msg.timestamp) userMessageTimestamps.push(msg.timestamp)
       counted = true
     }
 
     if (counted && msg.timestamp) {
-      const h = new Date(msg.timestamp).getUTCHours()
+      const h = new Date(msg.timestamp).getHours()
       if (!isNaN(h)) messageHours.push(h)
     }
   }
@@ -291,6 +314,7 @@ function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
     start_time: startTime || endTime || '',
     end_time: endTime || undefined,
     duration_minutes: durationMinutes,
+    active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
     assistant_message_count: assistantMessages,
     tool_counts: {},

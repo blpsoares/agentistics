@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { BarChart2, Lock, AlertCircle } from 'lucide-react'
 
-// ── i18n ──────────────────────────────────────────────────────────────────
+// i18n
 
 const COPY = {
   title:       { en: 'agentistics',                              pt: 'agentistics' },
@@ -20,7 +20,8 @@ function t(key: keyof typeof COPY, lang: 'en' | 'pt'): string {
   return COPY[key][lang]
 }
 
-// ── Component ─────────────────────────────────────────────────────────────
+// Component
+import { Revealable, REVEAL_PAD } from './PasswordReveal'
 
 interface Props {
   onAuthed: () => void
@@ -32,6 +33,7 @@ export function TeamLogin({ onAuthed }: Props) {
     navigator.language.startsWith('pt') ? 'pt' : 'en'
   )
   const [password, setPassword] = useState('')
+  const [shown, setShown] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<'wrong' | 'network' | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -136,9 +138,10 @@ export function TeamLogin({ onAuthed }: Props) {
             <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 5, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
               {t('label', lang)}
             </div>
+            <Revealable shown={shown} onToggle={() => setShown(v => !v)} lang={lang}>
             <input
               ref={inputRef}
-              type="password"
+              type={shown ? 'text' : 'password'}
               value={password}
               onChange={e => { setPassword(e.target.value); setError(null) }}
               placeholder={t('placeholder', lang)}
@@ -148,6 +151,7 @@ export function TeamLogin({ onAuthed }: Props) {
                 width: '100%',
                 boxSizing: 'border-box',
                 padding: '9px 12px',
+                paddingRight: REVEAL_PAD,
                 background: 'var(--bg-elevated)',
                 border: error === 'wrong'
                   ? '1px solid rgba(239,68,68,0.6)'
@@ -167,6 +171,7 @@ export function TeamLogin({ onAuthed }: Props) {
                 if (!error) e.currentTarget.style.borderColor = 'var(--border)'
               }}
             />
+            </Revealable>
           </label>
 
           {/* Error message */}

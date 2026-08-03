@@ -2,48 +2,18 @@ import React, { useEffect, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
   X, Clock, FileCode, GitCommit, Wrench, MessageSquare, Bot, Zap, AlertTriangle,
-  CheckCircle, XCircle, Globe, Server, ExternalLink,
+  CheckCircle, XCircle, Globe, Server, ExternalLink, Workflow as WorkflowIcon,
 } from 'lucide-react'
-import type { SessionMeta, Lang } from '@agentistics/core'
-import { formatProjectName, formatModel, calcCost, getModelColor, sessionLabel } from '@agentistics/core'
+import type { SessionMeta, Lang, WorkflowRun } from '@agentistics/core'
+import { sessionTime } from '../lib/sessionTime'
+import { formatProjectName, formatModel, calcCost, getModelColor, sessionLabel, fmtCost } from '@agentistics/core'
 import { blendedCostPerToken } from '../hooks/useData'
+import { buildWorkflowSteps } from '../lib/workflowSteps'
 import { fmtFull } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
-
-// ─── splitInlinedHistory ──────────────────────────────────────────────────────
-// Non-Claude harnesses sometimes concatenate a whole conversation into a single
-// user-turn (e.g. "User: hi\nAssistant: hello"). This helper splits such blocks
-// into individual bubbles so the transcript renders correctly.
-
-/** Pattern that matches a newline immediately followed by a conversation label. */
-const SPLIT_LABEL_RE = /\n(?=(?:User|Assistant|Gemini|Copilot):)/
-
-export function splitInlinedHistory(
-  role: 'user' | 'assistant',
-  content: string
-): { role: 'user' | 'assistant'; content: string }[] {
-  if (role !== 'user' || !SPLIT_LABEL_RE.test(content)) {
-    return [{ role, content }]
-  }
-  const segments = content.split(SPLIT_LABEL_RE).filter(Boolean)
-  const result: { role: 'user' | 'assistant'; content: string }[] = []
-  for (const seg of segments) {
-    const match = seg.match(/^(User|Assistant|Gemini|Copilot):\s*/)
-    if (match) {
-      const label = match[1]!
-      const text = seg.slice(match[0].length).trim()
-      if (!text) continue
-      result.push({ role: label === 'User' ? 'user' : 'assistant', content: text })
-    } else {
-      const text = seg.trim()
-      if (text) result.push({ role, content: text })
-    }
-  }
-  return result.length > 0 ? result : [{ role, content }]
-}
-
+import { splitInlinedHistory } from '../lib/transcriptSplit'
 
 interface Props {
   session: SessionMeta
@@ -53,6 +23,8 @@ interface Props {
   lang: Lang
   /** true when this agentistics instance is running in central (hub) mode */
   central?: boolean
+  /** All dynamic-workflow runs (from /api/data); this modal shows the ones for THIS session. */
+  workflows?: WorkflowRun[]
   onClose: () => void
 }
 
@@ -63,16 +35,6 @@ function fmt(n: number, full = false): string {
   return String(n)
 }
 
-function fmtCost(usd: number, currency: 'USD' | 'BRL', rate: number): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (brl < 0.005) return '<R$0,01'
-    return `R$${brl.toFixed(2).replace('.', ',')}`
-  }
-  if (usd < 0.001) return '<USD 0.001'
-  if (usd < 0.01) return `USD ${usd.toFixed(3)}`
-  return `USD ${usd.toFixed(2)}`
-}
 
 function fmtDuration(minutes: number): string {
   if (minutes < 1) return '<1m'
@@ -116,10 +78,12 @@ function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelU
        + ((session.output_tokens ?? 0) / 1_000_000) * blended.output
 }
 
-export function SessionDrilldownModal({ session, globalModelUsage, currency, brlRate, lang, central, onClose }: Props) {
+export function SessionDrilldownModal({ session, globalModelUsage, currency, brlRate, lang, central, workflows, onClose }: Props) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
   const [fullPrecision, setFullPrecision] = useState(false)
+  // Dynamic-workflow runs that belong to THIS session (moved here from the old aside menu).
+  const sessionRuns = (workflows ?? []).filter(w => w.sessionId === session.session_id)
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -242,7 +206,10 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
               <span style={{ opacity: 0.4 }}>·</span>
               <span>{session.start_time ? format(parseISO(session.start_time), 'MMM d, yyyy HH:mm') : '—'}</span>
               <span style={{ opacity: 0.4 }}>·</span>
-              <span>{fmtDuration(session.duration_minutes ?? 0)}</span>
+              <span title={sessionTime(session, lang).tooltip}
+                style={{ cursor: 'help' }}>
+                {sessionTime(session, lang).combined}
+              </span>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -479,6 +446,44 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                   </div>
                 )}
               </div>
+              </div>
+            </div>
+          )}
+
+          {/* Dynamic Workflows that ran in THIS session (moved from the old aside menu). */}
+          {sessionRuns.length > 0 && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <WorkflowIcon size={12} /> {pt ? `Dynamic Workflows (${sessionRuns.length})` : `Dynamic Workflows (${sessionRuns.length})`}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {sessionRuns.map(run => {
+                  const steps = buildWorkflowSteps(run, pt ? '(sem fase)' : '(no phase)')
+                  const statusColor = run.status === 'completed' ? '#22c55e' : run.status === 'partial' ? '#eab308' : '#ef4444'
+                  return (
+                    <div key={run.runId} style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'var(--bg-elevated)' }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor, flexShrink: 0 }} />
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>{run.name}</span>
+                        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                          {run.totals.agentCount} {pt ? 'agentes' : 'agents'} · {fmt(run.totals.tokensIn + run.totals.tokensOut, fullPrecision)} tk · <strong style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(run.totals.costUSD, currency, brlRate)}</strong>
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        {steps.map(step => (
+                          <div key={step.index} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '7px 10px', borderTop: '1px solid var(--border-subtle)', fontSize: 12 }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', minWidth: 14 }}>{step.index}</span>
+                            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{step.title}</span>
+                            <span style={{ color: 'var(--text-tertiary)' }}>{step.subtotal.count} {pt ? 'agentes' : 'agents'}</span>
+                            <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                              {fmt(step.subtotal.tokensIn + step.subtotal.tokensOut, fullPrecision)} tk · {fmtCost(step.subtotal.costUSD, currency, brlRate)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}

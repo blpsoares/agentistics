@@ -1,3 +1,11 @@
+/* Inter is self-hosted so the Content-Security-Policy needs no external origin and no
+   visitor IP ever reaches a third-party font host. Files live in public/fonts/. */
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 300; font-display: swap; src: url('/fonts/inter-300.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/inter-400.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/inter-500.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/inter-600.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/inter-700.woff2') format('woff2'); }
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -159,10 +167,36 @@ html, body {
 .prefs-tabbar { scrollbar-width: none; }
 .prefs-tabbar::-webkit-scrollbar { display: none; }
 
+/* Scrollable but no visible scrollbar (generic utility) */
+.ag-noscroll { scrollbar-width: none; -ms-overflow-style: none; }
+.ag-noscroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
 /* FiltersBar sticky shimmer scan */
 @keyframes filters-shimmer-scan {
   0%   { background-position: -100% 0; }
   100% { background-position: 200% 0; }
+}
+
+/* ── Route loader — animated bars (analytics motif) ─────────────────────────── */
+@keyframes ag-bar { 0%, 100% { transform: scaleY(0.32); opacity: 0.55; } 50% { transform: scaleY(1); opacity: 1; } }
+@keyframes ag-loader-in { from { opacity: 0; } to { opacity: 1; } }
+.ag-loader { display: flex; flex-direction: column; align-items: center; gap: 13px; animation: ag-loader-in 0.4s ease-out 0.1s both; }
+.ag-loader-bars { display: flex; align-items: flex-end; gap: 5px; height: 34px; }
+.ag-loader-bars > span {
+  width: 7px; height: 100%; border-radius: 3px; transform-origin: bottom; flex-shrink: 0;
+  background: linear-gradient(180deg, var(--anthropic-orange-light, #F59E0B), var(--anthropic-orange, #D97706));
+  animation: ag-bar 1.05s ease-in-out infinite;
+}
+.ag-loader-bars > span:nth-child(1) { animation-delay: 0s; }
+.ag-loader-bars > span:nth-child(2) { animation-delay: 0.11s; }
+.ag-loader-bars > span:nth-child(3) { animation-delay: 0.22s; }
+.ag-loader-bars > span:nth-child(4) { animation-delay: 0.33s; }
+.ag-loader-bars > span:nth-child(5) { animation-delay: 0.44s; }
+.ag-loader-label { font-size: 12px; color: var(--text-tertiary); letter-spacing: 0.03em; font-weight: 500; }
+@media (prefers-reduced-motion: reduce) {
+  .ag-loader-bars > span { animation: none; }
+  .ag-loader-bars > span:nth-child(2), .ag-loader-bars > span:nth-child(4) { transform: scaleY(0.6); }
+  .ag-loader-bars > span:nth-child(1), .ag-loader-bars > span:nth-child(5) { transform: scaleY(0.4); }
 }
 
 /* ── Mobile base ────────────────────────────────────────────────────────────── */
@@ -187,20 +221,167 @@ html, body {
   ::-webkit-scrollbar { display: none; }
   * { scrollbar-width: none; }
 
-  /* Respect iOS notch / home indicator */
-  #root {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
+  /* The home-indicator inset is absorbed by the fixed bottom nav (see .mobile-bottom-nav),
+     which is what actually sits over it. Padding #root too double-counted the inset. */
 }
 
-/* Bottom nav safe-area padding on iOS */
+/* Bottom nav safe-area padding.
+   `box-sizing: border-box` is global, so this padding EATS the nav's height instead of adding to
+   it: installed as a PWA (standalone, no browser toolbar) the inset is ~34-48px, which crushed a
+   56px bar down to ~10px of usable space — icons clipped, labels gone. In a browser tab the inset
+   is 0, which is why it only ever looked broken from the home screen. The height must therefore
+   carry the inset explicitly; --mobile-nav-h is the full occupied height for anything sitting
+   above the bar. */
+:root {
+  --mobile-nav-inset: env(safe-area-inset-bottom, 0px);
+  --mobile-nav-h: calc(56px + var(--mobile-nav-inset));
+}
+
 .mobile-bottom-nav {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  height: var(--mobile-nav-h);
+  padding-bottom: var(--mobile-nav-inset);
 }
 
 /* Prevent tap highlight flicker on mobile */
 @media (max-width: 767px) {
   button, a {
     -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Touch targets inside the settings pages.
+   The governance pages declare their button styles as module-level inline objects
+   (`primaryBtn`, `ghostBtn`, `trashBtn`), which a `useIsMobile()` hook cannot reach — so drawer
+   actions like "Create account" sat at 31-33px and "Remove team" at 22px. None of those objects
+   declares `min-height`, and inline styles only win for the properties they actually set, so this
+   rule applies cleanly without `!important` and without touching desktop. Buttons that already
+   set a taller inline min-height (RecordCardAction, Section) keep it. */
+@media (max-width: 767px) {
+  .ag-settings button {
+    min-height: 44px;
+  }
+  /* `Toggle` / `RowSwitch`'s switch pill is 20px tall by design (a knob at `top: 3` inside a
+     34x20 track) — the 44px rule above stretched it and left the knob pinned to the top third.
+     `.ag-switch` opts these two controls out; nothing else uses the class. */
+  .ag-settings button.ag-switch {
+    min-height: 0;
+  }
+}
+
+/* iOS zoom guard.
+   Safari auto-zooms the viewport whenever a focused field's font-size is under 16px, which
+   leaves the page scrolled sideways and breaks the sticky header. The app styles its fields
+   with inline `style` objects (mostly fontSize 13), and inline styles beat plain CSS rules —
+   hence `!important`. Scoped to mobile and to font-size only, so no desktop styling changes. */
+@media (max-width: 767px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* Horizontal-only scroll for the repo-detail tab bar: keep left/right scroll on
+   mobile but hide the scrollbar chrome. overflow-x:auto otherwise promotes
+   overflow-y to auto and the tabs' -1px marginBottom shows a vertical scrollbar. */
+.tabscroll { scrollbar-width: none; }
+.tabscroll::-webkit-scrollbar { display: none; }
+
+/* Responsive card grids (shared)
+   Scale the column count with viewport width and CAP it, so a row of cards neither crams on
+   narrow screens nor over-spreads into lonely orphans on ultrawide. Pick the max with a cap
+   class: `ag-grid cols-3` … `ag-grid cols-6`. Default gap is 12px — override inline with `gap`.
+   minmax(0,1fr) lets cells shrink so long content never forces a horizontal scroll. */
+.ag-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 420px) { .ag-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (min-width: 560px)  { .ag-grid.cols-3, .ag-grid.cols-4, .ag-grid.cols-5, .ag-grid.cols-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 860px)  { .ag-grid.cols-4, .ag-grid.cols-5, .ag-grid.cols-6 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 1160px) { .ag-grid.cols-5, .ag-grid.cols-6 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@media (min-width: 1460px) { .ag-grid.cols-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+
+/* --- .ag-hint: an informational icon that discloses its sentence on demand ----------------------
+ *
+ * Used by the sharing picker's reverse-warning (SiblingWithheldBadge.tsx), which used to be an
+ * orange pill of text under the row and read as a label describing the row rather than a caution
+ * about it. The icon is the standing signal; the sentence appears on hover, on keyboard focus, and
+ * on tap — `:focus-within` covers the last two, so no JavaScript state is involved.
+ *
+ * The body is absolutely positioned, so it can never widen or reflow the row it belongs to.
+ */
+.ag-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ag-hint-btn {
+  /* Always visible: this replaces something louder and must still be noticed BEFORE the switch
+   * beside it is flipped. Opacity is a hover affordance, never a way to hide it. */
+  opacity: 0.85;
+}
+
+.ag-hint-btn:hover,
+.ag-hint-btn:focus-visible {
+  opacity: 1;
+}
+
+.ag-hint-body {
+  position: absolute;
+  z-index: 40;
+  left: 0;
+  top: calc(100% + 6px);
+  /* A REAL width, and it has to be stated HERE. Out of flow means shrink-to-fit, and the
+   * containing block is `.ag-hint` — an inline-flex wrapper the width of a 13px icon. A
+   * `max-width: 100%` written on the element therefore capped the bubble at ~17px, which
+   * `overflow-wrap: anywhere` then satisfied by breaking inside words: one letter per line.
+   * The floor is in `ch` (a sentence needs COLUMNS, not pixels) and the ceiling is measured
+   * against the viewport, which is the only box that can honestly cap it. */
+  width: max-content;
+  min-width: 26ch;
+  max-width: min(34rem, calc(100vw - 32px));
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+  /* `overflow-wrap` INHERITS, and the picker rows set `anywhere` so a 60-character git remote can
+   * break. Stating both here is what stops that reaching into the bubble and shattering an
+   * ordinary sentence mid-word. */
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: none;
+  /* `visibility` rather than `display`, so the box is measurable and transitions cleanly. */
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+
+.ag-hint:hover > .ag-hint-body,
+.ag-hint:focus-within > .ag-hint-body {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* `#root` is `overflow-x: clip` on mobile, so a bubble that leaves the viewport does not even
+ * announce itself with a scrollbar — it simply disappears. The badge sits at the LEFT of its
+ * (wrapped) row, so the bubble opens rightward from there on BOTH branches: the old `right: 0`
+ * anchored it to a badge that is already near x=0 and pushed the box off the LEFT edge instead. */
+@media (max-width: 767px) {
+  .ag-hint-btn {
+    /* Touch target — 44px is the MOBILE number and is applied only here. */
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .ag-hint-body {
+    left: 0;
+    right: auto;
+    /* Narrower than the desktop floor, because at 390px 26ch is most of the screen already. */
+    min-width: 0;
+    max-width: calc(100vw - 48px);
   }
 }

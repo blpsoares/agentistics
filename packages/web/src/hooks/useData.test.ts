@@ -1,8 +1,11 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession } from './useData'
+import { mergeStatsCaches } from '@agentistics/core'
+import type { RepoSortKey, RepoStat } from './useData'
+import type { SessionMeta } from '@agentistics/core'
 import { format, subDays } from 'date-fns'
 
-// ── calcStreak ────────────────────────────────────────────────────────────────
+// calcStreak
 
 describe('calcStreak', () => {
   // Fixed reference date at noon UTC — safe for all timezones (no day boundary ambiguity)
@@ -52,7 +55,7 @@ describe('calcStreak', () => {
   })
 })
 
-// ── calcLongestStreak ─────────────────────────────────────────────────────────
+// calcLongestStreak
 
 describe('calcLongestStreak', () => {
   const TODAY = new Date('2026-04-10T12:00:00.000Z')
@@ -86,7 +89,7 @@ describe('calcLongestStreak', () => {
   })
 })
 
-// ── getDateRangeFilter ────────────────────────────────────────────────────────
+// getDateRangeFilter
 
 describe('getDateRangeFilter', () => {
   test('"all" sem customização → início do epoch até agora', () => {
@@ -138,7 +141,7 @@ describe('getDateRangeFilter', () => {
   })
 })
 
-// ── filterByHarness ───────────────────────────────────────────────────────────
+// filterByHarness
 
 describe('filterByHarness', () => {
   const sessions = [
@@ -164,7 +167,7 @@ describe('filterByHarness', () => {
 })
 
 
-// ── computeHarnessSummaries ───────────────────────────────────────────────────
+// computeHarnessSummaries
 
 describe('computeHarnessSummaries', () => {
   function makeAppData(overrides: Partial<import('@agentistics/core').AppData> = {}): import('@agentistics/core').AppData {
@@ -386,7 +389,7 @@ describe('computeHarnessSummaries', () => {
   })
 })
 
-// ── computeHarnessSummaries — new fields (hour/dow/activity/peaks) ─────────────
+// computeHarnessSummaries — new fields (hour/dow/activity/peaks)
 
 describe('computeHarnessSummaries — hourCounts and peakHour', () => {
   function makeSession(overrides: Partial<import('@agentistics/core').SessionMeta>): import('@agentistics/core').SessionMeta {
@@ -792,7 +795,7 @@ describe('computeHarnessSummaries — dailyActivity', () => {
   })
 })
 
-// ── computeHarnessSummaries — models[] and costPerMTokens ─────────────────────
+// computeHarnessSummaries — models[] and costPerMTokens
 
 describe('computeHarnessSummaries — models[] and costPerMTokens', () => {
   function makeSession(
@@ -947,5 +950,192 @@ describe('computeHarnessSummaries — models[] and costPerMTokens', () => {
     expect(c.models[0]!.inputTokens).toBe(100_000)
     expect(c.models[0]!.costUSD).toBeGreaterThan(0)
     expect(c.costPerMTokens).toBeGreaterThan(0)
+  })
+})
+
+// sortRepos
+
+function repo(p: Partial<RepoStat>): RepoStat {
+  return {
+    id: 'x', remote: '', linked: true, name: 'x', path: '', sessions: 0, messages: 0, tools: 0,
+    costUSD: 0, inputTokens: 0, outputTokens: 0, gitCommits: 0, linesAdded: 0, linesRemoved: 0,
+    filesModified: 0, ciSessions: 0, members: [], harnesses: ['claude'], firstActive: '', lastActive: '',
+    activityByDay: {}, _users: new Set(), _harnesses: new Set(), _paths: {}, ...p,
+  }
+}
+
+test('sortRepos by cost descending then ascending', () => {
+  const repos = [repo({ id: 'a', costUSD: 5 }), repo({ id: 'b', costUSD: 10 }), repo({ id: 'c', costUSD: 3 })]
+  expect(sortRepos(repos, 'cost', 'desc').map(r => r.id)).toEqual(['b', 'a', 'c'])
+  expect(sortRepos(repos, 'cost', 'asc').map(r => r.id)).toEqual(['c', 'a', 'b'])
+})
+
+test('sortRepos by name uses locale compare', () => {
+  const repos = [repo({ id: 'a', name: 'zeta' }), repo({ id: 'b', name: 'alpha' })]
+  expect(sortRepos(repos, 'name', 'asc').map(r => r.name)).toEqual(['alpha', 'zeta'])
+})
+
+test('sortRepos does not mutate the input array', () => {
+  const repos = [repo({ id: 'a', costUSD: 1 }), repo({ id: 'b', costUSD: 2 })]
+  sortRepos(repos, 'cost', 'desc')
+  expect(repos.map(r => r.id)).toEqual(['a', 'b'])
+})
+// computeFilteredHarnessSummaries — machine/team scope must equal the member scope
+
+describe('machine filter reads the same deep history as the member filter', () => {
+  // Regression: `userStatsCaches` is keyed by display name and SUMS a member's machines, so a
+  // machine (or team) selection could not be served from it and fell back to summing the
+  // individual session docs — which only cover the sessions still stored one-by-one. The same
+  // scope reported a fraction of the member view (835 sessions vs 225 on real data).
+  const day = (date: string, sessionCount: number, messageCount: number) =>
+    ({ date, sessionCount, messageCount, toolCallCount: 0 })
+  const usage = (input: number, output: number) => ({
+    'claude-sonnet-4-5': {
+      inputTokens: input, outputTokens: output,
+      cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0,
+    },
+  })
+  const cacheFor = (dates: [string, number, number][], input: number, output: number): import('@agentistics/core').StatsCache => ({
+    version: 1,
+    lastComputedDate: dates[dates.length - 1]![0],
+    dailyActivity: dates.map(([d, s, m]) => day(d, s, m)),
+    dailyModelTokens: [],
+    modelUsage: usage(input, output),
+    totalSessions: dates.reduce((a, [, s]) => a + s, 0),
+    totalMessages: dates.reduce((a, [, , m]) => a + m, 0),
+    longestSession: { sessionId: 'x', duration: 1, messageCount: 1, timestamp: '2026-06-01T00:00:00Z' },
+    firstSessionDate: dates[0]![0],
+    hourCounts: {},
+    totalSpeculationTimeSavedMs: 0,
+  })
+
+  const alienware = cacheFor([['2026-06-01', 400, 1200], ['2026-06-02', 100, 300]], 8_000_000, 50_000_000)
+  const dell = cacheFor([['2026-06-01', 200, 600], ['2026-06-03', 135, 400]], 8_350_000, 53_000_000)
+
+  const data = {
+    statsCache: cacheFor([['2026-06-01', 1, 1]], 0, 0),
+    sessions: [],   // the deep history exists ONLY aggregated — the session docs are long gone
+    projects: [],
+    allSessions: [],
+    harnesses: ['claude'],
+    userStatsCaches: { 'Bryan Soares': mergeStatsCaches([alienware, dell]) },
+    machineStatsCaches: { alienware, dell },
+    machineOwners: {
+      alienware: { user: 'Bryan Soares', teamIds: ['dev'] },
+      dell: { user: 'Bryan Soares', teamIds: ['dev'] },
+    },
+  } as unknown as import('@agentistics/core').AppData
+
+  const filters = (over: Partial<import('@agentistics/core').Filters>): import('@agentistics/core').Filters =>
+    ({ dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], ...over })
+
+  const byMember = computeFilteredHarnessSummaries(data, filters({ users: ['Bryan Soares'] }))
+  const byMachines = computeFilteredHarnessSummaries(data, filters({ machines: ['alienware', 'dell'] }))
+  const byTeam = computeFilteredHarnessSummaries(data, filters({ teams: ['dev'] }))
+
+  test('selecting both of a member\'s machines equals selecting the member', () => {
+    expect(byMachines.summaries.claude).toEqual(byMember.summaries.claude)
+    expect(byMachines.summaries.claude!.sessions).toBe(835)
+  })
+
+  test('the team holding only those machines equals the same scope', () => {
+    expect(byTeam.summaries.claude).toEqual(byMember.summaries.claude)
+  })
+
+  test('a single machine reports its own history, not the member\'s total', () => {
+    const one = computeFilteredHarnessSummaries(data, filters({ machines: ['alienware'] }))
+    expect(one.summaries.claude!.sessions).toBe(500)
+    expect(one.summaries.claude!.inputTokens).toBe(8_000_000)
+  })
+
+  test('falls back to the per-session sum when a machine has no cache (never a partial sum)', () => {
+    const partial = { ...data, machineStatsCaches: { alienware } } as import('@agentistics/core').AppData
+    const out = computeFilteredHarnessSummaries(partial, filters({ machines: ['alienware', 'dell'] }))
+    expect(out.summaries.claude!.sessions).toBe(0)  // no session docs → old behaviour, unchanged
+  })
+
+  // Regression: a scoped principal (a manager) receives `machineOwners` / `userStatsCaches` pruned
+  // to what they may see. A selection that resolves to NO cache used to merge an EMPTY cache and
+  // report a confident 0 on every KPI, instead of falling back to the per-session sum. The session
+  // here is deliberately visible so a correct fallback is non-zero and the zero is unmistakable.
+  const scoped = {
+    ...data,
+    sessions: [{
+      session_id: 's1', harness: 'claude', user: 'Bryan Soares', memberId: 'alienware',
+      teamIds: ['dev'], project_path: '/p', start_time: '2026-06-01T10:00:00.000Z',
+      input_tokens: 10, output_tokens: 20, user_message_count: 1, assistant_message_count: 1,
+    }],
+  } as unknown as import('@agentistics/core').AppData
+
+  test('a team the viewer holds no machine for falls back to sessions, not a confident zero', () => {
+    const out = computeFilteredHarnessSummaries(scoped, filters({ teams: ['finance'] }))
+    expect(out.summaries.claude?.sessions ?? 0).toBe(0) // no session is in `finance` — a true zero
+    // …but the team the viewer CAN see must not be zeroed just because the pruned map lacks it.
+    const blind = { ...scoped, machineOwners: {}, machineStatsCaches: {} } as import('@agentistics/core').AppData
+    const seen = computeFilteredHarnessSummaries(blind, filters({ teams: ['dev'] }))
+    expect(seen.summaries.claude!.sessions).toBe(1)
+    expect(seen.summaries.claude!.inputTokens).toBe(10)
+  })
+
+  test('a member whose cache was pruned away falls back to sessions, not a confident zero', () => {
+    // `userStatsCaches` holds another member only — the selected one was pruned out for this viewer.
+    const pruned = {
+      ...scoped,
+      userStatsCaches: { 'Someone Else': alienware },
+      machineOwners: {}, machineStatsCaches: {},
+    } as unknown as import('@agentistics/core').AppData
+    const out = computeFilteredHarnessSummaries(pruned, filters({ users: ['Bryan Soares'] }))
+    expect(out.summaries.claude!.sessions).toBe(1)
+    expect(out.summaries.claude!.inputTokens).toBe(10)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// pickLongestSession — the "958h" regression
+// ---------------------------------------------------------------------------
+
+function sess(id: string, wallMin: number, activeMin?: number): SessionMeta {
+  return {
+    session_id: id, project_path: '/p', start_time: '2026-01-01T00:00:00Z',
+    duration_minutes: wallMin, active_minutes: activeMin,
+    user_message_count: 1, assistant_message_count: 1,
+    tool_counts: {}, tool_output_tokens: {}, agent_file_reads: {}, languages: [],
+    git_commits: 0, git_pushes: 0, input_tokens: 0, output_tokens: 0,
+    first_prompt: '', user_interruptions: 0, user_response_times: [],
+    tool_errors: 0, tool_error_categories: {}, uses_task_agent: false,
+    uses_mcp: false, uses_web_search: false, uses_web_fetch: false,
+    lines_added: 0, lines_removed: 0, files_modified: 0,
+    message_hours: [], user_message_timestamps: [], harness: 'claude',
+  }
+}
+
+describe('pickLongestSession', () => {
+  test('a deleted-transcript session does not win on its wall clock', () => {
+    // The real case: 958h of wall clock, transcript already cleaned up, so no active time.
+    // It must lose to a shorter session that actually has measured work.
+    const deleted = sess('deleted', 958 * 60, undefined)
+    const real = sess('real', 106 * 60, 88 * 60)
+    const { session, unmeasured } = pickLongestSession([deleted, real])
+    expect(session?.session_id).toBe('real')
+    expect(unmeasured).toBe(1)
+  })
+
+  test('ranks by active time, not by wall clock', () => {
+    const openLong = sess('open-long', 500 * 60, 2 * 60)
+    const workedMore = sess('worked-more', 10 * 60, 9 * 60)
+    expect(pickLongestSession([openLong, workedMore]).session?.session_id).toBe('worked-more')
+  })
+
+  test('falls back to wall clock only when NOTHING has active time', () => {
+    const a = sess('a', 100, undefined)
+    const b = sess('b', 300, undefined)
+    const { session, unmeasured } = pickLongestSession([a, b])
+    expect(session?.session_id).toBe('b')
+    // Not reported as unmeasured: the whole set is on the same (wall-clock) footing.
+    expect(unmeasured).toBe(0)
+  })
+
+  test('empty input yields null, not a crash', () => {
+    expect(pickLongestSession([]).session).toBeNull()
   })
 })

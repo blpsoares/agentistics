@@ -22,6 +22,10 @@ export function Section({ title, children, action, onExpand, flashId, style: ext
         borderRadius: 'var(--radius-lg)',
         padding: isMobile ? '14px 14px' : '20px 22px',
         boxSizing: 'border-box',
+        // Column flex so a card given an explicit height (e.g. two cards stretched to the same row
+        // height) hands the leftover space to its CONTENT instead of leaving a dead band under it.
+        display: 'flex',
+        flexDirection: 'column',
         ...extraStyle,
       }}
     >
@@ -65,7 +69,9 @@ export function Section({ title, children, action, onExpand, flashId, style: ext
           )}
         </div>
       </div>
-      {children}
+      {/* minHeight:0 so a scrollable/looser child can shrink inside the flex column rather than
+          overflowing it. */}
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{children}</div>
     </div>
   )
 }

@@ -4,8 +4,9 @@ import { claudeAdapter } from './claude'
 import { codexAdapter } from './codex'
 import { geminiAdapter } from './gemini'
 import { copilotAdapter } from './copilot'
+import { antigravityAdapter } from './antigravity'
 
-const KNOWN_HARNESS_IDS = new Set(['claude', 'codex', 'gemini', 'copilot'])
+const KNOWN_HARNESS_IDS = new Set(['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi'])
 
 test('registry returns only known harness ids, always includes claude', async () => {
   const adapters = await getEnabledAdapters()
@@ -24,7 +25,7 @@ test('each adapter appears in getEnabledAdapters iff its isAvailable() returns t
   const adapters = await getEnabledAdapters()
   const ids = adapters.map(a => a.id)
 
-  for (const adapter of [claudeAdapter, codexAdapter, geminiAdapter, copilotAdapter]) {
+  for (const adapter of [claudeAdapter, codexAdapter, geminiAdapter, copilotAdapter, antigravityAdapter]) {
     if (adapter.isAvailable()) {
       expect(ids).toContain(adapter.id)
     } else {

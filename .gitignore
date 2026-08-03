@@ -68,3 +68,19 @@ packages/web/public/*.webm
 *.env
 *.env.bak
 central.env.*
+
+# git worktrees created by the harness
+.claude/worktrees/
+/report.md
+/notes.md
+
+# Agent scratch: SDD ledgers, briefs, reports and review packages.
+# Neither committed nor shipped — and NOT in the Docker build context either
+# (see .dockerignore): a review package landing here would otherwise invalidate
+# `COPY . .` and re-run the whole Vite build.
+.superpowers/
+
+# Recording working directory (seed-demo + record-all/record-web output).
+# Anchored to the root: the PUBLISHED casts live in docs/media/casts/ and are
+# committed, and an unanchored `casts/` would silently swallow them too.
+/casts/
