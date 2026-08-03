@@ -224,12 +224,20 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.next }}"
 
-          # Create the versioned release (Linux binary only; Windows installer added by build-desktop job)
-          gh release create "$TAG" \
-            --title "v${VERSION}" \
-            --notes-file /tmp/release-notes.md \
-            ./release/agentop \
-            ./release/agentop.exe
+          # Create the versioned release (Linux binary only; Windows installer added by build-desktop job).
+          # `gh release create` fails outright when the release already exists, which turns a
+          # re-run — the normal response to a later job in this workflow failing — into a second
+          # failure at the first step. Upload into it instead when it is already there.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — uploading the binaries into it"
+            gh release upload "$TAG" ./release/agentop ./release/agentop.exe --clobber
+          else
+            gh release create "$TAG" \
+              --title "v${VERSION}" \
+              --notes-file /tmp/release-notes.md \
+              ./release/agentop \
+              ./release/agentop.exe
+          fi
 
           # Update the rolling latest pointer
           gh release delete latest --yes 2>/dev/null || true
@@ -238,7 +246,15 @@ jobs:
           git tag latest
           git push origin latest
 
+          # `--target` is REQUIRED here. Without it `gh release create` refuses a tag it cannot
+          # yet see on the remote ("tag latest exists locally but has not been pushed"), and the
+          # push immediately above has not necessarily propagated by the time this runs. That is
+          # exactly how v1.7.4 failed: the old `latest` release had already been DELETED by the
+          # line above, so the repository was left with no rolling release at all, and every job
+          # after this one — the npm publish, the Windows installer, the GHCR image — was skipped.
+          # Naming the commit lets gh create the release without waiting on tag propagation.
           gh release create latest \
+            --target "$GITHUB_SHA" \
             --title "Latest build ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
             --notes-file /tmp/release-notes.md \
             ./release/agentop \
