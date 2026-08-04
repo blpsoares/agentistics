@@ -162,7 +162,7 @@ describe('parseCookies', () => {
 describe('handleSession', () => {
   it('returns JSON with authed, required, and central boolean fields', async () => {
     const req = new Request('http://localhost/api/team/session')
-    const res = handleSession(req)
+    const res = await handleSession(req)
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toBe('application/json')
 

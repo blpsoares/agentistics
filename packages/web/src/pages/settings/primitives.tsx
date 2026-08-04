@@ -373,10 +373,12 @@ export function PrefRow({ label, sub, children }: { label: string; sub?: string;
   )
 }
 
-export function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+export function Toggle({ on, onToggle, disabled }: { on: boolean; onToggle: () => void; disabled?: boolean }) {
   return (
     <button
-      onClick={onToggle}
+      onClick={() => { if (!disabled) onToggle() }}
+      disabled={disabled}
+      aria-disabled={disabled || undefined}
       // `.ag-switch` opts this control OUT of the `.ag-settings button { min-height: 44px }`
       // mobile rule (index.css). That rule exists for real buttons that were 22-33px tall on
       // mobile; applied here it stretched this 20px-tall pill to 44px and left its knob (top: 3)
@@ -385,7 +387,8 @@ export function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) 
       style={{
         position: 'relative', width: 34, height: 20, borderRadius: 10,
         border: 'none', background: on ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-        cursor: 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0,
+        cursor: disabled ? 'not-allowed' : 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0,
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       <span style={{

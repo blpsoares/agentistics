@@ -125,6 +125,8 @@ export interface ControlStrings {
   actOpen: string
   actStopAll: string
   actRestartAll: string
+  /** Names the version, so the verb states what it is about to install. */
+  actUpgrade: (version: string) => string
   actConnect: string
   actDisconnect: string
   actHistory: string
@@ -267,6 +269,7 @@ const EN: ControlStrings = {
   actOpen: 'Open in browser',
   actStopAll: 'Stop all',
   actRestartAll: 'Restart all',
+  actUpgrade: (v) => `Upgrade to v${v} & restart`,
   actConnect: 'Connect',
   actDisconnect: 'Disconnect',
   actHistory: 'Change',
@@ -393,6 +396,7 @@ const PT: ControlStrings = {
   actOpen: 'Abrir no navegador',
   actStopAll: 'Parar tudo',
   actRestartAll: 'Reiniciar tudo',
+  actUpgrade: (v) => `Atualizar para v${v} e reiniciar`,
   actConnect: 'Conectar',
   actDisconnect: 'Desconectar',
   actHistory: 'Mudar',

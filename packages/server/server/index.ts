@@ -56,6 +56,7 @@ async function readLocalLiveSnapshot(sessions: SessionMeta[]): Promise<{
 }
 import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
 import { CAPS, PROFILE } from './exposure'
+import { chatAllowed } from './chat-gate'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
 import { corsHeadersFor } from './cors'
@@ -944,6 +945,19 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
+    // Chat is opt-in. `capability-guard.ts` has already refused these paths where the exposure
+    // profile forbids them; this is the user's own switch on top, and it can only narrow further
+    // (chat-gate.ts). Enforced HERE, not only in the UI, because a hidden button is not a closed
+    // door — the endpoint is what actually spawns the CLI.
+    if (url.pathname === '/api/chat-harnesses' || url.pathname === '/api/chat-tty') {
+      if (!chatAllowed(CAPS.localChat, (await readPreferences()).chatEnabled)) {
+        return new Response(JSON.stringify({ error: 'chat_disabled' }), {
+          status: 403,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     if (url.pathname === '/api/chat-harnesses' && req.method === 'GET') {
       return new Response(JSON.stringify(chatHarnessStatus()), {
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
@@ -1320,7 +1334,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     }
 
     if (url.pathname === '/api/team/session' && req.method === 'GET') {
-      const res = handleSession(req)
+      const res = await handleSession(req)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })

@@ -150,6 +150,8 @@ export interface CliStrings {
   soloSet: string
   archiveSet: (mode: string) => string
   prefsWriteFailed: string
+  upgradeDone: string
+  upgradeFailed: (code: number) => string
 
   // critical (unattended) update — printed by `agentop check-update`
   updateCriticalTitle: string
@@ -284,6 +286,8 @@ const EN: CliStrings = {
   soloSet: 'solo mode set — nothing leaves this machine.',
   archiveSet: (mode) => `history preservation set to ${mode}.`,
   prefsWriteFailed: 'could not write preferences.',
+  upgradeDone: 'upgraded, and everything that was running was restarted onto the new version.',
+  upgradeFailed: (code) => `upgrade exited ${code} — see the output above.`,
 
   updateCriticalTitle: 'Critical update — installing automatically',
   updateCriticalInstalling: (v) => `v${v} is being installed in the background; your terminal is free.`,
@@ -414,6 +418,8 @@ const PT: CliStrings = {
   stoppedDone: 'serviço parado.',
   soloSet: 'modo solo definido — nada sai desta máquina.',
   archiveSet: (mode) => `preservação do histórico definida como ${mode}.`,
+  upgradeDone: 'atualizado, e tudo o que estava no ar foi reiniciado na versão nova.',
+  upgradeFailed: (code) => `o upgrade saiu com ${code} — veja a saída acima.`,
   prefsWriteFailed: 'não consegui gravar as preferências.',
 
   updateCriticalTitle: 'Atualização crítica — instalando automaticamente',

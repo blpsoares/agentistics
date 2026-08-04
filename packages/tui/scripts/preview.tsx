@@ -326,6 +326,7 @@ function fakeHost(opts: Options): ControlHost {
     initCentral: done,
     // `null` is "already answered", so the preview only opens on the consent gate when asked to.
     pendingArchiveMode: async () => (opts.pending ? 'consolidate' : null),
+    upgrade: done,
     setArchiveMode: done,
     enableBoot: done,
     setLang: async () => {},

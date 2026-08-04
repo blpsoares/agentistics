@@ -4,7 +4,7 @@ import { visibleSettingsSections, SETTINGS_SECTIONS } from './settingsSections'
 const ids = (v: Parameters<typeof visibleSettingsSections>[0]) => visibleSettingsSections(v).map(s => s.id)
 
 test('solo/member: personal sections + live, no governance', () => {
-  expect(ids({ central: false })).toEqual(['preferences', 'sessions', 'data-sources', 'harnesses', 'pricing', 'install', 'connection', 'live'])
+  expect(ids({ central: false })).toEqual(['preferences', 'sessions', 'data-sources', 'harnesses', 'pricing', 'install', 'connection', 'live', 'chat'])
 })
 
 test('central owner: personal (no live) + all governance sections', () => {
@@ -24,4 +24,9 @@ test('every section has a group', () => {
     expect(section.group).toBeDefined()
     expect(['personal', 'governance']).toContain(section.group)
   }
+})
+
+test('chat is a machine section — a central serves no local chat to configure', () => {
+  expect(ids({ central: false })).toContain('chat')
+  expect(ids({ central: true, role: 'owner' })).not.toContain('chat')
 })

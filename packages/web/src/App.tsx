@@ -81,6 +81,10 @@ interface TeamSessionState {
     localTranscripts?: boolean
     mcpAdmin?: boolean
   }
+  /** What the chat endpoints will actually answer: the capability AND the user's own switch.
+   *  Undefined on an older server, which had no switch — treated as "the capability decides",
+   *  so upgrading the web ahead of the server never hides a chat that still works. */
+  chatEnabled?: boolean
 }
 
 export interface IamAccount { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: { teamId: string; role: 'manager' | 'user' }[]; mustChangePassword: boolean }
@@ -1194,6 +1198,15 @@ export default function AppLayout() {
   // Team session gate
   // undefined = not yet fetched, TeamSessionState after fetch
   const [teamSession, setTeamSession] = useState<TeamSessionState | undefined>(undefined)
+  /**
+   * Whether to offer the chat at all.
+   *
+   * `chatEnabled` is the server's own answer (capability AND the user's switch), so this is a
+   * mirror of what /api/chat-tty would do rather than a second opinion about it. `undefined` means
+   * an older server that has no switch — then the capability alone decides, exactly as before, so
+   * a web bundle newer than its server never hides a chat that still works.
+   */
+  const chatOffered = teamSession?.chatEnabled ?? true
   // true when this instance is a team member pushing to a central (mode === 'member').
   // Used only to tailor the upgrade command shown in the UpdateModal.
   const [isMember, setIsMember] = useState(false)
@@ -2664,7 +2677,7 @@ export default function AppLayout() {
           Also hidden when the server revoked the localChat capability (an exposed instance
           answers /api/chat-tty and /api/exec with 403 — see server/capability-guard.ts), so the
           UI never offers an action that cannot work. */}
-      {!teamSession?.aggregatorOnly && teamSession?.capabilities?.localChat !== false && (
+      {!teamSession?.aggregatorOnly && teamSession?.capabilities?.localChat !== false && chatOffered && (
         <TtyChat
           lang={lang}
           chatModel={chatModel}

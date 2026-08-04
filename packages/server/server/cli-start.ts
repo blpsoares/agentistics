@@ -1426,6 +1426,19 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       }
     },
 
+    async upgrade(): Promise<ActionResult> {
+      const s = S()
+      // A CHILD process, not `runUpgrade()` in here. That command prints — a lot, for minutes —
+      // and nothing may print while the alternate buffer is live; run as a child under
+      // `streamCommand` both pipes are captured and every line lands in the detail pane instead.
+      // It is also what makes the self-replacement safe: the binary being overwritten is this
+      // process's own, and upgrade.ts installs by rename, which a running process survives.
+      const code = await streamCommand([process.execPath, 'upgrade'])
+      return code === 0
+        ? { ok: true, message: s.upgradeDone }
+        : { ok: false, message: s.upgradeFailed(code) }
+    },
+
     async setArchiveMode(mode: ArchiveMode): Promise<ActionResult> {
       const s = S()
       try {
