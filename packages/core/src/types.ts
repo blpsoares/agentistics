@@ -239,6 +239,15 @@ export interface WorkflowAgent {
   }
 }
 
+/** Every token a workflow run (or one of its agents) was billed for. Cache reads and writes are
+ *  the bulk of a subagent's consumption — a "tokens" figure that leaves them out is not a rounder
+ *  number, it is a different number, and it contradicts the cost shown next to it. */
+export function workflowTokens(
+  t: { tokensIn: number; tokensOut: number; cacheRead?: number; cacheWrite?: number },
+): number {
+  return t.tokensIn + t.tokensOut + (t.cacheRead ?? 0) + (t.cacheWrite ?? 0)
+}
+
 export interface WorkflowPhase {
   title: string
   agentCount: number
@@ -255,7 +264,14 @@ export interface WorkflowRun {
   durationMs: number
   phases: WorkflowPhase[]
   agents: WorkflowAgent[]
-  totals: { agentCount: number; tokensIn: number; tokensOut: number; costUSD: number; durationMs: number; toolUses: number }
+  /** `cacheRead`/`cacheWrite` are optional only because a doc written by an older central (or an
+   *  older consolidate store) predates them — read them through `workflowTokens()`, never bare, or
+   *  the headline understates a cache-heavy run by orders of magnitude while the cost beside it
+   *  (which always priced the cache) says otherwise. */
+  totals: {
+    agentCount: number; tokensIn: number; tokensOut: number; costUSD: number
+    durationMs: number; toolUses: number; cacheRead?: number; cacheWrite?: number
+  }
 }
 
 export interface PriceEntry {
