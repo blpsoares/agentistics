@@ -327,6 +327,17 @@ export interface ControlHost {
   setMode(mode: 'solo'): Promise<ActionResult>
   initCentral(): Promise<ActionResult>
   /** The archive-history consent, asked once. `null` when already chosen. */
+  /**
+   * Install the newer release and restart whatever is running onto it.
+   *
+   * Offered only while `ControlStatus.latestVersion` says there IS one. It is the whole of
+   * `agentop upgrade` — download, verify, install, then restart the active systemd services, the
+   * central's containers and a machine container — run as a CHILD process, because that command
+   * prints, and nothing may print while the alternate buffer is live. Its output is the point, so
+   * it streams into the detail pane like a build.
+   */
+  upgrade(): Promise<ActionResult>
+
   pendingArchiveMode(): Promise<ArchiveMode | null>
   setArchiveMode(mode: ArchiveMode): Promise<ActionResult>
 

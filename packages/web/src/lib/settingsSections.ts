@@ -1,6 +1,7 @@
 /** Which settings sections a viewer can see. UX-only gate — the server enforces real authz. */
 export type SettingsSectionId =
   | 'preferences' | 'sessions' | 'data-sources' | 'harnesses' | 'pricing' | 'install' | 'connection' | 'live'
+  | 'chat'
   | 'users' | 'teams' | 'machines' | 'repositories'
 
 export type SettingsGroup = 'personal' | 'governance'
@@ -17,6 +18,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   { id: 'install', labelEn: 'Install', labelPt: 'Instalação', group: 'personal' },
   { id: 'connection', labelEn: 'Central connection', labelPt: 'Conexão com a central', group: 'personal' },
   { id: 'live', labelEn: 'Live', labelPt: 'Ao vivo', group: 'personal' },
+  { id: 'chat', labelEn: 'Chat', labelPt: 'Chat', group: 'personal' },
   { id: 'users', labelEn: 'Users', labelPt: 'Usuários', group: 'governance' },
   { id: 'teams', labelEn: 'Teams', labelPt: 'Times', group: 'governance' },
   { id: 'machines', labelEn: 'Machines', labelPt: 'Máquinas', group: 'governance' },
@@ -28,6 +30,9 @@ export function visibleSettingsSections(v: SettingsViewer): SettingsSection[] {
     switch (s.id) {
       case 'connection': return !v.central
       case 'live': return !v.central
+      // Chat spawns an assistant CLI on THIS host. A central has no local harness to spawn, so
+      // there is nothing there to configure — the same reason `connection` and `live` are hidden.
+      case 'chat': return !v.central
       case 'users':
       case 'teams': return v.central && (v.role === 'owner' || !!v.isManager)
       // Machines is visible to ANY central account: owner/manager manage the fleet, a plain user

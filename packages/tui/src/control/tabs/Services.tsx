@@ -507,8 +507,19 @@ export function Services({
       out.push({ label: s.actStopAll, run: () => target('all', 'stop', s.actStopAll) })
       out.push({ label: s.actRestartAll, run: () => target('all', 'restart', s.actRestartAll) })
     }
+
+    // The update, where the update dot already is. The header has been able to say a newer version
+    // EXISTS for a long time while the only way to take it was to quit, remember the command and
+    // type it — so the notice pointed at work the user had to do by hand. `agentop upgrade`
+    // already installs and then restarts the active systemd services, the central's containers and
+    // a machine container; this is that same command, one keypress from the dot. Offered LAST
+    // because it acts on the whole install rather than on the selected service, and only while
+    // there is genuinely something to install.
+    if (status?.latestVersion) {
+      out.push({ label: s.actUpgrade(status.latestVersion), run: () => void run(() => host.upgrade(), s.actUpgrade(status.latestVersion!)) })
+    }
     return out
-  }, [selected, s, host, running.length, target, restartNow, open, onStart])
+  }, [selected, s, host, running.length, target, restartNow, open, onStart, status?.latestVersion, run])
 
   // -------------------------------------------------------------------------
   // the config pane
