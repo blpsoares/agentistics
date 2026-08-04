@@ -744,6 +744,52 @@ export function pickLongestSession(sessions: SessionMeta[]): {
   return { session, unmeasured: useActive ? sessions.length - withActive.length : 0 }
 }
 
+
+export interface RepoGitTotals {
+  commits: number
+  linesAdded: number
+  linesRemoved: number
+  filesModified: number
+}
+
+/**
+ * PURE: what happened IN THE REPOSITORY over the scope, or `undefined` when that cannot be said.
+ *
+ * This is a `git log`, so it also counts commits made by hand, by a teammate on the same checkout
+ * and by CI. It is therefore NOT a fact about any assistant, and it is deliberately kept apart from
+ * the per-session totals rather than being swapped in for them: those two used to be one number
+ * that switched source depending on whether a project filter was active, so the same card meant
+ * different things from one click to the next, and repository work was credited to an assistant.
+ *
+ * `undefined` when a harness filter is active — the figure cannot be attributed to one harness, and
+ * showing it beside a harness's name reads as if it belonged to it — and when no project in scope
+ * has git stats at all. The UI omits the line in that case; it never renders a zero, the same
+ * N/A-versus-a-confident-0 rule `HARNESS_CAPABILITIES` applies to metrics.
+ */
+export function repositoryGitTotals(
+  allProjects: { path: string; git_stats?: { commits: number; lines_added: number; lines_removed: number; files_modified: number } }[],
+  /** The paths in scope, or `null` for "every project". */
+  scopedPaths: string[] | null,
+  harnessFiltered: boolean,
+): RepoGitTotals | undefined {
+  if (harnessFiltered) return undefined
+  const scoped = scopedPaths === null
+    ? allProjects.map(p => p.git_stats)
+    : scopedPaths.map(path => allProjects.find(p => p.path === path)?.git_stats)
+  const matched = scoped.filter((gs): gs is NonNullable<typeof gs> => gs !== undefined)
+  if (matched.length === 0) return undefined
+  return matched.reduce<RepoGitTotals>(
+    (acc, gs) => ({
+      commits: acc.commits + gs.commits,
+      linesAdded: acc.linesAdded + gs.lines_added,
+      linesRemoved: acc.linesRemoved + gs.lines_removed,
+      filesModified: acc.filesModified + gs.files_modified,
+    }),
+    { commits: 0, linesAdded: 0, linesRemoved: 0, filesModified: 0 },
+  )
+}
+
+
 export function useDerivedStats(data: AppData | null, filters: Filters, tags: TagDef[] = []) {
   return useMemo(() => {
     if (!data) return null
@@ -1244,55 +1290,27 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       }
     }
 
-    // Git / Files
-    // When a project filter is active, prefer project-level git stats from data.projects
-    // (computed via `git log --numstat` — captures ALL commits, not just those run through
-    // Claude's Bash tool).  Session-level git_commits only counts commits that Claude
-    // explicitly ran via the Bash tool, so projects where the user commits from the
-    // terminal would always show 0 in the session-based path.
+    // Git / Files — TWO facts, never one switching between two sources.
     //
-    // For multi-project filters we sum the stats across all selected projects that have
-    // git_stats.  We fall back to session-based aggregation only when no project in the
-    // filter has git_stats (e.g. the project is not a git repo).
-    let projectLevelGitStats: { commits: number; linesAdded: number; linesRemoved: number; filesModified: number } | undefined
+    // `gitCommits` / `lines*` / `filesModified` are what the ASSISTANTS did: summed per session,
+    // so they are filterable by harness and consistent with tokens and cost, which are also per
+    // session. `repoGit` is what happened IN THE REPOSITORY over the same window: a `git log`,
+    // which also counts commits made by hand, by a teammate on the same checkout, and by CI.
+    //
+    // These used to be one number that silently switched source — project git_stats when a project
+    // filter was active, session sums otherwise — so the same card meant different things depending
+    // on an unrelated filter, and a repo-level figure was credited to an assistant.
+    const gitCommits = filteredSessions.reduce((s, sess) => s + (sess.git_commits ?? 0), 0)
+    const gitPushes = filteredSessions.reduce((s, sess) => s + (sess.git_pushes ?? 0), 0)
+    const linesAdded = filteredSessions.reduce((s, sess) => s + (sess.lines_added ?? 0), 0)
+    const linesRemoved = filteredSessions.reduce((s, sess) => s + (sess.lines_removed ?? 0), 0)
+    const filesModified = filteredSessions.reduce((s, sess) => s + (sess.files_modified ?? 0), 0)
 
-    if (projectFiltered) {
-      const matched = projects
-        .map(path => data.projects.find(p => p.path === path)?.git_stats)
-        .filter((gs): gs is NonNullable<typeof gs> => gs !== undefined)
-
-      if (matched.length > 0) {
-        projectLevelGitStats = matched.reduce(
-          (acc, gs) => ({
-            commits: acc.commits + gs.commits,
-            linesAdded: acc.linesAdded + gs.lines_added,
-            linesRemoved: acc.linesRemoved + gs.lines_removed,
-            filesModified: acc.filesModified + gs.files_modified,
-          }),
-          { commits: 0, linesAdded: 0, linesRemoved: 0, filesModified: 0 },
-        )
-      }
-    }
-
-    // COMMITS: prefer project-level git stats (counts all commits, not just Claude bash ones)
-    const gitCommits = projectLevelGitStats
-      ? projectLevelGitStats.commits
-      : filteredSessions.reduce((s, sess) => s + (sess.git_commits ?? 0), 0)
-    const gitPushes = projectLevelGitStats
-      ? 0  // not tracked at project level
-      : filteredSessions.reduce((s, sess) => s + (sess.git_pushes ?? 0), 0)
-    const linesAdded = projectLevelGitStats
-      ? projectLevelGitStats.linesAdded
-      : filteredSessions.reduce((s, sess) => s + (sess.lines_added ?? 0), 0)
-    const linesRemoved = projectLevelGitStats
-      ? projectLevelGitStats.linesRemoved
-      : filteredSessions.reduce((s, sess) => s + (sess.lines_removed ?? 0), 0)
-    // FILES: always use session-level count (Edit/Write/MultiEdit calls) — this captures files
-    // Claude created in non-git directories, which project-level git stats cannot see.
-    const sessionFilesModified = filteredSessions.reduce((s, sess) => s + (sess.files_modified ?? 0), 0)
-    const filesModified = sessionFilesModified > 0
-      ? sessionFilesModified
-      : (projectLevelGitStats?.filesModified ?? 0)
+    const repoGit = repositoryGitTotals(
+      data.projects,
+      projectFiltered ? projects : null,
+      (filters.harnesses ?? []).length > 0,
+    )
 
     // Tokens from sessions
     const inputTokens = filteredSessions.reduce((s, sess) => s + (sess.input_tokens ?? 0), 0)
@@ -1504,6 +1522,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       agentFileReads,
       langCounts,
       gitCommits,
+      repoGit,
       gitPushes,
       linesAdded,
       linesRemoved,
