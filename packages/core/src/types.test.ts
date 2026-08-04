@@ -337,11 +337,13 @@ test('claude is fully capable; gemini and copilot have tokens/cost/model', () =>
   expect(HARNESS_CAPABILITIES.gemini.tools).toBe(true)
   expect(HARNESS_CAPABILITIES.gemini.agents).toBe(false)
   expect(HARNESS_CAPABILITIES.gemini.gitLines).toBe(false)
-  // copilot: tokens/cost/model/gitLines enabled; tools and agents not supported
+  // copilot: tokens/cost/model/gitLines/tools enabled; agents not supported. `tools` flipped once
+  // the adapter actually read `tool.execution_start`, which had been carrying the tool name and its
+  // arguments all along — the flag had been out of date, not the data missing.
   expect(HARNESS_CAPABILITIES.copilot.tokens).toBe(true)
   expect(HARNESS_CAPABILITIES.copilot.cost).toBe(true)
   expect(HARNESS_CAPABILITIES.copilot.model).toBe(true)
-  expect(HARNESS_CAPABILITIES.copilot.tools).toBe(false)
+  expect(HARNESS_CAPABILITIES.copilot.tools).toBe(true)
   expect(HARNESS_CAPABILITIES.copilot.agents).toBe(false)
   expect(HARNESS_CAPABILITIES.copilot.gitLines).toBe(true)
 })

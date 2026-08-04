@@ -1,5 +1,6 @@
 import type { SessionMeta, TurnEvent } from '@agentistics/core'
 import { activeMinutesOf } from '@agentistics/core'
+import { canonicalTool, countGitCommands } from '../harness-activity'
 
 /** Pure: parse a Copilot events.jsonl string into a normalized SessionMeta.
  *  Returns null when the content has no usable lines. */
@@ -14,6 +15,8 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
   let userMessages = 0
   let assistantTurns = 0
   let toolErrors = 0
+  const toolCounts: Record<string, number> = {}
+  let gitCommits = 0, gitPushes = 0
   let usesMcp = false
   let firstPrompt = ''
   let mcpToolCallCount = 0
@@ -89,6 +92,23 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
       if (turnEvent) turnEvent.turnEnd = true
     } else if (type === 'session.error') {
       toolErrors++
+    } else if (type === 'tool.execution_start') {
+      // Copilot names its tool and hands over its arguments here. This is why the capability table
+      // said `tools: false` for years while the data was sitting in the transcript.
+      const raw = typeof data.toolName === 'string' ? data.toolName : ''
+      if (raw) {
+        const toolName = canonicalTool('copilot', raw)
+        toolCounts[toolName] = (toolCounts[toolName] ?? 0) + 1
+        if (toolName === 'Bash') {
+          const args = data.arguments as Record<string, unknown> | undefined
+          const cmd = typeof args?.command === 'string' ? args.command : ''
+          if (cmd) {
+            const g = countGitCommands(cmd)
+            gitCommits += g.commits
+            gitPushes += g.pushes
+          }
+        }
+      }
     } else if (type === 'mcp.tool_call') {
       mcpToolCallCount++
       if (typeof data.toolName === 'string' && data.toolName) {
@@ -138,12 +158,12 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
     assistant_message_count: assistantTurns,
-    tool_counts: {},
+    tool_counts: toolCounts,
     tool_output_tokens: {},
     agent_file_reads: {},
     languages: [],
-    git_commits: 0,
-    git_pushes: 0,
+    git_commits: gitCommits,
+    git_pushes: gitPushes,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     cache_read_input_tokens: cacheReadTokens,

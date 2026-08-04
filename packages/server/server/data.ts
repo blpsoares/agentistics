@@ -5,6 +5,7 @@ import { mergeStatsCaches } from '@agentistics/core'
 import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
+import { planProjectFacts, applyProjectFacts, type ResolvedFacts } from './project-facts'
 import { mergeLocalAndIngestedSessions, sessionKey } from './session-merge'
 import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
@@ -361,6 +362,36 @@ async function scanProjectDir(
   }
 }
 
+/**
+ * Read git for every project path that has not been read yet, and stamp what it finds.
+ *
+ * The IO half of `project-facts.ts`: the plan and the stamping are pure and tested there, this
+ * only spends the processes. Reads are memoized per path by the plan itself (one entry per distinct
+ * path) and bounded by a limiter — two harnesses in one directory cost one `git config`, not two.
+ */
+export async function resolveProjectFacts(
+  sessions: SessionMeta[],
+  projects: ServerProject[],
+  alreadyResolved: ReadonlySet<string>,
+): Promise<void> {
+  const plan = planProjectFacts(sessions, projects, alreadyResolved)
+  if (plan.length === 0) return
+
+  const limit = createLimiter(8)
+  const facts = new Map<string, ResolvedFacts>()
+  await Promise.all(plan.map(({ path, earliest }) => limit(async () => {
+    // Both are already total: a path that is gone, or is not a repo, yields '' / undefined rather
+    // than throwing. Guarded anyway — one unreadable directory must not fail the whole build.
+    const [remote, stats] = await Promise.all([
+      getGitRemote(path).catch(() => ''),
+      getProjectGitStats(path, earliest || undefined).catch(() => undefined),
+    ])
+    facts.set(path, { remote: remote ?? '', stats })
+  })))
+
+  applyProjectFacts(facts, sessions, projects)
+}
+
 export async function scanProjects(
   knownIds: Set<string>,
   metaMap: Map<string, SessionMeta>,
@@ -686,6 +717,9 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       (done, total) => onProgress('projects', total > 0 ? done / total : 1),
     )
     onProgress('projects', 1, String(projects.length))
+    // Every path the Claude walk has already asked git about — including the ones that turned out
+    // not to be repositories. `resolveProjectFacts` below skips these rather than re-reading them.
+    const gitResolvedPaths = new Set(projects.map(p => p.path))
 
     // Enrich project session created timestamps from meta where possible
     enrichProjectSessions(projects, metaMap)
@@ -815,6 +849,17 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         }
       }
     }
+    // --- Repository discovery, for every harness ---
+    // A repository is a property of a DIRECTORY, not of whichever assistant happened to visit it.
+    // Until this ran, `getGitRemote` was only ever called from inside the ~/.claude walk, so a repo
+    // used exclusively through Codex/Gemini/Copilot was invisible until a Claude session appeared in
+    // it. Measured before this change on a real machine: claude 163 sessions / 95 with a remote,
+    // codex 10 / 0, copilot 8 / 1, gemini 15 / 1.
+    //
+    // It runs BEFORE the writeConsolidated below, so the remote reaches the store — and therefore
+    // the uploader and the central, which has no filesystem to recover it from.
+    await resolveProjectFacts(sessions, projects, gitResolvedPaths)
+
     // Persist non-Claude sessions to the consolidate store too. The Claude-only
     // writeConsolidated() above runs before this merge, so without this the store
     // (and therefore the team uploader, which pushes loadConsolidated()) would only
