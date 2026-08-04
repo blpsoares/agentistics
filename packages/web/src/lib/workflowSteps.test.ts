@@ -63,3 +63,25 @@ test('groupRunsBySession groups by sessionId, sums, and orders by cost desc', ()
 test('groupRunsBySession returns empty for no runs', () => {
   expect(groupRunsBySession([])).toEqual([])
 })
+
+test('step subtotals carry cache tokens — they are the bulk of what a subagent is billed for', () => {
+  const r = run({
+    phases: [{ title: 'Recon', agentCount: 2 }],
+    agents: [
+      agent({ phase: 'Recon', tokensIn: 30, tokensOut: 4987, cacheRead: 549486, cacheWrite: 104813 }),
+      agent({ phase: 'Recon', tokensIn: 49, tokensOut: 9682, cacheRead: 1174310, cacheWrite: 222804 }),
+    ],
+  })
+  const [recon] = buildWorkflowSteps(r)
+  expect(recon!.subtotal.cacheRead).toBe(1723796)
+  expect(recon!.subtotal.cacheWrite).toBe(327617)
+})
+
+test('per-session totals carry cache tokens, tolerating a run stored before they existed', () => {
+  const withCache = run({ sessionId: 's1', totals: { agentCount: 1, tokensIn: 10, tokensOut: 20, cacheRead: 900, cacheWrite: 70, costUSD: 1, durationMs: 0, toolUses: 0 } })
+  const legacy = run({ sessionId: 's1', totals: { agentCount: 1, tokensIn: 5, tokensOut: 5, costUSD: 1, durationMs: 0, toolUses: 0 } })
+  const [g] = groupRunsBySession([withCache, legacy])
+  expect(g!.totals.cacheRead).toBe(900)
+  expect(g!.totals.cacheWrite).toBe(70)
+  expect(g!.totals.tokensIn).toBe(15)
+})

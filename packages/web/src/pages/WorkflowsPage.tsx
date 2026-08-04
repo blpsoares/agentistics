@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Workflow as WorkflowIcon, ChevronDown, ChevronRight, Search, FileCode, GitBranch } from 'lucide-react'
 import type { WorkflowRun, WorkflowAgent, SessionMeta } from '@agentistics/core'
-import { getModelPrice, fmtCost, fmt, sessionLabel, formatProjectName, repoShortName } from '@agentistics/core'
+import { getModelPrice, fmtCost, fmt, sessionLabel, formatProjectName, repoShortName, workflowTokens } from '@agentistics/core'
 import { DYNAMIC_WORKFLOWS_DOC } from '../lib/harness'
 import { DocLink } from '../components/DocLink'
 import type { AppContext } from '../lib/app-context'
@@ -18,14 +18,16 @@ function perMillionUSD(model: string) {
   return (p.input + p.output) / 2
 }
 
-interface Totals { count: number; tokensIn: number; tokensOut: number; costUSD: number }
+interface Totals { count: number; tokensIn: number; tokensOut: number; cacheRead: number; cacheWrite: number; costUSD: number }
 function sumAgents(agents: WorkflowAgent[]): Totals {
   return agents.reduce<Totals>((t, a) => ({
     count: t.count + 1,
     tokensIn: t.tokensIn + a.tokensIn,
     tokensOut: t.tokensOut + a.tokensOut,
+    cacheRead: t.cacheRead + a.cacheRead,
+    cacheWrite: t.cacheWrite + a.cacheWrite,
     costUSD: t.costUSD + a.costUSD,
-  }), { count: 0, tokensIn: 0, tokensOut: 0, costUSD: 0 })
+  }), { count: 0, tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheWrite: 0, costUSD: 0 })
 }
 
 export default function WorkflowsPage() {
@@ -251,8 +253,10 @@ function RunBlock({ run, pt, rate, currency, groupBy, query, sessionById }: {
         marginBottom: 12, overflow: 'hidden',
       }}>
         <Stat label={pt ? 'Agentes' : 'Agents'} value={String(total.count)} />
-        <Stat label="Tokens in" value={fmt(total.tokensIn)} />
-        <Stat label="Tokens out" value={fmt(total.tokensOut)} />
+        <Stat label="Tokens" value={fmt(workflowTokens(total))} />
+        <Stat label="In" value={fmt(total.tokensIn)} />
+        <Stat label="Out" value={fmt(total.tokensOut)} />
+        <Stat label="Cache" value={fmt(total.cacheRead + total.cacheWrite)} />
         <Stat label={pt ? 'Custo' : 'Cost'} value={fmtCost(total.costUSD, currency, rate)} accent />
         {run.durationMs > 0 && <Stat label={pt ? 'Duração' : 'Duration'} value={fmtDur(run.durationMs)} />}
         {run.totals.toolUses > 0 && <Stat label="Tools" value={fmt(run.totals.toolUses)} />}
@@ -270,7 +274,7 @@ function RunBlock({ run, pt, rate, currency, groupBy, query, sessionById }: {
                     <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>{groupKey}</span>
                     <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{sub.count} {pt ? 'agentes' : 'agents'}</span>
                     <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                      {fmt(sub.tokensIn)} in · {fmt(sub.tokensOut)} out · <strong style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(sub.costUSD, currency, rate)}</strong>
+                      {fmt(workflowTokens(sub))} tok · {fmt(sub.tokensOut)} out · <strong style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(sub.costUSD, currency, rate)}</strong>
                     </span>
                   </div>
                   <AgentTable agents={groupAgents} pt={pt} rate={rate} currency={currency} />
@@ -313,6 +317,7 @@ function AgentTable({ agents, pt, rate, currency }: { agents: WorkflowAgent[]; p
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', marginTop: 6, fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
               <span style={{ color: 'var(--text-secondary)' }}>In <strong style={{ color: 'var(--text-primary)' }}>{a.tokensIn.toLocaleString()}</strong></span>
               <span style={{ color: 'var(--text-secondary)' }}>Out <strong style={{ color: 'var(--text-primary)' }}>{a.tokensOut.toLocaleString()}</strong></span>
+              <span style={{ color: 'var(--text-secondary)' }}>{pt ? 'Cache' : 'Cache'} <strong style={{ color: 'var(--text-primary)' }}>{(a.cacheRead + a.cacheWrite).toLocaleString()}</strong></span>
               <span style={{ color: 'var(--text-secondary)' }}>{pt ? 'Custo' : 'Cost'} <strong style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(a.costUSD, currency, rate)}</strong></span>
               {a.model && <span style={{ color: 'var(--text-tertiary)' }}>{fmtCost(perMillionUSD(a.model), currency, rate)}/M</span>}
             </div>
@@ -331,6 +336,8 @@ function AgentTable({ agents, pt, rate, currency }: { agents: WorkflowAgent[]; p
             <th style={cell}>{pt ? 'Modelo' : 'Model'}</th>
             <th style={cellR}>In</th>
             <th style={cellR}>Out</th>
+            <th style={cellR}>Cache R</th>
+            <th style={cellR}>Cache W</th>
             <th style={cellR}>{pt ? 'Custo' : 'Cost'}</th>
             <th style={cellR}>{pt ? 'Custo/M' : 'Cost/M'}</th>
           </tr>
@@ -342,6 +349,8 @@ function AgentTable({ agents, pt, rate, currency }: { agents: WorkflowAgent[]; p
               <td style={cell}>{a.model || '—'}</td>
               <td style={cellR}>{a.tokensIn.toLocaleString()}</td>
               <td style={cellR}>{a.tokensOut.toLocaleString()}</td>
+              <td style={cellR}>{a.cacheRead.toLocaleString()}</td>
+              <td style={cellR}>{a.cacheWrite.toLocaleString()}</td>
               <td style={cellR}>{fmtCost(a.costUSD, currency, rate)}</td>
               <td style={cellR}>{a.model ? fmtCost(perMillionUSD(a.model), currency, rate) : '—'}</td>
             </tr>

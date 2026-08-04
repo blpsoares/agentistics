@@ -5,6 +5,7 @@ import { safeReadDir } from './utils'
 import { parseWorkflowScript } from './workflow-script'
 import { parseWorkflowUsage } from './workflow-usage'
 import { aggregateWorkflowAgent } from './workflow-agent'
+import { matchTranscriptsToCalls } from './workflow-match'
 
 interface DiscoveredRun {
   runId: string
@@ -106,13 +107,25 @@ export async function extractWorkflowRuns(
 
     // Per-agent transcripts: agent-*.jsonl in the run dir.
     const agentFiles = sortAgentFiles(files.filter(f => /^agent-.*\.jsonl$/.test(f)))
+    const aggregated = []
+    for (const file of agentFiles) {
+      const content = await readFile(join(runDir, file), 'utf-8').catch(() => '')
+      aggregated.push({ file, ...aggregateWorkflowAgent(content.split('\n')) })
+    }
+    // Pair each transcript with the `agent()` call that produced it BY PROMPT. The files are named
+    // agent-<hash>.jsonl: the hash carries no order, so pairing by position (the old behaviour)
+    // handed every agent a label belonging to some other agent — labels and metrics from different
+    // runs of the workflow, rendered as if they matched. See workflow-match.ts.
+    const matched = matchTranscriptsToCalls(aggregated, parsed.agents)
+    // Chronological, because that is the order the user watched them run in.
+    const order = aggregated
+      .map((a, i) => ({ a, meta: matched[i] }))
+      .sort((x, y) => (x.a.startedAt || '').localeCompare(y.a.startedAt || '') || x.a.file.localeCompare(y.a.file))
+
     const agents: WorkflowAgent[] = []
-    for (let i = 0; i < agentFiles.length; i++) {
-      const content = await readFile(join(runDir, agentFiles[i]!), 'utf-8').catch(() => '')
-      const agg = aggregateWorkflowAgent(content.split('\n'))
-      const meta = parsed.agents[i] // best-effort positional match to planned agents
+    for (const { a: agg, meta } of order) {
       agents.push({
-        label: meta?.label ?? agentFiles[i]!.replace(/\.jsonl$/, ''),
+        label: meta?.label || agg.file.replace(/\.jsonl$/, ''),
         phase: meta?.phase ?? '',
         model: agg.model || (meta?.model ?? ''),
         // NOTE: per-agent status is a best-effort 'completed'. The available data
@@ -148,6 +161,8 @@ export async function extractWorkflowRuns(
         agentCount: Math.max(agents.length, usage?.agentCount ?? 0),
         tokensIn: agents.reduce((s, a) => s + a.tokensIn, 0),
         tokensOut: agents.reduce((s, a) => s + a.tokensOut, 0),
+        cacheRead: agents.reduce((s, a) => s + a.cacheRead, 0),
+        cacheWrite: agents.reduce((s, a) => s + a.cacheWrite, 0),
         costUSD: agents.reduce((s, a) => s + a.costUSD, 0),
         durationMs: usage?.durationMs ?? 0,
         toolUses: usage?.toolUses ?? 0,
