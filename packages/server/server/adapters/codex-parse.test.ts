@@ -44,3 +44,35 @@ test('falls back to fallbackId and returns null on empty', () => {
   expect(noMeta!.session_id).toBe('fb-2')
   expect(noMeta!.user_message_count).toBe(1)
 })
+
+// Real shape, from a rollout on disk: the tool's NAME is in `payload.name` and the command is a
+// JSON string in `payload.arguments`. Counting the envelope type instead reported every tool as
+// "function_call", which says nothing and cannot be compared with another harness.
+const SHELL = [
+  JSON.stringify({ timestamp: '2026-05-25T18:25:51.000Z', type: 'session_meta', payload: { id: 's1', timestamp: '2026-05-25T18:25:50.000Z', cwd: '/repo' } }),
+  JSON.stringify({ timestamp: '2026-05-25T18:25:52.000Z', type: 'response_item', payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd: 'git add -A && git commit -m "x"', workdir: '/repo' }) } }),
+  JSON.stringify({ timestamp: '2026-05-25T18:25:53.000Z', type: 'response_item', payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd: 'git push origin main' }) } }),
+  JSON.stringify({ timestamp: '2026-05-25T18:25:54.000Z', type: 'response_item', payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd: 'bun test' }) } }),
+].join('\n')
+
+test('counts codex shell commands under the shared tool name', () => {
+  const s = parseCodexRollout(SHELL, 'f')!
+  expect(s.tool_counts['Bash']).toBe(3)
+  expect(s.tool_counts['function_call']).toBeUndefined()
+})
+
+test('counts codex git commits and pushes from the command it actually ran', () => {
+  const s = parseCodexRollout(SHELL, 'f')!
+  expect(s.git_commits).toBe(1)
+  expect(s.git_pushes).toBe(1)
+})
+
+test('malformed arguments never throw and never count', () => {
+  const lines = [
+    JSON.stringify({ timestamp: '2026-05-25T18:25:51.000Z', type: 'session_meta', payload: { id: 's2', timestamp: '2026-05-25T18:25:50.000Z', cwd: '/repo' } }),
+    JSON.stringify({ timestamp: '2026-05-25T18:25:52.000Z', type: 'response_item', payload: { type: 'function_call', name: 'exec_command', arguments: '{not json' } }),
+  ].join('\n')
+  const s = parseCodexRollout(lines, 'f')!
+  expect(s.git_commits).toBe(0)
+  expect(s.tool_counts['Bash']).toBe(1)
+})

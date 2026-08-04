@@ -2,6 +2,7 @@ import { readFile } from 'fs/promises'
 import type { SessionMeta, TurnEvent } from '@agentistics/core'
 import { activeMinutesOf } from '@agentistics/core'
 import { getGitFileStats } from './git'
+import { countGitCommands } from './harness-activity'
 import { extractAgentMetrics } from './agent-metrics'
 
 // File extension → language name (used when session-meta is absent)
@@ -292,14 +293,14 @@ export async function parseSessionJsonl(
 
             if (toolName.startsWith('mcp__')) hasMcp = true
 
-            // Count git commits/pushes from Bash tool calls
+            // Count git commits/pushes from Bash tool calls. The rule itself lives in
+            // `harness-activity.ts` so every harness counts the same thing the same way — it used to
+            // be inline here, which is why no adapter could reuse it and all of them reported 0.
             if (toolName === 'Bash') {
               const cmd = (p.input as Record<string, string> | undefined)?.command ?? ''
-              for (const seg of cmd.split(/&&|\|\||;|\n/)) {
-                const s = seg.trim()
-                if (/^(cd\s+\S+\s+&&\s+)?git\s+commit\b/.test(s)) gitCommits++
-                if (/^(cd\s+\S+\s+&&\s+)?git\s+push\b/.test(s)) gitPushes++
-              }
+              const g = countGitCommands(cmd)
+              gitCommits += g.commits
+              gitPushes += g.pushes
             }
 
             // Detect language and agent files from file-based tool calls
