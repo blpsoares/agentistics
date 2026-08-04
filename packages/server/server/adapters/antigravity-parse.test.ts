@@ -93,7 +93,7 @@ test('parses a normal conversation', () => {
   expect(s!.user_message_count).toBe(1)
   // Only PLANNER_RESPONSE steps carrying prose count as an assistant reply.
   expect(s!.assistant_message_count).toBe(1)
-  expect(s!.tool_counts).toEqual({ view_file: 1, search_web: 1, run_command: 1 })
+  expect(s!.tool_counts).toEqual({ Read: 1, search_web: 1, Bash: 1 })
   expect(s!.uses_web_search).toBe(true)
   expect(s!.uses_web_fetch).toBe(false)
   expect(s!.uses_mcp).toBe(false)
@@ -181,7 +181,7 @@ test('CONVERSATION_HISTORY replays and repeated step_index are not double counte
   const s = parseAntigravityTranscript(transcript, CONV, '/w')!
   expect(s.user_message_count).toBe(1)
   expect(s.assistant_message_count).toBe(1)
-  expect(s.tool_counts).toEqual({ view_file: 1 })
+  expect(s.tool_counts).toEqual({ Read: 1 })
   expect(s.user_message_timestamps).toHaveLength(1)
 })
 
@@ -584,8 +584,8 @@ test('mergeAntigravityChild: work is folded, invented user activity is not', () 
   const merged = rollUpAntigravitySessions(parsed, parentOf)[0]!
 
   // Work IS folded.
-  expect(merged.tool_counts.view_file).toBe(2)
-  expect(merged.tool_counts.write_to_file).toBe(3)
+  expect(merged.tool_counts.Read).toBe(2)
+  expect(merged.tool_counts.Write).toBe(3)
   expect(merged.tool_errors).toBe(1)
   expect(merged.tool_error_categories.error_7).toBe(1)
   expect(merged.lines_added).toBe(2 + 1 + 2)
@@ -638,4 +638,40 @@ test('message_hours uses the local clock, not UTC', () => {
     // is UTC (bun test ignores the shell TZ), so that is what "no TZ set" means here.
     process.env.TZ = originalTz ?? 'UTC'
   }
+})
+
+test('counts agy git commands from RUN_COMMAND steps, under the shared tool name', () => {
+  const lines = [
+    JSON.stringify({ step_index: 0, source: 'USER', type: 'USER_INPUT', status: 'DONE', created_at: '2026-07-27T17:23:20Z', content: 'go' }),
+    JSON.stringify({ step_index: 1, source: 'MODEL', type: 'RUN_COMMAND', status: 'DONE', created_at: '2026-07-27T17:23:25Z', exit_code: 0, content: 'git add -A && git commit -m "x"' }),
+    JSON.stringify({ step_index: 2, source: 'MODEL', type: 'RUN_COMMAND', status: 'DONE', created_at: '2026-07-27T17:23:26Z', exit_code: 0, content: 'git push origin main' }),
+    JSON.stringify({ step_index: 3, source: 'MODEL', type: 'RUN_COMMAND', status: 'DONE', created_at: '2026-07-27T17:23:27Z', exit_code: 0, content: 'bun test' }),
+  ]
+  const s = parseAntigravityTranscript(lines.join('\n'), 'c1', '/repo')!
+  expect(s.git_commits).toBe(1)
+  expect(s.git_pushes).toBe(1)
+  expect(s.tool_counts['Bash']).toBe(3)
+})
+
+test('a failed agy command still counted as a command, and still an error', () => {
+  const lines = [
+    JSON.stringify({ step_index: 0, source: 'USER', type: 'USER_INPUT', status: 'DONE', created_at: '2026-07-27T17:23:20Z', content: 'go' }),
+    JSON.stringify({ step_index: 1, source: 'MODEL', type: 'RUN_COMMAND', status: 'DONE', created_at: '2026-07-27T17:23:25Z', exit_code: 1, content: 'git commit -m x' }),
+  ]
+  const s = parseAntigravityTranscript(lines.join('\n'), 'c2', '/repo')!
+  expect(s.git_commits).toBe(1)
+  expect(s.tool_errors).toBe(1)
+})
+
+test('a requested command and its execution are ONE command, never two', () => {
+  const lines = [
+    JSON.stringify({ step_index: 0, source: 'USER', type: 'USER_INPUT', status: 'DONE', created_at: '2026-07-27T17:23:20Z', content: 'go' }),
+    // The model asks…
+    JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-07-27T17:23:24Z', tool_calls: [{ name: 'run_command' }] }),
+    // …and it runs. Same command.
+    JSON.stringify({ step_index: 2, source: 'MODEL', type: 'RUN_COMMAND', status: 'DONE', created_at: '2026-07-27T17:23:25Z', exit_code: 0, content: 'git commit -m x' }),
+  ].join('\n')
+  const s = parseAntigravityTranscript(lines, 'c3', '/repo')!
+  expect(s.tool_counts['Bash']).toBe(1)
+  expect(s.git_commits).toBe(1)
 })

@@ -193,3 +193,35 @@ test('a non-github host is left unattributed rather than guessed', () => {
   expect(copilotGitRemote({ hostType: 'github' })).toBeUndefined()
   expect(copilotGitRemote({})).toBeUndefined()
 })
+
+// `tool.execution_start` carries the tool name and its arguments — the reason `tools: false` in the
+// capability table was simply out of date. The matching `_complete` can carry a unified diff.
+const TOOLS = [
+  JSON.stringify({ type: 'session.start', timestamp: '2026-02-13T14:35:00.000Z', data: { workspace: '/repo' } }),
+  JSON.stringify({ type: 'user.message', timestamp: '2026-02-13T14:35:10.000Z', data: { content: 'go' } }),
+  JSON.stringify({ type: 'tool.execution_start', timestamp: '2026-02-13T14:35:20.000Z', data: { toolCallId: 't1', toolName: 'view', arguments: { path: '/repo/a.ts' } } }),
+  JSON.stringify({ type: 'tool.execution_start', timestamp: '2026-02-13T14:35:21.000Z', data: { toolCallId: 't2', toolName: 'bash', arguments: { command: 'git commit -m x && git push' } } }),
+  JSON.stringify({ type: 'tool.execution_start', timestamp: '2026-02-13T14:35:22.000Z', data: { toolCallId: 't3', toolName: 'bash', arguments: { command: 'bun test' } } }),
+].join('\n')
+
+test('counts copilot tools under the shared names', () => {
+  const s = parseCopilotEvents(TOOLS, 'f')!
+  expect(s.tool_counts['Read']).toBe(1)
+  expect(s.tool_counts['Bash']).toBe(2)
+})
+
+test('counts copilot git commands from the shell tool it actually ran', () => {
+  const s = parseCopilotEvents(TOOLS, 'f')!
+  expect(s.git_commits).toBe(1)
+  expect(s.git_pushes).toBe(1)
+})
+
+test('a tool with no name is not counted under an empty key', () => {
+  const lines = [
+    JSON.stringify({ type: 'session.start', timestamp: '2026-02-13T14:35:00.000Z', data: { workspace: '/repo' } }),
+    JSON.stringify({ type: 'user.message', timestamp: '2026-02-13T14:35:10.000Z', data: { content: 'go' } }),
+    JSON.stringify({ type: 'tool.execution_start', timestamp: '2026-02-13T14:35:20.000Z', data: { toolCallId: 't1' } }),
+  ].join('\n')
+  const s = parseCopilotEvents(lines, 'f')!
+  expect(Object.keys(s.tool_counts)).toEqual([])
+})

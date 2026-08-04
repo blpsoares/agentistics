@@ -122,13 +122,23 @@ export default function HomePage() {
           icon={<Clock size={15} />} accent="var(--accent-purple)" info={infoItems[4]} onInfoClick={() => setInfoModalIndex(4)} />
       )
     } else if (id === 'commits') {
-      card = <StatCard label={lang === 'pt' ? 'Commits' : 'Commits'} value={d.gitCommits} sub={d.gitPushes > 0 ? `${d.gitPushes} ${lang === 'pt' ? 'pushes via Claude' : 'pushes via Claude'}` : lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls'} icon={<GitCommit size={15} />} accent="var(--accent-cyan)" info={infoItems[6]} onInfoClick={() => setInfoModalIndex(6)} />
+      // Two facts, said as two. The KPI is what the ASSISTANTS did (summable, filterable by
+      // harness); the repository figure — a `git log`, which also counts what was committed by
+      // hand — is context beside it, and is absent whenever it would not mean anything here.
+      // `\n`, not ` · `: StatCard renders the sub as `pre-line` precisely so it can be a couple of
+      // short labelled lines, which is also what keeps it readable at 390px.
+      const commitsSub = [
+        [lang === 'pt' ? 'por assistentes' : 'by assistants',
+         d.gitPushes > 0 ? `${fmt(d.gitPushes)} pushes` : ''].filter(Boolean).join(' · '),
+        d.repoGit ? `· ${fmt(d.repoGit.commits)} ${lang === 'pt' ? 'no repositório' : 'in the repository'}` : '',
+      ].filter(Boolean).join('\n')
+      card = <StatCard label="Commits" value={d.gitCommits} sub={commitsSub} icon={<GitCommit size={15} />} accent="var(--accent-cyan)" info={infoItems[6]} onInfoClick={() => setInfoModalIndex(6)} />
     } else if (id === 'files') {
       const canGitLines = !filters.harness || capable(filters.harness, 'gitLines')
       const filesSub = canGitLines && d.linesAdded + d.linesRemoved > 0
-        ? `+${fmt(d.linesAdded)} / -${fmt(d.linesRemoved)} linhas`
+        ? `+${fmt(d.linesAdded)} / -${fmt(d.linesRemoved)} ${lang === 'pt' ? 'linhas' : 'lines'}`
         : canGitLines
-          ? (lang === 'pt' ? 'via chamadas Bash do Claude' : 'via Claude Bash calls')
+          ? (lang === 'pt' ? 'por assistentes' : 'by assistants')
           : (lang === 'pt' ? 'linhas adicionadas/removidas não disponíveis' : 'lines added/removed not available')
       card = <StatCard label={lang === 'pt' ? 'Arquivos' : 'Files'} value={d.filesModified} sub={filesSub} icon={<FileCode size={15} />} accent="var(--accent-green)" info={infoItems[7]} onInfoClick={() => setInfoModalIndex(7)} />
     }

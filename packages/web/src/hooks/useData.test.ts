@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals } from './useData'
 import { mergeStatsCaches } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
 import type { SessionMeta } from '@agentistics/core'
@@ -1137,5 +1137,33 @@ describe('pickLongestSession', () => {
 
   test('empty input yields null, not a crash', () => {
     expect(pickLongestSession([]).session).toBeNull()
+  })
+})
+
+describe('repositoryGitTotals', () => {
+  const P = (path: string, commits: number) => ({
+    path,
+    git_stats: { commits, lines_added: commits * 10, lines_removed: commits, files_modified: commits * 2 },
+  })
+
+  test('sums every project when nothing narrows the scope', () => {
+    expect(repositoryGitTotals([P('/a', 3), P('/b', 4)], null, false)?.commits).toBe(7)
+  })
+
+  test('sums only the scoped projects', () => {
+    expect(repositoryGitTotals([P('/a', 3), P('/b', 4)], ['/b'], false)?.commits).toBe(4)
+  })
+
+  test('is UNDEFINED under a harness filter — a git log belongs to no harness', () => {
+    expect(repositoryGitTotals([P('/a', 3)], null, true)).toBeUndefined()
+  })
+
+  test('is undefined, never zero, when no project in scope is a git repo', () => {
+    expect(repositoryGitTotals([{ path: '/a' }], null, false)).toBeUndefined()
+    expect(repositoryGitTotals([P('/a', 3)], ['/missing'], false)).toBeUndefined()
+  })
+
+  test('a project with no stats is skipped, not counted as zero', () => {
+    expect(repositoryGitTotals([P('/a', 3), { path: '/b' }], null, false)?.commits).toBe(3)
   })
 })
