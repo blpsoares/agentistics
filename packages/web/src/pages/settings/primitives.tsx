@@ -576,6 +576,8 @@ export function Checkbox({ checked, onChange, label, disabled }: {
   onChange: (checked: boolean) => void
   label: string
   disabled?: boolean
+  /** Render the panel open, for the static-markup test that pins `position: fixed`. */
+  defaultOpenForTest?: boolean
 }) {
   const isMobile = useIsMobile()
   const toggle = (e: React.SyntheticEvent) => {
@@ -681,7 +683,45 @@ export function SaveBar({ editing, canEdit, dirty, busy, onEdit, onCancel, onSav
   )
 }
 
-export function Select({ value, onChange, options, placeholder, disabled, searchable, searchPlaceholder }: {
+
+/**
+ * Where a popover should be drawn, in VIEWPORT coordinates.
+ *
+ * Both pickers used to draw their panel as a `position: absolute` child of the trigger. Inside the
+ * settings Drawer — whose body is `overflowY: auto` — that panel is clipped by the scroll container,
+ * so once the form had enough content to scroll, the panel opened into a box that cut it off. The
+ * tag editor is where this bit: its pickers looked dead because the list was open and out of sight.
+ *
+ * They also chose their direction by measuring the WINDOW while the DRAWER was what clipped them, so
+ * "there is room below" was being answered about the wrong box.
+ *
+ * `fixed` fixes both at once: no ancestor's overflow can clip it, and the viewport really is the box
+ * it is measured against. The cost is that the panel no longer follows the trigger on scroll, which
+ * is why the callers close on scroll rather than chasing it — a panel that drifts away from the row
+ * it belongs to is worse than one that closed.
+ */
+export interface PopoverRect { left: number; top?: number; bottom?: number; width: number }
+
+export function popoverPosition(rect: DOMRect, maxHeight: number, viewportHeight: number): PopoverRect {
+  const below = viewportHeight - rect.bottom
+  const dropUp = below < maxHeight && rect.top > below
+  return dropUp
+    ? { left: rect.left, bottom: viewportHeight - rect.top + 4, width: rect.width }
+    : { left: rect.left, top: rect.bottom + 4, width: rect.width }
+}
+
+/** The style a popover panel gets. `position: fixed` is the load-bearing part — see popoverPosition. */
+export function popoverStyle(pos: PopoverRect | null): React.CSSProperties {
+  return {
+    position: 'fixed',
+    left: pos?.left ?? 0,
+    ...(pos?.bottom !== undefined ? { bottom: pos.bottom } : { top: pos?.top ?? 0 }),
+    width: pos?.width,
+    zIndex: 1200,
+  }
+}
+
+export function Select({ value, onChange, options, placeholder, disabled, searchable, searchPlaceholder, defaultOpenForTest }: {
   value: string
   onChange: (v: string) => void
   /** `disabled` greys an option out and blocks selection; `hint` says why, inline. */
@@ -692,17 +732,20 @@ export function Select({ value, onChange, options, placeholder, disabled, search
   searchable?: boolean
   /** Placeholder for the type-to-filter box. English by default, per the project language rule. */
   searchPlaceholder?: string
+  /** Render the panel open, for the static-markup test that pins `position: fixed`. */
+  defaultOpenForTest?: boolean
 }) {
-  const [open, setOpen] = React.useState(false)
+  const [open, setOpen] = React.useState(Boolean(defaultOpenForTest))
   const [activeIndex, setActiveIndex] = React.useState(-1)
   const [query, setQuery] = React.useState('')
   const wrapperRef = React.useRef<HTMLDivElement>(null)
   const listRef = React.useRef<HTMLDivElement>(null)
   const searchRef = React.useRef<HTMLInputElement>(null)
   const isMobile = useIsMobile()
-  // Inside the settings Drawer the popover can render past the viewport bottom, where it is
-  // unreachable. Measure on open and flip above the trigger when there is not enough room below.
-  const [dropUp, setDropUp] = React.useState(false)
+  // The panel is `position: fixed`, anchored to the trigger's viewport rect — see popoverPosition.
+  // Absolute positioning made it a child of the Drawer's `overflowY: auto` body, which clipped it
+  // as soon as the form was long enough to scroll.
+  const [pos, setPos] = React.useState<PopoverRect | null>(null)
   const POPOVER_MAX_H = 280
 
   const showSearch = searchable ?? options.length > 8
@@ -720,8 +763,17 @@ export function Select({ value, onChange, options, placeholder, disabled, search
         setOpen(false)
       }
     }
+    // A fixed panel does not follow its trigger, so scrolling would leave it hanging beside a row
+    // that has moved. Closing is the honest answer; chasing the trigger is not worth the jitter.
+    const onScroll = () => setOpen(false)
     document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
   }, [open])
 
   // Keep the keyboard-highlighted option scrolled into view.
@@ -736,11 +788,7 @@ export function Select({ value, onChange, options, placeholder, disabled, search
     const i = options.findIndex(o => o.value === value)
     setActiveIndex(i >= 0 ? i : 0)
     const rect = wrapperRef.current?.getBoundingClientRect()
-    if (rect) {
-      const below = window.innerHeight - rect.bottom
-      // Only flip when the space above is actually better — flipping into even less room is worse.
-      setDropUp(below < POPOVER_MAX_H && rect.top > below)
-    }
+    if (rect) setPos(popoverPosition(rect, POPOVER_MAX_H, window.innerHeight))
     setOpen(true)
     if (showSearch) setTimeout(() => searchRef.current?.focus(), 0)
   }
@@ -850,11 +898,7 @@ export function Select({ value, onChange, options, placeholder, disabled, search
           ref={listRef}
           role="listbox"
           style={{
-            position: 'absolute',
-            ...(dropUp ? { bottom: 'calc(100% + 4px)' } : { top: 'calc(100% + 4px)' }),
-            left: 0,
-            right: 0,
-            zIndex: 50,
+            ...popoverStyle(pos),
             background: 'var(--bg-card)',
             border: '1px solid var(--border)',
             borderRadius: 8,
@@ -949,6 +993,7 @@ export function Select({ value, onChange, options, placeholder, disabled, search
  */
 export function MultiPicker({
   options, onCommit, placeholder, searchPlaceholder, confirmLabel, selectAllLabel, emptyLabel, disabled,
+  defaultOpenForTest,
 }: {
   options: { value: string; label: string; disabled?: boolean; hint?: string }[]
   /** Called with everything ticked when the user confirms. Never called with an empty list. */
@@ -960,12 +1005,15 @@ export function MultiPicker({
   selectAllLabel: string
   emptyLabel: string
   disabled?: boolean
+  /** Render the panel open, for the static-markup test that pins `position: fixed`. */
+  defaultOpenForTest?: boolean
 }) {
   const isMobile = useIsMobile()
-  const [open, setOpen] = React.useState(false)
+  const [open, setOpen] = React.useState(Boolean(defaultOpenForTest))
   const [picked, setPicked] = React.useState<string[]>([])
   const [query, setQuery] = React.useState('')
-  const [dropUp, setDropUp] = React.useState(false)
+  // See popoverPosition: fixed, so the Drawer's scrolling body cannot clip it.
+  const [pos, setPos] = React.useState<PopoverRect | null>(null)
   const wrapperRef = React.useRef<HTMLDivElement>(null)
   const searchRef = React.useRef<HTMLInputElement>(null)
   const PANEL_MAX_H = 340
@@ -983,18 +1031,24 @@ export function MultiPicker({
       if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) close()
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    // Same reason as Select: a fixed panel cannot follow a scrolling trigger.
+    const onScroll = () => close()
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
-    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
   }, [open, close])
 
   const openPanel = () => {
     if (disabled) return
     const rect = wrapperRef.current?.getBoundingClientRect()
-    if (rect) {
-      const below = window.innerHeight - rect.bottom
-      setDropUp(below < PANEL_MAX_H && rect.top > below)
-    }
+    if (rect) setPos(popoverPosition(rect, PANEL_MAX_H, window.innerHeight))
     setOpen(true)
     setTimeout(() => searchRef.current?.focus(), 0)
   }
@@ -1036,8 +1090,7 @@ export function MultiPicker({
         <div
           role="listbox"
           style={{
-            position: 'absolute', left: 0, right: 0, zIndex: 50,
-            ...(dropUp ? { bottom: 'calc(100% + 4px)' } : { top: 'calc(100% + 4px)' }),
+            ...popoverStyle(pos),
             background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
             boxShadow: '0 8px 28px rgba(0,0,0,0.35)', padding: 6,
             display: 'flex', flexDirection: 'column', gap: 6, maxHeight: PANEL_MAX_H,
