@@ -35,7 +35,7 @@
  * action DOES: every choice becomes one `host` call.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import { truncate } from '../../components/Primitives'
 import { COLORS } from '../../theme'
@@ -81,6 +81,7 @@ import {
 import { Menu } from '../Menu'
 import { OutputView } from '../Output'
 import { ArchiveChoice } from '../ArchiveChoice'
+import { archiveGateOnOpen } from '../archive-gate'
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
 import type { ControlStrings } from '../i18n'
 import type { CliLang } from '../lang'
@@ -173,7 +174,10 @@ type View =
   | { kind: 'kill'; option: StartOption }
   /** `then` is why it was asked: the gate in front of a detached start still has a server to
    *  start afterwards, while the config row was only ever changing a setting. */
-  | { kind: 'archive'; suggested: ArchiveMode; then: StartOption | null }
+  /** `gate` marks the one nobody asked for: the question raised on OPEN, because a machine enabled
+   *  at boot never crosses the start path that used to be the only place it was asked. Only that
+   *  one may be skipped — see `archive-gate.ts`. */
+  | { kind: 'archive'; suggested: ArchiveMode; then: StartOption | null; gate?: boolean }
   | { kind: 'connect'; step: ConnectStep; endpoint: string; token: string }
   | { kind: 'disconnect' }
   /** `runtime` is the one that just started, when this came from a fresh start's boot question —
@@ -305,6 +309,29 @@ export function Services({
   const conflicted = Boolean(selected?.conflict)
 
   const back = useCallback(() => setView({ kind: 'cockpit' }), [])
+
+  /**
+   * The history question, asked on OPEN when it has never been answered.
+   *
+   * `pendingArchiveMode()` is the host's record, so a machine whose owner already chose is never
+   * asked again — including across restarts, which is the whole point. The ref is the second half of
+   * `archiveGateOnOpen`: a skip has to hold for the rest of this run, or declining would re-open the
+   * question on the next repaint and the skip would be a lie.
+   *
+   * It runs once, on mount, and only ever REPLACES the cockpit — never a question already up.
+   */
+  const archiveAsked = useRef(false)
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const pending = await host.pendingArchiveMode().catch(() => null)
+      const gate = archiveGateOnOpen(pending, archiveAsked.current)
+      if (!alive || !gate.ask) return
+      archiveAsked.current = true
+      setView(v => (v.kind === 'cockpit' ? { kind: 'archive', suggested: gate.suggested, then: null, gate: true } : v))
+    })()
+    return () => { alive = false }
+  }, [host])
 
   // -------------------------------------------------------------------------
   // actions — every one of them a single host call, none of them decided here
@@ -1155,7 +1182,8 @@ export function Services({
               strings={s}
               suggested={view.suggested}
               onPick={mode => onArchive(mode, view.then)}
-              onCancel={back}
+              onSkip={view.gate ? onArchiveSkip : undefined}
+              onCancel={view.gate ? onArchiveSkip : back}
               width={body}
               height={rows}
               isActive={questionsLive}
@@ -1236,6 +1264,13 @@ export function Services({
 
   function onArchive(mode: ArchiveMode, then: StartOption | null) {
     void run(() => host.setArchiveMode(mode)).then(() => (then ? startNow(then) : back()))
+  }
+
+  /** Skipping the opening gate. It writes NOTHING — the setting stays unanswered on purpose — and
+   *  says so, because a question that vanishes silently reads as one that was answered. */
+  function onArchiveSkip() {
+    back()
+    void run(async () => ({ ok: true, message: s.archiveLaterMessage }))
   }
 
   function onConnect(step: ConnectStep, endpoint: string, token: string, value: string) {

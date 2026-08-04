@@ -169,6 +169,10 @@ export interface ControlStrings {
   archiveFullHint: string
   archiveOff: string
   archiveOffHint: string
+  /** The opening gate's fourth option, and what it costs. Absent from the other callers' menus. */
+  archiveLater: string
+  archiveLaterHint: string
+  archiveLaterMessage: string
   bootQuestion: string
 
   /** Logs tab. */
@@ -297,6 +301,9 @@ const EN: ControlStrings = {
   archiveFullHint: 'archivist — also mirror raw transcripts so you can re-read chats (heavy)',
   archiveOff: 'off',
   archiveOffHint: "do nothing — use Claude's default 30-day cleanup",
+  archiveLater: 'decide later',
+  archiveLaterHint: 'the dashboard will require an answer before it opens',
+  archiveLaterMessage: 'History left unset — the dashboard will ask before it opens.',
   bootQuestion: 'Start it on every boot (systemd user service)?',
 
   logSource: 'SOURCE',
@@ -420,6 +427,9 @@ const PT: ControlStrings = {
   archiveFullHint: 'arquivista — também espelha as transcrições cruas para reler os chats (pesado)',
   archiveOff: 'off',
   archiveOffHint: 'não fazer nada — usar a limpeza padrão de 30 dias do Claude',
+  archiveLater: 'decidir depois',
+  archiveLaterHint: 'a interface vai exigir a resposta antes de abrir',
+  archiveLaterMessage: 'Histórico sem definição — a interface vai perguntar antes de abrir.',
   bootQuestion: 'Iniciar também no boot (serviço systemd de usuário)?',
 
   logSource: 'FONTE',

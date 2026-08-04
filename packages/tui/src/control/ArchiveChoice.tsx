@@ -25,11 +25,20 @@ const ORDER: readonly ArchiveMode[] = ['consolidate', 'full', 'off'] as const
 /** The reason, the blank row under it, and the three options. */
 const ASIDE_ROWS = 2
 
-export function ArchiveChoice({ strings: s, suggested, onPick, onCancel, width, height, isActive, origin }: {
+/** The skip is a menu ROW, not an `esc` the user has to guess at. This question is the one the
+ *  opening gate asks unprompted, so declining to answer it has to be as visible as answering it —
+ *  and the row states what the skip costs, since a silent skip is how a machine ends up preserving
+ *  nothing. `esc` still cancels; the row is what makes the option discoverable. */
+const SKIP = '__later__'
+
+export function ArchiveChoice({ strings: s, suggested, onPick, onSkip, onCancel, width, height, isActive, origin }: {
   strings: ControlStrings
   /** The recommended answer, preselected. */
   suggested: ArchiveMode
   onPick: (mode: ArchiveMode) => void
+  /** Offered only where declining is legitimate — the opening gate. Absent elsewhere, and then the
+   *  menu has no such row: a start that needs the consent must not be able to proceed without it. */
+  onSkip?: () => void
   onCancel: () => void
   width: number
   height: number
@@ -52,9 +61,10 @@ export function ArchiveChoice({ strings: s, suggested, onPick, onCancel, width, 
           { label: s.archiveConsolidate, value: 'consolidate', hint: s.archiveConsolidateHint },
           { label: s.archiveFull, value: 'full', hint: s.archiveFullHint },
           { label: s.archiveOff, value: 'off', hint: s.archiveOffHint },
+          ...(onSkip ? [{ label: s.archiveLater, value: SKIP, hint: s.archiveLaterHint }] : []),
         ]}
         initialIndex={Math.max(0, ORDER.indexOf(suggested))}
-        onSelect={value => onPick(value as ArchiveMode)}
+        onSelect={value => (value === SKIP ? onSkip?.() : onPick(value as ArchiveMode))}
         // Ctrl-C out of `cli-setup.ts` is non-destructive; esc is its equivalent here — the
         // question comes back the next time the host says it is still unanswered.
         onCancel={onCancel}
