@@ -11,7 +11,7 @@ import { DatePicker } from '../components/DatePicker'
 
 // /api/tags response shapes. Aggregate-only by design (spec rule 2): the server never sends the
 // session rows behind a tag, so everything rendered here is a number the server already computed.
-type TagSourceType = 'repo' | 'project' | 'machine' | 'team' | 'account'
+import { tagSourceTypes, type TagSourceType } from '../lib/tagSourceTypes'
 interface TagSource { type: TagSourceType; value: string }
 interface TagAggregate {
   sessions: number
@@ -51,7 +51,6 @@ const DEFAULT_COLOR = '#f59e0b'
  *  non-central instance knows about, which every local session is attributed to. */
 const LOCAL_MACHINE_ID = 'local'
 /** Source types that only exist where there is IAM. Hidden off a central, and refused there too. */
-const CENTRAL_ONLY_TYPES: TagSourceType[] = ['team', 'account']
 
 /** A label/value pair inside a grid card. */
 function MiniStat({ label, value }: { label: string; value: string }) {
@@ -244,11 +243,8 @@ export default function TagsPage() {
     }
   }, [teamName, accountName, machineName])
 
-  /** Team and account need IAM, which only a central has. */
-  const sourceTypes = useMemo<TagSourceType[]>(() => (
-    (['repo', 'project', 'machine', 'team', 'account'] as TagSourceType[])
-      .filter(t => isCentral || !CENTRAL_ONLY_TYPES.includes(t))
-  ), [isCentral])
+  /** Which dimensions can be picked here — see `tagSourceTypes`. */
+  const sourceTypes = useMemo<TagSourceType[]>(() => tagSourceTypes(isCentral), [isCentral])
 
   const optionsForType = useCallback((t: TagSourceType) => {
     switch (t) {
