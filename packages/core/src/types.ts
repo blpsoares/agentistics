@@ -68,6 +68,9 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   //   gemini / antigravity / kimi → reconstructed from per-message timestamps (no measured field)
   claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true,  dynamicWorkflows: true,  activeTime: true },
   codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
+  // Gemini's chat files carry `toolCalls: [{ name, args }]` per message, and a shell call puts its
+  // command in `args.command` — so tools and commits are real. `gitLines` stays false: the calls
+  // name the file they touched but carry no diff counters.
   gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
   // `tools` was false while `tool.execution_start` had been carrying the tool name and its
   // arguments all along — the flag was out of date, not the data missing. Verified against a real

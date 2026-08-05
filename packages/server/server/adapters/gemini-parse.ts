@@ -1,3 +1,4 @@
+import { canonicalTool, countGitCommands } from '../harness-activity'
 import type { SessionMeta, TurnEvent } from '@agentistics/core'
 import { activeMinutesOf } from '@agentistics/core'
 
@@ -74,6 +75,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
   const messageHours: number[] = []
   const userMessageTimestamps: string[] = []
   const toolCounts: Record<string, number> = {}
+  let gitCommits = 0, gitPushes = 0
   let hasGenuineContent = false
   // Per-turn timeline for computeActiveTime() (docs/harness-contract.md). Gemini records no
   // duration of its own, so every turn is reconstructed from the message timestamps: a genuine
@@ -105,12 +107,27 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
           model = msg.model
         }
 
-        // Extract tool call names
+        // Tool calls. The name goes through `canonicalTool` so Gemini's `run_shell_command` and
+        // `read_file` sit in the same buckets as every other harness's equivalents — the tools
+        // breakdown compares harnesses, and it cannot while each one uses its own words.
         if (Array.isArray(msg.toolCalls)) {
           for (const tc of msg.toolCalls) {
             const name = tc.name as string | undefined
-            if (name) {
-              toolCounts[name] = (toolCounts[name] ?? 0) + 1
+            if (!name) continue
+            const shared = canonicalTool('gemini', name)
+            toolCounts[shared] = (toolCounts[shared] ?? 0) + 1
+
+            // A shell call carries its command in `args.command` — verified against real chat
+            // files. This is what lets Gemini report commits at all; it reported 0 not because the
+            // data was missing but because nothing here ever looked.
+            if (shared === 'Bash') {
+              const args = tc.args as Record<string, unknown> | undefined
+              const cmd = typeof args?.command === 'string' ? args.command : ''
+              if (cmd) {
+                const g = countGitCommands(cmd)
+                gitCommits += g.commits
+                gitPushes += g.pushes
+              }
             }
           }
         }
@@ -165,8 +182,8 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
     tool_output_tokens: {},
     agent_file_reads: {},
     languages: [],
-    git_commits: 0,
-    git_pushes: 0,
+    git_commits: gitCommits,
+    git_pushes: gitPushes,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     cache_read_input_tokens: cacheRead,
