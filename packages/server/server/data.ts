@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId, WorkflowRun } from '@agentistics/core'
-import { mergeStatsCaches } from '@agentistics/core'
+import { mergeStatsCaches, sessionDay } from '@agentistics/core'
 import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
@@ -563,7 +563,10 @@ function supplementStatsCache(statsCache: StatsCache, sessions: SessionMeta[]): 
 
   for (const s of sessions) {
     if (!s.start_time) continue
-    const day = s.start_time.slice(0, 10)
+    // `sessionDay`, not `.slice`: an adapter that wrote the wrong shape must not be able to throw
+    // here and take the whole API response with it. See sessionDay.
+    const day = sessionDay(s.start_time)
+    if (!day) continue
     if (lastComputed && day <= lastComputed) continue
 
     const da = dailyActivity.get(day) ?? { messageCount: 0, sessionCount: 0, toolCallCount: 0 }
