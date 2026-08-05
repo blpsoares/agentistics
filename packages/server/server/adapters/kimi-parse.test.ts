@@ -157,3 +157,59 @@ test('a hosted provider prefix is still stripped, so the pricing table can key o
   expect(stripProvider('google/gemini-3.5-flash-lite')).toBe('gemini-3.5-flash-lite')
   expect(stripProvider('moonshot/kimi-k2')).toBe('kimi-k2')
 })
+
+/** A wire with one real prompt, so buildKimiSession does not drop the session as empty. */
+const wireWithOnePrompt = () => accumulateKimiWire(wire([
+  { type: 'turn.prompt', input: [{ type: 'text', text: 'oi' }], origin: { kind: 'user' }, time: T0 },
+]))
+
+// Kimi writes `createdAt` as an epoch NUMBER in most sessions and an ISO string in others —
+// measured on a live machine: 10 of 11 were numbers. The declared type said `string`, so the number
+// travelled all the way into the consolidate store and every consumer that treats start_time as a
+// string (supplementStatsCache does `.slice(0, 10)`) threw — taking the WHOLE dashboard down over
+// one session.
+test('an epoch-number createdAt becomes an ISO start_time', () => {
+  const state = parseKimiState(JSON.stringify({
+    createdAt: 1785939883717,
+    workDir: '/repo',
+    agents: { main: { type: 'main' } },
+  }))
+  const s = buildKimiSession('abc', state, wireWithOnePrompt(), '/repo')!
+  expect(typeof s.start_time).toBe('string')
+  expect(s.start_time).toBe(new Date(1785939883717).toISOString())
+})
+
+test('an ISO createdAt is passed through untouched', () => {
+  const state = parseKimiState(JSON.stringify({
+    createdAt: '2026-08-05T14:01:24.097Z',
+    workDir: '/repo',
+    agents: { main: { type: 'main' } },
+  }))
+  const s = buildKimiSession('abc', state, wireWithOnePrompt(), '/repo')!
+  expect(s.start_time).toBe('2026-08-05T14:01:24.097Z')
+})
+
+// Shape verified against a live wire.jsonl AND against the tool schema Kimi itself sends to the
+// model (`llm.tools_snapshot`): Bash declares `properties.command` — "The command to execute."
+test('counts kimi git commands from the Bash tool call', () => {
+  const totals = accumulateKimiWire(wire([
+    { type: 'turn.prompt', input: [{ type: 'text', text: 'commita' }], origin: { kind: 'user' }, time: T0 },
+    { type: 'context.append_loop_event', event: { type: 'tool.call', name: 'Bash', args: { command: 'git add -A && git commit -m "x"' } }, time: T0 },
+    { type: 'context.append_loop_event', event: { type: 'tool.call', name: 'Bash', args: { command: 'git push' } }, time: T0 },
+    { type: 'context.append_loop_event', event: { type: 'tool.call', name: 'Bash', args: { command: 'bun test' } }, time: T0 },
+  ]))
+  const s = buildKimiSession('k1', null, totals, '/repo')!
+  expect(s.git_commits).toBe(1)
+  expect(s.git_pushes).toBe(1)
+  expect(s.tool_counts['Bash']).toBe(3)
+})
+
+test('a Bash call with no command counts as a call and nothing more', () => {
+  const totals = accumulateKimiWire(wire([
+    { type: 'turn.prompt', input: [{ type: 'text', text: 'oi' }], origin: { kind: 'user' }, time: T0 },
+    { type: 'context.append_loop_event', event: { type: 'tool.call', name: 'Bash', args: {} }, time: T0 },
+  ]))
+  const s = buildKimiSession('k2', null, totals, '/repo')!
+  expect(s.git_commits).toBe(0)
+  expect(s.tool_counts['Bash']).toBe(1)
+})

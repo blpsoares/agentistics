@@ -95,6 +95,8 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   // any unknown id on any harness they would take the shared fallback price, so add them here when
   // Moonshot publishes verified rates. `gitLines` is false because Kimi records the Edit/Write
   // strings but no diff counters.
+  // Kimi's wire carries `tool.call` with `args`, and its own tool schema declares Bash's
+  // `command` — so tools and commits are both real, read from what it actually ran.
   kimi: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
 }
 
@@ -591,6 +593,53 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
  *     `gemini-3.5-flash`, never `gemini-3.5-flash-lite`);
  *  4. otherwise the Sonnet-class fallback.
  */
+/** The `YYYY-MM-DD` day a session belongs to, from a `start_time` of unknown shape.
+ *
+ *  `SessionMeta.start_time` is a STRING by contract, but an adapter can get that wrong: Kimi wrote
+ *  an epoch NUMBER, it reached the consolidate store as written, and the first consumer to call
+ *  `.slice(0, 10)` on it threw — turning one malformed session into a 500 for the entire /api/data
+ *  response, and a dashboard that would not load at all.
+ *
+ *  Fixing the adapter is the real fix (see `isoFromKimiTime`). This is the second line: a single bad
+ *  row must never be able to blank the product for every other row. Returns '' when there is no day
+ *  to be had, which every caller already treats as "skip this session". */
+export function sessionDay(startTime: unknown): string {
+  if (typeof startTime === 'string') return startTime.slice(0, 10)
+  if (typeof startTime === 'number' && Number.isFinite(startTime) && startTime > 0) {
+    const d = new Date(startTime)
+    return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
+  }
+  return ''
+}
+
+/** Coerce a session's timestamps to the STRING shape `SessionMeta` declares, in place.
+ *
+ *  `start_time` is a string by contract, but an adapter can get it wrong — Kimi wrote an epoch
+ *  NUMBER — and once that reaches the consolidate store it is on disk, so fixing the adapter does
+ *  not repair what was already written. Every later consumer then calls a string method on it
+ *  (`.slice`, `.localeCompare`) and throws, which is how one malformed session produced a 500 for
+ *  the entire /api/data response.
+ *
+ *  Normalising at the boundary — where sessions ENTER the pipeline — is what keeps that from being
+ *  a hunt through every call site. Anything unusable becomes '', which the pipeline already treats
+ *  as "no start time". */
+export function normalizeSessionTimes<T extends { start_time?: unknown; end_time?: unknown }>(s: T): T {
+  const iso = (v: unknown): string | undefined => {
+    if (typeof v === 'string') return v
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+      const d = new Date(v)
+      return Number.isNaN(d.getTime()) ? '' : d.toISOString()
+    }
+    if (v instanceof Date) return Number.isNaN(v.getTime()) ? '' : v.toISOString()
+    return v === undefined ? undefined : ''
+  }
+  const start = iso(s.start_time)
+  if (start !== undefined) (s as { start_time?: unknown }).start_time = start
+  const end = iso(s.end_time)
+  if (end !== undefined) (s as { end_time?: unknown }).end_time = end
+  return s
+}
+
 export function getModelPrice(modelId: string) {
   if (MODEL_PRICING[modelId]) return MODEL_PRICING[modelId]
   // A model served off the user's own machine costs nothing. Checked BEFORE the table so no

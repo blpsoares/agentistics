@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, projectFolder, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName, canonicalProjectPath, HARNESS_ORDER } from './types'
+import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, projectFolder, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName, canonicalProjectPath, HARNESS_ORDER, sessionDay, normalizeSessionTimes } from './types'
 import type { ModelUsage, StatsCache } from './types'
 
 describe('mergeStatsCaches', () => {
@@ -548,4 +548,32 @@ test('current Anthropic models are priced as themselves, not as the fallback', (
   const fallback = getModelPrice('a-model-that-does-not-exist')
   expect(fallback.output).toBe(15)
   expect(getModelPrice('claude-opus-5').output).not.toBe(fallback.output)
+})
+
+test('sessionDay tolerates a start_time an adapter got wrong', () => {
+  expect(sessionDay('2026-08-05T10:00:00.000Z')).toBe('2026-08-05')
+  // Kimi wrote an epoch number; one such session used to 500 the whole /api/data response.
+  expect(sessionDay(1785939883717)).toBe(new Date(1785939883717).toISOString().slice(0, 10))
+  expect(sessionDay(undefined)).toBe('')
+  expect(sessionDay(null)).toBe('')
+  expect(sessionDay({})).toBe('')
+  expect(sessionDay(NaN)).toBe('')
+  expect(sessionDay(-1)).toBe('')
+})
+
+test('normalizeSessionTimes repairs a start_time an adapter wrote as a number', () => {
+  const s = normalizeSessionTimes({ start_time: 1785939883717 as unknown as string, end_time: undefined })
+  expect(s.start_time).toBe(new Date(1785939883717).toISOString())
+  expect(s.end_time).toBeUndefined()   // absent stays absent, never becomes ''
+})
+
+test('normalizeSessionTimes leaves a correct session untouched', () => {
+  const s = normalizeSessionTimes({ start_time: '2026-08-05T10:00:00.000Z', end_time: '2026-08-05T11:00:00.000Z' })
+  expect(s.start_time).toBe('2026-08-05T10:00:00.000Z')
+  expect(s.end_time).toBe('2026-08-05T11:00:00.000Z')
+})
+
+test('normalizeSessionTimes turns junk into the empty string the pipeline already handles', () => {
+  expect(normalizeSessionTimes({ start_time: {} as unknown as string }).start_time).toBe('')
+  expect(normalizeSessionTimes({ start_time: NaN as unknown as string }).start_time).toBe('')
 })
