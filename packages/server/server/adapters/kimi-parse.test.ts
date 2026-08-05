@@ -147,3 +147,13 @@ test('parseKimiState tolerates a missing or broken file', () => {
   expect(parseKimiState('{oops')).toBeNull()
   expect(parseKimiState('{"title":"t"}')?.title).toBe('t')
 })
+
+test('a local runtime prefix survives, because it is what says the call was free', () => {
+  expect(stripProvider('ollama-local/qwen2.5-coder-7b')).toBe('ollama-local/qwen2.5-coder-7b')
+  expect(stripProvider('ollama/llama3.1')).toBe('ollama/llama3.1')
+})
+
+test('a hosted provider prefix is still stripped, so the pricing table can key on the id', () => {
+  expect(stripProvider('google/gemini-3.5-flash-lite')).toBe('gemini-3.5-flash-lite')
+  expect(stripProvider('moonshot/kimi-k2')).toBe('kimi-k2')
+})

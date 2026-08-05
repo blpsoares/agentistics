@@ -1,3 +1,4 @@
+import { isLocalModelId, LOCAL_MODEL_PRICE } from './local-models'
 export interface DailyActivity {
   date: string
   messageCount: number
@@ -592,6 +593,10 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
  */
 export function getModelPrice(modelId: string) {
   if (MODEL_PRICING[modelId]) return MODEL_PRICING[modelId]
+  // A model served off the user's own machine costs nothing. Checked BEFORE the table so no
+  // partial-prefix match can price it, and before the fallback, which would otherwise invent
+  // spending that grows with every local session. See local-models.ts.
+  if (isLocalModelId(modelId)) return LOCAL_MODEL_PRICE
   const id = String(modelId ?? '')
   let forwardKey = ''
   let reverseKey = ''

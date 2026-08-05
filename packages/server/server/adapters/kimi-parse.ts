@@ -1,3 +1,4 @@
+import { isLocalModelId } from '@agentistics/core'
 import type { SessionMeta, TurnEvent } from '@agentistics/core'
 import { activeMinutesOf } from '@agentistics/core'
 
@@ -47,8 +48,14 @@ export function parseKimiState(text: string): KimiState | null {
 }
 
 /** `google/gemini-3.5-flash-lite` → `gemini-3.5-flash-lite`. Kimi routes to other providers and
- *  prefixes the alias; the bare id is what the pricing table is keyed by. */
+ *  prefixes the alias; the bare id is what the pricing table is keyed by.
+ *
+ *  A LOCAL runtime's prefix is KEPT (`ollama-local/qwen2.5-coder-7b` stays whole). For a hosted
+ *  model the prefix is noise the table does not want; for a local one it is the only thing saying
+ *  the call was free, and stripping it left `qwen2.5-coder-7b` to be priced at the shared fallback
+ *  — inventing spending for tokens that cost nothing. See `isLocalModelId`. */
 export function stripProvider(model: string): string {
+  if (isLocalModelId(model)) return model
   const slash = model.indexOf('/')
   return slash > 0 ? model.slice(slash + 1) : model
 }
