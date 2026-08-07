@@ -59,6 +59,9 @@ export interface CliStrings {
   rebuildNoCache: string
   restartedAll: string
   restartedDone: string
+  /** A central/machine restart or rebuild whose docker command failed — the old (or no) container
+   *  is what's actually running, and this replaces a false "restarted" banner. */
+  restartFailed: string
   noComposeFrom: (dir: string) => string
   runFromRepo: string
   buildingMachine: string
@@ -234,6 +237,7 @@ const EN: CliStrings = {
   rebuildNoCache: 'building from scratch (no Docker cache) — this takes several minutes. Pass --cache to reuse it.',
   restartedAll: 'restarted all running services.',
   restartedDone: 'service restarted.',
+  restartFailed: "that didn't come back up — see the output above for why.",
   noComposeFrom: (dir) => `couldn't find docker-compose.machine.yml in ${dir}.`,
   runFromRepo: 'Run agentop start from the agentistics repo to use Docker.',
   buildingMachine: 'building & starting the machine container…',
@@ -367,6 +371,7 @@ const PT: CliStrings = {
   rebuildNoCache: 'buildando do zero (sem cache do Docker) — leva vários minutos. Use --cache para reaproveitá-lo.',
   restartedAll: 'todos os serviços no ar foram reiniciados.',
   restartedDone: 'serviço reiniciado.',
+  restartFailed: 'não voltou a rodar — veja a saída acima para saber o motivo.',
   noComposeFrom: (dir) => `não achei docker-compose.machine.yml em ${dir}.`,
   runFromRepo: 'Rode agentop start de dentro do repo agentistics para usar Docker.',
   buildingMachine: 'buildando & subindo o container da máquina…',
