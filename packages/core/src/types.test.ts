@@ -1,6 +1,64 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, projectFolder, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName, canonicalProjectPath, HARNESS_ORDER, sessionDay, normalizeSessionTimes } from './types'
+import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, projectFolder, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, sanitizeStatsCache, normalizeGitRemote, repoShortName, canonicalProjectPath, HARNESS_ORDER, sessionDay, normalizeSessionTimes } from './types'
 import type { ModelUsage, StatsCache } from './types'
+
+describe('sanitizeStatsCache', () => {
+  function sc(over: Partial<StatsCache>): StatsCache {
+    return { ...emptyStatsCache(), ...over }
+  }
+
+  test('drops dailyActivity entries with a missing date', () => {
+    const input = sc({
+      dailyActivity: [
+        { date: '2026-01-01', messageCount: 5, sessionCount: 2, toolCallCount: 3 },
+        { date: undefined as unknown as string, messageCount: 9, sessionCount: 1, toolCallCount: 0 },
+      ],
+    })
+    const out = sanitizeStatsCache(input)
+    expect(out.dailyActivity).toEqual([{ date: '2026-01-01', messageCount: 5, sessionCount: 2, toolCallCount: 3 }])
+  })
+
+  test('drops dailyActivity entries with a non-string or empty date', () => {
+    const input = sc({
+      dailyActivity: [
+        { date: '2026-01-01', messageCount: 1, sessionCount: 1, toolCallCount: 1 },
+        { date: null as unknown as string, messageCount: 2, sessionCount: 1, toolCallCount: 0 },
+        { date: '', messageCount: 3, sessionCount: 1, toolCallCount: 0 },
+        { date: 12345 as unknown as string, messageCount: 4, sessionCount: 1, toolCallCount: 0 },
+      ],
+    })
+    const out = sanitizeStatsCache(input)
+    expect(out.dailyActivity).toHaveLength(1)
+    expect(out.dailyActivity[0]!.date).toBe('2026-01-01')
+  })
+
+  test('drops dailyModelTokens entries with a missing date', () => {
+    const input = sc({
+      dailyModelTokens: [
+        { date: '2026-01-01', tokensByModel: { 'claude-x': 100 } },
+        { date: undefined as unknown as string, tokensByModel: { 'claude-x': 50 } },
+      ],
+    })
+    const out = sanitizeStatsCache(input)
+    expect(out.dailyModelTokens).toEqual([{ date: '2026-01-01', tokensByModel: { 'claude-x': 100 } }])
+  })
+
+  test('tolerates a statsCache with no dailyActivity/dailyModelTokens at all', () => {
+    const input = { version: 1 } as StatsCache
+    expect(() => sanitizeStatsCache(input)).not.toThrow()
+    expect(sanitizeStatsCache(input).dailyActivity).toEqual([])
+  })
+
+  test('leaves a well-formed statsCache untouched', () => {
+    const input = sc({
+      dailyActivity: [{ date: '2026-01-01', messageCount: 5, sessionCount: 2, toolCallCount: 3 }],
+      dailyModelTokens: [{ date: '2026-01-01', tokensByModel: { 'claude-x': 100 } }],
+    })
+    const out = sanitizeStatsCache(input)
+    expect(out.dailyActivity).toHaveLength(1)
+    expect(out.dailyModelTokens).toHaveLength(1)
+  })
+})
 
 describe('mergeStatsCaches', () => {
   function sc(over: Partial<StatsCache>): StatsCache {

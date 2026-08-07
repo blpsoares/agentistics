@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId, WorkflowRun } from '@agentistics/core'
-import { mergeStatsCaches, sessionDay } from '@agentistics/core'
+import { mergeStatsCaches, sessionDay, sanitizeStatsCache, normalizeSessionTimes } from '@agentistics/core'
 import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
@@ -650,7 +650,7 @@ async function mergeArchivedStatsCache(statsCache: StatsCache, enabled: boolean)
   if (!enabled) return
   const snap = await safeReadJson<StatsCache>(join(ARCHIVE_STATS_DIR, 'latest.json'))
   if (!snap) return
-  applyArchivedStats(statsCache, snap)
+  applyArchivedStats(statsCache, sanitizeStatsCache(snap))
 }
 
 export function applyArchivedStats(statsCache: StatsCache, snap: StatsCache): void {
@@ -700,7 +700,7 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     const [statsCache, metaMap, healthIssues] = await Promise.all([
       safeReadJson<StatsCache>(STATS_CACHE_FILE)
         .then(async v => {
-          const sc = v ?? ({} as StatsCache)
+          const sc = sanitizeStatsCache(v ?? ({} as StatsCache))
           await mergeArchivedStatsCache(sc, fullMode)
           onProgress('statsCache', 1)
           return sc
@@ -731,6 +731,15 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
 
     const metaSessions = Array.from(metaMap.values())
     const allSessionsRaw: SessionMeta[] = [...metaSessions, ...extraSessions]
+
+    // Normalise at the boundary — where every harness's sessions ENTER the pipeline — before
+    // anything sorts, dedups, or persists them. `start_time`/`end_time` are typed `string`, but
+    // that is a compile-time promise only: an adapter can get the shape wrong (Kimi wrote an epoch
+    // NUMBER; jsonl.ts's own `ts` extraction was cast, not verified). Fixing it here means every
+    // downstream `.localeCompare`/`.slice`/`parseISO` — including the raw `.sort()` calls a few
+    // lines down — never has to defend against it individually, and a bad session is never even
+    // written to the consolidate store in the first place.
+    for (const s of allSessionsRaw) normalizeSessionTimes(s)
 
     // Deduplicate by session_id — same UUID can appear as both .jsonl AND UUID subdir
     // Prefer: meta > jsonl > subdir

@@ -29,7 +29,12 @@ export interface KimiState {
   /** Kimi writes this as an epoch NUMBER in most sessions and an ISO string in others — measured
    *  10 of 11 as numbers on a live machine. Both shapes are read; see `isoFromKimiTime`. */
   createdAt?: string | number
-  updatedAt?: string
+  /** Same inconsistency as `createdAt` — Kimi writes the same wire shape for both fields, so
+   *  `updatedAt` is exactly as likely to arrive as an epoch number. It was typed `string` only
+   *  and read raw (skipping `isoFromKimiTime`), which is what let a numeric `end_time` reach
+   *  `SessionMeta` — a field the frontend calls `parseISO`/`.slice` on, unguarded, in several
+   *  places. Same bug as `createdAt`, just not caught the first time. */
+  updatedAt?: string | number
   /** agentId → {parentAgentId}. `main` has a null parent; subagents point at their parent. */
   agents?: Record<string, { parentAgentId?: string | null } | undefined>
 }
@@ -233,7 +238,8 @@ export function buildKimiSession(
 
   const start = isoFromKimiTime(state?.createdAt)
     || (totals.firstTimeMs ? new Date(totals.firstTimeMs).toISOString() : '')
-  const end = state?.updatedAt || (totals.lastTimeMs ? new Date(totals.lastTimeMs).toISOString() : '')
+  const end = isoFromKimiTime(state?.updatedAt)
+    || (totals.lastTimeMs ? new Date(totals.lastTimeMs).toISOString() : '')
   if (!start) return null
 
   const startMs = Date.parse(start)

@@ -13,12 +13,13 @@
 import type { SessionMeta } from '@agentistics/core'
 import { canonicalProjectPath } from '@agentistics/core'
 
-export type TagSourceType = 'repo' | 'project' | 'machine' | 'team' | 'account'
+export type TagSourceType = 'repo' | 'project' | 'machine' | 'team' | 'account' | 'harness' | 'model' | 'user'
 
 export interface TagSource {
   type: TagSourceType
   /** repo → normalized git remote; project → project path; machine → memberId (token hash);
-   *  team → teamId; account → accountId. */
+   *  team → teamId; account → accountId; harness → HarnessId ('claude'|'codex'|...); model → the
+   *  bare model id as stored on the session; user → the session's `user` display name. */
   value: string
 }
 
@@ -89,6 +90,11 @@ function matchesSource(s: SessionMeta, src: TagSource, lookups: TagLookups): boo
       const machines = lookups.machinesByAccount[src.value]
       return !!machines && !!s.memberId && machines.includes(s.memberId)
     }
+    // Session ATTRIBUTES, not identity — visible to anyone (see tags-authority.ts canSeeSource)
+    // and meaningful on a solo machine too, unlike machine/team/account.
+    case 'harness': return (s.harness ?? 'claude') === src.value
+    case 'model': return s.model === src.value
+    case 'user': return s.user === src.value
     default: return false
   }
 }

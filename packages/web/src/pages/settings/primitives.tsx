@@ -766,9 +766,16 @@ export function Select({ value, onChange, options, placeholder, disabled, search
         setOpen(false)
       }
     }
-    // A fixed panel does not follow its trigger, so scrolling would leave it hanging beside a row
-    // that has moved. Closing is the honest answer; chasing the trigger is not worth the jitter.
-    const onScroll = () => setOpen(false)
+    // A fixed panel does not follow its trigger, so scrolling the PAGE (or any ancestor) would
+    // leave it hanging beside a row that has moved — closing is the honest answer there. But this
+    // listener is capture-phase on `window`, so it also fires when the panel's OWN option list
+    // scrolls (e.g. scrolling down to reach an option past the fold, or a keyboard/assistive
+    // scroll-into-view) — closing on that closed the panel before a click on a lower option could
+    // ever land, making any option beyond the visible fold unreachable. Only close for a scroll
+    // whose target is outside this component's own DOM subtree.
+    const onScroll = (e: Event) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setOpen(false)
+    }
     document.addEventListener('mousedown', handleClickOutside)
     window.addEventListener('scroll', onScroll, true)
     window.addEventListener('resize', onScroll)
@@ -1020,6 +1027,16 @@ export function MultiPicker({
   const wrapperRef = React.useRef<HTMLDivElement>(null)
   const searchRef = React.useRef<HTMLInputElement>(null)
   const PANEL_MAX_H = 340
+  // Ticking a checkbox reliably delivers a SECOND, browser-generated click to the trigger button
+  // right after (same coordinates, no intervening mousedown/mouseup — verified with instrumented
+  // listeners; the trigger sits in normal flow below/above a `position: fixed` popover, and picking
+  // an option is enough to reflow the page under it). That phantom click hit the trigger's
+  // open-if-closed/close-if-open toggle and closed the panel before the pick could ever be
+  // committed — the FIRST option beyond the very top of the list was unreachable. Stamping every
+  // pick and having the trigger ignore a click landing within the same tick is what a fixed-position
+  // popover anchored to a trigger still in normal flow needs, regardless of why the browser
+  // re-delivers the click.
+  const lastPickAtRef = React.useRef(0)
 
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -1034,8 +1051,13 @@ export function MultiPicker({
       if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) close()
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
-    // Same reason as Select: a fixed panel cannot follow a scrolling trigger.
-    const onScroll = () => close()
+    // Same reason as Select — and the same over-broad fix: this capture-phase listener also fires
+    // when the panel's OWN checkbox list scrolls (it has to, to fit more than a handful of
+    // options), which closed the whole picker the moment a user scrolled to reach — let alone
+    // clicked — anything past the first screenful. Only close for a scroll outside this component.
+    const onScroll = (e: Event) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) close()
+    }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     window.addEventListener('scroll', onScroll, true)
@@ -1071,7 +1093,12 @@ export function MultiPicker({
     <div ref={wrapperRef} style={{ position: 'relative', width: '100%' }}>
       <button
         type="button"
-        onClick={() => (open ? close() : openPanel())}
+        onClick={() => {
+          // See lastPickAtRef above — a click landing here within ~200ms of an in-panel pick is
+          // the browser's phantom re-delivery, not a real second press on the trigger.
+          if (Date.now() - lastPickAtRef.current < 200) return
+          open ? close() : openPanel()
+        }}
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -1114,7 +1141,7 @@ export function MultiPicker({
             <div style={{ display: 'flex', alignItems: 'center', minHeight: isMobile ? 44 : 30, paddingLeft: 2 }}>
               <Checkbox
                 checked={allShownPicked}
-                onChange={c => setPicked(c ? filtered.filter(o => !o.disabled).map(o => o.value) : [])}
+                onChange={c => { lastPickAtRef.current = Date.now(); setPicked(c ? filtered.filter(o => !o.disabled).map(o => o.value) : []) }}
                 label={selectAllLabel}
               />
             </div>
@@ -1132,7 +1159,7 @@ export function MultiPicker({
                 }}>
                 <Checkbox
                   checked={!o.disabled && picked.includes(o.value)}
-                  onChange={c => { if (o.disabled) return; setPicked(prev => c ? [...prev, o.value] : prev.filter(v => v !== o.value)) }}
+                  onChange={c => { if (o.disabled) return; lastPickAtRef.current = Date.now(); setPicked(prev => c ? [...prev, o.value] : prev.filter(v => v !== o.value)) }}
                   label={o.label}
                 />
                 {o.hint && <span style={{ fontSize: 11, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>{o.hint}</span>}

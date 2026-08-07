@@ -437,6 +437,21 @@ export type LiveUnavailableReason =
   /** This exposure profile has revoked local host power (`CAPS.localProcesses`). */
   | 'capability-off'
 
+/**
+ * Drops any `dailyActivity`/`dailyModelTokens` entry whose `date` is missing or not a string.
+ * `stats-cache.json` is written by Claude Code itself (or restored from an archive snapshot) —
+ * an interrupted write or a stale schema can leave one entry without a usable date, and every
+ * consumer downstream (`.sort((a,b) => a.date.localeCompare(b.date))`, `Map` keyed by `d.date`,
+ * `parseISO(d.date)`) assumes a valid string. One bad entry must not be able to throw and take
+ * the whole `/api/data` response — or the whole dashboard render — down with it. Mutates and
+ * returns the same object; never throws.
+ */
+export function sanitizeStatsCache(sc: StatsCache): StatsCache {
+  sc.dailyActivity = (sc.dailyActivity ?? []).filter(d => typeof d?.date === 'string' && d.date.length > 0)
+  sc.dailyModelTokens = (sc.dailyModelTokens ?? []).filter(d => typeof d?.date === 'string' && d.date.length > 0)
+  return sc
+}
+
 /** An empty statsCache with all zero/neutral fields. Pure. */
 export function emptyStatsCache(): StatsCache {
   return {

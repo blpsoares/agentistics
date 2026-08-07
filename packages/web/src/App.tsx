@@ -17,6 +17,7 @@ import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
 import type { TagDef } from './lib/tagMatch'
+import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
 import type { Filters, HarnessId, HealthIssue, TeamConfig } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
 import { formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
@@ -1270,6 +1271,16 @@ export default function AppLayout() {
     projects: [],
     models: [],
   })
+
+  // "Create tag with these filters" — only offered once the active filters actually map to
+  // something a tag can be built from (see filtersToTag.ts). The drawer opens on /tags pre-filled;
+  // TagsPage reads `draftFromFilters` from router state the same way it already reads `editTagId`.
+  const createTagFromFilters = useMemo(
+    () => (canCreateTagFromFilters(filters, { central: isCentral })
+      ? () => navigate('/tags', { state: { draftFromFilters: filtersToTagDraft(filters, { central: isCentral }) } })
+      : undefined),
+    [filters, isCentral, navigate],
+  )
   const [infoModalIndex, setInfoModalIndex] = useState<number | null>(null)
   const [pdfDirectExportRange, setPdfDirectExportRange] = useState<string | null>(null)
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
@@ -1347,6 +1358,15 @@ export default function AppLayout() {
   const collapseFilters = () => { setFiltersClip(true); setFiltersCollapsed(true) }
   const expandFilters = () => { setFiltersClip(true); setFiltersCollapsed(false) }
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
+  // Whether the full UpdateModal (a blocking, position:fixed/inset:0/z-9999 dialog) is open.
+  // Separate from `updateInfo` on purpose: the version CHECK is automatic, but the MODAL must
+  // never be — it sits on top of every drawer/popover in the app (all under z-index 2000), so an
+  // update firing while a user has, say, the "New tag" source picker open silently eats every
+  // click on the page with no visual cue on a dark theme (a 65%-black blur over an already
+  // near-black background reads as almost no change). `updateInfo` still drives the toast/bell
+  // (see the effect below) — that is the correct passive surface. The modal is opt-in, reached by
+  // clicking that toast/bell entry (see the 'agentistics:open-update-modal' listener).
+  const [showUpdateModal, setShowUpdateModal] = useState(false)
   // First-run archive consent gate: undefined = prefs not loaded, null = loaded but
   // not yet chosen (blocks the app), ArchiveMode = chosen.
   const [archiveChoice, setArchiveChoice] = useState<ArchiveMode | null | undefined>(undefined)
@@ -1523,8 +1543,9 @@ export default function AppLayout() {
       .then(r => r.ok ? r.json() : null)
       .then((info: { current: string; latest: string; hasUpdate: boolean } | null) => {
         if (info?.hasUpdate) {
+          // Only the passive surfaces (toast + bell) fire automatically. The blocking modal
+          // opens on demand — see `showUpdateModal` above.
           setUpdateInfo({ current: info.current, latest: info.latest })
-          // Also surface it in the toast + bell (once per detected version).
           if (notifiedVersionRef.current !== info.latest) {
             notifiedVersionRef.current = info.latest
             pushNotification({ type: 'info', code: 'app.update_available', meta: { version: info.latest } })
@@ -1532,6 +1553,13 @@ export default function AppLayout() {
         }
       })
       .catch(() => {})
+  }, [])
+
+  // The update toast/bell entry dispatches this to open the full modal on click.
+  useEffect(() => {
+    const handler = () => setShowUpdateModal(true)
+    window.addEventListener('agentistics:open-update-modal', handler)
+    return () => window.removeEventListener('agentistics:open-update-modal', handler)
   }, [])
 
   useEffect(() => {
@@ -2264,6 +2292,7 @@ export default function AppLayout() {
                   machines={machinesList}
                   tags={tagsList}
                   canFilterMembers={canFilterMembers}
+                  onCreateTagFromFilters={createTagFromFilters}
                 />
                 {/* Collapse handle */}
                 <button
@@ -2360,6 +2389,7 @@ export default function AppLayout() {
                 machines={machinesList}
                 tags={tagsList}
                 canFilterMembers={canFilterMembers}
+                onCreateTagFromFilters={createTagFromFilters}
               />
             </div>
 
@@ -2560,15 +2590,16 @@ export default function AppLayout() {
         />
       )}
 
-      {/* Update available modal */}
-      {updateInfo && (
+      {/* Update available modal — opt-in only, opened via the toast/bell (see
+          'agentistics:open-update-modal'). Never auto-opens: see `showUpdateModal` above. */}
+      {updateInfo && showUpdateModal && (
         <UpdateModal
           current={updateInfo.current}
           latest={updateInfo.latest}
           lang={lang}
           isCentral={isCentral}
           isMember={isMember}
-          onClose={() => setUpdateInfo(null)}
+          onClose={() => setShowUpdateModal(false)}
         />
       )}
 

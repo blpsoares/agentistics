@@ -192,7 +192,12 @@ export async function parseSessionJsonl(
       if (!cwd) cwd = e.cwd
       lastCwd = e.cwd
     }
-    const ts = e.timestamp as string | undefined
+    // `as string` alone is a compile-time promise only — a malformed transcript line can carry a
+    // number here just as Kimi's state.json did for its own timestamp fields (see
+    // isoFromKimiTime/normalizeSessionTimes), and every consumer downstream calls a string method
+    // on `startTime`/`endTime` (parseISO, .slice, .localeCompare). Verify the runtime type here,
+    // at the one place this value enters the pipeline, rather than trusting it all the way down.
+    const ts = typeof e.timestamp === 'string' ? e.timestamp : undefined
     let turnEvent: TurnEvent | null = null
     if (ts) {
       if (!startTime) startTime = ts

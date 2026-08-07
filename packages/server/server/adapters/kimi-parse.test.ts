@@ -189,6 +189,34 @@ test('an ISO createdAt is passed through untouched', () => {
   expect(s.start_time).toBe('2026-08-05T14:01:24.097Z')
 })
 
+// Same trap, the sibling field: `updatedAt` is written by the same Kimi CLI in the same state.json
+// and is exactly as likely to be an epoch number — measured on this same live machine: 10 of 11
+// session files had a numeric `updatedAt`. It was declared `string` only and read raw (skipping
+// `isoFromKimiTime`), so a numeric `end_time` reached SessionMeta and crashed `parseISO` on the
+// frontend — the same class of bug as createdAt, caught a second time instead of fixed once.
+test('an epoch-number updatedAt becomes an ISO end_time', () => {
+  const state = parseKimiState(JSON.stringify({
+    createdAt: '2026-08-05T14:01:24.097Z',
+    updatedAt: 1785940839984,
+    workDir: '/repo',
+    agents: { main: { type: 'main' } },
+  }))
+  const s = buildKimiSession('abc', state, wireWithOnePrompt(), '/repo')!
+  expect(typeof s.end_time).toBe('string')
+  expect(s.end_time).toBe(new Date(1785940839984).toISOString())
+})
+
+test('an ISO updatedAt is passed through untouched', () => {
+  const state = parseKimiState(JSON.stringify({
+    createdAt: '2026-08-05T14:01:24.097Z',
+    updatedAt: '2026-08-05T14:05:00.000Z',
+    workDir: '/repo',
+    agents: { main: { type: 'main' } },
+  }))
+  const s = buildKimiSession('abc', state, wireWithOnePrompt(), '/repo')!
+  expect(s.end_time).toBe('2026-08-05T14:05:00.000Z')
+})
+
 // Shape verified against a live wire.jsonl AND against the tool schema Kimi itself sends to the
 // model (`llm.tools_snapshot`): Bash declares `properties.command` — "The command to execute."
 test('counts kimi git commands from the Bash tool call', () => {

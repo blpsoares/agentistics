@@ -114,7 +114,15 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
               const { title, message } = resolveNotification(n, lang)
               // A notification about a decision opens that decision — see `notificationLink`.
               const link = notificationLink(n)
-              const go = () => { if (!link) return; setOpen(false); navigate(link) }
+              // The update notification isn't a route — it opens the (opt-in only, see App.tsx)
+              // UpdateModal via the same custom-event handoff TtyChat uses for its own open trigger.
+              const isUpdate = n.code === 'app.update_available'
+              const clickable = link !== null || isUpdate
+              const go = () => {
+                setOpen(false)
+                if (isUpdate) { window.dispatchEvent(new CustomEvent('agentistics:open-update-modal')); return }
+                if (link) navigate(link)
+              }
               return (
                 // THE WHOLE ROW is the link, not a box inside it. The handler used to sit on the
                 // inner text block, so a click on the row's padding, its icon or the timestamp
@@ -122,16 +130,16 @@ export function NotificationBell({ lang, buttonStyle }: Props) {
                 // the link reads as "clicking the notification does nothing".
                 <div
                   key={n.id}
-                  role={link ? 'button' : undefined}
-                  tabIndex={link ? 0 : undefined}
-                  onClick={link ? go : undefined}
-                  onKeyDown={link ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go() } }) : undefined}
-                  onMouseEnter={link ? (e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-elevated)' }) : undefined}
-                  onMouseLeave={link ? (e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent' }) : undefined}
+                  role={clickable ? 'button' : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onClick={clickable ? go : undefined}
+                  onKeyDown={clickable ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go() } }) : undefined}
+                  onMouseEnter={clickable ? (e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-elevated)' }) : undefined}
+                  onMouseLeave={clickable ? (e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent' }) : undefined}
                   style={{
                     display: 'flex', alignItems: 'flex-start', gap: 9,
                     padding: '10px 12px', borderBottom: '1px solid var(--border)',
-                    background: 'transparent', cursor: link ? 'pointer' : undefined,
+                    background: 'transparent', cursor: clickable ? 'pointer' : undefined,
                   }}
                 >
                   <Icon size={15} color={color} style={{ flexShrink: 0, marginTop: 1 }} />

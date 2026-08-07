@@ -1,8 +1,20 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
 import { calcStreak, calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, resolveMachineCacheScope, distinctHarnesses, mergeStatsCaches, repoShortName, HARNESS_ORDER } from '@agentistics/core'
-import { subDays, isAfter, isBefore, parseISO, startOfDay, endOfDay, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
+import { subDays, isAfter, isBefore, parseISO, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 import { makeTagFilter, type TagDef } from '../lib/tagMatch'
+
+/**
+ * True only for a non-empty string. `start_time`/`end_time`/`date` fields are typed as `string`
+ * but that is a compile-time promise only — a malformed record from an external file (a raw
+ * `stats-cache.json`, a harness adapter) can carry a number, a Date, or null at runtime. A bare
+ * `!!x` truthy check lets any of those through unchanged, and `parseISO`/`format`/`getDay` then
+ * throw deep inside date-fns ("e.split is not a function") — taking the whole render tree down
+ * with it, since there is no boundary between "no date" and "wrong-shaped date" otherwise.
+ */
+function isDateStr(x: unknown): x is string {
+  return typeof x === 'string' && x.length > 0
+}
 
 export interface StageProgress {
   progress: number
@@ -205,16 +217,44 @@ export function useData() {
   return { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval }
 }
 
+/** Start (00:00:00.000) of a Date's UTC calendar day. */
+function utcStartOfDay(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0))
+}
+/** End (23:59:59.999) of a Date's UTC calendar day. */
+function utcEndOfDay(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999))
+}
+/** Parse a `yyyy-MM-dd` string as a UTC calendar date, never through the browser's local
+ *  timezone — `parseISO('2026-07-23')` returns LOCAL midnight, which is a different instant
+ *  (and can even be a different UTC calendar day) depending on where the browser sits. */
+function utcDateFromDayStr(dayStr: string): Date {
+  const [y, m, d] = dayStr.split('-').map(Number)
+  return new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1))
+}
+
+/**
+ * Day boundaries are computed in UTC, matching `sessionDay()` (`@agentistics/core`) — the
+ * function that buckets Claude's own `dailyActivity`/`dailyModelTokens` rollup via a plain
+ * `.slice(0, 10)` on the ISO `start_time` (always UTC, since that's what the trailing `Z` means).
+ * Using the browser's LOCAL day boundary here instead — the previous behavior — made "a day"
+ * mean two different 24h windows depending on which screen read it: a date-filtered dashboard KPI
+ * (sourced from that UTC-bucketed rollup, see `filteredDailyModelTokens` below) and a Compare-page
+ * total for the same nominal day (this function, filtering raw sessions) could disagree by up to a
+ * timezone's width of sessions near midnight — enough, since cache tokens dominate the total, to
+ * make one screen report billions more or fewer tokens than the other for what a user picked as
+ * "the same day". Aligning everything here to UTC is what makes every screen agree.
+ */
 export function getDateRangeFilter(dateRange: DateRange, customStart?: string, customEnd?: string) {
-  const now = endOfDay(new Date())
-  if (dateRange === '7d') return { start: startOfDay(subDays(now, 7)), end: now }
-  if (dateRange === '30d') return { start: startOfDay(subDays(now, 30)), end: now }
-  if (dateRange === '90d') return { start: startOfDay(subDays(now, 90)), end: now }
+  const now = utcEndOfDay(new Date())
+  if (dateRange === '7d') return { start: utcStartOfDay(subDays(now, 7)), end: now }
+  if (dateRange === '30d') return { start: utcStartOfDay(subDays(now, 30)), end: now }
+  if (dateRange === '90d') return { start: utcStartOfDay(subDays(now, 90)), end: now }
   // 'all' sem datas customizadas → histórico completo
   if (dateRange === 'all' && !customStart && !customEnd) return { start: new Date(0), end: now }
   // 'all' com datas customizadas (ou qualquer outro caso) → aplica intervalo personalizado
-  const start = customStart ? startOfDay(parseISO(customStart)) : new Date(0)
-  const end = customEnd ? endOfDay(parseISO(customEnd)) : now
+  const start = customStart ? utcStartOfDay(utcDateFromDayStr(customStart)) : new Date(0)
+  const end = customEnd ? utcEndOfDay(utcDateFromDayStr(customEnd)) : now
   return { start, end }
 }
 
@@ -354,7 +394,7 @@ export function summarizeSessions(list: SessionMeta[], hasCost: boolean, hasToke
     }
 
     // day-of-week + daily activity
-    if (s.start_time) {
+    if (isDateStr(s.start_time)) {
       const dow = getDay(parseISO(s.start_time))
       dowCounts[dow] = (dowCounts[dow] ?? 0) + 1
       const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
@@ -497,7 +537,7 @@ export function claudeSummaryFromStatsCache(
   let claudeGapMessages = 0
   for (const s of gapSessions) {
     if ((s.harness ?? 'claude') !== 'claude') continue
-    if (!s.start_time) continue
+    if (!isDateStr(s.start_time)) continue
     const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
     if (!allDailyDates.has(day)) {
       claudeGapSessions += 1
@@ -533,12 +573,14 @@ export function claudeSummaryFromStatsCache(
   // Claude: dow from sc.dailyActivity
   const claudeDowCounts = Array.from({ length: 7 }, () => 0)
   for (const d of sc.dailyActivity ?? []) {
+    if (!isDateStr(d.date)) continue
     const dow = getDay(parseISO(d.date))
     claudeDowCounts[dow] = (claudeDowCounts[dow] ?? 0) + d.sessionCount
   }
 
   // Claude: daily activity for sparkline
   const claudeDailyActivity = (sc.dailyActivity ?? [])
+    .filter(d => isDateStr(d.date))
     .map(d => ({ date: d.date, sessions: d.sessionCount }))
     .sort((a, b) => a.date.localeCompare(b.date))
 
@@ -653,7 +695,7 @@ export function computeFilteredHarnessSummaries(data: AppData, filters: Filters)
     ),
     harnessSel
   ).filter(s => {
-    if (!s.start_time) return false
+    if (!isDateStr(s.start_time)) return false
     const d = parseISO(s.start_time)
     if (d < start || d > end) return false
     if (projects.length > 0 && !projectSet.has(s.project_path)) return false
@@ -891,15 +933,15 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
 
     // Filter daily activity (date-range only — no project granularity in statsCache)
     const filteredDailyActivity = (effectiveStatsCache.dailyActivity ?? []).filter(d =>
-      inRange(parseISO(d.date), start, end)
+      isDateStr(d.date) && inRange(parseISO(d.date), start, end)
     )
     const filteredDailyModelTokens = (effectiveStatsCache.dailyModelTokens ?? []).filter(d =>
-      inRange(parseISO(d.date), start, end)
+      isDateStr(d.date) && inRange(parseISO(d.date), start, end)
     )
 
     // Shared date predicate — reused for filteredSessions and nonClaudeInRange
     const inDateRange = (s: { start_time?: string }) =>
-      !!s.start_time && inRange(parseISO(s.start_time), start, end)
+      isDateStr(s.start_time) && inRange(parseISO(s.start_time), start, end)
 
     // Filter sessions (date + projects + model)
     const filteredSessions = harnessSessions.filter(s => {
@@ -924,7 +966,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     const dailyActivityDates = new Set(filteredDailyActivity.map(d => d.date))
     const supplementByDay: Record<string, { messageCount: number; sessionCount: number; toolCallCount: number }> = {}
     for (const s of filteredSessions) {
-      if (!s.start_time) continue
+      if (!isDateStr(s.start_time)) continue
       const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
       if (dailyActivityDates.has(day)) continue // already covered by statsCache
       if (!supplementByDay[day]) supplementByDay[day] = { messageCount: 0, sessionCount: 0, toolCallCount: 0 }
@@ -970,7 +1012,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       let claudeGap = 0
       for (const s of harnessSessions) {
         if ((s.harness ?? 'claude') !== 'claude') continue
-        if (!s.start_time) continue
+        if (!isDateStr(s.start_time)) continue
         const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
         if (!allDailyDates.has(day)) claudeGap += 1
       }
@@ -1010,21 +1052,21 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       ? (() => {
           const set = new Set<string>()
           for (const s of filteredSessions) {
-            if (!s.start_time) continue
+            if (!isDateStr(s.start_time)) continue
             if (s.user_message_timestamps?.length) {
               for (const ts of s.user_message_timestamps) {
-                set.add(format(parseISO(ts), 'yyyy-MM-dd'))
+                if (isDateStr(ts)) set.add(format(parseISO(ts), 'yyyy-MM-dd'))
               }
             } else {
               set.add(format(parseISO(s.start_time), 'yyyy-MM-dd'))
-              if (s.end_time) set.add(format(parseISO(s.end_time), 'yyyy-MM-dd'))
+              if (isDateStr(s.end_time)) set.add(format(parseISO(s.end_time), 'yyyy-MM-dd'))
             }
           }
           return set
         })()
       : new Set([
           ...(effectiveStatsCache.dailyActivity ?? []).map(d => d.date),
-          ...(harnessSessions ?? []).filter(s => s.start_time).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')),
+          ...(harnessSessions ?? []).filter(s => isDateStr(s.start_time)).map(s => format(parseISO(s.start_time), 'yyyy-MM-dd')),
         ])
     const streak = calcStreak(activeDates)
     const streakLastActiveDate = streak === 0 && activeDates.size > 0
@@ -1038,17 +1080,17 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     // Project filter IS applied so the breakdown only shows projects in the active filter.
     const projectDateMap: Record<string, Set<string>> = {}
     for (const sess of harnessSessions) {
-      if (!sess.project_path || !sess.start_time) continue
+      if (!sess.project_path || !isDateStr(sess.start_time)) continue
       if (projectFiltered && !projectSet.has(sess.project_path)) continue
       if (modelSet && (!sess.model || !modelSet.has(sess.model))) continue
       const dates = projectDateMap[sess.project_path] ?? (projectDateMap[sess.project_path] = new Set())
       if (sess.user_message_timestamps?.length) {
         for (const ts of sess.user_message_timestamps) {
-          dates.add(format(parseISO(ts), 'yyyy-MM-dd'))
+          if (isDateStr(ts)) dates.add(format(parseISO(ts), 'yyyy-MM-dd'))
         }
       } else {
         dates.add(format(parseISO(sess.start_time), 'yyyy-MM-dd'))
-        if (sess.end_time) dates.add(format(parseISO(sess.end_time), 'yyyy-MM-dd'))
+        if (isDateStr(sess.end_time)) dates.add(format(parseISO(sess.end_time), 'yyyy-MM-dd'))
       }
     }
     // Streak day breakdown: which projects were active on each day of the current streak
@@ -1074,7 +1116,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       // dailyActivity here made longestStreak count days from the whole Claude history.
       if (cacheBlindScope || nonClaudeHarness) {
         for (const s of (cacheBlindScope ? filteredSessions : harnessSessions)) {
-          if (!s.start_time) continue
+          if (!isDateStr(s.start_time)) continue
           if (projectFiltered && !projectSet.has(s.project_path)) continue
           if (modelSet && (!s.model || !modelSet.has(s.model))) continue
           if (s.user_message_timestamps?.length) {
@@ -1083,7 +1125,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
             }
           } else {
             set.add(format(parseISO(s.start_time), 'yyyy-MM-dd'))
-            if (s.end_time) set.add(format(parseISO(s.end_time), 'yyyy-MM-dd'))
+            if (isDateStr(s.end_time)) set.add(format(parseISO(s.end_time), 'yyyy-MM-dd'))
           }
         }
       } else {
@@ -1101,7 +1143,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     if (sessionFiltered) {
       const byDay: Record<string, { value: number; sessions: number; tools: number }> = {}
       for (const s of filteredSessions) {
-        if (!s.start_time) continue
+        if (!isDateStr(s.start_time)) continue
         const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
         if (!byDay[day]) byDay[day] = { value: 0, sessions: 0, tools: 0 }
         byDay[day].value += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
@@ -1115,7 +1157,7 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
         heatmapByDay[d.date] = { value: d.messageCount, sessions: d.sessionCount, tools: d.toolCallCount }
       }
       for (const s of nonClaudeInRange) {
-        if (!s.start_time) continue
+        if (!isDateStr(s.start_time)) continue
         const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
         if (!heatmapByDay[day]) heatmapByDay[day] = { value: 0, sessions: 0, tools: 0 }
         heatmapByDay[day].value += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
