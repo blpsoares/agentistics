@@ -139,6 +139,9 @@ export interface CliStrings {
   optRebuildDockerHint: string
   archiveUnsetHint: string
   dockerStartFailed: string
+  /** A local (native) restart/rebuild whose health check never came back — the old process is
+   *  gone but the new one never bound the port (crash on boot, port already taken, …). */
+  localStartFailed: string
   centralStarted: string
   centralFailed: string
   centralInitDone: string
@@ -277,6 +280,7 @@ const EN: CliStrings = {
   optRebuildDockerHint: 'rebuild the image and recreate the container',
   archiveUnsetHint: 'history preservation is still unset — see the Setup tab',
   dockerStartFailed: 'the machine container did not start.',
+  localStartFailed: 'the local server did not come back up.',
   centralStarted: 'agentistics central is up.',
   centralFailed: 'the central did not start.',
   centralInitDone: 'central configured.',
@@ -411,6 +415,7 @@ const PT: CliStrings = {
   optRebuildDockerHint: 'reconstrói a imagem e recria o container',
   archiveUnsetHint: 'a preservação do histórico ainda não foi definida — veja a aba Setup',
   dockerStartFailed: 'o container da máquina não subiu.',
+  localStartFailed: 'o server local não voltou a rodar.',
   centralStarted: 'agentistics central está no ar.',
   centralFailed: 'a central não subiu.',
   centralInitDone: 'central configurada.',

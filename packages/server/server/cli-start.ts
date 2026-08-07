@@ -744,7 +744,11 @@ interface RestartMode extends RunMode {
   flags?: RebuildFlags
 }
 
-async function restartLocalSvc(s: CliStrings, mode: RestartMode = {}): Promise<void> {
+/** Returns whether the local server actually came back up. `startBackground` is fire-and-forget
+ *  by design (it detaches and returns immediately) — without polling the health endpoint here, a
+ *  freshly (re)compiled binary that crashes on boot, or a port still held by the process just
+ *  killed, was reported as a successful restart with nothing left listening. */
+async function restartLocalSvc(s: CliStrings, mode: RestartMode = {}): Promise<boolean> {
   // With a rebuild, actually rebuild the native binary (web + embedded assets) so the restart
   // serves the new frontend/code — not just bounce the old build. Needs the repo checkout.
   if (mode.rebuild) {
@@ -756,6 +760,17 @@ async function restartLocalSvc(s: CliStrings, mode: RestartMode = {}): Promise<v
   process.stdout.write(`  ${D}${s.restartingLocal}${R}\n`)
   await stopLocal(s)
   const log = startBackground()
+  // A fresh compile + boot can take longer than the plain bounce this loop also covers, so it
+  // gets more headroom than `stopLocal`'s symmetric wait-for-down loop (20 * 150ms).
+  let up = false
+  for (let i = 0; i < 40; i++) {
+    if (await isServerRunning()) { up = true; break }
+    await sleep(250)
+  }
+  if (!up) {
+    process.stderr.write(`  ${YE}${s.localStartFailed}${R}\n`)
+    return false
+  }
   // `agentop restart --all` is a plain CLI command with no screen to report into, and it is the one
   // caller of this that the user is watching. `startBackground` fell silent when the control center
   // took it over — which left that command saying "restarted" and never where the server now is or
@@ -765,6 +780,7 @@ async function restartLocalSvc(s: CliStrings, mode: RestartMode = {}): Promise<v
     `  ${D}${s.webLabel}:${R}  ${CY}http://localhost:${WEB_PORT}${R}\n` +
     `  ${D}${s.logsLabel}:${R} ${log}\n`,
   )
+  return true
 }
 /** Returns whether the central actually came back up — a non-zero exit here means the old
  *  container (or none at all) is what's left running, and that must never be reported as a
@@ -834,7 +850,7 @@ async function restartRuntimes(
   mode: RestartMode = {},
 ): Promise<boolean> {
   let ok = true
-  if (targets.includes('local')) await restartLocalSvc(s, mode)
+  if (targets.includes('local')) ok = (await restartLocalSvc(s, mode)) && ok
   if (targets.includes('central')) ok = (await restartCentralSvc(s, mode)) && ok
   if (targets.includes('machine')) ok = (await restartMachineSvc(s, mode)) && ok
   return ok
@@ -875,8 +891,8 @@ export async function restartNativeServer(
   if (!(await isRuntimeUp('local'))) {
     return { ok: false, message: s.nothingRunning }
   }
-  await restartLocalSvc(s, { rebuild, flags })
-  return { ok: true, message: s.restartedDone }
+  const ok = await restartLocalSvc(s, { rebuild, flags })
+  return ok ? { ok: true, message: s.restartedDone } : { ok: false, message: s.localStartFailed }
 }
 
 export async function restartAllServices(rebuild = false, flags: RebuildFlags = {}): Promise<number> {
