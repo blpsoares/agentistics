@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals } from './useData'
 import { mergeStatsCaches } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
 import type { SessionMeta } from '@agentistics/core'
@@ -120,17 +120,29 @@ describe('getDateRangeFilter', () => {
     expect(diffDays).toBeLessThan(91.1)
   })
 
-  test('"all" com datas customizadas → usa as datas fornecidas', () => {
+  test('"all" com datas customizadas → usa as datas fornecidas (dia calendário em UTC)', () => {
+    // UTC, não fuso local — ver o comentário em getDateRangeFilter: precisa bater com sessionDay(),
+    // que fatia a string ISO crua (`.slice(0, 10)`, sempre UTC).
     const { start, end } = getDateRangeFilter('all', '2026-01-01', '2026-03-31')
-    expect(start.getFullYear()).toBe(2026)
-    expect(start.getMonth()).toBe(0) // janeiro
-    expect(end.getMonth()).toBe(2)   // março
+    expect(start.getUTCFullYear()).toBe(2026)
+    expect(start.getUTCMonth()).toBe(0) // janeiro
+    expect(start.getUTCDate()).toBe(1)
+    expect(start.getUTCHours()).toBe(0)
+    expect(end.getUTCMonth()).toBe(2)   // março
+    expect(end.getUTCDate()).toBe(31)
+    expect(end.getUTCHours()).toBe(23)
   })
 
   test('customStart sem customEnd → end é agora', () => {
     const { start, end } = getDateRangeFilter('all', '2025-01-01')
-    expect(start.getFullYear()).toBe(2025)
+    expect(start.getUTCFullYear()).toBe(2025)
     expect(end.getTime()).toBeGreaterThan(Date.now() - 1000)
+  })
+
+  test('um dia customizado (start === end) cobre exatamente esse dia calendário UTC', () => {
+    const { start, end } = getDateRangeFilter('all', '2026-07-23', '2026-07-23')
+    expect(start.toISOString()).toBe('2026-07-23T00:00:00.000Z')
+    expect(end.toISOString()).toBe('2026-07-23T23:59:59.999Z')
   })
 
   test('start sempre antes de end', () => {
@@ -571,6 +583,20 @@ describe('computeHarnessSummaries — dowCounts and peakDow', () => {
     const summaries = computeHarnessSummaries(data)
     expect(summaries['codex']!.dowCounts.length).toBe(7)
   })
+
+  // Real-world trap: a harness adapter can write start_time/end_time as an epoch NUMBER instead
+  // of a string (found live — the Kimi adapter's `updatedAt`). `!!s.start_time` alone is not
+  // enough to guard against this since a nonzero number is truthy; parseISO() then throws
+  // ("e.split is not a function") deep inside date-fns and takes the whole render down with it.
+  test('a session with a numeric start_time does not throw', () => {
+    const s = makeSession('s1', '2026-06-08T09:00:00Z')
+    const malformed = { ...s, start_time: 1785939883717 as unknown as string }
+    const data = makeData([s, malformed])
+    expect(() => computeHarnessSummaries(data)).not.toThrow()
+    const summaries = computeHarnessSummaries(data)
+    // Only the well-formed session is counted into dowCounts; the malformed one is skipped.
+    expect(summaries['codex']!.dowCounts[1]).toBe(1)
+  })
 })
 
 describe('computeHarnessSummaries — peakTokenDay and peakSessionCost', () => {
@@ -792,6 +818,36 @@ describe('computeHarnessSummaries — dailyActivity', () => {
     expect(daily[0]!.sessions).toBe(2)
     expect(daily[1]!.sessions).toBe(1)
     expect(daily[2]!.sessions).toBe(1)
+  })
+
+  test('claude: a dailyActivity entry with no date does not throw and is skipped', () => {
+    const data: import('@agentistics/core').AppData = {
+      statsCache: {
+        version: 1,
+        lastComputedDate: '2026-06-12',
+        dailyActivity: [
+          { date: '2026-06-10', messageCount: 4, sessionCount: 1, toolCallCount: 2 },
+          // Malformed entry — no `date`. Must be skipped, never crash parseISO/localeCompare.
+          { date: undefined as unknown as string, messageCount: 3, sessionCount: 1, toolCallCount: 1 },
+        ],
+        dailyModelTokens: [],
+        modelUsage: {},
+        totalSessions: 2,
+        totalMessages: 7,
+        longestSession: { sessionId: 'x', duration: 0, messageCount: 0, timestamp: '2026-06-10T00:00:00Z' },
+        firstSessionDate: '2026-06-10',
+        hourCounts: {},
+        totalSpeculationTimeSavedMs: 0,
+      },
+      sessions: [],
+      projects: [],
+      allSessions: [],
+      harnesses: ['claude'],
+    }
+    expect(() => computeHarnessSummaries(data)).not.toThrow()
+    const summaries = computeHarnessSummaries(data)
+    const daily = summaries['claude']!.dailyActivity
+    expect(daily.map(d => d.date)).toEqual(['2026-06-10'])
   })
 })
 
@@ -1137,5 +1193,33 @@ describe('pickLongestSession', () => {
 
   test('empty input yields null, not a crash', () => {
     expect(pickLongestSession([]).session).toBeNull()
+  })
+})
+
+describe('repositoryGitTotals', () => {
+  const P = (path: string, commits: number) => ({
+    path,
+    git_stats: { commits, lines_added: commits * 10, lines_removed: commits, files_modified: commits * 2 },
+  })
+
+  test('sums every project when nothing narrows the scope', () => {
+    expect(repositoryGitTotals([P('/a', 3), P('/b', 4)], null, false)?.commits).toBe(7)
+  })
+
+  test('sums only the scoped projects', () => {
+    expect(repositoryGitTotals([P('/a', 3), P('/b', 4)], ['/b'], false)?.commits).toBe(4)
+  })
+
+  test('is UNDEFINED under a harness filter — a git log belongs to no harness', () => {
+    expect(repositoryGitTotals([P('/a', 3)], null, true)).toBeUndefined()
+  })
+
+  test('is undefined, never zero, when no project in scope is a git repo', () => {
+    expect(repositoryGitTotals([{ path: '/a' }], null, false)).toBeUndefined()
+    expect(repositoryGitTotals([P('/a', 3)], ['/missing'], false)).toBeUndefined()
+  })
+
+  test('a project with no stats is skipped, not counted as zero', () => {
+    expect(repositoryGitTotals([P('/a', 3), { path: '/b' }], null, false)?.commits).toBe(3)
   })
 })

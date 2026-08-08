@@ -60,6 +60,11 @@ interface Props {
    *  only sees their own scoped data, so those dimensions are hidden for them. Defaults to true
    *  (solo/non-central usage where the concept doesn't apply). */
   canFilterMembers?: boolean
+  /** Shows "Create tag with these filters" next to "+ Filter" when provided. The caller (App.tsx)
+   *  decides whether the CURRENT filters map to anything a tag can be built from — see
+   *  `canCreateTagFromFilters` in lib/filtersToTag.ts — and omits this entirely otherwise, so
+   *  FiltersBar itself stays filter-domain-only and never needs to know what a tag is. */
+  onCreateTagFromFilters?: () => void
 }
 
 const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [
@@ -91,7 +96,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true }: Props) {
+export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -328,6 +333,29 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             </button>
           )}
         </div>
+
+        {/* "Create tag with these filters" — only rendered when the caller has already decided the
+            current filters map to a usable tag draft (see canCreateTagFromFilters). FiltersBar
+            itself never computes that; it just shows the button and fires the callback. */}
+        {onCreateTagFromFilters && (
+          <button
+            onClick={onCreateTagFromFilters}
+            title={lang === 'pt' ? 'Criar tag com esses filtros' : 'Create tag with these filters'}
+            style={{
+              ...CTL,
+              gap: 5,
+              width: isMobile ? '100%' : undefined,
+              justifyContent: isMobile ? 'center' : undefined,
+              border: '1px solid var(--border)',
+              background: 'transparent',
+              color: 'var(--text-secondary)',
+              flexShrink: 0,
+            }}
+          >
+            <TagIcon size={12} style={{ flexShrink: 0 }} />
+            <span>{lang === 'pt' ? 'Criar tag' : 'Create tag'}</span>
+          </button>
+        )}
 
         {/* + Filter — single entry point for all dimension filters (members/harnesses/
             presence/repos/projects/models). Clicking it opens a menu of the AVAILABLE

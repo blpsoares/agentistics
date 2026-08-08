@@ -1,5 +1,6 @@
 import type { SessionMeta, TurnEvent } from '@agentistics/core'
 import { activeMinutesOf } from '@agentistics/core'
+import { canonicalTool, countGitCommands } from '../harness-activity'
 
 /** Pure: parse a Codex rollout JSONL string into a normalized SessionMeta.
  *  Returns null when the content has no usable lines. */
@@ -22,6 +23,7 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
   const messageHours: number[] = []
   const userMessageTimestamps: string[] = []
   const toolCounts: Record<string, number> = {}
+  let gitCommits = 0, gitPushes = 0
   // Per-turn timeline for computeActiveTime() (docs/harness-contract.md). Codex measures each
   // turn itself: `task_complete.duration_ms`, keyed by the same turn_id as `task_started`.
   const turnEvents: TurnEvent[] = []
@@ -80,8 +82,30 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
     }
 
     if (type && type.endsWith('_call')) {
-      toolCounts[type] = (toolCounts[type] ?? 0) + 1
+      // The NAME is what a tool is; `function_call` is only the envelope it arrived in, and
+      // counting that reported every Codex tool as one indistinguishable bucket. `canonicalTool`
+      // then puts it in the same bucket as the other harnesses' equivalent.
+      const rawName = typeof data.name === 'string' && data.name ? data.name : type
+      const toolName = canonicalTool('codex', rawName)
+      toolCounts[toolName] = (toolCounts[toolName] ?? 0) + 1
       if (type === 'web_search_call') usesWebSearch = true
+
+      // The command it ran, when it ran one. `arguments` is a JSON STRING; a malformed one is
+      // skipped rather than thrown on — one unreadable call must not lose the whole session.
+      if (toolName === 'Bash' && typeof data.arguments === 'string') {
+        let cmd = ''
+        try {
+          const args = JSON.parse(data.arguments) as Record<string, unknown>
+          if (typeof args.cmd === 'string') cmd = args.cmd
+          else if (Array.isArray(args.command)) cmd = args.command.join(' ')
+          else if (typeof args.command === 'string') cmd = args.command
+        } catch { /* not JSON — nothing to count */ }
+        if (cmd) {
+          const g = countGitCommands(cmd)
+          gitCommits += g.commits
+          gitPushes += g.pushes
+        }
+      }
     }
     if (lineTs) endTime = lineTs
   }
@@ -108,8 +132,8 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
     tool_output_tokens: {},
     agent_file_reads: {},
     languages: [],
-    git_commits: 0,
-    git_pushes: 0,
+    git_commits: gitCommits,
+    git_pushes: gitPushes,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     cache_read_input_tokens: cacheRead,

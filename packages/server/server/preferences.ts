@@ -32,6 +32,10 @@ export interface Preferences {
   cardPrecision?: Record<string, boolean>
   chatModel?: string
   chatSoundEnabled?: boolean
+  /** Whether this machine serves the chat at all. ABSENT READS AS OFF — chat spawns an assistant
+   *  CLI on the host, and until it was made opt-in every machine installed for its metrics also
+   *  shipped a shell nobody had chosen. It can only ever narrow `CAPS.localChat`; see chat-gate.ts. */
+  chatEnabled?: boolean
   /** true once the user dismissed the install prompt with "don't show again".
    *  Persisted server-side (not localStorage) so it survives incognito windows. */
   installDismissed?: boolean

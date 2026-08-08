@@ -1,5 +1,38 @@
 import { describe, it, expect } from 'bun:test'
-import { sessionLabel, fmt } from './format'
+import { sessionLabel, fmt, fmtCost, fmtCostFull } from './format'
+
+describe('fmtCost', () => {
+  // A local model (see isLocalModelId/LOCAL_MODEL_PRICE in local-models.ts) prices at exactly 0 —
+  // that fact must be visible, not collapsed into the same '<R$0,05' label a real sub-cent
+  // proprietary call gets. Otherwise a free Ollama session and a genuinely (if tiny) billed one
+  // are indistinguishable in every cost breakdown, which is the one place a user could tell them apart.
+  it('renders exact zero as a real zero in BRL, not the sub-cent placeholder', () => {
+    expect(fmtCost(0, 'BRL', 5.5)).toBe('R$0,00')
+  })
+
+  it('still uses the sub-cent placeholder for a genuinely tiny nonzero BRL amount', () => {
+    expect(fmtCost(0.001, 'BRL', 5.5)).toBe('<R$0,05')
+  })
+
+  it('renders exact zero as a real zero in USD', () => {
+    expect(fmtCost(0, 'USD')).toBe('USD 0.00')
+  })
+
+  it('still uses the sub-cent placeholder for a genuinely tiny nonzero USD amount', () => {
+    expect(fmtCost(0.0001, 'USD')).toBe('<USD 0.01')
+  })
+
+  it('formats a normal BRL amount with thousands separators', () => {
+    expect(fmtCost(1000, 'BRL', 5.5)).toBe('R$5.500,00')
+  })
+})
+
+describe('fmtCostFull', () => {
+  it('renders exact zero as a real zero, not the sub-cent placeholder', () => {
+    expect(fmtCostFull(0, 'BRL', 5.5)).toBe('R$0,000000')
+    expect(fmtCostFull(0, 'USD')).toBe('USD 0.000000')
+  })
+})
 
 describe('sessionLabel', () => {
   it('prefers the title when present', () => {

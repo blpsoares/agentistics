@@ -125,6 +125,8 @@ export interface ControlStrings {
   actOpen: string
   actStopAll: string
   actRestartAll: string
+  /** Names the version, so the verb states what it is about to install. */
+  actUpgrade: (version: string) => string
   actConnect: string
   actDisconnect: string
   actHistory: string
@@ -169,6 +171,10 @@ export interface ControlStrings {
   archiveFullHint: string
   archiveOff: string
   archiveOffHint: string
+  /** The opening gate's fourth option, and what it costs. Absent from the other callers' menus. */
+  archiveLater: string
+  archiveLaterHint: string
+  archiveLaterMessage: string
   bootQuestion: string
 
   /** Logs tab. */
@@ -263,6 +269,7 @@ const EN: ControlStrings = {
   actOpen: 'Open in browser',
   actStopAll: 'Stop all',
   actRestartAll: 'Restart all',
+  actUpgrade: (v) => `Upgrade to v${v} & restart`,
   actConnect: 'Connect',
   actDisconnect: 'Disconnect',
   actHistory: 'Change',
@@ -297,6 +304,9 @@ const EN: ControlStrings = {
   archiveFullHint: 'archivist — also mirror raw transcripts so you can re-read chats (heavy)',
   archiveOff: 'off',
   archiveOffHint: "do nothing — use Claude's default 30-day cleanup",
+  archiveLater: 'decide later',
+  archiveLaterHint: 'the dashboard will require an answer before it opens',
+  archiveLaterMessage: 'History left unset — the dashboard will ask before it opens.',
   bootQuestion: 'Start it on every boot (systemd user service)?',
 
   logSource: 'SOURCE',
@@ -386,6 +396,7 @@ const PT: ControlStrings = {
   actOpen: 'Abrir no navegador',
   actStopAll: 'Parar tudo',
   actRestartAll: 'Reiniciar tudo',
+  actUpgrade: (v) => `Atualizar para v${v} e reiniciar`,
   actConnect: 'Conectar',
   actDisconnect: 'Desconectar',
   actHistory: 'Mudar',
@@ -420,6 +431,9 @@ const PT: ControlStrings = {
   archiveFullHint: 'arquivista — também espelha as transcrições cruas para reler os chats (pesado)',
   archiveOff: 'off',
   archiveOffHint: 'não fazer nada — usar a limpeza padrão de 30 dias do Claude',
+  archiveLater: 'decidir depois',
+  archiveLaterHint: 'a interface vai exigir a resposta antes de abrir',
+  archiveLaterMessage: 'Histórico sem definição — a interface vai perguntar antes de abrir.',
   bootQuestion: 'Iniciar também no boot (serviço systemd de usuário)?',
 
   logSource: 'FONTE',

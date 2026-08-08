@@ -20,6 +20,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { TEAM_CENTRAL, TEAM_PASSWORD, TEAM_SESSION_SECRET, TEAM_TLS, CENTRAL_USER } from './config'
 import { getAccount } from './accounts'
 import { CAPS, PROFILE } from './exposure'
+import { chatAllowed } from './chat-gate'
+import { readPreferences } from './preferences'
 import type { Principal } from './iam-types'
 
 // ---------------------------------------------------------------------------
@@ -309,10 +311,12 @@ export function handleLogout(_req: Request): Response {
  * aggregator. The web uses it to hide local-only UI (archive consent gate, Nay chat).
  * Public — never behind the gate.
  */
-export function handleSession(req: Request): Response {
+export async function handleSession(req: Request): Promise<Response> {
   const required = Boolean(TEAM_PASSWORD)
   const authed = isAuthed(req)
   const aggregatorOnly = TEAM_CENTRAL && !CENTRAL_USER
+  // Unreadable preferences are not consent: chat stays off rather than falling open.
+  const prefs = await readPreferences().catch(() => ({} as { chatEnabled?: boolean }))
   return new Response(
     JSON.stringify({
       authed,
@@ -329,6 +333,10 @@ export function handleSession(req: Request): Response {
         localTranscripts: CAPS.localTranscripts,
         mcpAdmin: CAPS.mcpAdmin,
       },
+      // What the chat endpoints will ACTUALLY answer: the capability AND the user's switch.
+      // Separate from `capabilities.localChat`, which stays the exposure profile's answer alone —
+      // the Settings tab has to be able to say "your profile allows this, you have it off".
+      chatEnabled: chatAllowed(CAPS.localChat, prefs.chatEnabled),
     }),
     { status: 200, headers: JSON_CT },
   )

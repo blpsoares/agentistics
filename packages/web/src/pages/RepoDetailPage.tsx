@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import type { AppContext, } from '../lib/app-context'
 import type { SessionMeta, MemberPresence, HarnessId, WorkflowRun, WorkflowAgent } from '@agentistics/core'
-import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionCostUSD, sessionLabel, NO_REPO_KEY } from '@agentistics/core'
+import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionCostUSD, sessionLabel, workflowTokens, NO_REPO_KEY } from '@agentistics/core'
 import { capable, HARNESS_LABELS, HARNESS_COLORS, DYNAMIC_WORKFLOWS_DOC } from '../lib/harness'
 import { canonicalRepoKey } from '../lib/shareRepos'
 import { PLURAL_COPY, interpolate, plural } from '../components/team/copy'
@@ -668,7 +668,7 @@ function SessionGroupCard({ group: g, pt, currency, brlRate, sessionById }: {
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
           <span><strong style={{ color: 'var(--text-primary)' }}>{g.totals.runs}</strong> {pt ? 'workflows' : 'workflows'}</span>
           <span>{g.totals.agents} {pt ? 'agentes' : 'agents'}</span>
-          <span>{fmt(g.totals.tokensIn + g.totals.tokensOut)} tok</span>
+          <span>{fmt(workflowTokens(g.totals))} tok</span>
           <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(g.totals.costUSD, currency, brlRate)}</span>
         </span>
       </div>
@@ -706,7 +706,7 @@ function WorkflowRunCard({ run, pt, currency, brlRate, sessionById }: {
   const sessTitle = s ? sessionLabel(s) : ''
   const project = s?.project_path ? formatProjectName(s.project_path) : ''
   const steps = buildWorkflowSteps(run, pt ? '(sem fase)' : '(no phase)')
-  const tok = run.totals.tokensIn + run.totals.tokensOut
+  const tok = workflowTokens(run.totals)
 
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: 'var(--bg-card)' }}>
@@ -790,7 +790,7 @@ function WorkflowRunCard({ run, pt, currency, brlRate, sessionById }: {
                     <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>{step.subtotal.count} {pt ? 'agentes' : 'agents'}</span>
                     {step.subtotal.count > 0 && (
                       <span style={{ marginLeft: 'auto', fontSize: 10.5, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                        {fmt(step.subtotal.tokensIn)} in · {fmt(step.subtotal.tokensOut)} out · <strong style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(step.subtotal.costUSD, currency, brlRate)}</strong>
+                        {fmt(workflowTokens(step.subtotal))} tok · {fmt(step.subtotal.tokensOut)} out · <strong style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(step.subtotal.costUSD, currency, brlRate)}</strong>
                       </span>
                     )}
                   </div>
@@ -819,7 +819,7 @@ function WfAgentRow({ a, pt, currency, brlRate }: { a: WorkflowAgent; pt: boolea
       {/* label grows to fill the row; tokens/cost sit in fixed right columns aligned with the header */}
       <span style={{ color: 'var(--text-primary)', fontWeight: 600, wordBreak: 'break-word', flex: 1, minWidth: 120 }}>{a.label}</span>
       {a.model && <span style={{ color: 'var(--text-tertiary)', fontSize: 10.5, flexShrink: 0 }}>{formatModel(a.model)}</span>}
-      <span style={{ width: 96, textAlign: 'right', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{fmt(a.tokensIn)}/{fmt(a.tokensOut)}</span>
+      <span style={{ width: 96, textAlign: 'right', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }} title={`${a.tokensIn.toLocaleString()} in · ${a.tokensOut.toLocaleString()} out · ${a.cacheRead.toLocaleString()} cache read · ${a.cacheWrite.toLocaleString()} cache write`}>{fmt(workflowTokens(a))}</span>
       <span style={{ width: 92, textAlign: 'right', color: 'var(--anthropic-orange)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{fmtCost(a.costUSD, currency, brlRate)}</span>
       {a.toolStats && (
         <span style={{ flexBasis: '100%', paddingLeft: 20, color: 'var(--text-tertiary)', fontSize: 10.5 }}>

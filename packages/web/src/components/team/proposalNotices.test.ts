@@ -286,7 +286,7 @@ describe('nextNoticeFocus — the bell must open the notices EVERY time, not onc
     const src = readFileSync(join(import.meta.dir, '../NotificationBell.tsx'), 'utf8')
     const rowStart = src.indexOf('notes.map(n =>')
     const row = src.slice(rowStart, src.indexOf('</div>', src.indexOf('<Icon')))
-    expect(row).toContain('onClick={link ? go : undefined}')
+    expect(row).toContain('onClick={clickable ? go : undefined}')
     // …and the per-row delete button must not navigate on its way out.
     expect(src).toContain('stopPropagation')
   })

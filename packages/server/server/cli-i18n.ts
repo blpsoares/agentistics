@@ -59,6 +59,9 @@ export interface CliStrings {
   rebuildNoCache: string
   restartedAll: string
   restartedDone: string
+  /** A central/machine restart or rebuild whose docker command failed — the old (or no) container
+   *  is what's actually running, and this replaces a false "restarted" banner. */
+  restartFailed: string
   noComposeFrom: (dir: string) => string
   runFromRepo: string
   buildingMachine: string
@@ -136,6 +139,9 @@ export interface CliStrings {
   optRebuildDockerHint: string
   archiveUnsetHint: string
   dockerStartFailed: string
+  /** A local (native) restart/rebuild whose health check never came back — the old process is
+   *  gone but the new one never bound the port (crash on boot, port already taken, …). */
+  localStartFailed: string
   centralStarted: string
   centralFailed: string
   centralInitDone: string
@@ -150,6 +156,8 @@ export interface CliStrings {
   soloSet: string
   archiveSet: (mode: string) => string
   prefsWriteFailed: string
+  upgradeDone: string
+  upgradeFailed: (code: number) => string
 
   // critical (unattended) update — printed by `agentop check-update`
   updateCriticalTitle: string
@@ -232,6 +240,7 @@ const EN: CliStrings = {
   rebuildNoCache: 'building from scratch (no Docker cache) — this takes several minutes. Pass --cache to reuse it.',
   restartedAll: 'restarted all running services.',
   restartedDone: 'service restarted.',
+  restartFailed: "that didn't come back up — see the output above for why.",
   noComposeFrom: (dir) => `couldn't find docker-compose.machine.yml in ${dir}.`,
   runFromRepo: 'Run agentop start from the agentistics repo to use Docker.',
   buildingMachine: 'building & starting the machine container…',
@@ -271,6 +280,7 @@ const EN: CliStrings = {
   optRebuildDockerHint: 'rebuild the image and recreate the container',
   archiveUnsetHint: 'history preservation is still unset — see the Setup tab',
   dockerStartFailed: 'the machine container did not start.',
+  localStartFailed: 'the local server did not come back up.',
   centralStarted: 'agentistics central is up.',
   centralFailed: 'the central did not start.',
   centralInitDone: 'central configured.',
@@ -284,6 +294,8 @@ const EN: CliStrings = {
   soloSet: 'solo mode set — nothing leaves this machine.',
   archiveSet: (mode) => `history preservation set to ${mode}.`,
   prefsWriteFailed: 'could not write preferences.',
+  upgradeDone: 'upgraded, and everything that was running was restarted onto the new version.',
+  upgradeFailed: (code) => `upgrade exited ${code} — see the output above.`,
 
   updateCriticalTitle: 'Critical update — installing automatically',
   updateCriticalInstalling: (v) => `v${v} is being installed in the background; your terminal is free.`,
@@ -363,6 +375,7 @@ const PT: CliStrings = {
   rebuildNoCache: 'buildando do zero (sem cache do Docker) — leva vários minutos. Use --cache para reaproveitá-lo.',
   restartedAll: 'todos os serviços no ar foram reiniciados.',
   restartedDone: 'serviço reiniciado.',
+  restartFailed: 'não voltou a rodar — veja a saída acima para saber o motivo.',
   noComposeFrom: (dir) => `não achei docker-compose.machine.yml em ${dir}.`,
   runFromRepo: 'Rode agentop start de dentro do repo agentistics para usar Docker.',
   buildingMachine: 'buildando & subindo o container da máquina…',
@@ -402,6 +415,7 @@ const PT: CliStrings = {
   optRebuildDockerHint: 'reconstrói a imagem e recria o container',
   archiveUnsetHint: 'a preservação do histórico ainda não foi definida — veja a aba Setup',
   dockerStartFailed: 'o container da máquina não subiu.',
+  localStartFailed: 'o server local não voltou a rodar.',
   centralStarted: 'agentistics central está no ar.',
   centralFailed: 'a central não subiu.',
   centralInitDone: 'central configurada.',
@@ -414,6 +428,8 @@ const PT: CliStrings = {
   stoppedDone: 'serviço parado.',
   soloSet: 'modo solo definido — nada sai desta máquina.',
   archiveSet: (mode) => `preservação do histórico definida como ${mode}.`,
+  upgradeDone: 'atualizado, e tudo o que estava no ar foi reiniciado na versão nova.',
+  upgradeFailed: (code) => `o upgrade saiu com ${code} — veja a saída acima.`,
   prefsWriteFailed: 'não consegui gravar as preferências.',
 
   updateCriticalTitle: 'Atualização crítica — instalando automaticamente',

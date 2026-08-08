@@ -1,3 +1,5 @@
+import { isLocalModelId } from '@agentistics/core'
+import { canonicalTool, countGitCommands } from '../harness-activity'
 import type { SessionMeta, TurnEvent } from '@agentistics/core'
 import { activeMinutesOf } from '@agentistics/core'
 
@@ -24,8 +26,15 @@ import { activeMinutesOf } from '@agentistics/core'
 export interface KimiState {
   title?: string
   workDir?: string
-  createdAt?: string
-  updatedAt?: string
+  /** Kimi writes this as an epoch NUMBER in most sessions and an ISO string in others — measured
+   *  10 of 11 as numbers on a live machine. Both shapes are read; see `isoFromKimiTime`. */
+  createdAt?: string | number
+  /** Same inconsistency as `createdAt` — Kimi writes the same wire shape for both fields, so
+   *  `updatedAt` is exactly as likely to arrive as an epoch number. It was typed `string` only
+   *  and read raw (skipping `isoFromKimiTime`), which is what let a numeric `end_time` reach
+   *  `SessionMeta` — a field the frontend calls `parseISO`/`.slice` on, unguarded, in several
+   *  places. Same bug as `createdAt`, just not caught the first time. */
+  updatedAt?: string | number
   /** agentId → {parentAgentId}. `main` has a null parent; subagents point at their parent. */
   agents?: Record<string, { parentAgentId?: string | null } | undefined>
 }
@@ -47,8 +56,14 @@ export function parseKimiState(text: string): KimiState | null {
 }
 
 /** `google/gemini-3.5-flash-lite` → `gemini-3.5-flash-lite`. Kimi routes to other providers and
- *  prefixes the alias; the bare id is what the pricing table is keyed by. */
+ *  prefixes the alias; the bare id is what the pricing table is keyed by.
+ *
+ *  A LOCAL runtime's prefix is KEPT (`ollama-local/qwen2.5-coder-7b` stays whole). For a hosted
+ *  model the prefix is noise the table does not want; for a local one it is the only thing saying
+ *  the call was free, and stripping it left `qwen2.5-coder-7b` to be priced at the shared fallback
+ *  — inventing spending for tokens that cost nothing. See `isLocalModelId`. */
 export function stripProvider(model: string): string {
+  if (isLocalModelId(model)) return model
   const slash = model.indexOf('/')
   return slash > 0 ? model.slice(slash + 1) : model
 }
@@ -64,6 +79,8 @@ export interface KimiWireTotals {
   assistantTurns: number
   toolCounts: Record<string, number>
   toolErrors: number
+  gitCommits: number
+  gitPushes: number
   usesMcp: boolean
   firstPrompt: string
   hours: number[]
@@ -84,7 +101,7 @@ export interface KimiWireTotals {
 export function emptyKimiTotals(): KimiWireTotals {
   return {
     inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheCreation: 0,
-    userPrompts: 0, assistantTurns: 0, toolCounts: {}, toolErrors: 0, usesMcp: false,
+    userPrompts: 0, assistantTurns: 0, toolCounts: {}, toolErrors: 0, gitCommits: 0, gitPushes: 0, usesMcp: false,
     firstPrompt: '', hours: [], userTimestamps: [], firstTimeMs: 0, lastTimeMs: 0, turnEvents: [],
   }
 }
@@ -139,8 +156,25 @@ export function accumulateKimiWire(text: string, acc: KimiWireTotals = emptyKimi
         else if (ev.type === 'tool.call') {
           const name = typeof ev.name === 'string' ? ev.name : ''
           if (name) {
-            acc.toolCounts[name] = (acc.toolCounts[name] ?? 0) + 1
+            // Kimi already uses the shared vocabulary (`Bash`, `Read`, `Edit`, …) — its own
+            // `tools.set_active_tools` lists exactly those names — so canonicalTool is a no-op here
+            // and is called anyway, so the day Kimi renames one this does not silently drift.
+            const shared = canonicalTool('kimi', name)
+            acc.toolCounts[shared] = (acc.toolCounts[shared] ?? 0) + 1
             if (name.startsWith('mcp__')) acc.usesMcp = true
+
+            // The command it ran. `args.command` is not a guess: it is what Kimi's own tool schema
+            // declares for Bash ("The command to execute"), read out of the `llm.tools_snapshot`
+            // event in a real wire.
+            if (shared === 'Bash') {
+              const args = ev.args as Record<string, unknown> | undefined
+              const cmd = typeof args?.command === 'string' ? args.command : ''
+              if (cmd) {
+                const g = countGitCommands(cmd)
+                acc.gitCommits += g.commits
+                acc.gitPushes += g.pushes
+              }
+            }
           }
         } else if (ev.type === 'tool.result') {
           if (isToolError(ev)) acc.toolErrors++
@@ -176,6 +210,24 @@ function textOfPrompt(input: unknown): string {
 
 /** Build the SessionMeta. Returns null when nothing usable was recorded (no user turn at all),
  *  the same rule the Gemini adapter uses to drop bootstrap stubs. */
+/** Kimi's `createdAt`, whatever shape it arrived in, as an ISO string.
+ *
+ *  A number here is an epoch in milliseconds. Letting it through as a number is not a cosmetic
+ *  slip: `SessionMeta.start_time` is a STRING by contract, it is persisted to the consolidate store
+ *  as written, and every consumer that slices it for a day (`supplementStatsCache`) throws on a
+ *  number — one such session took the whole /api/data response down with a 500.
+ *
+ *  Anything unusable yields '' — the adapter's own way of saying "no start time", which the rest of
+ *  the pipeline already handles. */
+export function isoFromKimiTime(v: string | number | undefined): string {
+  if (typeof v === 'string') return v
+  if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+    const d = new Date(v)
+    return Number.isNaN(d.getTime()) ? '' : d.toISOString()
+  }
+  return ''
+}
+
 export function buildKimiSession(
   sessionId: string,
   state: KimiState | null,
@@ -184,8 +236,10 @@ export function buildKimiSession(
 ): SessionMeta | null {
   if (totals.userPrompts === 0) return null
 
-  const start = state?.createdAt || (totals.firstTimeMs ? new Date(totals.firstTimeMs).toISOString() : '')
-  const end = state?.updatedAt || (totals.lastTimeMs ? new Date(totals.lastTimeMs).toISOString() : '')
+  const start = isoFromKimiTime(state?.createdAt)
+    || (totals.firstTimeMs ? new Date(totals.firstTimeMs).toISOString() : '')
+  const end = isoFromKimiTime(state?.updatedAt)
+    || (totals.lastTimeMs ? new Date(totals.lastTimeMs).toISOString() : '')
   if (!start) return null
 
   const startMs = Date.parse(start)
@@ -212,8 +266,8 @@ export function buildKimiSession(
     tool_output_tokens: {},
     agent_file_reads: {},
     languages: [],
-    git_commits: 0,
-    git_pushes: 0,
+    git_commits: totals.gitCommits,
+    git_pushes: totals.gitPushes,
     input_tokens: totals.inputTokens,
     output_tokens: totals.outputTokens,
     cache_read_input_tokens: totals.cacheRead,

@@ -50,6 +50,28 @@ test('account resolves to every machine that account owns; unknown account match
   expect(sessionMatchesTagSources(s({ memberId: 'hashA' }), src)).toBe(false)
 })
 
+test('harness matches session.harness, defaulting to claude for legacy sessions with none', () => {
+  const src: TagSource[] = [{ type: 'harness', value: 'codex' }]
+  expect(sessionMatchesTagSources(s({ harness: 'codex' }), src, noLookups)).toBe(true)
+  expect(sessionMatchesTagSources(s({ harness: 'claude' }), src, noLookups)).toBe(false)
+  const claudeSrc: TagSource[] = [{ type: 'harness', value: 'claude' }]
+  expect(sessionMatchesTagSources(s({ harness: undefined }), claudeSrc, noLookups)).toBe(true)
+})
+
+test('model matches session.model exactly; a session with no model matches nothing', () => {
+  const src: TagSource[] = [{ type: 'model', value: 'claude-opus-4-8' }]
+  expect(sessionMatchesTagSources(s({ model: 'claude-opus-4-8' }), src, noLookups)).toBe(true)
+  expect(sessionMatchesTagSources(s({ model: 'claude-sonnet-4-6' }), src, noLookups)).toBe(false)
+  expect(sessionMatchesTagSources(s({}), src, noLookups)).toBe(false)
+})
+
+test('user matches session.user exactly; a local session with no user matches nothing', () => {
+  const src: TagSource[] = [{ type: 'user', value: 'alice' }]
+  expect(sessionMatchesTagSources(s({ user: 'alice' }), src, noLookups)).toBe(true)
+  expect(sessionMatchesTagSources(s({ user: 'bob' }), src, noLookups)).toBe(false)
+  expect(sessionMatchesTagSources(s({}), src, noLookups)).toBe(false)
+})
+
 test('sources are an OR union', () => {
   const sources: TagSource[] = [
     { type: 'repo', value: 'github.com/org/a' },
@@ -151,7 +173,11 @@ test('the browser mirror and the server resolver agree, session for session', ()
   // The two copies are hand-kept in sync (the web bundle cannot import from packages/server at
   // runtime). This is the test that fails when only one of them is updated.
   const w: TagWindow = { start: '2026-07-04', end: '2026-07-18' }
-  const sources: TagSource[] = [{ type: 'repo', value: 'r1' }, { type: 'machine', value: 'm1' }]
+  const sources: TagSource[] = [
+    { type: 'repo', value: 'r1' }, { type: 'machine', value: 'm1' },
+    { type: 'harness', value: 'codex' }, { type: 'model', value: 'claude-opus-4-8' },
+    { type: 'user', value: 'alice' },
+  ]
   const tagDef = windowed('t', sources, w)
   const filter = makeTagFilter(['t'], [tagDef], noLookups)!
 
@@ -161,6 +187,9 @@ test('the browser mirror and the server resolver agree, session for session', ()
     dated('2026-07-18', { memberId: 'm1' }),
     dated('2026-07-19', { memberId: 'm1' }),
     dated('2026-07-10', { git_remote: 'other' }),
+    dated('2026-07-10', { git_remote: 'other', harness: 'codex' }),
+    dated('2026-07-10', { git_remote: 'other', model: 'claude-opus-4-8' }),
+    dated('2026-07-10', { git_remote: 'other', user: 'alice' }),
     s({ git_remote: 'r1' }),
     s({ git_remote: 'r1', start_time: 'garbage' }),
   ]

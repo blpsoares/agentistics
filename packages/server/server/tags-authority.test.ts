@@ -15,8 +15,21 @@ const ctx: TagAuthorityContext = {
   visibleAccountIds: new Set(['m1', 'u2']),
   visibleRepos: new Set(['github.com/org/a']),
   visibleProjects: new Set(['/home/me/app']),
+  visibleUsers: new Set(['alice']),
   machinesByAccount: { m1: [], u2: ['machA'] },
 }
+
+test('harness and model sources are visible to anyone — session attributes, not identity', () => {
+  const plainUser: Principal = { accountId: 'u9', role: 'member', memberships: [] }
+  expect(canSeeSource(plainUser, { type: 'harness', value: 'codex' }, ctx)).toBe(true)
+  expect(canSeeSource(plainUser, { type: 'model', value: 'claude-opus-4-8' }, ctx)).toBe(true)
+})
+
+test('a user source is scoped like a repo or project: only a visible display name may be written', () => {
+  const plainUser: Principal = { accountId: 'u9', role: 'member', memberships: [] }
+  expect(canSeeSource(plainUser, { type: 'user', value: 'alice' }, ctx)).toBe(true)
+  expect(canSeeSource(plainUser, { type: 'user', value: 'someone-outside-my-scope' }, ctx)).toBe(false)
+})
 
 test('an account source requires EVERY machine that account owns to be visible', () => {
   // Escalation this blocks: a manager of team A tags account U (a member of A, so "visible"),
@@ -29,6 +42,7 @@ test('an account source requires EVERY machine that account owns to be visible',
     visibleAccountIds: new Set(['u2']),
     visibleRepos: new Set<string>(),
     visibleProjects: new Set<string>(),
+    visibleUsers: new Set<string>(),
     machinesByAccount: { u2: ['machA', 'machB'] }, // machB is out of scope
   }
   expect(canSeeSource(mgrA, { type: 'account', value: 'u2' }, ctx)).toBe(false)
@@ -200,6 +214,7 @@ test('a plain user may tag ONLY what their own account owns', () => {
     visibleAccountIds: new Set(['u1']),        // and can always see themselves
     visibleRepos: new Set(['github.com/me/app']),
     visibleProjects: new Set(['/home/me/app']),
+    visibleUsers: new Set(['u1']),
     machinesByAccount: { u1: ['myMachine'] },
   }
   // Their own machine, repo, folder and account: allowed.

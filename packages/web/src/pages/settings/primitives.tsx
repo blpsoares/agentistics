@@ -373,10 +373,12 @@ export function PrefRow({ label, sub, children }: { label: string; sub?: string;
   )
 }
 
-export function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+export function Toggle({ on, onToggle, disabled }: { on: boolean; onToggle: () => void; disabled?: boolean }) {
   return (
     <button
-      onClick={onToggle}
+      onClick={() => { if (!disabled) onToggle() }}
+      disabled={disabled}
+      aria-disabled={disabled || undefined}
       // `.ag-switch` opts this control OUT of the `.ag-settings button { min-height: 44px }`
       // mobile rule (index.css). That rule exists for real buttons that were 22-33px tall on
       // mobile; applied here it stretched this 20px-tall pill to 44px and left its knob (top: 3)
@@ -385,7 +387,8 @@ export function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) 
       style={{
         position: 'relative', width: 34, height: 20, borderRadius: 10,
         border: 'none', background: on ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-        cursor: 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0,
+        cursor: disabled ? 'not-allowed' : 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0,
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       <span style={{
@@ -576,6 +579,8 @@ export function Checkbox({ checked, onChange, label, disabled }: {
   onChange: (checked: boolean) => void
   label: string
   disabled?: boolean
+  /** Render the panel open, for the static-markup test that pins `position: fixed`. */
+  defaultOpenForTest?: boolean
 }) {
   const isMobile = useIsMobile()
   const toggle = (e: React.SyntheticEvent) => {
@@ -681,7 +686,45 @@ export function SaveBar({ editing, canEdit, dirty, busy, onEdit, onCancel, onSav
   )
 }
 
-export function Select({ value, onChange, options, placeholder, disabled, searchable, searchPlaceholder }: {
+
+/**
+ * Where a popover should be drawn, in VIEWPORT coordinates.
+ *
+ * Both pickers used to draw their panel as a `position: absolute` child of the trigger. Inside the
+ * settings Drawer — whose body is `overflowY: auto` — that panel is clipped by the scroll container,
+ * so once the form had enough content to scroll, the panel opened into a box that cut it off. The
+ * tag editor is where this bit: its pickers looked dead because the list was open and out of sight.
+ *
+ * They also chose their direction by measuring the WINDOW while the DRAWER was what clipped them, so
+ * "there is room below" was being answered about the wrong box.
+ *
+ * `fixed` fixes both at once: no ancestor's overflow can clip it, and the viewport really is the box
+ * it is measured against. The cost is that the panel no longer follows the trigger on scroll, which
+ * is why the callers close on scroll rather than chasing it — a panel that drifts away from the row
+ * it belongs to is worse than one that closed.
+ */
+export interface PopoverRect { left: number; top?: number; bottom?: number; width: number }
+
+export function popoverPosition(rect: DOMRect, maxHeight: number, viewportHeight: number): PopoverRect {
+  const below = viewportHeight - rect.bottom
+  const dropUp = below < maxHeight && rect.top > below
+  return dropUp
+    ? { left: rect.left, bottom: viewportHeight - rect.top + 4, width: rect.width }
+    : { left: rect.left, top: rect.bottom + 4, width: rect.width }
+}
+
+/** The style a popover panel gets. `position: fixed` is the load-bearing part — see popoverPosition. */
+export function popoverStyle(pos: PopoverRect | null): React.CSSProperties {
+  return {
+    position: 'fixed',
+    left: pos?.left ?? 0,
+    ...(pos?.bottom !== undefined ? { bottom: pos.bottom } : { top: pos?.top ?? 0 }),
+    width: pos?.width,
+    zIndex: 1200,
+  }
+}
+
+export function Select({ value, onChange, options, placeholder, disabled, searchable, searchPlaceholder, defaultOpenForTest }: {
   value: string
   onChange: (v: string) => void
   /** `disabled` greys an option out and blocks selection; `hint` says why, inline. */
@@ -692,17 +735,20 @@ export function Select({ value, onChange, options, placeholder, disabled, search
   searchable?: boolean
   /** Placeholder for the type-to-filter box. English by default, per the project language rule. */
   searchPlaceholder?: string
+  /** Render the panel open, for the static-markup test that pins `position: fixed`. */
+  defaultOpenForTest?: boolean
 }) {
-  const [open, setOpen] = React.useState(false)
+  const [open, setOpen] = React.useState(Boolean(defaultOpenForTest))
   const [activeIndex, setActiveIndex] = React.useState(-1)
   const [query, setQuery] = React.useState('')
   const wrapperRef = React.useRef<HTMLDivElement>(null)
   const listRef = React.useRef<HTMLDivElement>(null)
   const searchRef = React.useRef<HTMLInputElement>(null)
   const isMobile = useIsMobile()
-  // Inside the settings Drawer the popover can render past the viewport bottom, where it is
-  // unreachable. Measure on open and flip above the trigger when there is not enough room below.
-  const [dropUp, setDropUp] = React.useState(false)
+  // The panel is `position: fixed`, anchored to the trigger's viewport rect — see popoverPosition.
+  // Absolute positioning made it a child of the Drawer's `overflowY: auto` body, which clipped it
+  // as soon as the form was long enough to scroll.
+  const [pos, setPos] = React.useState<PopoverRect | null>(null)
   const POPOVER_MAX_H = 280
 
   const showSearch = searchable ?? options.length > 8
@@ -720,8 +766,24 @@ export function Select({ value, onChange, options, placeholder, disabled, search
         setOpen(false)
       }
     }
+    // A fixed panel does not follow its trigger, so scrolling the PAGE (or any ancestor) would
+    // leave it hanging beside a row that has moved — closing is the honest answer there. But this
+    // listener is capture-phase on `window`, so it also fires when the panel's OWN option list
+    // scrolls (e.g. scrolling down to reach an option past the fold, or a keyboard/assistive
+    // scroll-into-view) — closing on that closed the panel before a click on a lower option could
+    // ever land, making any option beyond the visible fold unreachable. Only close for a scroll
+    // whose target is outside this component's own DOM subtree.
+    const onScroll = (e: Event) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setOpen(false)
+    }
     document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
   }, [open])
 
   // Keep the keyboard-highlighted option scrolled into view.
@@ -736,11 +798,7 @@ export function Select({ value, onChange, options, placeholder, disabled, search
     const i = options.findIndex(o => o.value === value)
     setActiveIndex(i >= 0 ? i : 0)
     const rect = wrapperRef.current?.getBoundingClientRect()
-    if (rect) {
-      const below = window.innerHeight - rect.bottom
-      // Only flip when the space above is actually better — flipping into even less room is worse.
-      setDropUp(below < POPOVER_MAX_H && rect.top > below)
-    }
+    if (rect) setPos(popoverPosition(rect, POPOVER_MAX_H, window.innerHeight))
     setOpen(true)
     if (showSearch) setTimeout(() => searchRef.current?.focus(), 0)
   }
@@ -850,11 +908,7 @@ export function Select({ value, onChange, options, placeholder, disabled, search
           ref={listRef}
           role="listbox"
           style={{
-            position: 'absolute',
-            ...(dropUp ? { bottom: 'calc(100% + 4px)' } : { top: 'calc(100% + 4px)' }),
-            left: 0,
-            right: 0,
-            zIndex: 50,
+            ...popoverStyle(pos),
             background: 'var(--bg-card)',
             border: '1px solid var(--border)',
             borderRadius: 8,
@@ -949,6 +1003,7 @@ export function Select({ value, onChange, options, placeholder, disabled, search
  */
 export function MultiPicker({
   options, onCommit, placeholder, searchPlaceholder, confirmLabel, selectAllLabel, emptyLabel, disabled,
+  defaultOpenForTest,
 }: {
   options: { value: string; label: string; disabled?: boolean; hint?: string }[]
   /** Called with everything ticked when the user confirms. Never called with an empty list. */
@@ -960,15 +1015,28 @@ export function MultiPicker({
   selectAllLabel: string
   emptyLabel: string
   disabled?: boolean
+  /** Render the panel open, for the static-markup test that pins `position: fixed`. */
+  defaultOpenForTest?: boolean
 }) {
   const isMobile = useIsMobile()
-  const [open, setOpen] = React.useState(false)
+  const [open, setOpen] = React.useState(Boolean(defaultOpenForTest))
   const [picked, setPicked] = React.useState<string[]>([])
   const [query, setQuery] = React.useState('')
-  const [dropUp, setDropUp] = React.useState(false)
+  // See popoverPosition: fixed, so the Drawer's scrolling body cannot clip it.
+  const [pos, setPos] = React.useState<PopoverRect | null>(null)
   const wrapperRef = React.useRef<HTMLDivElement>(null)
   const searchRef = React.useRef<HTMLInputElement>(null)
   const PANEL_MAX_H = 340
+  // Ticking a checkbox reliably delivers a SECOND, browser-generated click to the trigger button
+  // right after (same coordinates, no intervening mousedown/mouseup — verified with instrumented
+  // listeners; the trigger sits in normal flow below/above a `position: fixed` popover, and picking
+  // an option is enough to reflow the page under it). That phantom click hit the trigger's
+  // open-if-closed/close-if-open toggle and closed the panel before the pick could ever be
+  // committed — the FIRST option beyond the very top of the list was unreachable. Stamping every
+  // pick and having the trigger ignore a click landing within the same tick is what a fixed-position
+  // popover anchored to a trigger still in normal flow needs, regardless of why the browser
+  // re-delivers the click.
+  const lastPickAtRef = React.useRef(0)
 
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -983,18 +1051,29 @@ export function MultiPicker({
       if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) close()
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    // Same reason as Select — and the same over-broad fix: this capture-phase listener also fires
+    // when the panel's OWN checkbox list scrolls (it has to, to fit more than a handful of
+    // options), which closed the whole picker the moment a user scrolled to reach — let alone
+    // clicked — anything past the first screenful. Only close for a scroll outside this component.
+    const onScroll = (e: Event) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) close()
+    }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
-    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
   }, [open, close])
 
   const openPanel = () => {
     if (disabled) return
     const rect = wrapperRef.current?.getBoundingClientRect()
-    if (rect) {
-      const below = window.innerHeight - rect.bottom
-      setDropUp(below < PANEL_MAX_H && rect.top > below)
-    }
+    if (rect) setPos(popoverPosition(rect, PANEL_MAX_H, window.innerHeight))
     setOpen(true)
     setTimeout(() => searchRef.current?.focus(), 0)
   }
@@ -1014,7 +1093,12 @@ export function MultiPicker({
     <div ref={wrapperRef} style={{ position: 'relative', width: '100%' }}>
       <button
         type="button"
-        onClick={() => (open ? close() : openPanel())}
+        onClick={() => {
+          // See lastPickAtRef above — a click landing here within ~200ms of an in-panel pick is
+          // the browser's phantom re-delivery, not a real second press on the trigger.
+          if (Date.now() - lastPickAtRef.current < 200) return
+          open ? close() : openPanel()
+        }}
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -1036,8 +1120,7 @@ export function MultiPicker({
         <div
           role="listbox"
           style={{
-            position: 'absolute', left: 0, right: 0, zIndex: 50,
-            ...(dropUp ? { bottom: 'calc(100% + 4px)' } : { top: 'calc(100% + 4px)' }),
+            ...popoverStyle(pos),
             background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
             boxShadow: '0 8px 28px rgba(0,0,0,0.35)', padding: 6,
             display: 'flex', flexDirection: 'column', gap: 6, maxHeight: PANEL_MAX_H,
@@ -1058,7 +1141,7 @@ export function MultiPicker({
             <div style={{ display: 'flex', alignItems: 'center', minHeight: isMobile ? 44 : 30, paddingLeft: 2 }}>
               <Checkbox
                 checked={allShownPicked}
-                onChange={c => setPicked(c ? filtered.filter(o => !o.disabled).map(o => o.value) : [])}
+                onChange={c => { lastPickAtRef.current = Date.now(); setPicked(c ? filtered.filter(o => !o.disabled).map(o => o.value) : []) }}
                 label={selectAllLabel}
               />
             </div>
@@ -1076,7 +1159,7 @@ export function MultiPicker({
                 }}>
                 <Checkbox
                   checked={!o.disabled && picked.includes(o.value)}
-                  onChange={c => { if (o.disabled) return; setPicked(prev => c ? [...prev, o.value] : prev.filter(v => v !== o.value)) }}
+                  onChange={c => { if (o.disabled) return; lastPickAtRef.current = Date.now(); setPicked(prev => c ? [...prev, o.value] : prev.filter(v => v !== o.value)) }}
                   label={o.label}
                 />
                 {o.hint && <span style={{ fontSize: 11, color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>{o.hint}</span>}

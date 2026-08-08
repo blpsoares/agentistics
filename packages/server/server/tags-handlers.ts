@@ -79,7 +79,7 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT })
 }
 
-const SOURCE_TYPES = new Set<TagSourceType>(['repo', 'project', 'machine', 'team', 'account'])
+const SOURCE_TYPES = new Set<TagSourceType>(['repo', 'project', 'machine', 'team', 'account', 'harness', 'model', 'user'])
 
 /** A machine bucket carries its display name alongside the opaque memberId the key stays. */
 type LabelledBucket = TagVisibilityBucket & { label?: string }
@@ -134,6 +134,7 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagC
   // sets only ever gate non-owners.
   const visibleRepos = new Set<string>()
   const visibleProjects = new Set<string>()
+  const visibleUsers = new Set<string>()
   for (const s of sessions) {
     const sessionTeams = s.teamIds ?? (s.teamId ? [s.teamId] : [])
     const inScope = (!!s.memberId && visibleMachineIds.has(s.memberId))
@@ -141,6 +142,7 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagC
     if (!inScope) continue
     if (s.git_remote) visibleRepos.add(s.git_remote)
     if (s.project_path) visibleProjects.add(s.project_path)
+    if (s.user) visibleUsers.add(s.user)
   }
 
   return {
@@ -153,6 +155,7 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagC
       visibleAccountIds,
       visibleRepos,
       visibleProjects,
+      visibleUsers,
       machinesByAccount,
     },
   }
@@ -164,9 +167,11 @@ async function buildContext(p: Principal, sessions: SessionMeta[]): Promise<TagC
 function soloContext(sessions: SessionMeta[]): TagContext {
   const visibleRepos = new Set<string>()
   const visibleProjects = new Set<string>()
+  const visibleUsers = new Set<string>()
   for (const s of sessions) {
     if (s.git_remote) visibleRepos.add(s.git_remote)
     if (s.project_path) visibleProjects.add(s.project_path)
+    if (s.user) visibleUsers.add(s.user)
   }
   const machine: MachineInfo = {
     id: LOCAL_MACHINE_ID,
@@ -191,6 +196,7 @@ function soloContext(sessions: SessionMeta[]): TagContext {
       visibleAccountIds: new Set([LOCAL_MACHINE_ID]),
       visibleRepos,
       visibleProjects,
+      visibleUsers,
       machinesByAccount: {},
     },
   }

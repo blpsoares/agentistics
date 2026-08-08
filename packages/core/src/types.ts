@@ -1,3 +1,4 @@
+import { isLocalModelId, LOCAL_MODEL_PRICE } from './local-models'
 export interface DailyActivity {
   date: string
   messageCount: number
@@ -68,8 +69,14 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   //   gemini / antigravity / kimi → reconstructed from per-message timestamps (no measured field)
   claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true,  dynamicWorkflows: true,  activeTime: true },
   codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
+  // Gemini's chat files carry `toolCalls: [{ name, args }]` per message, and a shell call puts its
+  // command in `args.command` — so tools and commits are real. `gitLines` stays false: the calls
+  // name the file they touched but carry no diff counters.
   gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
-  copilot: { tokens: true,  cost: true,  model: true,  tools: false, agents: false, gitLines: true,  dynamicWorkflows: false, activeTime: true },
+  // `tools` was false while `tool.execution_start` had been carrying the tool name and its
+  // arguments all along — the flag was out of date, not the data missing. Verified against a real
+  // events.jsonl before flipping it.
+  copilot: { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: true,  dynamicWorkflows: false, activeTime: true },
   // Antigravity (agy): tokens + model come from the `gen_metadata` protobuf blobs in
   // ~/.gemini/antigravity-cli/conversations/<id>.db (decoded by adapters/antigravity-protobuf.ts)
   // and cost is derived from them via calcCost().
@@ -88,6 +95,8 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   // any unknown id on any harness they would take the shared fallback price, so add them here when
   // Moonshot publishes verified rates. `gitLines` is false because Kimi records the Edit/Write
   // strings but no diff counters.
+  // Kimi's wire carries `tool.call` with `args`, and its own tool schema declares Bash's
+  // `command` — so tools and commits are both real, read from what it actually ran.
   kimi: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
 }
 
@@ -239,6 +248,15 @@ export interface WorkflowAgent {
   }
 }
 
+/** Every token a workflow run (or one of its agents) was billed for. Cache reads and writes are
+ *  the bulk of a subagent's consumption — a "tokens" figure that leaves them out is not a rounder
+ *  number, it is a different number, and it contradicts the cost shown next to it. */
+export function workflowTokens(
+  t: { tokensIn: number; tokensOut: number; cacheRead?: number; cacheWrite?: number },
+): number {
+  return t.tokensIn + t.tokensOut + (t.cacheRead ?? 0) + (t.cacheWrite ?? 0)
+}
+
 export interface WorkflowPhase {
   title: string
   agentCount: number
@@ -255,7 +273,14 @@ export interface WorkflowRun {
   durationMs: number
   phases: WorkflowPhase[]
   agents: WorkflowAgent[]
-  totals: { agentCount: number; tokensIn: number; tokensOut: number; costUSD: number; durationMs: number; toolUses: number }
+  /** `cacheRead`/`cacheWrite` are optional only because a doc written by an older central (or an
+   *  older consolidate store) predates them — read them through `workflowTokens()`, never bare, or
+   *  the headline understates a cache-heavy run by orders of magnitude while the cost beside it
+   *  (which always priced the cache) says otherwise. */
+  totals: {
+    agentCount: number; tokensIn: number; tokensOut: number; costUSD: number
+    durationMs: number; toolUses: number; cacheRead?: number; cacheWrite?: number
+  }
 }
 
 export interface PriceEntry {
@@ -411,6 +436,21 @@ export type LiveUnavailableReason =
   | 'permission-denied'
   /** This exposure profile has revoked local host power (`CAPS.localProcesses`). */
   | 'capability-off'
+
+/**
+ * Drops any `dailyActivity`/`dailyModelTokens` entry whose `date` is missing or not a string.
+ * `stats-cache.json` is written by Claude Code itself (or restored from an archive snapshot) —
+ * an interrupted write or a stale schema can leave one entry without a usable date, and every
+ * consumer downstream (`.sort((a,b) => a.date.localeCompare(b.date))`, `Map` keyed by `d.date`,
+ * `parseISO(d.date)`) assumes a valid string. One bad entry must not be able to throw and take
+ * the whole `/api/data` response — or the whole dashboard render — down with it. Mutates and
+ * returns the same object; never throws.
+ */
+export function sanitizeStatsCache(sc: StatsCache): StatsCache {
+  sc.dailyActivity = (sc.dailyActivity ?? []).filter(d => typeof d?.date === 'string' && d.date.length > 0)
+  sc.dailyModelTokens = (sc.dailyModelTokens ?? []).filter(d => typeof d?.date === 'string' && d.date.length > 0)
+  return sc
+}
 
 /** An empty statsCache with all zero/neutral fields. Pure. */
 export function emptyStatsCache(): StatsCache {
@@ -568,8 +608,59 @@ export const MODEL_PRICING: Record<string, { input: number; output: number; cach
  *     `gemini-3.5-flash`, never `gemini-3.5-flash-lite`);
  *  4. otherwise the Sonnet-class fallback.
  */
+/** The `YYYY-MM-DD` day a session belongs to, from a `start_time` of unknown shape.
+ *
+ *  `SessionMeta.start_time` is a STRING by contract, but an adapter can get that wrong: Kimi wrote
+ *  an epoch NUMBER, it reached the consolidate store as written, and the first consumer to call
+ *  `.slice(0, 10)` on it threw — turning one malformed session into a 500 for the entire /api/data
+ *  response, and a dashboard that would not load at all.
+ *
+ *  Fixing the adapter is the real fix (see `isoFromKimiTime`). This is the second line: a single bad
+ *  row must never be able to blank the product for every other row. Returns '' when there is no day
+ *  to be had, which every caller already treats as "skip this session". */
+export function sessionDay(startTime: unknown): string {
+  if (typeof startTime === 'string') return startTime.slice(0, 10)
+  if (typeof startTime === 'number' && Number.isFinite(startTime) && startTime > 0) {
+    const d = new Date(startTime)
+    return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
+  }
+  return ''
+}
+
+/** Coerce a session's timestamps to the STRING shape `SessionMeta` declares, in place.
+ *
+ *  `start_time` is a string by contract, but an adapter can get it wrong — Kimi wrote an epoch
+ *  NUMBER — and once that reaches the consolidate store it is on disk, so fixing the adapter does
+ *  not repair what was already written. Every later consumer then calls a string method on it
+ *  (`.slice`, `.localeCompare`) and throws, which is how one malformed session produced a 500 for
+ *  the entire /api/data response.
+ *
+ *  Normalising at the boundary — where sessions ENTER the pipeline — is what keeps that from being
+ *  a hunt through every call site. Anything unusable becomes '', which the pipeline already treats
+ *  as "no start time". */
+export function normalizeSessionTimes<T extends { start_time?: unknown; end_time?: unknown }>(s: T): T {
+  const iso = (v: unknown): string | undefined => {
+    if (typeof v === 'string') return v
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+      const d = new Date(v)
+      return Number.isNaN(d.getTime()) ? '' : d.toISOString()
+    }
+    if (v instanceof Date) return Number.isNaN(v.getTime()) ? '' : v.toISOString()
+    return v === undefined ? undefined : ''
+  }
+  const start = iso(s.start_time)
+  if (start !== undefined) (s as { start_time?: unknown }).start_time = start
+  const end = iso(s.end_time)
+  if (end !== undefined) (s as { end_time?: unknown }).end_time = end
+  return s
+}
+
 export function getModelPrice(modelId: string) {
   if (MODEL_PRICING[modelId]) return MODEL_PRICING[modelId]
+  // A model served off the user's own machine costs nothing. Checked BEFORE the table so no
+  // partial-prefix match can price it, and before the fallback, which would otherwise invent
+  // spending that grows with every local session. See local-models.ts.
+  if (isLocalModelId(modelId)) return LOCAL_MODEL_PRICE
   const id = String(modelId ?? '')
   let forwardKey = ''
   let reverseKey = ''

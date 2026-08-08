@@ -3,7 +3,7 @@ import type { WorkflowRun, WorkflowAgent } from '@agentistics/core'
 export interface SessionGroup {
   sessionId: string
   runs: WorkflowRun[]
-  totals: { runs: number; agents: number; tokensIn: number; tokensOut: number; costUSD: number }
+  totals: { runs: number; agents: number; tokensIn: number; tokensOut: number; cacheRead: number; cacheWrite: number; costUSD: number }
 }
 
 /** Group workflow runs by their owning session, summing per-session totals. Sessions are
@@ -15,7 +15,7 @@ export function groupRunsBySession(workflows: WorkflowRun[]): SessionGroup[] {
   for (const run of workflows) {
     let g = map.get(run.sessionId)
     if (!g) {
-      g = { sessionId: run.sessionId, runs: [], totals: { runs: 0, agents: 0, tokensIn: 0, tokensOut: 0, costUSD: 0 } }
+      g = { sessionId: run.sessionId, runs: [], totals: { runs: 0, agents: 0, tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheWrite: 0, costUSD: 0 } }
       map.set(run.sessionId, g)
       order.push(run.sessionId)
     }
@@ -24,6 +24,9 @@ export function groupRunsBySession(workflows: WorkflowRun[]): SessionGroup[] {
     g.totals.agents += run.totals.agentCount
     g.totals.tokensIn += run.totals.tokensIn
     g.totals.tokensOut += run.totals.tokensOut
+    // `?? 0`: a run stored by an older build has no cache fields at all — see WorkflowRun.totals.
+    g.totals.cacheRead += run.totals.cacheRead ?? 0
+    g.totals.cacheWrite += run.totals.cacheWrite ?? 0
     g.totals.costUSD += run.totals.costUSD
   }
   return order
@@ -35,6 +38,8 @@ export interface StepSubtotal {
   count: number
   tokensIn: number
   tokensOut: number
+  cacheRead: number
+  cacheWrite: number
   costUSD: number
 }
 
@@ -53,8 +58,10 @@ function subtotal(agents: WorkflowAgent[]): StepSubtotal {
     count: t.count + 1,
     tokensIn: t.tokensIn + a.tokensIn,
     tokensOut: t.tokensOut + a.tokensOut,
+    cacheRead: t.cacheRead + a.cacheRead,
+    cacheWrite: t.cacheWrite + a.cacheWrite,
     costUSD: t.costUSD + a.costUSD,
-  }), { count: 0, tokensIn: 0, tokensOut: 0, costUSD: 0 })
+  }), { count: 0, tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheWrite: 0, costUSD: 0 })
 }
 
 /** Group a run's agents under its declared phases (in declared order), then append
