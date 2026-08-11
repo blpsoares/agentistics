@@ -33,7 +33,7 @@ import chokidar from 'chokidar'
 import { metrics, ValueType } from '@opentelemetry/api'
 import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics'
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http'
-import { Resource } from '@opentelemetry/resources'
+import { resourceFromAttributes } from '@opentelemetry/resources'
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
 
 // Shared imports from the main codebase
@@ -277,7 +277,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     exportIntervalMillis: WATCH_INTERVAL_SEC * 1000,
   })
 
-  const resource = new Resource({
+  const resource = resourceFromAttributes({
     [ATTR_SERVICE_NAME]: SERVICE_NAME,
   })
 
