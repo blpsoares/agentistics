@@ -458,7 +458,7 @@ jobs:
       # older than the release that added OIDC support, and an old CLI fails by
       # looking for a credential rather than by saying the feature is missing.
       - name: Setup Node + npm
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
           # Deliberately NO registry-url: it writes an .npmrc expecting
