@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { GitCompare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import type { HarnessId, Lang } from '@agentistics/core'
@@ -7,6 +7,7 @@ import { fmt, fmtCost, formatModel, t } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 import { computeFilteredHarnessSummaries } from '../hooks/useData'
 import { fmtDateLocalized } from '../lib/dateFormat'
+import { CompareByFilter } from './compare/CompareByFilter'
 
 interface HarnessAgg {
   harness: HarnessId
@@ -218,7 +219,65 @@ function SectionCard({ title, children }: { title: string; children: React.React
   )
 }
 
+/**
+ * The compare page, in two modes.
+ *
+ *   'harness' — the original: every harness side by side under ONE filter. Untouched.
+ *   'filter'  — two independent filter sets and a curated A / B / Δ table.
+ *
+ * One page rather than two nav entries, because "compare harnesses" is one case of "compare two
+ * scopes" and two similar items in a menu is a choice nobody wants to make. Only the HARNESS mode
+ * stays gated on having more than one harness; the page itself is always reachable.
+ */
 export default function ComparePage() {
+  const ctx = useOutletContext<AppContext>()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const mode: 'harness' | 'filter' = searchParams.get('mode') === 'filter' ? 'filter' : 'harness'
+  const setMode = (m: 'harness' | 'filter') => setSearchParams(m === 'filter' ? { mode: 'filter' } : {})
+  return (
+    <div>
+      <CompareModeSelector mode={mode} onChange={setMode} lang={ctx.lang} multiHarness={(ctx.data.harnesses?.length ?? 0) > 1} />
+      {mode === 'filter' ? <CompareByFilter ctx={ctx} /> : <CompareByHarness />}
+    </div>
+  )
+}
+
+function CompareModeSelector({ mode, onChange, lang, multiHarness }: {
+  mode: 'harness' | 'filter'
+  onChange: (m: 'harness' | 'filter') => void
+  lang: 'pt' | 'en'
+  multiHarness: boolean
+}) {
+  const pt = lang === 'pt'
+  const options: { id: 'harness' | 'filter'; label: string; disabled?: boolean }[] = [
+    { id: 'harness', label: pt ? 'Por harness' : 'By harness', disabled: !multiHarness },
+    { id: 'filter', label: pt ? 'Por filtro' : 'By filter' },
+  ]
+  return (
+    <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: 16 }}>
+      {options.map(o => (
+        <button
+          key={o.id}
+          onClick={() => !o.disabled && onChange(o.id)}
+          disabled={o.disabled}
+          title={o.disabled ? (pt ? 'Só há um harness com dados' : 'Only one harness has data') : undefined}
+          style={{
+            padding: '8px 16px', border: 'none', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600,
+            background: mode === o.id ? 'var(--anthropic-orange-dim)' : 'transparent',
+            color: o.disabled ? 'var(--text-tertiary)' : mode === o.id ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+            opacity: o.disabled ? 0.5 : 1,
+            cursor: o.disabled ? 'default' : 'pointer',
+          }}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** The original page body, extracted verbatim. */
+function CompareByHarness() {
   const { data, currency, brlRate, lang, filters } = useOutletContext<AppContext>()
 
   // Compare respects the active filters (users, harnesses, date, projects, models): the

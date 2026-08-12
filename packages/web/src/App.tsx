@@ -703,9 +703,9 @@ function MobileBottomNav({
     { key: 'tags', label: 'Tags', icon: TagIcon, onClick: () => { closeSheet(); navigate('/tags') }, active: location.pathname.startsWith('/tags') },
     { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { closeSheet(); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
     { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { closeSheet(); navigate('/export') }, active: location.pathname.startsWith('/export') },
-    ...(harnesses && harnesses.length > 1
-      ? [{ key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { closeSheet(); navigate('/compare') }, active: location.pathname.startsWith('/compare') } as Tile]
-      : []),
+    // Unconditional: the page's filter mode compares two SCOPES and needs no second harness.
+    // Only the by-harness mode inside it stays gated.
+    { key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { closeSheet(); navigate('/compare') }, active: location.pathname.startsWith('/compare') },
   ]
   const activeIssueCount = healthIssues?.length ?? 0
   const actionTiles: Tile[] = [
@@ -1010,7 +1010,8 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
     { to: '/tags',      labelPt: 'Tags',         labelEn: 'Tags',         icon: <TagIcon size={17} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={17} /> },
-    ...(harnesses && harnesses.length > 1 ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={17} /> }] : []),
+    // Unconditional — see the mobile tile: comparing two filter scopes needs no second harness.
+    { to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={17} /> },
   ]
   const footBtn: React.CSSProperties = {
     width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1183,7 +1184,11 @@ export default function AppLayout() {
   // Reset scroll to the top on every route change — otherwise navigating away while scrolled to the
   // bottom of a page lands the next page still scrolled down.
   useEffect(() => { window.scrollTo(0, 0) }, [location.pathname])
-  const isCustomPage = location.pathname === '/custom'
+  // Pages that render their OWN filter bar(s) and must not get the header's as well. `/custom`
+  // embeds one; `/compare?mode=filter` owns two, and three bars on one screen is not a page.
+  const isCustomPage =
+    location.pathname === '/custom'
+    || (location.pathname === '/compare' && new URLSearchParams(location.search).get('mode') === 'filter')
 
   /** Which filter dimensions a page can actually react to. Top usage ranks by member, team,
    *  machine, presence, repo, tag, project and model, so those narrow it meaningfully — harness is
@@ -2643,6 +2648,7 @@ export default function AppLayout() {
           filters, setFilters,
           lang, theme, currency, setCurrency, brlRate,
           billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
+          tags: tagsList,
           chatModel, chatSoundEnabled, chatSoundId,
           savePreferences,
           pwaPrompt,

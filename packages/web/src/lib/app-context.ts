@@ -1,6 +1,7 @@
 import type { BillingReadiness, BillingSettings, CostBasis, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
 import type { useDerivedStats } from '../hooks/useData'
 import type { PlanBasisView } from '../hooks/usePlanBasis'
+import type { TagDef } from './tagMatch'
 import type { ChatModelId } from './chatModels'
 
 type DerivedStats = NonNullable<ReturnType<typeof useDerivedStats>>
@@ -142,6 +143,14 @@ export interface AppContext {
   teams: { id: string; name: string }[]
   /** Central-only: available machines for filter. Empty when not a central or no machines. */
   machines: { id: string; name: string; user: string; teamId?: string; teamIds?: string[] }[]
+
+  /** The tag definitions `useDerivedStats` resolves a tag filter against.
+   *
+   *  Exposed because a page that derives a SECOND scope (the compare page's B side) must pass the
+   *  same array to its own `useDerivedStats` call. Omitting it takes the `tags: TagDef[] = []`
+   *  default, whose fresh array identity kills the memo on every render — a full dashboard
+   *  recompute per keystroke, and two sides that can tear apart mid-edit. */
+  tags: TagDef[]
 
   /** Task 13 — the hidden-repo badge: canonical repo key (or `NO_REPO_KEY`) → the labels of every
    *  connection currently hiding it (`lib/shareRepos.ts`'s `buildDeniedRepoLabels`). OPTIONAL
