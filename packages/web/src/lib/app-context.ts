@@ -1,4 +1,4 @@
-import type { BillingReadiness, BillingSettings, CostBasis, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
+import type { BillingReadiness, BillingSettings, CostBasis, MonthlyCommitment, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
 import type { useDerivedStats } from '../hooks/useData'
 import type { PlanBasisView } from '../hooks/usePlanBasis'
 import type { TagDef } from './tagMatch'
@@ -78,6 +78,9 @@ export interface AppContext {
   /** Opens the billing setup prompt — what the DISABLED basis control does when pressed, so it
    *  says what it needs instead of doing nothing. */
   openBillingSetup: () => void
+  /** What the registered plans commit to for the CURRENT calendar month — a fixed figure, and a
+   *  different question from the filter-window plan cost. `null` when nothing is registered. */
+  monthCommitment: MonthlyCommitment | null
 
   // chat preferences (seed the Preferences settings page draft)
   chatModel: ChatModelId | null

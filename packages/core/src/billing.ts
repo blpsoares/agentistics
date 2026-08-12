@@ -777,6 +777,85 @@ export function aggregatePlanBasis(parts: readonly HarnessPlanBasis[]): Aggregat
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
+// The monthly commitment
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface MonthlyCommitment {
+  /** The fixed subscription cost for the month, in USD. */
+  usd: number
+  /** The harnesses contributing to it, in display order. */
+  harnesses: HarnessId[]
+  /** A subscription did not cover the whole month — it started or ended inside it, so this figure
+   *  is the prorated part rather than a full month's price. Worth saying out loud: an unexplained
+   *  "USD 63" where the user expects USD 100 reads as a bug. */
+  partial: boolean
+  /** At least one harness is billed per token in this month, so there is variable spend ON TOP of
+   *  this commitment and the number is a floor rather than the total. */
+  hasUsageBilling: boolean
+}
+
+/**
+ * What the registered plans COMMIT to for one calendar month, regardless of any filter.
+ *
+ * This is a different question from `computePlanCost`, and deliberately so. That one prices a
+ * filter window to compare against usage; this one answers "what do I owe this month", which is
+ * what a monthly budget is set against. `api`-mode days contribute NOTHING here — their cost is
+ * usage, not a commitment, and folding a usage figure into a commitment would make the number
+ * neither.
+ *
+ * Returns `null` when no period covers any day of the month: there is no commitment to state, and
+ * zero would read as "your plans are free".
+ */
+export function monthlyCommitment(args: {
+  profiles: BillingProfiles
+  /** Any day in the month of interest. */
+  month: BillingDay
+  brlRate: number
+}): MonthlyCommitment | null {
+  const { profiles, month, brlRate } = args
+  const index = dayIndex(month)
+  if (index === null) return null
+
+  const first = `${month.slice(0, 7)}-01`
+  const firstIndex = dayIndex(first)
+  if (firstIndex === null) return null
+  // The last day of the month: step to the first of the next month and back one.
+  const year = Number(month.slice(0, 4))
+  const mon = Number(month.slice(5, 7))
+  const nextFirst = Math.floor(Date.UTC(mon === 12 ? year + 1 : year, mon === 12 ? 0 : mon, 1) / MS_PER_DAY)
+  const window: PlanWindow = { from: first, to: dayFromIndex(nextFirst - 1) }
+  const monthDays = windowDayCount(window)
+
+  let usd = 0
+  let coveredDays = 0
+  let hasUsageBilling = false
+  const harnesses: HarnessId[] = []
+
+  for (const [key, timeline] of Object.entries(profiles) as [HarnessId, BillingTimeline][]) {
+    if (!timeline) continue
+    const plan = computePlanCost({ timeline, window, brlRate })
+    if (plan.unavailable && plan.apiDayKeys.size === 0) continue
+    if (plan.apiDayKeys.size > 0) hasUsageBilling = true
+    if (plan.subscriptionCostUSD > 0) {
+      usd += plan.subscriptionCostUSD
+      harnesses.push(key)
+      // A subscription that does not span the whole month is prorated; report that, per harness,
+      // so one short period marks the whole figure partial.
+      coveredDays = Math.max(coveredDays, plan.coveredDays)
+    }
+  }
+
+  if (harnesses.length === 0 && !hasUsageBilling) return null
+
+  return {
+    usd,
+    harnesses: harnesses.sort((a, b) => HARNESS_ORDER.indexOf(a) - HARNESS_ORDER.indexOf(b)),
+    partial: harnesses.length > 0 && coveredDays < monthDays,
+    hasUsageBilling,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 // Allocation
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 

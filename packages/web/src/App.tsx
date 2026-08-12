@@ -23,7 +23,7 @@ import type { TagDef } from './lib/tagMatch'
 import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
 import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, TeamConfig } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { billingReadiness, normalizeBillingSettings, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
+import { billingReadiness, monthlyCommitment, normalizeBillingSettings, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
 import { buildDeniedRepoLabels } from './lib/shareRepos'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
@@ -1704,6 +1704,17 @@ export default function AppLayout() {
   }, [billing, saveBilling])
   const openBillingSetup = useCallback(() => setBillingSetupOpen(true), [])
 
+  // What the registered plans commit to THIS calendar month — a different question from the
+  // filter-window plan cost, and the one a monthly budget is set against.
+  const monthCommitment = useMemo(
+    () => (isCentral ? null : monthlyCommitment({
+      profiles: billing.profiles,
+      month: new Date().toISOString().slice(0, 10),
+      brlRate,
+    })),
+    [billing.profiles, brlRate, isCentral],
+  )
+
   // The first-run invite repeats every load until dismissed for good — but only once preferences
   // have actually loaded (`introDismissed` absent during loading would flash it at someone who
   // dismissed it months ago), only with nothing registered yet, and never on a central.
@@ -2648,7 +2659,7 @@ export default function AppLayout() {
           filters, setFilters,
           lang, theme, currency, setCurrency, brlRate,
           billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
-          tags: tagsList,
+          tags: tagsList, monthCommitment,
           chatModel, chatSoundEnabled, chatSoundId,
           savePreferences,
           pwaPrompt,

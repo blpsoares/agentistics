@@ -58,6 +58,10 @@ export default function HomePage() {
   }
 
   const planFactor = planBasis.basis ? planAllocation(planBasis.basis).aggregateFactor : null
+  // Agents are Claude-only, so they allocate against CLAUDE's plan, not the fleet's aggregate.
+  const claudePlanFactor = costBasis === 'plan' && planBasis.basis
+    ? planAllocation(planBasis.basis).byHarness.claude ?? null
+    : null
   function planCostSub(activeLang: Lang): string {
     return planCostSubtitle({
       multiple: planBasis.basis?.multiple ?? null,
@@ -261,7 +265,7 @@ export default function HomePage() {
 
       {/* Budget */}
       <Section flashId="budget" title={<><Target size={14} /> {lang === 'pt' ? 'Orçamento & projeção' : 'Budget & forecast'}</>}>
-        <BudgetPanel statsCache={statsCache} budgetUSD={monthlyBudgetUSD} onBudgetChange={updateBudget} currency={currency} brlRate={brlRate} lang={lang} harness={filters.harness} />
+        <BudgetPanel statsCache={statsCache} budgetUSD={monthlyBudgetUSD} onBudgetChange={updateBudget} currency={currency} brlRate={brlRate} lang={lang} monthlyCommitmentUSD={ctx.monthCommitment?.usd ?? null} commitmentPartial={ctx.monthCommitment?.partial ?? false} harness={filters.harness} />
       </Section>
 
       {/* Cache — full width */}
@@ -292,7 +296,7 @@ export default function HomePage() {
 
       {/* Agent metrics */}
       <Section flashId="agents" title={<><Bot size={14} /> {lang === 'pt' ? 'Métricas de agentes' : 'Agent metrics'}</>}>
-        <AgentMetricsPanel invocations={derived.agentInvocations} agentTypeBreakdown={derived.agentTypeBreakdown} totalInvocations={derived.totalAgentInvocations} totalTokens={derived.totalAgentTokens} totalCostUSD={derived.totalAgentCostUSD} totalDurationMs={derived.totalAgentDurationMs} currency={currency} brlRate={brlRate} lang={lang} harness={filters.harness} />
+        <AgentMetricsPanel invocations={derived.agentInvocations} agentTypeBreakdown={derived.agentTypeBreakdown} totalInvocations={derived.totalAgentInvocations} totalTokens={derived.totalAgentTokens} totalCostUSD={derived.totalAgentCostUSD} totalDurationMs={derived.totalAgentDurationMs} currency={currency} brlRate={brlRate} planFactor={claudePlanFactor} lang={lang} harness={filters.harness} />
       </Section>
 
       {/* Recent sessions */}

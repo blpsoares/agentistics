@@ -5,6 +5,7 @@ import {
   allocatePlanCost,
   billingReadiness,
   computePlanCost,
+  monthlyCommitment,
   dayFromIndex,
   dayIndex,
   isBillingDay,
@@ -513,6 +514,61 @@ describe('normalizeBillingSettings', () => {
     const out = normalizeBillingSettings({ profiles: { claude: { periods: [sub('a', '2026-01-01', undefined, 0)] } } })
     expect(out.profiles.claude?.periods[0]?.price).toBeUndefined()
     expect(codes(validatePeriod(out.profiles.claude!.periods[0]!))).toEqual(['missing_price'])
+  })
+})
+
+// ── the monthly commitment ───────────────────────────────────────────────────────────────────
+
+describe('monthlyCommitment', () => {
+  const claude = (periods: BillingPeriod[]) => normalizeBillingSettings({ profiles: { claude: { periods } } }).profiles
+
+  test('a full month of one subscription is its monthly price', () => {
+    const c = monthlyCommitment({ profiles: claude([sub('a', '2020-01-01', undefined, 100)]), month: '2026-04-17', brlRate: 5.5 })
+    // April has 30 days, so a $100/month plan prorates to 100 × 30 / 30.44.
+    expect(c!.usd).toBeCloseTo((100 * 30) / AVG_DAYS_PER_MONTH, 9)
+    expect(c!.partial).toBe(false)
+    expect(c!.harnesses).toEqual(['claude'])
+  })
+
+  test('a plan starting mid-month is reported as partial', () => {
+    // An unexplained "USD 63" where the user expects USD 100 reads as a bug, so the flag exists.
+    const c = monthlyCommitment({ profiles: claude([sub('a', '2026-04-15', undefined, 100)]), month: '2026-04-01', brlRate: 5.5 })
+    expect(c!.partial).toBe(true)
+    expect(c!.usd).toBeCloseTo((100 * 16) / AVG_DAYS_PER_MONTH, 9)
+  })
+
+  test('api-mode days commit nothing but are flagged as usage on top', () => {
+    // Their cost is usage, not a commitment; folding one into the other makes the number neither.
+    const c = monthlyCommitment({ profiles: claude([api('a', '2020-01-01')]), month: '2026-04-10', brlRate: 5.5 })
+    expect(c!.usd).toBe(0)
+    expect(c!.hasUsageBilling).toBe(true)
+    expect(c!.harnesses).toEqual([])
+  })
+
+  test('several harnesses sum, and are named in display order', () => {
+    const profiles = normalizeBillingSettings({
+      profiles: {
+        kimi: { periods: [sub('k', '2020-01-01', undefined, 30)] },
+        claude: { periods: [sub('c', '2020-01-01', undefined, 100)] },
+      },
+    }).profiles
+    const c = monthlyCommitment({ profiles, month: '2026-04-10', brlRate: 5.5 })
+    expect(c!.usd).toBeCloseTo((130 * 30) / AVG_DAYS_PER_MONTH, 9)
+    expect(c!.harnesses).toEqual(['claude', 'kimi'])
+  })
+
+  test('nothing registered yields null, never a zero that reads as "your plans are free"', () => {
+    expect(monthlyCommitment({ profiles: {}, month: '2026-04-10', brlRate: 5.5 })).toBeNull()
+    expect(monthlyCommitment({ profiles: claude([sub('a', '2027-01-01', undefined, 100)]), month: '2026-04-10', brlRate: 5.5 })).toBeNull()
+  })
+
+  test('a December month rolls into the next year correctly', () => {
+    const c = monthlyCommitment({ profiles: claude([sub('a', '2020-01-01', undefined, 100)]), month: '2026-12-05', brlRate: 5.5 })
+    expect(c!.usd).toBeCloseTo((100 * 31) / AVG_DAYS_PER_MONTH, 9)
+  })
+
+  test('a bad month string yields null rather than throwing', () => {
+    expect(monthlyCommitment({ profiles: claude([sub('a', '2020-01-01', undefined, 100)]), month: 'nope', brlRate: 5.5 })).toBeNull()
   })
 })
 
