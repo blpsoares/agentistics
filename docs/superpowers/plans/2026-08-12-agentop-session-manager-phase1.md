@@ -835,7 +835,7 @@ git commit -m "feat(sessions): managed-session registry store"
 - Produces: `TMUX_SOCKET`, `SESSION_PREFIX`, `tmuxName(id)`, `idFromTmuxName(name)`, `LIST_FORMAT`,
   `parseTmuxList(stdout)`, `trimCapture(lines)`, `parsePrefix(stdout)`, and the argv builders
   `newSessionArgs`, `killSessionArgs`, `capturePaneArgs`, `sendKeysLiteralArgs`, `sendKeysEnterArgs`,
-  `attachArgs`, `remainOnExitArgs`, `showPrefixArgs`, `hasServerArgs`.
+  `attachArgs`, `remainOnExitArgs`, `showPrefixArgs`.
 
 - [ ] **Step 1: Write the failing test**
 
