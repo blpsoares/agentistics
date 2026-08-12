@@ -38,6 +38,10 @@ export interface SessionRegistry {
 }
 
 export function createSessionRegistry(file: string): SessionRegistry {
+  // One in-process writer. Each write appends to this chain, so read-modify-write sequences run
+  // strictly one after another even when several requests land at once.
+  let queue: Promise<unknown> = Promise.resolve()
+
   async function read(): Promise<ManagedSession[]> {
     const raw = await safeReadJson<ManagedSession[]>(file)
     return Array.isArray(raw) ? raw : []
@@ -48,23 +52,38 @@ export function createSessionRegistry(file: string): SessionRegistry {
     await writeFile(file, `${JSON.stringify(list, null, 2)}\n`, 'utf-8')
   }
 
+  // Chains `fn` behind whatever is already queued, so its read and write run as one atomic step
+  // relative to every other call made through this same function. Kept alive across a rejection —
+  // otherwise one failed mutation would wedge every mutation queued after it.
+  function enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const next = queue.then(fn)
+    queue = next.catch(() => undefined)
+    return next
+  }
+
   return {
     read,
-    async add(session) {
-      const list = await read()
-      await write([...list.filter(s => s.id !== session.id), session])
+    add(session) {
+      return enqueue(async () => {
+        const list = await read()
+        await write([...list.filter(s => s.id !== session.id), session])
+      })
     },
-    async remove(id) {
-      const list = await read()
-      await write(list.filter(s => s.id !== id))
+    remove(id) {
+      return enqueue(async () => {
+        const list = await read()
+        await write(list.filter(s => s.id !== id))
+      })
     },
-    async patch(id, patch) {
-      const list = await read()
-      const idx = list.findIndex(s => s.id === id)
-      if (idx === -1) return false
-      list[idx] = { ...list[idx]!, ...patch }
-      await write(list)
-      return true
+    patch(id, patch) {
+      return enqueue(async () => {
+        const list = await read()
+        const idx = list.findIndex(s => s.id === id)
+        if (idx === -1) return false
+        list[idx] = { ...list[idx]!, ...patch }
+        await write(list)
+        return true
+      })
     },
   }
 }

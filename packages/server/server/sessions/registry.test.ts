@@ -65,6 +65,14 @@ describe('createSessionRegistry', () => {
     await r.remove('a1')
     expect(await r.read()).toEqual([])
   })
+
+  it('serializes concurrent adds so a read-modify-write race cannot drop one', async () => {
+    const r = createSessionRegistry(file)
+    const ids = Array.from({ length: 10 }, (_, i) => `c${i}`)
+    await Promise.all(ids.map(id => r.add(session(id))))
+    const list = await r.read()
+    expect(list.map(s => s.id).sort()).toEqual([...ids].sort())
+  })
 })
 
 describe('newSessionId', () => {
