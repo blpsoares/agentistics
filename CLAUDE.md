@@ -30,6 +30,8 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   ├── agentop watch        → server/otel-watcher.ts (daemon only)
   ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull; `up` takes -y/-n and --cache/--no-cache, honored on the standalone path too)
   ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
+  ├── agentop session …    → server/sessions/cli-session.ts (start/list/attach/kill/rename/note;
+  │                          `--bg` detaches via tmux, attach prints the REAL detach key)
   ├── agentop ci-push      → server/ci-push.ts (one-shot GitHub Actions runner → central push; env AGENTISTICS_CENTRAL_URL/AGENTISTICS_CI_TOKEN)
   ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc + ~/.zshrc update-check hook)
   ├── agentop upgrade      → server/upgrade.ts
@@ -55,6 +57,14 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── version.ts           → getVersionInfo (current vs latest); drives update banners/notifications
   ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc + ~/.zshrc update-check hook
   ├── cli-setup.ts / cli-central.ts / cli-member.ts → the agentop setup/central/member command handlers
+  ├── sessions/            → the session manager: `SessionBackend` (tmux today, a per-session
+  │                          ConPTY host on Windows in Phase 4), the PURE `spawn-spec.ts`
+  │                          (`Record<HarnessId, SpawnSpec|null>` — a harness with no spec is
+  │                          ABSENT from the wizard, never offered and failing), the PURE
+  │                          `tmux-cli.ts` (every tmux argv and parse), `session-ref.ts` and the
+  │                          `managed-sessions.json` registry. **Every flag is read from the
+  │                          tool's own `--help`, never guessed** — codex's reasoning effort is
+  │                          deliberately absent for that reason. See docs/session-manager.md
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)

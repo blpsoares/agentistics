@@ -59,6 +59,7 @@ Commands:
   watch         Start the background metrics daemon only
   central       Manage the team central (Docker; runs from anywhere)
   member        Configure this machine as a team member
+  session       Start / list / attach assistant sessions (tmux-backed; --bg detaches)
   ci-push       One-shot push of a CI runner's metrics to a central
   upgrade       Upgrade agentop to the latest version
   autostart     Start a mode with the system (systemd user service on Linux)
@@ -372,6 +373,12 @@ if (command === 'central') {
     extra = [...centralUpArgs(parsed.flags), ...parsed.rest]
   }
   const code = await runCentral(action, extra)
+  process.exit(code)
+}
+
+if (command === 'session') {
+  const { runSession } = await import('../server/sessions/cli-session.ts')
+  const code = await runSession(args)
   process.exit(code)
 }
 
