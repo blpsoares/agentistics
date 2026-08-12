@@ -1,4 +1,4 @@
-import type { Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
+import type { BillingSettings, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
 import type { useDerivedStats } from '../hooks/useData'
 import type { ChatModelId } from './chatModels'
 
@@ -54,6 +54,13 @@ export interface AppContext {
   currency: 'USD' | 'BRL'
   setCurrency: (c: 'USD' | 'BRL') => void
   brlRate: number
+
+  /** How this machine is actually billed — the timeline the plan cost basis is computed from.
+   *  Local only; it never travels to a central, and on a central it is always empty. */
+  billing: BillingSettings
+  /** Persists the COMPLETE settings object. `writePreferencesTo` merges shallowly, so a partial
+   *  save would replace the whole timeline with the fragment. */
+  saveBilling: (next: BillingSettings) => Promise<void>
 
   // chat preferences (seed the Preferences settings page draft)
   chatModel: ChatModelId | null

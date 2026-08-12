@@ -1,6 +1,6 @@
 /** Which settings sections a viewer can see. UX-only gate — the server enforces real authz. */
 export type SettingsSectionId =
-  | 'preferences' | 'sessions' | 'data-sources' | 'harnesses' | 'pricing' | 'install' | 'connection' | 'live'
+  | 'preferences' | 'sessions' | 'data-sources' | 'harnesses' | 'pricing' | 'billing' | 'install' | 'connection' | 'live'
   | 'chat'
   | 'users' | 'teams' | 'machines' | 'repositories'
 
@@ -15,6 +15,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   { id: 'data-sources', labelEn: 'Data & sources', labelPt: 'Dados & fontes', group: 'personal' },
   { id: 'harnesses', labelEn: 'Harnesses', labelPt: 'Harnesses', group: 'personal' },
   { id: 'pricing', labelEn: 'Pricing', labelPt: 'Preços', group: 'personal' },
+  { id: 'billing', labelEn: 'Billing', labelPt: 'Cobrança', group: 'personal' },
   { id: 'install', labelEn: 'Install', labelPt: 'Instalação', group: 'personal' },
   { id: 'connection', labelEn: 'Central connection', labelPt: 'Conexão com a central', group: 'personal' },
   { id: 'live', labelEn: 'Live', labelPt: 'Ao vivo', group: 'personal' },
@@ -33,6 +34,10 @@ export function visibleSettingsSections(v: SettingsViewer): SettingsSection[] {
       // Chat spawns an assistant CLI on THIS host. A central has no local harness to spawn, so
       // there is nothing there to configure — the same reason `connection` and `live` are hidden.
       case 'chat': return !v.central
+      // Billing describes how ONE machine is paid for. A central aggregates many, and pricing a
+      // whole fleet from its operator's own timeline would be a fabricated number — so the plan
+      // cost basis does not exist there and neither does the screen that configures it.
+      case 'billing': return !v.central
       case 'users':
       case 'teams': return v.central && (v.role === 'owner' || !!v.isManager)
       // Machines is visible to ANY central account: owner/manager manage the fleet, a plain user

@@ -18,9 +18,9 @@ import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
 import type { TagDef } from './lib/tagMatch'
 import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
-import type { Filters, HarnessId, HealthIssue, TeamConfig } from '@agentistics/core'
+import type { BillingSettings, Filters, HarnessId, HealthIssue, TeamConfig } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
+import { normalizeBillingSettings, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
 import { buildDeniedRepoLabels } from './lib/shareRepos'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
@@ -1263,6 +1263,19 @@ export default function AppLayout() {
   const setLang = useCallback((l: Lang) => setLangState(l), [])
   const setTheme = useCallback((t: Theme) => setThemeState(t), [])
   const setCurrency = useCallback((c: 'USD' | 'BRL') => setCurrencyState(c), [])
+
+  // How this machine is actually billed. Local only — it never travels to a central.
+  const [billing, setBilling] = useState<BillingSettings>({ profiles: {} })
+  // `writePreferencesTo` is a SHALLOW merge, so a partial PUT would replace the whole billing
+  // object with the fragment. The complete settings always go over the wire.
+  const saveBilling = useCallback(async (next: BillingSettings) => {
+    setBilling(next)
+    await fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ billing: next }),
+    })
+  }, [])
   const [brlRate, setBrlRate] = useState(5.70)
   const [filters, setFilters] = useState<Filters>({
     dateRange: 'all',
@@ -1500,8 +1513,10 @@ export default function AppLayout() {
     // only a real 200 response with no archiveMode may set it. On failure we retry with
     // backoff and leave state at `undefined` (neutral loading bg) so nothing false-gates.
     let cancelled = false
-    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean; team?: TeamConfig }) => {
+    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean; team?: TeamConfig; billing?: unknown }) => {
       if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
+      // Total and never throws: a hand-edited preferences.json must not blank the dashboard.
+      setBilling(normalizeBillingSettings(prefs.billing))
       if (prefs.lang) setLangState(prefs.lang)
       if (prefs.theme) setThemeState(prefs.theme)
       if (prefs.currency) setCurrencyState(prefs.currency)
@@ -2545,6 +2560,7 @@ export default function AppLayout() {
           statsCache,
           filters, setFilters,
           lang, theme, currency, setCurrency, brlRate,
+          billing, saveBilling,
           chatModel, chatSoundEnabled, chatSoundId,
           savePreferences,
           pwaPrompt,
