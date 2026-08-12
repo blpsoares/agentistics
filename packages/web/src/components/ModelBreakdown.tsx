@@ -14,6 +14,18 @@ interface Props {
   fallbackInputTokens?: number
   fallbackOutputTokens?: number
   fallbackCostUSD?: number
+  /**
+   * C/A for this scope, when the page is showing the plan basis.
+   *
+   * Every cost in the table is multiplied by it. WITHIN ONE HARNESS that is a linear rescale, so
+   * the ordering, the proportions and the percentages are all preserved exactly — what changes is
+   * the magnitude and the meaning. It is an ALLOCATION, not a measurement: nobody was billed
+   * per model on a flat monthly plan, and the header says so rather than leaving the reader to
+   * assume these figures were observed.
+   *
+   * `undefined` (or 1) leaves the table in API basis.
+   */
+  planFactor?: number | null
   lang?: 'en' | 'pt'
 }
 
@@ -28,7 +40,7 @@ const COL: React.CSSProperties = { fontSize: 11, color: 'var(--text-tertiary)', 
 const GRID = 'minmax(120px,1fr) 56px 64px 64px 64px 88px'
 const GRID_MOBILE = 'minmax(100px,1fr) 56px 70px 88px'
 
-export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1, fallbackInputTokens, fallbackOutputTokens, fallbackCostUSD, lang = 'en' }: Props) {
+export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1, fallbackInputTokens, fallbackOutputTokens, fallbackCostUSD, planFactor, lang = "en" }: Props) {
   const isMobile = useIsMobile()
   const pt = lang === 'pt'
   const [query, setQuery] = useState('')
@@ -119,7 +131,11 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
     )
   }
 
-  const totalCost = entries.reduce((s, [id, u]) => s + calcCost(u, id), 0)
+  // A linear rescale of every cost in the table. Ordering and proportions are untouched by
+  // construction; only the magnitude and the meaning change, and `allocNote` below says which.
+  const alloc = planFactor !== null && planFactor !== undefined && Number.isFinite(planFactor) ? planFactor : 1
+  const showAlloc = alloc !== 1
+  const totalCost = entries.reduce((s, [id, u]) => s + calcCost(u, id), 0) * alloc
   const totalTokens = entries.reduce((s, [, u]) => s + u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens, 0)
   const totalInput = entries.reduce((s, [, u]) => s + u.inputTokens, 0)
   const totalOutput = entries.reduce((s, [, u]) => s + u.outputTokens, 0)
@@ -194,7 +210,7 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
       {ordered.map(([modelId, usage], i) => {
         const provider = resolveProvider(modelId)
         const newGroup = byProvider && (i === 0 || resolveProvider(ordered[i - 1]![0]).id !== provider.id)
-        const costUSD = calcCost(usage, modelId)
+        const costUSD = calcCost(usage, modelId) * alloc
         const tokens = usage.inputTokens + usage.outputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens
         const pct = totalTokens > 0 ? tokens / totalTokens : 0
         const color = getModelColor(modelId)
@@ -277,7 +293,7 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              Estimated Total
+              {showAlloc ? (pt ? 'Total do plano' : 'Plan total') : 'Estimated Total'}
             </span>
             <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 'auto', flexShrink: 0 }}>100%</span>
           </div>
@@ -296,6 +312,17 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
               {fmtCost(totalCost, currency, brlRate)}
             </span>
           </div>
+        </div>
+      )}
+
+      {/* Said once, at the bottom, where the numbers end: these are shares of a monthly fee, not
+          per-model charges. Nobody was billed per model on a flat plan, and the ratios between the
+          rows are the only part of this table that was actually measured. */}
+      {showAlloc && (
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'center', padding: '8px 14px', borderTop: '1px solid var(--border-subtle)', lineHeight: 1.5 }}>
+          {pt
+            ? 'Rateado: o custo do seu plano dividido entre os modelos na proporção do uso de cada um. Nenhum modelo é cobrado separadamente numa assinatura.'
+            : 'Allocated: your plan cost split across models in proportion to each one’s usage. No model is billed separately on a subscription.'}
         </div>
       )}
 

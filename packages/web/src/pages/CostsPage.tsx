@@ -1,6 +1,7 @@
 import React from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { TrendingUp, Zap, Target, Sparkles } from 'lucide-react'
+import { planAllocation } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { Section } from '../components/Section'
@@ -32,6 +33,7 @@ export default function CostsPage() {
         <ModelBreakdown
           modelUsage={derived.modelUsage}
           currency={currency}
+          planFactor={ctx.costBasis === 'plan' && ctx.planBasis.basis ? planAllocation(ctx.planBasis.basis).aggregateFactor : null}
           brlRate={brlRate}
           lang={lang}
           fallbackInputTokens={filters.projects.length > 0 ? derived.inputTokens : undefined}

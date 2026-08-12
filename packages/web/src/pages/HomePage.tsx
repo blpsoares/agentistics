@@ -244,6 +244,7 @@ export default function HomePage() {
         <ModelBreakdown
           modelUsage={derived.modelUsage}
           currency={currency}
+          planFactor={costBasis === "plan" ? planFactor : null}
           brlRate={brlRate}
           fallbackInputTokens={filters.projects.length > 0 ? derived.inputTokens : undefined}
           fallbackOutputTokens={filters.projects.length > 0 ? derived.outputTokens : undefined}
