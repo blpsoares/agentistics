@@ -513,7 +513,12 @@ actually pays.
   hold its operator's timeline; Settings → Billing is hidden there too.
 - **A panel where "plan" has no meaning renders in API basis and says so** — `CacheHitRatePanel`
   is hard-wired, because cache does not reduce a subscription bill, it extends a rate limit. Same
-  rule as `HARNESS_CAPABILITIES`, applied to a basis instead of a metric.
+  rule as `HARNESS_CAPABILITIES`, applied to a basis instead of a metric. `BudgetPanel` likewise
+  keeps its variable tracking (a forecast of a fixed fee only predicts itself) and instead shows
+  `monthlyCommitment()` — a SEPARATE question from `computePlanCost`, answering "what do I owe
+  this month" rather than "what did this window cost". api-mode days commit nothing to it.
+- **A Claude-only metric allocates against Claude's own C/A**, never the cross-harness aggregate —
+  `AgentMetricsPanel` would otherwise price agents partly against a plan paying for something else.
 - **Per-row plan figures are ALLOCATIONS, labelled as such.** Within one harness it is a linear
   rescale by C/A, so rankings and proportions survive exactly; across harnesses the factors differ
   and the label is the only thing stopping it being read as a measurement.

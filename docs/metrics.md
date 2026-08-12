@@ -181,6 +181,19 @@ Two related facts appear in the same place:
 - **Third party** (Bedrock, Vertex, a gateway) — the cost is off-machine and unknowable here, so
   those days count as uncovered.
 
+### The monthly commitment
+
+The budget panel does **not** convert. It forecasts variable spend from the pace so far, and a
+subscription has no pace — it is a fixed number known on day one, so a converted forecast would
+only ever predict itself.
+
+Instead it gains a third figure beside the two variable ones: **Month commitment**, what your
+registered plans owe for the current calendar month. That is a different question from the plan
+cost of a filter window, and it is the one a monthly budget is actually set against. Days billed
+per token commit nothing to it — their cost is usage — so they are reported as variable spend on
+top rather than folded in. A plan that started or ended mid-month is prorated and labelled as
+such, so an unexpected figure explains itself.
+
 ### What does not convert
 
 - **Cache savings** stay in API pricing, always. Cache does not reduce a subscription bill — the
