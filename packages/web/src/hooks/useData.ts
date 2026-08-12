@@ -16,6 +16,80 @@ function isDateStr(x: unknown): x is string {
   return typeof x === 'string' && x.length > 0
 }
 
+/**
+ * Split a day's per-model TOTAL token count into the input/output/cache breakdown pricing needs.
+ *
+ * `statsCache.dailyModelTokens` records only a total per model per day, so the split is
+ * apportioned from that model's global proportions. It is an approximation and always has been —
+ * this function exists so the approximation is written ONCE and tested, rather than living in two
+ * copies (the date-filtered `modelUsage` builder and the day-cost series) that could drift into
+ * pricing the same day two different ways.
+ *
+ * With no global row to apportion from, it falls back to 70/30 input/output and claims no cache:
+ * inventing a cache split would move tokens onto the cheapest rate in the table and quietly
+ * understate the day.
+ */
+export function apportionModelUsage(
+  totalTokens: number,
+  global: import('@agentistics/core').ModelUsage | undefined,
+): import('@agentistics/core').ModelUsage {
+  const gTotal = global
+    ? global.inputTokens + global.outputTokens + global.cacheReadInputTokens + global.cacheCreationInputTokens
+    : 0
+  if (global && gTotal > 0) {
+    return {
+      inputTokens: Math.round(totalTokens * global.inputTokens / gTotal),
+      outputTokens: Math.round(totalTokens * global.outputTokens / gTotal),
+      cacheReadInputTokens: Math.round(totalTokens * global.cacheReadInputTokens / gTotal),
+      cacheCreationInputTokens: Math.round(totalTokens * global.cacheCreationInputTokens / gTotal),
+      webSearchRequests: 0,
+      costUSD: 0,
+    }
+  }
+  return {
+    inputTokens: Math.round(totalTokens * 0.7),
+    outputTokens: Math.round(totalTokens * 0.3),
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    webSearchRequests: 0,
+    costUSD: 0,
+  }
+}
+
+/**
+ * Close the day series against the headline it decomposes.
+ *
+ * The residue is the DIFFERENCE, taken exactly, never a reconciliation: `Σ(days) + undated`
+ * equals `totalCostUSD` by construction, whichever fork produced the days. That is what lets the
+ * plan basis cut A to a set of days and still be able to say, in money, how much of the total it
+ * left out.
+ */
+export function summarizeApiCostByDay(
+  days: Partial<Record<HarnessId, Record<string, { costUSD: number; tokens: number; sessions: number }>>>,
+  totalCostUSD: number,
+  totalTokens: number,
+): import('@agentistics/core').ApiCostByDay {
+  let datedCostUSD = 0
+  let datedTokens = 0
+  let firstDay: string | null = null
+  let lastDay: string | null = null
+  for (const byDay of Object.values(days)) {
+    for (const [day, entry] of Object.entries(byDay ?? {})) {
+      datedCostUSD += entry.costUSD
+      datedTokens += entry.tokens
+      if (firstDay === null || day < firstDay) firstDay = day
+      if (lastDay === null || day > lastDay) lastDay = day
+    }
+  }
+  return {
+    days,
+    undatedCostUSD: totalCostUSD - datedCostUSD,
+    undatedTokens: totalTokens - datedTokens,
+    firstDay,
+    lastDay,
+  }
+}
+
 export interface StageProgress {
   progress: number
   detail?: string
@@ -1204,10 +1278,6 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       for (const day of filteredDailyModelTokens) {
         for (const [model, totalTok] of Object.entries(day.tokensByModel)) {
           if (modelSet && !modelSet.has(model)) continue
-          const g = globalModelUsage[model]
-          const gTotal = g
-            ? g.inputTokens + g.outputTokens + g.cacheReadInputTokens + g.cacheCreationInputTokens
-            : 0
           if (!filteredModelUsage[model]) {
             filteredModelUsage[model] = {
               inputTokens: 0, outputTokens: 0,
@@ -1216,16 +1286,13 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
             }
           }
           const entry = filteredModelUsage[model]
-          if (g && gTotal > 0) {
-            entry.inputTokens             += Math.round(totalTok * g.inputTokens / gTotal)
-            entry.outputTokens            += Math.round(totalTok * g.outputTokens / gTotal)
-            entry.cacheReadInputTokens    += Math.round(totalTok * g.cacheReadInputTokens / gTotal)
-            entry.cacheCreationInputTokens += Math.round(totalTok * g.cacheCreationInputTokens / gTotal)
-          } else {
-            // Fallback: assume 70% input / 30% output
-            entry.inputTokens  += Math.round(totalTok * 0.7)
-            entry.outputTokens += Math.round(totalTok * 0.3)
-          }
+          // Same apportionment the day-cost series uses — one implementation, so the two can
+          // never price the same day differently.
+          const split = apportionModelUsage(totalTok, globalModelUsage[model])
+          entry.inputTokens              += split.inputTokens
+          entry.outputTokens             += split.outputTokens
+          entry.cacheReadInputTokens     += split.cacheReadInputTokens
+          entry.cacheCreationInputTokens += split.cacheCreationInputTokens
         }
       }
       // Supplement with non-Claude sessions in range (unified view, date-filtered)
@@ -1282,26 +1349,98 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
     }
 
     // Cost calculation
+    //
+    // The day-granular series (`apiCostByDay`) is built from the SAME fork, in the same pass, so
+    // the headline and the per-day decomposition can never drift apart. Whatever the fork cannot
+    // attribute to a day becomes `undatedCostUSD`, computed below as an EXACT residue rather than
+    // by trying to make two sources agree — see the ApiCostByDay doc comment in @agentistics/core.
+    //
+    // The day key is `start_time.slice(0, 10)` (UTC), matching `tagSessionDay` and the billing
+    // module. Deliberately NOT `format(parseISO(...), 'yyyy-MM-dd')` (local), which is used a few
+    // lines above for the session-gap count: mixing the two rules would drift a session across a
+    // billing-period boundary at UTC-3 while the chart beside it plots the other day.
+    const costDays: Partial<Record<HarnessId, Record<string, { costUSD: number; tokens: number; sessions: number }>>> = {}
+    const addDayCost = (harness: HarnessId, day: string, costUSD: number, tokens: number, sessions: number) => {
+      const byDay = (costDays[harness] ??= {})
+      const entry = (byDay[day] ??= { costUSD: 0, tokens: 0, sessions: 0 })
+      entry.costUSD += costUSD
+      entry.tokens += tokens
+      entry.sessions += sessions
+    }
+    const dayOf = (s: { start_time?: string }): string | null =>
+      isDateStr(s.start_time) ? s.start_time.slice(0, 10) : null
+    const sessionTokens = (u: { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }) =>
+      u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens
+
     let totalCostUSD = 0
+    let totalTokensAll = 0
     if (cacheBlindScope || nonClaudeHarness || harnessesFiltered) {
       // Use per-session calcCost with the session's model field (includes cache tokens).
       // Also used when a non-Claude harness is selected (statsCache lacks harness granularity).
       // Sessions without a model fall back to blended rate on input+output only.
+      // Every contribution here IS a session, so every one of them carries a day: this branch
+      // attributes in full and leaves no residue.
       const blended = blendedCostPerToken(globalModelUsage)
       const modelSetFallback = modelSet?.size === 1 ? [...modelSet][0]! : undefined
       for (const sess of filteredSessions) {
         // Per-model pricing (multi-model sessions carry a `model_usage` breakdown).
         const cost = sessionCostUSD(sess, modelSetFallback)
-        if (cost !== null) {
-          totalCostUSD += cost
-        } else {
-          totalCostUSD += ((sess.input_tokens ?? 0) / 1_000_000) * blended.input
-                       + ((sess.output_tokens ?? 0) / 1_000_000) * blended.output
-        }
+        const sessCost = cost !== null
+          ? cost
+          : ((sess.input_tokens ?? 0) / 1_000_000) * blended.input
+            + ((sess.output_tokens ?? 0) / 1_000_000) * blended.output
+        totalCostUSD += sessCost
+        const tokens = (sess.input_tokens ?? 0) + (sess.output_tokens ?? 0)
+          + (sess.cache_read_input_tokens ?? 0) + (sess.cache_creation_input_tokens ?? 0)
+        totalTokensAll += tokens
+        const day = dayOf(sess)
+        if (day) addDayCost(sess.harness ?? 'claude', day, sessCost, tokens, 1)
       }
     } else {
       totalCostUSD = Object.entries(filteredModelUsage).reduce((s, [id, u]) => s + calcCost(u, id), 0)
+      totalTokensAll = Object.values(filteredModelUsage).reduce((s, u) => s + sessionTokens(u), 0)
+
+      // Claude's half. `dailyModelTokens` is the ONLY day series Claude has, and it carries a
+      // per-model total with no input/output/cache split — so the split is apportioned from the
+      // global per-model proportions, exactly as `filteredModelUsage` already does a few lines
+      // above. When a date filter is active those two are built from the same rows and the day
+      // series sums to the headline; with no filter the headline comes from the CUMULATIVE
+      // `modelUsage` instead, which covers history the daily series no longer retains. That gap
+      // is the residue, and it is real spend — reported, never folded into a day it did not
+      // happen on.
+      for (const day of filteredDailyModelTokens) {
+        if (!isDateStr(day.date)) continue
+        let dayCost = 0
+        let dayTokens = 0
+        for (const [model, totalTok] of Object.entries(day.tokensByModel)) {
+          if (modelSet && !modelSet.has(model)) continue
+          dayCost += calcCost(apportionModelUsage(totalTok, globalModelUsage[model]), model)
+          dayTokens += totalTok
+        }
+        if (dayCost > 0 || dayTokens > 0) addDayCost('claude', day.date.slice(0, 10), dayCost, dayTokens, 0)
+      }
+
+      // The non-Claude half is per-session and therefore fully dated.
+      for (const sess of nonClaudeInRange) {
+        const day = dayOf(sess)
+        if (!day) continue
+        let sessCost = 0
+        let tokens = 0
+        for (const [m, u] of sessionModelUsage(sess)) {
+          if (modelSet && !modelSet.has(m)) continue
+          sessCost += calcCost(u, m)
+          tokens += sessionTokens(u)
+        }
+        addDayCost(sess.harness ?? 'claude', day, sessCost, tokens, 1)
+      }
     }
+
+    // Exact by construction: Σ(days) + undated === totalCostUSD, whichever fork ran. A NEGATIVE
+    // residue means the daily series reports MORE than the cumulative total it is supposed to
+    // decompose — the two local sources contradicting each other, not merely disagreeing about
+    // how far back they reach. `usePlanBasis` treats that as a fault and withholds the plan
+    // basis, because A over the covered days would then exceed the total shown beside it.
+    const apiCostByDay = summarizeApiCostByDay(costDays, totalCostUSD, totalTokensAll)
 
     // Model tokens by model (for date range)
     const modelTokensByDate: Record<string, number> = {}
@@ -1552,6 +1691,9 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       allTimeTotalSessions,
       totalToolCalls,
       totalCostUSD,
+      /** `totalCostUSD` decomposed by day and harness, plus the part no day can carry.
+       *  Feeds the plan cost basis — see `billing.ts` in @agentistics/core. */
+      apiCostByDay,
       streak,
       streakLastActiveDate,
       longestStreak,

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay } from './useData'
 import { mergeStatsCaches } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
 import type { SessionMeta } from '@agentistics/core'
@@ -1221,5 +1221,91 @@ describe('repositoryGitTotals', () => {
 
   test('a project with no stats is skipped, not counted as zero', () => {
     expect(repositoryGitTotals([P('/a', 3), { path: '/b' }], null, false)?.commits).toBe(3)
+  })
+})
+
+// apportionModelUsage — the one implementation of the daily-token split
+describe('apportionModelUsage', () => {
+  const global = {
+    inputTokens: 500, outputTokens: 300, cacheReadInputTokens: 150, cacheCreationInputTokens: 50,
+    webSearchRequests: 0, costUSD: 0,
+  }
+
+  test('splits a day total in the global proportions', () => {
+    const out = apportionModelUsage(1000, global)
+    expect(out).toMatchObject({ inputTokens: 500, outputTokens: 300, cacheReadInputTokens: 150, cacheCreationInputTokens: 50 })
+  })
+
+  test('conserves the token total it was given', () => {
+    // The split is an approximation of the SHAPE, never of the volume — a day that loses tokens
+    // here would quietly under-price itself against a plan.
+    for (const total of [1000, 7777, 123_456]) {
+      const out = apportionModelUsage(total, global)
+      const sum = out.inputTokens + out.outputTokens + out.cacheReadInputTokens + out.cacheCreationInputTokens
+      expect(Math.abs(sum - total)).toBeLessThanOrEqual(2) // rounding only
+    }
+  })
+
+  test('with no global row it falls back to 70/30 and claims no cache', () => {
+    // Inventing a cache split would move tokens onto the cheapest rate in the table and
+    // understate the day.
+    for (const g of [undefined, { ...global, inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }]) {
+      const out = apportionModelUsage(1000, g)
+      expect(out).toMatchObject({ inputTokens: 700, outputTokens: 300, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 })
+    }
+  })
+
+  test('zero tokens yields zeros, never NaN', () => {
+    const out = apportionModelUsage(0, global)
+    expect(out.inputTokens + out.outputTokens + out.cacheReadInputTokens + out.cacheCreationInputTokens).toBe(0)
+  })
+})
+
+// summarizeApiCostByDay — the residue is a difference, never a reconciliation
+describe('summarizeApiCostByDay', () => {
+  const days = {
+    claude: {
+      '2026-04-02': { costUSD: 10, tokens: 1000, sessions: 2 },
+      '2026-04-05': { costUSD: 15, tokens: 1500, sessions: 3 },
+    },
+    codex: {
+      '2026-04-01': { costUSD: 5, tokens: 500, sessions: 1 },
+    },
+  }
+
+  test('the invariant holds: sum of days + undated === the headline', () => {
+    const out = summarizeApiCostByDay(days, 100, 10_000)
+    const summed = Object.values(out.days).flatMap(d => Object.values(d ?? {})).reduce((s, e) => s + e.costUSD, 0)
+    expect(summed + out.undatedCostUSD).toBeCloseTo(100, 9)
+    expect(out.undatedCostUSD).toBeCloseTo(70, 9)
+    expect(out.undatedTokens).toBe(7000)
+  })
+
+  test('a fully attributed total leaves no residue', () => {
+    const out = summarizeApiCostByDay(days, 30, 3000)
+    expect(out.undatedCostUSD).toBeCloseTo(0, 9)
+    expect(out.undatedTokens).toBe(0)
+  })
+
+  test('firstDay and lastDay span every harness, not just one', () => {
+    const out = summarizeApiCostByDay(days, 30, 3000)
+    expect(out.firstDay).toBe('2026-04-01') // codex, earlier than any claude day
+    expect(out.lastDay).toBe('2026-04-05')
+  })
+
+  test('no days at all: the whole total is undated and there is no window', () => {
+    const out = summarizeApiCostByDay({}, 42, 900)
+    expect(out.undatedCostUSD).toBe(42)
+    expect(out.firstDay).toBeNull()
+    expect(out.lastDay).toBeNull()
+  })
+
+  test('a negative residue is reported, not clamped away', () => {
+    // The daily series reporting MORE than the cumulative total is the two local sources
+    // contradicting each other. Hiding it behind a zero would let A exceed the total shown
+    // beside it; the consumer withholds the plan basis on this instead.
+    const out = summarizeApiCostByDay(days, 10, 1000)
+    expect(out.undatedCostUSD).toBeCloseTo(-20, 9)
+    expect(out.undatedTokens).toBe(-2000)
   })
 })
