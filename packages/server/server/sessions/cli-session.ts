@@ -145,7 +145,10 @@ async function patch(
   const registry = await readRegistry()
   const found = resolveSessionRef(registry, ref)
   if (!found.ok) { console.error(refError(ref, found.reason, found.matches)); return 1 }
-  await patchSession(found.session.id, fields)
+  // The registry was read before this write, and writes are queued — a concurrent `kill` can
+  // remove the session in between, so the patch itself is the only source of truth on success.
+  const applied = await patchSession(found.session.id, fields)
+  if (!applied) { console.error(refError(ref, 'not-found', [])); return 1 }
   console.log(`${found.session.id} ${verb}.`)
   return 0
 }
