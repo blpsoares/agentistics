@@ -1,5 +1,6 @@
-import type { BillingSettings, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
+import type { BillingReadiness, BillingSettings, CostBasis, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
 import type { useDerivedStats } from '../hooks/useData'
+import type { PlanBasisView } from '../hooks/usePlanBasis'
 import type { ChatModelId } from './chatModels'
 
 type DerivedStats = NonNullable<ReturnType<typeof useDerivedStats>>
@@ -61,6 +62,21 @@ export interface AppContext {
   /** Persists the COMPLETE settings object. `writePreferencesTo` merges shallowly, so a partial
    *  save would replace the whole timeline with the fragment. */
   saveBilling: (next: BillingSettings) => Promise<void>
+
+  /** Which basis every cost figure is expressed in. Plumbed exactly like `currency`.
+   *  Always `'api'` on a central, which cannot price a fleet from one operator's timeline. */
+  costBasis: CostBasis
+  /** Switch the basis. Refuses `'plan'` when it cannot be computed — the control is DISABLED in
+   *  that case and opens the setup prompt instead, so this is the second gate, not the only one. */
+  setCostBasis: (b: CostBasis) => void
+  /** The plan cost for the CURRENT filter, computed once for the whole app so every surface tells
+   *  the same story. `basis === null` means the plan basis is not available. */
+  planBasis: PlanBasisView
+  /** Whether the plan basis may be offered at all, and what is missing when it may not. */
+  billingReady: BillingReadiness
+  /** Opens the billing setup prompt — what the DISABLED basis control does when pressed, so it
+   *  says what it needs instead of doing nothing. */
+  openBillingSetup: () => void
 
   // chat preferences (seed the Preferences settings page draft)
   chatModel: ChatModelId | null

@@ -1,0 +1,136 @@
+/**
+ * usePlanBasis.ts — turn the day-decomposed API cost plus the user's billing timeline into the
+ * plan basis, once per render of the whole app.
+ *
+ * Computed ONE place and passed down, never re-derived per surface: two surfaces that each cut A
+ * their own way would tell two different stories about the same filter, and the whole point of
+ * the basis is that every cost on the page agrees.
+ *
+ * This module is wiring. Every decision lives in `@agentistics/core/billing`; what happens here is
+ * the walk over `apiCostByDay` that splits A into "on subscription days", "on api days" and
+ * "excluded", using `coveredDayKeys` as the only authority on which day is which.
+ */
+import { useMemo } from 'react'
+import {
+  aggregatePlanBasis,
+  computePlanCost,
+  resolvePlanBasis,
+  resolveWindow,
+  type AggregatePlanBasis,
+  type ApiCostByDay,
+  type BillingSettings,
+  type Filters,
+  type HarnessId,
+  type HarnessPlanBasis,
+  type PlanWindow,
+} from '@agentistics/core'
+import { getDateRangeFilter } from './useData'
+
+export type PlanBasisBlock = 'no-window' | 'inconsistent-history' | null
+
+export interface PlanBasisView {
+  /** `null` when no plan basis can be produced for this filter at all. */
+  basis: AggregatePlanBasis | null
+  /**
+   * The days actually measured.
+   *
+   * Rendered BESIDE the multiple, always. A user who filtered "all time" and got a number over the
+   * last 90 days — because that is as far back as the daily series reaches — has a correct figure
+   * under a misleading heading, and the window is the only thing that corrects it.
+   */
+  window: PlanWindow | null
+  blocked: PlanBasisBlock
+}
+
+const EMPTY: PlanBasisView = { basis: null, window: null, blocked: 'no-window' }
+
+/**
+ * @param today injected for tests; defaults to the real UTC day.
+ */
+export function computePlanBasisView(args: {
+  apiCostByDay: ApiCostByDay
+  billing: BillingSettings
+  brlRate: number
+  filters: Filters
+  today?: string
+}): PlanBasisView {
+  const { apiCostByDay, billing, brlRate, filters } = args
+  const today = args.today ?? new Date().toISOString().slice(0, 10)
+
+  // The daily series claiming MORE than the cumulative total it decomposes is the two local
+  // sources contradicting each other, not merely disagreeing about how far back they reach. A
+  // over the covered days would then exceed the total shown beside it, so the basis is withheld
+  // rather than shown too high.
+  if (apiCostByDay.undatedCostUSD < 0) {
+    return { basis: null, window: null, blocked: 'inconsistent-history' }
+  }
+
+  const range = getDateRangeFilter(filters.dateRange, filters.customStart, filters.customEnd)
+  const window = resolveWindow({
+    filterStartMs: range.start.getTime(),
+    filterEndMs: range.end.getTime(),
+    dataFirstDay: apiCostByDay.firstDay,
+    dataLastDay: apiCostByDay.lastDay,
+    today,
+  })
+  if (!window) return EMPTY
+
+  const parts: HarnessPlanBasis[] = []
+  for (const [key, byDay] of Object.entries(apiCostByDay.days)) {
+    const harness = key as HarnessId
+    if (!byDay) continue
+
+    const plan = computePlanCost({ timeline: billing.profiles[harness], window, brlRate })
+
+    let apiOnSubscriptionDays = 0
+    let apiOnApiDays = 0
+    let tokensCovered = 0
+    let excludedSessions = 0
+    let excludedApiCostUSD = 0
+
+    for (const [day, entry] of Object.entries(byDay)) {
+      // Days outside the window are not "uncovered" — they are not in scope at all, and counting
+      // them as excluded would report a coverage gap the user cannot act on.
+      if (day < window.from || day > window.to) continue
+      if (!plan.coveredDayKeys.has(day)) {
+        excludedSessions += entry.sessions
+        excludedApiCostUSD += entry.costUSD
+        continue
+      }
+      tokensCovered += entry.tokens
+      if (plan.apiDayKeys.has(day)) apiOnApiDays += entry.costUSD
+      else apiOnSubscriptionDays += entry.costUSD
+    }
+
+    parts.push({
+      harness,
+      basis: resolvePlanBasis({
+        plan,
+        apiCostOnSubscriptionDaysUSD: apiOnSubscriptionDays,
+        apiCostOnApiDaysUSD: apiOnApiDays,
+        tokensCovered,
+        excludedSessions,
+        excludedApiCostUSD,
+        // The undated residue is Claude's alone — it comes from `statsCache.modelUsage`, which no
+        // other harness has. Attributing it to each harness would multiply one fact by six.
+        undatedApiCostUSD: harness === 'claude' ? apiCostByDay.undatedCostUSD : 0,
+      }),
+    })
+  }
+
+  if (parts.length === 0) return { basis: null, window, blocked: 'no-window' }
+  return { basis: aggregatePlanBasis(parts), window, blocked: null }
+}
+
+export function usePlanBasis(args: {
+  apiCostByDay: ApiCostByDay | undefined
+  billing: BillingSettings
+  brlRate: number
+  filters: Filters
+}): PlanBasisView {
+  const { apiCostByDay, billing, brlRate, filters } = args
+  return useMemo(() => {
+    if (!apiCostByDay) return EMPTY
+    return computePlanBasisView({ apiCostByDay, billing, brlRate, filters })
+  }, [apiCostByDay, billing, brlRate, filters])
+}

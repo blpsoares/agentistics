@@ -14,13 +14,16 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
+import { usePlanBasis } from './hooks/usePlanBasis'
+import { viewCost } from './lib/costBasis'
+import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
 import type { TagDef } from './lib/tagMatch'
 import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
-import type { BillingSettings, Filters, HarnessId, HealthIssue, TeamConfig } from '@agentistics/core'
+import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, TeamConfig } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { normalizeBillingSettings, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
+import { billingReadiness, normalizeBillingSettings, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
 import { buildDeniedRepoLabels } from './lib/shareRepos'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
@@ -1266,6 +1269,8 @@ export default function AppLayout() {
 
   // How this machine is actually billed. Local only — it never travels to a central.
   const [billing, setBilling] = useState<BillingSettings>({ profiles: {} })
+  const [costBasisState, setCostBasisState] = useState<CostBasis>('api')
+  const [billingSetupOpen, setBillingSetupOpen] = useState(false)
   // `writePreferencesTo` is a SHALLOW merge, so a partial PUT would replace the whole billing
   // object with the fragment. The complete settings always go over the wire.
   const saveBilling = useCallback(async (next: BillingSettings) => {
@@ -1516,7 +1521,9 @@ export default function AppLayout() {
     const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean; team?: TeamConfig; billing?: unknown }) => {
       if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
       // Total and never throws: a hand-edited preferences.json must not blank the dashboard.
-      setBilling(normalizeBillingSettings(prefs.billing))
+      const nextBilling = normalizeBillingSettings(prefs.billing)
+      setBilling(nextBilling)
+      setCostBasisState(nextBilling.costBasis ?? 'api')
       if (prefs.lang) setLangState(prefs.lang)
       if (prefs.theme) setThemeState(prefs.theme)
       if (prefs.currency) setCurrencyState(prefs.currency)
@@ -1667,6 +1674,50 @@ export default function AppLayout() {
   // Tags visible to the viewer; back both the `tags` filter dimension and the derived stats.
   const [tagsList, setTagsList] = useState<TagDef[]>([])
   const derived = useDerivedStats(data, filters, tagsList)
+
+  // ── the plan cost basis ──────────────────────────────────────────────────────────────────
+  // Computed ONCE here and passed down: two surfaces each cutting A their own way would tell two
+  // different stories about the same filter, and the point of the basis is that they agree.
+  const planBasis = usePlanBasis({
+    apiCostByDay: derived?.apiCostByDay,
+    billing,
+    brlRate,
+    filters,
+  })
+  const billingReady = useMemo(
+    () => billingReadiness(billing, data?.harnesses?.length ? data.harnesses : ['claude']),
+    [billing, data?.harnesses],
+  )
+  // A central aggregates many machines; pricing a whole fleet from its operator's own timeline
+  // would be a fabricated number, so the basis does not exist there at all. And a basis the data
+  // cannot support falls back rather than rendering a page of N/A.
+  const costBasis: CostBasis =
+    isCentral || !billingReady.ready || planBasis.basis === null ? 'api' : costBasisState
+  const setCostBasis = useCallback((b: CostBasis) => {
+    setCostBasisState(b)
+    void saveBilling({ ...billing, costBasis: b })
+  }, [billing, saveBilling])
+  const openBillingSetup = useCallback(() => setBillingSetupOpen(true), [])
+
+  // The first-run invite repeats every load until dismissed for good — but only once preferences
+  // have actually loaded (`introDismissed` absent during loading would flash it at someone who
+  // dismissed it months ago), only with nothing registered yet, and never on a central.
+  const [billingIntroSeen, setBillingIntroSeen] = useState(false)
+  const showBillingIntro =
+    !isCentral
+    && !billingIntroSeen
+    && archiveChoice !== null
+    && billing.introDismissed !== true
+    && Object.keys(billing.profiles).length === 0
+
+  // The header totals strip, in whichever basis is active. It carries no label of its own, so the
+  // tooltip is where "this is your plan cost, not an API estimate" has to be said.
+  const headerPlanFactor = planBasis.basis ? planAllocation(planBasis.basis).aggregateFactor : null
+  const headerCostView = viewCost(derived?.totalCostUSD ?? 0, { basis: costBasis, factor: headerPlanFactor })
+  const headerCostUSD = headerCostView.usd
+  const headerCostTitle = headerCostView.basis === 'plan'
+    ? (lang === 'pt' ? 'Custo do seu plano no período medido' : 'Your plan cost over the measured period')
+    : (lang === 'pt' ? 'Estimativa a preços de API' : 'API-price estimate')
 
   const models = useMemo(() => {
     if (!data) return []
@@ -1980,18 +2031,34 @@ export default function AppLayout() {
           ? 'O ativo NÃO conta o intervalo entre um turno acabar e você mandar o próximo — por isso uma sessão reaberta durante semanas deixa de aparecer como centenas de horas. Mas ele AINDA conta um turno que ficou parado esperando você (ex.: aprovação de permissão): separar isso exigiria um limite de ociosidade arbitrário. Sessões cuja transcrição o Claude já apagou não têm tempo ativo e ficam fora do ranking.'
           : 'Active time does NOT count the gap between a turn ending and your next prompt — which is why a session reopened over weeks no longer reads as hundreds of hours. It DOES still count a turn that sat waiting on you (e.g. a permission prompt): separating that would need an arbitrary idle threshold. Sessions whose transcript Claude already deleted have no active time and are excluded from the ranking.',
       },
-      {
-        label: pt ? 'Custo estimado' : 'Estimated cost',
-        source: twoPaths(
-          '~/.claude/stats-cache.json → modelUsage[model].{inputTokens, outputTokens, cacheRead, cacheWrite}',
-          pt ? 'tokens de cada sessão × preço do modelo dela' : "each session's tokens × its model's price"),
-        formula: pt
-          ? 'Σ modelo [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nUma sessão sem modelo conhecido usa a taxa média ponderada pelo mix de modelos do período.'
-          : 'Σ model [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nA session with no known model uses the average rate weighted by the period\'s model mix.',
-        note: pt
-          ? 'Preços vêm de três fontes, nesta ordem de confiança: páginas oficiais dos fornecedores, a base comunitária LiteLLM e a tabela embutida no app. Como os harnesses usam vários fornecedores (Anthropic, OpenAI, Google), os preços não são só da Anthropic. Veja Configurações → Preços para a tarifa e a origem de cada modelo que esta máquina realmente usou. É estimativa de preço de API — não é sua fatura nem sua assinatura.'
-          : 'Prices come from three sources, in this order of trust: the vendors\' official pages, the LiteLLM community dataset and the table built into the app. Because harnesses use several vendors (Anthropic, OpenAI, Google), prices are not Anthropic-only. See Settings → Pricing for the rate and origin of every model this machine actually used. This is an API-price estimate — not your invoice or your subscription.',
-      },
+      // Two different items, because in plan basis this card measures something else entirely.
+      // Leaving the API text up while the headline shows C would make the explanation itself the
+      // lie the whole feature exists to remove.
+      costBasis === 'plan'
+        ? {
+            label: pt ? 'Custo do plano' : 'Plan cost',
+            source: pt
+              ? 'Configurações → Cobrança (períodos cadastrados) + as sessões filtradas'
+              : 'Settings → Billing (registered periods) + the filtered sessions',
+            formula: pt
+              ? 'C = Σ período [mensal × dias na janela / 30,44]\nV = A / C\n\nA = o custo a preços de API dos MESMOS dias.'
+              : 'C = Σ period [monthly × days in window / 30.44]\nV = A / C\n\nA = the API-price cost of the SAME days.',
+            note: pt
+              ? 'Dias sem plano cadastrado saem dos DOIS lados — do custo do plano e do valor de API — para que o múltiplo compare o mesmo período. O rodapé do card diz a janela realmente medida, que pode ser menor que o filtro: a série diária do Claude não alcança todo o histórico, e o que ela não alcança é declarado à parte em vez de ser jogado num dia qualquer. O valor mensal é o que você digitou; conversão de BRL usa a cotação de /api/rates.'
+              : 'Days with no registered plan leave BOTH sides — the plan cost and the API value — so the multiple compares the same period. The card’s subtitle names the window actually measured, which can be narrower than your filter: Claude’s daily series does not reach the whole history, and what it cannot reach is reported separately rather than dropped onto some day. The monthly amount is the one you typed; BRL is converted at the /api/rates figure.',
+          }
+        : {
+            label: pt ? 'Custo estimado' : 'Estimated cost',
+            source: twoPaths(
+              '~/.claude/stats-cache.json → modelUsage[model].{inputTokens, outputTokens, cacheRead, cacheWrite}',
+              pt ? 'tokens de cada sessão × preço do modelo dela' : "each session's tokens × its model's price"),
+            formula: pt
+              ? 'Σ modelo [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nUma sessão sem modelo conhecido usa a taxa média ponderada pelo mix de modelos do período.'
+              : 'Σ model [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nA session with no known model uses the average rate weighted by the period\'s model mix.',
+            note: pt
+              ? 'Preços vêm de três fontes, nesta ordem de confiança: páginas oficiais dos fornecedores, a base comunitária LiteLLM e a tabela embutida no app. Como os harnesses usam vários fornecedores (Anthropic, OpenAI, Google), os preços não são só da Anthropic. Veja Configurações → Preços para a tarifa e a origem de cada modelo que esta máquina realmente usou. É estimativa de preço de API — não é sua fatura nem sua assinatura. Cadastrou seu plano? Configurações → Cobrança transforma isto no custo real.'
+              : 'Prices come from three sources, in this order of trust: the vendors\' official pages, the LiteLLM community dataset and the table built into the app. Because harnesses use several vendors (Anthropic, OpenAI, Google), prices are not Anthropic-only. See Settings → Pricing for the rate and origin of every model this machine actually used. This is an API-price estimate — not your invoice or your subscription. Registered your plan? Settings → Billing turns this into your real cost.',
+          },
       {
         label: pt ? 'Commits' : 'Commits',
         source: scoped
@@ -2195,6 +2262,21 @@ export default function AppLayout() {
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W), transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+      {/* The billing prompt. Mounted HERE, after the archive consent gate's early return above, so
+          the two can never stack on a first launch — one blocking modal behind one dismissible one
+          is a pile nobody reads. It is the same component for the first-run invite and for the
+          disabled cost-basis control, which opens it with the specific gaps listed. */}
+      <BillingIntroModal
+        open={(billingSetupOpen || showBillingIntro) && !isCentral}
+        mode={billingSetupOpen ? 'setup' : 'intro'}
+        gaps={billingSetupOpen ? billingReady.gaps : []}
+        lang={lang}
+        onClose={() => { setBillingSetupOpen(false); setBillingIntroSeen(true) }}
+        onNeverShowAgain={() => {
+          setBillingIntroSeen(true)
+          void saveBilling({ ...billing, introDismissed: true })
+        }}
+      />
       {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
       {!isMobile && <SideNav
         lang={lang}
@@ -2340,7 +2422,7 @@ export default function AppLayout() {
               >
                 <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
                 <span style={{ opacity: 0.35 }}>·</span>
-                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(derived.totalCostUSD, currency, brlRate)}</span>
+                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
                 <span style={{ opacity: 0.35 }}>·</span>
                 <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(derived.inputTokens + derived.outputTokens)}</strong> tok</span>
                 <ChevronDown size={16} style={{ marginLeft: 'auto', opacity: 0.6, transform: fleetOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
@@ -2416,7 +2498,7 @@ export default function AppLayout() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                 <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
                 <span style={{ opacity: 0.35 }}>·</span>
-                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(derived.totalCostUSD, currency, brlRate)}</span>
+                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
                 <span style={{ opacity: 0.35 }}>·</span>
                 <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(derived.inputTokens + derived.outputTokens)}</strong> tok</span>
               </div>
@@ -2560,7 +2642,7 @@ export default function AppLayout() {
           statsCache,
           filters, setFilters,
           lang, theme, currency, setCurrency, brlRate,
-          billing, saveBilling,
+          billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
           chatModel, chatSoundEnabled, chatSoundId,
           savePreferences,
           pwaPrompt,
