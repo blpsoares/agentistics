@@ -25,6 +25,12 @@ const EXACT: ReadonlyMap<string, keyof Capabilities> = new Map<string, keyof Cap
   // key fingerprints. Strictly more sensitive than /api/team/status, which deliberately exposes
   // only counts, so it is host-local data and must be unreachable on an exposed instance.
   ['/api/team/proposals', 'localTranscripts'],
+  // Reads ~/.claude.json, ~/.claude/settings*.json and ~/.claude/.credentials.json to propose how
+  // this machine is billed. It extracts only non-secret fields, but the ANSWER is still host
+  // configuration and the files are the most sensitive this product touches, so it rides the same
+  // capability as the transcript routes rather than getting one of its own: there is no
+  // deployment that should read a transcript but not this.
+  ['/api/billing/detect', 'localTranscripts'],
 ])
 
 /** Prefix (no trailing slash) → capability. Matches `<prefix>` and `<prefix>/…` only. */

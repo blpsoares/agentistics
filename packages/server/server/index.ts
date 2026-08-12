@@ -751,6 +751,20 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
+    if (url.pathname === '/api/billing/detect' && req.method === 'GET') {
+      // Detection describes ONE machine's own configuration, so a central — which aggregates many
+      // machines and would only ever see its operator's — has no use for it and does not serve it.
+      // The capability guard (localTranscripts) has already run by here; this is the second gate,
+      // not the only one.
+      if (TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { detectBillingLocal } = await import('./billing-detect')
+      const adapters = await getEnabledAdapters()
+      const detections = await detectBillingLocal(adapters.map(a => a.id))
+      return new Response(JSON.stringify({ detections }), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/projects-list' && req.method === 'GET') {
       try {
         const dirs = await safeReadDir(PROJECTS_DIR)

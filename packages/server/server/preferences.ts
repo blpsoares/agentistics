@@ -1,7 +1,7 @@
 import { join, dirname } from 'path'
 import { mkdir, rename, writeFile, open, unlink, stat, readFile, utimes } from 'node:fs/promises'
 import { AGENTISTICS_DATA_DIR, CLAUDE_DIR } from './config'
-import type { TeamConfig } from '@agentistics/core'
+import type { BillingSettings, TeamConfig } from '@agentistics/core'
 import { migrateTeamConfig } from '@agentistics/core'
 
 // Preferences live in the writable ~/.agentistics dir. The legacy location under CLAUDE_DIR
@@ -39,6 +39,15 @@ export interface Preferences {
   /** true once the user dismissed the install prompt with "don't show again".
    *  Persisted server-side (not localStorage) so it survives incognito windows. */
   installDismissed?: boolean
+  /** How this machine is actually billed — a timeline of periods per harness, plus the display
+   *  basis. Drives the "plan" cost basis; see `billing.ts` in @agentistics/core.
+   *
+   *  LOCAL ONLY. This never enters `IngestBody`, a team document or an audit event: what someone
+   *  pays is theirs, and a central cannot price a fleet from one operator's timeline anyway.
+   *  It needs no `redactPreferences` entry — a plan id and a monthly amount are not credentials,
+   *  and the writes go through the same shallow merge as every other field, so the settings screen
+   *  must always PUT the complete object rather than a partial one. */
+  billing?: BillingSettings
   /** How the app preserves session history past Claude's 30-day cleanup.
    *  `undefined` = not chosen yet (the blocking consent gate is shown).
    *    - 'consolidate' = store computed per-session metrics only (~KB, recommended)
