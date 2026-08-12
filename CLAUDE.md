@@ -478,6 +478,61 @@ The display **name is set by the central** on the minted token — there is no n
 
 ---
 
+## Cost basis — API vs plan
+
+Every cost in this product is an **API-equivalent estimate** (`calcCost()` × `MODEL_PRICING`).
+Most people pay a flat subscription, so that figure is not their invoice. `costBasis: 'api' |
+'plan'` (on `AppContext`, plumbed exactly like `currency`) re-expresses it against what the user
+actually pays.
+
+- **`packages/core/src/billing.ts` is the ONLY place the plan arithmetic lives.** No caller may
+  re-derive coverage. `C = Σ monthly × days / 30.44` over the user's registered periods; `V = A/C`.
+  Proration is by DAYS, not calendar months — the calendar reading cannot survive an arbitrary
+  filter window.
+- **The model is a TIMELINE of periods per harness, never a single "current plan".** No file on
+  any machine records which plan was in force when, so a window spanning a plan change can only
+  be priced by asking. Overlapping periods are refused at entry **and re-checked in
+  `computePlanCost`** — `preferences.json` is hand-editable and a silently doubled C is worse
+  than none.
+- **Uncovered days are cut from BOTH A and C**, via the single `coveredDayKeys` set. Cutting one
+  side only inflates V; re-deriving the day set elsewhere makes A and C measure different periods.
+- **N/A, never a confident 0.** An uncovered window is `unavailable`; a multiple over zero cost is
+  `null`; an unconvertible BRL price uncovers its days rather than yielding `Infinity`. `viewCost`
+  refuses too: asking for the plan basis with no usable factor returns the API figure flagged
+  `unavailable`, never a silent zero under a plan label.
+- **Two day rules exist in this repo; billing uses `start_time.slice(0, 10)` (UTC)**, matching
+  `tagSessionDay` — not the local-clock `format(parseISO(...))` used for the session-gap count. At
+  UTC-3 the two disagree, and mixing them drifts a session across a period boundary.
+- **`apiCostByDay.undatedCostUSD` is real spend with no day.** In the unfiltered view Claude's
+  total comes from the cumulative `statsCache.modelUsage` while the only day series
+  (`dailyModelTokens`) does not sum to it, so a per-day A that closes on the headline does not
+  exist. The residue is the EXACT difference (`Σ days + undated === totalCostUSD`, pinned by a
+  test) and is reported, never folded into a day it did not happen on. A **negative** residue is
+  the two local sources contradicting each other and withholds the basis entirely.
+- **The plan basis is unavailable on a central.** It aggregates many machines and could only ever
+  hold its operator's timeline; Settings → Billing is hidden there too.
+- **A panel where "plan" has no meaning renders in API basis and says so** — `CacheHitRatePanel`
+  is hard-wired, because cache does not reduce a subscription bill, it extends a rate limit. Same
+  rule as `HARNESS_CAPABILITIES`, applied to a basis instead of a metric.
+- **Per-row plan figures are ALLOCATIONS, labelled as such.** Within one harness it is a linear
+  rescale by C/A, so rankings and proportions survive exactly; across harnesses the factors differ
+  and the label is the only thing stopping it being read as a measurement.
+- **`plan-catalog.ts` inherits the `MODEL_PRICING` rule structurally**: `CatalogPrice` requires
+  `verifiedAt` and `source`, so a price cannot exist without provenance. An unverifiable price is
+  OMITTED and the user types it — several entries ship with no amount for exactly this reason.
+- **`billing-detect.ts` may name only the whitelisted fields.** The files it reads also hold OAuth
+  secrets, a mail address and account identifiers; `billing-detect.test.ts` greps the module's own
+  source and fails if one is so much as mentioned. Never shell out to the macOS Keychain.
+  Detection is a PROPOSAL — it cannot know when a plan started, which is what the timeline needs
+  most.
+- **The basis toggle is a GATE**: disabled until `billingReadiness().ready`, and pressing it
+  disabled opens the setup prompt rather than doing nothing.
+
+See `docs/metrics.md` for the arithmetic written out and `docs/security.md` for the reader's
+boundary.
+
+---
+
 ## Calculation functions — single source of truth
 
 **All layers** use the same functions from `packages/core/src/types.ts` via `@agentistics/core`. Never inline pricing calculations.

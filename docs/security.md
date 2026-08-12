@@ -411,3 +411,52 @@ agentop doctor --exposed    # the deployment's own state
 
 And end to end, against a running instance: the checklist at the end of
 [exposure.md](exposure.md).
+
+## Billing detection — a narrow window onto the most sensitive files
+
+`GET /api/billing/detect` proposes how this machine is billed by reading
+`~/.claude.json`, `~/.claude/settings.json`, `~/.claude/settings.local.json` and
+`~/.claude/.credentials.json`. Those files also hold live OAuth access and refresh tokens, the
+user's mail address, and account and organization identifiers.
+
+**The whitelist is the boundary, and it is enforced by the type and by a test.**
+`BillingSignals` (`@agentistics/core/billingDetect.ts`) is a narrow, flat interface listing exactly
+the fields that may be extracted: three routing environment variables, the presence of an API key,
+`apiKeyHelper`, three `oauthAccount` fields, two credential fields and a pair of usage totals.
+Nothing else can be expressed, so nothing else can be carried.
+
+The reader (`packages/server/server/billing-detect.ts`) copies values with a `pick()` that takes a
+fixed key list rather than spreading a parsed object — a spread would carry whatever the file
+happens to contain, which is the failure mode being designed against. `ANTHROPIC_API_KEY` is
+reduced to the literal `'set'`: its presence is the signal, its value is a credential there is no
+reason to hold, not even in memory.
+
+`billing-detect.test.ts` enforces this two ways:
+
+1. **A source-text guard.** It reads both modules' own source and fails if either so much as
+   *names* a forbidden field. A field the code cannot name is a field it cannot leak. This is
+   deliberately cruder than a behavioural test — it fails on a comment, a type or a fixture.
+2. **A shape walk** over the real result, asserting the key set is a subset of `BillingSignals`
+   and that no value is long, contains `@`, or carries a credential-shaped prefix.
+
+**macOS is not probed.** The credentials there live in the login Keychain, and this product does
+NOT shell out to `security` to reach them — that raises a system prompt, and a metrics dashboard
+has no business asking someone to unlock their keychain. An absent signal is absent, and the
+detection chain falls through to the next one.
+
+**Exposure.** The route is registered in `capability-guard.ts` under `localTranscripts` rather
+than a capability of its own: its answer is host configuration read out of private files, and
+there is no deployment that should read a transcript but not this. It additionally returns 404 on
+a central, which aggregates many machines and would only ever see its operator's own setup.
+`capability-guard.test.ts` pins both the mapping and a near-miss path, so a typo in the
+registration fails loudly rather than quietly leaving a host-reading route unguarded.
+
+**Nothing detected is authoritative and nothing is written.** Every result carries
+`proposalOnly: true`; the user confirms it, and confirming creates an ordinary hand-entered period
+through the same validation as any other. Detection can only see the CURRENT state, while the
+billing timeline most needs to know when a plan STARTED — which no file records. Auto-applying
+would price months the user was on something else.
+
+**The timeline never travels.** `Preferences.billing` is local: it is not in `IngestBody`, not in
+a team document, not in an audit event. What someone pays is theirs, and a central cannot price a
+fleet from one operator's timeline anyway.
