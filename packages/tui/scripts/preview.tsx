@@ -37,6 +37,7 @@ import {
   TAB_ORDER,
   type ControlHost,
   type ControlSessions,
+  type ProjectOption,
   type ControlService,
   type ControlStatus,
   type ServiceRuntimeState,
@@ -343,6 +344,14 @@ function fakeHost(opts: Options): ControlHost {
     },
     readLog: async (source, maxLines) => (LOG[source] ?? []).slice(-maxLines),
     sessions: async () => FAKE_FLEET,
+    startableHarnesses: async () => [
+      { id: 'claude', label: 'claude', modelSuggestions: ['opus', 'sonnet', 'haiku'], supportsModel: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      { id: 'codex', label: 'codex', modelSuggestions: ['gpt-5.4', 'gpt-5.4-mini'], supportsModel: true, efforts: [] },
+      { id: 'kimi', label: 'kimi', modelSuggestions: ['kimi-k3'], supportsModel: true, efforts: [] },
+    ],
+    searchProjects: async (query: string) => FAKE_PROJECTS
+      .filter(p => p.label.toLowerCase().includes(query.trim().toLowerCase())),
+    spawnSession: async () => ({ ok: true, message: 'preview — nothing was performed' }),
   }
 }
 
@@ -354,6 +363,14 @@ function fakeHost(opts: Options): ControlHost {
  * row that does not fit — and the state word is the one cell the screen may never give up, so the
  * widest of them (`needs approval`) has to be on screen at every width being checked.
  */
+const FAKE_PROJECTS: ProjectOption[] = [
+  { path: '/home/dev/agentistics', label: 'agentistics  ·  blpsoares/agentistics', source: 'cwd' },
+  { path: '/home/dev/prontuario', label: 'prontuario  ·  org/prontuario', source: 'history' },
+  { path: '/home/dev/embark', label: 'embark  ·  opvibes/embark', source: 'history' },
+  { path: '/home/dev/agentistics/.claude/worktrees/x', label: 'x  ·  blpsoares/agentistics', source: 'history' },
+  { path: '/home/dev/scratch', label: 'scratch', source: 'history' },
+]
+
 const FAKE_FLEET: ControlSessions = {
   attention: 2,
   rang: [],

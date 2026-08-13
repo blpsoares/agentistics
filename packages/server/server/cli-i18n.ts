@@ -113,6 +113,13 @@ export interface CliStrings {
   sessNoted: string
   /** A session the backend hosts but the registry never recorded has no metadata to patch. */
   sessNoRegistryEntry: string
+  sessStarted: (name: string) => string
+  sessStartedBg: (name: string) => string
+  sessSpawnFailed: (reason: string) => string
+  sessSpawnUnsupported: (harness: string) => string
+  sessSpawnNoModel: (harness: string) => string
+  sessSpawnNoEffort: (harness: string) => string
+  sessSpawnBadEffort: (harness: string, value: string, accepted: string[]) => string
   dockerMissing: string
   dockerUnreachable: string
   foregroundLater: string
@@ -294,6 +301,14 @@ const EN: CliStrings = {
     `Attaching to ${title}. To leave it running and come back here, press ${detach}.`,
   sessNoted: 'note saved.',
   sessNoRegistryEntry: 'that session has no record to update — it was not started by agentop.',
+  sessStarted: (name: string) => `started ${name}.`,
+  sessStartedBg: (name: string) => `started ${name} in the background.`,
+  sessSpawnFailed: (reason: string) => `could not start the session: ${reason}`,
+  sessSpawnUnsupported: (harness: string) => `agentop cannot start ${harness} yet.`,
+  sessSpawnNoModel: (harness: string) => `${harness} has no model flag, so a model cannot be set.`,
+  sessSpawnNoEffort: (harness: string) => `${harness} has no effort flag, so an effort cannot be set.`,
+  sessSpawnBadEffort: (harness: string, value: string, accepted: string[]) =>
+    `${harness} does not accept effort "${value}". Accepted: ${accepted.join(', ')}.`,
   dockerMissing: 'docker not installed',
   dockerUnreachable: 'docker is installed but not answering',
   foregroundLater: 'foreground starts once this screen closes.',
@@ -449,6 +464,14 @@ const PT: CliStrings = {
     `Anexando a ${title}. Para deixá-la rodando e voltar aqui, aperte ${detach}.`,
   sessNoted: 'nota salva.',
   sessNoRegistryEntry: 'essa sessão não tem registro para atualizar — não foi o agentop que iniciou ela.',
+  sessStarted: (name: string) => `${name} iniciada.`,
+  sessStartedBg: (name: string) => `${name} iniciada em background.`,
+  sessSpawnFailed: (reason: string) => `não deu para iniciar a sessão: ${reason}`,
+  sessSpawnUnsupported: (harness: string) => `o agentop ainda não inicia ${harness}.`,
+  sessSpawnNoModel: (harness: string) => `${harness} não tem flag de modelo, então não dá para definir um.`,
+  sessSpawnNoEffort: (harness: string) => `${harness} não tem flag de effort, então não dá para definir um.`,
+  sessSpawnBadEffort: (harness: string, value: string, accepted: string[]) =>
+    `${harness} não aceita o effort "${value}". Aceitos: ${accepted.join(', ')}.`,
   dockerMissing: 'docker não instalado',
   dockerUnreachable: 'docker instalado, mas não responde',
   foregroundLater: 'o foreground sobe assim que esta tela fechar.',

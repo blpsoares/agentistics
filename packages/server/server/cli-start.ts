@@ -32,7 +32,7 @@ import { spawn } from 'node:child_process'
 import { writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
-import { DEFAULT_TEAM, type TeamConnection } from '@agentistics/core'
+import { DEFAULT_TEAM, HARNESS_ORDER, type HarnessId, type TeamConnection } from '@agentistics/core'
 import type {
   ActionResult,
   ActionTarget,
@@ -50,7 +50,11 @@ import type {
   ServiceRef,
   ServiceRuntimeState,
   ServiceState,
+  SessionHarnessOption,
   SessionState,
+  SpawnSessionRequest,
+  SpawnSessionResult,
+  ProjectOption,
   StartOption,
   TabId,
   StartRequest,
@@ -77,7 +81,11 @@ import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
 import { resolveLang } from './cli-lang'
 import { scanProcesses } from './live-sessions'
 import { resolveBackend } from './sessions'
-import { patchSession, readRegistry, removeSession } from './sessions/registry'
+import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
+import { findProjects } from './sessions/project-source'
+import { candidateLabel } from './sessions/project-search'
+import type { SpawnPlanError } from './sessions/types'
+import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
 import type { SessionView } from './sessions/session-view'
 
@@ -1149,6 +1157,22 @@ async function ensureSessionsPoller(): Promise<SessionsPoller> {
   return sessionsPoller
 }
 
+/**
+ * A refused spawn plan, in words.
+ *
+ * Mirrors `cli-session.ts`'s explainer rather than sharing it, because that one prints a CLI usage
+ * hint and this one goes into a status line — the same facts, addressed to someone looking at a
+ * screen rather than at a shell.
+ */
+function explainSpawnError(e: SpawnPlanError, s: CliStrings): string {
+  switch (e.code) {
+    case 'unsupported-harness': return s.sessSpawnUnsupported(e.harness)
+    case 'model-unsupported': return s.sessSpawnNoModel(e.harness)
+    case 'effort-unsupported': return s.sessSpawnNoEffort(e.harness)
+    case 'unknown-effort': return s.sessSpawnBadEffort(e.harness, e.value, e.accepted)
+  }
+}
+
 /** The state word each session wears, and the machine-readable state beside it. */
 function sessionState(v: SessionView): SessionState {
   if (v.status === 'external') return 'unknown'
@@ -1747,6 +1771,83 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const s = S()
       const ok = await patchSession(id, { note: text })
       return ok ? { ok: true, message: s.sessNoted } : { ok: false, message: s.sessNoRegistryEntry }
+    },
+
+    /**
+     * Derived from `SPAWN_SPECS`, never a second hand-written list.
+     *
+     * A harness with no spec is ABSENT from the wizard rather than offered and failing — the same
+     * rule `agentop session`'s `STARTABLE` already follows, and the reason the two can never drift.
+     */
+    async startableHarnesses(): Promise<SessionHarnessOption[]> {
+      return HARNESS_ORDER.flatMap(id => {
+        const spec = SPAWN_SPECS[id]
+        if (!spec) return []
+        return [{
+          id,
+          label: id,
+          modelSuggestions: spec.modelSuggestions,
+          supportsModel: spec.modelFlag !== undefined,
+          efforts: spec.efforts ?? [],
+        }]
+      })
+    },
+
+    async searchProjects(query: string): Promise<ProjectOption[]> {
+      const found = await findProjects(query, process.cwd())
+      return found.map(c => ({ path: c.path, label: candidateLabel(c), source: c.source }))
+    },
+
+    /**
+     * Start a session, and — when it was asked for attached — hand back what it takes to enter it.
+     *
+     * The plan is checked BEFORE anything is spawned, so an unsupported flag is a sentence rather
+     * than a session that starts and immediately dies with a usage error on a screen nobody sees.
+     */
+    async spawnSession(req: SpawnSessionRequest): Promise<SpawnSessionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+
+      const planned = planSpawn({
+        harness: req.harness as HarnessId,
+        cwd: req.cwd,
+        ...(req.prompt ? { prompt: req.prompt } : {}),
+        ...(req.model ? { model: req.model } : {}),
+        ...(req.effort ? { effort: req.effort } : {}),
+      })
+      if (!planned.ok) return { ok: false, message: explainSpawnError(planned.error, s) }
+
+      const id = newSessionId()
+      try {
+        await backend.spawn({
+          id,
+          cwd: req.cwd,
+          argv: planned.plan.argv,
+          ...(planned.plan.sendKeys ? { sendKeys: planned.plan.sendKeys } : {}),
+        })
+      } catch (e) {
+        return { ok: false, message: s.sessSpawnFailed(e instanceof Error ? e.message : String(e)) }
+      }
+
+      await addSession({
+        id,
+        harness: req.harness as HarnessId,
+        cwd: req.cwd,
+        createdAt: new Date().toISOString(),
+        ...(req.model ? { model: req.model } : {}),
+        ...(req.effort ? { effort: req.effort } : {}),
+        ...(req.label ? { label: req.label } : {}),
+      })
+
+      const name = req.label ?? id
+      if (!req.attach) return { ok: true, message: s.sessStartedBg(name) }
+      return {
+        ok: true,
+        message: s.sessStarted(name),
+        ticket: { argv: backend.attachCommand(id), detachHint: await backend.detachHint(), label: name },
+      }
     },
   }
 }

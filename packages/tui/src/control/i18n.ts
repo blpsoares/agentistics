@@ -213,6 +213,23 @@ export interface ControlStrings {
   keySessionsKill: string
   keySessionsRename: string
   keySessionsNote: string
+  keySessionsNew: string
+  /** The wizard's six questions. */
+  wizHarness: string
+  wizWhere: string
+  wizWhereHint: string
+  wizModel: string
+  wizModelHint: string
+  wizEffort: string
+  wizPrompt: string
+  wizPromptHint: string
+  wizHow: string
+  wizAttached: string
+  wizBackground: string
+  wizSkip: string
+  wizNoMatch: string
+  wizSourceCwd: string
+  wizSourceTyped: string
   /** The rename / note prompts, and the kill confirmation. */
   sessionsRenamePrompt: string
   sessionsNotePrompt: string
@@ -384,6 +401,22 @@ const EN: ControlStrings = {
   keySessionsKill: 'x kill',
   keySessionsRename: 'n name',
   keySessionsNote: 't note',
+  keySessionsNew: 'a new',
+  wizHarness: 'Which assistant?',
+  wizWhere: 'Where should it start?',
+  wizWhereHint: 'type to search your projects and repos, or paste a path',
+  wizModel: 'Which model?',
+  wizModelHint: 'pick one, or type any model name',
+  wizEffort: 'Which reasoning effort?',
+  wizPrompt: 'First prompt (optional)',
+  wizPromptHint: 'leave empty to start with nothing typed',
+  wizHow: 'Start it how?',
+  wizAttached: 'attached — take this terminal now',
+  wizBackground: 'background — keep it running and stay here',
+  wizSkip: 'use the default',
+  wizNoMatch: 'nothing matches — paste a full path to use a directory with no history',
+  wizSourceCwd: 'you are here',
+  wizSourceTyped: 'typed',
   sessionsRenamePrompt: 'Name this session',
   sessionsNotePrompt: 'Describe this session',
   sessionsKillConfirm: (title: string) => `Stop "${title}"? The assistant running in it is ended.`,
@@ -549,6 +582,22 @@ const PT: ControlStrings = {
   keySessionsKill: 'x encerrar',
   keySessionsRename: 'n nomear',
   keySessionsNote: 't nota',
+  keySessionsNew: 'a nova',
+  wizHarness: 'Qual assistente?',
+  wizWhere: 'Onde ela começa?',
+  wizWhereHint: 'digite para buscar seus projetos e repos, ou cole um caminho',
+  wizModel: 'Qual modelo?',
+  wizModelHint: 'escolha um, ou digite qualquer nome de modelo',
+  wizEffort: 'Qual nível de raciocínio?',
+  wizPrompt: 'Primeiro prompt (opcional)',
+  wizPromptHint: 'deixe vazio para começar sem nada digitado',
+  wizHow: 'Iniciar como?',
+  wizAttached: 'anexada — assume este terminal agora',
+  wizBackground: 'background — deixa rodando e fica aqui',
+  wizSkip: 'usar o padrão',
+  wizNoMatch: 'nada corresponde — cole um caminho completo para usar um diretório sem histórico',
+  wizSourceCwd: 'você está aqui',
+  wizSourceTyped: 'digitado',
   sessionsRenamePrompt: 'Dê um nome a esta sessão',
   sessionsNotePrompt: 'Descreva esta sessão',
   sessionsKillConfirm: (title: string) => `Encerrar "${title}"? O assistente que roda nela é finalizado.`,

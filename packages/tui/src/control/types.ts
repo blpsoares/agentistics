@@ -493,6 +493,70 @@ export interface ControlHost {
   killSession?(id: string): Promise<ActionResult>
   renameSession?(id: string, label: string): Promise<ActionResult>
   noteSession?(id: string, text: string): Promise<ActionResult>
+
+  /**
+   * The harnesses this machine can actually START, with what each of them accepts.
+   *
+   * Derived by the host from the spawn specs, so a harness with no spec is ABSENT from the wizard
+   * rather than offered and failing — the same rule the CLI already follows. The wizard renders
+   * whatever comes back and knows nothing about which CLI takes which flag.
+   */
+  startableHarnesses?(): Promise<SessionHarnessOption[]>
+
+  /** Places a new session could start, ranked. `query` may be empty, which opens on recency. */
+  searchProjects?(query: string): Promise<ProjectOption[]>
+
+  /** Start one. An attached request comes back with a ticket the shell hands to `ControlExit`. */
+  spawnSession?(req: SpawnSessionRequest): Promise<SpawnSessionResult>
+}
+
+/** One harness the wizard may offer, and the shape of the questions it earns. */
+export interface SessionHarnessOption {
+  id: string
+  /** Already-localized name. */
+  label: string
+  /**
+   * Models to OFFER — never a validation list. `claude --help` documents `--model` as an alias "or
+   * a model's full name", so refusing anything outside a fixed list would reject valid input the
+   * day a model ships. The wizard therefore lets the value be typed as well as picked.
+   */
+  modelSuggestions: string[]
+  /** Absent when the CLI has no model flag at all, which is a different thing from an empty list. */
+  supportsModel: boolean
+  /** A genuine closed enum printed by the CLI itself, so this one IS validated. Empty = none. */
+  efforts: string[]
+}
+
+/** One place a session could start. */
+export interface ProjectOption {
+  /** The directory. The only field that is load-bearing. */
+  path: string
+  /** Already-composed display label — the directory name, and the repo when it belongs to one. */
+  label: string
+  /**
+   * Why it is being offered, so the list can say so: the directory you are standing in, a place you
+   * have worked before, or a path you typed that exists but has no history.
+   */
+  source: 'cwd' | 'history' | 'typed'
+}
+
+export interface SpawnSessionRequest {
+  harness: string
+  cwd: string
+  prompt?: string
+  model?: string
+  effort?: string
+  label?: string
+  /** Take the terminal now, versus start detached and stay here. */
+  attach: boolean
+}
+
+export interface SpawnSessionResult {
+  ok: boolean
+  /** Already-localized outcome for the status line. */
+  message: string
+  /** Present only on a successful ATTACHED start — the shell reports it as `ControlExit.attach`. */
+  ticket?: AttachTicket
 }
 
 /** Everything the caller needs to hand the terminal over and get the user back afterwards. */

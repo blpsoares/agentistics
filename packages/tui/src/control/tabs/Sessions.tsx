@@ -22,6 +22,7 @@ import type { TabChrome } from '../ControlCenter'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import { Divider } from '../Surface'
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
+import { SessionWizard } from './SessionWizard'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, sessionsLayout, type DetailLine, type SessionGrouping, type SessionRow,
@@ -53,6 +54,8 @@ type Ask =
   | { kind: 'rename'; session: ControlSession }
   | { kind: 'note'; session: ControlSession }
   | { kind: 'kill'; session: ControlSession }
+  /** Starting a new one — the only question that needs no selected row. */
+  | { kind: 'new' }
 
 export function Sessions({
   host, fleet, strings: s, width, height, isActive, run, onChrome, onExit, onRefreshFleet,
@@ -167,6 +170,10 @@ export function Sessions({
 
     // The verbs. `k` is deliberately NOT the kill key — it is `up` in this list, and a key that
     // moves the cursor on one screen and destroys work on another is the shape of a real accident.
+    // `a` opens the wizard and needs no selection at all — it is the one verb that is about the
+    // fleet rather than about a row, which is also why an empty list still offers it.
+    if (input === 'a' && host.spawnSession) { setAsk({ kind: 'new' }); return }
+
     if (key.return) return actOn('attach')
     if (input === 'x') return actOn('kill')
     if (input === 'n') return actOn('rename')
@@ -187,8 +194,8 @@ export function Sessions({
       : {
           capture: false,
           hints: [
-            s.keyQuit, s.keyTabs, s.keyMove, s.keySessionsAttach, s.keySessionsRename,
-            s.keySessionsNote, s.keySessionsKill, s.keySessionsGroup,
+            s.keyQuit, s.keyTabs, s.keySessionsNew, s.keyMove, s.keySessionsAttach,
+            s.keySessionsRename, s.keySessionsNote, s.keySessionsKill, s.keySessionsGroup,
           ],
         })
   }, [isActive, onChrome, s, ask])
@@ -212,6 +219,31 @@ export function Sessions({
 
   const offset = windowOffset(at < 0 ? 0 : selectable[at]!, rows.length, layout.list)
   const visible = rows.slice(offset, offset + layout.list)
+
+  // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
+  // search field in the middle, and squeezing that under a list would give the one control that
+  // decides where work happens three rows to show its results in.
+  if (ask?.kind === 'new') {
+    return (
+      <Box flexDirection="column" width={width} flexShrink={0}>
+        <SessionWizard
+          host={host}
+          strings={s}
+          width={width}
+          height={height}
+          isActive={isActive}
+          onCancel={() => setAsk(null)}
+          onDone={result => {
+            setAsk(null)
+            // A successful ATTACHED start is the same handover `enter` performs — the screen reports
+            // the intent and the shell releases the terminal.
+            if (result.ok && result.ticket) return onExit({ kind: 'attach', ticket: result.ticket })
+            void run(async () => ({ ok: result.ok, message: result.message })).then(onRefreshFleet)
+          }}
+        />
+      </Box>
+    )
+  }
 
   // `flexShrink={0}`: the budget above is this screen's contract with the pane around it, and a Box
   // that shrinks would spend the same rows again on Yoga's terms.
@@ -256,7 +288,7 @@ export function Sessions({
         <>
           <Divider width={width} />
           <Question
-            ask={ask}
+            ask={ask as Exclude<Ask, { kind: 'new' }>}
             strings={s}
             width={width}
             onClose={() => setAsk(null)}
@@ -372,7 +404,8 @@ function Detail({ lines, width, rows }: {
  * read at the moment the user is deciding, and the row being acted on is still visible above.
  */
 function Question({ ask, strings: s, width, onClose, onRun, host }: {
-  ask: Ask
+  /** Never `new` — the wizard takes the whole screen and is rendered before this is reached. */
+  ask: Exclude<Ask, { kind: 'new' }>
   strings: ControlStrings
   width: number
   onClose: () => void
