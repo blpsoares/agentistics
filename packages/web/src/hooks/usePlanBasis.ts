@@ -57,13 +57,12 @@ export function computePlanBasisView(args: {
   const { apiCostByDay, billing, brlRate, filters } = args
   const today = args.today ?? new Date().toISOString().slice(0, 10)
 
-  // The daily series claiming MORE than the cumulative total it decomposes is the two local
-  // sources contradicting each other, not merely disagreeing about how far back they reach. A
-  // over the covered days would then exceed the total shown beside it, so the basis is withheld
-  // rather than shown too high.
-  if (apiCostByDay.undatedCostUSD < 0) {
-    return { basis: null, window: null, blocked: 'inconsistent-history' }
-  }
+  // A NEGATIVE residue means the day series accounts for more than the cumulative total it
+  // decomposes. That used to withhold the basis, on the reading that the two local sources were
+  // contradicting each other. It is no longer a contradiction: the Claude day series is now the
+  // max-merge of the daily token series and the per-session costs, so a series richer than the
+  // cumulative aggregate is the expected outcome, not a fault. Nothing of the headline is then
+  // missing from the comparison, which is exactly what a zero residue says.
 
   const range = getDateRangeFilter(filters.dateRange, filters.customStart, filters.customEnd)
   const window = resolveWindow({
@@ -113,7 +112,8 @@ export function computePlanBasisView(args: {
         excludedApiCostUSD,
         // The undated residue is Claude's alone — it comes from `statsCache.modelUsage`, which no
         // other harness has. Attributing it to each harness would multiply one fact by six.
-        undatedApiCostUSD: harness === 'claude' ? apiCostByDay.undatedCostUSD : 0,
+        // Floored at zero: see the note above on a negative residue.
+        undatedApiCostUSD: harness === 'claude' ? Math.max(0, apiCostByDay.undatedCostUSD) : 0,
       }),
     })
   }

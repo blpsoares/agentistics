@@ -69,6 +69,35 @@ export function PlanValuePanel({ planBasis, currency, brlRate, lang }: {
         </span>
       </div>
 
+      {/* The number in money. The multiple answers "was it worth it"; this answers "by how much",
+          which is the one people repeat out loud. Shown as an OVERSPEND when it goes the other
+          way — a "saving" of minus two thousand is a sentence nobody should have to decode. */}
+      {basis.multiple !== null && (
+        <div style={{
+          display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap',
+          padding: '9px 12px', borderRadius: 'var(--radius-md)',
+          background: 'var(--bg-elevated)',
+          borderLeft: `3px solid ${worthIt ? 'var(--accent-green, #22c55e)' : '#f59e0b'}`,
+        }}>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            {worthIt
+              ? (pt ? 'Economia com o plano' : 'Saved by being on the plan')
+              : (pt ? 'Pago a mais que o valor de API' : 'Paid above the API value')}
+          </span>
+          <span style={{
+            fontSize: 18, fontWeight: 800, fontVariantNumeric: 'tabular-nums',
+            color: worthIt ? 'var(--accent-green, #22c55e)' : '#f59e0b',
+          }}>
+            {fmtCost(Math.abs(api - plan), currency, brlRate)}
+          </span>
+          <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+            {pt
+              ? `no período medido · ${fmtCost(api, currency, brlRate)} de valor por ${fmtCost(plan, currency, brlRate)} pagos`
+              : `over the measured period · ${fmtCost(api, currency, brlRate)} of value for ${fmtCost(plan, currency, brlRate)} paid`}
+          </span>
+        </div>
+      )}
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
         <Bar
           label={pt ? 'Valor de API do seu uso' : 'API value of your usage'}

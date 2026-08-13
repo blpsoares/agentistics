@@ -74,16 +74,17 @@ describe('computePlanBasisView', () => {
     expect(view.basis!.apiCostUSD).toBe(200)
   })
 
-  test('a negative residue withholds the basis entirely', () => {
-    // The daily series claiming more than the cumulative total is the two sources contradicting
-    // each other; A over covered days would exceed the total shown beside it.
+  test('a negative residue reads as nothing missing, not as a fault', () => {
+    // The Claude day series is the max-merge of the daily token series and the per-session costs,
+    // so accounting for more than the cumulative aggregate is expected rather than contradictory.
+    // Nothing of the headline is then missing from the comparison — which is what zero says.
     const view = computePlanBasisView({
       apiCostByDay: series({ '2026-04-05': 100 }, 'claude', -20),
       billing: monthly(100, '2020-01-01'),
       brlRate: 5.5, filters, today,
     })
-    expect(view.basis).toBeNull()
-    expect(view.blocked).toBe('inconsistent-history')
+    expect(view.basis).not.toBeNull()
+    expect(view.basis!.coverage.undatedApiCostUSD).toBe(0)
   })
 
   test('the undated residue is Claude-only, never multiplied across harnesses', () => {

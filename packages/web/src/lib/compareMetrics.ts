@@ -119,6 +119,9 @@ export interface CompareRow {
 export const COMPARE_METRICS: readonly CompareMetricDef[] = [
   { key: 'cost', labelEn: 'Cost', labelPt: 'Custo', polarity: 'lower-better', format: 'cost' },
   { key: 'planMultiple', labelEn: 'Plan value multiple', labelPt: 'Múltiplo do plano', polarity: 'higher-better', format: 'multiple', fixedBasis: 'plan' },
+  // A − C, the multiple restated in money. Negative when the plan cost more than the usage was
+  // worth, which is a real answer and is shown as such rather than floored at zero.
+  { key: 'planSavings', labelEn: 'Saved vs API prices', labelPt: 'Economia vs. preços de API', polarity: 'higher-better', format: 'cost', fixedBasis: 'plan' },
   { key: 'effectiveCostPerMTokens', labelEn: 'Effective $/1M tokens', labelPt: 'Custo efetivo por 1M tokens', polarity: 'lower-better', format: 'rate' },
   { key: 'tokens', labelEn: 'Tokens', labelPt: 'Tokens', polarity: 'neutral', format: 'tokens' },
   { key: 'sessions', labelEn: 'Sessions', labelPt: 'Sessões', polarity: 'higher-better', format: 'count' },
@@ -136,6 +139,9 @@ function valueFor(side: CompareSide, key: string, basis: MetricBasis): number | 
   switch (key) {
     case 'cost': return basis === 'plan' ? side.planCostUSD : side.costUSD
     case 'planMultiple': return side.planMultiple
+    case 'planSavings':
+      // Needs BOTH figures; one alone says nothing about the difference between them.
+      return side.planCostUSD === null || side.costUSD === null ? null : side.costUSD - side.planCostUSD
     case 'effectiveCostPerMTokens':
       // Both bases divide by the SAME token count. Taking the plan basis's own rate here would
       // change the denominator too (it counts cache, this page's `tokens` does not), so flipping

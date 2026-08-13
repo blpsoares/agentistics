@@ -1430,6 +1430,39 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
         if (dayCost > 0 || dayTokens > 0) addDayCost('claude', day.date.slice(0, 10), dayCost, dayTokens, 0)
       }
 
+      // Claude's SESSIONS also carry a day, and they reach further back than `dailyModelTokens`
+      // does. Without this, ticking the Claude harness chip — which flips the fork above to the
+      // per-session branch — changed the plan comparison enormously for the same underlying data,
+      // because the unfiltered path could only date a fraction of the cost and excluded the rest.
+      //
+      // MERGED PER DAY BY MAX, never added: the two sources overlap, so summing them would
+      // double-count every day both describe. Same rule, and the same reason, as
+      // `applyArchivedStats` reconciling the archive against the live stats.
+      // Sessions SUM among themselves within a day — they are distinct pieces of work — and only
+      // the day's total then competes with the daily series for the max.
+      const fromSessions: Record<string, { costUSD: number; tokens: number; sessions: number }> = {}
+      for (const sess of filteredSessions) {
+        if ((sess.harness ?? 'claude') !== 'claude') continue
+        const day = dayOf(sess)
+        if (!day) continue
+        const entry = (fromSessions[day] ??= { costUSD: 0, tokens: 0, sessions: 0 })
+        entry.costUSD += sessionCostUSD(sess) ?? 0
+        entry.tokens += (sess.input_tokens ?? 0) + (sess.output_tokens ?? 0)
+          + (sess.cache_read_input_tokens ?? 0) + (sess.cache_creation_input_tokens ?? 0)
+        entry.sessions += 1
+      }
+      const claudeDays = (costDays.claude ??= {})
+      for (const [day, entry] of Object.entries(fromSessions)) {
+        const prev = claudeDays[day]
+        claudeDays[day] = prev
+          ? {
+              costUSD: Math.max(prev.costUSD, entry.costUSD),
+              tokens: Math.max(prev.tokens, entry.tokens),
+              sessions: Math.max(prev.sessions, entry.sessions),
+            }
+          : entry
+      }
+
       // The non-Claude half is per-session and therefore fully dated.
       for (const sess of nonClaudeInRange) {
         const day = dayOf(sess)
