@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test'
 import { COMPARE_METRICS, buildCompareRows, type CompareSide } from './compareMetrics'
 
 const side = (patch: Partial<CompareSide> = {}): CompareSide => ({
-  costUSD: 100, planCostUSD: 50, planMultiple: 2, effectiveCostPerMTokens: 5,
+  costUSD: 100, planCostUSD: 50, planMultiple: 2,
   tokens: 10_000_000, sessions: 20, messages: 200, cacheHitRate: 0.6,
   ...patch,
 })
@@ -106,15 +106,21 @@ describe('buildCompareRows — derived values', () => {
     expect(row(rows, 'effectiveCostPerMTokens').a).toBeCloseTo(5, 9)
   })
 
-  test('the effective rate comes from the plan in plan basis', () => {
+  test('the effective rate uses the plan cost in plan basis, over the SAME tokens', () => {
+    // Only the numerator may move with the basis. If the denominator moved too — the plan basis
+    // counts cache, this page's `tokens` does not — the row would change for two reasons at once
+    // and compare nothing.
     const rows = buildCompareRows(
-      side({ effectiveCostPerMTokens: 1.2, planCostUSD: 10 }),
-      side({ effectiveCostPerMTokens: 3.4, planCostUSD: 10 }),
+      side({ costUSD: 50, planCostUSD: 10, tokens: 10_000_000 }),
+      side({ costUSD: 50, planCostUSD: 30, tokens: 10_000_000 }),
       'plan',
     )
     const r = row(rows, 'effectiveCostPerMTokens')
-    expect(r.a).toBe(1.2)
-    expect(r.b).toBe(3.4)
+    expect(r.a).toBeCloseTo(1, 9)
+    expect(r.b).toBeCloseTo(3, 9)
+
+    const api = row(buildCompareRows(side({ costUSD: 50, tokens: 10_000_000 }), side(), 'api'), 'effectiveCostPerMTokens')
+    expect(api.a).toBeCloseTo(5, 9) // same denominator, API numerator
   })
 })
 

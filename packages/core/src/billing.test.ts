@@ -545,6 +545,21 @@ describe('monthlyCommitment', () => {
     expect(c!.harnesses).toEqual([])
   })
 
+  test('one short plan makes the TOTAL partial, even beside a full-month one', () => {
+    // The total is then smaller than the sum of the monthly prices, and without this flag nothing
+    // on screen says why. Taking the longest coverage instead reports a full month whenever any
+    // one plan happens to span it.
+    const profiles = normalizeBillingSettings({
+      profiles: {
+        claude: { periods: [sub('c', '2020-01-01', undefined, 100)] },
+        kimi: { periods: [sub('k', '2026-04-20', undefined, 30)] },
+      },
+    }).profiles
+    const c = monthlyCommitment({ profiles, month: '2026-04-10', brlRate: 5.5 })
+    expect(c!.partial).toBe(true)
+    expect(c!.usd).toBeCloseTo((100 * 30) / AVG_DAYS_PER_MONTH + (30 * 11) / AVG_DAYS_PER_MONTH, 9)
+  })
+
   test('several harnesses sum, and are named in display order', () => {
     const profiles = normalizeBillingSettings({
       profiles: {

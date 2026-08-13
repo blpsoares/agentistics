@@ -827,7 +827,7 @@ export function monthlyCommitment(args: {
   const monthDays = windowDayCount(window)
 
   let usd = 0
-  let coveredDays = 0
+  let anyPartial = false
   let hasUsageBilling = false
   const harnesses: HarnessId[] = []
 
@@ -839,9 +839,11 @@ export function monthlyCommitment(args: {
     if (plan.subscriptionCostUSD > 0) {
       usd += plan.subscriptionCostUSD
       harnesses.push(key)
-      // A subscription that does not span the whole month is prorated; report that, per harness,
-      // so one short period marks the whole figure partial.
-      coveredDays = Math.max(coveredDays, plan.coveredDays)
+      // ANY contributing subscription that does not span the whole month makes the TOTAL a
+      // prorated figure. Taking the longest coverage instead would report a full month whenever
+      // one plan happened to span it, leaving the short one's proration unexplained — the total
+      // is smaller than the sum of the monthly prices and nothing on screen would say why.
+      if (plan.coveredDays < monthDays) anyPartial = true
     }
   }
 
@@ -850,7 +852,7 @@ export function monthlyCommitment(args: {
   return {
     usd,
     harnesses: harnesses.sort((a, b) => HARNESS_ORDER.indexOf(a) - HARNESS_ORDER.indexOf(b)),
-    partial: harnesses.length > 0 && coveredDays < monthDays,
+    partial: harnesses.length > 0 && anyPartial,
     hasUsageBilling,
   }
 }

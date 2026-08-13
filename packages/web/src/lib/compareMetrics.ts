@@ -36,7 +36,6 @@ export interface CompareSide {
   /** C for this side's filter. `null` when the plan basis is not computable there. */
   planCostUSD: number | null
   planMultiple: number | null
-  effectiveCostPerMTokens: number | null
   tokens: number | null
   sessions: number | null
   messages: number | null
@@ -78,9 +77,14 @@ function valueFor(side: CompareSide, key: string, basis: MetricBasis): number | 
     case 'cost': return basis === 'plan' ? side.planCostUSD : side.costUSD
     case 'planMultiple': return side.planMultiple
     case 'effectiveCostPerMTokens':
-      return basis === 'plan'
-        ? side.effectiveCostPerMTokens
-        : ratio(side.costUSD, side.tokens === null ? null : side.tokens / 1_000_000)
+      // Both bases divide by the SAME token count. Taking the plan basis's own rate here would
+      // change the denominator too (it counts cache, this page's `tokens` does not), so flipping
+      // the toggle would move the number for two reasons at once and the row would compare
+      // nothing. A basis switch may only ever change the numerator.
+      return ratio(
+        basis === 'plan' ? side.planCostUSD : side.costUSD,
+        side.tokens === null ? null : side.tokens / 1_000_000,
+      )
     case 'tokens': return side.tokens
     case 'sessions': return side.sessions
     case 'messages': return side.messages

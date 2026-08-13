@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { ArrowRight } from 'lucide-react'
-import { fmt, fmtCost, planAllocation, type Filters } from '@agentistics/core'
+import { fmt, fmtCost, type Filters } from '@agentistics/core'
 import type { AppContext } from '../../lib/app-context'
 import { useDerivedStats } from '../../hooks/useData'
 import { computePlanBasisView } from '../../hooks/usePlanBasis'
@@ -121,7 +120,7 @@ function useSide(
 ): CompareSide {
   return useMemo(() => {
     if (!derived) {
-      return { costUSD: null, planCostUSD: null, planMultiple: null, effectiveCostPerMTokens: null, tokens: null, sessions: null, messages: null, cacheHitRate: null }
+      return { costUSD: null, planCostUSD: null, planMultiple: null, tokens: null, sessions: null, messages: null, cacheHitRate: null }
     }
     const view = computePlanBasisView({
       apiCostByDay: derived.apiCostByDay,
@@ -134,7 +133,6 @@ function useSide(
       costUSD: derived.totalCostUSD,
       planCostUSD: usable ? usable.planCostUSD : null,
       planMultiple: usable?.multiple ?? null,
-      effectiveCostPerMTokens: usable?.effectiveCostPerMTokens ?? null,
       tokens: derived.inputTokens + derived.outputTokens,
       sessions: derived.totalSessions,
       messages: derived.totalMessages,
