@@ -242,6 +242,16 @@ export interface ControlStrings {
   sessionsSearchEmpty: string
   sessionsClosedWord: string
   sessionsShowClosed: string
+  /** The view panel: one vertical list of every choice about what the list shows. */
+  viewTitle: string
+  viewGroupBy: string
+  viewShow: string
+  viewClosedOn: string
+  viewClosedOff: string
+  viewUnfiledOn: string
+  viewUnfiledOff: string
+  viewHint: string
+  promptHint: string
   sessionsHideClosed: string
   keySessionsClosed: string
   keySessionsNoTask: string
@@ -467,6 +477,15 @@ const EN: ControlStrings = {
   sessionsSearchEmpty: 'nothing matches.',
   sessionsClosedWord: 'closed',
   sessionsShowClosed: 'closed: shown',
+  viewTitle: 'What this list shows',
+  viewGroupBy: 'Group by',
+  viewShow: 'Show',
+  viewClosedOn: 'closed conversations',
+  viewClosedOff: 'closed conversations',
+  viewUnfiledOn: 'sessions with no task',
+  viewUnfiledOff: 'sessions with no task',
+  viewHint: '↑↓ move · enter choose · esc close',
+  promptHint: 'enter saves · esc cancels',
   sessionsHideClosed: 'closed: hidden',
   keySessionsClosed: 'c closed',
   keySessionsNoTask: 'u unfiled',
@@ -685,6 +704,15 @@ const PT: ControlStrings = {
   sessionsSearchEmpty: 'nada corresponde.',
   sessionsClosedWord: 'fechada',
   sessionsShowClosed: 'fechadas: visíveis',
+  viewTitle: 'O que esta lista mostra',
+  viewGroupBy: 'Agrupar por',
+  viewShow: 'Mostrar',
+  viewClosedOn: 'conversas fechadas',
+  viewClosedOff: 'conversas fechadas',
+  viewUnfiledOn: 'sessões sem tarefa',
+  viewUnfiledOff: 'sessões sem tarefa',
+  viewHint: '↑↓ mover · enter escolher · esc fechar',
+  promptHint: 'enter salva · esc cancela',
   sessionsHideClosed: 'fechadas: ocultas',
   keySessionsClosed: 'c fechadas',
   keySessionsNoTask: 'u sem tarefa',

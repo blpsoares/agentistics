@@ -21,7 +21,6 @@ import type { ControlStrings } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import { actionAtColumn, fitActionRow } from '../chrome.ts'
-import { sourceAtColumn, sourceRowFit } from '../surface.ts'
 import { ActionRow } from '../Chrome'
 import { Divider } from '../Surface'
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
@@ -56,6 +55,8 @@ const STATE_COLOR: Record<SessionState, string | undefined> = {
  * down — typing a session name would otherwise quit the app on the `q` and refresh it on the `r`.
  */
 type Ask =
+  /** Everything about WHAT the list shows, in one vertical panel. */
+  | { kind: 'view' }
   | { kind: 'search' }
   | { kind: 'task'; session: ControlSession }
   | { kind: 'openTask'; session: ControlSession }
@@ -162,15 +163,6 @@ export function Sessions({
   // The action row is drawn from this screen's own budget, so it is subtracted BEFORE the split. A
   // row taken without being paid for is composited over the one under it, which reads as a corrupt
   // frame rather than a cramped one.
-  // Measured ONCE and handed to both the row and the pointer, so the cells a click resolves against
-  // are the very cells that were drawn.
-  const groupFit = useMemo(() => sourceRowFit(
-    s.sessionsGroupBy,
-    GROUPINGS.map(g => s.sessionsGroupings[g]),
-    Math.max(0, GROUPINGS.indexOf(grouping)),
-    Math.max(1, width - 24),
-  ), [s, grouping, width])
-
   const actionRows = height >= 8 ? 1 : 0
   const layout = sessionsLayout(
     Math.max(1, height - actionRows),
@@ -204,12 +196,10 @@ export function Sessions({
   const runAction = useCallback((a: SessionAction) => {
     if (a === 'new') { if (host.spawnSession) setAsk({ kind: 'new' }); return }
     if (a === 'search') { setAsk({ kind: 'search' }); return }
-    if (a === 'group') {
-      const i = GROUPINGS.indexOf(grouping)
-      setGrouping(GROUPINGS[(i + 1) % GROUPINGS.length]!)
-      setCursor(0)
-      return
-    }
+    // Opens the panel rather than cycling blind. A control that changes something without showing
+    // what the options were, or what the current one is, is a control people stop trusting — and
+    // the hide-closed and hide-unfiled switches had nowhere to live at all.
+    if (a === 'group') { setAsk({ kind: 'view' }); return }
     if (!selected) return
     if (a === 'attach') return actOn('attach')
     if (a === 'resume') { setAsk({ kind: 'resume', session: selected }); return }
@@ -312,17 +302,9 @@ export function Sessions({
     }
     if (!isActivation(p)) return
 
-    // The grouping selector is the FIRST row.
-    if (layout.summary && p.y === 0) {
-      const hit = sourceAtColumn(groupFit, p.x)
-      if (hit !== null) { setGrouping(GROUPINGS[hit]!); setCursor(0); return }
-      // The right-hand end of this row is the closed toggle. Clicking what a row SAYS is true is how
-      // a person expects to change it.
-      const toggleFrom = width - (showClosed ? s.sessionsShowClosed : s.sessionsHideClosed).length
-        - s.sessionsCount(fleet?.sessions.length ?? 0).length - 3
-      if (p.x >= toggleFrom) { setShowClosed(v => !v); setCursor(0) }
-      return
-    }
+    // The summary row states what is being shown; the controls live in the view panel, which a
+    // click on that row opens. One place to change these, rather than two that can disagree.
+    if (layout.summary && p.y === 0) { setAsk({ kind: 'view' }); return }
 
     // The action row is the LAST row this screen draws. Resolved against the very same fit the row
     // was rendered from, so a click and the drawn cells can never disagree.
@@ -352,6 +334,26 @@ export function Sessions({
   // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
   // search field in the middle, and squeezing that under a list would give the one control that
   // decides where work happens three rows to show its results in.
+  if (ask?.kind === 'view') {
+    return (
+      <Box flexDirection="column" width={width} flexShrink={0}>
+        <ViewOptions
+          strings={s}
+          grouping={grouping}
+          showClosed={showClosed}
+          hideEmptyTask={hideEmptyTask}
+          width={width}
+          height={height}
+          isActive={isActive}
+          onGrouping={g => { setGrouping(g); setCursor(0) }}
+          onShowClosed={v => { setShowClosed(v); setCursor(0) }}
+          onHideEmptyTask={v => { setHideEmptyTask(v); setCursor(0) }}
+          onClose={() => setAsk(null)}
+        />
+      </Box>
+    )
+  }
+
   if (ask?.kind === 'new') {
     return (
       <Box flexDirection="column" width={width} flexShrink={0}>
@@ -384,7 +386,6 @@ export function Sessions({
           grouping={grouping}
           strings={s}
           width={width}
-          fit={groupFit}
           showClosed={showClosed}
           hideEmptyTask={grouping === 'task' ? hideEmptyTask : null}
         />
@@ -438,7 +439,7 @@ export function Sessions({
         <>
           <Divider width={width} />
           <Question
-            ask={ask as Exclude<Ask, { kind: 'new' }>}
+            ask={ask as Exclude<Ask, { kind: 'new' } | { kind: 'view' }>}
             strings={s}
             width={width}
             onClose={() => setAsk(null)}
@@ -477,44 +478,43 @@ export function Sessions({
  * clicking one selects it — the same selector idiom the Logs screen uses for its sources, measured
  * by the same pure fit so a click and the drawn cells can never disagree.
  */
-function SummaryRow({ fleet, grouping, strings: s, width, fit, showClosed, hideEmptyTask }: {
+/**
+ * What the list is showing right now, in words — and nothing you can press.
+ *
+ * It used to be a control strip: the grouping as clickable cells, the two visibility switches as
+ * corner labels. That crammed three controls and two counts into one row, and the switches were
+ * neither findable nor obviously switches. The controls moved to the view panel; this row's job is
+ * to state the answer, so a glance tells you why the list looks the way it does.
+ */
+function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyTask }: {
   fleet: ControlSessions | null | undefined
   grouping: SessionGrouping
   strings: ControlStrings
   width: number
-  fit: ReturnType<typeof sourceRowFit>
   showClosed: boolean
-  /** Only meaningful while grouping BY TASK; the toggle is hidden otherwise rather than inert. */
+  /** `null` when the setting does not apply — grouping by anything but task. */
   hideEmptyTask: boolean | null
 }) {
   if (fleet?.unavailable) {
     return <Text color={COLORS.accent} wrap="truncate">{truncate(fleet.unavailable, width)}</Text>
   }
   const waiting = fleet?.attention ?? 0
-  const index = GROUPINGS.indexOf(grouping)
+
+  // Only the filters that are actually HIDING something are named. A row that lists every setting
+  // at its default is noise; one that names what is being withheld is an explanation.
+  const hiding: string[] = []
+  if (!showClosed) hiding.push(s.viewClosedOn)
+  if (hideEmptyTask) hiding.push(s.viewUnfiledOn)
 
   return (
     <Box flexDirection="row" width={width} justifyContent="space-between">
-      <Box flexDirection="row" flexShrink={0}>
-        <Text dimColor bold>{fit.label ? fit.label + '  ' : ''}</Text>
-        {fit.labels.map((cell, i) => {
-          const active = fit.from + i === index
-          return (
-            <Text key={cell} color={active ? COLORS.accent : undefined} dimColor={!active}>
-              {i > 0 ? '   ' : ''}
-              <Text bold={active} underline={active}>{cell}</Text>
-            </Text>
-          )
-        })}
-      </Box>
       <Text>
-        {/* Stated as a SETTING rather than as a verb, so the row says what is true now as well as
-            what pressing it would do. */}
-        <Text dimColor>{showClosed ? s.sessionsShowClosed : s.sessionsHideClosed}</Text>
-        {hideEmptyTask !== null ? (
-          <Text dimColor>{`   ${hideEmptyTask ? s.sessionsNoTaskHidden : s.sessionsNoTaskShown}`}</Text>
-        ) : null}
-        <Text dimColor>{`   ${s.sessionsCount(fleet?.sessions.length ?? 0)}`}</Text>
+        <Text dimColor>{`${s.sessionsGroupBy} `}</Text>
+        <Text bold>{s.sessionsGroupings[grouping]}</Text>
+        {hiding.length > 0 ? <Text dimColor>{`   − ${hiding.join(', ')}`}</Text> : null}
+      </Text>
+      <Text>
+        <Text dimColor>{s.sessionsCount(fleet?.sessions.length ?? 0)}</Text>
         {waiting > 0 ? (
           <Text color={COLORS.accent} bold>{`   ${s.sessionsWaitingCount(waiting)}`}</Text>
         ) : null}
@@ -598,7 +598,7 @@ function Detail({ lines, width, rows }: {
  */
 function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery }: {
   /** Never `new` — the wizard takes the whole screen and is rendered before this is reached. */
-  ask: Exclude<Ask, { kind: 'new' }>
+  ask: Exclude<Ask, { kind: 'new' } | { kind: 'view' }>
   strings: ControlStrings
   width: number
   onClose: () => void
@@ -609,6 +609,8 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
 }) {
   if (ask.kind === 'search') {
     return (
+      <Box flexDirection="column" width={width}>
+      <Text dimColor>{truncate(s.promptHint, width)}</Text>
       <TextPrompt
         label={s.sessionsSearchLabel}
         defaultValue={query}
@@ -618,6 +620,7 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
         // on every change, and a cursor that jumps while someone is still typing is unusable.
         onSubmit={value => { onQuery(value.trim()); onClose() }}
       />
+      </Box>
     )
   }
 
@@ -689,6 +692,8 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
   const isRename = ask.kind === 'rename'
   const isTask = ask.kind === 'task'
   return (
+    <Box flexDirection="column" width={width}>
+    <Text dimColor>{truncate(s.promptHint, width)}</Text>
     <TextPrompt
       label={isRename ? s.sessionsRenamePrompt : isTask ? s.sessionsTaskPrompt : s.sessionsNotePrompt}
       // The current value is offered as the default, so `enter` on an unchanged field is a no-op
@@ -707,5 +712,105 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
         )
       }}
     />
+    </Box>
+  )
+}
+
+/**
+ * Everything about WHAT the list shows, as ONE vertical panel.
+ *
+ * It replaced a cramped horizontal strip that cycled the grouping on a hidden key and had nowhere
+ * to put the two visibility switches — so they were a corner label people did not find, changed by
+ * a letter nobody was told about. A vertical list is navigable with two keys, states every option
+ * AND the one in force, and has room to say what each does.
+ *
+ * Rendered where the whole screen is, like the wizard: this is a decision, not an annotation, and
+ * squeezing it under the list is what made it unreadable the first time.
+ */
+function ViewOptions({
+  strings: s, grouping, showClosed, hideEmptyTask, width, height, isActive,
+  onGrouping, onShowClosed, onHideEmptyTask, onClose,
+}: {
+  strings: ControlStrings
+  grouping: SessionGrouping
+  showClosed: boolean
+  hideEmptyTask: boolean
+  width: number
+  height: number
+  isActive: boolean
+  onGrouping: (g: SessionGrouping) => void
+  onShowClosed: (v: boolean) => void
+  onHideEmptyTask: (v: boolean) => void
+  onClose: () => void
+}) {
+  // One flat list of rows so the cursor moves over exactly what is drawn — the same reason the
+  // fleet list flattens its groups.
+  type Row =
+    | { kind: 'heading'; label: string }
+    | { kind: 'group'; value: SessionGrouping }
+    | { kind: 'closed' }
+    | { kind: 'unfiled' }
+
+  const rows: Row[] = [
+    { kind: 'heading', label: s.viewGroupBy },
+    ...GROUPINGS.map(g => ({ kind: 'group' as const, value: g })),
+    { kind: 'heading', label: s.viewShow },
+    { kind: 'closed' },
+    // Only meaningful while grouping by task, so it is ABSENT otherwise rather than inert.
+    ...(grouping === 'task' ? [{ kind: 'unfiled' as const }] : []),
+  ]
+  const selectable = rows.map((r, i) => (r.kind === 'heading' ? -1 : i)).filter(i => i >= 0)
+
+  const [index, setIndex] = useState(0)
+  const at = Math.min(index, Math.max(0, selectable.length - 1))
+  const cursorRow = selectable[at] ?? 0
+
+  useInput((input, key) => {
+    if (key.escape) return onClose()
+    if (key.upArrow || input === 'k') return setIndex(Math.max(0, at - 1))
+    if (key.downArrow || input === 'j') return setIndex(Math.min(selectable.length - 1, at + 1))
+    if (!key.return) return
+    const row = rows[cursorRow]
+    if (!row) return
+    if (row.kind === 'group') return onGrouping(row.value)
+    if (row.kind === 'closed') return onShowClosed(!showClosed)
+    if (row.kind === 'unfiled') return onHideEmptyTask(!hideEmptyTask)
+  }, { isActive })
+
+  const body = Math.max(1, height - 2)
+
+  return (
+    <Box flexDirection="column" width={width} flexShrink={0}>
+      <Text bold>{truncate(s.viewTitle, width)}</Text>
+      <Text dimColor>{truncate(s.viewHint, width)}</Text>
+      {rows.slice(0, body).map((row, i) => {
+        if (row.kind === 'heading') {
+          return <Text key={`h${i}`} dimColor bold>{truncate(row.label, width)}</Text>
+        }
+        const active = i === cursorRow
+        // Every row states BOTH what it is and whether it is on. A list of options that shows only
+        // the cursor makes you press things to find out what they already were.
+        // The dot means SHOWN, always — for every row on this panel. It read the other way round
+        // for the unfiled toggle, whose state is stored as "hidden": a filled dot beside "sessions
+        // with no task" said they were visible while they were the one thing being withheld.
+        const on = row.kind === 'group'
+          ? row.value === grouping
+          : row.kind === 'closed' ? showClosed : !hideEmptyTask
+        const label = row.kind === 'group'
+          ? s.sessionsGroupings[row.value]
+          : row.kind === 'closed' ? s.viewClosedOn
+          : s.viewUnfiledOn
+        return (
+          <Text key={`r${i}`} wrap="truncate">
+            <Text color={active ? COLORS.accent : undefined}>{active ? '  ❯ ' : '    '}</Text>
+            {/* Glyph plus word: which options are on must survive a terminal that drops colour. */}
+            <Text color={on ? COLORS.success : COLORS.muted}>{on ? '● ' : '○ '}</Text>
+            <Text color={active ? COLORS.accent : undefined} bold={active}>
+              {truncate(label, Math.max(1, width - 8))}
+            </Text>
+          </Text>
+        )
+      })}
+    </Box>
   )
 }
