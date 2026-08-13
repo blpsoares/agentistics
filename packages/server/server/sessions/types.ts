@@ -72,6 +72,12 @@ export interface BackendSpawn {
   sendKeys?: string
 }
 
+export type CaptureFailure = 'no-session' | 'backend-error'
+
+export type CaptureResult =
+  | { ok: true; lines: string[] }
+  | { ok: false; reason: CaptureFailure }
+
 /** One session as the BACKEND sees it — existence and liveness, no product metadata. */
 export interface BackendSession {
   id: string
@@ -102,8 +108,13 @@ export interface SessionBackend {
   unavailable(): Promise<string | undefined>
   spawn(req: BackendSpawn): Promise<void>
   list(): Promise<BackendSession[]>
-  /** Newest-last lines of the last rendered frame, trailing blanks removed. */
-  capture(id: string, lines: number): Promise<string[]>
+  /**
+   * Newest-last lines of the last rendered frame, trailing blanks removed.
+   *
+   * A RESULT rather than a bare array: a failed capture and a blank pane are different facts, and
+   * the attention monitor may not treat "could not read" as "nothing is happening".
+   */
+  capture(id: string, lines: number): Promise<CaptureResult>
   /**
    * Kill the session and report whether it is confirmed GONE afterwards. "Already gone" (the
    * session finished or was removed between `list` and this call) counts as success — the caller

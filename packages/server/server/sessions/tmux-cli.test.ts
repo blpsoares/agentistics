@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  LIST_FORMAT, attachArgs, capturePaneArgs, idFromTmuxName, isSessionGoneError, killSessionArgs,
-  newSessionArgs, parsePrefix, parseTmuxList, sendKeysEnterArgs, sendKeysLiteralArgs, trimCapture,
-  tmuxName,
+  LIST_FORMAT, attachArgs, capturePaneArgs, captureFailureFor, idFromTmuxName, isSessionGoneError,
+  killSessionArgs, newSessionArgs, parsePrefix, parseTmuxList, sendKeysEnterArgs,
+  sendKeysLiteralArgs, trimCapture, tmuxName,
 } from './tmux-cli'
 
 describe('names', () => {
@@ -105,5 +105,17 @@ describe('isSessionGoneError', () => {
   it('treats any other stderr as a real failure, never a guessed "gone"', () => {
     expect(isSessionGoneError('permission denied')).toBe(false)
     expect(isSessionGoneError('')).toBe(false)
+  })
+})
+
+describe('captureFailureFor', () => {
+  it("reads tmux's own words for a session that is not there", () => {
+    expect(captureFailureFor("can't find session: agentop-a1")).toBe('no-session')
+    expect(captureFailureFor('no server running on /tmp/tmux-1000/agentop')).toBe('no-session')
+  })
+
+  it('calls anything else a backend error rather than guessing it away', () => {
+    expect(captureFailureFor('some tmux failure nobody has seen')).toBe('backend-error')
+    expect(captureFailureFor('')).toBe('backend-error')
   })
 })

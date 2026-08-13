@@ -4,11 +4,11 @@
  */
 
 import {
-  attachArgs, capturePaneArgs, isSessionGoneError, killSessionArgs, listSessionsArgs,
-  newSessionArgs, parsePrefix, parseTmuxList, remainOnExitArgs, sendKeysEnterArgs,
-  sendKeysLiteralArgs, showPrefixArgs, trimCapture,
+  attachArgs, capturePaneArgs, captureFailureFor, isSessionGoneError, killSessionArgs,
+  listSessionsArgs, newSessionArgs, parsePrefix, parseTmuxList, remainOnExitArgs,
+  sendKeysEnterArgs, sendKeysLiteralArgs, showPrefixArgs, trimCapture,
 } from './tmux-cli'
-import type { BackendSession, BackendSpawn, SessionBackend } from './types'
+import type { BackendSession, BackendSpawn, CaptureResult, SessionBackend } from './types'
 
 /** How long to wait for a harness to draw its prompt before typing into it. */
 const SEND_KEYS_DELAY_MS = 1200
@@ -60,10 +60,10 @@ export const tmuxBackend: SessionBackend = {
     return parseTmuxList(out)
   },
 
-  async capture(id: string, lines: number) {
-    const { code, out } = await tmux(capturePaneArgs(id, lines))
-    if (code !== 0) return []
-    return trimCapture(out.split('\n'))
+  async capture(id: string, lines: number): Promise<CaptureResult> {
+    const { code, out, err } = await tmux(capturePaneArgs(id, lines))
+    if (code !== 0) return { ok: false, reason: captureFailureFor(err) }
+    return { ok: true, lines: trimCapture(out.split('\n')) }
   },
 
   async kill(id: string) {

@@ -115,6 +115,18 @@ export function isSessionGoneError(stderr: string): boolean {
 }
 
 /**
+ * Why a capture produced nothing.
+ *
+ * A capture that FAILED and a pane that is genuinely blank are different facts, and the attention
+ * monitor must not conflate them: a blank pane can be classified, an unreadable one can only be
+ * reported. This is the same N/A-versus-a-confident-0 rule the dashboard applies to harness
+ * capabilities.
+ */
+export function captureFailureFor(stderr: string): 'no-session' | 'backend-error' {
+  return isSessionGoneError(stderr) ? 'no-session' : 'backend-error'
+}
+
+/**
  * The real detach keystroke, from `show-options -g prefix` (e.g. `prefix C-b`).
  *
  * Read rather than assumed: tmux loads the user's `~/.tmux.conf` on our socket too, so a user who
