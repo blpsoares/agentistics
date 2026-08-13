@@ -397,3 +397,45 @@ export function actionLabels(
 ): string[] {
   return actions.map(a => words[a])
 }
+
+/**
+ * The summary row's two halves, fitted to `width` — PURE.
+ *
+ * It has to be MEASURED, not merely truncated. A row wider than the terminal wraps, and a wrapped
+ * row takes two of the screen's rows while its budget counted one — which pushes the action row,
+ * the detail pane and the footer off the bottom. "Everything below the list vanished" is what that
+ * looks like, and nothing about it says the cause was one row too wide.
+ *
+ * Cells are given up in the order the row can afford to lose them: the list of what is being HIDDEN
+ * first (the panel one keypress away states it in full), then the waiting count, then the total.
+ * The grouping is last because it is the only cell that explains why the rows are arranged as they
+ * are, and it is truncated rather than dropped.
+ */
+export function summaryCells(o: {
+  group: string
+  hiding: string
+  count: string
+  waiting: string
+  width: number
+}): { group: string; hiding: string; count: string; waiting: string } {
+  const GAP = 3
+  const width = Math.max(0, o.width)
+  const fits = (parts: string[]) => {
+    const kept = parts.filter(p => p !== '')
+    return kept.reduce((n, p) => n + p.length, 0) + GAP * Math.max(0, kept.length - 1) <= width
+  }
+
+  const full = { group: o.group, hiding: o.hiding, count: o.count, waiting: o.waiting }
+  if (fits([full.group, full.hiding, full.count, full.waiting])) return full
+
+  const noHiding = { ...full, hiding: '' }
+  if (fits([noHiding.group, noHiding.count, noHiding.waiting])) return noHiding
+
+  const noWaiting = { ...noHiding, waiting: '' }
+  if (fits([noWaiting.group, noWaiting.count])) return noWaiting
+
+  const groupOnly = { group: o.group, hiding: '', count: '', waiting: '' }
+  if (fits([groupOnly.group])) return groupOnly
+
+  return { ...groupOnly, group: o.group.slice(0, Math.max(0, width)) }
+}

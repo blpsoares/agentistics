@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionActions, sessionCells,
-  sessionRows, sessionsLayout, sortSessions,
+  sessionRows, sessionsLayout, sortSessions, summaryCells,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -345,5 +345,48 @@ describe('detailLines — the two non-actionable rows say different things', () 
     expect(detailLines(session('m'), labels, ago).map(x => x.key)).not.toContain('metrics')
     const l = detailLines(session('m', { tokens: '41.4K', cost: 'USD 0.26' }), labels, ago)
     expect(l.find(x => x.key === 'metrics')?.value).toBe('41.4K  ·  USD 0.26')
+  })
+})
+
+describe('summaryCells', () => {
+  const full = {
+    group: 'GROUP task',
+    hiding: '− closed conversations, sessions with no task',
+    count: '18 sessions',
+    waiting: '3 waiting on you',
+    width: 200,
+  }
+
+  const rendered = (c: ReturnType<typeof summaryCells>) =>
+    [c.group, c.hiding, c.count, c.waiting].filter(Boolean)
+      .reduce((n, p) => n + p.length, 0)
+      + 3 * Math.max(0, [c.group, c.hiding, c.count, c.waiting].filter(Boolean).length - 1)
+
+  it('keeps everything when the row fits', () => {
+    expect(summaryCells(full)).toEqual({
+      group: full.group, hiding: full.hiding, count: full.count, waiting: full.waiting,
+    })
+  })
+
+  it('gives up what is HIDDEN first — the panel one keypress away states it in full', () => {
+    const c = summaryCells({ ...full, width: 40 })
+    expect(c.hiding).toBe('')
+    expect(c.group).toBe('GROUP task')
+  })
+
+  it('keeps the grouping to the very end, because it explains the arrangement', () => {
+    const c = summaryCells({ ...full, width: 12 })
+    expect(c.group).toContain('GROUP')
+    expect(c.count).toBe('')
+    expect(c.waiting).toBe('')
+  })
+
+  it('NEVER renders wider than it was given, at any width', () => {
+    // The whole point. A row that wraps takes two of the screen's rows while its budget counted
+    // one, which pushes the action row, the detail pane and the footer off the bottom — and that
+    // reads as "the entire screen vanished", not as "one row is too wide".
+    for (let w = 0; w <= 220; w++) {
+      expect(rendered(summaryCells({ ...full, width: w }))).toBeLessThanOrEqual(Math.max(w, 0) || 0)
+    }
   })
 })

@@ -27,7 +27,7 @@ import { ConfirmPrompt, TextPrompt } from '../Prompt'
 import { SessionWizard } from './SessionWizard'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
-  QUESTION_ROWS, actionLabels, filterSessions, sessionActions, sessionsLayout,
+  QUESTION_ROWS, actionLabels, filterSessions, sessionActions, sessionsLayout, summaryCells,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
 } from '../sessions'
 import { isActivation, wheelDelta } from '../mouse'
@@ -506,17 +506,28 @@ function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyT
   if (!showClosed) hiding.push(s.viewClosedOn)
   if (hideEmptyTask) hiding.push(s.viewUnfiledOn)
 
+  // MEASURED, never left to Yoga: a row that wraps takes two of the screen's rows while its budget
+  // counted one, and everything below it — the action row, the detail pane, the footer — is pushed
+  // off the bottom. That failure reads as "the whole screen vanished", not as "one row is too wide".
+  const cells = summaryCells({
+    group: `${s.sessionsGroupBy} ${s.sessionsGroupings[grouping]}`,
+    hiding: hiding.length > 0 ? `− ${hiding.join(', ')}` : '',
+    count: s.sessionsCount(fleet?.sessions.length ?? 0),
+    waiting: waiting > 0 ? s.sessionsWaitingCount(waiting) : '',
+    width,
+  })
+
   return (
-    <Box flexDirection="row" width={width} justifyContent="space-between">
-      <Text>
+    <Box flexDirection="row" width={width} justifyContent="space-between" flexShrink={0}>
+      <Text wrap="truncate">
         <Text dimColor>{`${s.sessionsGroupBy} `}</Text>
-        <Text bold>{s.sessionsGroupings[grouping]}</Text>
-        {hiding.length > 0 ? <Text dimColor>{`   − ${hiding.join(', ')}`}</Text> : null}
+        <Text bold>{cells.group.slice(s.sessionsGroupBy.length + 1)}</Text>
+        {cells.hiding ? <Text dimColor>{`   ${cells.hiding}`}</Text> : null}
       </Text>
-      <Text>
-        <Text dimColor>{s.sessionsCount(fleet?.sessions.length ?? 0)}</Text>
-        {waiting > 0 ? (
-          <Text color={COLORS.accent} bold>{`   ${s.sessionsWaitingCount(waiting)}`}</Text>
+      <Text wrap="truncate">
+        <Text dimColor>{cells.count}</Text>
+        {cells.waiting ? (
+          <Text color={COLORS.accent} bold>{`   ${cells.waiting}`}</Text>
         ) : null}
       </Text>
     </Box>
