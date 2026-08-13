@@ -508,6 +508,58 @@ test('only RUNNING sessions are captured, and only the 40 lines the classifier w
   expect(snapshot.views.map(v => v.id).sort()).toEqual(['exited1', 'lost1', 'running1'])
 })
 
+// `reconcileSessions` marks a row `unregistered` when the backend hosts it but the registry never
+// knew it (a crash between `backend.spawn` and `addSession`, or a wiped registry with tmux still
+// up) — and such a row can carry a real `backend.alive === true`, which `buildSessionViews`
+// classifies exactly like a registered running session (see monitor.ts's comment on `status` vs
+// `alive`). The capture filter has to agree with that classifier's predicate, or an unregistered
+// session sitting on a live approval prompt gets no capture at all, `monitor.ts` substitutes an
+// empty `{ ok: true, lines: [] }`, and the classifier reads that as an ordinary quiet frame —
+// `idle-unknown` for a session that may need the user right now.
+test('an unregistered-but-alive session is still captured, not silently skipped', async () => {
+  const asked: string[] = []
+  const snapshot = await sessionSnapshot(
+    backendOf({
+      list: async () => [hostedOf('orphan1', true)],
+      capture: async id => { asked.push(id); return { ok: true, lines: [] } },
+    }),
+    EN,
+    {
+      // Absent from the registry entirely, so `reconcileSessions` marks it 'unregistered' — not
+      // 'running' — while `backend.alive` for it is true.
+      registry: async () => [],
+      processes: async () => [],
+      nowMs: () => 1_000_000,
+    },
+  )
+  expect(asked).toEqual(['orphan1'])
+})
+
+// A rejected capture must not cost the rest of the fleet their real states. `unreadable` exists
+// precisely to say this about ONE row; a bare `Promise.all` over the captures turned any single
+// rejection into `sessionsReadFailed` for every session, which is the same over-claiming as the
+// unregistered-row bug above, just from the other side of the same predicate.
+test('one rejecting capture does not take the rest of the fleet down with it', async () => {
+  const snapshot = await sessionSnapshot(
+    backendOf({
+      list: async () => [hostedOf('ok1', true), hostedOf('bad1', true)],
+      capture: async id => {
+        if (id === 'bad1') throw new Error('tmux capture-pane failed')
+        return { ok: true, lines: [] }
+      },
+    }),
+    EN,
+    {
+      registry: async () => [managedOf('ok1'), managedOf('bad1')],
+      processes: async () => [],
+      nowMs: () => 1_000_000,
+    },
+  )
+  expect(snapshot.unavailable).toBeUndefined()
+  expect(snapshot.views.find(v => v.id === 'bad1')?.state).toBe('unreadable')
+  expect(snapshot.views.find(v => v.id === 'ok1')?.state).not.toBe('unreadable')
+})
+
 // The screen POLLS this, outside the shell's action wrapper that turns a throw into a message — so
 // a rejection here would take the control center down. It must degrade, and it must degrade into
 // "the list is unknown" rather than "the list is empty".

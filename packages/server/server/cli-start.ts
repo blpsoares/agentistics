@@ -1015,10 +1015,10 @@ export async function sessionSnapshot(
   s: CliStrings,
   sources: SessionSources = {},
 ): Promise<SessionSnapshot> {
-  const blocked = await backendBlocked(backend, s)
-  if (blocked) return { views: [], unavailable: blocked }
-
   try {
+    const blocked = await backendBlocked(backend, s)
+    if (blocked) return { views: [], unavailable: blocked }
+
     const [registry, hosted, processes] = await Promise.all([
       (sources.registry ?? readRegistry)(),
       backend.list(),
@@ -1026,13 +1026,25 @@ export async function sessionSnapshot(
     ])
     const reconciled = reconcileSessions(registry, hosted)
 
-    // Only the RUNNING ones: a `lost` session has no pane to read, and an `exited` one's last frame
-    // cannot change what `buildSessionViews` already knows about it.
+    // Only the ALIVE ones: this must be the same predicate `buildSessionViews` classifies on
+    // (`r.backend?.alive`, not `r.status`), or the two disagree about what "running" means. An
+    // `unregistered` row — the backend hosts it, the registry lost track — carries a real
+    // `backend.alive` and is classified exactly like a registered running session; filtering on
+    // `status === 'running'` alone skips it, and the missing capture is then substituted with an
+    // empty `{ ok: true, lines: [] }` that `classifyAttention` reads as an ordinary idle frame —
+    // the reassuring-direction error `attention.ts` exists to forbid, and worse than `unreadable`
+    // because it never even admits the frame was never read. A `lost` session has no pane to read,
+    // and an `exited` one's last frame cannot change what `buildSessionViews` already knows.
     const limit = createLimiter(CAPTURE_CONCURRENCY)
     const captures: Record<string, CaptureResult> = {}
     await Promise.all(reconciled
-      .filter(r => r.status === 'running')
-      .map(r => limit(async () => { captures[r.id] = await backend.capture(r.id, CAPTURE_LINES) })))
+      .filter(r => r.backend?.alive === true)
+      .map(r => limit(async () => { captures[r.id] = await backend.capture(r.id, CAPTURE_LINES) })
+        // One pane failing to read must not cost the rest of the fleet their real states — that is
+        // what a bare `Promise.all` did here before, collapsing every session into
+        // `sessionsReadFailed` on a single rejection. `unreadable` says the truth about exactly
+        // this row and nothing about the others.
+        .catch(() => { captures[r.id] = { ok: false, reason: 'backend-error' } })))
 
     const nowMs = (sources.nowMs ?? Date.now)()
     return { views: buildSessionViews({ nowMs, reconciled, captures, processes }) }
@@ -1744,7 +1756,16 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     // `sessions()` is the exception, because it is POLLED rather than run through `run()`.
 
     async sessions(): Promise<SessionSnapshot> {
-      return sessionSnapshot(await resolveBackend(), S())
+      const s = S()
+      // `resolveBackend()` sits OUTSIDE `sessionSnapshot`'s own try — that guard only starts once a
+      // backend value exists, so a throw resolving the backend itself would still escape the "never
+      // throws" contract `ControlHost.sessions()` documents. This is a polled method, not one run
+      // through `run()`'s throw-to-`ActionResult` wrapper, so the guard has to live here.
+      try {
+        return await sessionSnapshot(await resolveBackend(), s)
+      } catch {
+        return { views: [], unavailable: s.sessionsReadFailed }
+      }
     },
 
     async startSession(req: NewSessionRequest): Promise<ActionResult & { id?: string }> {
