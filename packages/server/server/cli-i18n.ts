@@ -91,6 +91,20 @@ export interface CliStrings {
   svcConflict: (runtimes: string[]) => string
   /** A stop/restart named something that is not running. */
   svcNotRunning: string
+
+  /** The session fleet — the words the monitor's rows and detail pane wear. */
+  sessState: {
+    working: string
+    waitingApproval: string
+    waiting: string
+    exited: string
+    lost: string
+    external: string
+  }
+  /** Said on a session whose harness has no probed approval markers. */
+  sessApprovalBlind: (harness: string) => string
+  /** The fallback title for a session the user never named. */
+  sessUntitled: (harness: string, project: string) => string
   dockerMissing: string
   dockerUnreachable: string
   foregroundLater: string
@@ -252,6 +266,18 @@ const EN: CliStrings = {
   svcCentral: 'agentistics central',
   svcConflict: (runtimes) => `conflict: ${runtimes.join(' + ')} both running — stop one`,
   svcNotRunning: 'that service is not running.',
+
+  sessState: {
+    working: 'working',
+    waitingApproval: 'needs approval',
+    waiting: 'waiting',
+    exited: 'exited',
+    lost: 'lost',
+    external: 'external',
+  },
+  sessApprovalBlind: (harness: string) =>
+    `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
+  sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
   dockerMissing: 'docker not installed',
   dockerUnreachable: 'docker is installed but not answering',
   foregroundLater: 'foreground starts once this screen closes.',
@@ -387,6 +413,18 @@ const PT: CliStrings = {
   svcCentral: 'agentistics central',
   svcConflict: (runtimes) => `conflito: ${runtimes.join(' + ')} rodando juntos — pare um`,
   svcNotRunning: 'esse serviço não está rodando.',
+
+  sessState: {
+    working: 'trabalhando',
+    waitingApproval: 'precisa de aprovação',
+    waiting: 'aguardando',
+    exited: 'encerrada',
+    lost: 'perdida',
+    external: 'externa',
+  },
+  sessApprovalBlind: (harness: string) =>
+    `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando", como qualquer outra pausa.`,
+  sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
   dockerMissing: 'docker não instalado',
   dockerUnreachable: 'docker instalado, mas não responde',
   foregroundLater: 'o foreground sobe assim que esta tela fechar.',

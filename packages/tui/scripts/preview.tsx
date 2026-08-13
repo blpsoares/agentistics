@@ -36,6 +36,7 @@ import { ControlCenter } from '../src/control/ControlCenter'
 import {
   TAB_ORDER,
   type ControlHost,
+  type ControlSessions,
   type ControlService,
   type ControlStatus,
   type ServiceRuntimeState,
@@ -341,7 +342,54 @@ function fakeHost(opts: Options): ControlHost {
       return () => { watchers.delete(handler) }
     },
     readLog: async (source, maxLines) => (LOG[source] ?? []).slice(-maxLines),
+    sessions: async () => FAKE_FLEET,
   }
+}
+
+/**
+ * A fleet worth looking at: one blocked on a question, one waiting, one working, one finished, and
+ * one running outside agentop.
+ *
+ * Deliberately covers every state the row can wear, because the point of the preview is to catch a
+ * row that does not fit — and the state word is the one cell the screen may never give up, so the
+ * widest of them (`needs approval`) has to be on screen at every width being checked.
+ */
+const FAKE_FLEET: ControlSessions = {
+  attention: 2,
+  rang: [],
+  sessions: [
+    {
+      id: 'a1b2c3', title: 'migrate the auth store', harness: 'claude',
+      cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus',
+      state: 'waiting-approval', stateLabel: 'needs approval', actionable: true,
+      startedAt: Date.now() - 22 * 60_000, attached: false,
+    },
+    {
+      id: 'd4e5f6', title: 'flaky test hunt', harness: 'codex',
+      cwd: '/home/dev/prontuario', project: 'prontuario',
+      note: 'reproduces only on CI', state: 'waiting', stateLabel: 'waiting',
+      actionable: true, approvalBlind: 'agentop has no verified screen markers for codex, so a blocking question here shows as "waiting" like any other pause.',
+      startedAt: Date.now() - 3 * 60_000, attached: false,
+    },
+    {
+      id: '778899', title: 'rewrite the importer', harness: 'kimi',
+      cwd: '/home/dev/embark', project: 'embark', model: 'kimi-k3',
+      state: 'working', stateLabel: 'working', actionable: true,
+      startedAt: Date.now() - 90_000, attached: true,
+    },
+    {
+      id: 'aabbcc', title: 'release notes', harness: 'claude',
+      cwd: '/home/dev/agentistics', project: 'agentistics',
+      state: 'exited', stateLabel: 'exited', actionable: true,
+      startedAt: Date.now() - 4 * 60 * 60_000, attached: false,
+    },
+    {
+      id: 'external:claude:/home/dev/aipe:0', title: 'claude in aipe', harness: 'claude',
+      cwd: '/home/dev/aipe', project: 'aipe',
+      state: 'unknown', stateLabel: 'external', actionable: false,
+      startedAt: Date.now() - 40 * 60_000, attached: false,
+    },
+  ],
 }
 
 // ---------------------------------------------------------------------------

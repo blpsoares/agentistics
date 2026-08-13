@@ -9,10 +9,11 @@
 
 import type { CliLang } from './lang'
 
-export type TabId = 'services' | 'setup' | 'logs' | 'cheatsheet' | 'help' | 'contribute'
+export type TabId = 'services' | 'sessions' | 'setup' | 'logs' | 'cheatsheet' | 'help' | 'contribute'
 
 export const TAB_ORDER: readonly TabId[] = [
   'services',
+  'sessions',
   'setup',
   'logs',
   'cheatsheet',
@@ -264,6 +265,74 @@ export interface ControlService {
  */
 export type BootState = 'on' | 'off'
 
+// ---------------------------------------------------------------------------
+// the session fleet
+// ---------------------------------------------------------------------------
+
+/**
+ * What a session is doing, machine-readable — the colour, the sort and the counter read this.
+ *
+ * `unknown` is for an EXTERNAL session: an assistant running on this machine that agentop did not
+ * start. Its screen cannot be captured and its backend cannot be asked, so no state can honestly be
+ * claimed for it. The same N/A-versus-a-confident-0 rule the detail pane applies to `boot`.
+ */
+export type SessionState =
+  | 'working'
+  | 'waiting-approval'
+  | 'waiting'
+  | 'exited'
+  | 'lost'
+  | 'unknown'
+
+/**
+ * One session, as the host currently sees it.
+ *
+ * Every displayable string arrives already localized, exactly as `ControlService` does — the TUI
+ * owns no logic, so it neither decides what a session is doing nor what to call it.
+ */
+export interface ControlSession {
+  id: string
+  /** Already-localized display name: the user's label when there is one, else a derived one. */
+  title: string
+  /** Harness id, or `''` when the registry has forgotten it. The colour and grouping key. */
+  harness: string
+  cwd: string
+  /** The last path segment of `cwd` — the "by project" grouping key, computed by the host. */
+  project: string
+  model?: string
+  note?: string
+  state: SessionState
+  /** Already-localized state word, e.g. "needs approval". */
+  stateLabel: string
+  /**
+   * Whether this row can be acted on at all.
+   *
+   * False for an external session, which is listed because "the fleet in one place" is the point,
+   * and marked because offering it verbs that cannot work would be worse than not listing it.
+   */
+  actionable: boolean
+  /**
+   * Already-localized sentence, present only when this harness has no probed approval markers.
+   *
+   * Its presence is the statement: a blocking question on such a session reads as plain `waiting`,
+   * so the detail pane says so rather than letting the state word imply a certainty it does not have.
+   */
+  approvalBlind?: string
+  /** When it started, epoch ms. An instant rather than a duration — see `ServiceRuntimeState`. */
+  startedAt?: number
+  attached: boolean
+}
+
+export interface ControlSessions {
+  sessions: ControlSession[]
+  /** How many are waiting on a person. Drives the header counter, from every tab. */
+  attention: number
+  /** Ids that JUST entered attention. The shell rings the terminal bell for these, once. */
+  rang: string[]
+  /** Already-localized reason this list may not be the whole truth. Never an empty list alone. */
+  unavailable?: string
+}
+
 export type TeamMode = 'solo' | 'central' | 'member'
 
 export type ArchiveMode = 'consolidate' | 'full' | 'off'
@@ -399,6 +468,17 @@ export interface ControlHost {
    * reads exactly that one, which is what the full-screen Logs screen's selector needs.
    */
   readLog(source: LogSource, maxLines: number): Promise<string[]>
+
+  /**
+   * The session fleet, re-read. Must never throw — a failed poll comes back as the previous list
+   * plus an `unavailable` sentence, never as an empty one.
+   *
+   * OPTIONAL, and its absence means the feature does not exist here: a host that does not implement
+   * it gets no `sessions` tab content beyond a sentence saying so. Same treatment as `openUrl?`,
+   * and for the same reason — a screen that offers what the host cannot do is the one bug this
+   * contract exists to prevent.
+   */
+  sessions?(): Promise<ControlSessions>
 }
 
 /**

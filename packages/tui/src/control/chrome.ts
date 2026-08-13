@@ -176,22 +176,34 @@ export interface HeaderMetaInput {
   mode: string
   version: string
   latestVersion?: string
+  /**
+   * How many sessions are waiting on a person, or 0.
+   *
+   * It lives in the HEADER because it is the one fact that must be readable from a tab that is not
+   * the sessions screen — a counter you have to navigate to in order to see is a counter that
+   * cannot tell you to navigate there.
+   */
+  attention?: number
   width: number
 }
 
 /**
- * `text` is the dim run; `update` is the accent-colored dot, empty when there is nothing to say.
- * Split rather than pre-joined because the dot is the only part that is not dim, and a component
- * cannot color the middle of a string it was handed whole.
+ * `text` is the dim run; `alert` and `update` are the accent-colored ones, empty when there is
+ * nothing to say. Split rather than pre-joined because the coloured pieces cannot be coloured inside
+ * a string a component was handed whole.
  */
 export interface HeaderMeta {
   text: string
+  /** The waiting-sessions counter, e.g. `⏳ 2`. */
+  alert: string
   update: string
 }
 
-/** What the two pieces cost together, separators included — the number the caller budgets against. */
+/** What the pieces cost together, separators included — the number the caller budgets against. */
 export function headerMetaWidth(meta: HeaderMeta): number {
-  return meta.text.length + (meta.update ? SEP.length + meta.update.length : 0)
+  return meta.text.length
+    + (meta.alert ? SEP.length + meta.alert.length : 0)
+    + (meta.update ? SEP.length + meta.update.length : 0)
 }
 
 /**
@@ -201,27 +213,34 @@ export function headerMetaWidth(meta: HeaderMeta): number {
  * metrics to a central · http://198.51.100.199:48080" is a paragraph, not a tag. Only the short
  * token survives; the sentence and the endpoint moved to the config pane, which has rows to spare.
  *
- * Under width pressure the pieces drop from the right: the update notice first, then the version.
- * The mode token is the last thing standing because it is the only one that says WHICH machine you
- * are looking at — a version you cannot see is one `agentop --version` away, and the update dot
- * comes back the moment the terminal is wider.
+ * Under width pressure the pieces drop from the right, LEAST ACTIONABLE FIRST: the update notice,
+ * then the version, then the waiting counter. The mode token is the last thing standing because it
+ * is the only one that says WHICH machine you are looking at.
+ *
+ * The counter outranks the version deliberately. A version you cannot see is one `agentop --version`
+ * away and changes once a month; a session waiting on you is the reason this application is open,
+ * and it is the piece that must survive a narrow terminal.
  */
 export function headerMeta(input: HeaderMetaInput): HeaderMeta {
-  const { mode, version, latestVersion, width } = input
-  if (width <= 0) return { text: '', update: '' }
+  const { mode, version, latestVersion, attention, width } = input
+  if (width <= 0) return { text: '', alert: '', update: '' }
 
   const outdated = Boolean(latestVersion && latestVersion !== version)
   const text = version ? `${mode}${SEP}v${version}` : mode
+  const alert = attention && attention > 0 ? `⏳ ${attention}` : ''
   const update = outdated ? `● ${latestVersion}` : ''
 
-  const full = { text, update }
+  const full = { text, alert, update }
   if (headerMetaWidth(full) <= width) return full
 
-  const withoutUpdate = { text, update: '' }
+  const withoutUpdate = { text, alert, update: '' }
   if (headerMetaWidth(withoutUpdate) <= width) return withoutUpdate
 
-  if (mode.length <= width) return { text: mode, update: '' }
-  return { text: truncate(mode, width), update: '' }
+  const withoutVersion = { text: mode, alert, update: '' }
+  if (headerMetaWidth(withoutVersion) <= width) return withoutVersion
+
+  if (mode.length <= width) return { text: mode, alert: '', update: '' }
+  return { text: truncate(mode, width), alert: '', update: '' }
 }
 
 // ---------------------------------------------------------------------------

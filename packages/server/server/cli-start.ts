@@ -39,6 +39,8 @@ import type {
   BootState,
   ControlHost,
   ControlService,
+  ControlSession,
+  ControlSessions,
   ControlStatus,
   LogSource,
   RestartOption,
@@ -47,6 +49,7 @@ import type {
   ServiceRef,
   ServiceRuntimeState,
   ServiceState,
+  SessionState,
   StartOption,
   StartRequest,
 } from '@agentistics/tui/control'
@@ -70,6 +73,11 @@ import { confirm } from './cli-ui'
 import { CURRENT_VERSION, getVersionInfo } from './version'
 import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
 import { resolveLang } from './cli-lang'
+import { scanProcesses } from './live-sessions'
+import { resolveBackend } from './sessions'
+import { readRegistry } from './sessions/registry'
+import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
+import type { SessionView } from './sessions/session-view'
 
 export type StartResult = number | 'foreground'
 
@@ -1099,6 +1107,85 @@ async function tailFile(path: string, maxLines: number): Promise<string[]> {
   }
 }
 
+/**
+ * The session poller, created once for the life of the process.
+ *
+ * A singleton on purpose, and not for speed: the poller carries the previous frame digest and the
+ * previous state of every session between calls, and those two are what make movement detectable
+ * and the bell a TRANSITION rather than a level. A fresh poller per call would have no previous
+ * frame to compare against — so nothing could ever be seen to move, and every waiting session would
+ * ring the bell every five seconds forever.
+ */
+let sessionsPoller: SessionsPoller | null = null
+
+async function ensureSessionsPoller(): Promise<SessionsPoller> {
+  if (sessionsPoller) return sessionsPoller
+  const backend = await resolveBackend()
+  sessionsPoller = createSessionsPoller({ backend, readRegistry, scanProcesses })
+  return sessionsPoller
+}
+
+/** The state word each session wears, and the machine-readable state beside it. */
+function sessionState(v: SessionView): SessionState {
+  if (v.status === 'external') return 'unknown'
+  if (v.status === 'lost') return 'lost'
+  switch (v.activity) {
+    case 'waiting-approval': return 'waiting-approval'
+    case 'waiting': return 'waiting'
+    case 'working': return 'working'
+    case 'exited': return 'exited'
+    // A row with no activity that is not external is one the poller could not read this time round.
+    // `lost` is the honest word for it: something is known to exist and nothing can be said about it.
+    default: return 'lost'
+  }
+}
+
+function stateLabel(state: SessionState, s: CliStrings): string {
+  switch (state) {
+    case 'working': return s.sessState.working
+    case 'waiting-approval': return s.sessState.waitingApproval
+    case 'waiting': return s.sessState.waiting
+    case 'exited': return s.sessState.exited
+    case 'lost': return s.sessState.lost
+    case 'unknown': return s.sessState.external
+  }
+}
+
+/** The last path segment — the "by project" grouping key, decided here so the TUI never parses a
+ *  path of its own. Backslashes normalised first, because a WSL machine sees both separators. */
+function projectName(cwd: string): string {
+  const parts = cwd.replace(/\\/g, '/').replace(/\/+$/, '').split('/')
+  return parts[parts.length - 1] ?? cwd
+}
+
+/** One server-side view, mapped to what the control center renders — every word already localized. */
+function toControlSession(v: SessionView, s: CliStrings): ControlSession {
+  const state = sessionState(v)
+  const project = projectName(v.cwd)
+  const harness = v.harness ?? ''
+  return {
+    id: v.id,
+    // The user's own label wins over anything derived: naming a session is the whole point of
+    // being able to name one.
+    title: v.label ?? s.sessUntitled(harness || '?', project),
+    harness,
+    cwd: v.cwd,
+    project,
+    ...(v.model ? { model: v.model } : {}),
+    ...(v.note ? { note: v.note } : {}),
+    state,
+    stateLabel: stateLabel(state, s),
+    actionable: v.status !== 'external',
+    // Stated only where it is TRUE and only for a session we actually drive: an external row cannot
+    // have its approval detected either way, and saying so twice on the same screen is noise.
+    ...(v.status !== 'external' && !v.approvalDetection && harness
+      ? { approvalBlind: s.sessApprovalBlind(harness) }
+      : {}),
+    ...(v.createdMs !== undefined ? { startedAt: v.createdMs } : {}),
+    attached: v.attached,
+  }
+}
+
 function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
   let lang = initialLang
   const S = () => cliStrings(lang)
@@ -1571,6 +1658,29 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const r = await sh(['sh', '-c', `docker logs --tail ${maxLines} ${ids[0]} 2>&1`])
       if (r.code !== 0) return []
       return r.out.split('\n').filter(line => line.length > 0)
+    },
+
+    /**
+     * The session fleet, already decided and already localized.
+     *
+     * The poller is created ONCE and reused, which is not an optimization: it carries the previous
+     * frame digest and the previous state of every session between calls, and those are what make
+     * movement detectable and the bell a transition rather than a level. A fresh poller each call
+     * would have no previous frame to compare against, so no session could ever be seen to move and
+     * every waiting one would ring the bell every five seconds.
+     */
+    async sessions(): Promise<ControlSessions> {
+      // `S()` rather than `this.lang`: the language is a closure variable `setLang` reassigns, and
+      // reading it through `this` would break the moment a caller detached the method.
+      const s = S()
+      const poller = await ensureSessionsPoller()
+      const snap = await poller.poll()
+      return {
+        sessions: snap.sessions.map(v => toControlSession(v, s)),
+        attention: snap.attention,
+        rang: snap.rang,
+        ...(snap.unavailable ? { unavailable: snap.unavailable } : {}),
+      }
     },
   }
 }

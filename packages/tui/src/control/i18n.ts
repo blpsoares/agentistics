@@ -185,6 +185,31 @@ export interface ControlStrings {
   logFollowing: string
   logPaused: string
 
+  /** Sessions tab. */
+  sessionsEmpty: string
+  sessionsLoading: string
+  /** Said when the host does not implement the fleet at all — not the same as an empty fleet. */
+  sessionsUnsupported: string
+  /** The summary row: "3 sessions · 1 waiting on you". */
+  sessionsCount: (n: number) => string
+  sessionsWaitingCount: (n: number) => string
+  sessionsGroupBy: string
+  sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project', string>
+  sessionsUnknownHarness: string
+  sessionsUnknownModel: string
+  sessionsUnknownProject: string
+  /** Detail-pane field labels. */
+  sessionsWhere: string
+  sessionsModel: string
+  sessionsNote: string
+  sessionsStarted: string
+  /** How long ago, from a whole number of SECONDS — the caller does the clock arithmetic so this
+   *  stays a pure formatter. */
+  sessionsAgo: (seconds: number) => string
+  /** The external row's own sentence, in the detail pane. */
+  sessionsExternalNote: string
+  keySessionsGroup: string
+
   /** Static tabs. */
   helpIntro: string
   cheatIntro: string
@@ -199,6 +224,7 @@ const EN: ControlStrings = {
 
   tabs: {
     services: 'Services',
+    sessions: 'Sessions',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Cheat sheet',
@@ -208,6 +234,7 @@ const EN: ControlStrings = {
 
   tabsShort: {
     services: 'services',
+    sessions: 'sessions',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'commands',
@@ -316,6 +343,34 @@ const EN: ControlStrings = {
   logFollowing: 'following',
   logPaused: 'paused',
 
+  sessionsEmpty: 'no sessions running.',
+  sessionsLoading: 'reading…',
+  sessionsUnsupported: 'session management is not available on this machine.',
+  sessionsCount: (n: number) => (n === 1 ? '1 session' : `${n} sessions`),
+  sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
+  sessionsGroupBy: 'GROUP',
+  sessionsGroupings: {
+    none: 'flat',
+    harness: 'harness',
+    model: 'model',
+    project: 'project',
+  },
+  sessionsUnknownHarness: 'harness unknown',
+  sessionsUnknownModel: 'no model recorded',
+  sessionsUnknownProject: 'no directory recorded',
+  sessionsWhere: 'where',
+  sessionsModel: 'model',
+  sessionsNote: 'note',
+  sessionsStarted: 'started',
+  sessionsAgo: (sec: number) => {
+    if (sec < 60) return `${sec}s ago`
+    const min = Math.round(sec / 60)
+    if (min < 60) return `${min}m ago`
+    return `${Math.floor(min / 60)}h ${min % 60}m ago`
+  },
+  sessionsExternalNote: 'started outside agentop — listed, but it cannot be attached or stopped here.',
+  keySessionsGroup: 'v group',
+
   helpIntro: 'Every command, with the flags that matter. `agentop --help` prints this plain.',
   cheatIntro: 'The commands worth remembering.',
   contributeIntro: 'Agentistics is open source — issues and pull requests welcome.',
@@ -328,6 +383,7 @@ const PT: ControlStrings = {
 
   tabs: {
     services: 'Serviços',
+    sessions: 'Sessões',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Comandos',
@@ -337,6 +393,7 @@ const PT: ControlStrings = {
 
   tabsShort: {
     services: 'serviços',
+    sessions: 'sessões',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'comandos',
@@ -442,6 +499,34 @@ const PT: ControlStrings = {
   logFollow: 'f acompanhar',
   logFollowing: 'acompanhando',
   logPaused: 'pausado',
+
+  sessionsEmpty: 'nenhuma sessão em execução.',
+  sessionsLoading: 'lendo…',
+  sessionsUnsupported: 'gerenciamento de sessões não está disponível nesta máquina.',
+  sessionsCount: (n: number) => (n === 1 ? '1 sessão' : `${n} sessões`),
+  sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
+  sessionsGroupBy: 'AGRUPAR',
+  sessionsGroupings: {
+    none: 'lista',
+    harness: 'harness',
+    model: 'modelo',
+    project: 'projeto',
+  },
+  sessionsUnknownHarness: 'harness desconhecido',
+  sessionsUnknownModel: 'sem modelo registrado',
+  sessionsUnknownProject: 'sem diretório registrado',
+  sessionsWhere: 'onde',
+  sessionsModel: 'modelo',
+  sessionsNote: 'nota',
+  sessionsStarted: 'iniciada',
+  sessionsAgo: (sec: number) => {
+    if (sec < 60) return `há ${sec}s`
+    const min = Math.round(sec / 60)
+    if (min < 60) return `há ${min}min`
+    return `há ${Math.floor(min / 60)}h ${min % 60}min`
+  },
+  sessionsExternalNote: 'iniciada fora do agentop — listada, mas não dá para anexar nem parar por aqui.',
+  keySessionsGroup: 'v agrupar',
 
   helpIntro: 'Todos os comandos, com as flags que importam. `agentop --help` imprime isto puro.',
   cheatIntro: 'Os comandos que vale a pena lembrar.',
