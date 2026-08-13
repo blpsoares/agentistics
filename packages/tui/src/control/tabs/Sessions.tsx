@@ -29,11 +29,12 @@ import { Pane, paneBody, paneRows } from '../Pane'
 const PANE_EDGE_X = 2
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
 import { SessionWizard } from './SessionWizard'
+import { TaskChoice } from '../TaskChoice'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, actionLabels, asideRows, asideSelectable, enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
-  taskCounts, projectCounts, sessionMetric,
+  taskCounts, projectCounts, sessionMetric, asideSections, asideSectionRows,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
 } from '../sessions'
@@ -100,7 +101,10 @@ export function Sessions({
   /** Store the arrangement, so a restart does not throw away what the user chose. */
   onView: (v: SessionViewPrefs) => void
 }) {
-  const [grouping, setGrouping] = useState<SessionGrouping>(view?.grouping ?? 'none')
+  // Repository by default: a session is opened in a directory, but the thing a person thinks in is
+  // the repository, and three worktrees of one repo are three places to work on ONE project — a
+  // list that files them under three unrelated folder names has split the work, not organised it.
+  const [grouping, setGrouping] = useState<SessionGrouping>(view?.grouping ?? 'repo')
   const [cursor, setCursor] = useState(0)
   const [ask, setAsk] = useState<Ask | null>(null)
   const [query, setQuery] = useState('')
@@ -172,6 +176,7 @@ export function Sessions({
       model: s.sessionsUnknownModel,
       project: s.sessionsUnknownProject,
       task: s.sessionsUnknownTask,
+      repo: s.sessionsUnknownRepo,
     },
     fleet?.finishedTasks ?? [],
   ), s.sessionsClosedWord, s.sessionsDoneWord), [
@@ -525,9 +530,31 @@ export function Sessions({
     // The MENU is the left pane of the band. Answered FIRST, because every hit test below is
     // written in the list's coordinates — and the menu was not answering the mouse at all, which
     // for a menu built to be clicked is the whole of it not working.
-    if (cockpit.aside > 0 && inPane(0, cockpit.aside, 0, cockpit.band)) {
-      const index = asideOffset + (p.y - 1)
-      const row = asideList[index]
+    if (cockpit.aside > 0 && p.x >= PANE_EDGE_X && p.x < cockpit.aside - PANE_EDGE_X
+        && p.y >= 0 && p.y < cockpit.band) {
+      // In the SECTIONED menu each block is its own pane, so the row a click lands on is found by
+      // walking the stack — the flat offset belongs to the single-pane fallback and would answer
+      // with a row from some other block entirely.
+      let index = -1
+      if (sectionRows) {
+        let top = 0
+        for (let i = 0; i < sections.length; i++) {
+          const h = sectionRows[i]!
+          if (p.y > top && p.y < top + h - 1) {
+            const section = sections[i]!
+            const inner = paneRows(h)
+            const off = windowOffset(
+              Math.max(0, section.indexes.indexOf(asideRow)), section.rows.length, inner,
+            )
+            index = section.indexes[off + (p.y - top - 1)] ?? -1
+            break
+          }
+          top += h
+        }
+      } else if (p.y >= 1 && p.y < cockpit.band - 1) {
+        index = asideOffset + (p.y - 1)
+      }
+      const row = index < 0 ? undefined : asideList[index]
       if (!row || row.kind === 'heading' || row.kind === 'rule') return
       if (row.kind === 'action' && !row.enabled) return
       setFocus('aside')
@@ -574,6 +601,13 @@ export function Sessions({
   // Slicing from zero would leave the view switches below the fold on a short terminal — invisible,
   // and still the thing `enter` would act on.
   const asideOffset = windowOffset(Math.max(0, asideRow), asideList.length, paneRows(cockpit.band))
+  const sections = useMemo(() => asideSections(asideList), [asideList])
+  const activeSection = Math.max(0, sections.findIndex(sec => sec.indexes.includes(asideRow)))
+  // `null` when the band cannot pay for one frame per block, and the single scrolling pane is drawn
+  // instead — a row handed out that does not exist is composited over the row below it.
+  const sectionRows = cockpit.aside > 0
+    ? asideSectionRows(sections, cockpit.band, activeSection)
+    : null
 
   // Measured across the rows ON SCREEN, so the state, harness and directory columns line up. A
   // single long title thirty rows down must not narrow every visible row to pay for something
@@ -582,9 +616,13 @@ export function Sessions({
     () => sessionColumns(
       visible.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
       cockpit.list,
-      grouping === 'task',
+      {
+        groupedByTask: grouping === 'task',
+        worktreeWord: s.sessionsWorktreeTag,
+        ...(cockpit.header ? { headings: s.sessionsCols } : {}),
+      },
     ),
-    [visible, cockpit.list, grouping],
+    [visible, cockpit.list, grouping, cockpit.header, s],
   )
 
   // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
@@ -643,23 +681,57 @@ export function Sessions({
       <Box flexDirection="row" width={width} flexShrink={0}>
       {cockpit.aside > 0 ? (
         <>
-          <Pane
-            title={s.sessionsPaneMenu}
-            focused={focus === 'aside'}
-            width={cockpit.aside}
-            height={cockpit.band}
-          >
-            <AsideMenu
-              rows={asideList}
-              cursor={asideRow}
+          {sectionRows ? (
+            // Each block its OWN framed pane, titled with its own heading. One scrolling pane
+            // titled "menu" showed its first section and nothing else, so every switch and every
+            // task sat below the fold — and the honest reading of that screen is that all of it
+            // lives inside "Actions".
+            <Box flexDirection="column" width={cockpit.aside} flexShrink={0}>
+              {sections.map((section, i) => (
+                <Pane
+                  key={section.title}
+                  title={section.title.toLowerCase()}
+                  focused={focus === 'aside' && i === activeSection}
+                  width={cockpit.aside}
+                  height={sectionRows[i]!}
+                >
+                  <AsideMenu
+                    rows={section.rows}
+                    cursor={section.indexes.indexOf(asideRow)}
+                    focused={focus === 'aside'}
+                    width={paneBody(cockpit.aside)}
+                    height={paneRows(sectionRows[i]!)}
+                    offset={windowOffset(
+                      Math.max(0, section.indexes.indexOf(asideRow)),
+                      section.rows.length,
+                      paneRows(sectionRows[i]!),
+                    )}
+                    allTasksLabel={s.asideAllTasks}
+                    allProjectsLabel={s.asideAllProjects}
+                  />
+                </Pane>
+              ))}
+            </Box>
+          ) : (
+            // Too short to frame each block: one pane, scrolling, with the headings inline.
+            <Pane
+              title={s.sessionsPaneMenu}
               focused={focus === 'aside'}
-              width={paneBody(cockpit.aside)}
-              height={paneRows(cockpit.band)}
-              offset={asideOffset}
-              allTasksLabel={s.asideAllTasks}
-              allProjectsLabel={s.asideAllProjects}
-            />
-          </Pane>
+              width={cockpit.aside}
+              height={cockpit.band}
+            >
+              <AsideMenu
+                rows={asideList}
+                cursor={asideRow}
+                focused={focus === 'aside'}
+                width={paneBody(cockpit.aside)}
+                height={paneRows(cockpit.band)}
+                offset={asideOffset}
+                allTasksLabel={s.asideAllTasks}
+                allProjectsLabel={s.asideAllProjects}
+              />
+            </Pane>
+          )}
           {/* The frames provide the separation the drawn divider used to; the gap is the column
               `sessionsCockpit` already withheld from the list. */}
           <Box width={1} flexShrink={0} />
@@ -683,6 +755,21 @@ export function Sessions({
           query={query}
           scope={projectFilter ?? taskFilter ?? ''}
         />
+      ) : null}
+
+      {/* What each cell IS. The row was six aligned columns of unlabelled text — the alignment made
+          it scannable and the labels are what make it readable, and they are drawn from the very
+          same measured widths so the heading can never sit over the wrong column. */}
+      {cockpit.header && rows.length > 0 ? (
+        <Text dimColor wrap="truncate">
+          {'  ' + padCell(s.sessionsCols.state, columns.state)}
+          {columns.title > 0 ? '  ' + padCell(s.sessionsCols.title, columns.title) : ''}
+          {columns.worktree > 0 ? '  ' + padCell(s.sessionsCols.worktree, columns.worktree) : ''}
+          {columns.task > 0 ? '  ' + padCell(s.sessionsCols.task, columns.task) : ''}
+          {columns.metrics > 0 ? '  ' + padCell(s.sessionsCols.metrics, columns.metrics) : ''}
+          {columns.harness > 0 ? '  ' + padCell(s.sessionsCols.harness, columns.harness) : ''}
+          {columns.where > 0 ? '  ' + padCell(s.sessionsCols.where, columns.where) : ''}
+        </Text>
       ) : null}
 
       {fleet === undefined ? (
@@ -722,6 +809,7 @@ export function Sessions({
                 selected={selected?.id === row.session.id}
                 columns={columns}
                 width={listBody}
+                worktreeWord={s.sessionsWorktreeTag}
               />
             )
           })}
@@ -865,11 +953,13 @@ function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyT
   )
 }
 
-function SessionRowView({ session, selected, columns, width }: {
+function SessionRowView({ session, selected, columns, width, worktreeWord }: {
   session: ControlSession
   selected: boolean
   columns: SessionColumns
   width: number
+  /** Already-localized word for a linked worktree — this component owns no strings. */
+  worktreeWord: string
 }) {
   // `harness` is a plain string here because it can be EMPTY — a session the registry has
   // forgotten runs a harness nobody recorded. An empty one simply gets no colour.
@@ -888,6 +978,15 @@ function SessionRowView({ session, selected, columns, width }: {
       {columns.title > 0 ? (
         <Text color={selected ? COLORS.accent : undefined} bold={selected}>
           {gap + padCell(session.title, columns.title)}
+        </Text>
+      ) : null}
+      {/* A linked WORKTREE says so, because it changes what the row IS: three rows of one repo in
+          three directories are three checkouts, and without the word they read as three projects.
+          The word, never a glyph alone — a distinction announced in a symbol is one that has to be
+          taught before the screen can be read. */}
+      {columns.worktree > 0 ? (
+        <Text color={COLORS.secondary}>
+          {gap + padCell(session.worktree ? worktreeWord : '', columns.worktree)}
         </Text>
       ) : null}
       {/* The TASK, right of the name. Filing a session under a task and then not being able to see
@@ -1270,85 +1369,6 @@ function SessionActionRow({ labels, actions, selected, focused, width }: {
   )
 }
 
-/**
- * Filing a session under a task: pick one that exists, or type a new one.
- *
- * A pick rather than a spelling test. A task is a free string, so typing "auth-refactor" a second
- * time as "auth refactor" makes two tasks that look like one and group like two — offering what
- * already exists is what prevents that, and typing still creates a new one when that is what you
- * mean. The list narrows as you type, so a machine with twenty tasks is still one field away.
- */
-function TaskChoice({ host, strings: s, current, width, onCancel, onPick }: {
-  host: ControlHost
-  strings: ControlStrings
-  current: string
-  width: number
-  onCancel: () => void
-  onPick: (value: string) => void
-}) {
-  const [tasks, setTasks] = useState<string[] | null>(null)
-  const [typed, setTyped] = useState('')
-  const [index, setIndex] = useState(0)
-
-  useEffect(() => {
-    const read = host.sessionTasks
-    if (!read) { setTasks([]); return }
-    let alive = true
-    void read.call(host).then(list => { if (alive) setTasks(list) })
-    return () => { alive = false }
-  }, [host])
-
-  const matching = useMemo(() => {
-    const q = typed.trim().toLowerCase()
-    const all = tasks ?? []
-    return q ? all.filter(t => t.toLowerCase().includes(q)) : all
-  }, [tasks, typed])
-
-  // `''` clears the task, and is offered as a row so removing one is not a hidden gesture.
-  const rows = useMemo(() => ['', ...matching], [matching])
-  const at = Math.min(index, Math.max(0, rows.length - 1))
-
-  useInput((input, key) => {
-    if (key.escape) return onCancel()
-    // What is TYPED wins over what is highlighted the moment there is any: that is how a new task
-    // gets created, and it must not require clearing the list first.
-    if (key.return) return onPick(typed.trim() || rows[at] || '')
-    if (key.backspace || key.delete) { setTyped(v => v.slice(0, -1)); setIndex(0); return }
-    if (key.upArrow) return setIndex(Math.max(0, at - 1))
-    if (key.downArrow) return setIndex(Math.min(rows.length - 1, at + 1))
-    if (key.ctrl || key.meta || key.tab) return
-    const printable = [...input].filter(ch => ch >= ' ' && ch !== '\x7f').join('')
-    if (printable) { setTyped(v => v + printable); setIndex(0) }
-  })
-
-  return (
-    <Box flexDirection="column" width={width}>
-      <Text bold>{truncate(s.sessionsTaskPrompt, width)}</Text>
-      <Text dimColor>{truncate(s.taskHint, width)}</Text>
-      <Text>
-        <Text dimColor>{'› '}</Text>
-        {typed ? <Text>{truncate(typed, Math.max(1, width - 2))}</Text> : <Text dimColor>…</Text>}
-      </Text>
-      {tasks === null ? (
-        <Text dimColor>{s.sessionsLoading}</Text>
-      ) : (
-        rows.slice(0, 6).map((task, i) => {
-          const active = !typed && i === at
-          const label = task === '' ? s.taskNone : task
-          return (
-            <Text key={task || '_none'} wrap="truncate" dimColor={Boolean(typed)}>
-              <Text color={active ? COLORS.accent : undefined}>{active ? '❯ ' : '  '}</Text>
-              <Text color={active ? COLORS.accent : undefined} bold={active}>
-                {truncate(label, Math.max(1, width - 4))}
-              </Text>
-              {task && task === current ? <Text dimColor>{`  ${s.taskCurrent}`}</Text> : null}
-            </Text>
-          )
-        })
-      )}
-    </Box>
-  )
-}
 
 /**
  * The aside menu — everything this screen can do, on the left, visible.

@@ -89,6 +89,7 @@ import { resolveBackend } from './sessions'
 import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
 import { findProjects } from './sessions/project-source'
 import { candidatePath } from './sessions/project-search'
+import { repoFacts, type RepoFacts } from './sessions/repo-facts'
 import type { SpawnPlanError } from './sessions/types'
 import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
@@ -1210,7 +1211,7 @@ async function sessionViewPref(): Promise<{ sessionView: SessionViewPrefs }> {
   const stored = (await readPreferences()).sessionView
   return {
     sessionView: stored ?? {
-      grouping: 'none', showClosed: false, showExited: false, showUnfiled: true, showDone: false,
+      grouping: 'repo', showClosed: false, showExited: false, showUnfiled: true, showDone: false,
     },
   }
 }
@@ -1308,7 +1309,12 @@ function projectName(cwd: string): string {
 }
 
 /** One server-side view, mapped to what the control center renders — every word already localized. */
-function toControlSession(v: SessionView, s: CliStrings): ControlSession {
+function toControlSession(
+  v: SessionView,
+  s: CliStrings,
+  /** What repository this session's directory belongs to, already resolved and memoized. */
+  facts: RepoFacts = { worktree: false },
+): ControlSession {
   const state = sessionState(v)
   const project = projectName(v.cwd)
   const harness = v.harness ?? ''
@@ -1334,6 +1340,8 @@ function toControlSession(v: SessionView, s: CliStrings): ControlSession {
       : {}),
     ...(v.createdMs !== undefined ? { startedAt: v.createdMs } : {}),
     ...(v.task ? { task: v.task } : {}),
+    ...(facts.repo ? { repo: facts.repo } : {}),
+    ...(facts.worktree ? { worktree: true } : {}),
     ...(v.resume ? { resume: v.resume } : {}),
     ...(v.lastLines?.length ? { lastLines: v.lastLines } : {}),
     // Already formatted, because formatting is a presentation concern the host owns for everything
@@ -1856,8 +1864,12 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // Read on every snapshot rather than cached: the toggle and the verb both write it, and a
       // stale copy would leave a task the user just finished still heading a live section.
       const finishedTasks = (await readPreferences()).finishedTasks ?? []
+      // Resolved per session and MEMOIZED by directory: a directory does not change repository, and
+      // this poll runs every five seconds over the whole fleet — asking git three times per session
+      // per tick would be a hundred processes a minute to learn the same thing.
+      const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd)))
       return {
-        sessions: snap.sessions.map(v => toControlSession(v, s)),
+        sessions: snap.sessions.map((v, i) => toControlSession(v, s, facts[i])),
         attention: snap.attention,
         rang: snap.rang,
         ...(finishedTasks.length > 0 ? { finishedTasks } : {}),
@@ -2054,6 +2066,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         ...(req.model ? { model: req.model } : {}),
         ...(req.effort ? { effort: req.effort } : {}),
         ...(req.label ? { label: req.label } : {}),
+        ...(req.task ? { task: req.task } : {}),
       }, S())
     },
   }

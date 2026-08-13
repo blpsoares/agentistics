@@ -61,9 +61,15 @@ export function attentionOf(list: readonly ControlSession[]): number {
 // grouping
 // ---------------------------------------------------------------------------
 
-export type SessionGrouping = 'none' | 'harness' | 'model' | 'project' | 'task'
+export type SessionGrouping = 'none' | 'harness' | 'model' | 'project' | 'task' | 'repo'
 
-export const GROUPINGS: readonly SessionGrouping[] = ['none', 'task', 'harness', 'model', 'project'] as const
+/**
+ * `repo` leads because it is the DEFAULT, and it is the default because it is the grouping that
+ * matches how the work is organised: a session is opened in a directory, but the thing a person
+ * thinks in is the repository, and worktrees of one repo are places to work on ONE project.
+ */
+export const GROUPINGS: readonly SessionGrouping[] =
+  ['repo', 'none', 'task', 'harness', 'model', 'project'] as const
 
 export interface SessionGroup {
   key: string
@@ -85,7 +91,7 @@ export interface SessionGroup {
 export function groupSessions(
   list: readonly ControlSession[],
   by: SessionGrouping,
-  unknownLabels: { harness: string; model: string; project: string; task: string },
+  unknownLabels: { harness: string; model: string; project: string; task: string; repo: string },
   /** The tasks the user marked finished — a statement about the WORK, not about any session. */
   doneTasks: readonly string[] = [],
 ): SessionGroup[] {
@@ -96,6 +102,7 @@ export function groupSessions(
     const key = by === 'harness' ? s.harness
       : by === 'model' ? (s.model ?? '')
       : by === 'task' ? (s.task ?? '')
+      : by === 'repo' ? (s.repo ?? '')
       : s.project
     const label = key !== '' ? key : unknownLabels[by]
     const found = groups.get(key)
@@ -489,6 +496,8 @@ export interface SessionColumns {
    * being able to see which task it is in is the feature not working.
    */
   task: number
+  /** The worktree word. `0` when no row on screen is one — never a column of blanks. */
+  worktree: number
   /** Tokens + cost. `0` when nothing on screen has any — never a column of blanks. */
   metrics: number
   harness: number
@@ -523,18 +532,37 @@ export function sessionMetric(s: ControlSession): string {
 export function sessionColumns(
   rows: readonly ControlSession[],
   width: number,
-  /** True while the HEADING above each row already names the task, so the cell would repeat it. */
-  groupedByTask = false,
+  o: {
+    /** True while the HEADING above each row already names the task, so the cell would repeat it. */
+    groupedByTask?: boolean
+    /** Already-localized word for a linked worktree; this module owns no strings. */
+    worktreeWord?: string
+    /**
+     * The column HEADINGS, when a header row is being drawn.
+     *
+     * Measured as content of their own columns, because they are: a heading wider than the column
+     * under it is truncated, and a truncated heading sits over a cell it no longer names. Passed
+     * only when the header is actually drawn — a pane too short for one must not pay for words
+     * nobody is going to see.
+     */
+    headings?: Partial<Record<keyof SessionColumns, string>>
+  } = {},
 ): SessionColumns {
-  const widest = (pick: (s: ControlSession) => string) =>
-    rows.reduce((n, s) => Math.max(n, pick(s).length), 0)
+  const head = (key: keyof SessionColumns) => (o.headings?.[key] ?? '').length
+  // A column that draws nothing stays at zero: the heading is only content of a column that exists.
+  const widest = (key: keyof SessionColumns, pick: (s: ControlSession) => string) => {
+    const data = rows.reduce((n, s) => Math.max(n, pick(s).length), 0)
+    return data === 0 ? 0 : Math.max(data, head(key))
+  }
 
-  const state = widest(s => s.stateLabel)
-  const task = groupedByTask ? 0 : widest(s => s.task ?? '')
-  const metrics = widest(sessionMetric)
-  const harness = widest(s => s.harness)
-  const where = widest(s => s.project)
-  const title = widest(s => s.title)
+  const state = widest('state', s => s.stateLabel)
+  const task = o.groupedByTask ? 0 : widest('task', s => s.task ?? '')
+  const worktreeWord = o.worktreeWord ?? ''
+  const worktree = rows.some(s => s.worktree) ? Math.max(worktreeWord.length, head('worktree')) : 0
+  const metrics = widest('metrics', sessionMetric)
+  const harness = widest('harness', s => s.harness)
+  const where = widest('where', s => s.project)
+  const title = widest('title', s => s.title)
 
   /**
    * Columns everything BUT the title costs: two for the cursor, the cells, and a gap between each
@@ -544,9 +572,9 @@ export function sessionColumns(
    * no session reports usage draws no metrics column, and paying its gap anyway would narrow every
    * title on the screen to reserve a space nothing occupies.
    */
-  const overhead = (k: number, m: number, h: number, w: number) => {
-    const drawn = [state, 1, k, m, h, w].filter(n => n > 0).length
-    return 2 + state + k + m + h + w + GAP * (drawn - 1)
+  const overhead = (wt: number, k: number, m: number, h: number, w: number) => {
+    const drawn = [state, 1, wt, k, m, h, w].filter(n => n > 0).length
+    return 2 + state + wt + k + m + h + w + GAP * (drawn - 1)
   }
 
   // The fewest columns a title is worth. Below it the row has a state word and an ellipsis, which
@@ -557,26 +585,28 @@ export function sessionColumns(
   // STATE and the NAME are what a row cannot lose — the state because nothing else on the frame
   // says whether this session is waiting for you, the name because a row you cannot identify is not
   // a row you can act on.
-  const ladder: Array<[number, number, number, number]> = [
-    [task, metrics, harness, where],
-    [task, metrics, harness, 0],
-    [task, metrics, 0, 0],
-    [task, 0, 0, 0],
-    [0, 0, 0, 0],
+  const ladder: Array<[number, number, number, number, number]> = [
+    [worktree, task, metrics, harness, where],
+    [worktree, task, metrics, harness, 0],
+    [worktree, task, metrics, 0, 0],
+    [worktree, task, 0, 0, 0],
+    [worktree, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0],
   ]
-  for (const [k, m, h, w] of ladder) {
-    const room = width - overhead(k, m, h, w)
+  for (const [wt, k, m, h, w] of ladder) {
+    const room = width - overhead(wt, k, m, h, w)
     // The title takes what it NEEDS, not what is left: stretching it to the full remainder pushed
     // the trailing cells to the far edge with a field of blank between, which is the old
     // misalignment wearing a different shape.
-    if (room >= MIN_TITLE || (k === 0 && m === 0 && h === 0 && w === 0)) {
+    if (room >= MIN_TITLE || (wt === 0 && k === 0 && m === 0 && h === 0 && w === 0)) {
       return {
-        state, title: Math.max(1, Math.min(title, room)), task: k, metrics: m, harness: h, where: w,
+        state, title: Math.max(1, Math.min(title, room)),
+        worktree: wt, task: k, metrics: m, harness: h, where: w,
       }
     }
   }
   /* c8 ignore next */
-  return { state, title: 1, task: 0, metrics: 0, harness: 0, where: 0 }
+  return { state, title: 1, worktree: 0, task: 0, metrics: 0, harness: 0, where: 0 }
 }
 
 /** Pad or truncate a cell to exactly `w` columns. `0` means the column is not drawn. */
@@ -600,13 +630,15 @@ export interface CockpitLayout {
   detail: number
   /** Whether the summary row above the sessions fits INSIDE the list pane. */
   summary: boolean
+  /** Whether the column-header row fits under it. */
+  header: boolean
   /** Rows for session rows inside the list pane, frame and summary already paid for. */
   listRows: number
 }
 
 /** The aside's natural width: wide enough for its longest label, within bounds. */
-const ASIDE_MIN = 14
-const ASIDE_MAX = 26
+const ASIDE_MIN = 18
+const ASIDE_MAX = 34
 /** Below this the screen is all list — an aside that squeezes the sessions to nothing helps nobody. */
 const ASIDE_NEEDS = 52
 /** The fewest rows a detail pane is worth: a divider plus something to say. */
@@ -639,7 +671,9 @@ export function sessionsCockpit(o: {
   const height = Math.max(1, o.height)
 
   const aside = width >= ASIDE_NEEDS
-    ? Math.min(ASIDE_MAX, Math.max(ASIDE_MIN, o.asideLabel + 2))
+    // `+ 4` rather than `+ 2`: the rows carry a cursor, a state dot and — for a task or a project —
+    // a trailing count, and sizing to the label alone truncated every long verb in the menu.
+    ? Math.min(ASIDE_MAX, Math.max(ASIDE_MIN, o.asideLabel + 4))
     : 0
   // One column of divider between the two panes, and only when there are two.
   const list = Math.max(1, width - (aside > 0 ? aside + 1 : 0))
@@ -652,8 +686,13 @@ export function sessionsCockpit(o: {
     const inner = Math.max(0, band - PANE_FRAME_Y)
     // The summary is the first thing given up: it describes the list, and a list with no rows left
     // has nothing to describe.
-    const summary = inner >= 4
-    return { aside, list, band, detail, summary, listRows: Math.max(1, inner - (summary ? 1 : 0)) }
+    const summary = inner >= 5
+    // The column HEADER is the row that says what each cell is. It is given up before the summary,
+    // because the summary states what is being withheld from the list — a filter you cannot see is
+    // a list lying about its length, while an unlabelled column is merely one you have to learn.
+    const header = inner >= 4
+    const spent = (summary ? 1 : 0) + (header ? 1 : 0)
+    return { aside, list, band, detail, summary, header, listRows: Math.max(1, inner - spent) }
   }
 
   if (height <= COCKPIT_DETAIL_MIN + 2 || o.detailWanted <= 0) return finish(height, 0)
@@ -836,6 +875,75 @@ export interface ProjectColumns {
   why: number
 }
 
+/** One section of the picker: the repository its rows belong to, or `''` for the loose folders. */
+export interface ProjectSection {
+  repo: string
+  rows: ProjectRow[]
+}
+
+/**
+ * Group the candidates by REPOSITORY, keeping the order they arrived in — PURE.
+ *
+ * First appearance decides section order, which is what preserves the host's ranking: the section
+ * holding the directory you are standing in stays at the top, and re-sorting alphabetically here
+ * would throw away the one piece of ordering the search actually earned.
+ *
+ * Loose folders — anything with no repository — go LAST, under their own empty-keyed section. They
+ * are the long tail of a `$HOME` walk, and the sections above them are the answer most of the time.
+ */
+export function groupProjects(rows: readonly ProjectRow[]): ProjectSection[] {
+  const byRepo = new Map<string, ProjectSection>()
+  const loose: ProjectRow[] = []
+  for (const r of rows) {
+    if (!r.repo) { loose.push(r); continue }
+    const found = byRepo.get(r.repo)
+    if (found) found.rows.push(r)
+    else byRepo.set(r.repo, { repo: r.repo, rows: [r] })
+  }
+  const out = [...byRepo.values()]
+  if (loose.length > 0) out.push({ repo: '', rows: loose })
+  return out
+}
+
+/**
+ * The picker's rows as they are DRAWN — headings included, in one flat list.
+ *
+ * Flat because the cursor moves over it: with headings drawn separately, the selected index and the
+ * drawn rows are two different countings of one list and they agree until the first section
+ * boundary. `index` is the position in the ORIGINAL list, so what `enter` picks is never in doubt.
+ *
+ * Sections are only drawn when they earn themselves: one section is not a grouping, it is a heading
+ * over the whole list.
+ */
+export type ProjectPickRow =
+  | { kind: 'heading'; label: string }
+  | { kind: 'project'; row: ProjectRow; index: number }
+
+export function projectPickRows(
+  rows: readonly ProjectRow[],
+  /** Already-localized heading for the folders that belong to no repository. */
+  looseLabel: string,
+): { rows: ProjectPickRow[]; grouped: boolean } {
+  const sections = groupProjects(rows)
+  const named = sections.filter(s => s.repo !== '').length
+  // A grouping needs at least one named repository AND something to separate it from.
+  if (named === 0 || sections.length < 2) {
+    return { rows: rows.map((row, index) => ({ kind: 'project' as const, row, index })), grouped: false }
+  }
+  const out: ProjectPickRow[] = []
+  let index = 0
+  const seen = new Map<ProjectRow, number>()
+  rows.forEach((r, i) => seen.set(r, i))
+  for (const section of sections) {
+    out.push({ kind: 'heading', label: section.repo || looseLabel })
+    for (const row of section.rows) {
+      index = seen.get(row) ?? index
+      out.push({ kind: 'project', row, index })
+    }
+  }
+  return { rows: out, grouped: true }
+}
+
 /**
  * Column widths for a screenful of project candidates — PURE, and MEASURED across the page.
  *
@@ -848,6 +956,9 @@ export interface ProjectColumns {
  * one". The name is what the eye scans, so it goes first and is squeezed rather than dropped; the
  * repo and the provenance word are both derivable from the path and are given up before it.
  */
+/** Cursor plus the kind glyph, both always drawn: `❯ ◆ `. */
+export const PROJECT_LEAD = 4
+
 export function projectColumns(rows: readonly ProjectRow[], width: number): ProjectColumns {
   const widest = (pick: (r: ProjectRow) => string) =>
     rows.reduce((n, r) => Math.max(n, pick(r).length), 0)
@@ -865,11 +976,13 @@ export function projectColumns(rows: readonly ProjectRow[], width: number): Proj
   // the pane and every row was truncated by the frame it had just been measured against.
   const room = (r: number, p: number, w: number) => {
     const drawn = [1, r, p, w].filter(v => v > 0).length
-    return 2 + r + p + w + GAP * Math.max(0, drawn - 1)
+    return PROJECT_LEAD + r + p + w + GAP * Math.max(0, drawn - 1)
   }
 
   const MIN_NAME = 10
   const MIN_PATH = 12
+  // Two for the cursor and two for the glyph that says what kind of place this is. The glyph is
+  // always drawn, so it is chrome rather than a column that can be given up.
 
   const ladder: Array<[number, number, number]> = [
     [repo, path, why],
@@ -884,7 +997,93 @@ export function projectColumns(rows: readonly ProjectRow[], width: number): Proj
   // Nothing fits whole. The name and the path SHARE what there is, because either alone is a row
   // that cannot be acted on: a name with no path does not say which directory, a path with no name
   // is a row nobody scans.
-  const shared = Math.max(2, width - 2 - GAP)
+  const shared = Math.max(2, width - PROJECT_LEAD - GAP)
   const forPath = Math.min(path, Math.max(MIN_PATH, Math.floor(shared / 2)))
   return { name: Math.max(1, shared - forPath), repo: 0, path: forPath, why: 0 }
+}
+
+// ---------------------------------------------------------------------------
+// the aside, split into its own panes
+// ---------------------------------------------------------------------------
+
+/** One titled block of the menu, ready to be drawn as its own framed pane. */
+export interface AsideSection {
+  /** Already-localized title, taken from the heading row that opened the block. */
+  title: string
+  /** The rows of this block, WITHOUT its heading or the rule that followed it. */
+  rows: AsideRow[]
+  /** Index into the flat `asideRows` list of each row above, so the cursor keeps ONE counting. */
+  indexes: number[]
+}
+
+/**
+ * Split the flat menu into its titled sections — PURE.
+ *
+ * The menu is authored as one flat list because the CURSOR moves over one list: with the sections
+ * kept as separate arrays, the selected index and the drawn rows are two different countings of one
+ * menu and they agree until the first section boundary. This takes that one list apart for DRAWING
+ * only, and every row carries the index it had — so what `enter` runs is never in doubt.
+ *
+ * It exists because a single scrolling pane titled "menu" showed its first section and nothing
+ * else: with the actions at the top and the pane four rows tall, every switch and every task was
+ * below the fold, and the honest reading of that screen is that everything lives inside "Actions".
+ */
+export function asideSections(rows: readonly AsideRow[]): AsideSection[] {
+  const out: AsideSection[] = []
+  rows.forEach((row, index) => {
+    if (row.kind === 'rule') return
+    if (row.kind === 'heading') { out.push({ title: row.label, rows: [], indexes: [] }); return }
+    const current = out[out.length - 1]
+    if (!current) return
+    current.rows.push(row)
+    current.indexes.push(index)
+  })
+  return out.filter(s => s.rows.length > 0)
+}
+
+/**
+ * How many rows each section gets when they are drawn as separate framed panes — PURE.
+ *
+ * Returns `null` when the band cannot pay for the frames, and the caller falls back to the single
+ * scrolling pane. That is the control center's own degradation ladder: give up a PIECE the screen
+ * can afford to lose rather than hand out rows that do not exist, which Ink composites on top of
+ * the rows below instead of clipping.
+ *
+ * The section holding the CURSOR is served first and in full, because it is the one being read; the
+ * rest share what is left, in order, and a section that cannot get at least one row is dropped
+ * entirely rather than drawn as a title over nothing.
+ */
+export function asideSectionRows(
+  sections: readonly AsideSection[],
+  band: number,
+  /** Which section the cursor is in, so it is the one that is never squeezed out. */
+  active: number,
+): number[] | null {
+  if (sections.length === 0) return null
+  // Every pane costs its frame; a section is only worth one if it can show a row inside it.
+  const min = sections.length * (PANE_FRAME_Y + 1)
+  if (band < min) return null
+
+  const out = sections.map(() => PANE_FRAME_Y + 1)
+  let left = band - min
+  // ROUND-ROBIN, starting from the section holding the cursor. Serving the active section to its
+  // full height first is what produced a menu showing ten actions and one row of everything else,
+  // which is the very failure the split was for: a block reduced to its first row says no more than
+  // a heading did. A row each, in turn, until the space runs out.
+  const order = [
+    ...sections.map((_, i) => i).slice(active),
+    ...sections.map((_, i) => i).slice(0, active),
+  ]
+  let gave = true
+  while (left > 0 && gave) {
+    gave = false
+    for (const i of order) {
+      if (left <= 0) break
+      if (out[i]! - PANE_FRAME_Y >= sections[i]!.rows.length) continue
+      out[i]! += 1
+      left -= 1
+      gave = true
+    }
+  }
+  return out
 }

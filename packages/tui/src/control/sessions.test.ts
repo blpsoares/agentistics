@@ -3,11 +3,13 @@ import {
   attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionActions, sessionCells,
   sessionRows, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
+  projectPickRows, groupProjects, asideSections, asideSectionRows,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
 const UNKNOWN = {
   harness: 'harness unknown', model: 'no model recorded', project: 'no directory', task: 'no task',
+  repo: 'no repository',
 }
 
 const session = (id: string, over: Partial<ControlSession> = {}): ControlSession => ({
@@ -461,8 +463,10 @@ describe('sessionsCockpit', () => {
 
   it('gives the aside its measured width and the list the rest', () => {
     const l = at(120, 30)
-    expect(l.aside).toBe(18)
-    expect(l.list).toBe(120 - 18 - 1)
+    // The label plus the cursor, the state dot and a trailing count — sizing to the label alone
+    // truncated every long verb in the menu.
+    expect(l.aside).toBe(20)
+    expect(l.list).toBe(120 - 20 - 1)
   })
 
   it('DROPS the aside on a narrow terminal rather than squeezing the sessions', () => {
@@ -475,7 +479,7 @@ describe('sessionsCockpit', () => {
 
   it('bounds the aside so one long label cannot eat the screen', () => {
     expect(sessionsCockpit({ width: 200, height: 30, asideLabel: 90, detailWanted: 4 }).aside)
-      .toBeLessThanOrEqual(26)
+      .toBeLessThanOrEqual(34)
   })
 
   it('draws no detail pane when nothing is selected to describe', () => {
@@ -508,7 +512,7 @@ describe('asideRows', () => {
     kill: 'Stop', openTask: 'Open whole task', finishTask: 'Finish task',
     new: 'New', search: 'Search', group: 'Group',
   }
-  const groupWords = { none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project' }
+  const groupWords = { repo: 'repo', none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project' }
   const toggleWords = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks' }
   const headings = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
 
@@ -625,7 +629,7 @@ describe('the task cell', () => {
 
   it('is ABSENT while grouping by task, where the heading already says it', () => {
     // A column repeating the word in the heading above every row under it is not information.
-    expect(sessionColumns(filed, 140, true).task).toBe(0)
+    expect(sessionColumns(filed, 140, { groupedByTask: true }).task).toBe(0)
   })
 
   it('draws no column when nothing on screen is filed', () => {
@@ -711,5 +715,129 @@ describe('projectColumns', () => {
     // identical rows without it. It is never given up, only shortened.
     for (let w = 20; w <= 200; w++) expect(projectColumns(rows, w).path).toBeGreaterThan(0)
     for (let w = 20; w <= 200; w++) expect(projectColumns(rows, w).name).toBeGreaterThan(0)
+  })
+})
+
+describe('projectPickRows', () => {
+  const row = (name: string, repo = '', path = `~/${name}`) => ({ name, repo, path, why: '' })
+
+  it('groups by repository, keeping the order the search ranked them in', () => {
+    // First appearance decides section order. Sorting alphabetically here would throw away the one
+    // piece of ordering the search actually earned — the directory you are standing in is first.
+    const sections = groupProjects([
+      row('web', 'org/mono'), row('loose'), row('api', 'org/mono'), row('other', 'aaa/first'),
+    ])
+    expect(sections.map(s => s.repo)).toEqual(['org/mono', 'aaa/first', ''])
+    expect(sections[0]!.rows.map(r => r.name)).toEqual(['web', 'api'])
+  })
+
+  it('does not group when there is nothing to separate', () => {
+    // One section is not a grouping, it is a heading over the whole list.
+    const only = projectPickRows([row('a'), row('b')], 'loose')
+    expect(only.grouped).toBe(false)
+    expect(only.rows.every(r => r.kind === 'project')).toBe(true)
+
+    const oneRepo = projectPickRows([row('a', 'org/x'), row('b', 'org/x')], 'loose')
+    expect(oneRepo.grouped).toBe(false)
+  })
+
+  it('keeps each row pointing at its ORIGINAL index, so enter picks what is highlighted', () => {
+    const rows = [row('web', 'org/mono'), row('loose'), row('api', 'org/mono')]
+    const { rows: drawn, grouped } = projectPickRows(rows, 'loose')
+    expect(grouped).toBe(true)
+    const picks = drawn.flatMap(r => (r.kind === 'project' ? [r] : []))
+    // Drawn out of order, but every row still names the position it came from.
+    expect(picks.map(p => p.row.name)).toEqual(['web', 'api', 'loose'])
+    expect(picks.map(p => p.index)).toEqual([0, 2, 1])
+  })
+})
+
+describe('the worktree cell', () => {
+  const wt = [
+    session('a', { stateLabel: 'waiting', title: 'one', worktree: true }),
+    session('b', { stateLabel: 'waiting', title: 'two' }),
+  ]
+
+  it('draws nothing when no row on screen is a worktree', () => {
+    const plain = [session('b', { stateLabel: 'waiting', title: 'two' })]
+    expect(sessionColumns(plain, 140, { worktreeWord: 'worktree' }).worktree).toBe(0)
+  })
+
+  it('is sized to the WORD, not to the rows that happen to carry it', () => {
+    // It is a flag, not a value: every row that has it says the same thing, so the column is the
+    // width of the word and the rows that are not worktrees are blank under it.
+    expect(sessionColumns(wt, 140, { worktreeWord: 'worktree' }).worktree).toBe('worktree'.length)
+  })
+
+  it('is given up before the name, and after nothing else', () => {
+    // It is the first cell surrendered: it qualifies the row rather than identifying it, and a
+    // narrow terminal that keeps the flag but loses the directory has kept the lesser fact.
+    const lost = (pick: (c: ReturnType<typeof sessionColumns>) => number) => {
+      for (let w = 200; w >= 4; w--) if (pick(sessionColumns(wt, w, { worktreeWord: 'worktree' })) === 0) return w
+      return 0
+    }
+    expect(lost(c => c.worktree)).toBeLessThan(lost(c => c.where))
+  })
+})
+
+describe('asideSections', () => {
+  const rows: Parameters<typeof asideSections>[0] = [
+    { kind: 'heading', label: 'ACTIONS' },
+    { kind: 'action', action: 'attach', label: 'Attach', enabled: true },
+    { kind: 'action', action: 'kill', label: 'Stop', enabled: true },
+    { kind: 'rule' },
+    { kind: 'heading', label: 'VIEW' },
+    { kind: 'group', value: 'repo', label: 'repository', on: true },
+    { kind: 'rule' },
+    { kind: 'heading', label: 'EMPTY' },
+  ]
+
+  it('keeps every row pointing at its index in the FLAT menu', () => {
+    // The cursor moves over one list. Sections that carried their own indexes would be a second
+    // counting of the same menu, agreeing until the first boundary.
+    const s = asideSections(rows)
+    expect(s.map(x => x.title)).toEqual(['ACTIONS', 'VIEW'])
+    expect(s[0]!.indexes).toEqual([1, 2])
+    expect(s[1]!.indexes).toEqual([5])
+  })
+
+  it('drops a heading with nothing under it, rather than drawing a title over nothing', () => {
+    expect(asideSections(rows).some(s => s.title === 'EMPTY')).toBe(false)
+  })
+})
+
+describe('asideSectionRows', () => {
+  const sec = (n: number, title: string) => ({
+    title,
+    rows: Array.from({ length: n }, (_, i) => ({ kind: 'rule' as const, i })) as never[],
+    indexes: Array.from({ length: n }, (_, i) => i),
+  })
+  const three = [sec(10, 'a'), sec(3, 'b'), sec(3, 'c')]
+
+  it('returns null when the band cannot pay for one frame per section', () => {
+    // Handing out rows that do not exist is worse than not splitting: Ink composites the overflow
+    // on top of the rows below rather than clipping it.
+    expect(asideSectionRows(three, 8, 0)).toBeNull()
+    expect(asideSectionRows(three, 9, 0)).not.toBeNull()
+  })
+
+  it('never spends more than the band it was given', () => {
+    for (let band = 9; band <= 60; band++) {
+      const got = asideSectionRows(three, band, 0)!
+      expect(got.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(band)
+    }
+  })
+
+  it('shares the space instead of filling the active section first', () => {
+    // Serving the active block to its full height produced a menu showing ten actions and one row
+    // of everything else — a block reduced to its first row says no more than its heading did.
+    const got = asideSectionRows(three, 20, 0)!
+    expect(got.every(n => n >= 3)).toBe(true)
+    expect(Math.max(...got.slice(1))).toBeGreaterThan(3)
+  })
+
+  it('never gives a section more rows than it has', () => {
+    const got = asideSectionRows(three, 60, 0)!
+    expect(got).toEqual([12, 5, 5])
   })
 })

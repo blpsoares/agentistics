@@ -382,6 +382,7 @@ const FAKE_FLEET: ControlSessions = {
     {
       id: 'a1b2c3', title: 'migrate the auth store', harness: 'claude',
       cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus', task: 'billing',
+      repo: 'blpsoares/agentistics',
       state: 'waiting-approval', stateLabel: 'needs approval', actionable: true,
       // Usage on SOME rows and not others, deliberately: the column is sized to the widest row that
       // has any, and a fixture where every row carries one would never exercise the padding.
@@ -390,7 +391,7 @@ const FAKE_FLEET: ControlSessions = {
     },
     {
       id: 'd4e5f6', title: 'flaky test hunt', harness: 'codex',
-      cwd: '/home/dev/prontuario', project: 'prontuario', task: 'flaky triage',
+      cwd: '/home/dev/prontuario', project: 'prontuario', task: 'flaky triage', repo: 'org/prontuario',
       note: 'reproduces only on CI', state: 'waiting', stateLabel: 'waiting',
       actionable: true, approvalBlind: 'agentop has no verified screen markers for codex, so a blocking question here shows as "waiting" like any other pause.',
       startedAt: Date.now() - 3 * 60_000, attached: false,
@@ -404,7 +405,8 @@ const FAKE_FLEET: ControlSessions = {
     },
     {
       id: 'aabbcc', title: 'release notes', harness: 'claude',
-      cwd: '/home/dev/agentistics', project: 'agentistics',
+      cwd: '/home/dev/agentistics/.claude/worktrees/notes', project: 'notes',
+      repo: 'blpsoares/agentistics', worktree: true,
       state: 'exited', stateLabel: 'exited', actionable: true,
       startedAt: Date.now() - 4 * 60 * 60_000, attached: false,
     },

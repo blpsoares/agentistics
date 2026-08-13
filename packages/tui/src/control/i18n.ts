@@ -194,11 +194,15 @@ export interface ControlStrings {
   sessionsCount: (n: number) => string
   sessionsWaitingCount: (n: number) => string
   sessionsGroupBy: string
-  sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project' | 'task', string>
+  sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project' | 'task' | 'repo', string>
   sessionsUnknownHarness: string
   sessionsUnknownModel: string
   sessionsUnknownProject: string
   sessionsUnknownTask: string
+  sessionsUnknownRepo: string
+  sessionsWorktreeTag: string
+  /** The sessions list's column headings — an unlabelled column is one you have to learn. */
+  sessionsCols: Record<'state' | 'title' | 'task' | 'worktree' | 'metrics' | 'harness' | 'where', string>
   /** Detail-pane field labels. */
   sessionsWhere: string
   sessionsModel: string
@@ -310,6 +314,8 @@ export interface ControlStrings {
   wizColRepo: string
   wizColPath: string
   wizColWhy: string
+  /** Heading over the candidates that belong to no repository. */
+  wizNoRepo: string
   wizSourceCwd: string
   wizSourceTyped: string
   wizSourceHistory: string
@@ -461,6 +467,7 @@ const EN: ControlStrings = {
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
   sessionsGroupBy: 'GROUP',
   sessionsGroupings: {
+    repo: 'repository',
     task: 'task',
     none: 'flat',
     harness: 'harness',
@@ -471,6 +478,18 @@ const EN: ControlStrings = {
   sessionsUnknownModel: 'no model recorded',
   sessionsUnknownProject: 'no directory recorded',
   sessionsUnknownTask: 'no task',
+  sessionsUnknownRepo: 'no repository',
+  /** Said on a row whose directory is a linked worktree. Short: it is a CELL, not a sentence. */
+  sessionsWorktreeTag: 'worktree',
+  sessionsCols: {
+    state: 'state',
+    title: 'session',
+    task: 'task',
+    worktree: 'kind',
+    metrics: 'usage',
+    harness: 'harness',
+    where: 'folder',
+  },
   sessionsWhere: 'where',
   sessionsModel: 'model',
   sessionsNote: 'note',
@@ -575,6 +594,7 @@ const EN: ControlStrings = {
   wizColRepo: 'repository',
   wizColPath: 'path',
   wizColWhy: 'why',
+  wizNoRepo: 'no repository',
   wizSourceCwd: 'you are here',
   wizSourceTyped: 'typed',
   wizSourceHistory: 'worked here before',
@@ -720,6 +740,7 @@ const PT: ControlStrings = {
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
   sessionsGroupBy: 'AGRUPAR',
   sessionsGroupings: {
+    repo: 'repositório',
     task: 'tarefa',
     none: 'lista',
     harness: 'harness',
@@ -730,6 +751,17 @@ const PT: ControlStrings = {
   sessionsUnknownModel: 'sem modelo registrado',
   sessionsUnknownProject: 'sem diretório registrado',
   sessionsUnknownTask: 'sem tarefa',
+  sessionsUnknownRepo: 'sem repositório',
+  sessionsWorktreeTag: 'worktree',
+  sessionsCols: {
+    state: 'estado',
+    title: 'sessão',
+    task: 'tarefa',
+    worktree: 'tipo',
+    metrics: 'uso',
+    harness: 'harness',
+    where: 'pasta',
+  },
   sessionsWhere: 'onde',
   sessionsModel: 'modelo',
   sessionsNote: 'nota',
@@ -834,6 +866,7 @@ const PT: ControlStrings = {
   wizColRepo: 'repositório',
   wizColPath: 'caminho',
   wizColWhy: 'por quê',
+  wizNoRepo: 'sem repositório',
   wizSourceCwd: 'você está aqui',
   wizSourceTyped: 'digitado',
   wizSourceHistory: 'já trabalhou aqui',

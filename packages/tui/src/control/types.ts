@@ -302,6 +302,16 @@ export interface ControlSession {
   cwd: string
   /** The last path segment of `cwd` — the "by project" grouping key, computed by the host. */
   project: string
+  /**
+   * The REPOSITORY this session's directory belongs to, `org/repo` or the checkout's folder name.
+   *
+   * A separate grouping from `project`, and the one that matches how the work is organised: three
+   * worktrees of one repo are three places to work on ONE thing, and grouping by directory files
+   * them under three unrelated names. Absent for a directory that is not in a repository at all.
+   */
+  repo?: string
+  /** True only for a LINKED worktree. Said on the row, because it changes what the row IS. */
+  worktree?: boolean
   model?: string
   note?: string
   /** The piece of work this session belongs to, when the user said so. Groups the list. */
@@ -359,7 +369,7 @@ export interface ControlSession {
  * its own rather than as a setting that was never stored.
  */
 export interface SessionViewPrefs {
-  grouping: 'none' | 'task' | 'harness' | 'model' | 'project'
+  grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo'
   showClosed: boolean
   showExited: boolean
   /** Only meaningful while grouping by task, but stored either way so it survives a detour. */
@@ -676,6 +686,14 @@ export interface ProjectOption {
 export interface SpawnSessionRequest {
   harness: string
   cwd: string
+  /**
+   * The piece of work this session belongs to, chosen while starting it.
+   *
+   * Declared, and not merely spread in by the wizard: TypeScript runs no excess-property check on a
+   * spread, so a field the request type does not know about is dropped in silence — the wizard
+   * would ask the question and throw the answer away.
+   */
+  task?: string
   prompt?: string
   model?: string
   effort?: string

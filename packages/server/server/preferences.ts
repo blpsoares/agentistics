@@ -53,7 +53,7 @@ export interface Preferences {
    * threw away the arrangement someone chose, which reads as the screen forgetting on its own.
    */
   sessionView?: {
-    grouping: 'none' | 'task' | 'harness' | 'model' | 'project'
+    grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo'
     showClosed: boolean
     showExited: boolean
     showUnfiled: boolean
