@@ -6,7 +6,7 @@ import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, FileCode, TrendingUp, BarChart2,
   Download, Upload, Trophy, Bot, Target,
-  Calendar,
+  Calendar, Receipt,
 } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { sessionTime } from '../lib/sessionTime'
@@ -32,6 +32,7 @@ import { RecentSessions } from '../components/RecentSessions'
 import { capable, HARNESS_PROVIDERS } from '../lib/harness'
 import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
 import { CostBasisToggle } from '../components/CostBasisToggle'
+import { PlanValuePanel } from '../components/PlanValuePanel'
 import { planCostSubtitle, viewCost } from '../lib/costBasis'
 
 type CardId = 'messages' | 'sessions' | 'tool-calls' | 'input-tokens' | 'output-tokens' | 'cost' | 'streak' | 'longest-session' | 'commits' | 'files'
@@ -262,6 +263,15 @@ export default function HomePage() {
           }
         />
       </Section>
+
+      {/* API vs plan — only once a plan is registered and a cost could actually be computed.
+          An empty version inviting setup would be a third prompt competing with the first-run
+          modal and the disabled basis toggle, which already do that job. */}
+      {planBasis.basis?.coverage.computable && (
+        <Section flashId="plan-value" title={<><Receipt size={14} /> {lang === 'pt' ? 'API vs. seu plano' : 'API vs your plan'}</>}>
+          <PlanValuePanel planBasis={planBasis} currency={currency} brlRate={brlRate} lang={lang} />
+        </Section>
+      )}
 
       {/* Budget */}
       <Section flashId="budget" title={<><Target size={14} /> {lang === 'pt' ? 'Orçamento & projeção' : 'Budget & forecast'}</>}>

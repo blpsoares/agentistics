@@ -44,6 +44,15 @@ import {
   type PeriodDraft,
 } from './billingForm'
 
+/** The wire shape of `GET /api/billing/plan-prices`. Declared here rather than imported: the web
+ *  bundle must never reach into `packages/server`. */
+interface ScrapedPlanPrice {
+  planId: string
+  amount: number
+  currency: BillingCurrency
+  source: string
+}
+
 const newPeriodId = (): string =>
   `bp_${Math.random().toString(16).slice(2, 8)}${Date.now().toString(16).slice(-6)}`
 
@@ -82,6 +91,20 @@ export default function BillingSettings() {
   const [confirmDelete, setConfirmDelete] = useState<BillingPeriod | null>(null)
   const [detections, setDetections] = useState<BillingDetection[] | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [planPrices, setPlanPrices] = useState<ScrapedPlanPrice[]>([])
+
+  // Live vendor prices. Best-effort by construction: the endpoint is anchored, so it returns
+  // nothing rather than a wrong figure, and nothing simply means the built-in catalog stands.
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/billing/plan-prices')
+      .then(r => (r.ok ? r.json() : null))
+      .then((body: { prices?: ScrapedPlanPrice[] } | null) => {
+        if (!cancelled) setPlanPrices(body?.prices ?? [])
+      })
+      .catch(() => { /* the catalog is the floor; a failed fetch changes nothing */ })
+    return () => { cancelled = true }
+  }, [])
 
   // Detection is a convenience, fetched once. A failure is silent: the screen is fully usable by
   // hand, and an error banner for a feature the user did not ask for is noise.
@@ -143,13 +166,24 @@ export default function BillingSettings() {
     setDraft(null)
   }
 
-  const catalogOptions = useMemo(() => plansForHarness(harness).map(entry => ({
-    value: entry.id,
-    label: entry.label,
-    hint: entry.monthly
-      ? `${entry.monthly.currency} ${entry.monthly.amount}/${pt ? 'mês' : 'mo'}`
-      : (pt ? 'sem valor publicado' : 'no published price'),
-  })), [harness, pt])
+  // A live figure read from the vendor's page today beats the compiled-in one, which is only ever
+  // as fresh as the last release. Both lose to whatever the user typed.
+  const livePrice = useCallback(
+    (planId: string) => planPrices.find(p => p.planId === planId) ?? null,
+    [planPrices],
+  )
+
+  const catalogOptions = useMemo(() => plansForHarness(harness).map(entry => {
+    const live = planPrices.find(p => p.planId === entry.id)
+    const price = live ?? entry.monthly
+    return {
+      value: entry.id,
+      label: entry.label,
+      hint: price
+        ? `${price.currency} ${price.amount}/${pt ? 'mês' : 'mo'}`
+        : (pt ? 'sem valor publicado' : 'no published price'),
+    }
+  }), [harness, pt, planPrices])
 
   const selectedEntry = draft?.planId ? findPlan(draft.planId) : undefined
   const rangeLabel = (p: BillingPeriod) =>
@@ -360,13 +394,38 @@ export default function BillingSettings() {
                 value={draft.planId}
                 onChange={v => {
                   const entry = findPlan(v)
-                  setDraft(d => (d && entry ? applyPlan(d, entry) : d))
+                  if (!entry) return
+                  // A figure read from the vendor's page today supersedes the compiled-in one,
+                  // which is only ever as fresh as the last release. `applyPlan` still refuses to
+                  // overwrite anything the user has already typed.
+                  const live = livePrice(v)
+                  const withLive = live
+                    ? { ...entry, monthly: { amount: live.amount, currency: live.currency, verifiedAt: today(), source: live.source } }
+                    : entry
+                  setDraft(d => (d ? applyPlan(d, withLive) : d))
                 }}
                 options={catalogOptions}
                 placeholder={pt ? 'Escolha um plano' : 'Choose a plan'}
                 searchable
               />
               <FieldError text={errorFor(['missing_plan'])} />
+              {/* Provenance, always. A prefilled amount with no stated origin is indistinguishable
+                  from one the app invented — and one of these two really is only as fresh as the
+                  last release. */}
+              {selectedEntry && livePrice(selectedEntry.id) && (
+                <div style={{ fontSize: 11, color: 'var(--accent-green, #22c55e)', marginTop: 6, lineHeight: 1.5 }}>
+                  {pt
+                    ? `Valor lido hoje de ${livePrice(selectedEntry.id)!.source}. Confirme na sua fatura — cobrança anual, plano antigo ou imposto podem mudar o número.`
+                    : `Read today from ${livePrice(selectedEntry.id)!.source}. Confirm against your invoice — annual billing, a grandfathered plan or tax can change it.`}
+                </div>
+              )}
+              {selectedEntry && !livePrice(selectedEntry.id) && selectedEntry.monthly && (
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6, lineHeight: 1.5 }}>
+                  {pt
+                    ? `Valor da tabela interna, conferido em ${selectedEntry.monthly.verifiedAt}. Não foi possível ler a página do fornecedor agora.`
+                    : `From the built-in table, checked on ${selectedEntry.monthly.verifiedAt}. The vendor's page could not be read just now.`}
+                </div>
+              )}
               {selectedEntry && (pt ? selectedEntry.notePt : selectedEntry.noteEn) && (
                 <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6, lineHeight: 1.5 }}>
                   {pt ? selectedEntry.notePt : selectedEntry.noteEn}

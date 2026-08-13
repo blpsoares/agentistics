@@ -751,6 +751,16 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
+    if (url.pathname === '/api/billing/plan-prices' && req.method === 'GET') {
+      // Reads two public vendor pages — no host access, so no capability registration. It is
+      // anchored: a page that fails its known-good figure returns nothing rather than a wrong
+      // price, and the built-in catalog stands.
+      const { fetchPlanPrices } = await import('./plan-pricing')
+      return new Response(JSON.stringify(await fetchPlanPrices()), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/billing/detect' && req.method === 'GET') {
       // Detection describes ONE machine's own configuration, so a central — which aggregates many
       // machines and would only ever see its operator's — has no use for it and does not serve it.
