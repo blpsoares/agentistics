@@ -165,6 +165,7 @@ export type {
   ServiceState,
   SessionHarnessOption,
   SessionState,
+  SessionViewPrefs,
   SpawnSessionRequest,
   SpawnSessionResult,
   ProjectOption,

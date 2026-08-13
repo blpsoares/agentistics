@@ -350,6 +350,22 @@ export interface ControlSession {
   attached: boolean
 }
 
+/**
+ * How the fleet list is arranged, remembered ACROSS RUNS.
+ *
+ * It lives on the status rather than in the TUI for the same reason the language and the mouse do:
+ * the control center owns no persistence. Without it the grouping was per-run state, so every
+ * restart threw away the arrangement someone had chosen — which reads as the screen forgetting on
+ * its own rather than as a setting that was never stored.
+ */
+export interface SessionViewPrefs {
+  grouping: 'none' | 'task' | 'harness' | 'model' | 'project'
+  showClosed: boolean
+  showExited: boolean
+  /** Only meaningful while grouping by task, but stored either way so it survives a detour. */
+  showUnfiled: boolean
+}
+
 export interface ControlSessions {
   sessions: ControlSession[]
   /** How many are waiting on a person. Drives the header counter, from every tab. */
@@ -375,6 +391,8 @@ export interface ControlStatus {
   latestVersion?: string
   /** The history-preservation setting in force, or `undefined` while it is still unanswered. */
   archiveMode?: ArchiveMode
+  /** How the fleet list was last arranged. Absent on a machine that has never chosen. */
+  sessionView?: SessionViewPrefs
   /**
    * Whether the terminal should report the mouse. Defaults to ON — the mouse is the thing a user
    * reaches for first, and `m` (or this preference) is how someone who wants their terminal's own
@@ -452,6 +470,13 @@ export interface ControlHost {
   enableBoot(service: ServiceId, runtime?: RuntimeId): Promise<ActionResult>
 
   setLang(lang: CliLang): Promise<void>
+
+  /**
+   * Remember how the fleet list is arranged. Same shape as `setLang`, and for the same reason: a
+   * preference the control center can toggle is a preference the host stores. Best-effort — a
+   * machine that cannot write its preferences still gets the setting for this run.
+   */
+  setSessionView?(view: SessionViewPrefs): Promise<void>
 
   /**
    * Persist whether the mouse reports. Same shape as `setLang`, and for the same reason: the

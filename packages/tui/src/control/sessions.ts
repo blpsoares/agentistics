@@ -541,3 +541,126 @@ export function padCell(text: string, w: number): string {
   if (w <= 0) return ''
   return text.length >= w ? truncateCell(text, w) : text + ' '.repeat(w - text.length)
 }
+
+// ---------------------------------------------------------------------------
+// the cockpit: an aside menu beside the list, over a detail pane
+// ---------------------------------------------------------------------------
+
+export interface CockpitLayout {
+  /** Columns the aside menu takes. `0` when the terminal is too narrow to carry one. */
+  aside: number
+  /** Columns the list takes — everything the aside leaves, minus the divider between them. */
+  list: number
+  /** Rows the list band gets. */
+  band: number
+  /** Rows the detail pane gets under it, or 0 when the screen cannot pay for one. */
+  detail: number
+}
+
+/** The aside's natural width: wide enough for its longest label, within bounds. */
+const ASIDE_MIN = 14
+const ASIDE_MAX = 26
+/** Below this the screen is all list — an aside that squeezes the sessions to nothing helps nobody. */
+const ASIDE_NEEDS = 52
+/** The fewest rows a detail pane is worth: a divider plus something to say. */
+const COCKPIT_DETAIL_MIN = 4
+
+/**
+ * Split the screen into an aside menu, the list beside it, and a detail pane under both.
+ *
+ * The aside exists because everything on this screen used to be a letter: the grouping cycled on a
+ * hidden `v`, the visibility switches were a corner label, and the verbs only appeared once you
+ * knew `tab` reached them. A menu you can see and click is not a nicety here, it is the difference
+ * between a screen you can use and one you have to be taught.
+ *
+ * It is DROPPED on a narrow terminal rather than squeezed: at 40 columns an aside leaves nothing for
+ * the sessions, and the sessions are what the screen is. The letters keep working, so a narrow
+ * terminal loses the menu and not the feature.
+ *
+ * The detail pane is reserved BEFORE the band on a short screen, the same rule the services cockpit
+ * follows — it is where a question is asked, and a prompt with nowhere to draw cannot be answered.
+ */
+export function sessionsCockpit(o: {
+  width: number
+  height: number
+  /** The widest label the aside must carry, so it is measured rather than guessed at. */
+  asideLabel: number
+  /** Rows the detail pane is asking for, `0` when there is nothing selected to describe. */
+  detailWanted: number
+}): CockpitLayout {
+  const width = Math.max(1, o.width)
+  const height = Math.max(1, o.height)
+
+  const aside = width >= ASIDE_NEEDS
+    ? Math.min(ASIDE_MAX, Math.max(ASIDE_MIN, o.asideLabel + 2))
+    : 0
+  // One column of divider between the two panes, and only when there are two.
+  const list = Math.max(1, width - (aside > 0 ? aside + 1 : 0))
+
+  if (height <= COCKPIT_DETAIL_MIN + 2 || o.detailWanted <= 0) {
+    return { aside, list, band: height, detail: 0 }
+  }
+  const detail = Math.min(o.detailWanted + 1, Math.max(COCKPIT_DETAIL_MIN, Math.floor(height / 2)))
+  return { aside, list, band: height - detail, detail }
+}
+
+// ---------------------------------------------------------------------------
+// the aside menu's rows
+// ---------------------------------------------------------------------------
+
+/** What an aside row DOES. `heading` and `rule` are not selectable. */
+export type AsideRow =
+  | { kind: 'heading'; label: string }
+  | { kind: 'rule' }
+  | { kind: 'action'; action: SessionAction; label: string; enabled: boolean }
+  | { kind: 'group'; value: SessionGrouping; label: string; on: boolean }
+  | { kind: 'toggle'; toggle: SessionToggle; label: string; on: boolean }
+
+/** The three things the list can be told to withhold. */
+export type SessionToggle = 'closed' | 'exited' | 'unfiled'
+
+/**
+ * The aside's rows, in reading order — PURE, so what is drawn and what a click resolves against are
+ * one answer.
+ *
+ * Actions first because they are what a person came to do; the view switches under them because they
+ * are set once and then left alone. Every row states its own state: a menu that shows only a cursor
+ * makes you press things to find out what they already were.
+ */
+export function asideRows(o: {
+  actions: readonly OfferedAction[]
+  actionWords: Record<SessionAction, string>
+  grouping: SessionGrouping
+  groupWords: Record<SessionGrouping, string>
+  toggles: Record<SessionToggle, boolean>
+  toggleWords: Record<SessionToggle, string>
+  headings: { actions: string; view: string; show: string }
+  /** `unfiled` only means anything while grouping by task, so it is ABSENT otherwise. */
+  showUnfiled: boolean
+}): AsideRow[] {
+  const rows: AsideRow[] = [{ kind: 'heading', label: o.headings.actions }]
+  for (const a of o.actions) {
+    rows.push({ kind: 'action', action: a.action, label: o.actionWords[a.action], enabled: a.enabled })
+  }
+  rows.push({ kind: 'rule' }, { kind: 'heading', label: o.headings.view })
+  for (const g of GROUPINGS) {
+    rows.push({ kind: 'group', value: g, label: o.groupWords[g], on: g === o.grouping })
+  }
+  rows.push({ kind: 'rule' }, { kind: 'heading', label: o.headings.show })
+  const toggles: SessionToggle[] = o.showUnfiled ? ['closed', 'exited', 'unfiled'] : ['closed', 'exited']
+  for (const t of toggles) {
+    rows.push({ kind: 'toggle', toggle: t, label: o.toggleWords[t], on: o.toggles[t] })
+  }
+  return rows
+}
+
+/** Index of the nth row the cursor may land on: never a heading, a rule, or a disabled action. */
+export function asideSelectable(rows: readonly AsideRow[]): number[] {
+  const out: number[] = []
+  rows.forEach((r, i) => {
+    if (r.kind === 'heading' || r.kind === 'rule') return
+    if (r.kind === 'action' && !r.enabled) return
+    out.push(i)
+  })
+  return out
+}

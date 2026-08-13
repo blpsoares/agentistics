@@ -254,6 +254,17 @@ export interface ControlStrings {
   viewUnfiledOn: string
   viewUnfiledOff: string
   viewHint: string
+  /** The aside menu's three headings, and the third visibility switch. */
+  asideActions: string
+  asideView: string
+  asideShow: string
+  toggleClosed: string
+  toggleExited: string
+  toggleUnfiled: string
+  keySessionsAside: string
+  /** The management view a session opens into. */
+  manageTitle: (title: string) => string
+  manageHint: string
   promptHint: string
   sessionsHideClosed: string
   keySessionsClosed: string
@@ -491,6 +502,15 @@ const EN: ControlStrings = {
   viewUnfiledOn: 'sessions with no task',
   viewUnfiledOff: 'sessions with no task',
   viewHint: '↑↓ move · enter choose · esc close',
+  asideActions: 'ACTIONS',
+  asideView: 'VIEW',
+  asideShow: 'SHOW',
+  toggleClosed: 'closed conversations',
+  toggleExited: 'finished sessions',
+  toggleUnfiled: 'sessions with no task',
+  keySessionsAside: 'tab menu',
+  manageTitle: (title: string) => `Managing "${title}"`,
+  manageHint: '↑↓ move · enter run · esc back to the list',
   promptHint: 'enter saves · esc cancels',
   sessionsHideClosed: 'closed: hidden',
   keySessionsClosed: 'c closed',
@@ -721,6 +741,15 @@ const PT: ControlStrings = {
   viewUnfiledOn: 'sessões sem tarefa',
   viewUnfiledOff: 'sessões sem tarefa',
   viewHint: '↑↓ mover · enter escolher · esc fechar',
+  asideActions: 'AÇÕES',
+  asideView: 'VER',
+  asideShow: 'MOSTRAR',
+  toggleClosed: 'conversas fechadas',
+  toggleExited: 'sessões encerradas',
+  toggleUnfiled: 'sessões sem tarefa',
+  keySessionsAside: 'tab menu',
+  manageTitle: (title: string) => `Gerenciando "${title}"`,
+  manageHint: '↑↓ mover · enter executar · esc voltar à lista',
   promptHint: 'enter salva · esc cancela',
   sessionsHideClosed: 'fechadas: ocultas',
   keySessionsClosed: 'c fechadas',

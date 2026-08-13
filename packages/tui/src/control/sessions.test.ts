@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionActions, sessionCells,
   sessionRows, sessionsLayout, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
-  sessionColumns,
+  sessionColumns, sessionsCockpit, asideRows, asideSelectable,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -446,5 +446,107 @@ describe('sessionColumns', () => {
     for (let w = 4; w <= 160; w++) {
       expect(drawn(sessionColumns(rows, w))).toBeLessThanOrEqual(Math.max(w, 2 + 'needs approval'.length + 3))
     }
+  })
+})
+
+describe('sessionsCockpit', () => {
+  const at = (width: number, height: number, detailWanted = 4) =>
+    sessionsCockpit({ width, height, asideLabel: 16, detailWanted })
+
+  it('gives the aside its measured width and the list the rest', () => {
+    const l = at(120, 30)
+    expect(l.aside).toBe(18)
+    expect(l.list).toBe(120 - 18 - 1)
+  })
+
+  it('DROPS the aside on a narrow terminal rather than squeezing the sessions', () => {
+    // At forty columns an aside leaves nothing for the sessions, and the sessions are what the
+    // screen is. The letters keep working, so a narrow terminal loses the menu, not the feature.
+    const l = at(40, 30)
+    expect(l.aside).toBe(0)
+    expect(l.list).toBe(40)
+  })
+
+  it('bounds the aside so one long label cannot eat the screen', () => {
+    expect(sessionsCockpit({ width: 200, height: 30, asideLabel: 90, detailWanted: 4 }).aside)
+      .toBeLessThanOrEqual(26)
+  })
+
+  it('draws no detail pane when nothing is selected to describe', () => {
+    const l = at(120, 30, 0)
+    expect(l.detail).toBe(0)
+    expect(l.band).toBe(30)
+  })
+
+  it('caps the detail pane at half the screen, however much it wants to say', () => {
+    const l = at(120, 30, 100)
+    expect(l.detail).toBe(15)
+    expect(l.band).toBe(15)
+  })
+
+  it('never invents a row or a column, at any size', () => {
+    for (let w = 1; w <= 200; w += 7) {
+      for (let h = 1; h <= 60; h += 3) {
+        const l = at(w, h)
+        expect(l.band + l.detail).toBe(Math.max(1, h))
+        expect(l.list + (l.aside > 0 ? l.aside + 1 : 0)).toBe(Math.max(1, w))
+        expect(l.list).toBeGreaterThanOrEqual(1)
+      }
+    }
+  })
+})
+
+describe('asideRows', () => {
+  const words = {
+    attach: 'Attach', resume: 'Reopen', rename: 'Rename', note: 'Note', task: 'Task',
+    kill: 'Stop', openTask: 'Open whole task', new: 'New', search: 'Search', group: 'Group',
+  }
+  const groupWords = { none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project' }
+  const toggleWords = { closed: 'closed', exited: 'finished', unfiled: 'no task' }
+  const headings = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
+
+  const build = (o: Partial<Parameters<typeof asideRows>[0]> = {}) => asideRows({
+    actions: sessionActions(session('m')),
+    actionWords: words,
+    grouping: 'none',
+    groupWords,
+    toggles: { closed: false, exited: false, unfiled: false },
+    toggleWords,
+    headings,
+    showUnfiled: false,
+    ...o,
+  })
+
+  it('puts what you came to do above what you set once and leave', () => {
+    const rows = build()
+    const firstHeading = rows.findIndex(r => r.kind === 'heading')
+    const firstAction = rows.findIndex(r => r.kind === 'action')
+    const firstGroup = rows.findIndex(r => r.kind === 'group')
+    expect(firstHeading).toBeLessThan(firstAction)
+    expect(firstAction).toBeLessThan(firstGroup)
+  })
+
+  it('states every row own state, so nothing must be pressed to be discovered', () => {
+    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, unfiled: false } })
+    expect(rows.find(r => r.kind === 'group' && r.value === 'task')).toMatchObject({ on: true })
+    expect(rows.find(r => r.kind === 'group' && r.value === 'none')).toMatchObject({ on: false })
+    expect(rows.find(r => r.kind === 'toggle' && r.toggle === 'closed')).toMatchObject({ on: true })
+  })
+
+  it('offers the unfiled switch only where it means something', () => {
+    expect(build().some(r => r.kind === 'toggle' && r.toggle === 'unfiled')).toBe(false)
+    expect(build({ showUnfiled: true }).some(r => r.kind === 'toggle' && r.toggle === 'unfiled')).toBe(true)
+  })
+
+  it('never lets the cursor land on a heading, a rule, or a disabled verb', () => {
+    const rows = build({ actions: sessionActions(session('e', { state: 'unknown', actionable: false })) })
+    for (const i of asideSelectable(rows)) {
+      const r = rows[i]!
+      expect(r.kind).not.toBe('heading')
+      expect(r.kind).not.toBe('rule')
+      if (r.kind === 'action') expect(r.enabled).toBe(true)
+    }
+    // The disabled verbs are still PRESENT — the menu keeps its shape.
+    expect(rows.some(r => r.kind === 'action' && r.action === 'rename' && !r.enabled)).toBe(true)
   })
 })

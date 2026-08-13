@@ -566,6 +566,10 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
               // An action the user just took must be visible before the next tick, or the screen
               // looks like it ignored them.
               onRefreshFleet={() => { void pollFleet() }}
+              // Remembered across runs by the HOST, like the language and the mouse: the control
+              // center owns no persistence, so a setting it can toggle is a setting the host stores.
+              view={status?.sessionView}
+              onView={v => { void host.setSessionView?.(v) }}
             />
           </Pane>
         </Screen>

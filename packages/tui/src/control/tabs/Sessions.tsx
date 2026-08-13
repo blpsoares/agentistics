@@ -12,10 +12,11 @@
  * counter it feeds is drawn in the header where it is readable from every other tab.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import type {
   ActionResult, ControlExit, ControlHost, ControlSession, ControlSessions, SessionState,
+  SessionViewPrefs,
 } from '../types'
 import type { ControlStrings } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
@@ -26,9 +27,9 @@ import { ConfirmPrompt, TextPrompt } from '../Prompt'
 import { SessionWizard } from './SessionWizard'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
-  QUESTION_ROWS, actionLabels, enabledActionIndexes, filterSessions, sessionActions,
-  sessionsLayout, summaryCells, sessionColumns, padCell,
-  type OfferedAction, type SessionColumns,
+  QUESTION_ROWS, actionLabels, asideRows, asideSelectable, enabledActionIndexes, filterSessions,
+  sessionActions, sessionsCockpit, sessionsLayout, summaryCells, sessionColumns, padCell,
+  type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
 } from '../sessions'
 import { isActivation, wheelDelta } from '../mouse'
@@ -70,6 +71,7 @@ type Ask =
 
 export function Sessions({
   host, fleet, strings: s, width, height, isActive, run, onChrome, onExit, onRefreshFleet,
+  view, onView,
 }: {
   host: ControlHost
   /** `null` until the first poll lands, `undefined` when the host has no fleet at all. The two are
@@ -86,8 +88,12 @@ export function Sessions({
   /** Re-poll immediately rather than waiting out the interval — an action the user just took must
    *  be visible in the list before the next tick, or the screen looks like it ignored them. */
   onRefreshFleet: () => void
+  /** How the list was arranged last time, as the host remembered it. */
+  view: SessionViewPrefs | undefined
+  /** Store the arrangement, so a restart does not throw away what the user chose. */
+  onView: (v: SessionViewPrefs) => void
 }) {
-  const [grouping, setGrouping] = useState<SessionGrouping>('none')
+  const [grouping, setGrouping] = useState<SessionGrouping>(view?.grouping ?? 'none')
   const [cursor, setCursor] = useState(0)
   const [ask, setAsk] = useState<Ask | null>(null)
   const [query, setQuery] = useState('')
@@ -105,17 +111,29 @@ export function Sessions({
    * order of magnitude bigger than the fleet — it buried the live rows the first time it shipped on.
    * One keypress and one visible toggle bring it back, and search reaches it either way.
    */
-  const [showClosed, setShowClosed] = useState(false)
+  const [showClosed, setShowClosed] = useState(view?.showClosed ?? false)
   /** Whether the "no task" bucket is listed while grouping by task. Hidden by default: the point of
    *  grouping by task is seeing the tasks, and everything unfiled is the biggest group there is. */
-  const [hideEmptyTask, setHideEmptyTask] = useState(true)
+  const [hideEmptyTask, setHideEmptyTask] = useState(!(view?.showUnfiled ?? false))
   const [actionsFocused, setActionsFocused] = useState(false)
   const [actionIndex, setActionIndex] = useState(0)
+  /**
+   * Whether a FINISHED session is listed.
+   *
+   * Its own switch rather than sharing the closed one: a session that ran here and ended is a
+   * different thing from a conversation that was never ours, and someone who wants yesterday's
+   * conversations back does not necessarily want every pane that exited today.
+   */
+  const [showExited, setShowExited] = useState(view?.showExited ?? false)
+  /** Which pane has the keyboard. The aside is a real pane, not a strip of hints. */
+  const [focus, setFocus] = useState<'list' | 'aside'>('list')
+  const [asideIndex, setAsideIndex] = useState(0)
 
   const rows = useMemo(() => sessionRows(groupSessions(
     filterSessions(
       (fleet?.sessions ?? []).filter(v =>
         (showClosed || v.state !== 'closed')
+        && (showExited || (v.state !== 'exited' && v.state !== 'lost'))
         // Only ever applies while grouping by task: everywhere else an unfiled session is simply a
         // session, and hiding it would make the list lie about how many there are.
         && !(hideEmptyTask && grouping === 'task' && !v.task)),
@@ -128,7 +146,7 @@ export function Sessions({
       project: s.sessionsUnknownProject,
       task: s.sessionsUnknownTask,
     },
-  ), s.sessionsClosedWord), [fleet?.sessions, grouping, query, showClosed, hideEmptyTask, s])
+  ), s.sessionsClosedWord), [fleet?.sessions, grouping, query, showClosed, showExited, hideEmptyTask, s])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
 
@@ -197,6 +215,40 @@ export function Sessions({
     group: s.actSessions.group,
   }), [actions, s])
 
+  const asideList = useMemo(() => asideRows({
+    actions,
+    actionWords: {
+      attach: s.actSessions.attach, resume: s.actSessions.resume, rename: s.actSessions.rename,
+      note: s.actSessions.note, task: s.actSessions.task, kill: s.actSessions.kill,
+      openTask: s.actSessions.openTask, new: s.actSessions.newSession,
+      search: s.actSessions.search, group: s.actSessions.group,
+    },
+    grouping,
+    groupWords: s.sessionsGroupings,
+    toggles: { closed: showClosed, exited: showExited, unfiled: !hideEmptyTask },
+    toggleWords: {
+      closed: s.toggleClosed, exited: s.toggleExited, unfiled: s.toggleUnfiled,
+    },
+    headings: { actions: s.asideActions, view: s.asideView, show: s.asideShow },
+    showUnfiled: grouping === 'task',
+  }), [actions, grouping, showClosed, showExited, hideEmptyTask, s])
+
+  const asidePicks = useMemo(() => asideSelectable(asideList), [asideList])
+  const asideAt = asidePicks.length === 0 ? -1 : Math.min(asideIndex, asidePicks.length - 1)
+  const asideRow = asideAt < 0 ? -1 : asidePicks[asideAt]!
+
+  const asideLabel = useMemo(
+    () => asideList.reduce((n, r) => Math.max(n, 'label' in r ? r.label.length + 2 : 0), 0),
+    [asideList],
+  )
+  const cockpit = sessionsCockpit({
+    width,
+    height,
+    asideLabel,
+    detailWanted: ask ? Math.max(QUESTION_ROWS, detail.length) : detail.length,
+  })
+
+
   /** Run one verb, whether it arrived from a letter, an arrow key or a click. */
   const runAction = useCallback((a: SessionAction) => {
     if (a === 'new') { if (host.spawnSession) setAsk({ kind: 'new' }); return }
@@ -232,6 +284,19 @@ export function Sessions({
     setAsk({ kind, session: selected })
   }, [selected, host, run, onExit, s])
 
+  /** Run whatever an aside row means — the same path a key and a click both take. */
+  const runAside = useCallback((index: number) => {
+    const row = asideList[index]
+    if (!row) return
+    if (row.kind === 'action') { if (row.enabled) runAction(row.action); return }
+    if (row.kind === 'group') { setGrouping(row.value); setCursor(0); return }
+    if (row.kind !== 'toggle') return
+    setCursor(0)
+    if (row.toggle === 'closed') return setShowClosed(v => !v)
+    if (row.toggle === 'exited') return setShowExited(v => !v)
+    return setHideEmptyTask(v => !v)
+  }, [asideList, runAction])
+
   useInput((input, key) => {
     const nav: NavKey = {
       input,
@@ -244,9 +309,22 @@ export function Sessions({
       shift: key.shift,
     }
 
-    // `tab` moves between the list and the VISIBLE action row, which is what makes every verb
-    // reachable without knowing a single letter.
-    if (key.tab) { setActionsFocused(f => !f); return }
+    // `tab` moves between the list and the MENU, which is what makes every verb and every switch
+    // reachable without knowing a single letter. The menu is a real pane, so it keeps its own
+    // cursor while the list keeps its selection.
+    if (key.tab) {
+      if (cockpit.aside > 0) setFocus(f => (f === 'list' ? 'aside' : 'list'))
+      else setActionsFocused(f => !f)
+      return
+    }
+
+    if (focus === 'aside' && cockpit.aside > 0) {
+      if (key.escape) { setFocus('list'); return }
+      if (key.return) return runAside(asideRow)
+      if (key.upArrow || input === 'k') return setAsideIndex(Math.max(0, asideAt - 1))
+      if (key.downArrow || input === 'j') return setAsideIndex(Math.min(asidePicks.length - 1, asideAt + 1))
+      return
+    }
 
     if (actionsFocused) {
       if (key.escape) { setActionsFocused(false); return }
@@ -263,6 +341,7 @@ export function Sessions({
     if (key.return) return runAction(actions[liveActions[0] ?? 0]?.action ?? 'new')
     if (input === 'v') return runAction('group')
     if (input === 'c') { setShowClosed(v => !v); setCursor(0); return }
+    if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
     if (input === 'u' && grouping === 'task') { setHideEmptyTask(v => !v); setCursor(0); return }
     if (input === 'a') return runAction('new')
     if (input === '/') return runAction('search')
@@ -277,6 +356,31 @@ export function Sessions({
       if (next !== at) setCursor(next)
     }
   }, { isActive: isActive && ask === null })
+
+  /**
+   * Apply what the host remembered, ONCE, when it arrives.
+   *
+   * `useState(view?.…)` alone is not enough: the status is null on the first render and the stored
+   * arrangement lands a moment later, so the initial value is always the default. Guarded by a ref
+   * so this can never fight a change the user makes afterwards.
+   */
+  const restored = useRef(false)
+  useEffect(() => {
+    if (restored.current || !view) return
+    restored.current = true
+    setGrouping(view.grouping)
+    setShowClosed(view.showClosed)
+    setShowExited(view.showExited)
+    setHideEmptyTask(!view.showUnfiled)
+  }, [view])
+
+  // Written whenever any part of the arrangement moves, rather than at each call site: four setters
+  // that each had to remember to persist is four places for one to be forgotten. It waits for the
+  // restore, so the defaults of a first render never overwrite what was stored.
+  useEffect(() => {
+    if (!restored.current && view) return
+    onView({ grouping, showClosed, showExited, showUnfiled: !hideEmptyTask })
+  }, [grouping, showClosed, showExited, hideEmptyTask, onView, view])
 
   useEffect(() => {
     if (!isActive) return
@@ -344,9 +448,9 @@ export function Sessions({
   const columns = useMemo(
     () => sessionColumns(
       visible.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
-      width,
+      cockpit.list,
     ),
-    [visible, width],
+    [visible, cockpit.list],
   )
 
   // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
@@ -396,14 +500,40 @@ export function Sessions({
 
   // `flexShrink={0}`: the budget above is this screen's contract with the pane around it, and a Box
   // that shrinks would spend the same rows again on Yoga's terms.
+  const listWidth = cockpit.list
+
   return (
     <Box flexDirection="column" width={width} flexShrink={0}>
+      {/* The BAND: the menu beside the list. Everything this screen can do is on the left, visible,
+          navigable and clickable — which is the whole point of it existing. */}
+      <Box flexDirection="row" width={width} flexShrink={0}>
+      {cockpit.aside > 0 ? (
+        <>
+          <AsideMenu
+            rows={asideList}
+            cursor={asideRow}
+            focused={focus === 'aside'}
+            width={cockpit.aside}
+            height={cockpit.band}
+            // Slicing from zero would leave the view switches below the fold on a short terminal —
+            // invisible, and still the thing `enter` would act on.
+            offset={windowOffset(Math.max(0, asideRow), asideList.length, cockpit.band)}
+          />
+          <Box flexDirection="column" width={1} flexShrink={0}>
+            {Array.from({ length: cockpit.band }, (_, i) => (
+              <Text key={i} dimColor>│</Text>
+            ))}
+          </Box>
+        </>
+      ) : null}
+
+      <Box flexDirection="column" width={listWidth} flexShrink={0}>
       {layout.summary ? (
         <SummaryRow
           fleet={fleet}
           grouping={grouping}
           strings={s}
-          width={width}
+          width={listWidth}
           showClosed={showClosed}
           hideEmptyTask={grouping === 'task' ? hideEmptyTask : null}
         />
@@ -432,11 +562,11 @@ export function Sessions({
               // edge. Dim grey at the same weight as its rows is not a hierarchy — it is a list that
               // happens to be sorted, which is what this screen was.
               const head = `${row.label}  ${row.count}`
-              const rule = Math.max(0, width - head.length - 3)
+              const rule = Math.max(0, listWidth - head.length - 3)
               return (
                 <Text key={`h${index}`} wrap="truncate">
                   <Text color={row.muted ? COLORS.muted : COLORS.secondary} bold={!row.muted}>
-                    {truncate(head, width)}
+                    {truncate(head, listWidth)}
                   </Text>
                   <Text dimColor>{rule > 0 ? `  ${'─'.repeat(rule)}` : ''}</Text>
                 </Text>
@@ -448,17 +578,20 @@ export function Sessions({
                 session={row.session}
                 selected={selected?.id === row.session.id}
                 columns={columns}
-                width={width}
+                width={listWidth}
               />
             )
           })}
         </Box>
       )}
+      </Box>
+      </Box>
 
-      {actionRows > 0 ? (
+      {/* The action row stays as the KEYBOARD path for a narrow terminal that has no menu, and as a
+          familiar horizontal echo of it where there is one. It is drawn full width, under the band,
+          because it acts on the selection rather than on either pane. */}
+      {actionRows > 0 && cockpit.aside === 0 ? (
         <>
-          {/* One row of air, so the verbs read as a separate thing from the rows they act on rather
-              than as another list entry. Only spent when the screen can afford it. */}
           {height >= 12 ? <Text> </Text> : null}
           <SessionActionRow
             labels={actionWords}
@@ -1005,6 +1138,59 @@ function TaskChoice({ host, strings: s, current, width, onCancel, onPick }: {
           )
         })
       )}
+    </Box>
+  )
+}
+
+/**
+ * The aside menu — everything this screen can do, on the left, visible.
+ *
+ * It exists because every control here used to be a letter: the grouping cycled on a hidden `v`, the
+ * visibility switches were a corner label, and the verbs only appeared once you knew `tab` reached
+ * them. A person opening this screen for the first time could see a list of sessions and no way to
+ * act on any of them. A menu you can read and click is not a nicety here.
+ *
+ * Every row states its own state — a filled dot for a grouping in force or a switch that is on —
+ * because a menu that shows only a cursor makes you press things to find out what they already were.
+ */
+function AsideMenu({ rows, cursor, focused, width, height, offset }: {
+  rows: readonly AsideRow[]
+  /** Index into `rows` of the row under the cursor, or `-1`. */
+  cursor: number
+  focused: boolean
+  width: number
+  height: number
+  offset: number
+}) {
+  const inner = Math.max(1, width - 2)
+  return (
+    <Box flexDirection="column" width={width} flexShrink={0}>
+      {rows.slice(offset, offset + height).map((row, at) => {
+        const i = offset + at
+        if (row.kind === 'rule') {
+          return <Text key={`r${i}`} dimColor>{'─'.repeat(inner)}</Text>
+        }
+        if (row.kind === 'heading') {
+          return <Text key={`h${i}`} dimColor bold wrap="truncate">{truncate(row.label, width)}</Text>
+        }
+        const active = i === cursor && focused
+        // An action has no on/off state — a dot beside "Rename" would be claiming something. Only
+        // the switches and the grouping carry one.
+        const dot = row.kind === 'action' ? '  ' : row.on ? '● ' : '○ '
+        const enabled = row.kind !== 'action' || row.enabled
+        return (
+          <Text key={`${row.kind}${i}`} wrap="truncate" dimColor={!enabled}>
+            <Text color={active ? COLORS.accent : undefined}>{active ? '❯' : ' '}</Text>
+            <Text color={row.kind !== 'action' && row.on ? COLORS.success : COLORS.muted}>{dot}</Text>
+            <Text
+              color={active ? COLORS.accent : enabled ? undefined : COLORS.muted}
+              bold={active}
+            >
+              {truncate(row.label, Math.max(1, width - 3))}
+            </Text>
+          </Text>
+        )
+      })}
     </Box>
   )
 }

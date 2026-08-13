@@ -52,6 +52,7 @@ import type {
   ServiceState,
   SessionHarnessOption,
   SessionState,
+  SessionViewPrefs,
   SpawnSessionRequest,
   SpawnSessionResult,
   ProjectOption,
@@ -1184,6 +1185,12 @@ function explainSpawnError(e: SpawnPlanError, s: CliStrings): string {
  * BEFORE anything is spawned, so an unsupported flag is a sentence rather than a session that starts
  * and dies with a usage error on a screen nobody is looking at.
  */
+/** The stored fleet arrangement, or nothing when this machine has never chosen one. */
+async function sessionViewPref(): Promise<{ sessionView?: SessionViewPrefs }> {
+  const stored = (await readPreferences()).sessionView
+  return stored ? { sessionView: stored } : {}
+}
+
 async function spawnManaged(req: {
   harness: HarnessId
   cwd: string
@@ -1489,6 +1496,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         version: CURRENT_VERSION,
         latestVersion,
         archiveMode: await currentArchiveMode(),
+        ...(await sessionViewPref()),
         mouse,
       }
     },
