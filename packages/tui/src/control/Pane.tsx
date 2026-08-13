@@ -57,7 +57,9 @@ export function Pane({ title = '', badge = '', focused, width, height, children 
     <Box flexDirection="column" width={width} height={height} flexShrink={0}>
       <Text color={border}>
         {top.head}
-        <Text color={focused ? COLORS.accent : undefined} dimColor={!focused} bold={focused}>
+        {/* Never `dimColor`: at half intensity over a dark background the title is unreadable, and
+            it is the only thing on the frame that says what the box holds. */}
+        <Text color={focused ? COLORS.accent : COLORS.label} bold>
           {top.title}
         </Text>
         {top.gap}

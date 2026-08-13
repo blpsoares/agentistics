@@ -185,6 +185,160 @@ export interface ControlStrings {
   logFollowing: string
   logPaused: string
 
+  /** Sessions tab. */
+  sessionsEmpty: string
+  /** The list is empty because `only active` is on, and this many sessions are being withheld. */
+  sessionsEmptyActive: (total: number) => string
+  /** The list is empty because a search or a scope is narrowing it. */
+  sessionsEmptyFiltered: string
+  sessionsLoading: string
+  /** Said when the host does not implement the fleet at all — not the same as an empty fleet. */
+  sessionsUnsupported: string
+  /** The summary row: "3 sessions · 1 waiting on you". */
+  sessionsCount: (n: number) => string
+  sessionsWaitingCount: (n: number) => string
+  sessionsGroupBy: string
+  sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project' | 'task' | 'repo', string>
+  sessionsUnknownHarness: string
+  sessionsUnknownModel: string
+  sessionsUnknownProject: string
+  sessionsUnknownTask: string
+  sessionsUnknownRepo: string
+  sessionsWorktreeTag: string
+  /** The sessions list's column headings — an unlabelled column is one you have to learn. */
+  sessionsCols: Record<'id' | 'state' | 'title' | 'task' | 'worktree' | 'metrics' | 'harness' | 'where', string>
+  /** Detail-pane field labels. */
+  sessionsWhere: string
+  sessionsModel: string
+  sessionsNote: string
+  sessionsStarted: string
+  sessionsDoing: string
+  sessionsTask: string
+  sessionsMetrics: string
+  /** Label of the detail line stating how to LEAVE an attached session. */
+  sessionsDetach: string
+  /** Marks a finished task's heading, and the word the toggle uses. */
+  sessionsDoneWord: string
+  /** Pane titles — the SHORT lowercase names, the same words the tab bar prints. */
+  sessionsPaneMenu: string
+  sessionsPaneDetail: string
+  sessionsPaneAsk: string
+  sessionsFinishConfirm: (task: string, count: number) => string
+  sessionsReopenConfirm: (task: string) => string
+  asideProjects: string
+  asideAllProjects: string
+  toggleDone: string
+  /** The strict switch: only what is running. Overrides the other three. */
+  toggleActive: string
+  /** States the active search on the summary row, and how to drop it. */
+  sessionsSearching: (query: string) => string
+  /** How long ago, from a whole number of SECONDS — the caller does the clock arithmetic so this
+   *  stays a pure formatter. */
+  sessionsAgo: (seconds: number) => string
+  /** The external row's own sentence, in the detail pane. */
+  sessionsExternalNote: string
+  sessionsClosedNote: string
+  keySessionsGroup: string
+  keySessionsAttach: string
+  /** How to put the arrangement back to how the app opens on a fresh machine. */
+  keySessionsReset: string
+  keySessionsKill: string
+  keySessionsRename: string
+  keySessionsNote: string
+  keySessionsNew: string
+  keySessionsSearch: string
+  keySessionsActions: string
+  /** The visible action row — the same verbs the letters run, spelled out and clickable. */
+  actSessions: {
+    attach: string
+    resume: string
+    rename: string
+    note: string
+    task: string
+    kill: string
+    openTask: string
+    finishTask: string
+    newSession: string
+    search: string
+    group: string
+  }
+  sessionsTaskPrompt: string
+  taskHint: string
+  taskNone: string
+  taskCurrent: string
+  sessionsOpenTaskConfirm: (task: string, n: number) => string
+  sessionsResumeConfirm: (title: string) => string
+  sessionsResumeRunning: string
+  sessionsSearchLabel: string
+  sessionsSearchEmpty: string
+  sessionsClosedWord: string
+  sessionsShowClosed: string
+  /** The view panel: one vertical list of every choice about what the list shows. */
+  viewTitle: string
+  viewGroupBy: string
+  viewShow: string
+  viewActiveOn: string
+  viewClosedOn: string
+  viewClosedOff: string
+  viewUnfiledOn: string
+  viewUnfiledOff: string
+  viewHint: string
+  /** The aside menu's three headings, and the third visibility switch. */
+  asideActions: string
+  asideView: string
+  asideShow: string
+  asideTasks: string
+  asideAllTasks: string
+  toggleClosed: string
+  toggleExited: string
+  toggleUnfiled: string
+  keySessionsAside: string
+  /** The management view a session opens into. */
+  manageTitle: (title: string) => string
+  manageHint: string
+  promptHint: string
+  sessionsHideClosed: string
+  keySessionsActive: string
+  keySessionsClosed: string
+  keySessionsNoTask: string
+  /** How to change screen where the arrows belong to the screen itself. */
+  keyTabsAlt: string
+  /** How to jump between the menu's sections without walking every row of one. */
+  keyAsideSection: string
+  sessionsNoTaskHidden: string
+  sessionsNoTaskShown: string
+  /** The wizard's six questions. */
+  wizHarness: string
+  wizWhere: string
+  wizWhereHint: string
+  wizModel: string
+  wizModelHint: string
+  wizEffort: string
+  wizPrompt: string
+  wizPromptHint: string
+  wizHow: string
+  wizAttached: string
+  wizBackground: string
+  wizSkip: string
+  wizNoMatch: string
+  /** The project table's column headings — four unlabelled columns are four columns of guesswork. */
+  wizColName: string
+  wizColRepo: string
+  wizColPath: string
+  wizColWhy: string
+  /** Heading over the candidates that belong to no repository. */
+  wizNoRepo: string
+  wizSourceCwd: string
+  wizSourceTyped: string
+  wizSourceHistory: string
+  wizSourceRepo: string
+  /** The rename / note prompts, and the kill confirmation. */
+  sessionsRenamePrompt: string
+  sessionsNotePrompt: string
+  sessionsKillConfirm: (title: string) => string
+  /** Said when a verb is pressed on a row that cannot take it. */
+  sessionsNotActionable: string
+
   /** Static tabs. */
   helpIntro: string
   cheatIntro: string
@@ -199,6 +353,7 @@ const EN: ControlStrings = {
 
   tabs: {
     services: 'Services',
+    sessions: 'Sessions',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Cheat sheet',
@@ -208,6 +363,7 @@ const EN: ControlStrings = {
 
   tabsShort: {
     services: 'services',
+    sessions: 'sessions',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'commands',
@@ -316,6 +472,159 @@ const EN: ControlStrings = {
   logFollowing: 'following',
   logPaused: 'paused',
 
+  sessionsEmpty: 'no sessions running.',
+  sessionsEmptyActive: (total: number) =>
+    `nothing running · ${total} session${total === 1 ? '' : 's'} withheld — l shows them`,
+  sessionsEmptyFiltered: 'nothing matches · esc clears the filter',
+  sessionsLoading: 'reading…',
+  sessionsUnsupported: 'session management is not available on this machine.',
+  sessionsCount: (n: number) => (n === 1 ? '1 session' : `${n} sessions`),
+  sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
+  sessionsGroupBy: 'GROUP',
+  sessionsGroupings: {
+    repo: 'repository',
+    task: 'task',
+    none: 'flat',
+    harness: 'harness',
+    model: 'model',
+    project: 'project',
+  },
+  sessionsUnknownHarness: 'harness unknown',
+  sessionsUnknownModel: 'no model recorded',
+  sessionsUnknownProject: 'no directory recorded',
+  sessionsUnknownTask: 'no task',
+  sessionsUnknownRepo: 'no repository',
+  /** Said on a row whose directory is a linked worktree. Short: it is a CELL, not a sentence. */
+  sessionsWorktreeTag: 'worktree',
+  sessionsCols: {
+    id: 'id',
+    state: 'state',
+    title: 'session',
+    task: 'task',
+    worktree: 'worktree',
+    metrics: 'usage',
+    harness: 'harness',
+    where: 'project',
+  },
+  sessionsWhere: 'where',
+  sessionsModel: 'model',
+  sessionsNote: 'note',
+  sessionsStarted: 'started',
+  sessionsDoing: 'saying',
+  sessionsTask: 'task',
+  sessionsMetrics: 'usage',
+  sessionsDetach: 'to detach',
+  sessionsDoneWord: 'finished',
+  sessionsPaneMenu: 'menu',
+  sessionsPaneDetail: 'detail',
+  sessionsPaneAsk: 'question',
+  sessionsFinishConfirm: (task, count) =>
+    `Mark "${task}" finished? Its ${count} session${count === 1 ? '' : 's'} stay listed behind the "finished tasks" switch.`,
+  sessionsReopenConfirm: task => `Reopen "${task}"?`,
+  asideProjects: 'PROJECTS',
+  asideAllProjects: 'every project',
+  toggleDone: 'finished tasks',
+  toggleActive: 'only active',
+  sessionsSearching: q => `search: ${q} · esc clears`,
+  sessionsAgo: (sec: number) => {
+    if (sec < 60) return `${sec}s ago`
+    const min = Math.round(sec / 60)
+    if (min < 60) return `${min}m ago`
+    return `${Math.floor(min / 60)}h ${min % 60}m ago`
+  },
+  sessionsExternalNote: 'started outside agentop — listed, but it cannot be attached or stopped here.',
+  sessionsClosedNote: 'not running — reopen it to pick this conversation back up.',
+  keySessionsGroup: 'v group',
+  keySessionsAttach: 'o attach',
+  keySessionsReset: '^r reset view',
+  keySessionsKill: 'x kill',
+  keySessionsRename: 'n name',
+  keySessionsNote: 't note',
+  keySessionsNew: 'a new',
+  keySessionsSearch: '/ search',
+  keySessionsActions: 'tab actions',
+  actSessions: {
+    attach: 'Attach',
+    resume: 'Reopen',
+    rename: 'Rename',
+    note: 'Note',
+    task: 'Task',
+    kill: 'Stop session',
+    openTask: 'Open whole task',
+    finishTask: 'Finish task',
+    newSession: 'New session',
+    search: 'Search',
+    group: 'Group',
+  },
+  sessionsTaskPrompt: 'Which task does this session belong to?',
+  taskHint: 'pick one, or type a new name',
+  taskNone: 'no task',
+  taskCurrent: '(current)',
+  sessionsOpenTaskConfirm: (task: string, n: number) =>
+    `Reopen all ${n} session(s) of "${task}" in the background?`,
+  sessionsResumeConfirm: (title: string) => `Reopen "${title}" as a session agentop manages?`,
+  sessionsResumeRunning:
+    'the assistant already running there is NOT stopped — close it first, or you will have two on one conversation.',
+  sessionsSearchLabel: 'Search sessions and closed conversations',
+  sessionsSearchEmpty: 'nothing matches.',
+  sessionsClosedWord: 'closed',
+  sessionsShowClosed: 'closed: shown',
+  viewTitle: 'What this list shows',
+  viewGroupBy: 'Group by',
+  viewShow: 'Show',
+  viewActiveOn: 'everything but active',
+  viewClosedOn: 'closed conversations',
+  viewClosedOff: 'closed conversations',
+  viewUnfiledOn: 'sessions with no task',
+  viewUnfiledOff: 'sessions with no task',
+  viewHint: '↑↓ move · enter choose · esc close',
+  asideActions: 'ACTIONS',
+  asideView: 'VIEW',
+  asideShow: 'SHOW',
+  asideTasks: 'TASKS',
+  asideAllTasks: 'every task',
+  toggleClosed: 'closed conversations',
+  toggleExited: 'finished sessions',
+  toggleUnfiled: 'sessions with no task',
+  keySessionsAside: 'tab menu',
+  manageTitle: (title: string) => `Managing "${title}"`,
+  manageHint: '↑↓ move · enter run · esc back to the list',
+  promptHint: 'enter saves · esc cancels',
+  sessionsHideClosed: 'closed: hidden',
+  keySessionsActive: 'l only active',
+  keySessionsClosed: 'c closed',
+  keySessionsNoTask: 'u unfiled',
+  keyTabsAlt: '[ ] screens',
+  keyAsideSection: '1-9 ←→ section',
+  sessionsNoTaskHidden: 'unfiled: hidden',
+  sessionsNoTaskShown: 'unfiled: shown',
+  wizHarness: 'Which assistant?',
+  wizWhere: 'Where should it start?',
+  wizWhereHint: 'search any folder under your home — or paste a full path',
+  wizModel: 'Which model?',
+  wizModelHint: 'pick one, or type any model name',
+  wizEffort: 'Which reasoning effort?',
+  wizPrompt: 'First prompt (optional)',
+  wizPromptHint: 'leave empty to start with nothing typed',
+  wizHow: 'Start it how?',
+  wizAttached: 'attached — take this terminal now',
+  wizBackground: 'background — keep it running and stay here',
+  wizSkip: 'use the default',
+  wizNoMatch: 'nothing matches — paste a full path to use a directory anywhere on this machine',
+  wizColName: 'folder',
+  wizColRepo: 'repository',
+  wizColPath: 'path',
+  wizColWhy: 'why',
+  wizNoRepo: 'no repository',
+  wizSourceCwd: 'you are here',
+  wizSourceTyped: 'typed',
+  wizSourceHistory: 'worked here before',
+  wizSourceRepo: 'git repo',
+  sessionsRenamePrompt: 'Name this session',
+  sessionsNotePrompt: 'Describe this session',
+  sessionsKillConfirm: (title: string) => `Stop "${title}"? The assistant running in it is ended.`,
+  sessionsNotActionable: 'that session was not started by agentop, so it cannot be driven from here.',
+
   helpIntro: 'Every command, with the flags that matter. `agentop --help` prints this plain.',
   cheatIntro: 'The commands worth remembering.',
   contributeIntro: 'Agentistics is open source — issues and pull requests welcome.',
@@ -328,6 +637,7 @@ const PT: ControlStrings = {
 
   tabs: {
     services: 'Serviços',
+    sessions: 'Sessões',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Comandos',
@@ -337,6 +647,7 @@ const PT: ControlStrings = {
 
   tabsShort: {
     services: 'serviços',
+    sessions: 'sessões',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'comandos',
@@ -442,6 +753,158 @@ const PT: ControlStrings = {
   logFollow: 'f acompanhar',
   logFollowing: 'acompanhando',
   logPaused: 'pausado',
+
+  sessionsEmpty: 'nenhuma sessão em execução.',
+  sessionsEmptyActive: (total: number) =>
+    `nada rodando · ${total} ${total === 1 ? 'sessão retida' : 'sessões retidas'} — l mostra`,
+  sessionsEmptyFiltered: 'nada corresponde · esc limpa o filtro',
+  sessionsLoading: 'lendo…',
+  sessionsUnsupported: 'gerenciamento de sessões não está disponível nesta máquina.',
+  sessionsCount: (n: number) => (n === 1 ? '1 sessão' : `${n} sessões`),
+  sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
+  sessionsGroupBy: 'AGRUPAR',
+  sessionsGroupings: {
+    repo: 'repositório',
+    task: 'tarefa',
+    none: 'lista',
+    harness: 'harness',
+    model: 'modelo',
+    project: 'projeto',
+  },
+  sessionsUnknownHarness: 'harness desconhecido',
+  sessionsUnknownModel: 'sem modelo registrado',
+  sessionsUnknownProject: 'sem diretório registrado',
+  sessionsUnknownTask: 'sem tarefa',
+  sessionsUnknownRepo: 'sem repositório',
+  sessionsWorktreeTag: 'worktree',
+  sessionsCols: {
+    id: 'id',
+    state: 'estado',
+    title: 'sessão',
+    task: 'tarefa',
+    worktree: 'worktree',
+    metrics: 'uso',
+    harness: 'harness',
+    where: 'projeto',
+  },
+  sessionsWhere: 'onde',
+  sessionsModel: 'modelo',
+  sessionsNote: 'nota',
+  sessionsStarted: 'iniciada',
+  sessionsDoing: 'dizendo',
+  sessionsTask: 'tarefa',
+  sessionsMetrics: 'uso',
+  sessionsDetach: 'para sair',
+  sessionsDoneWord: 'finalizada',
+  sessionsPaneMenu: 'menu',
+  sessionsPaneDetail: 'detalhe',
+  sessionsPaneAsk: 'pergunta',
+  sessionsFinishConfirm: (task, count) =>
+    `Finalizar "${task}"? Suas ${count} sessõe${count === 1 ? '' : 's'} continuam listadas atrás do interruptor "tarefas finalizadas".`,
+  sessionsReopenConfirm: task => `Reabrir "${task}"?`,
+  asideProjects: 'PROJETOS',
+  asideAllProjects: 'todos os projetos',
+  toggleDone: 'tarefas finalizadas',
+  toggleActive: 'apenas ativas',
+  sessionsSearching: q => `busca: ${q} · esc limpa`,
+  sessionsAgo: (sec: number) => {
+    if (sec < 60) return `há ${sec}s`
+    const min = Math.round(sec / 60)
+    if (min < 60) return `há ${min}min`
+    return `há ${Math.floor(min / 60)}h ${min % 60}min`
+  },
+  sessionsExternalNote: 'iniciada fora do agentop — listada, mas não dá para anexar nem parar por aqui.',
+  sessionsClosedNote: 'não está rodando — reabra para retomar esta conversa.',
+  keySessionsGroup: 'v agrupar',
+  keySessionsAttach: 'o anexar',
+  keySessionsReset: '^r restaurar view',
+  keySessionsKill: 'x encerrar',
+  keySessionsRename: 'n nomear',
+  keySessionsNote: 't nota',
+  keySessionsNew: 'a nova',
+  keySessionsSearch: '/ buscar',
+  keySessionsActions: 'tab ações',
+  actSessions: {
+    attach: 'Anexar',
+    resume: 'Reabrir',
+    rename: 'Renomear',
+    note: 'Nota',
+    task: 'Tarefa',
+    kill: 'Encerrar sessão',
+    openTask: 'Abrir tarefa toda',
+    finishTask: 'Finalizar tarefa',
+    newSession: 'Nova sessão',
+    search: 'Buscar',
+    group: 'Agrupar',
+  },
+  sessionsTaskPrompt: 'De qual tarefa esta sessão faz parte?',
+  taskHint: 'escolha uma, ou digite um nome novo',
+  taskNone: 'sem tarefa',
+  taskCurrent: '(atual)',
+  sessionsOpenTaskConfirm: (task: string, n: number) =>
+    `Reabrir todas as ${n} sessão(ões) de "${task}" em background?`,
+  sessionsResumeConfirm: (title: string) => `Reabrir "${title}" como sessão gerenciada pelo agentop?`,
+  sessionsResumeRunning:
+    'o assistente que já roda ali NÃO é encerrado — feche ele antes, ou você fica com dois na mesma conversa.',
+  sessionsSearchLabel: 'Buscar sessões e conversas fechadas',
+  sessionsSearchEmpty: 'nada corresponde.',
+  sessionsClosedWord: 'fechada',
+  sessionsShowClosed: 'fechadas: visíveis',
+  viewTitle: 'O que esta lista mostra',
+  viewGroupBy: 'Agrupar por',
+  viewShow: 'Mostrar',
+  viewActiveOn: 'tudo menos as ativas',
+  viewClosedOn: 'conversas fechadas',
+  viewClosedOff: 'conversas fechadas',
+  viewUnfiledOn: 'sessões sem tarefa',
+  viewUnfiledOff: 'sessões sem tarefa',
+  viewHint: '↑↓ mover · enter escolher · esc fechar',
+  asideActions: 'AÇÕES',
+  asideView: 'VER',
+  asideShow: 'MOSTRAR',
+  asideTasks: 'TAREFAS',
+  asideAllTasks: 'todas as tarefas',
+  toggleClosed: 'conversas fechadas',
+  toggleExited: 'sessões encerradas',
+  toggleUnfiled: 'sessões sem tarefa',
+  keySessionsAside: 'tab menu',
+  manageTitle: (title: string) => `Gerenciando "${title}"`,
+  manageHint: '↑↓ mover · enter executar · esc voltar à lista',
+  promptHint: 'enter salva · esc cancela',
+  sessionsHideClosed: 'fechadas: ocultas',
+  keySessionsActive: 'l só ativas',
+  keySessionsClosed: 'c fechadas',
+  keySessionsNoTask: 'u sem tarefa',
+  keyTabsAlt: '[ ] telas',
+  keyAsideSection: '1-9 ←→ seção',
+  sessionsNoTaskHidden: 'sem tarefa: ocultas',
+  sessionsNoTaskShown: 'sem tarefa: visíveis',
+  wizHarness: 'Qual assistente?',
+  wizWhere: 'Onde ela começa?',
+  wizWhereHint: 'busque qualquer pasta na sua home — ou cole um caminho completo',
+  wizModel: 'Qual modelo?',
+  wizModelHint: 'escolha um, ou digite qualquer nome de modelo',
+  wizEffort: 'Qual nível de raciocínio?',
+  wizPrompt: 'Primeiro prompt (opcional)',
+  wizPromptHint: 'deixe vazio para começar sem nada digitado',
+  wizHow: 'Iniciar como?',
+  wizAttached: 'anexada — assume este terminal agora',
+  wizBackground: 'background — deixa rodando e fica aqui',
+  wizSkip: 'usar o padrão',
+  wizNoMatch: 'nada corresponde — cole um caminho completo para usar um diretório sem histórico',
+  wizColName: 'pasta',
+  wizColRepo: 'repositório',
+  wizColPath: 'caminho',
+  wizColWhy: 'por quê',
+  wizNoRepo: 'sem repositório',
+  wizSourceCwd: 'você está aqui',
+  wizSourceTyped: 'digitado',
+  wizSourceHistory: 'já trabalhou aqui',
+  wizSourceRepo: 'repo git',
+  sessionsRenamePrompt: 'Dê um nome a esta sessão',
+  sessionsNotePrompt: 'Descreva esta sessão',
+  sessionsKillConfirm: (title: string) => `Encerrar "${title}"? O assistente que roda nela é finalizado.`,
+  sessionsNotActionable: 'essa sessão não foi iniciada pelo agentop, então não dá para controlá-la daqui.',
 
   helpIntro: 'Todos os comandos, com as flags que importam. `agentop --help` imprime isto puro.',
   cheatIntro: 'Os comandos que vale a pena lembrar.',

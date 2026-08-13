@@ -91,6 +91,44 @@ export interface CliStrings {
   svcConflict: (runtimes: string[]) => string
   /** A stop/restart named something that is not running. */
   svcNotRunning: string
+
+  /** The session fleet — the words the monitor's rows and detail pane wear. */
+  sessState: {
+    working: string
+    waitingApproval: string
+    waiting: string
+    exited: string
+    lost: string
+    external: string
+    closed: string
+  }
+  /** Said on a session whose harness has no probed approval markers. */
+  sessApprovalBlind: (harness: string) => string
+  /** The fallback title for a session the user never named. */
+  sessUntitled: (harness: string, project: string) => string
+  sessKilled: (id: string) => string
+  sessNoTask: string
+  sessTaskFinished: (task: string) => string
+  sessTaskReopened: (task: string) => string
+  sessKillUnconfirmed: (id: string) => string
+  sessRenamed: string
+  /** Printed on the way into an attach, with the REAL detach key. */
+  sessAttaching: (title: string, detach: string) => string
+  sessNoted: string
+  sessTasked: string
+  sessTaskEmpty: (task: string) => string
+  sessTaskOpened: (task: string, opened: number, skipped: number) => string
+  sessTaskNoneOpened: (task: string, skipped: number) => string
+  /** A session the backend hosts but the registry never recorded has no metadata to patch. */
+  sessNoRegistryEntry: string
+  sessStarted: (name: string) => string
+  sessStartedBg: (name: string) => string
+  sessSpawnFailed: (reason: string) => string
+  sessSpawnUnsupported: (harness: string) => string
+  sessSpawnNoResume: (harness: string) => string
+  sessSpawnNoModel: (harness: string) => string
+  sessSpawnNoEffort: (harness: string) => string
+  sessSpawnBadEffort: (harness: string, value: string, accepted: string[]) => string
   dockerMissing: string
   dockerUnreachable: string
   foregroundLater: string
@@ -252,6 +290,47 @@ const EN: CliStrings = {
   svcCentral: 'agentistics central',
   svcConflict: (runtimes) => `conflict: ${runtimes.join(' + ')} both running — stop one`,
   svcNotRunning: 'that service is not running.',
+
+  sessState: {
+    working: 'working',
+    waitingApproval: 'needs approval',
+    waiting: 'waiting',
+    exited: 'exited',
+    lost: 'lost',
+    external: 'external',
+    closed: 'closed',
+  },
+  sessApprovalBlind: (harness: string) =>
+    `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
+  sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
+  sessKilled: (id: string) => `stopped ${id}.`,
+  sessNoTask: 'that session has no task.',
+  sessTaskFinished: (task: string) => `"${task}" marked finished.`,
+  sessTaskReopened: (task: string) => `"${task}" reopened.`,
+  sessKillUnconfirmed: (id: string) =>
+    `could not confirm ${id} was stopped — it may still be running, so its record was kept.`,
+  sessRenamed: 'session renamed.',
+  sessAttaching: (title: string, detach: string) =>
+    `Attaching to ${title}. To leave it running and come back here, press ${detach}.`,
+  sessNoted: 'note saved.',
+  sessTasked: 'task set.',
+  sessTaskEmpty: (task: string) => `no sessions are filed under "${task}".`,
+  sessTaskOpened: (task: string, opened: number, skipped: number) =>
+    skipped > 0
+      ? `reopened ${opened} session(s) of "${task}" — ${skipped} could not be reopened.`
+      : `reopened ${opened} session(s) of "${task}".`,
+  sessTaskNoneOpened: (task: string, skipped: number) =>
+    `none of the ${skipped} session(s) of "${task}" could be reopened.`,
+  sessNoRegistryEntry: 'that session has no record to update — it was not started by agentop.',
+  sessStarted: (name: string) => `started ${name}.`,
+  sessStartedBg: (name: string) => `started ${name} in the background.`,
+  sessSpawnFailed: (reason: string) => `could not start the session: ${reason}`,
+  sessSpawnUnsupported: (harness: string) => `agentop cannot start ${harness} yet.`,
+  sessSpawnNoResume: (harness: string) => `${harness} cannot reopen a conversation by id.`,
+  sessSpawnNoModel: (harness: string) => `${harness} has no model flag, so a model cannot be set.`,
+  sessSpawnNoEffort: (harness: string) => `${harness} has no effort flag, so an effort cannot be set.`,
+  sessSpawnBadEffort: (harness: string, value: string, accepted: string[]) =>
+    `${harness} does not accept effort "${value}". Accepted: ${accepted.join(', ')}.`,
   dockerMissing: 'docker not installed',
   dockerUnreachable: 'docker is installed but not answering',
   foregroundLater: 'foreground starts once this screen closes.',
@@ -387,6 +466,47 @@ const PT: CliStrings = {
   svcCentral: 'agentistics central',
   svcConflict: (runtimes) => `conflito: ${runtimes.join(' + ')} rodando juntos — pare um`,
   svcNotRunning: 'esse serviço não está rodando.',
+
+  sessState: {
+    working: 'trabalhando',
+    waitingApproval: 'precisa de aprovação',
+    waiting: 'aguardando',
+    exited: 'encerrada',
+    lost: 'perdida',
+    external: 'externa',
+    closed: 'fechada',
+  },
+  sessApprovalBlind: (harness: string) =>
+    `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando", como qualquer outra pausa.`,
+  sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
+  sessKilled: (id: string) => `${id} encerrada.`,
+  sessNoTask: 'essa sessão não tem tarefa.',
+  sessTaskFinished: (task: string) => `"${task}" marcada como finalizada.`,
+  sessTaskReopened: (task: string) => `"${task}" reaberta.`,
+  sessKillUnconfirmed: (id: string) =>
+    `não deu para confirmar que ${id} foi encerrada — ela pode continuar rodando, então o registro dela foi mantido.`,
+  sessRenamed: 'sessão renomeada.',
+  sessAttaching: (title: string, detach: string) =>
+    `Anexando a ${title}. Para deixá-la rodando e voltar aqui, aperte ${detach}.`,
+  sessNoted: 'nota salva.',
+  sessTasked: 'tarefa definida.',
+  sessTaskEmpty: (task: string) => `nenhuma sessão está na tarefa "${task}".`,
+  sessTaskOpened: (task: string, opened: number, skipped: number) =>
+    skipped > 0
+      ? `${opened} sessão(ões) de "${task}" reabertas — ${skipped} não puderam ser reabertas.`
+      : `${opened} sessão(ões) de "${task}" reabertas.`,
+  sessTaskNoneOpened: (task: string, skipped: number) =>
+    `nenhuma das ${skipped} sessão(ões) de "${task}" pôde ser reaberta.`,
+  sessNoRegistryEntry: 'essa sessão não tem registro para atualizar — não foi o agentop que iniciou ela.',
+  sessStarted: (name: string) => `${name} iniciada.`,
+  sessStartedBg: (name: string) => `${name} iniciada em background.`,
+  sessSpawnFailed: (reason: string) => `não deu para iniciar a sessão: ${reason}`,
+  sessSpawnUnsupported: (harness: string) => `o agentop ainda não inicia ${harness}.`,
+  sessSpawnNoResume: (harness: string) => `${harness} não reabre conversa por id.`,
+  sessSpawnNoModel: (harness: string) => `${harness} não tem flag de modelo, então não dá para definir um.`,
+  sessSpawnNoEffort: (harness: string) => `${harness} não tem flag de effort, então não dá para definir um.`,
+  sessSpawnBadEffort: (harness: string, value: string, accepted: string[]) =>
+    `${harness} não aceita o effort "${value}". Aceitos: ${accepted.join(', ')}.`,
   dockerMissing: 'docker não instalado',
   dockerUnreachable: 'docker instalado, mas não responde',
   foregroundLater: 'o foreground sobe assim que esta tela fechar.',

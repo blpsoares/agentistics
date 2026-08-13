@@ -298,6 +298,15 @@ const CHEAT_EN: ContentSection[] = [
     ],
   },
   {
+    title: 'Sessions',
+    rows: [
+      { cmd: 'agentop session claude --bg -p "fix the tests"', text: 'start a background session' },
+      { cmd: 'agentop session list', text: 'see what is running' },
+      { cmd: 'agentop session attach <id|name>', text: "take over a session's terminal" },
+      { cmd: 'agentop session kill <id|name>', text: 'stop a session' },
+    ],
+  },
+  {
     title: 'Maintain',
     rows: [
       { cmd: 'agentop upgrade', text: 'install the latest release and restart what was running' },
@@ -337,6 +346,15 @@ const CHEAT_PT: ContentSection[] = [
       { cmd: 'agentop member connect --endpoint <url> --token <token>', text: 'entra numa central' },
       { cmd: 'agentop member status', text: 'modo, endpoint, usuário e última sincronização' },
       { cmd: 'agentop member leave', text: 'devolve esta máquina para o modo solo' },
+    ],
+  },
+  {
+    title: 'Sessões',
+    rows: [
+      { cmd: 'agentop session claude --bg -p "fix the tests"', text: 'inicia uma sessão em background' },
+      { cmd: 'agentop session list', text: 'mostra o que está rodando' },
+      { cmd: 'agentop session attach <id|name>', text: 'assume o terminal de uma sessão' },
+      { cmd: 'agentop session kill <id|name>', text: 'encerra uma sessão' },
     ],
   },
   {
