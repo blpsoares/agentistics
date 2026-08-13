@@ -31,7 +31,9 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull; `up` takes -y/-n and --cache/--no-cache, honored on the standalone path too)
   ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
   ├── agentop session …    → server/sessions/cli-session.ts (start/list/attach/kill/rename/note;
-  │                          `--bg` detaches via tmux, attach prints the REAL detach key)
+  │                          `--bg` detaches via tmux, attach prints the REAL detach key; `list`
+  │                          reports what each session is DOING and names the harnesses whose
+  │                          approval detection is unavailable)
   ├── agentop ci-push      → server/ci-push.ts (one-shot GitHub Actions runner → central push; env AGENTISTICS_CENTRAL_URL/AGENTISTICS_CI_TOKEN)
   ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc + ~/.zshrc update-check hook)
   ├── agentop upgrade      → server/upgrade.ts
@@ -57,14 +59,35 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── version.ts           → getVersionInfo (current vs latest); drives update banners/notifications
   ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc + ~/.zshrc update-check hook
   ├── cli-setup.ts / cli-central.ts / cli-member.ts → the agentop setup/central/member command handlers
-  ├── sessions/            → the session manager: `SessionBackend` (tmux today, a per-session
-  │                          ConPTY host on Windows in Phase 4), the PURE `spawn-spec.ts`
+  ├── sessions/            → the session manager and the fleet monitor behind the cockpit's
+  │                          `sessions` tab. `SessionBackend` is the platform boundary (tmux;
+  │                          **there is no Windows backend and `index.ts` records why** — Bun
+  │                          exposes no PTY primitive and a native module cannot live in the
+  │                          single compiled binary, so Windows is told to use WSL rather than
+  │                          handed a verb that cannot work). The PURE `spawn-spec.ts`
   │                          (`Record<HarnessId, SpawnSpec|null>` — a harness with no spec is
   │                          ABSENT from the wizard, never offered and failing), the PURE
   │                          `tmux-cli.ts` (every tmux argv and parse), `session-ref.ts` and the
   │                          `managed-sessions.json` registry. **Every flag is read from the
   │                          tool's own `--help`, never guessed** — codex's reasoning effort is
-  │                          deliberately absent for that reason. See docs/session-manager.md
+  │                          deliberately absent for that reason, while agy's IS wired up because
+  │                          its `--help` prints the closed set. `kimi` and `copilot` get their
+  │                          first prompt TYPED IN, because their `-p` exits after answering.
+  │                          **What a session is DOING** is the pure `attention.ts` over two
+  │                          signals — a probed screen marker and whether the frame moved — with
+  │                          `attention-rules.ts` holding six per-harness patterns **captured
+  │                          from six live dialogs**, each with its CLI version and date. There
+  │                          is deliberately no `idle` state: an interactive assistant that is
+  │                          alive and still is waiting for you, and the uncertainty that really
+  │                          exists is about the REASON, which lives in an absent approval rule
+  │                          the UI states in words. `session-view.ts` merges the managed fleet
+  │                          with the EXTERNAL assistants `/proc` reports (listed, marked, and
+  │                          carrying no activity — nothing about them is capturable), and
+  │                          `sessions-host.ts` is the 5s poller, whose failed poll keeps the
+  │                          previous list plus a reason rather than reporting an empty one.
+  │                          `project-search.ts` / `project-source.ts` feed the wizard's search
+  │                          field from the LOCAL store, so it works with the server stopped.
+  │                          See docs/session-manager.md
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
@@ -675,7 +698,10 @@ packages/tui/src/
     Pane.tsx         the ONE containment style: rounded frame, title in the border, accent when focused
     Chrome.tsx Surface.tsx Menu.tsx Prompt.tsx ArchiveChoice.tsx   shared primitives (cockpit / linear / questions)
     Output.tsx       the pane a streaming task owns — the detail region, auto-following its tail
-    tabs/            Services (the cockpit), Setup, Logs, Static (Help / Cheat sheet / Contribute)
+    sessions.ts      PURE arithmetic for the sessions tab: its row budget, the cell fit, the
+                     grouping and the ordering (tested in sessions.test.ts)
+    tabs/            Services (the cockpit), Sessions (+ SessionWizard), Setup, Logs,
+                     Static (Help / Cheat sheet / Contribute)
   stubs/react-devtools-core/   REQUIRED for the binary build — see below
 packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to stdout at a chosen
                                    size/lang/mode, with `--keys` to drive it into a question first
@@ -816,6 +842,20 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
 - **Order footer hints most-important-first** — `footerHints` drops from the RIGHT, so `q quit`
   and the tab keys lead. A narrow terminal that hides how to leave strands the user in a buffer
   that hides their shell.
+- **The sessions tab shows the WHOLE fleet, and says what it cannot know.** Sessions agentop
+  started are attachable, killable and nameable; assistants running beside it (from `/proc`) are
+  listed as `external` and carry NO state — nothing about them is capturable, so claiming one would
+  be inventing it. A verb pressed on such a row refuses in a SENTENCE rather than doing nothing: a
+  control that is silently inert is indistinguishable from a broken one. The waiting counter lives
+  in the HEADER because it must be readable from every tab, and it outranks the version under width
+  pressure — a version is one `agentop --version` away, a session waiting on you is why the app is
+  open. The bell rings on the TRANSITION into waiting, never on the level.
+- **`enter` attaches, and attaching is a `ControlExit`, not an exec.** The Ink app unmounts,
+  `cli-start.ts` gives the session the real tty, and `runStart` LOOPS — so detaching comes back to
+  the sessions tab. The detach key is read from the backend and printed first; a user who cannot get
+  out is stranded in a buffer that hides their shell. **The kill key is `x`, never `k`** — `k` is
+  `up` in this list, and a key that navigates on one screen and destroys work on another is a real
+  accident waiting to happen.
 - **`stats-cache.json` stays Claude-only here too.** `selectors.ts` reads Claude totals from the
   cache and every other harness from per-session sums; `applyHarnessFilter` blanks the cache when
   a non-Claude harness is selected, or Claude's numbers would survive the filter.
