@@ -32,7 +32,10 @@ import { spawn } from 'node:child_process'
 import { writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
-import { DEFAULT_TEAM, HARNESS_ORDER, fmt, fmtCost, type HarnessId, type TeamConnection } from '@agentistics/core'
+import {
+  DEFAULT_TEAM, HARNESS_ORDER, fmt, fmtCost, repoShortName,
+  type HarnessId, type TeamConnection,
+} from '@agentistics/core'
 import type {
   ActionResult,
   ActionTarget,
@@ -85,7 +88,7 @@ import { scanProcesses } from './live-sessions'
 import { resolveBackend } from './sessions'
 import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
 import { findProjects } from './sessions/project-source'
-import { candidateLabel, candidatePath } from './sessions/project-search'
+import { candidatePath } from './sessions/project-search'
 import type { SpawnPlanError } from './sessions/types'
 import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
@@ -2027,7 +2030,10 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const found = await findProjects(query, process.cwd())
       return found.map(c => ({
         path: c.path,
-        label: candidateLabel(c),
+        // Name and repo travel SEPARATELY: the picker aligns them into columns, and a pre-joined
+        // label is one cell holding two facts that no column arithmetic can take apart again.
+        label: c.name,
+        ...(c.remote ? { repo: repoShortName(c.remote) } : {}),
         detail: candidatePath(c, homedir()),
         source: c.source,
       }))

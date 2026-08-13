@@ -54,11 +54,6 @@ const SOURCE_RANK: Record<ProjectCandidate['source'], number> = {
   folder: 4,
 }
 
-/** How a candidate reads in the list: its name, and the repo it belongs to when it has one. */
-export function candidateLabel(c: ProjectCandidate): string {
-  return c.remote ? `${c.name}  ·  ${repoShortName(c.remote)}` : c.name
-}
-
 /**
  * The PATH, shortened for display — and the reason the list is usable at all.
  *

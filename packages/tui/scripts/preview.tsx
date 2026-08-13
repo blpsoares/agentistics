@@ -365,8 +365,9 @@ function fakeHost(opts: Options): ControlHost {
  * widest of them (`needs approval`) has to be on screen at every width being checked.
  */
 const FAKE_PROJECTS: ProjectOption[] = [
-  { path: '/home/dev/agentistics', label: 'agentistics  ·  blpsoares/agentistics', detail: '~/agentistics', source: 'cwd' },
-  { path: '/home/dev/prontuario', label: 'prontuario  ·  org/prontuario', detail: '~/prontuario', source: 'history' },
+  { path: '/home/dev/agentistics', label: 'agentistics', repo: 'blpsoares/agentistics', detail: '~/agentistics', source: 'cwd' },
+  { path: '/home/dev/prontuario', label: 'prontuario', repo: 'org/prontuario', detail: '~/prontuario', source: 'history' },
+  { path: '/home/dev/agentistics-wt', label: 'session-monitor', repo: 'blpsoares/agentistics', detail: '~/agentistics/…/worktrees/session-monitor', source: 'history' },
   { path: '/home/dev/embark', label: 'embark', detail: '~/orgs/opvibes/embark', source: 'repo' },
   { path: '/home/dev/embark2', label: 'embark', detail: '~/archive/2024/embark', source: 'folder' },
   { path: '/home/dev/scratch', label: 'scratch', detail: '~/scratch', source: 'folder' },

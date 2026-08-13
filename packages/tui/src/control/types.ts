@@ -646,8 +646,16 @@ export interface SessionHarnessOption {
 export interface ProjectOption {
   /** The directory. The only field that is load-bearing. */
   path: string
-  /** Already-composed display label — the directory name, and the repo when it belongs to one. */
+  /**
+   * The directory NAME, on its own.
+   *
+   * On its own, and not joined to the repo any more: the picker draws a measured TABLE, and a cell
+   * that already contains two facts and a separator cannot be aligned against anything. It read as
+   * a paragraph per row — which, on a machine with twenty candidates, is what made it unusable.
+   */
   label: string
+  /** The repository it belongs to (`org/repo`), when it belongs to one. Its own column. */
+  repo?: string
   /**
    * The path, shortened for display.
    *

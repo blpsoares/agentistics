@@ -305,6 +305,11 @@ export interface ControlStrings {
   wizBackground: string
   wizSkip: string
   wizNoMatch: string
+  /** The project table's column headings — four unlabelled columns are four columns of guesswork. */
+  wizColName: string
+  wizColRepo: string
+  wizColPath: string
+  wizColWhy: string
   wizSourceCwd: string
   wizSourceTyped: string
   wizSourceHistory: string
@@ -566,6 +571,10 @@ const EN: ControlStrings = {
   wizBackground: 'background — keep it running and stay here',
   wizSkip: 'use the default',
   wizNoMatch: 'nothing matches — paste a full path to use a directory anywhere on this machine',
+  wizColName: 'folder',
+  wizColRepo: 'repository',
+  wizColPath: 'path',
+  wizColWhy: 'why',
   wizSourceCwd: 'you are here',
   wizSourceTyped: 'typed',
   wizSourceHistory: 'worked here before',
@@ -821,6 +830,10 @@ const PT: ControlStrings = {
   wizBackground: 'background — deixa rodando e fica aqui',
   wizSkip: 'usar o padrão',
   wizNoMatch: 'nada corresponde — cole um caminho completo para usar um diretório sem histórico',
+  wizColName: 'pasta',
+  wizColRepo: 'repositório',
+  wizColPath: 'caminho',
+  wizColWhy: 'por quê',
   wizSourceCwd: 'você está aqui',
   wizSourceTyped: 'digitado',
   wizSourceHistory: 'já trabalhou aqui',

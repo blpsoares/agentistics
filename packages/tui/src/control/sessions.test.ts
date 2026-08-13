@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionActions, sessionCells,
   sessionRows, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
-  sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts,
+  sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -674,5 +674,42 @@ describe('sessionsCockpit budget', () => {
 
   it('always leaves at least one row for a session', () => {
     for (let h = 1; h <= 60; h++) expect(at(h).listRows).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe('projectColumns', () => {
+  const rows = [
+    { name: 'session-monitor', repo: 'blpsoares/agentistics', path: '~/agentistics/…/worktrees/session-monitor', why: 'you worked here' },
+    { name: 'embark', repo: '', path: '~/orgs/opvibes/embark', why: 'git repo' },
+    { name: 'scratch', repo: '', path: '~/scratch', why: '' },
+  ]
+  const drawn = (c: ReturnType<typeof projectColumns>) => {
+    const cells = [c.name, c.repo, c.path, c.why].filter(n => n > 0)
+    return 2 + cells.reduce((a, b) => a + b, 0) + 2 * Math.max(0, cells.length - 1)
+  }
+
+  it('never draws a row wider than the pane it was measured against', () => {
+    // Two columns too wide is not a cosmetic miss: the frame truncates every row of the table it
+    // just measured, which is what the per-row sizing produced in the first place.
+    for (let w = 20; w <= 200; w++) expect(drawn(projectColumns(rows, w))).toBeLessThanOrEqual(w)
+  })
+
+  it('sizes each column to the widest row ON THE PAGE, so the cells line up', () => {
+    const c = projectColumns(rows, 160)
+    expect(c.name).toBe('session-monitor'.length)
+    expect(c.repo).toBe('blpsoares/agentistics'.length)
+    expect(c.path).toBe('~/agentistics/…/worktrees/session-monitor'.length)
+  })
+
+  it('gives up the reason first, then the repo, and never the path', () => {
+    const lost = (pick: (c: ReturnType<typeof projectColumns>) => number) => {
+      for (let w = 200; w >= 20; w--) if (pick(projectColumns(rows, w)) === 0) return w
+      return 0
+    }
+    expect(lost(c => c.why)).toBeGreaterThan(lost(c => c.repo))
+    // The path answers "which one" — a machine with six directories of the same name renders six
+    // identical rows without it. It is never given up, only shortened.
+    for (let w = 20; w <= 200; w++) expect(projectColumns(rows, w).path).toBeGreaterThan(0)
+    for (let w = 20; w <= 200; w++) expect(projectColumns(rows, w).name).toBeGreaterThan(0)
   })
 })

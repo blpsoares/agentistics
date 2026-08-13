@@ -18,6 +18,7 @@ import type {
 } from '../types'
 import type { ControlStrings } from '../i18n'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
+import { padCell, projectColumns, type ProjectRow } from '../sessions'
 import { TextPrompt } from '../Prompt'
 import { truncate } from '../../components/Primitives'
 import { COLORS } from '../../theme'
@@ -375,8 +376,8 @@ function ProjectSearch({ host, strings: s, width, height, isActive, onPick }: {
     if (printable) setQuery(v => v + printable)
   }, { isActive })
 
-  // Label, hint, the field itself.
-  const page = Math.max(1, height - 3)
+  // Label, hint, the field itself — and the table's header row.
+  const page = Math.max(1, height - 4)
   const offset = windowOffset(at, list.length, page)
 
   // A folder that was merely FOUND on disk must not read like one you have worked in — the words
@@ -387,6 +388,14 @@ function ProjectSearch({ host, strings: s, width, height, isActive, onPick }: {
       : o.source === 'history' ? s.wizSourceHistory
       : o.source === 'repo' ? s.wizSourceRepo
       : ''
+
+  const shown = list.slice(offset, offset + page)
+  const table: ProjectRow[] = shown.map(o => ({
+    name: o.label, repo: o.repo ?? '', path: o.detail, why: sourceWord(o),
+  }))
+  // Measured across the page, not per row: sizing each row against its own content started every
+  // name at a different column, and the eye had to re-find the path on every line.
+  const cols = projectColumns(table, width)
 
   return (
     <Box flexDirection="column" width={width}>
@@ -401,25 +410,33 @@ function ProjectSearch({ host, strings: s, width, height, isActive, onPick }: {
       ) : list.length === 0 ? (
         <Text dimColor wrap="truncate">{truncate(s.wizNoMatch, width)}</Text>
       ) : (
-        list.slice(offset, offset + page).map((o, i) => {
-          const active = offset + i === at
-          const word = sourceWord(o)
-          // The PATH is what makes two directories of the same name distinguishable, so it is drawn
-          // on every row and it is the cell that survives — the name and the provenance word are
-          // both guessable from it, and neither of them is a substitute for it.
-          const right = `${o.detail}${word ? `   ${word}` : ''}`
-          const nameRoom = Math.max(6, width - 2 - right.length - 2)
-          return (
-            <Text key={o.path} wrap="truncate">
-              <Text color={active ? COLORS.accent : undefined}>{active ? '❯ ' : '  '}</Text>
-              <Text color={active ? COLORS.accent : undefined} bold={active}>
-                {truncate(o.label, nameRoom)}
+        <>
+          {/* A header row, because a table of four unlabelled columns is four columns of guesswork —
+              and `caminho` versus `repositório` is exactly the distinction a person is scanning for. */}
+          <Text dimColor wrap="truncate">
+            {'  ' + padCell(s.wizColName, cols.name)}
+            {cols.repo > 0 ? '  ' + padCell(s.wizColRepo, cols.repo) : ''}
+            {cols.path > 0 ? '  ' + padCell(s.wizColPath, cols.path) : ''}
+            {cols.why > 0 ? '  ' + padCell(s.wizColWhy, cols.why) : ''}
+          </Text>
+          {table.map((row, i) => {
+            const active = offset + i === at
+            const accent = active ? COLORS.accent : undefined
+            return (
+              <Text key={shown[i]!.path} wrap="truncate">
+                <Text color={accent}>{active ? '❯ ' : '  '}</Text>
+                <Text color={accent} bold={active}>{padCell(row.name, cols.name)}</Text>
+                {cols.repo > 0 ? (
+                  <Text color={COLORS.secondary}>{'  ' + padCell(row.repo, cols.repo)}</Text>
+                ) : null}
+                {/* The PATH is what makes two directories of the same name distinguishable, so it is
+                    on every row and it is the cell that survives. */}
+                {cols.path > 0 ? <Text dimColor>{'  ' + padCell(row.path, cols.path)}</Text> : null}
+                {cols.why > 0 ? <Text dimColor>{'  ' + padCell(row.why, cols.why)}</Text> : null}
               </Text>
-              <Text dimColor>{`  ${truncate(o.detail, Math.max(1, width - 4 - nameRoom))}`}</Text>
-              {word ? <Text dimColor>{`   ${word}`}</Text> : null}
-            </Text>
-          )
-        })
+            )
+          })}
+        </>
       )}
     </Box>
   )

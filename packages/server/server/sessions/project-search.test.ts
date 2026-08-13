@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  buildCandidates, candidateLabel, candidatePath, matchScore, searchCandidates, withFixedCandidates,
+  buildCandidates, candidatePath, matchScore, searchCandidates, withFixedCandidates,
   type ProjectCandidate,
 } from './project-search'
 
@@ -127,17 +127,6 @@ describe('withFixedCandidates', () => {
   it('adds a typed path history has never seen', () => {
     const merged = withFixedCandidates([], [cand({ path: '/fresh/clone', source: 'typed' })])
     expect(merged.map(c => c.source)).toEqual(['typed'])
-  })
-})
-
-describe('candidateLabel', () => {
-  it('names the repository beside the directory when there is one', () => {
-    expect(candidateLabel(cand({ name: 'web', remote: 'github.com/org/monorepo' })))
-      .toBe('web  ·  org/monorepo')
-  })
-
-  it('says only the directory when it belongs to no repository', () => {
-    expect(candidateLabel(cand({ name: 'scratch' }))).toBe('scratch')
   })
 })
 

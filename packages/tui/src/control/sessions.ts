@@ -815,3 +815,76 @@ export function asideSelectable(rows: readonly AsideRow[]): number[] {
   })
   return out
 }
+
+// ---------------------------------------------------------------------------
+// the project picker's table
+// ---------------------------------------------------------------------------
+
+/** One project row, already reduced to the four things a column can hold. */
+export interface ProjectRow {
+  name: string
+  repo: string
+  path: string
+  /** Already-localized reason it is being offered ("you are here", "you worked here"). */
+  why: string
+}
+
+export interface ProjectColumns {
+  name: number
+  repo: number
+  path: number
+  why: number
+}
+
+/**
+ * Column widths for a screenful of project candidates — PURE, and MEASURED across the page.
+ *
+ * The picker used to size each row against its own content, so every name started at a different
+ * column and the eye had to re-find the path on every line. With twenty candidates that is not a
+ * list, it is a paragraph per row — and this is the one control that decides where work happens.
+ *
+ * The PATH is the cell that survives everything: a machine with six directories called `portifolio`
+ * renders six identical rows without it, so the name answers "what" and the path answers "which
+ * one". The name is what the eye scans, so it goes first and is squeezed rather than dropped; the
+ * repo and the provenance word are both derivable from the path and are given up before it.
+ */
+export function projectColumns(rows: readonly ProjectRow[], width: number): ProjectColumns {
+  const widest = (pick: (r: ProjectRow) => string) =>
+    rows.reduce((n, r) => Math.max(n, pick(r).length), 0)
+
+  const name = widest(r => r.name)
+  const repo = widest(r => r.repo)
+  const path = widest(r => r.path)
+  const why = widest(r => r.why)
+
+  // Two for the cursor, then a gap between each pair of cells that is actually drawn. Counted from
+  // the cells because any of them can be zero — a fleet of candidates with no repo draws no repo
+  // column, and paying its gap anyway narrows every name to reserve a space nothing occupies.
+  // The NAME counts as a drawn cell even while its width is still being solved for — it is always
+  // drawn. Leaving it out of the tally lost one GAP, so the table came out two columns wider than
+  // the pane and every row was truncated by the frame it had just been measured against.
+  const room = (r: number, p: number, w: number) => {
+    const drawn = [1, r, p, w].filter(v => v > 0).length
+    return 2 + r + p + w + GAP * Math.max(0, drawn - 1)
+  }
+
+  const MIN_NAME = 10
+  const MIN_PATH = 12
+
+  const ladder: Array<[number, number, number]> = [
+    [repo, path, why],
+    [repo, path, 0],
+    [0, path, 0],
+  ]
+  for (const [r, p, w] of ladder) {
+    const over = room(r, p, w)
+    const left = width - over
+    if (left >= MIN_NAME) return { name: Math.min(name, left), repo: r, path: p, why: w }
+  }
+  // Nothing fits whole. The name and the path SHARE what there is, because either alone is a row
+  // that cannot be acted on: a name with no path does not say which directory, a path with no name
+  // is a row nobody scans.
+  const shared = Math.max(2, width - 2 - GAP)
+  const forPath = Math.min(path, Math.max(MIN_PATH, Math.floor(shared / 2)))
+  return { name: Math.max(1, shared - forPath), repo: 0, path: forPath, why: 0 }
+}
