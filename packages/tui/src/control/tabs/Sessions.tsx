@@ -310,6 +310,9 @@ export function Sessions({
   ])
 
   const asidePicks = useMemo(() => asideSelectable(asideList), [asideList])
+  // The menu's titled blocks, derived from the same flat list the cursor walks.
+  const sections = useMemo(() => asideSections(asideList), [asideList])
+
   const asideAt = asidePicks.length === 0 ? -1 : Math.min(asideIndex, asidePicks.length - 1)
   const asideRow = asideAt < 0 ? -1 : asidePicks[asideAt]!
 
@@ -366,6 +369,23 @@ export function Sessions({
     setAsk({ kind, session: selected })
   }, [selected, host, run, onExit, s])
 
+  /**
+   * Jump the menu to a section, whatever the focus was.
+   *
+   * The one place the digits, the arrows and a click all go through. `←`/`→` were the only way to
+   * move between sections, and on a tablet's soft keyboard there are no arrow keys at all — so the
+   * only way left was pressing down through every row of the section you were in, which is exactly
+   * the tedium the fold was supposed to end.
+   */
+  const gotoSection = useCallback((n: number) => {
+    const section = sections[n]
+    const target = section?.indexes[0]
+    if (target === undefined) return
+    setFocus('aside')
+    setActionsFocused(false)
+    setAsideIndex(Math.max(0, asidePicks.indexOf(target)))
+  }, [sections, asidePicks])
+
   /** Run whatever an aside row means — the same path a key and a click both take. */
   const runAside = useCallback((index: number) => {
     const row = asideList[index]
@@ -403,6 +423,14 @@ export function Sessions({
       return
     }
 
+    // The DIGITS jump straight to a menu section, from the list as well as from the menu — every
+    // section wears its number, so this is a key the screen documents itself rather than one you
+    // have to be told about. They work where the arrows are not available at all.
+    if (cockpit.aside > 0 && input >= '1' && input <= '9') {
+      const n = Number(input) - 1
+      if (n < sections.length) { gotoSection(n); return }
+    }
+
     if (focus === 'aside' && cockpit.aside > 0) {
       if (key.escape) { setFocus('list'); return }
       if (key.return) return runAside(asideRow)
@@ -413,10 +441,7 @@ export function Sessions({
       if (key.leftArrow || key.rightArrow) {
         if (sections.length === 0) return
         const step = key.rightArrow ? 1 : -1
-        const next = (activeSection + step + sections.length) % sections.length
-        const target = sections[next]?.indexes[0]
-        if (target === undefined) return
-        return setAsideIndex(Math.max(0, asidePicks.indexOf(target)))
+        return gotoSection((activeSection + step + sections.length) % sections.length)
       }
       if (key.upArrow || input === 'k') return setAsideIndex(Math.max(0, asideAt - 1))
       if (key.downArrow || input === 'j') return setAsideIndex(Math.min(asidePicks.length - 1, asideAt + 1))
@@ -521,7 +546,7 @@ export function Sessions({
       : focus === 'aside' && cockpit.aside > 0
         // The menu is a vertical list, so it answers ↑↓ and enter — and `esc` is the way back to the
         // sessions. A hint for a key that does nothing here is the one bug this footer prevents.
-        ? { capture: false, claimArrows: true, hints: [s.keyQuit, s.keyMove, s.keyAsideSection, s.keyRun, s.keyBack, s.keyTabsAlt] }
+        ? { capture: false, claimArrows: true, hints: [s.keyQuit, s.keyAsideSection, s.keyMove, s.keyRun, s.keyBack, s.keyTabsAlt] }
       : actionsFocused
         // While the action row has the keyboard it is a horizontal list, so it claims the arrows —
         // and the footer stops saying they change screen for exactly as long as that is true.
@@ -534,7 +559,8 @@ export function Sessions({
             capture: false,
             claimArrows: true,
             hints: [
-              s.keyQuit, s.keyTabsAlt, s.keySessionsActions, s.keySessionsAttach, s.keyMove,
+              s.keyQuit, s.keyTabsAlt, s.keySessionsActions, s.keyAsideSection,
+              s.keySessionsAttach, s.keyMove,
               s.keySessionsSearch, s.keySessionsNew, s.keySessionsGroup, s.keySessionsClosed,
               ...(grouping === 'task' ? [s.keySessionsNoTask] : []),
             ],
@@ -571,6 +597,14 @@ export function Sessions({
         let top = 0
         for (let i = 0; i < sections.length; i++) {
           const h = foldRows[i]!
+          // A COLLAPSED section is one row and it is a control: clicking its name opens it, which
+          // is what its number and the arrows do. A name you can see and cannot press is worse than
+          // no name at all.
+          if (h < PANE_MIN_ROWS) {
+            if (p.y === top) { gotoSection(i); return }
+            top += h
+            continue
+          }
           if (p.y > top && p.y < top + h - 1) {
             const section = sections[i]!
             const inner = paneRows(h)
@@ -637,7 +671,6 @@ export function Sessions({
   // Slicing from zero would leave the view switches below the fold on a short terminal — invisible,
   // and still the thing `enter` would act on.
   const asideOffset = windowOffset(Math.max(0, asideRow), asideList.length, paneRows(cockpit.band))
-  const sections = useMemo(() => asideSections(asideList), [asideList])
   const activeSection = Math.max(0, sections.findIndex(sec => sec.indexes.includes(asideRow)))
   // `null` when the band cannot pay for one frame per block, and the single scrolling pane is drawn
   // instead — a row handed out that does not exist is composited over the row below it.
@@ -734,10 +767,11 @@ export function Sessions({
                   const count = ` ${section.rows.length}`
                   const label = truncate(
                     section.title.toLowerCase(),
-                    Math.max(1, cockpit.aside - 3 - count.length),
+                    Math.max(1, cockpit.aside - 5 - count.length),
                   )
                   return (
                     <Text key={section.title} wrap="truncate">
+                      <Text color={COLORS.secondary}>{`${i + 1} `}</Text>
                       <Text color={open ? COLORS.accent : COLORS.label}>{`▸ ${label}`}</Text>
                       <Text dimColor>{count}</Text>
                     </Text>
@@ -750,7 +784,7 @@ export function Sessions({
                 return (
                   <Pane
                     key={section.title}
-                    title={section.title.toLowerCase()}
+                    title={`${i + 1} ${section.title.toLowerCase()}`}
                     focused={focus === 'aside' && i === activeSection}
                     width={cockpit.aside}
                     height={h}
