@@ -147,9 +147,16 @@ export function sessionRows(groups: readonly SessionGroup[], closedLabel?: strin
     for (const session of sessions) out.push({ kind: 'session', session })
   }
 
+  // "Live" is a stricter question than "not closed": a session whose command has EXITED is not
+  // running either, and leaving it among the working ones is what made a finished session sit in
+  // the live list looking like something you could still talk to. `lost` joins it — the backend has
+  // no idea what happened to it, so it is certainly not something you are working in.
+  const isLive = (s: ControlSession) =>
+    s.state !== 'closed' && s.state !== 'exited' && s.state !== 'lost'
+
   for (const g of groups) {
-    const live = g.sessions.filter(x => x.state !== 'closed')
-    const closed = g.sessions.filter(x => x.state === 'closed')
+    const live = g.sessions.filter(isLive)
+    const closed = g.sessions.filter(s => !isLive(s))
     // An empty KEY is an absence ("no task"), not a category, and is drawn as one.
     push(g.label, live, g.key === '')
     if (closed.length > 0) {

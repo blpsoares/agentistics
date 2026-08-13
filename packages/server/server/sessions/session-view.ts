@@ -209,11 +209,26 @@ export function buildSessionViews(o: {
 
   // Conversations that are not running at all — the ones you closed and want back. They are the
   // reason this screen can answer "what was I doing yesterday" as well as "what is running now".
-  const running = new Set<string>()
-  for (const v of external) if (v.resume) running.add(v.resume.sessionId)
+  //
+  // A conversation ALREADY on screen must not appear a second time as history, and it was: only the
+  // external rows were excluded, so a session agentop is running right now was listed once as
+  // `working` and again as `closed` — the same title, the same directory, twice. Every LIVE row
+  // covers its conversation, whether that row is one we host or one we merely observed.
+  const shown = new Set<string>()
+  for (const v of external) if (v.resume) shown.add(v.resume.sessionId)
+  for (const m of managed) {
+    // A managed row does not carry a conversation id, so it covers by the same harness+directory
+    // inference used for a foreign process. `exited` and `lost` rows cover nothing: their work IS
+    // over, and the conversation belongs in history where it can be reopened.
+    if (m.status !== 'running' && m.status !== 'unregistered') continue
+    const conv = m.harness
+      ? conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
+      : undefined
+    if (conv) shown.add(conv.sessionId)
+  }
 
   const closed: SessionView[] = conversations
-    .filter(c => !running.has(c.sessionId))
+    .filter(c => !shown.has(c.sessionId))
     .slice(0, o.closedLimit ?? 12)
     .map(c => ({
       id: `closed:${c.sessionId}`,

@@ -308,9 +308,12 @@ async function list(backend: SessionBackend, json = false): Promise<number> {
 
   // A harness with no probed rules cannot distinguish a permission prompt from an ordinary pause.
   // Saying so is the difference between a gap and a wrong answer.
+  // Only rows we actually HOST can have their approval detected, so only they can lack it. A closed
+  // conversation and a foreign process have no screen to read at all — including them here named
+  // claude, kimi and codex as undetectable when all three are probed.
   const blind = [...new Set(
     snap.sessions
-      .filter(v => v.status !== 'external' && !v.approvalDetection)
+      .filter(v => v.status !== 'external' && v.status !== 'closed' && !v.approvalDetection)
       .map(v => v.harness)
       .filter((h): h is NonNullable<typeof h> => h !== undefined),
   )]
