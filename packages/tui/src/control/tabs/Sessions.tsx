@@ -23,10 +23,29 @@ import type { TabChrome } from '../ControlCenter'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import { ACTION_SEP, actionAtColumn, fitActionRow } from '../chrome.ts'
 import { Divider } from '../Surface'
+import { PANE_MIN_ROWS } from '../chrome.ts'
 import { Pane, paneBody, paneRows } from '../Pane'
 
 /** Columns a pane spends on its left edge: one of border, one of padding. */
 const PANE_EDGE_X = 2
+
+/**
+ * How far down a scrolling region is, one cell per drawn row.
+ *
+ * A window with no bar is a list whose length is a secret: you cannot tell whether the row under
+ * the cursor is the last one or the tenth of ninety, and the only way to find out is to keep
+ * pressing down until it stops moving. Drawn only when there IS more — see `scrollBar`.
+ */
+function ScrollBar({ cells }: { cells: readonly string[] }) {
+  if (cells.length === 0) return null
+  return (
+    <Box flexDirection="column" width={1} flexShrink={0}>
+      {cells.map((c, i) => (
+        <Text key={i} color={c === '█' ? COLORS.label : COLORS.border}>{c}</Text>
+      ))}
+    </Box>
+  )
+}
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
 import { SessionWizard } from './SessionWizard'
 import { TaskChoice } from '../TaskChoice'
@@ -34,7 +53,7 @@ import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, actionLabels, asideRows, asideSelectable, enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
-  taskCounts, projectCounts, sessionMetric, asideSections, asideSectionRows,
+  taskCounts, projectCounts, sessionMetric, asideSections, asideFold, scrollBar,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
 } from '../sessions'
@@ -387,6 +406,18 @@ export function Sessions({
     if (focus === 'aside' && cockpit.aside > 0) {
       if (key.escape) { setFocus('list'); return }
       if (key.return) return runAside(asideRow)
+      // `←`/`→` JUMP between sections. Reaching the next one by pressing down through every row of
+      // this one is the whole of what made the menu tedious — and with the accordion it is also the
+      // gesture that opens a section, so the arrows that do nothing else here are the right keys
+      // for it. The cursor lands on the section's first row, which is what a person wants next.
+      if (key.leftArrow || key.rightArrow) {
+        if (sections.length === 0) return
+        const step = key.rightArrow ? 1 : -1
+        const next = (activeSection + step + sections.length) % sections.length
+        const target = sections[next]?.indexes[0]
+        if (target === undefined) return
+        return setAsideIndex(Math.max(0, asidePicks.indexOf(target)))
+      }
       if (key.upArrow || input === 'k') return setAsideIndex(Math.max(0, asideAt - 1))
       if (key.downArrow || input === 'j') return setAsideIndex(Math.min(asidePicks.length - 1, asideAt + 1))
       return
@@ -490,7 +521,7 @@ export function Sessions({
       : focus === 'aside' && cockpit.aside > 0
         // The menu is a vertical list, so it answers ↑↓ and enter — and `esc` is the way back to the
         // sessions. A hint for a key that does nothing here is the one bug this footer prevents.
-        ? { capture: false, claimArrows: true, hints: [s.keyQuit, s.keyMove, s.keyRun, s.keyBack, s.keyTabsAlt] }
+        ? { capture: false, claimArrows: true, hints: [s.keyQuit, s.keyMove, s.keyAsideSection, s.keyRun, s.keyBack, s.keyTabsAlt] }
       : actionsFocused
         // While the action row has the keyboard it is a horizontal list, so it claims the arrows —
         // and the footer stops saying they change screen for exactly as long as that is true.
@@ -536,10 +567,10 @@ export function Sessions({
       // walking the stack — the flat offset belongs to the single-pane fallback and would answer
       // with a row from some other block entirely.
       let index = -1
-      if (sectionRows) {
+      if (foldRows) {
         let top = 0
         for (let i = 0; i < sections.length; i++) {
-          const h = sectionRows[i]!
+          const h = foldRows[i]!
           if (p.y > top && p.y < top + h - 1) {
             const section = sections[i]!
             const inner = paneRows(h)
@@ -598,6 +629,11 @@ export function Sessions({
 
   const offset = windowOffset(at < 0 ? 0 : selectable[at]!, rows.length, cockpit.listRows)
   const visible = rows.slice(offset, offset + cockpit.listRows)
+  // The bar takes a column, so the rows are measured against what is left — a table sized to the
+  // full pane and then drawn beside a bar is a table truncated by one character on every row.
+  const listBar = scrollBar({ offset, total: rows.length, rows: cockpit.listRows })
+  const listBody = paneBody(cockpit.list) - (listBar.length > 0 ? 1 : 0)
+
   // Slicing from zero would leave the view switches below the fold on a short terminal — invisible,
   // and still the thing `enter` would act on.
   const asideOffset = windowOffset(Math.max(0, asideRow), asideList.length, paneRows(cockpit.band))
@@ -605,9 +641,9 @@ export function Sessions({
   const activeSection = Math.max(0, sections.findIndex(sec => sec.indexes.includes(asideRow)))
   // `null` when the band cannot pay for one frame per block, and the single scrolling pane is drawn
   // instead — a row handed out that does not exist is composited over the row below it.
-  const sectionRows = cockpit.aside > 0
-    ? asideSectionRows(sections, cockpit.band, activeSection)
-    : null
+  // One answer for every height: open what fits, name the rest. `null` only when the band cannot
+  // even do that, and the single scrolling pane is drawn instead.
+  const foldRows = cockpit.aside > 0 ? asideFold(sections, cockpit.band, activeSection) : null
 
   // Measured across the rows ON SCREEN, so the state, harness and directory columns line up. A
   // single long title thirty rows down must not narrow every visible row to pay for something
@@ -615,14 +651,17 @@ export function Sessions({
   const columns = useMemo(
     () => sessionColumns(
       visible.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
-      cockpit.list,
+      // The CONTENT width, not the pane's: measuring against the frame made every column four
+      // characters wider than the row it was drawn into, and the table survived only because Ink
+      // truncated it.
+      listBody,
       {
         groupedByTask: grouping === 'task',
         worktreeWord: s.sessionsWorktreeTag,
         ...(cockpit.header ? { headings: s.sessionsCols } : {}),
       },
     ),
-    [visible, cockpit.list, grouping, cockpit.header, s],
+    [visible, listBody, grouping, cockpit.header, s],
   )
 
   // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
@@ -670,7 +709,6 @@ export function Sessions({
     )
   }
 
-  const listBody = paneBody(cockpit.list)
 
   // Three framed panes, and the one with the keyboard wears the accent border. The screen used to
   // be a single frame with two unmarked columns inside it, so there was nothing on the screen that
@@ -681,36 +719,58 @@ export function Sessions({
       <Box flexDirection="row" width={width} flexShrink={0}>
       {cockpit.aside > 0 ? (
         <>
-          {sectionRows ? (
+          {foldRows ? (
             // Each block its OWN framed pane, titled with its own heading. One scrolling pane
             // titled "menu" showed its first section and nothing else, so every switch and every
             // task sat below the fold — and the honest reading of that screen is that all of it
             // lives inside "Actions".
             <Box flexDirection="column" width={cockpit.aside} flexShrink={0}>
-              {sections.map((section, i) => (
-                <Pane
-                  key={section.title}
-                  title={section.title.toLowerCase()}
-                  focused={focus === 'aside' && i === activeSection}
-                  width={cockpit.aside}
-                  height={sectionRows[i]!}
-                >
-                  <AsideMenu
-                    rows={section.rows}
-                    cursor={section.indexes.indexOf(asideRow)}
-                    focused={focus === 'aside'}
-                    width={paneBody(cockpit.aside)}
-                    height={paneRows(sectionRows[i]!)}
-                    offset={windowOffset(
-                      Math.max(0, section.indexes.indexOf(asideRow)),
-                      section.rows.length,
-                      paneRows(sectionRows[i]!),
-                    )}
-                    allTasksLabel={s.asideAllTasks}
-                    allProjectsLabel={s.asideAllProjects}
-                  />
-                </Pane>
-              ))}
+              {sections.map((section, i) => {
+                const h = foldRows[i]!
+                // COLLAPSED: the name and how many rows are inside it, and nothing else. What it
+                // gives up is its contents, never the fact that it exists.
+                if (h < PANE_MIN_ROWS) {
+                  const open = focus === 'aside' && i === activeSection
+                  const count = ` ${section.rows.length}`
+                  const label = truncate(
+                    section.title.toLowerCase(),
+                    Math.max(1, cockpit.aside - 3 - count.length),
+                  )
+                  return (
+                    <Text key={section.title} wrap="truncate">
+                      <Text color={open ? COLORS.accent : COLORS.label}>{`▸ ${label}`}</Text>
+                      <Text dimColor>{count}</Text>
+                    </Text>
+                  )
+                }
+                const inner = paneRows(h)
+                const cursorIn = section.indexes.indexOf(asideRow)
+                const off = windowOffset(Math.max(0, cursorIn), section.rows.length, inner)
+                const bar = scrollBar({ offset: off, total: section.rows.length, rows: inner })
+                return (
+                  <Pane
+                    key={section.title}
+                    title={section.title.toLowerCase()}
+                    focused={focus === 'aside' && i === activeSection}
+                    width={cockpit.aside}
+                    height={h}
+                  >
+                    <Box flexDirection="row" flexShrink={0}>
+                      <AsideMenu
+                        rows={section.rows}
+                        cursor={cursorIn}
+                        focused={focus === 'aside'}
+                        width={paneBody(cockpit.aside) - (bar.length > 0 ? 1 : 0)}
+                        height={inner}
+                        offset={off}
+                        allTasksLabel={s.asideAllTasks}
+                        allProjectsLabel={s.asideAllProjects}
+                      />
+                      <ScrollBar cells={bar} />
+                    </Box>
+                  </Pane>
+                )
+              })}
             </Box>
           ) : (
             // Too short to frame each block: one pane, scrolling, with the headings inline.
@@ -783,7 +843,8 @@ export function Sessions({
       ) : (
         // NO fixed height: the rows pack upward so nothing sits at the bottom of a tall pane with a
         // field of blank above it. The leftover space belongs at the very bottom of the frame.
-        <Box flexDirection="column" flexShrink={0}>
+        <Box flexDirection="row" flexShrink={0}>
+        <Box flexDirection="column" flexShrink={0} width={listBody}>
           {visible.map((row, i) => {
             const index = offset + i
             if (row.kind === 'spacer') return <Text key={`s${index}`}> </Text>
@@ -813,6 +874,8 @@ export function Sessions({
               />
             )
           })}
+        </Box>
+        <ScrollBar cells={listBar} />
         </Box>
       )}
       </Pane>

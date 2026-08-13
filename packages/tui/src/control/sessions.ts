@@ -1042,48 +1042,83 @@ export function asideSections(rows: readonly AsideRow[]): AsideSection[] {
 }
 
 /**
- * How many rows each section gets when they are drawn as separate framed panes — PURE.
+ * How many rows each menu section gets — PURE, and the ONE answer for every terminal height.
  *
- * Returns `null` when the band cannot pay for the frames, and the caller falls back to the single
- * scrolling pane. That is the control center's own degradation ladder: give up a PIECE the screen
- * can afford to lose rather than hand out rows that do not exist, which Ink composites on top of
- * the rows below instead of clipping.
+ * A section that is open is a framed pane holding all of its rows; a section that is not gives up
+ * its frame and its contents and keeps its NAME, on one row. Nothing is ever hidden: what a
+ * collapsed section costs is what is inside it, never the fact that it exists — which was the whole
+ * complaint about the single scrolling pane, where the first section filled the box and the rest
+ * were below a fold nothing announced.
  *
- * The section holding the CURSOR is served first and in full, because it is the one being read; the
- * rest share what is left, in order, and a section that cannot get at least one row is dropped
- * entirely rather than drawn as a title over nothing.
+ * The section holding the cursor opens first, then the others in reading order while they fit
+ * WHOLE. Opening one part-way was the middle ground and it was the worst of the three: a block cut
+ * to its first two rows says no more than its heading did, and every one of them grew its own
+ * little scrollbar. The active section is the single exception — it takes whatever is left even if
+ * that is not all of it, because it is the one being read.
+ *
+ * So a tall terminal opens every section and a short one opens the one you are using, with no
+ * second behaviour to learn and no dead air under the last pane.
+ *
+ * `null` when the band cannot even name every section and open one, and the caller falls back to
+ * the single scrolling pane.
  */
-export function asideSectionRows(
+export function asideFold(
   sections: readonly AsideSection[],
   band: number,
-  /** Which section the cursor is in, so it is the one that is never squeezed out. */
   active: number,
 ): number[] | null {
   if (sections.length === 0) return null
-  // Every pane costs its frame; a section is only worth one if it can show a row inside it.
-  const min = sections.length * (PANE_FRAME_Y + 1)
-  if (band < min) return null
+  const at = Math.max(0, Math.min(active, sections.length - 1))
+  const collapsed = sections.length - 1
+  if (band < collapsed + PANE_FRAME_Y + 1) return null
 
-  const out = sections.map(() => PANE_FRAME_Y + 1)
-  let left = band - min
-  // ROUND-ROBIN, starting from the section holding the cursor. Serving the active section to its
-  // full height first is what produced a menu showing ten actions and one row of everything else,
-  // which is the very failure the split was for: a block reduced to its first row says no more than
-  // a heading did. A row each, in turn, until the space runs out.
-  const order = [
-    ...sections.map((_, i) => i).slice(active),
-    ...sections.map((_, i) => i).slice(0, active),
-  ]
-  let gave = true
-  while (left > 0 && gave) {
-    gave = false
-    for (const i of order) {
-      if (left <= 0) break
-      if (out[i]! - PANE_FRAME_Y >= sections[i]!.rows.length) continue
-      out[i]! += 1
-      left -= 1
-      gave = true
-    }
+  const want = (i: number) => PANE_FRAME_Y + sections[i]!.rows.length
+  const out: number[] = sections.map(() => 1)
+  // The one being read, first and at whatever height is left to it.
+  out[at] = Math.min(want(at), band - collapsed)
+  let used = out.reduce((a, b) => a + b, 0)
+
+  // Then the rest, in READING order rather than outward from the cursor: the menu must not
+  // rearrange itself as the cursor moves, or the box you were aiming at is somewhere else by the
+  // time you get there.
+  for (let i = 0; i < sections.length; i++) {
+    if (i === at) continue
+    const extra = want(i) - out[i]!
+    if (extra <= 0 || used + extra > band) continue
+    out[i] = want(i)
+    used += extra
   }
+
+  // Whatever is left over goes to the OPEN section, so the column ends flush with the list beside
+  // it. Air under a pane is a fault and air inside one is a pane — and the section you are using is
+  // the one where the spare rows are worth having, since its contents are what grows.
+  out[at] += band - used
   return out
+}
+
+// ---------------------------------------------------------------------------
+// how far down a scrolling region is
+// ---------------------------------------------------------------------------
+
+/**
+ * The scrollbar for a windowed list, one character per drawn row — PURE.
+ *
+ * A window with no scrollbar is a list whose length is a secret: you cannot tell whether the row
+ * under the cursor is the last one or the tenth of ninety, and the only way to find out is to keep
+ * pressing down until it stops moving. That is what people were doing.
+ *
+ * Returns an EMPTY array when everything fits. A bar that is always drawn says "there is more" on a
+ * list that has no more, which is the same class of lie as a confident zero.
+ */
+export function scrollBar(o: { offset: number; total: number; rows: number }): string[] {
+  const rows = Math.max(0, o.rows)
+  if (rows === 0 || o.total <= rows) return []
+
+  // At least one cell, and never the whole track — a full-length thumb reads as "nothing to scroll"
+  // on exactly the list that has the most of it.
+  const thumb = Math.max(1, Math.min(rows - 1, Math.round((rows * rows) / o.total)))
+  const span = Math.max(1, o.total - rows)
+  const offset = Math.max(0, Math.min(o.offset, span))
+  const top = Math.round((offset / span) * (rows - thumb))
+  return Array.from({ length: rows }, (_, i) => (i >= top && i < top + thumb ? '█' : '│'))
 }

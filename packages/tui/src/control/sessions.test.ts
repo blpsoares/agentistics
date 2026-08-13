@@ -3,7 +3,7 @@ import {
   attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionActions, sessionCells,
   sessionRows, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
-  projectPickRows, groupProjects, asideSections, asideSectionRows,
+  projectPickRows, groupProjects, asideSections, asideFold, scrollBar,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -806,38 +806,104 @@ describe('asideSections', () => {
   })
 })
 
-describe('asideSectionRows', () => {
+describe('asideFold', () => {
   const sec = (n: number, title: string) => ({
     title,
-    rows: Array.from({ length: n }, (_, i) => ({ kind: 'rule' as const, i })) as never[],
+    rows: Array.from({ length: n }, () => ({ kind: 'rule' as const })) as never[],
     indexes: Array.from({ length: n }, (_, i) => i),
   })
-  const three = [sec(10, 'a'), sec(3, 'b'), sec(3, 'c')]
+  const five = [sec(10, 'a'), sec(6, 'b'), sec(3, 'c'), sec(4, 'd'), sec(5, 'e')]
+  const whole = five.reduce((n, s) => n + s.rows.length + 2, 0)
+  const sum = (ns: readonly number[]) => ns.reduce((a: number, b: number) => a + b, 0)
 
-  it('returns null when the band cannot pay for one frame per section', () => {
-    // Handing out rows that do not exist is worse than not splitting: Ink composites the overflow
-    // on top of the rows below rather than clipping it.
-    expect(asideSectionRows(three, 8, 0)).toBeNull()
-    expect(asideSectionRows(three, 9, 0)).not.toBeNull()
+  it('opens every section when the band can hold them all', () => {
+    expect(asideFold(five, whole, 0)).toEqual([12, 8, 5, 6, 7])
   })
 
-  it('never spends more than the band it was given', () => {
-    for (let band = 9; band <= 60; band++) {
-      const got = asideSectionRows(three, band, 0)!
-      expect(got.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(band)
+  it('leaves NO air under the last pane — it opens what the leftover can pay for', () => {
+    // Collapsing everything but the active one and stopping there left fourteen blank rows under
+    // the menu on a tall terminal. Air under a pane is a fault; air inside one is a pane.
+    const band = whole - 6
+    const got = asideFold(five, band, 0)!
+    expect(sum(got)).toBe(band)
+    expect(got.filter(n => n > 1).length).toBeGreaterThan(1)
+  })
+
+  it('keeps every section NAMED however short the band', () => {
+    const got = asideFold(five, 8, 2)!
+    expect(got).toHaveLength(5)
+    expect(got.every(n => n >= 1)).toBe(true)
+    expect(got[2]).toBe(8 - 4)
+  })
+
+  it('opens the section holding the cursor, whichever it is', () => {
+    for (let at = 0; at < five.length; at++) {
+      expect(asideFold(five, 9, at)![at]).toBeGreaterThan(1)
     }
   })
 
-  it('shares the space instead of filling the active section first', () => {
-    // Serving the active block to its full height produced a menu showing ten actions and one row
-    // of everything else — a block reduced to its first row says no more than its heading did.
-    const got = asideSectionRows(three, 20, 0)!
-    expect(got.every(n => n >= 3)).toBe(true)
-    expect(Math.max(...got.slice(1))).toBeGreaterThan(3)
+  it('spends the band EXACTLY, at any height or cursor', () => {
+    // Not merely "no more than": a column that stops short of the list beside it leaves air under
+    // the last pane, which the control center's own rule calls a fault.
+    for (let band = 1; band <= 60; band++) {
+      for (let at = 0; at < five.length; at++) {
+        const got = asideFold(five, band, at)
+        if (got) expect(sum(got)).toBe(band)
+      }
+    }
   })
 
-  it('never gives a section more rows than it has', () => {
-    const got = asideSectionRows(three, 60, 0)!
-    expect(got).toEqual([12, 5, 5])
+  it('refuses when it cannot name them all and still open one', () => {
+    expect(asideFold(five, 6, 0)).toBeNull()
+  })
+
+  it('leaves a section closed only when it genuinely does not fit', () => {
+    // The others are walked in READING order and opened when they fit, so the menu does not
+    // reorder itself; a closed box next to visible space would just be a row nobody is using.
+    for (let band = 9; band <= 60; band++) {
+      for (let at = 0; at < five.length; at++) {
+        const got = asideFold(five, band, at)
+        if (!got) continue
+        const left = band - sum(got)
+        got.forEach((n, i) => {
+          if (i === at || n > 1) return
+          expect(2 + five[i]!.rows.length - 1).toBeGreaterThan(left)
+        })
+      }
+    }
+  })
+})
+
+describe('scrollBar', () => {
+  it('draws nothing at all when everything fits', () => {
+    // A bar that is always there says "there is more" on the list that has no more, which is the
+    // same class of lie as a confident zero.
+    expect(scrollBar({ offset: 0, total: 5, rows: 10 })).toEqual([])
+    expect(scrollBar({ offset: 0, total: 10, rows: 10 })).toEqual([])
+  })
+
+  it('puts the thumb at the top at the top, and at the bottom at the bottom', () => {
+    const top = scrollBar({ offset: 0, total: 100, rows: 10 })
+    const bottom = scrollBar({ offset: 90, total: 100, rows: 10 })
+    expect(top[0]).toBe('█')
+    expect(top[top.length - 1]).toBe('│')
+    expect(bottom[bottom.length - 1]).toBe('█')
+    expect(bottom[0]).toBe('│')
+  })
+
+  it('never fills the whole track, however long the list', () => {
+    // A full-length thumb reads as "nothing to scroll" on exactly the list that has the most of it.
+    for (const total of [11, 12, 20, 100, 5000]) {
+      const bar = scrollBar({ offset: 0, total, rows: 10 })
+      expect(bar).toHaveLength(10)
+      expect(bar.filter(c => c === '█').length).toBeLessThan(10)
+      expect(bar.filter(c => c === '█').length).toBeGreaterThanOrEqual(1)
+    }
+  })
+
+  it('clamps an offset past the end instead of drawing off the track', () => {
+    const bar = scrollBar({ offset: 9999, total: 100, rows: 10 })
+    expect(bar).toHaveLength(10)
+    expect(bar[bar.length - 1]).toBe('█')
   })
 })

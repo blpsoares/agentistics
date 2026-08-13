@@ -293,6 +293,8 @@ export interface ControlStrings {
   keySessionsNoTask: string
   /** How to change screen where the arrows belong to the screen itself. */
   keyTabsAlt: string
+  /** How to jump between the menu's sections without walking every row of one. */
+  keyAsideSection: string
   sessionsNoTaskHidden: string
   sessionsNoTaskShown: string
   /** The wizard's six questions. */
@@ -575,6 +577,7 @@ const EN: ControlStrings = {
   keySessionsClosed: 'c closed',
   keySessionsNoTask: 'u unfiled',
   keyTabsAlt: '[ ] screens',
+  keyAsideSection: '←→ section',
   sessionsNoTaskHidden: 'unfiled: hidden',
   sessionsNoTaskShown: 'unfiled: shown',
   wizHarness: 'Which assistant?',
@@ -847,6 +850,7 @@ const PT: ControlStrings = {
   keySessionsClosed: 'c fechadas',
   keySessionsNoTask: 'u sem tarefa',
   keyTabsAlt: '[ ] telas',
+  keyAsideSection: '←→ seção',
   sessionsNoTaskHidden: 'sem tarefa: ocultas',
   sessionsNoTaskShown: 'sem tarefa: visíveis',
   wizHarness: 'Qual assistente?',
