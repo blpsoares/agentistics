@@ -226,6 +226,8 @@ export interface ControlStrings {
   asidePreset: string
   asideAllProjects: string
   toggleDone: string
+  /** The strict switch: only what is running. Overrides the other three. */
+  toggleActive: string
   /** States the active search on the summary row, and how to drop it. */
   sessionsSearching: (query: string) => string
   /** How long ago, from a whole number of SECONDS — the caller does the clock arithmetic so this
@@ -273,6 +275,7 @@ export interface ControlStrings {
   viewTitle: string
   viewGroupBy: string
   viewShow: string
+  viewActiveOn: string
   viewClosedOn: string
   viewClosedOff: string
   viewUnfiledOn: string
@@ -293,6 +296,7 @@ export interface ControlStrings {
   manageHint: string
   promptHint: string
   sessionsHideClosed: string
+  keySessionsActive: string
   keySessionsClosed: string
   keySessionsNoTask: string
   /** How to change screen where the arrows belong to the screen itself. */
@@ -516,6 +520,7 @@ const EN: ControlStrings = {
   asidePreset: 'active · project',
   asideAllProjects: 'every project',
   toggleDone: 'finished tasks',
+  toggleActive: 'only active',
   sessionsSearching: q => `search: ${q} · esc clears`,
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `${sec}s ago`
@@ -563,6 +568,7 @@ const EN: ControlStrings = {
   viewTitle: 'What this list shows',
   viewGroupBy: 'Group by',
   viewShow: 'Show',
+  viewActiveOn: 'everything but active',
   viewClosedOn: 'closed conversations',
   viewClosedOff: 'closed conversations',
   viewUnfiledOn: 'sessions with no task',
@@ -581,6 +587,7 @@ const EN: ControlStrings = {
   manageHint: '↑↓ move · enter run · esc back to the list',
   promptHint: 'enter saves · esc cancels',
   sessionsHideClosed: 'closed: hidden',
+  keySessionsActive: 'l only active',
   keySessionsClosed: 'c closed',
   keySessionsNoTask: 'u unfiled',
   keyTabsAlt: '[ ] screens',
@@ -792,6 +799,7 @@ const PT: ControlStrings = {
   asidePreset: 'ativos · projeto',
   asideAllProjects: 'todos os projetos',
   toggleDone: 'tarefas finalizadas',
+  toggleActive: 'apenas ativas',
   sessionsSearching: q => `busca: ${q} · esc limpa`,
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `há ${sec}s`
@@ -839,6 +847,7 @@ const PT: ControlStrings = {
   viewTitle: 'O que esta lista mostra',
   viewGroupBy: 'Agrupar por',
   viewShow: 'Mostrar',
+  viewActiveOn: 'tudo menos as ativas',
   viewClosedOn: 'conversas fechadas',
   viewClosedOff: 'conversas fechadas',
   viewUnfiledOn: 'sessões sem tarefa',
@@ -857,6 +866,7 @@ const PT: ControlStrings = {
   manageHint: '↑↓ mover · enter executar · esc voltar à lista',
   promptHint: 'enter salva · esc cancela',
   sessionsHideClosed: 'fechadas: ocultas',
+  keySessionsActive: 'l só ativas',
   keySessionsClosed: 'c fechadas',
   keySessionsNoTask: 'u sem tarefa',
   keyTabsAlt: '[ ] telas',

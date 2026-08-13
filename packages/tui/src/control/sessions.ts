@@ -795,7 +795,18 @@ export type AsideRow =
   | { kind: 'preset'; label: string; on: boolean }
 
 /** The three things the list can be told to withhold. */
-export type SessionToggle = 'closed' | 'exited' | 'unfiled' | 'done'
+export type SessionToggle = 'closed' | 'exited' | 'unfiled' | 'done' | 'active'
+
+/**
+ * Is this session RUNNING right now — PURE.
+ *
+ * The three states that mean something is alive on the other end. `exited`, `lost`, `closed` and
+ * `unknown` (an external process, whose state cannot be read at all) are not running, and the
+ * "only active" switch keeps none of them.
+ */
+export function sessionRunning(s: ControlSession): boolean {
+  return s.state === 'working' || s.state === 'waiting' || s.state === 'waiting-approval'
+}
 
 /**
  * The aside's rows, in reading order — PURE, so what is drawn and what a click resolves against are
@@ -858,9 +869,12 @@ export function asideRows(o: {
   rows.push({ kind: 'rule' }, { kind: 'heading', label: o.headings.show })
   // `done` sits with the other two because it is the same kind of thing — what the list withholds.
   // `unfiled` only means anything while grouping by task and is ABSENT otherwise.
+  // `active` leads because it OVERRIDES the three under it: with it on they change nothing, and a
+  // switch that appears to do nothing is one people conclude is broken. Listed first, it reads as
+  // what it is — the strict answer, with the widening ones beneath.
   const toggles: SessionToggle[] = o.showUnfiled
-    ? ['closed', 'exited', 'done', 'unfiled']
-    : ['closed', 'exited', 'done']
+    ? ['active', 'closed', 'exited', 'done', 'unfiled']
+    : ['active', 'closed', 'exited', 'done']
   for (const t of toggles) {
     rows.push({ kind: 'toggle', toggle: t, label: o.toggleWords[t], on: o.toggles[t] })
   }

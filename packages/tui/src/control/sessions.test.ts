@@ -4,7 +4,7 @@ import {
   sessionRows, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
   projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
-  sessionHandle, worktreeName,
+  sessionHandle, worktreeName, sessionRunning,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -514,7 +514,7 @@ describe('asideRows', () => {
     new: 'New', search: 'Search', group: 'Group',
   }
   const groupWords = { repo: 'repo', none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project' }
-  const toggleWords = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks' }
+  const toggleWords = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks', active: 'only active' }
   const headings = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
 
   const build = (o: Partial<Parameters<typeof asideRows>[0]> = {}) => asideRows({
@@ -522,7 +522,7 @@ describe('asideRows', () => {
     actionWords: words,
     grouping: 'none',
     groupWords,
-    toggles: { closed: false, exited: false, unfiled: false, done: false },
+    toggles: { closed: false, exited: false, unfiled: false, done: false, active: false },
     toggleWords,
     headings,
     showUnfiled: false,
@@ -539,7 +539,7 @@ describe('asideRows', () => {
   })
 
   it('states every row own state, so nothing must be pressed to be discovered', () => {
-    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, unfiled: false, done: false } })
+    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, unfiled: false, done: false, active: false } })
     expect(rows.find(r => r.kind === 'group' && r.value === 'task')).toMatchObject({ on: true })
     expect(rows.find(r => r.kind === 'group' && r.value === 'none')).toMatchObject({ on: false })
     expect(rows.find(r => r.kind === 'toggle' && r.toggle === 'closed')).toMatchObject({ on: true })
@@ -970,7 +970,7 @@ describe('the default-arrangement row', () => {
     repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
     project: 'project',
   }
-  const toggles = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks' }
+  const toggles = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks', active: 'only active' }
   const heads = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
 
   it('is offered at the head of the VIEW section, and states whether it is on', () => {
@@ -981,7 +981,7 @@ describe('the default-arrangement row', () => {
       actionWords: verbs,
       grouping: 'project',
       groupWords: groups,
-      toggles: { closed: false, exited: false, unfiled: false, done: false },
+      toggles: { closed: false, exited: false, unfiled: false, done: false, active: false },
       toggleWords: toggles,
       headings: heads,
       showUnfiled: false,
@@ -1000,7 +1000,7 @@ describe('the default-arrangement row', () => {
       actionWords: verbs,
       grouping: 'project',
       groupWords: groups,
-      toggles: { closed: false, exited: false, unfiled: false, done: false },
+      toggles: { closed: false, exited: false, unfiled: false, done: false, active: false },
       toggleWords: toggles,
       headings: heads,
       showUnfiled: false,
@@ -1027,5 +1027,51 @@ describe('grouping by project', () => {
   it('falls back to the directory when the session belongs to no repository', () => {
     const g = groupSessions([session('a', { project: 'scratch' })], 'project', UNKNOWN)
     expect(g[0]!.key).toBe('scratch')
+  })
+})
+
+describe('sessionRunning', () => {
+  it('is the three states that mean something is alive on the other end', () => {
+    const at = (state: SessionState) => sessionRunning(session('a', { state }))
+    expect(at('working')).toBe(true)
+    expect(at('waiting')).toBe(true)
+    expect(at('waiting-approval')).toBe(true)
+    // An external process's state cannot be read at all, so it is not evidence of anything.
+    expect(at('unknown')).toBe(false)
+    expect(at('exited')).toBe(false)
+    expect(at('lost')).toBe(false)
+    expect(at('closed')).toBe(false)
+  })
+})
+
+describe('the only-active toggle', () => {
+  const build = (showUnfiled: boolean) => asideRows({
+    actions: sessionActions(session('m')),
+    actionWords: {
+      attach: 'A', resume: 'R', rename: 'N', note: 'O', task: 'T', kill: 'K',
+      openTask: 'OT', finishTask: 'FT', new: 'NW', search: 'S', group: 'G',
+    },
+    grouping: 'project',
+    groupWords: {
+      repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
+      project: 'project',
+    },
+    toggles: { closed: false, exited: false, unfiled: false, done: false, active: true },
+    toggleWords: {
+      closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks',
+      active: 'only active',
+    },
+    headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
+    showUnfiled,
+  })
+
+  it('leads the SHOW block, because it overrides the three under it', () => {
+    // A switch that appears to do nothing is one people conclude is broken. Listed first it reads
+    // as what it is: the strict answer, with the widening ones beneath.
+    for (const unfiled of [false, true]) {
+      const rows = build(unfiled)
+      const show = rows.findIndex(r => r.kind === 'heading' && r.label === 'SHOW')
+      expect(rows[show + 1]).toMatchObject({ kind: 'toggle', toggle: 'active', on: true })
+    }
   })
 })

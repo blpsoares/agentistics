@@ -978,6 +978,10 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   section part-way was the middle ground and the worst of the three — a block cut to two rows says
   no more than its heading did. The leftover goes to the open section so the column ends flush with
   the list: air under a pane is a fault, air inside one is a pane.
+- **`onlyActive` is the one switch that OVERRIDES the named-row rule**, and the only one on that
+  block that narrows rather than widens — which is why it is listed first: a switch that appears to
+  do nothing is one people conclude is broken. The named rule is right by default (it is what stops
+  a reboot emptying the list), but on a machine with months of named work it shows all of it.
 - **A row the user NAMED is never withheld by the history switches** (`sessionNamed`). A machine
   restart makes every managed session `lost`, and with those switches off — which is how they ship —
   the list came back EMPTY, taking the session you had renamed and filed under a task with it.

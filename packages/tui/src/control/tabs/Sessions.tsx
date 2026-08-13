@@ -54,7 +54,7 @@ import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, actionLabels, asideRows, asideSelectable, enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
-  taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName,
+  taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
   asideSections, asideFold, scrollBar, THUMB,
   sessionNamed,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
@@ -133,6 +133,13 @@ export function Sessions({
   // "which project am I looking through right now" is not something a restart should remember.
   const [projectFilter, setProjectFilter] = useState<string | null>(null)
   const [showDone, setShowDone] = useState(view?.showDone ?? DEFAULT_SESSION_VIEW.showDone ?? false)
+  // The strict switch: only what is running, and it OVERRIDES the "a row you named is never hidden"
+  // rule rather than widening alongside the others. That rule is right by default — it is what
+  // stops a reboot emptying the list — but on a machine with months of named work it shows all of
+  // it, and someone who wants the four things they are actually doing had no way to say so.
+  const [onlyActive, setOnlyActive] = useState(
+    view?.onlyActive ?? DEFAULT_SESSION_VIEW.onlyActive ?? false,
+  )
   /**
    * Whether the visible action row has the keyboard.
    *
@@ -176,14 +183,19 @@ export function Sessions({
   const rows = useMemo(() => sessionRows(groupSessions(
     filterSessions(
       (fleet?.sessions ?? []).filter(v =>
-        // What you NAMED, you keep seeing. A machine restart makes every managed session `lost`,
-        // and with the history switches off — which is how they ship — the list came back empty:
-        // the session you had renamed and filed under a task was gone, and so was the name. A row
-        // someone deliberately marked is their work, not anonymous history, so the two switches
-        // withhold everything EXCEPT that.
-        (sessionNamed(v)
-          || ((showClosed || v.state !== 'closed')
-            && (showExited || (v.state !== 'exited' && v.state !== 'lost'))))
+        // ONLY ACTIVE is absolute: it answers the whole question above on its own, named rows
+        // included. Everything else here can only ever widen, and the point of this switch is that
+        // there is finally one that does not.
+        (onlyActive
+          ? sessionRunning(v)
+          // What you NAMED, you keep seeing. A machine restart makes every managed session `lost`,
+          // and with the history switches off — which is how they ship — the list came back empty:
+          // the session you had renamed and filed under a task was gone, and so was the name. A row
+          // someone deliberately marked is their work, not anonymous history, so the two switches
+          // withhold everything EXCEPT that.
+          : sessionNamed(v)
+            || ((showClosed || v.state !== 'closed')
+              && (showExited || (v.state !== 'exited' && v.state !== 'lost'))))
         // Scoped to one task: every verb still works, on the rows inside it.
         && (taskFilter === null || v.task === taskFilter)
         // The project drill-down. Exact, never a prefix — two projects can share a first word.
@@ -208,7 +220,7 @@ export function Sessions({
     fleet?.finishedTasks ?? [],
   ), s.sessionsClosedWord, s.sessionsDoneWord), [
     fleet?.sessions, fleet?.finishedTasks, done, grouping, query, showClosed, showExited,
-    hideEmptyTask, showDone, taskFilter, projectFilter, s,
+    hideEmptyTask, showDone, onlyActive, taskFilter, projectFilter, s,
   ])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
@@ -284,6 +296,7 @@ export function Sessions({
     && showClosed === DEFAULT_SESSION_VIEW.showClosed
     && showExited === DEFAULT_SESSION_VIEW.showExited
     && showDone === (DEFAULT_SESSION_VIEW.showDone ?? false)
+    && onlyActive === (DEFAULT_SESSION_VIEW.onlyActive ?? false)
     && hideEmptyTask === !DEFAULT_SESSION_VIEW.showUnfiled
     && taskFilter === null && projectFilter === null && query === ''
 
@@ -298,9 +311,13 @@ export function Sessions({
     },
     grouping,
     groupWords: s.sessionsGroupings,
-    toggles: { closed: showClosed, exited: showExited, unfiled: !hideEmptyTask, done: showDone },
+    toggles: {
+      closed: showClosed, exited: showExited, unfiled: !hideEmptyTask, done: showDone,
+      active: onlyActive,
+    },
     toggleWords: {
       closed: s.toggleClosed, exited: s.toggleExited, unfiled: s.toggleUnfiled, done: s.toggleDone,
+      active: s.toggleActive,
     },
     headings: { actions: s.asideActions, view: s.asideView, show: s.asideShow },
     presetLabel: s.asidePreset,
@@ -324,8 +341,8 @@ export function Sessions({
       allLabel: s.asideAllProjects,
     },
   }), [
-    actions, grouping, showClosed, showExited, hideEmptyTask, showDone, taskFilter, projectFilter,
-    fleet?.sessions, fleet?.finishedTasks, isDefaultView, s,
+    actions, grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, taskFilter,
+    projectFilter, fleet?.sessions, fleet?.finishedTasks, isDefaultView, s,
   ])
 
   const asidePicks = useMemo(() => asideSelectable(asideList), [asideList])
@@ -427,6 +444,7 @@ export function Sessions({
     setShowClosed(DEFAULT_SESSION_VIEW.showClosed)
     setShowExited(DEFAULT_SESSION_VIEW.showExited)
     setShowDone(DEFAULT_SESSION_VIEW.showDone ?? false)
+    setOnlyActive(DEFAULT_SESSION_VIEW.onlyActive ?? false)
     setHideEmptyTask(!DEFAULT_SESSION_VIEW.showUnfiled)
     setTaskFilter(null)
     setProjectFilter(null)
@@ -448,6 +466,7 @@ export function Sessions({
     if (row.toggle === 'closed') return setShowClosed(v => !v)
     if (row.toggle === 'exited') return setShowExited(v => !v)
     if (row.toggle === 'done') return setShowDone(v => !v)
+    if (row.toggle === 'active') return setOnlyActive(v => !v)
     return setHideEmptyTask(v => !v)
   }, [asideList, runAction, resetView])
 
@@ -537,6 +556,7 @@ export function Sessions({
     if (input === 'v') return runAction('group')
     if (input === 'c') { setShowClosed(v => !v); setCursor(0); return }
     if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
+    if (input === 'l') { setOnlyActive(v => !v); setCursor(0); return }
     if (input === 'u' && grouping === 'task') { setHideEmptyTask(v => !v); setCursor(0); return }
     if (input === 'a') return runAction('new')
     // Attaching has its OWN key because `enter` deliberately does not do it any more: enter opens
@@ -575,6 +595,7 @@ export function Sessions({
     // the stored `showClosed` follows, so a preferences file written before this existed opens with
     // finished work put away rather than with the switch inverted.
     setShowDone(view.showDone ?? false)
+    setOnlyActive(view.onlyActive ?? false)
   }, [view])
 
   // Written whenever any part of the arrangement moves, rather than at each call site: four setters
@@ -588,8 +609,8 @@ export function Sessions({
     // stored arrangement was read, and the arrangement was gone. `sessionViewPref` now always
     // answers, so an absent `view` means "not loaded yet" and nothing else.
     if (!restored.current) return
-    onView({ grouping, showClosed, showExited, showUnfiled: !hideEmptyTask, showDone })
-  }, [grouping, showClosed, showExited, hideEmptyTask, showDone, onView, view])
+    onView({ grouping, showClosed, showExited, showUnfiled: !hideEmptyTask, showDone, onlyActive })
+  }, [grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, onView, view])
 
   useEffect(() => {
     if (!isActive) return
@@ -900,6 +921,7 @@ export function Sessions({
           width={listBody}
           showClosed={showClosed}
           hideEmptyTask={grouping === 'task' ? hideEmptyTask : null}
+          onlyActive={onlyActive}
           query={query}
           scope={projectFilter ?? taskFilter ?? ''}
         />
@@ -1041,7 +1063,9 @@ export function Sessions({
  * neither findable nor obviously switches. The controls moved to the view panel; this row's job is
  * to state the answer, so a glance tells you why the list looks the way it does.
  */
-function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyTask, query, scope }: {
+function SummaryRow({
+  fleet, grouping, strings: s, width, showClosed, hideEmptyTask, onlyActive, query, scope,
+}: {
   fleet: ControlSessions | null | undefined
   grouping: SessionGrouping
   strings: ControlStrings
@@ -1049,6 +1073,8 @@ function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyT
   showClosed: boolean
   /** `null` when the setting does not apply — grouping by anything but task. */
   hideEmptyTask: boolean | null
+  /** The strict switch, which withholds more than the other two together. */
+  onlyActive: boolean
   /** The active search, or `''`. Stated HERE because a list narrowed silently reads as an empty one. */
   query: string
   /** The active task or project scope, already localized, or `''`. */
@@ -1062,8 +1088,13 @@ function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyT
   // Only the filters that are actually HIDING something are named. A row that lists every setting
   // at its default is noise; one that names what is being withheld is an explanation.
   const hiding: string[] = []
-  if (!showClosed) hiding.push(s.viewClosedOn)
-  if (hideEmptyTask) hiding.push(s.viewUnfiledOn)
+  // The strict switch is stated FIRST and alone: it withholds everything the other two do and more,
+  // so listing them beside it would describe a filter that is not the one in force.
+  if (onlyActive) hiding.push(s.viewActiveOn)
+  else {
+    if (!showClosed) hiding.push(s.viewClosedOn)
+    if (hideEmptyTask) hiding.push(s.viewUnfiledOn)
+  }
 
   // MEASURED, never left to Yoga: a row that wraps takes two of the screen's rows while its budget
   // counted one, and everything below it — the action row, the detail pane, the footer — is pushed
