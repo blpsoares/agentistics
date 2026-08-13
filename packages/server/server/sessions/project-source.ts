@@ -1,49 +1,70 @@
 /**
  * project-source.ts — where the wizard's candidates come from.
  *
- * The LOCAL consolidate store, read directly rather than through the API. That is the whole point:
- * the control center has to work with the server stopped, which is precisely the state a user is
- * most likely to be in when they open it to start something.
+ * THREE sources, merged, in descending order of how much we know about them:
  *
- * Cached in process with a TTL because the wizard opening is the only thing that reads this — never
- * the five-second poll — and a user who opens it twice in a minute should not pay for the walk
- * twice.
+ *  1. **History** — the local consolidate store. Places you have actually worked, so they can be
+ *     ranked by recency and carry their repository.
+ *  2. **The home directory, walked** — because any folder should be startable. Limiting the wizard
+ *     to places with history made it useless for the most ordinary case there is: a repository
+ *     cloned five minutes ago.
+ *  3. **A path typed in full** — the escape hatch for anywhere else on the machine, including
+ *     outside `$HOME`.
+ *
+ * All three are read from disk directly rather than through the API, for the same reason
+ * `conversations.ts` is: the control center must work with the server stopped, which is exactly the
+ * state a user is in when they open it to start something.
  */
 
-import { stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { loadConsolidated } from '../consolidate'
+import { isDirectory, scanDirectories } from './dir-scan'
 import {
   buildCandidates, searchCandidates, withFixedCandidates, type ProjectCandidate,
 } from './project-search'
 
-/** Long enough that reopening the wizard is instant, short enough that a repo used five minutes ago
+/** Long enough that reopening the wizard is instant, short enough that a repo cloned a minute ago
  *  shows up without restarting the control center. */
 const CACHE_TTL_MS = 60_000
 
 let cache: { at: number; candidates: ProjectCandidate[] } | null = null
 
-async function historyCandidates(): Promise<ProjectCandidate[]> {
+async function allCandidates(): Promise<ProjectCandidate[]> {
   const now = Date.now()
   if (cache && now - cache.at < CACHE_TTL_MS) return cache.candidates
-  let candidates: ProjectCandidate[]
-  try {
-    candidates = buildCandidates([...(await loadConsolidated()).values()])
-  } catch {
-    // A store that cannot be read is a wizard with no history, never a wizard that fails to open:
-    // the current directory alone is enough to start a session, which is the common case anyway.
-    candidates = []
-  }
+
+  const [history, scanned] = await Promise.all([
+    loadConsolidated()
+      .then(m => buildCandidates([...m.values()]))
+      // A store that cannot be read is a wizard with no history, never one that fails to open.
+      .catch(() => [] as ProjectCandidate[]),
+    scanDirectories().catch(() => []),
+  ])
+
+  // History WINS on a path both know about: it carries the repository and the recency, and the walk
+  // knows only that the directory exists. `withFixedCandidates` keeps the richer entry and lets the
+  // other one say why it is there — here the walk says nothing history has not already said better.
+  const walked: ProjectCandidate[] = scanned.map(d => ({
+    path: d.path,
+    name: d.name,
+    remote: '',
+    lastSeenMs: 0,
+    sessions: 0,
+    source: d.repo ? 'repo' : 'folder',
+  }))
+
+  const byPath = new Map<string, ProjectCandidate>()
+  for (const c of walked) byPath.set(c.path, c)
+  for (const c of history) byPath.set(c.path, c)
+
+  const candidates = [...byPath.values()]
   cache = { at: now, candidates }
   return candidates
 }
 
-/** Is this a directory that exists? The escape hatch for a repository cloned five minutes ago. */
-async function isDirectory(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isDirectory()
-  } catch {
-    return false
-  }
+/** Drop the index, so a directory created seconds ago is findable without waiting out the TTL. */
+export function forgetProjects(): void {
+  cache = null
 }
 
 /**
@@ -53,7 +74,7 @@ async function isDirectory(path: string): Promise<boolean> {
  * single most common thing anyone wants, and routing that through a search would bury it.
  */
 export async function findProjects(query: string, cwd: string, limit = 20): Promise<ProjectCandidate[]> {
-  const history = await historyCandidates()
+  const known = await allCandidates()
 
   const fixed: ProjectCandidate[] = [{
     path: cwd,
@@ -64,19 +85,17 @@ export async function findProjects(query: string, cwd: string, limit = 20): Prom
     source: 'cwd',
   }]
 
-  // A typed absolute path that exists but has never been used. Checked only when it LOOKS like a
-  // path, so an ordinary word never costs a stat.
+  // A typed path that exists but is nowhere in the index — outside `$HOME`, or deeper than the walk
+  // goes. Checked only when it LOOKS like a path, so an ordinary word never costs a stat.
   const typed = query.trim()
   if (typed.startsWith('/') || typed.startsWith('~')) {
-    const path = typed.startsWith('~')
-      ? typed.replace(/^~/, process.env.HOME ?? '~')
-      : typed
-    if (!history.some(c => c.path === path) && await isDirectory(path)) {
+    const path = typed.startsWith('~') ? typed.replace(/^~/, homedir()) : typed
+    if (!known.some(c => c.path === path) && await isDirectory(path)) {
       fixed.push({ path, name: baseName(path), remote: '', lastSeenMs: 0, sessions: 0, source: 'typed' })
     }
   }
 
-  return searchCandidates(withFixedCandidates(history, fixed), query, limit)
+  return searchCandidates(withFixedCandidates(known, fixed), query, limit)
 }
 
 function baseName(path: string): string {

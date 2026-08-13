@@ -282,7 +282,10 @@ export type SessionState =
   | 'waiting'
   | 'exited'
   | 'lost'
+  /** Running, but agentop did not start it — nothing about it is capturable. */
   | 'unknown'
+  /** Not running at all: a conversation on this machine that can usually be reopened. */
+  | 'closed'
 
 /**
  * One session, as the host currently sees it.
@@ -301,6 +304,19 @@ export interface ControlSession {
   project: string
   model?: string
   note?: string
+  /** The piece of work this session belongs to, when the user said so. Groups the list. */
+  task?: string
+  /**
+   * The conversation this row could REOPEN, when there is one.
+   *
+   * Present on a row that is running outside agentop (the conversation it appears to be driving) and
+   * on a closed one (itself). Absent when the harness cannot reopen by id, so the verb is not
+   * offered rather than offered and wrong.
+   */
+  resume?: { sessionId: string; title: string }
+  /** Everything this row can be found by, already lowercased — including a closed conversation's
+   *  opening prompt, which is what a person remembers about work they put down. */
+  searchText: string
   state: SessionState
   /** Already-localized state word, e.g. "needs approval". */
   stateLabel: string
@@ -493,6 +509,26 @@ export interface ControlHost {
   killSession?(id: string): Promise<ActionResult>
   renameSession?(id: string, label: string): Promise<ActionResult>
   noteSession?(id: string, text: string): Promise<ActionResult>
+  /** File this session under a piece of work. Empty string clears it. */
+  taskSession?(id: string, task: string): Promise<ActionResult>
+
+  /**
+   * Reopen a conversation as a NEW managed session.
+   *
+   * This is what makes a closed conversation, or one running outside agentop, something the cockpit
+   * can act on at all: it cannot attach to a process it did not start, but it can start a session
+   * that resumes the same conversation.
+   */
+  resumeSession?(req: ResumeSessionRequest): Promise<SpawnSessionResult>
+
+  /**
+   * Reopen every session of one task, in the background.
+   *
+   * The point of naming a task is getting all of its work back at once. Sessions whose conversation
+   * cannot be resolved are SKIPPED AND COUNTED in the result — a silent partial reopen would leave
+   * someone believing they had their whole task back.
+   */
+  openTask?(task: string): Promise<ActionResult>
 
   /**
    * The harnesses this machine can actually START, with what each of them accepts.
@@ -534,10 +570,13 @@ export interface ProjectOption {
   /** Already-composed display label — the directory name, and the repo when it belongs to one. */
   label: string
   /**
-   * Why it is being offered, so the list can say so: the directory you are standing in, a place you
-   * have worked before, or a path you typed that exists but has no history.
+   * Why it is being offered, so the list can say so — and so a folder that was merely FOUND is not
+   * mistaken for one you have worked in.
+   *
+   * `cwd` where you are standing · `history` somewhere sessions have run · `repo` a git repository
+   * found on disk · `folder` any other directory found on disk · `typed` a path given in full.
    */
-  source: 'cwd' | 'history' | 'typed'
+  source: 'cwd' | 'history' | 'repo' | 'folder' | 'typed'
 }
 
 export interface SpawnSessionRequest {
@@ -548,6 +587,16 @@ export interface SpawnSessionRequest {
   effort?: string
   label?: string
   /** Take the terminal now, versus start detached and stay here. */
+  attach: boolean
+}
+
+export interface ResumeSessionRequest {
+  /** The HARNESS's own conversation id. */
+  sessionId: string
+  harness: string
+  cwd: string
+  /** Already-composed name for the new session, so the row keeps reading the same. */
+  label: string
   attach: boolean
 }
 

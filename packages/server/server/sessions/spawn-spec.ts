@@ -30,6 +30,8 @@ export const SPAWN_SPECS: Record<HarnessId, SpawnSpec | null> = {
     effortFlag: '--effort',
     // "Effort level for the current session (low, medium, high, xhigh, max)"
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    // `-r, --resume [value]  Resume a conversation by session ID`
+    resume: id => ['--resume', id],
   },
 
   // `Usage: codex [OPTIONS] [PROMPT]` / `[PROMPT]  Optional user prompt to start the session`
@@ -40,6 +42,9 @@ export const SPAWN_SPECS: Record<HarnessId, SpawnSpec | null> = {
     prompt: { kind: 'positional' },
     modelFlag: '--model', // `-m, --model <MODEL>`
     modelSuggestions: [],
+    // A SUBCOMMAND, not a flag: `codex resume [OPTIONS] [SESSION_ID] [PROMPT]`, whose argument is
+    // documented as "Conversation/session id (UUID) or thread name".
+    resume: id => ['resume', id],
   },
 
   // Kimi's only prompt flag is `-p, --prompt <prompt>  Run one prompt non-interactively and print
@@ -49,6 +54,8 @@ export const SPAWN_SPECS: Record<HarnessId, SpawnSpec | null> = {
     prompt: { kind: 'send-keys' },
     modelFlag: '--model', // `-m, --model <model>`
     modelSuggestions: [],
+    // `-S, --session [id]  Resume a session. With ID: resume that session.`
+    resume: id => ['-S', id],
   },
 
   // `-i, --prompt-interactive  Execute the provided prompt and continue in interactive mode`.
@@ -62,7 +69,8 @@ export const SPAWN_SPECS: Record<HarnessId, SpawnSpec | null> = {
     // No model list is printed by `--help`, so these are the ids this machine has actually run
     // rather than ids from memory. The list is a convenience, never a validation set.
     modelSuggestions: ['gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'],
-    // No effort flag exists.
+    // No effort flag exists, and no `resume`: gemini's `-r, --resume` takes "latest" or an index
+    // number, never a session id. Offering it would be a verb that reopens the wrong conversation.
   },
 
   // `-p, --prompt <text>  Execute a prompt in non-interactive mode (exits after completion)` — the
@@ -73,6 +81,10 @@ export const SPAWN_SPECS: Record<HarnessId, SpawnSpec | null> = {
     prompt: { kind: 'send-keys' },
     modelFlag: '--model', // `--model <model>  Set the AI model to use (use 'auto' to let Copilot pick)`
     modelSuggestions: ['auto', 'claude-sonnet-4.6', 'gpt-5.3-codex'],
+    // `--session-id <id>  Resume an existing session or task by id` — used in preference to
+    // `-r, --resume[=value]`, whose `[=value]` form requires the `=` and silently degrades to
+    // "resume the most recent" when the id is passed as a separate argument.
+    resume: id => ['--session-id', id],
   },
 
   // `--prompt-interactive  Run an initial prompt interactively and continue the session`, plus a
@@ -86,6 +98,7 @@ export const SPAWN_SPECS: Record<HarnessId, SpawnSpec | null> = {
     // `--effort  Reasoning effort for the current CLI session (low|medium|high)` — printed by the
     // CLI itself, so unlike codex's `-c` override this one IS verifiable and IS validated.
     efforts: ['low', 'medium', 'high'],
+    resume: id => ['--conversation', id], // `--conversation  Resume a previous conversation by ID`
   },
 }
 
@@ -107,7 +120,14 @@ export function planSpawn(req: SpawnRequest): SpawnPlanResult {
     }
   }
 
+  if (req.resumeId && !spec.resume) {
+    return { ok: false, error: { code: 'resume-unsupported', harness: req.harness } }
+  }
+
   const argv: string[] = [spec.bin]
+  // The resume argv goes FIRST because one of these is a subcommand (`codex resume <id>`), and a
+  // subcommand that follows a flag is not a subcommand any more.
+  if (req.resumeId && spec.resume) argv.push(...spec.resume(req.resumeId))
   if (req.model && spec.modelFlag) argv.push(spec.modelFlag, req.model)
   if (req.effort && spec.effortFlag) argv.push(spec.effortFlag, req.effort)
 

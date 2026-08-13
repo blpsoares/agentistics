@@ -44,6 +44,7 @@ const STATE_COLOR: Record<SessionState, string | undefined> = {
   exited: COLORS.muted,
   lost: COLORS.muted,
   unknown: COLORS.muted,
+  closed: COLORS.muted,
 }
 
 /**
@@ -87,6 +88,7 @@ export function Sessions({
       harness: s.sessionsUnknownHarness,
       model: s.sessionsUnknownModel,
       project: s.sessionsUnknownProject,
+      task: s.sessionsUnknownTask,
     },
   )), [fleet?.sessions, grouping, s])
 

@@ -36,6 +36,7 @@ import { ControlCenter } from '../src/control/ControlCenter'
 import {
   TAB_ORDER,
   type ControlHost,
+  type ControlSession,
   type ControlSessions,
   type ProjectOption,
   type ControlService,
@@ -374,7 +375,7 @@ const FAKE_PROJECTS: ProjectOption[] = [
 const FAKE_FLEET: ControlSessions = {
   attention: 2,
   rang: [],
-  sessions: [
+  sessions: withSearchText([
     {
       id: 'a1b2c3', title: 'migrate the auth store', harness: 'claude',
       cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus',
@@ -406,7 +407,16 @@ const FAKE_FLEET: ControlSessions = {
       state: 'unknown', stateLabel: 'external', actionable: false,
       startedAt: Date.now() - 40 * 60_000, attached: false,
     },
-  ],
+  ]),
+}
+
+/** The preview's fixtures say what they ARE; the searchable blob is derived, exactly as the host
+ *  derives it, so the two can never disagree about what a row can be found by. */
+function withSearchText(rows: Array<Omit<ControlSession, 'searchText'>>): ControlSession[] {
+  return rows.map(r => ({
+    ...r,
+    searchText: [r.title, r.harness, r.cwd, r.note, r.task].filter(Boolean).join(' ').toLowerCase(),
+  }))
 }
 
 // ---------------------------------------------------------------------------

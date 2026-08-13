@@ -379,8 +379,14 @@ function ProjectSearch({ host, strings: s, width, height, isActive, onPick }: {
   const page = Math.max(1, height - 3)
   const offset = windowOffset(at, list.length, page)
 
+  // A folder that was merely FOUND on disk must not read like one you have worked in — the words
+  // are the only thing distinguishing them, since both are just a directory name on a row.
   const sourceWord = (o: ProjectOption): string =>
-    o.source === 'cwd' ? s.wizSourceCwd : o.source === 'typed' ? s.wizSourceTyped : ''
+    o.source === 'cwd' ? s.wizSourceCwd
+      : o.source === 'typed' ? s.wizSourceTyped
+      : o.source === 'history' ? s.wizSourceHistory
+      : o.source === 'repo' ? s.wizSourceRepo
+      : ''
 
   return (
     <Box flexDirection="column" width={width}>

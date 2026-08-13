@@ -42,6 +42,8 @@ function explainPlanError(e: SpawnPlanError): string {
   switch (e.code) {
     case 'unsupported-harness':
       return `${e.harness} cannot be started by agentop yet. Supported: ${STARTABLE.join(', ')}.`
+    case 'resume-unsupported':
+      return `${e.harness} cannot reopen a conversation by id, so it cannot be resumed.`
     case 'model-unsupported':
       return `${e.harness} has no model flag, so --model cannot be applied.`
     case 'effort-unsupported':

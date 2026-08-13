@@ -36,15 +36,32 @@ export interface SpawnSpec {
   effortFlag?: string
   /** A genuine closed enum, printed by the CLI itself — so this one IS validated. */
   efforts?: string[]
+  /**
+   * The argv (after `bin`) that reopens an existing conversation by ID.
+   *
+   * A function rather than a flag string because the shapes genuinely differ: codex takes a
+   * SUBCOMMAND (`codex resume <id>`), the rest take a flag, and they do not agree on which. Absent
+   * when the CLI cannot reopen a conversation by id at all — gemini's `--resume` takes "latest" or
+   * an index, never an id, so it has none and the verb is simply not offered for it.
+   */
+  resume?: (id: string) => string[]
 }
 
 export interface SpawnRequest {
   harness: HarnessId
   cwd: string
+  /**
+   * Reopen this conversation instead of starting a fresh one.
+   *
+   * Mutually exclusive with `prompt` in practice — the conversation already has its history — but
+   * not refused, because a resumed session accepting an opening line is a reasonable thing to want.
+   */
+  resumeId?: string
   prompt?: string
   model?: string
   effort?: string
   label?: string
+  task?: string
 }
 
 export interface SpawnPlan {
@@ -55,6 +72,7 @@ export interface SpawnPlan {
 
 export type SpawnPlanError =
   | { code: 'unsupported-harness'; harness: HarnessId }
+  | { code: 'resume-unsupported'; harness: HarnessId }
   | { code: 'model-unsupported'; harness: HarnessId }
   | { code: 'effort-unsupported'; harness: HarnessId }
   | { code: 'unknown-effort'; harness: HarnessId; value: string; accepted: string[] }
@@ -94,6 +112,14 @@ export interface ManagedSession {
   effort?: string
   label?: string
   note?: string
+  /**
+   * The piece of work this session belongs to.
+   *
+   * A free string rather than an id: a task is whatever the person says it is, and making them
+   * create one before they can name one is how a grouping feature goes unused. Several sessions
+   * carrying the same task are that task's sessions, and can be reopened together.
+   */
+  task?: string
 }
 
 /**

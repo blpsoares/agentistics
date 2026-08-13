@@ -168,6 +168,7 @@ export type {
   SpawnSessionRequest,
   SpawnSessionResult,
   ProjectOption,
+  ResumeSessionRequest,
   StartHow,
   StartOption,
   StartRequest,

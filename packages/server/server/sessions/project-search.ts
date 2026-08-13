@@ -29,10 +29,29 @@ export interface ProjectCandidate {
    * `cwd` is the directory the user is standing in and is ALWAYS offered first, even with no history
    * at all: starting a session where you already are is the single most common thing anyone wants,
    * and making that case go through the same search as everything else would bury it.
-   * `typed` is a path the user typed that exists on disk but has no history — the escape hatch for
-   * a repository cloned five minutes ago.
+   * `history` is somewhere sessions have run before, so it carries a repository and a recency;
+   * `repo` and `folder` are found by WALKING the home directory, because any folder should be
+   * startable and limiting this to places with history made the wizard useless for a repository
+   * cloned five minutes ago; `typed` is a path given in full that is in none of the above.
    */
-  source: 'cwd' | 'history' | 'typed'
+  source: 'cwd' | 'history' | 'repo' | 'folder' | 'typed'
+}
+
+/**
+ * How much is known about a candidate, which is the primary sort under an equal text match.
+ *
+ * The order is the point: with the home directory walked, a query like `web` matches a dozen
+ * folders, and the one the user means is almost always one they have worked in. Recency alone cannot
+ * express that — a scanned folder has no recency at all — so provenance ranks first and recency
+ * breaks ties inside it. A `.git` is the strongest hint that a folder is a place someone works
+ * rather than a place something is stored.
+ */
+const SOURCE_RANK: Record<ProjectCandidate['source'], number> = {
+  cwd: 0,
+  history: 1,
+  typed: 2,
+  repo: 3,
+  folder: 4,
 }
 
 /** How a candidate reads in the list: its name, and the repo it belongs to when it has one. */
@@ -131,10 +150,19 @@ export function searchCandidates(
   }
 
   scored.sort((a, b) => {
-    if (a.c.source === 'cwd' !== (b.c.source === 'cwd')) return a.c.source === 'cwd' ? -1 : 1
+    // Where you are standing outranks everything, always.
+    if ((a.c.source === 'cwd') !== (b.c.source === 'cwd')) return a.c.source === 'cwd' ? -1 : 1
+    // Then how well the text matches: a name that STARTS with what was typed beats one that merely
+    // contains it, whatever either of them is.
     if (a.score !== b.score) return b.score - a.score
+    // Then how much is known about it.
+    const bySource = SOURCE_RANK[a.c.source] - SOURCE_RANK[b.c.source]
+    if (bySource !== 0) return bySource
     if (a.c.lastSeenMs !== b.c.lastSeenMs) return b.c.lastSeenMs - a.c.lastSeenMs
     if (a.c.sessions !== b.c.sessions) return b.c.sessions - a.c.sessions
+    // Shallower first: `~/projects/web` is likelier meant than `~/a/b/c/d/web`.
+    const byDepth = a.c.path.split('/').length - b.c.path.split('/').length
+    if (byDepth !== 0) return byDepth
     return a.c.name.localeCompare(b.c.name)
   })
 

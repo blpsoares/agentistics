@@ -43,7 +43,7 @@ export interface SessionRegistry {
   add(session: ManagedSession): Promise<void>
   remove(id: string): Promise<void>
   /** False when no session carries that id — never a silent success. */
-  patch(id: string, patch: { label?: string; note?: string }): Promise<boolean>
+  patch(id: string, patch: { label?: string; note?: string; task?: string }): Promise<boolean>
 }
 
 /**
@@ -69,6 +69,7 @@ function sanitize(raw: unknown): ManagedSession | null {
     ...(typeof s.effort === 'string' ? { effort: s.effort } : {}),
     ...(typeof s.label === 'string' ? { label: s.label } : {}),
     ...(typeof s.note === 'string' ? { note: s.note } : {}),
+    ...(typeof s.task === 'string' ? { task: s.task } : {}),
   }
 }
 
@@ -178,5 +179,5 @@ export const addSession = (s: ManagedSession): Promise<void> => defaultRegistry.
 export const removeSession = (id: string): Promise<void> => defaultRegistry.remove(id)
 export const patchSession = (
   id: string,
-  patch: { label?: string; note?: string },
+  patch: { label?: string; note?: string; task?: string },
 ): Promise<boolean> => defaultRegistry.patch(id, patch)

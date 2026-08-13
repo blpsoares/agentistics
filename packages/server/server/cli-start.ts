@@ -55,6 +55,7 @@ import type {
   SpawnSessionRequest,
   SpawnSessionResult,
   ProjectOption,
+  ResumeSessionRequest,
   StartOption,
   TabId,
   StartRequest,
@@ -87,6 +88,7 @@ import { candidateLabel } from './sessions/project-search'
 import type { SpawnPlanError } from './sessions/types'
 import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
+import { conversationForProcess, forgetConversations, loadConversations } from './sessions/conversations'
 import type { SessionView } from './sessions/session-view'
 
 export type StartResult = number | 'foreground'
@@ -1153,7 +1155,7 @@ let sessionsPoller: SessionsPoller | null = null
 async function ensureSessionsPoller(): Promise<SessionsPoller> {
   if (sessionsPoller) return sessionsPoller
   const backend = await resolveBackend()
-  sessionsPoller = createSessionsPoller({ backend, readRegistry, scanProcesses })
+  sessionsPoller = createSessionsPoller({ backend, readRegistry, scanProcesses, loadConversations })
   return sessionsPoller
 }
 
@@ -1167,14 +1169,81 @@ async function ensureSessionsPoller(): Promise<SessionsPoller> {
 function explainSpawnError(e: SpawnPlanError, s: CliStrings): string {
   switch (e.code) {
     case 'unsupported-harness': return s.sessSpawnUnsupported(e.harness)
+    case 'resume-unsupported': return s.sessSpawnNoResume(e.harness)
     case 'model-unsupported': return s.sessSpawnNoModel(e.harness)
     case 'effort-unsupported': return s.sessSpawnNoEffort(e.harness)
     case 'unknown-effort': return s.sessSpawnBadEffort(e.harness, e.value, e.accepted)
   }
 }
 
+/**
+ * Start one managed session — the ONE path every caller goes through.
+ *
+ * The wizard, a resume and "open this whole task" differ only in what they put in the request, so
+ * they share this rather than each doing their own plan/spawn/register dance. The plan is checked
+ * BEFORE anything is spawned, so an unsupported flag is a sentence rather than a session that starts
+ * and dies with a usage error on a screen nobody is looking at.
+ */
+async function spawnManaged(req: {
+  harness: HarnessId
+  cwd: string
+  attach: boolean
+  resumeId?: string
+  prompt?: string
+  model?: string
+  effort?: string
+  label?: string
+  task?: string
+}, s: CliStrings): Promise<SpawnSessionResult> {
+  const backend = await resolveBackend()
+  const blocked = await backend.unavailable()
+  if (blocked) return { ok: false, message: blocked }
+
+  const planned = planSpawn({
+    harness: req.harness,
+    cwd: req.cwd,
+    ...(req.resumeId ? { resumeId: req.resumeId } : {}),
+    ...(req.prompt ? { prompt: req.prompt } : {}),
+    ...(req.model ? { model: req.model } : {}),
+    ...(req.effort ? { effort: req.effort } : {}),
+  })
+  if (!planned.ok) return { ok: false, message: explainSpawnError(planned.error, s) }
+
+  const id = newSessionId()
+  try {
+    await backend.spawn({
+      id,
+      cwd: req.cwd,
+      argv: planned.plan.argv,
+      ...(planned.plan.sendKeys ? { sendKeys: planned.plan.sendKeys } : {}),
+    })
+  } catch (e) {
+    return { ok: false, message: s.sessSpawnFailed(e instanceof Error ? e.message : String(e)) }
+  }
+
+  await addSession({
+    id,
+    harness: req.harness,
+    cwd: req.cwd,
+    createdAt: new Date().toISOString(),
+    ...(req.model ? { model: req.model } : {}),
+    ...(req.effort ? { effort: req.effort } : {}),
+    ...(req.label ? { label: req.label } : {}),
+    ...(req.task ? { task: req.task } : {}),
+  })
+
+  const name = req.label ?? id
+  if (!req.attach) return { ok: true, message: s.sessStartedBg(name) }
+  return {
+    ok: true,
+    message: s.sessStarted(name),
+    ticket: { argv: backend.attachCommand(id), detachHint: await backend.detachHint(), label: name },
+  }
+}
+
 /** The state word each session wears, and the machine-readable state beside it. */
 function sessionState(v: SessionView): SessionState {
+  if (v.status === 'closed') return 'closed'
   if (v.status === 'external') return 'unknown'
   if (v.status === 'lost') return 'lost'
   switch (v.activity) {
@@ -1196,6 +1265,7 @@ function stateLabel(state: SessionState, s: CliStrings): string {
     case 'exited': return s.sessState.exited
     case 'lost': return s.sessState.lost
     case 'unknown': return s.sessState.external
+    case 'closed': return s.sessState.closed
   }
 }
 
@@ -1223,13 +1293,16 @@ function toControlSession(v: SessionView, s: CliStrings): ControlSession {
     ...(v.note ? { note: v.note } : {}),
     state,
     stateLabel: stateLabel(state, s),
-    actionable: v.status !== 'external',
+    actionable: v.status !== 'external' && v.status !== 'closed',
     // Stated only where it is TRUE and only for a session we actually drive: an external row cannot
     // have its approval detected either way, and saying so twice on the same screen is noise.
     ...(v.status !== 'external' && !v.approvalDetection && harness
       ? { approvalBlind: s.sessApprovalBlind(harness) }
       : {}),
     ...(v.createdMs !== undefined ? { startedAt: v.createdMs } : {}),
+    ...(v.task ? { task: v.task } : {}),
+    ...(v.resume ? { resume: v.resume } : {}),
+    searchText: v.searchText,
     attached: v.attached,
   }
 }
@@ -1773,6 +1846,69 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       return ok ? { ok: true, message: s.sessNoted } : { ok: false, message: s.sessNoRegistryEntry }
     },
 
+    async taskSession(id: string, task: string): Promise<ActionResult> {
+      const s = S()
+      const ok = await patchSession(id, { task })
+      return ok ? { ok: true, message: s.sessTasked } : { ok: false, message: s.sessNoRegistryEntry }
+    },
+
+    /**
+     * Reopen a conversation as a NEW managed session.
+     *
+     * The only way the cockpit can act on something it did not start: it cannot attach to a foreign
+     * process, but it can start a session that resumes the same conversation. The new session
+     * inherits the conversation's NAME, so the row keeps reading the same after the swap.
+     */
+    async resumeSession(req: ResumeSessionRequest): Promise<SpawnSessionResult> {
+      const s = S()
+      const spawned = await spawnManaged({
+        harness: req.harness as HarnessId,
+        cwd: req.cwd,
+        resumeId: req.sessionId,
+        label: req.label,
+        attach: req.attach,
+      }, s)
+      // The store's view of what is running just changed, and the next poll must see it rather than
+      // waiting out the cache and showing the conversation as still closed.
+      if (spawned.ok) forgetConversations()
+      return spawned
+    },
+
+    /**
+     * Reopen every session of one task, detached.
+     *
+     * The whole point of naming a task is getting its work back at once. Sessions whose conversation
+     * cannot be resolved are SKIPPED AND COUNTED — a partial reopen reported as a success would
+     * leave someone believing they had their whole task back when they did not.
+     */
+    async openTask(task: string): Promise<ActionResult> {
+      const s = S()
+      const wanted = (await readRegistry()).filter(m => m.task === task)
+      if (wanted.length === 0) return { ok: false, message: s.sessTaskEmpty(task) }
+
+      const conversations = await loadConversations()
+      let opened = 0
+      let skipped = 0
+      for (const m of wanted) {
+        const conv = conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
+        if (!conv?.resumable) { skipped++; continue }
+        const r = await spawnManaged({
+          harness: m.harness,
+          cwd: m.cwd,
+          resumeId: conv.sessionId,
+          label: m.label ?? conv.title,
+          task,
+          attach: false,
+        }, s)
+        if (r.ok) opened++
+        else skipped++
+      }
+      forgetConversations()
+      return opened > 0
+        ? { ok: true, message: s.sessTaskOpened(task, opened, skipped) }
+        : { ok: false, message: s.sessTaskNoneOpened(task, skipped) }
+    },
+
     /**
      * Derived from `SPAWN_SPECS`, never a second hand-written list.
      *
@@ -1805,49 +1941,15 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
      * than a session that starts and immediately dies with a usage error on a screen nobody sees.
      */
     async spawnSession(req: SpawnSessionRequest): Promise<SpawnSessionResult> {
-      const s = S()
-      const backend = await resolveBackend()
-      const blocked = await backend.unavailable()
-      if (blocked) return { ok: false, message: blocked }
-
-      const planned = planSpawn({
+      return spawnManaged({
         harness: req.harness as HarnessId,
         cwd: req.cwd,
+        attach: req.attach,
         ...(req.prompt ? { prompt: req.prompt } : {}),
         ...(req.model ? { model: req.model } : {}),
         ...(req.effort ? { effort: req.effort } : {}),
-      })
-      if (!planned.ok) return { ok: false, message: explainSpawnError(planned.error, s) }
-
-      const id = newSessionId()
-      try {
-        await backend.spawn({
-          id,
-          cwd: req.cwd,
-          argv: planned.plan.argv,
-          ...(planned.plan.sendKeys ? { sendKeys: planned.plan.sendKeys } : {}),
-        })
-      } catch (e) {
-        return { ok: false, message: s.sessSpawnFailed(e instanceof Error ? e.message : String(e)) }
-      }
-
-      await addSession({
-        id,
-        harness: req.harness as HarnessId,
-        cwd: req.cwd,
-        createdAt: new Date().toISOString(),
-        ...(req.model ? { model: req.model } : {}),
-        ...(req.effort ? { effort: req.effort } : {}),
         ...(req.label ? { label: req.label } : {}),
-      })
-
-      const name = req.label ?? id
-      if (!req.attach) return { ok: true, message: s.sessStartedBg(name) }
-      return {
-        ok: true,
-        message: s.sessStarted(name),
-        ticket: { argv: backend.attachCommand(id), detachHint: await backend.detachHint(), label: name },
-      }
+      }, S())
     },
   }
 }

@@ -194,10 +194,11 @@ export interface ControlStrings {
   sessionsCount: (n: number) => string
   sessionsWaitingCount: (n: number) => string
   sessionsGroupBy: string
-  sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project', string>
+  sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project' | 'task', string>
   sessionsUnknownHarness: string
   sessionsUnknownModel: string
   sessionsUnknownProject: string
+  sessionsUnknownTask: string
   /** Detail-pane field labels. */
   sessionsWhere: string
   sessionsModel: string
@@ -214,6 +215,28 @@ export interface ControlStrings {
   keySessionsRename: string
   keySessionsNote: string
   keySessionsNew: string
+  keySessionsSearch: string
+  keySessionsActions: string
+  /** The visible action row — the same verbs the letters run, spelled out and clickable. */
+  actSessions: {
+    attach: string
+    resume: string
+    rename: string
+    note: string
+    task: string
+    kill: string
+    openTask: string
+    newSession: string
+    search: string
+    group: string
+  }
+  sessionsTaskPrompt: string
+  sessionsOpenTaskConfirm: (task: string, n: number) => string
+  sessionsResumeConfirm: (title: string) => string
+  sessionsResumeRunning: string
+  sessionsSearchLabel: string
+  sessionsSearchEmpty: string
+  sessionsClosedWord: string
   /** The wizard's six questions. */
   wizHarness: string
   wizWhere: string
@@ -230,6 +253,8 @@ export interface ControlStrings {
   wizNoMatch: string
   wizSourceCwd: string
   wizSourceTyped: string
+  wizSourceHistory: string
+  wizSourceRepo: string
   /** The rename / note prompts, and the kill confirmation. */
   sessionsRenamePrompt: string
   sessionsNotePrompt: string
@@ -377,6 +402,7 @@ const EN: ControlStrings = {
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
   sessionsGroupBy: 'GROUP',
   sessionsGroupings: {
+    task: 'task',
     none: 'flat',
     harness: 'harness',
     model: 'model',
@@ -385,6 +411,7 @@ const EN: ControlStrings = {
   sessionsUnknownHarness: 'harness unknown',
   sessionsUnknownModel: 'no model recorded',
   sessionsUnknownProject: 'no directory recorded',
+  sessionsUnknownTask: 'no task',
   sessionsWhere: 'where',
   sessionsModel: 'model',
   sessionsNote: 'note',
@@ -402,9 +429,32 @@ const EN: ControlStrings = {
   keySessionsRename: 'n name',
   keySessionsNote: 't note',
   keySessionsNew: 'a new',
+  keySessionsSearch: '/ search',
+  keySessionsActions: 'tab actions',
+  actSessions: {
+    attach: 'Attach',
+    resume: 'Reopen',
+    rename: 'Rename',
+    note: 'Note',
+    task: 'Task',
+    kill: 'Stop',
+    openTask: 'Open whole task',
+    newSession: 'New session',
+    search: 'Search',
+    group: 'Group',
+  },
+  sessionsTaskPrompt: 'Which task does this session belong to?',
+  sessionsOpenTaskConfirm: (task: string, n: number) =>
+    `Reopen all ${n} session(s) of "${task}" in the background?`,
+  sessionsResumeConfirm: (title: string) => `Reopen "${title}" as a session agentop manages?`,
+  sessionsResumeRunning:
+    'the assistant already running there is NOT stopped — close it first, or you will have two on one conversation.',
+  sessionsSearchLabel: 'Search sessions and closed conversations',
+  sessionsSearchEmpty: 'nothing matches.',
+  sessionsClosedWord: 'closed',
   wizHarness: 'Which assistant?',
   wizWhere: 'Where should it start?',
-  wizWhereHint: 'type to search your projects and repos, or paste a path',
+  wizWhereHint: 'search any folder under your home — or paste a full path',
   wizModel: 'Which model?',
   wizModelHint: 'pick one, or type any model name',
   wizEffort: 'Which reasoning effort?',
@@ -414,9 +464,11 @@ const EN: ControlStrings = {
   wizAttached: 'attached — take this terminal now',
   wizBackground: 'background — keep it running and stay here',
   wizSkip: 'use the default',
-  wizNoMatch: 'nothing matches — paste a full path to use a directory with no history',
+  wizNoMatch: 'nothing matches — paste a full path to use a directory anywhere on this machine',
   wizSourceCwd: 'you are here',
   wizSourceTyped: 'typed',
+  wizSourceHistory: 'worked here before',
+  wizSourceRepo: 'git repo',
   sessionsRenamePrompt: 'Name this session',
   sessionsNotePrompt: 'Describe this session',
   sessionsKillConfirm: (title: string) => `Stop "${title}"? The assistant running in it is ended.`,
@@ -558,6 +610,7 @@ const PT: ControlStrings = {
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
   sessionsGroupBy: 'AGRUPAR',
   sessionsGroupings: {
+    task: 'tarefa',
     none: 'lista',
     harness: 'harness',
     model: 'modelo',
@@ -566,6 +619,7 @@ const PT: ControlStrings = {
   sessionsUnknownHarness: 'harness desconhecido',
   sessionsUnknownModel: 'sem modelo registrado',
   sessionsUnknownProject: 'sem diretório registrado',
+  sessionsUnknownTask: 'sem tarefa',
   sessionsWhere: 'onde',
   sessionsModel: 'modelo',
   sessionsNote: 'nota',
@@ -583,9 +637,32 @@ const PT: ControlStrings = {
   keySessionsRename: 'n nomear',
   keySessionsNote: 't nota',
   keySessionsNew: 'a nova',
+  keySessionsSearch: '/ buscar',
+  keySessionsActions: 'tab ações',
+  actSessions: {
+    attach: 'Anexar',
+    resume: 'Reabrir',
+    rename: 'Renomear',
+    note: 'Nota',
+    task: 'Tarefa',
+    kill: 'Encerrar',
+    openTask: 'Abrir tarefa toda',
+    newSession: 'Nova sessão',
+    search: 'Buscar',
+    group: 'Agrupar',
+  },
+  sessionsTaskPrompt: 'De qual tarefa esta sessão faz parte?',
+  sessionsOpenTaskConfirm: (task: string, n: number) =>
+    `Reabrir todas as ${n} sessão(ões) de "${task}" em background?`,
+  sessionsResumeConfirm: (title: string) => `Reabrir "${title}" como sessão gerenciada pelo agentop?`,
+  sessionsResumeRunning:
+    'o assistente que já roda ali NÃO é encerrado — feche ele antes, ou você fica com dois na mesma conversa.',
+  sessionsSearchLabel: 'Buscar sessões e conversas fechadas',
+  sessionsSearchEmpty: 'nada corresponde.',
+  sessionsClosedWord: 'fechada',
   wizHarness: 'Qual assistente?',
   wizWhere: 'Onde ela começa?',
-  wizWhereHint: 'digite para buscar seus projetos e repos, ou cole um caminho',
+  wizWhereHint: 'busque qualquer pasta na sua home — ou cole um caminho completo',
   wizModel: 'Qual modelo?',
   wizModelHint: 'escolha um, ou digite qualquer nome de modelo',
   wizEffort: 'Qual nível de raciocínio?',
@@ -598,6 +675,8 @@ const PT: ControlStrings = {
   wizNoMatch: 'nada corresponde — cole um caminho completo para usar um diretório sem histórico',
   wizSourceCwd: 'você está aqui',
   wizSourceTyped: 'digitado',
+  wizSourceHistory: 'já trabalhou aqui',
+  wizSourceRepo: 'repo git',
   sessionsRenamePrompt: 'Dê um nome a esta sessão',
   sessionsNotePrompt: 'Descreva esta sessão',
   sessionsKillConfirm: (title: string) => `Encerrar "${title}"? O assistente que roda nela é finalizado.`,

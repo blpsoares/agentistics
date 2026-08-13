@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionCells, sessionRows,
-  sessionsLayout, sortSessions,
+  attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionActions, sessionCells,
+  sessionRows, sessionsLayout, sortSessions,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
-const UNKNOWN = { harness: 'harness unknown', model: 'no model recorded', project: 'no directory' }
+const UNKNOWN = {
+  harness: 'harness unknown', model: 'no model recorded', project: 'no directory', task: 'no task',
+}
 
 const session = (id: string, over: Partial<ControlSession> = {}): ControlSession => ({
   id,
@@ -17,6 +19,7 @@ const session = (id: string, over: Partial<ControlSession> = {}): ControlSession
   stateLabel: 'waiting',
   actionable: true,
   attached: false,
+  searchText: id,
   ...over,
 })
 
@@ -227,5 +230,52 @@ describe('detailLines', () => {
     expect(detailLines(session('a'), labels, ago).map(x => x.key)).not.toContain('blind')
     const blind = detailLines(session('a', { approvalBlind: 'no markers for x' }), labels, ago)
     expect(blind.find(x => x.key === 'blind')).toMatchObject({ note: true, value: 'no markers for x' })
+  })
+})
+
+describe('sessionActions', () => {
+  const words = {
+    attach: 'Attach', resume: 'Reopen', rename: 'Rename', note: 'Note', task: 'Task',
+    kill: 'Stop', openTask: 'Open whole task', new: 'New', search: 'Search', group: 'Group',
+  }
+
+  it('always offers the verbs that need no selection', () => {
+    // The screen must be usable when the fleet is empty — which is exactly when someone most needs
+    // to start something.
+    expect(sessionActions(undefined)).toEqual(['new', 'search', 'group'])
+  })
+
+  it('offers attach and the metadata verbs on a session agentop runs', () => {
+    const a = sessionActions(session('m'))
+    expect(a[0]).toBe('attach')
+    expect(a).toContain('rename')
+    expect(a).toContain('kill')
+  })
+
+  it('offers reopen instead of attach on a row agentop does not run', () => {
+    // A verb that cannot work is ABSENT, never present and refusing: there is no process of ours to
+    // attach to, but the conversation can be reopened.
+    const external = session('e', {
+      state: 'unknown', actionable: false, resume: { sessionId: 's1', title: 'auth' },
+    })
+    expect(sessionActions(external)[0]).toBe('resume')
+    expect(sessionActions(external)).not.toContain('attach')
+    expect(sessionActions(external)).not.toContain('rename')
+  })
+
+  it('offers nothing row-specific when the harness cannot reopen by id', () => {
+    const external = session('e', { state: 'unknown', actionable: false })
+    expect(sessionActions(external)).toEqual(['new', 'search', 'group'])
+  })
+
+  it('offers the whole task only once the session is filed under one', () => {
+    expect(sessionActions(session('m'))).not.toContain('openTask')
+    expect(sessionActions(session('m', { task: 'XPTO' }))).toContain('openTask')
+  })
+
+  it('labels every verb it offers, in the caller language', () => {
+    for (const a of sessionActions(session('m', { task: 'X' }))) {
+      expect(words[a].length).toBeGreaterThan(0)
+    }
   })
 })

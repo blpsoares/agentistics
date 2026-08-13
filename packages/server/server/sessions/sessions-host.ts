@@ -15,6 +15,7 @@ import { createLimiter } from '../utils'
 import type { HarnessProcess } from '../live-sessions'
 import { rulesFor } from './attention-rules'
 import { attentionOf, digestFrame } from './attention'
+import { loadConversations, type Conversation } from './conversations'
 import { reconcileSessions } from './session-ref'
 import {
   attentionCount, bellTransitions, buildSessionViews, type SessionView,
@@ -57,6 +58,12 @@ export function createSessionsPoller(o: {
   backend: SessionBackend
   readRegistry: () => Promise<ManagedSession[]>
   scanProcesses: () => Promise<{ procs: HarnessProcess[] }>
+  /**
+   * Every conversation this machine knows about — what names an external session and what fills the
+   * "closed, reopenable" rows. Injected and OPTIONAL: it is a filesystem read, and the tests that
+   * exercise the poller's real logic must not need one.
+   */
+  loadConversations?: () => Promise<Conversation[]>
   now?: () => number
   captureLines?: number
 }): SessionsPoller {
@@ -84,10 +91,13 @@ export function createSessionsPoller(o: {
     }
 
     try {
-      const [registry, backendSessions, processes] = await Promise.all([
+      const [registry, backendSessions, processes, conversations] = await Promise.all([
         o.readRegistry(),
         o.backend.list(),
         o.scanProcesses().then(r => r.procs).catch(() => [] as HarnessProcess[]),
+        // History is an enrichment, never a prerequisite: a store that cannot be read costs the
+        // closed rows, not the running ones.
+        o.loadConversations ? o.loadConversations().catch(() => [] as Conversation[]) : Promise.resolve([]),
       ])
 
       const reconciled = reconcileSessions(registry, backendSessions)
@@ -119,7 +129,7 @@ export function createSessionsPoller(o: {
         }))
       })))
 
-      const sessions = buildSessionViews({ reconciled, activity, processes })
+      const sessions = buildSessionViews({ reconciled, activity, processes, conversations })
       const rang = bellTransitions(prevActivity, sessions)
 
       prevDigest = nextDigest

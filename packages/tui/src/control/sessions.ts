@@ -24,6 +24,7 @@ const RANK: Record<SessionState, number> = {
   exited: 3,
   lost: 4,
   unknown: 5,
+  closed: 6,
 }
 
 export function sessionRank(s: ControlSession): number {
@@ -46,9 +47,9 @@ export function attentionOf(list: readonly ControlSession[]): number {
 // grouping
 // ---------------------------------------------------------------------------
 
-export type SessionGrouping = 'none' | 'harness' | 'model' | 'project'
+export type SessionGrouping = 'none' | 'harness' | 'model' | 'project' | 'task'
 
-export const GROUPINGS: readonly SessionGrouping[] = ['none', 'harness', 'model', 'project'] as const
+export const GROUPINGS: readonly SessionGrouping[] = ['none', 'task', 'harness', 'model', 'project'] as const
 
 export interface SessionGroup {
   key: string
@@ -68,13 +69,16 @@ export interface SessionGroup {
 export function groupSessions(
   list: readonly ControlSession[],
   by: SessionGrouping,
-  unknownLabels: { harness: string; model: string; project: string },
+  unknownLabels: { harness: string; model: string; project: string; task: string },
 ): SessionGroup[] {
   if (by === 'none') return [{ key: '', label: '', sessions: sortSessions(list) }]
 
   const groups = new Map<string, SessionGroup>()
   for (const s of list) {
-    const key = by === 'harness' ? s.harness : by === 'model' ? (s.model ?? '') : s.project
+    const key = by === 'harness' ? s.harness
+      : by === 'model' ? (s.model ?? '')
+      : by === 'task' ? (s.task ?? '')
+      : s.project
     const label = key !== '' ? key : unknownLabels[by]
     const found = groups.get(key)
     if (found) found.sessions.push(s)
@@ -275,4 +279,44 @@ export function sessionsLayout(height: number, detailWanted = 0): SessionsLayout
   // the list, which is a scrolling region and can hold empty rows honestly.
   const detail = Math.min(detailWanted + 1, Math.max(DETAIL_MIN, Math.floor(available / 2)))
   return { list: available - detail, detail, summary }
+}
+
+// ---------------------------------------------------------------------------
+// the visible action row
+// ---------------------------------------------------------------------------
+
+/** What a verb DOES, independent of what it is called in either language. */
+export type SessionAction =
+  | 'attach' | 'resume' | 'rename' | 'note' | 'task' | 'kill' | 'openTask' | 'new' | 'search' | 'group'
+
+/**
+ * The verbs offered for the selected row — PURE, and the single answer both the drawn row and a
+ * click on it resolve against.
+ *
+ * Composed rather than fixed, on the same rule the services cockpit follows: a verb that cannot work
+ * on this row is ABSENT, never present and refusing. A closed conversation has nothing to attach to;
+ * one running outside agentop has nothing to rename; a row whose harness cannot reopen by id gets no
+ * reopen at all.
+ */
+export function sessionActions(selected: ControlSession | undefined): SessionAction[] {
+  const out: SessionAction[] = ['new', 'search', 'group']
+  if (!selected) return out
+
+  const managed = selected.state !== 'unknown' && selected.state !== 'closed'
+  if (managed) out.unshift('attach')
+  else if (selected.resume) out.unshift('resume')
+
+  if (managed) {
+    out.push('rename', 'note', 'task', 'kill')
+    if (selected.task) out.push('openTask')
+  }
+  return out
+}
+
+/** The already-localized labels for those verbs, in the order they are offered. */
+export function actionLabels(
+  actions: readonly SessionAction[],
+  words: Record<SessionAction, string>,
+): string[] {
+  return actions.map(a => words[a])
 }

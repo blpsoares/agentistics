@@ -12,6 +12,8 @@ import type { HarnessId } from '@agentistics/core'
 import { type HarnessProcess, sessionAtCwd } from '../live-sessions'
 import { rulesFor } from './attention-rules'
 import type { ReconciledSession } from './session-ref'
+import type { Conversation } from './conversations'
+import { conversationForProcess } from './conversations'
 import type { SessionActivity } from './types'
 
 export interface SessionView {
@@ -25,17 +27,33 @@ export interface SessionView {
    */
   harness?: HarnessId
   cwd: string
-  /** `external` is the whole of "this row cannot be acted on". There is deliberately no second
-   *  `managed` boolean saying the same thing, which could then disagree with it. */
-  status: ReconciledSession['status'] | 'external'
+  /**
+   * `external` — running, but agentop did not start it. `closed` — a conversation on this machine
+   * that is not running at all.
+   *
+   * Neither can be attached to, and both can usually be REOPENED, which is what `resume` carries.
+   * There is deliberately no second `managed` boolean saying the same thing as this field, which
+   * could then disagree with it.
+   */
+  status: ReconciledSession['status'] | 'external' | 'closed'
   /** ABSENT for an external session — not capturable, so not knowable. */
   activity?: SessionActivity
   label?: string
   note?: string
   model?: string
   effort?: string
+  /** The piece of work this session belongs to, when the user said. Groups the list. */
+  task?: string
   createdMs?: number
   attached: boolean
+  /**
+   * The conversation this row could REOPEN, when there is one.
+   *
+   * Present on an `external` row (the conversation it appears to be driving) and on a `closed` one
+   * (itself). Absent when the harness cannot reopen by id — gemini takes "latest" or an index, never
+   * an id — so the verb is simply not offered rather than offered and wrong.
+   */
+  resume?: { sessionId: string; title: string }
   /**
    * Whether this harness has probed approval rules at all.
    *
@@ -43,6 +61,14 @@ export interface SessionView {
    * still surfaced, but the reason cannot be shown. The UI says so; this flag is where it learns it.
    */
   approvalDetection: boolean
+  /**
+   * Everything about this row worth searching, lowercased and joined.
+   *
+   * Composed HERE so the search reaches a closed conversation's OPENING PROMPT — which is what a
+   * person actually remembers about something they closed ("the one where I asked about the
+   * migration") — without the screen having to hold conversation text it never renders.
+   */
+  searchText: string
 }
 
 export function needsAttention(a?: SessionActivity): boolean {
@@ -59,6 +85,9 @@ const RANK: Record<string, number> = {
 }
 
 function rankOf(v: SessionView): number {
+  // Closed conversations sit below everything running: they are history, and history must never
+  // push a session that is waiting on someone further down the screen.
+  if (v.status === 'closed') return 6
   if (v.status === 'external') return 5
   return RANK[v.activity ?? ''] ?? 4
 }
@@ -74,10 +103,33 @@ function externalId(p: HarnessProcess): string {
   return `external:${p.harness}:${p.cwd}:${p.startedMs ?? 0}`
 }
 
+/** Everything a row can be found by, in one lowercased blob. */
+function searchTextOf(...parts: Array<string | undefined>): string {
+  return parts.filter(Boolean).join(' ').toLowerCase()
+}
+
+/**
+ * The rows matching what was typed — PURE, and the same predicate for every kind of row.
+ *
+ * One function rather than a filter per status: a search that quietly skipped closed conversations
+ * would be a search that cannot find the thing it was most likely opened to find.
+ */
+export function filterSessions(views: readonly SessionView[], query: string): SessionView[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return [...views]
+  return views.filter(v => v.searchText.includes(q))
+}
+
 export function buildSessionViews(o: {
   reconciled: readonly ReconciledSession[]
   activity: ReadonlyMap<string, SessionActivity>
   processes: readonly HarnessProcess[]
+  /** Everything this machine has ever recorded, newest first. Used to name what an external process
+   *  is driving, and to offer the conversations that are not running at all. */
+  conversations?: readonly Conversation[]
+  /** How many closed conversations to offer. A machine with hundreds of them must not drown the
+   *  handful that are actually running. */
+  closedLimit?: number
 }): SessionView[] {
   const managed: SessionView[] = o.reconciled.map(r => {
     const harness = r.managed?.harness
@@ -92,9 +144,11 @@ export function buildSessionViews(o: {
       ...(r.managed?.note ? { note: r.managed.note } : {}),
       ...(r.managed?.model ? { model: r.managed.model } : {}),
       ...(r.managed?.effort ? { effort: r.managed.effort } : {}),
+      ...(r.managed?.task ? { task: r.managed.task } : {}),
       ...(r.backend ? { createdMs: r.backend.createdMs } : {}),
       attached: r.backend?.attached ?? false,
       approvalDetection: harness !== undefined && rulesFor(harness) !== undefined,
+      searchText: searchTextOf(harness, r.managed?.cwd, r.managed?.label, r.managed?.note, r.managed?.task),
     }
   })
 
@@ -110,17 +164,51 @@ export function buildSessionViews(o: {
     m.status !== 'lost' &&
     sessionAtCwd({ current_cwd: m.cwd, project_path: m.cwd }, p.cwd))
 
-  const external: SessionView[] = o.processes.filter(p => !covered(p)).map(p => ({
-    id: externalId(p),
-    harness: p.harness,
-    cwd: p.cwd,
-    status: 'external' as const,
-    ...(p.startedMs !== undefined ? { createdMs: p.startedMs } : {}),
-    attached: false,
-    approvalDetection: false,
-  }))
+  const conversations = o.conversations ?? []
 
-  return [...managed, ...external].sort((a, b) => {
+  const external: SessionView[] = o.processes.filter(p => !covered(p)).map(p => {
+    // What this process appears to be driving. Offered, never acted on: the confirmation names the
+    // conversation's own title, which is what lets the person judge whether it is the right one.
+    const conv = conversationForProcess(conversations, {
+      harness: p.harness,
+      cwd: p.cwd,
+      ...(p.sessionId ? { namedId: p.sessionId } : {}),
+    })
+    return {
+      id: externalId(p),
+      harness: p.harness,
+      cwd: p.cwd,
+      status: 'external' as const,
+      ...(p.startedMs !== undefined ? { createdMs: p.startedMs } : {}),
+      attached: false,
+      approvalDetection: false,
+      ...(conv?.resumable ? { resume: { sessionId: conv.sessionId, title: conv.title } } : {}),
+      searchText: searchTextOf(p.harness, p.cwd, conv?.title, conv?.firstPrompt),
+    }
+  })
+
+  // Conversations that are not running at all — the ones you closed and want back. They are the
+  // reason this screen can answer "what was I doing yesterday" as well as "what is running now".
+  const running = new Set<string>()
+  for (const v of external) if (v.resume) running.add(v.resume.sessionId)
+
+  const closed: SessionView[] = conversations
+    .filter(c => !running.has(c.sessionId))
+    .slice(0, o.closedLimit ?? 40)
+    .map(c => ({
+      id: `closed:${c.sessionId}`,
+      harness: c.harness,
+      cwd: c.cwd,
+      status: 'closed' as const,
+      label: c.title,
+      createdMs: c.lastActivityMs,
+      attached: false,
+      approvalDetection: false,
+      ...(c.resumable ? { resume: { sessionId: c.sessionId, title: c.title } } : {}),
+      searchText: searchTextOf(c.harness, c.cwd, c.title, c.firstPrompt),
+    }))
+
+  return [...managed, ...external, ...closed].sort((a, b) => {
     const byRank = rankOf(a) - rankOf(b)
     if (byRank !== 0) return byRank
     return (b.createdMs ?? 0) - (a.createdMs ?? 0)
@@ -131,7 +219,7 @@ export function attentionCount(views: readonly SessionView[]): number {
   return views.filter(v => needsAttention(v.activity)).length
 }
 
-export type SessionGrouping = 'harness' | 'model' | 'project' | 'none'
+export type SessionGrouping = 'harness' | 'model' | 'project' | 'task' | 'none'
 
 export interface SessionGroup {
   key: string
@@ -154,12 +242,14 @@ export function groupSessions(views: readonly SessionView[], by: SessionGrouping
   for (const v of views) {
     const key = by === 'harness' ? (v.harness ?? '')
       : by === 'model' ? (v.model ?? '')
+      : by === 'task' ? (v.task ?? '')
       : projectName(v.cwd)
     // An empty key means the fact was never recorded. Each dimension says so in its own words
     // rather than sharing one blank heading that reads as a category.
     const label = key !== '' ? key
       : by === 'harness' ? 'harness unknown'
       : by === 'model' ? 'no model recorded'
+      : by === 'task' ? 'no task'
       : 'no directory recorded'
     const found = groups.get(key)
     if (found) found.sessions.push(v)
