@@ -268,6 +268,15 @@ describe('headerMeta', () => {
     expect(headerMeta({ ...tag, width: 6 }).attention).toBe('')
   })
 
+  test('keeps the version rather than dropping straight to bare mode when only the count does not fit', () => {
+    // Wide enough for `solo · v1.7.3` (13 cols) but not for `solo · 2 waiting on you` (23) — the
+    // version must not disappear just because something is waiting on the user.
+    const tag = { mode: 'solo', version: '1.7.3', attention: '2 waiting on you' }
+    const meta = headerMeta({ ...tag, width: 'solo · v1.7.3'.length })
+    expect(meta.text).toBe('solo · v1.7.3')
+    expect(meta.attention).toBe('')
+  })
+
   test('never exceeds its width with a count in the tag either', () => {
     for (let width = 0; width <= 80; width++) {
       const meta = headerMeta({

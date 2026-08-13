@@ -24,7 +24,9 @@
  *    exists to produce for a user who is looking somewhere else — the header's waiting counter and
  *    the BEL. A bell that only rings while you are staring at the list is not a bell. The screen is
  *    mounted for the whole session (`display: none`, never unmounted), so "mounted" is the honest
- *    gate. Switching TO the tab still asks again on the spot rather than waiting out the interval.
+ *    gate. It still runs at TWO cadences rather than one — see `POLL_ACTIVE_MS` — because "never
+ *    stops" and "always costs the maximum" are different claims, and only the first one is required.
+ *    Switching TO the tab still asks again on the spot rather than waiting out the interval.
  *
  *  - **`enter` is ATTACH, not "step into the verbs".** That is the one key a session list has to
  *    spend well, so `tab` is the only way to the action row — which is why `sessionsHints` is told
@@ -70,13 +72,21 @@ import type { ActionResult, ControlHost, SessionSnapshot, SessionView } from '..
 import type { RunAction, TabChrome } from '../ControlCenter'
 
 /**
- * How often the fleet is re-read.
+ * How often the fleet is re-read — five seconds while this tab is on screen, per the spec.
  *
- * Five seconds, per the spec. It is not free — the host takes one capture per RUNNING session — so
- * it is deliberately slower than the Logs screen's second, and it is the only thing on this screen
- * that costs anything.
+ * It is not free — one tick is `readRegistry()` + a `tmux ls` + a full `/proc` scan
+ * (`harnessProcesses()`) + one `capture-pane` per alive session — and the poll runs for the whole
+ * life of `agentop`, per the class comment above. Paying the 5s price on the Help tab, the Logs tab
+ * or a minimized terminal is the maximum cost for no extra benefit: the header counter and the BEL
+ * are still fed correctly by a slower tick, since nothing reads THIS screen's list while it is not
+ * the one on screen. So there are two numbers, not one — `isActive` picks between them — and
+ * switching TO this tab still asks on the spot rather than waiting out whichever interval was
+ * running.
  */
-const POLL_MS = 5000
+const POLL_ACTIVE_MS = 5000
+/** The cadence everywhere else. Six times slower, which is the whole point: still fresh enough that
+ *  the counter and the bell notice within half a minute, never as expensive as watching the list. */
+const POLL_BACKGROUND_MS = 30000
 
 /**
  * How often the clock ticks.
@@ -163,6 +173,22 @@ export function Sessions({
   const selection = Math.max(0, views.findIndex(v => v.id === selectedId))
   const selected: SessionView | undefined = views[selection]
 
+  // Re-seat the cursor whenever it is not pointing at a row that exists — the FIRST snapshot
+  // (`selectedId` is still `null`) and a poll that pruned the tracked session are the same case: the
+  // fallback to row 0 above already moves `selection` for both, silently, and this is what keeps the
+  // rest of the screen from lying about what that fallback means. A stored `actionIndex` surviving
+  // the swap is what let a highlighted `Kill` end up highlighted on a session that never asked for
+  // it, so it is reset here exactly as `move()` resets it when the USER changes rows — this is the
+  // same reset for when the LIST changes out from under them. `wantFocus` is only nudged off the
+  // action row, never off `list`, since the row it pointed at is what went missing, not the pane.
+  useEffect(() => {
+    if (snapshot === null) return
+    if (selectedId !== null && views.some(v => v.id === selectedId)) return
+    setSelectedId(views[0]?.id ?? null)
+    setActionIndex(0)
+    setWantFocus(f => (f === 'actions' ? 'list' : f))
+  }, [snapshot, views, selectedId])
+
   const back = useCallback(() => setView({ kind: 'cockpit' }), [])
 
   // -------------------------------------------------------------------------
@@ -180,24 +206,29 @@ export function Sessions({
   useEffect(() => () => { alive.current = false }, [])
 
   const readSessions = useCallback(async () => {
-    let next: SessionSnapshot
+    // The host contracts `host.sessions()` never to throw — a real read failure comes back as
+    // `{ views: [], unavailable: ... }`, which is the HONEST empty fleet, not this catch. If it is
+    // ever reached anyway, the truthful answer to a transient throw is "we don't know yet", not
+    // "there are no sessions": overwriting a good snapshot with an empty one here would render a
+    // contract violation as the confident zero this codebase forbids everywhere else. So a throw
+    // simply keeps whatever the last honest snapshot was.
     try {
-      next = await host.sessions()
-    } catch {
-      next = { views: [] }
-    }
-    if (alive.current) setSnapshot(next)
+      const next = await host.sessions()
+      if (alive.current) setSnapshot(next)
+    } catch { /* keep the last snapshot — see above */ }
   }, [host])
 
   useEffect(() => {
+    // One effect, not two. A second effect that also read on mount (to catch `isActive` becoming
+    // true on open) cost the app two `/proc` scans and two capture rounds back to back — this one
+    // reads on mount AND on every `isActive` transition, because both are the same event: the
+    // dependency array re-runs the effect (and its immediate `readSessions()`) exactly when the tab
+    // is switched to, and the cadence chosen below already matches which case it is.
     void readSessions()
-    const timer = setInterval(() => { void readSessions() }, POLL_MS)
+    const ms = isActive ? POLL_ACTIVE_MS : POLL_BACKGROUND_MS
+    const timer = setInterval(() => { void readSessions() }, ms)
     return () => clearInterval(timer)
-  }, [readSessions])
-
-  // Coming back to the screen asks on the spot. Five seconds is a long time to look at a list you
-  // have just been told is stale by the act of opening it.
-  useEffect(() => { if (isActive) void readSessions() }, [isActive, readSessions])
+  }, [readSessions, isActive])
 
   useEffect(() => {
     if (!isActive) return
@@ -224,13 +255,29 @@ export function Sessions({
    * waiting when `agentop` opened is not news — ringing for it would make the app beep every time it
    * starts. Ringing on the SET rather than on the count is the other half: two sessions swapping
    * places (one answered, another one asking) leaves the count at two and is still news.
+   *
+   * A session in `waiting-approval` or `waiting-input` is always a member. One in `unreadable` KEEPS
+   * whatever membership it already had instead of being computed fresh — `unreadable` is not a
+   * resolved state, it is the host saying a `capture-pane` failed on this particular tick (a state it
+   * models precisely because that happens), so a session that was waiting and is now unreadable has
+   * not been OBSERVED to have stopped waiting. Dropping it here and picking it back up next tick is
+   * what rang the bell twice for one still-pending session; every other state (working, exited, …)
+   * is a genuine observation and does clear it.
    */
   const wasWaiting = useRef<Set<string> | null>(null)
 
   useEffect(() => {
     if (snapshot === null) return
-    const ids = new Set(waiting.map(v => v.id))
     const before = wasWaiting.current
+    const ids = new Set(
+      views
+        .filter(v => (
+          v.state === 'waiting-approval'
+          || v.state === 'waiting-input'
+          || (v.state === 'unreadable' && (before?.has(v.id) ?? false))
+        ))
+        .map(v => v.id),
+    )
     wasWaiting.current = ids
     if (before === null) return
     for (const id of ids) {
@@ -239,7 +286,7 @@ export function Sessions({
         return
       }
     }
-  }, [snapshot, waiting])
+  }, [snapshot, views])
 
   // -------------------------------------------------------------------------
   // the verbs — every one of them a single host call, none of them decided here
@@ -428,9 +475,15 @@ export function Sessions({
     }
 
     // The list. The letters are `sessionsHints`': they avoid every key the shell answers globally
-    // (`q`, `r`, `m`) and both vi movement keys — `k` for "kill" would have been the same keypress
-    // as "up". Each one is gated on the same flag that puts its verb on the action row, so a key
-    // whose hint is absent does nothing rather than failing.
+    // (`q`, `m`) and both vi movement keys — `k` for "kill" would have been the same keypress as
+    // "up". Each one is gated on the same flag that puts its verb on the action row, so a key whose
+    // hint is absent does nothing rather than failing.
+    //
+    // `r` is the one exception, and it does not steal from the shell: Ink dispatches a key to every
+    // active `useInput`, so the shell's own `r` (service status) still fires from its own hook. This
+    // screen just ALSO answers it, which is what makes `sessionsHints`' `s.keyRefresh` true here — it
+    // used to be a footer hint for a key that, on this screen, did nothing.
+    if (input === 'r') { void readSessions(); return }
     if (!selected) return
     if (key.return && selected.attachable) return attach(selected.id)
     if (input === 'R' && selected.managed) {

@@ -242,6 +242,15 @@ export function headerMeta(input: HeaderMetaInput): HeaderMeta {
   const withoutVersion = { text: mode, attention, update: '' }
   if (headerMetaWidth(withoutVersion) <= width) return withoutVersion
 
+  // The rung the ladder was missing: `mode · vX.Y.Z` on its own, no attention, no update. Without it
+  // a width that fits `solo · v1.7.3` (13 cols) but not `solo · 2 waiting on you` (23) fell straight
+  // to bare `solo` — the version vanished BECAUSE something was waiting, spending nothing on 16
+  // free columns. The count still outranks the version when there is room for one or the other
+  // (`withoutVersion`, above), so this only fires once neither combination fits and the choice is
+  // between the version alone and nothing at all.
+  const withoutAttention = { text, attention: '', update: '' }
+  if (headerMetaWidth(withoutAttention) <= width) return withoutAttention
+
   if (mode.length <= width) return { text: mode, attention: '', update: '' }
   return { text: truncate(mode, width), attention: '', update: '' }
 }
