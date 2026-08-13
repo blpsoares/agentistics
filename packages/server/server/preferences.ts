@@ -1,7 +1,7 @@
 import { join, dirname } from 'path'
 import { mkdir, rename, writeFile, open, unlink, stat, readFile, utimes } from 'node:fs/promises'
 import { AGENTISTICS_DATA_DIR, CLAUDE_DIR } from './config'
-import type { BillingSettings, TeamConfig } from '@agentistics/core'
+import type { BillingSettings, SavedComparison, TeamConfig } from '@agentistics/core'
 import { migrateTeamConfig } from '@agentistics/core'
 
 // Preferences live in the writable ~/.agentistics dir. The legacy location under CLAUDE_DIR
@@ -48,6 +48,9 @@ export interface Preferences {
    *  and the writes go through the same shallow merge as every other field, so the settings screen
    *  must always PUT the complete object rather than a partial one. */
   billing?: BillingSettings
+  /** Saved comparisons — N filter scopes the user asks about repeatedly, and which of them are
+   *  pinned to the Home page. Local only, same as `billing`. */
+  comparisons?: SavedComparison[]
   /** How the app preserves session history past Claude's 30-day cleanup.
    *  `undefined` = not chosen yet (the blocking consent gate is shown).
    *    - 'consolidate' = store computed per-session metrics only (~KB, recommended)

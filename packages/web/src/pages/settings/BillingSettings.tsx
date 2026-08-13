@@ -86,6 +86,8 @@ export default function BillingSettings() {
   const openDraft = useCallback((next: PeriodDraft) => {
     setDraft(next)
     setDraftOrigin(JSON.stringify(next))
+    // Each drawer starts clean: an error revealed on the last attempt must not greet the next one.
+    setShowErrors(false)
   }, [])
   const draftDirty = draft !== null && JSON.stringify(draft) !== draftOrigin
   const [confirmDelete, setConfirmDelete] = useState<BillingPeriod | null>(null)
@@ -136,7 +138,12 @@ export default function BillingSettings() {
     () => (draft ? validateDraft(draft, periods, newPeriodId) : []),
     [draft, periods],
   )
+  // A blank form is not a form full of mistakes. Errors stay hidden until the user asks to save —
+  // greeting someone with three red lines before they have typed anything reads as "this is
+  // broken", not as "here is what I need".
+  const [showErrors, setShowErrors] = useState(false)
   const errorFor = (codes: string[]): string | null => {
+    if (!showErrors) return null
     const hit = draftErrors.find(e => codes.includes(e.code))
     if (!hit) return null
     const other = hit.code === 'overlap'
@@ -159,7 +166,10 @@ export default function BillingSettings() {
   }
 
   const saveDraft = async () => {
-    if (!draft || draftErrors.length > 0) return
+    if (!draft) return
+    // The button is never disabled. A greyed-out control with nothing to explain it is the same
+    // dead click as a toggle that does nothing — pressing it reveals what is missing instead.
+    if (draftErrors.length > 0) { setShowErrors(true); return }
     const period = periodFromDraft(draft, newPeriodId)
     const rest = periods.filter(p => p.id !== period.id)
     await persist([...rest, period])
@@ -371,13 +381,10 @@ export default function BillingSettings() {
         footer={
           <button
             onClick={saveDraft}
-            disabled={draftErrors.length > 0}
             style={{
               width: '100%', padding: '12px 16px', borderRadius: 'var(--radius-lg)',
               border: 'none', fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
-              background: draftErrors.length > 0 ? 'var(--bg-hover)' : 'var(--anthropic-orange)',
-              color: draftErrors.length > 0 ? 'var(--text-tertiary)' : '#fff',
-              cursor: draftErrors.length > 0 ? 'default' : 'pointer',
+              background: 'var(--anthropic-orange)', color: '#fff', cursor: 'pointer',
             }}
           >
             {pt ? 'Salvar' : 'Save'}
@@ -454,6 +461,7 @@ export default function BillingSettings() {
                     : 'What your invoice says. The catalog’s suggestion is only a starting point.'}
                   amount={draft.amount}
                   currency={draft.currency}
+                  monthSuffix={pt ? '/mês' : '/mo'}
                   onAmountChange={v => setDraft(d => (d ? { ...d, amount: v } : d))}
                   onCurrencyChange={c => setDraft(d => (d ? { ...d, currency: c } : d))}
                 />
@@ -519,12 +527,17 @@ function modeLabel(mode: BillingPeriod['mode'], pt: boolean): string {
   }
 }
 
-/** Errors render inline under their field, never as a toast: on a phone this form is a
- *  full-screen drawer, and a toast over it is read once and cannot be re-read. */
+/**
+ * Errors render inline under their field, never as a toast: on a phone this form is a full-screen
+ * drawer, and a toast over it is read once and cannot be re-read.
+ *
+ * No negative margin. It had `marginTop: -8` tuned against `FieldInput`'s own bottom margin, which
+ * the `Select` above it does not have — so the message landed on top of the control it was about.
+ */
 function FieldError({ text }: { text: string | null }) {
   if (!text) return null
   return (
-    <div style={{ fontSize: 11.5, color: 'var(--accent-red)', marginTop: -8, marginBottom: 12, lineHeight: 1.45 }}>
+    <div style={{ fontSize: 11.5, color: 'var(--accent-red)', margin: '-6px 0 12px', lineHeight: 1.45 }}>
       {text}
     </div>
   )
@@ -542,11 +555,14 @@ function FieldError({ text }: { text: string | null }) {
  * `parseAmountInput` is a fixed point over that display, so re-parsing what the field shows on
  * every keystroke is safe — see its test.
  */
-function MoneyField({ label, sub, amount, currency, onAmountChange, onCurrencyChange }: {
+function MoneyField({ label, sub, amount, currency, monthSuffix, onAmountChange, onCurrencyChange }: {
   label: string
   sub?: string
   amount: string
   currency: BillingCurrency
+  /** "/mo" or "/mês" — this followed the currency instead of the language and read as Portuguese
+   *  inside an English form. */
+  monthSuffix: string
   onAmountChange: (v: string) => void
   onCurrencyChange: (c: BillingCurrency) => void
 }) {
@@ -575,7 +591,7 @@ function MoneyField({ label, sub, amount, currency, onAmountChange, onCurrencyCh
               background: 'transparent', color: 'var(--text-primary)', fontFamily: 'inherit',
             }}
           />
-          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>/mês</span>
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>{monthSuffix}</span>
         </div>
         <div style={{ flexShrink: 0 }}>
           <TabSelect

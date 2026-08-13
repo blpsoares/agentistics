@@ -33,6 +33,7 @@ import { capable, HARNESS_PROVIDERS } from '../lib/harness'
 import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
 import { CostBasisToggle } from '../components/CostBasisToggle'
 import { PlanValuePanel } from '../components/PlanValuePanel'
+import { HomeComparisons } from '../components/HomeComparisons'
 import { planCostSubtitle, viewCost } from '../lib/costBasis'
 
 type CardId = 'messages' | 'sessions' | 'tool-calls' | 'input-tokens' | 'output-tokens' | 'cost' | 'streak' | 'longest-session' | 'commits' | 'files'
@@ -263,6 +264,9 @@ export default function HomePage() {
           }
         />
       </Section>
+
+      {/* Pinned comparisons — each keeps its own filters and its own basis. */}
+      <HomeComparisons ctx={ctx} />
 
       {/* API vs plan — only once a plan is registered and a cost could actually be computed.
           An empty version inviting setup would be a third prompt competing with the first-run

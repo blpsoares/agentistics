@@ -1,4 +1,4 @@
-import type { BillingReadiness, BillingSettings, CostBasis, MonthlyCommitment, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
+import type { BillingReadiness, BillingSettings, CostBasis, MonthlyCommitment, SavedComparison, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
 import type { useDerivedStats } from '../hooks/useData'
 import type { PlanBasisView } from '../hooks/usePlanBasis'
 import type { TagDef } from './tagMatch'
@@ -60,6 +60,9 @@ export interface AppContext {
   /** How this machine is actually billed — the timeline the plan cost basis is computed from.
    *  Local only; it never travels to a central, and on a central it is always empty. */
   billing: BillingSettings
+  /** Saved comparisons, and which are pinned to Home. */
+  comparisons: SavedComparison[]
+  saveComparisons: (next: SavedComparison[]) => Promise<void>
   /** Persists the COMPLETE settings object. `writePreferencesTo` merges shallowly, so a partial
    *  save would replace the whole timeline with the fragment. */
   saveBilling: (next: BillingSettings) => Promise<void>

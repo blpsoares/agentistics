@@ -93,18 +93,27 @@ export interface CompareSide {
   cacheHitRate: number | null
 }
 
-export interface CompareRow {
-  metric: CompareMetricDef
-  a: number | null
-  b: number | null
-  /** `b - a`. `null` when either side is missing. */
+/** One side's cell in a row. */
+export interface CompareCell {
+  value: number | null
+  /** Against the BASELINE (index 0). `null` on the baseline itself and when either side is
+   *  missing. */
   delta: number | null
-  /** `(b - a) / a`. `null` when either side is missing OR `a` is zero — growth from nothing has
-   *  no percentage, and printing one would be inventing a denominator. */
+  /** `delta / baseline`. `null` when the baseline is zero — growth from nothing has no
+   *  percentage, and printing one would be inventing a denominator. */
   deltaPct: number | null
   tone: DeltaTone
+}
+
+export interface CompareRow {
+  metric: CompareMetricDef
+  /** One per side, in the sides' own order. `cells[0]` is the baseline. */
+  cells: CompareCell[]
   /** The basis this row was actually rendered in. */
   basis: MetricBasis
+  /** The index of the best cell by this metric's polarity, or `null` for a neutral metric or when
+   *  nothing is comparable. Drawn as a marker rather than left for the reader to work out. */
+  bestIndex: number | null
 }
 
 export const COMPARE_METRICS: readonly CompareMetricDef[] = [
@@ -154,12 +163,18 @@ function toneFor(delta: number | null, polarity: MetricPolarity): DeltaTone {
 }
 
 /**
- * Build the table.
+ * Build the table for N sides.
  *
- * `basis` is the page's toggle. A row whose `fixedBasis` disagrees keeps its own, and the cost
- * row degrades to API when either side cannot produce a plan cost — see rule 1 in the header.
+ * `basis` is the comparison's own basis. A row whose `fixedBasis` disagrees keeps its own, and the
+ * cost row degrades to API when ANY side cannot produce a plan cost — see rule 1 in the header:
+ * one plan-basis column beside an API-basis one is not a comparison.
+ *
+ * Every delta is against `sides[0]`. With two sides that is a symmetric statement and the order
+ * hardly matters; with three or more it is the whole meaning of the table, which is why the
+ * baseline is fixed at the first side rather than chosen per row.
  */
-export function buildCompareRows(a: CompareSide, b: CompareSide, basis: MetricBasis): CompareRow[] {
+export function buildCompareRows(sides: readonly CompareSide[], basis: MetricBasis): CompareRow[] {
+  if (sides.length === 0) return []
   const rows: CompareRow[] = []
 
   for (const metric of COMPARE_METRICS) {
@@ -167,21 +182,41 @@ export function buildCompareRows(a: CompareSide, b: CompareSide, basis: MetricBa
 
     // The whole row falls back together, never one column at a time.
     if (rowBasis === 'plan' && metric.key !== 'planMultiple') {
-      if (a.planCostUSD === null || b.planCostUSD === null) rowBasis = 'api'
+      if (sides.some(s => s.planCostUSD === null)) rowBasis = 'api'
     }
 
-    const va = valueFor(a, metric.key, rowBasis)
-    const vb = valueFor(b, metric.key, rowBasis)
+    const values = sides.map(s => valueFor(s, metric.key, rowBasis))
 
-    // A row pinned to the plan basis is simply absent when neither side has one — showing it
-    // empty in every column is a row that only ever says "no".
-    if (metric.fixedBasis === 'plan' && va === null && vb === null) continue
+    // A row pinned to the plan basis is simply absent when NO side has one — a row that can only
+    // ever say "no" in every column is noise.
+    if (metric.fixedBasis === 'plan' && values.every(v => v === null)) continue
 
-    const delta = va === null || vb === null ? null : vb - va
-    const deltaPct = delta === null || va === null || va === 0 ? null : delta / va
+    const baseline = values[0] ?? null
+    const cells: CompareCell[] = values.map((value, i) => {
+      if (i === 0) return { value, delta: null, deltaPct: null, tone: 'flat' }
+      const delta = value === null || baseline === null ? null : value - baseline
+      const deltaPct = delta === null || baseline === null || baseline === 0 ? null : delta / baseline
+      return { value, delta, deltaPct, tone: toneFor(delta, metric.polarity) }
+    })
 
-    rows.push({ metric, a: va, b: vb, delta, deltaPct, tone: toneFor(delta, metric.polarity), basis: rowBasis })
+    rows.push({ metric, cells, basis: rowBasis, bestIndex: bestOf(values, metric.polarity) })
   }
 
   return rows
+}
+
+/** Which side wins this metric. `null` for a neutral one — marking a "winner" where none exists
+ *  would invent a judgement the metric does not support. */
+function bestOf(values: (number | null)[], polarity: MetricPolarity): number | null {
+  if (polarity === 'neutral') return null
+  let best: number | null = null
+  let bestValue = 0
+  values.forEach((v, i) => {
+    if (v === null) return
+    if (best === null) { best = i; bestValue = v; return }
+    const wins = polarity === 'lower-better' ? v < bestValue : v > bestValue
+    if (wins) { best = i; bestValue = v }
+  })
+  // A single comparable side is not a winner over anything.
+  return values.filter(v => v !== null).length > 1 ? best : null
 }

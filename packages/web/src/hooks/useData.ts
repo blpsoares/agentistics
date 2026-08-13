@@ -906,8 +906,18 @@ export function repositoryGitTotals(
 }
 
 
-export function useDerivedStats(data: AppData | null, filters: Filters, tags: TagDef[] = []) {
-  return useMemo(() => {
+/**
+ * The whole derivation, as a PURE function of (data, filters, tags).
+ *
+ * Extracted from the hook so it can be called N TIMES for N scopes — the compare page derives one
+ * per side and the count is dynamic, which the rules of hooks forbid a hook from doing. It also
+ * makes the derivation directly testable without mounting anything.
+ *
+ * It reads nothing but its arguments; `useDerivedStats` below is the memoized single-scope wrapper
+ * every page uses.
+ */
+export function computeDerivedStats(data: AppData | null, filters: Filters, tags: TagDef[] = []) {
+  {
     if (!data) return null
 
     const { start, end } = getDateRangeFilter(filters.dateRange, filters.customStart, filters.customEnd)
@@ -1739,5 +1749,9 @@ export function useDerivedStats(data: AppData | null, filters: Filters, tags: Ta
       cacheNetSavedUSD,
       cachePerModel,
     }
-  }, [data, filters, tags])
+  }
+}
+
+export function useDerivedStats(data: AppData | null, filters: Filters, tags: TagDef[] = []) {
+  return useMemo(() => computeDerivedStats(data, filters, tags), [data, filters, tags])
 }

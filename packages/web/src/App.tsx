@@ -21,9 +21,9 @@ import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
 import type { TagDef } from './lib/tagMatch'
 import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
-import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, TeamConfig } from '@agentistics/core'
+import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, SavedComparison, TeamConfig } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { billingReadiness, monthlyCommitment, normalizeBillingSettings, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
+import { billingReadiness, monthlyCommitment, normalizeBillingSettings, normalizeComparisons, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
 import { buildDeniedRepoLabels } from './lib/shareRepos'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
@@ -1274,6 +1274,15 @@ export default function AppLayout() {
 
   // How this machine is actually billed. Local only — it never travels to a central.
   const [billing, setBilling] = useState<BillingSettings>({ profiles: {} })
+  const [comparisons, setComparisons] = useState<SavedComparison[]>([])
+  const saveComparisons = useCallback(async (next: SavedComparison[]) => {
+    setComparisons(next)
+    await fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comparisons: next }),
+    })
+  }, [])
   const [costBasisState, setCostBasisState] = useState<CostBasis>('api')
   const [billingSetupOpen, setBillingSetupOpen] = useState(false)
   // `writePreferencesTo` is a SHALLOW merge, so a partial PUT would replace the whole billing
@@ -1529,6 +1538,7 @@ export default function AppLayout() {
       const nextBilling = normalizeBillingSettings(prefs.billing)
       setBilling(nextBilling)
       setCostBasisState(nextBilling.costBasis ?? 'api')
+      setComparisons(normalizeComparisons((prefs as Record<string, unknown>).comparisons))
       if (prefs.lang) setLangState(prefs.lang)
       if (prefs.theme) setThemeState(prefs.theme)
       if (prefs.currency) setCurrencyState(prefs.currency)
@@ -2667,6 +2677,7 @@ export default function AppLayout() {
           filters, setFilters,
           lang, theme, currency, setCurrency, brlRate,
           billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
+          comparisons, saveComparisons,
           tags: tagsList, monthCommitment,
           chatModel, chatSoundEnabled, chatSoundId,
           savePreferences,
