@@ -64,42 +64,34 @@ describe('costBasisMarker', () => {
 })
 
 describe('planCostSubtitle', () => {
-  const base = { multiple: 24.5, window: { from: '2026-04-10', to: '2026-08-13' }, coveredDays: 126, uncoveredDays: 0, lang: 'pt' as const }
+  const base = { multiple: 24.5, coveredDays: 126, lang: 'pt' as const }
 
-  test('explains why a fixed monthly price shows a broken figure', () => {
-    // "The subscription is fixed, why is it R$2.069,65?" is the first question this number
-    // raises. The window alone did not answer it; the day count plus "prorated" does.
-    const out = planCostSubtitle(base)
-    expect(out).toContain('126 dias')
-    expect(out).toContain('rateados')
+  test('stays ONE short line — a KPI card is not a report', () => {
+    // An earlier version stacked the multiple, the day count, the proration, the window AND the
+    // uncovered days into this slot. It wrapped to four lines and made that card twice the height
+    // of every sibling in the row, because a grid row shares its height.
+    for (const lang of ['pt', 'en'] as const) {
+      const out = planCostSubtitle({ ...base, lang })
+      expect(out).not.toContain('\n')
+      // A guard against regressing to a paragraph, not a pixel measurement — the card ellipsizes
+      // at its own width anyway. The version this replaced ran to 110 characters.
+      expect(out.length).toBeLessThan(40)
+    }
   })
 
-  test('always names the measured window', () => {
-    // A user who filtered "all time" and got a figure over 126 days has a correct number under a
-    // misleading heading.
-    expect(planCostSubtitle(base)).toContain('2026-04-10')
-    expect(planCostSubtitle(base)).toContain('2026-08-13')
+  test('leads with the multiple and names the prorated days', () => {
+    expect(planCostSubtitle(base)).toBe('24,5× o valor de API · 126d rateados')
+    expect(planCostSubtitle({ ...base, lang: 'en' })).toBe('24.5× the API value · 126d prorated')
   })
 
-  test('leads with the multiple', () => {
-    expect(planCostSubtitle(base).startsWith('24,5×')).toBe(true)
-    expect(planCostSubtitle({ ...base, lang: 'en' }).startsWith('24.5×')).toBe(true)
-  })
-
-  test('names uncovered days when there are any, and stays quiet when there are none', () => {
-    expect(planCostSubtitle({ ...base, uncoveredDays: 145 })).toContain('145')
-    expect(planCostSubtitle(base)).not.toContain('sem plano')
-  })
-
-  test('a single day is singular in both languages', () => {
-    expect(planCostSubtitle({ ...base, coveredDays: 1 })).toContain('1 dia rateado')
-    expect(planCostSubtitle({ ...base, coveredDays: 1, lang: 'en' })).toContain('1 day prorated')
-  })
-
-  test('an absent multiple simply drops out rather than printing a dash', () => {
+  test('an absent multiple still names the figure rather than printing a dash', () => {
     const out = planCostSubtitle({ ...base, multiple: null })
     expect(out).not.toContain('×')
-    expect(out).toContain('126 dias')
+    expect(out).toContain('126d')
+  })
+
+  test('no covered days leaves only the headline phrase', () => {
+    expect(planCostSubtitle({ ...base, coveredDays: 0 })).toBe('24,5× o valor de API')
   })
 })
 

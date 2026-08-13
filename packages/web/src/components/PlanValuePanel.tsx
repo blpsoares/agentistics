@@ -130,6 +130,15 @@ export function PlanValuePanel({ planBasis, currency, brlRate, lang }: {
               : `Measured ${planBasis.window.from} → ${planBasis.window.to} — both sides over the same days.`}
           </span>
         )}
+        {/* The proration lives here now, not in the KPI card's one-line subtitle. It is the answer
+            to "the subscription is fixed, why is this figure broken", and it needs a sentence. */}
+        {cov.coveredDays > 0 && (
+          <span>
+            {pt
+              ? `São ${cov.coveredDays} dia${cov.coveredDays === 1 ? '' : 's'} cobertos, rateados do seu valor mensal — por isso o total raramente é um número redondo.`
+              : `That is ${cov.coveredDays} covered day${cov.coveredDays === 1 ? '' : 's'}, prorated from your monthly amount — which is why the total is rarely a round number.`}
+          </span>
+        )}
         {cov.uncoveredDays > 0 && (
           <span>
             {pt

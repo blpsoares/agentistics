@@ -66,9 +66,7 @@ export default function HomePage() {
   function planCostSub(activeLang: Lang): string {
     return planCostSubtitle({
       multiple: planBasis.basis?.multiple ?? null,
-      window: planBasis.window,
       coveredDays: planBasis.basis?.coverage.coveredDays ?? 0,
-      uncoveredDays: planBasis.basis?.coverage.uncoveredDays ?? 0,
       lang: activeLang === 'pt' ? 'pt' : 'en',
     })
   }
@@ -107,6 +105,9 @@ export default function HomePage() {
           // headline — BRL is ~5× the amount and can carry an extra digit.
           sizeBasis={widerValue(fmtCost(shownUSD, 'USD', brlRate), fmtCost(shownUSD, 'BRL', brlRate))}
           sub={showPlan ? planCostSub(lang) : costCardSub(lang, filters.harness)}
+          // Belt and braces beside the shorter text: every card in a grid row shares its height,
+          // so this one may never be the one that stretches it.
+          subNoWrap={showPlan}
           icon={<TrendingUp size={15} />} accent="var(--anthropic-orange)" info={infoItems[5]} onInfoClick={() => setInfoModalIndex(5)}
           // Only the currency lives here. The API/Plan switch moved to the filter bar, where it
           // was asked for and where people look to change what they are seeing — keeping a second

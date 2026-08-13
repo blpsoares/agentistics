@@ -75,37 +75,25 @@ export function costBasisMarker(view: CostView, lang: 'pt' | 'en'): string | nul
  */
 export function planCostSubtitle(args: {
   multiple: number | null
-  window: { from: string; to: string } | null
   /** Days the plan actually covered. Named because it is what makes the figure non-round. */
   coveredDays: number
-  uncoveredDays: number
   lang: 'pt' | 'en'
 }): string {
-  const { multiple, window, coveredDays, uncoveredDays, lang } = args
+  const { multiple, coveredDays, lang } = args
   const pt = lang === 'pt'
-  const parts: string[] = []
 
+  // ONE SHORT LINE, and no longer than its neighbours'. This sits in a KPI card whose siblings
+  // read "tokens enviados ao modelo"; an earlier version stacked the multiple, the day count, the
+  // proration, the window AND the uncovered days into it, wrapped to four lines, and made that
+  // one card twice the height of the row. The card is a headline — the caveats belong to the
+  // "API vs your plan" panel below it, which is always on screen whenever this figure is, and to
+  // the info popover.
   const mult = formatMultiple(multiple, lang)
-  if (mult) parts.push(pt ? `${mult} o valor de API` : `${mult} the API value`)
-
-  // "Why is a fixed monthly price showing R$2.069,65?" is the first question this figure raises,
-  // and the answer is that the window is 126 days — not a whole number of months. Saying
-  // "prorated" beside the day count answers it before it is asked; the window alone did not.
-  if (coveredDays > 0) {
-    parts.push(pt
-      ? `${coveredDays} dia${coveredDays === 1 ? '' : 's'} rateados do seu mensal`
-      : `${coveredDays} day${coveredDays === 1 ? '' : 's'} prorated from your monthly`)
-  }
-  if (window) {
-    parts.push(pt ? `${window.from} a ${window.to}` : `${window.from} → ${window.to}`)
-  }
-  if (uncoveredDays > 0) {
-    parts.push(pt
-      ? `${uncoveredDays} sem plano cadastrado`
-      : `${uncoveredDays} with no registered plan`)
-  }
-
-  return parts.join(' · ')
+  const value = mult
+    ? (pt ? `${mult} o valor de API` : `${mult} the API value`)
+    : (pt ? 'custo do seu plano' : 'your plan cost')
+  if (coveredDays <= 0) return value
+  return pt ? `${value} · ${coveredDays}d rateados` : `${value} · ${coveredDays}d prorated`
 }
 
 /** A multiple, for display. `null` stays `null` — an absent multiple is not "1×". */
