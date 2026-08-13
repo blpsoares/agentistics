@@ -44,7 +44,7 @@ Two properties of that work are load-bearing for everything below:
 | # | Question | Decision |
 |---|---|---|
 | 1 | Windows, where tmux does not exist | Keep the abstract `SessionBackend`. tmux on Unix; a per-session ConPTY host on Windows. |
-| 2 | How "needs attention" is detected | Hybrid: output quiescence is the primary signal, per-harness screen rules refine it, and **an unmatched frame yields `idle`, never a confident "fine"**. |
+| 2 | How "needs attention" is detected | Hybrid: probed screen rules first, output movement second, and **a harness with no probed approval rule says so rather than reporting a confident "fine"**. |
 | 3 | Which sessions the monitor shows | Managed AND external, with honest per-row capabilities. |
 | 4 | What attach does | Full terminal takeover; the cockpit remounts where it was on detach. |
 | 5 | What the project picker searches | agentistics history (fuzzy, recency-ranked, grouped by git remote) with a typed path accepted as a fallback. |
@@ -86,11 +86,20 @@ The dependency direction the repo already mandates holds: **the TUI owns no logi
 
 ```ts
 export type SessionActivity =
-  | 'working'           // output moved recently, or the frame changed since the last poll
-  | 'waiting-approval'  // quiet, and an approval question is on screen
-  | 'waiting-input'     // quiet, and the harness's idle prompt is on screen
-  | 'idle'              // quiet, and no rule matched — we do not know why
+  | 'working'           // a proof marker is on screen, or the frame moved since the last poll
+  | 'waiting-approval'  // a probed approval question is on screen
+  | 'waiting'           // alive and quiet — it is waiting for you
   | 'exited'            // the hosted command finished
+
+export interface AttentionRules {
+  /** A frame matching one of these is a question the session is blocked on. */
+  approval: RegExp[]
+  /** Proof the session is working even if it did not redraw between two polls. Absent for a
+   *  harness whose frames carry no such marker — codex genuinely has none. */
+  working?: RegExp[]
+  /** Provenance: the exact CLI version the frames came from, and the date. */
+  probed: string
+}
 
 export function attentionOf(o: {
   alive: boolean
@@ -106,28 +115,51 @@ export function attentionOf(o: {
 Order of evidence, strongest first:
 
 1. `!alive` → `exited`.
-2. `frameDigest !== prevDigest`, or `nowMs - lastActivityMs < QUIET_MS` (3s) → `working`.
-   Two signals because each alone is wrong somewhere: tmux's `session_activity` has one-second
-   resolution and a spinner redrawing the same bytes moves it, while a frame digest cannot see a
-   process that is thinking without drawing.
-3. `rules` absent → `idle`. **A harness whose frames were never probed gets no guess.**
-4. `rules.approval` matches the frame → `waiting-approval`.
-5. `rules.waiting` matches the frame → `waiting-input`.
-6. Otherwise → `idle`.
+2. `rules.approval` matches the frame → `waiting-approval`. A blocked question outranks every
+   movement signal: the dialog IS the frame, and nothing else is running behind it.
+3. `rules.working` matches the frame → `working`. This is a PROOF marker, consulted before the
+   movement test so a session that is genuinely thinking without redrawing is never called quiet.
+4. `frameDigest !== prevDigest`, or `nowMs - lastActivityMs < QUIET_MS` (6s, one poll interval plus
+   slack) → `working`. Two signals because each alone is wrong somewhere: tmux's `session_activity`
+   has one-second resolution and a spinner redrawing the same bytes moves it, while a frame digest
+   cannot see a process that is thinking without drawing.
+5. Otherwise → `waiting`.
 
-`needsAttention` is `waiting-approval | waiting-input` and nothing else. `idle` is rendered as its
-own word: it usually does mean the session is waiting, but the system cannot say so, and the same
-N/A-versus-a-confident-0 rule `HARNESS_CAPABILITIES` and `liveEmptyNotice` already enforce applies
-here. A monitor that says "all clear" while a session sits on a permission prompt is worse than one
-that says "idle, reason unknown".
+`needsAttention` is `waiting-approval | waiting`, and step 5 is a sound inference rather than a
+guess: an interactive assistant whose process is alive and whose screen has stopped moving is, by
+construction, waiting for the person in front of it. There is no third thing it could be doing.
+
+**Where the honesty gap actually lives is `rules.approval` being absent**, and that is where the UI
+must state it: for a harness with no probed rules the detail pane says approval detection is
+unavailable for it, so a session blocked on a permission prompt is reported as `waiting` (correct,
+and it still raises the counter) rather than as a confidently distinct state the system cannot see.
+This replaces an earlier `idle` state that tried to encode "we do not know why" — probing showed the
+uncertainty is about the REASON, never about the fact, and a state word is the wrong place to put it.
 
 `digestFrame(lines)` is a dependency-free FNV-1a over the joined frame, so the pure function takes
 strings and the caller does no hashing of its own.
 
-**`attention-rules.ts` carries a dated provenance comment per harness**, in the style
-`tmux-cli.ts` already uses ("probed against tmux 3.2a on 2026-08-12"). Rules are written from
-frames captured out of a real session, never from memory of what a CLI prints. A harness with no
-probed frames ships no rules rather than plausible ones.
+#### Probed frames — provenance
+
+`attention-rules.ts` carries a dated provenance string per harness, in the style `tmux-cli.ts`
+already uses. The rules below were captured from real sessions on **2026-08-13** by starting each
+CLI under tmux and reading `capture-pane`; nothing here is written from memory of what a CLI prints.
+
+| Harness | Version | `approval` (probed) | `working` (probed) |
+|---|---|---|---|
+| claude | 2.1.231 | `Enter to confirm · Esc to cancel` | `esc to interrupt` |
+| codex | 0.113.0 | `Press enter to continue` | — none exists — |
+| kimi | 0.35.0 | `↑↓ navigate · Enter select · Esc exit` | — none exists — |
+
+Two findings from that probe are load-bearing and would have been got wrong from memory:
+
+- **Claude's input box is not a discriminator.** The `❯` prompt line is drawn identically while
+  working and while idle; only the footer changes (`esc to interrupt` versus `? for shortcuts`).
+  A rule keyed on the input box would have reported every working session as waiting.
+- **Codex has no working marker at all.** Its footer and its ghost placeholder
+  (`› Find and fix a bug in @filename`) are byte-identical while it streams output and while it sits
+  idle. For codex, movement is the only working signal there is — which is precisely why step 4
+  exists and why `rules.working` is optional rather than required.
 
 ### 4.2 `session-view.ts` — pure
 
