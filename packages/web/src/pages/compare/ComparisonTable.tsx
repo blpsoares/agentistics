@@ -92,7 +92,7 @@ export function ComparisonTable({ rows, sides, currency, brlRate, lang }: {
       <div style={{ minWidth: 200 + sides.length * 150 }}>
         <div style={{
           display: 'grid', gridTemplateColumns: `minmax(160px, 1.2fr) repeat(${sides.length}, minmax(140px, 1fr))`,
-          gap: 14, padding: '10px 16px', background: 'var(--bg-hover)',
+          gap: 12, padding: '8px 14px', background: 'var(--bg-hover)',
         }}>
           <span style={HEAD}>{pt ? 'Métrica' : 'Metric'}</span>
           {sides.map((s, i) => (
@@ -112,25 +112,24 @@ export function ComparisonTable({ rows, sides, currency, brlRate, lang }: {
             key={row.metric.key}
             style={{
               display: 'grid', gridTemplateColumns: `minmax(160px, 1.2fr) repeat(${sides.length}, minmax(140px, 1fr))`,
-              gap: 14, padding: '13px 16px', alignItems: 'center',
+              gap: 12, padding: '9px 14px', alignItems: 'center',
               borderTop: r === 0 ? 'none' : '1px solid var(--border)',
             }}
           >
-            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+            <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-secondary)' }}>
               {pt ? row.metric.labelPt : row.metric.labelEn}
-              
             </div>
             {sides.map((s, i) => (
               <div key={s.id} style={{ minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                   <span style={{
-                    fontSize: 15, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+                    fontSize: 13.5, fontWeight: 600, fontVariantNumeric: 'tabular-nums',
                     color: row.cells[i]?.value === null ? 'var(--text-tertiary)' : 'var(--text-primary)',
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                   }}>
                     {formatValue(row, row.cells[i]?.value ?? null, currency, brlRate, lang)}
                   </span>
-                  {row.bestIndex === i && <Crown size={12} style={{ color: sideColour(i), flexShrink: 0 }} />}
+                  {row.bestIndex === i && <Crown size={11} style={{ color: sideColour(i), flexShrink: 0 }} />}
                 </div>
                 <DeltaText cell={row.cells[i]} row={row} currency={currency} brlRate={brlRate} lang={lang} />
                 {/* The one thing that must never be silent: this column asked for the plan basis
@@ -156,8 +155,8 @@ function RowBar({ row, index }: { row: CompareRow; index: number }) {
   const v = row.cells[index]?.value ?? null
   const pct = v !== null && max > 0 ? Math.max(2, (v / max) * 100) : 0
   return (
-    <div style={{ height: 4, background: 'var(--bg-elevated)', borderRadius: 2, marginTop: 6, overflow: 'hidden' }}>
-      <div style={{ height: '100%', width: `${pct}%`, background: sideColour(index), opacity: 0.75, borderRadius: 2, transition: 'width 0.35s ease-out' }} />
+    <div style={{ height: 3, background: 'var(--bg-elevated)', borderRadius: 2, marginTop: 5, overflow: 'hidden' }}>
+      <div style={{ height: '100%', width: `${pct}%`, background: sideColour(index), opacity: 0.6, borderRadius: 2, transition: 'width 0.35s ease-out' }} />
     </div>
   )
 }
@@ -169,12 +168,14 @@ function DeltaText({ cell, row, currency, brlRate, lang }: {
   brlRate: number
   lang: Lang
 }) {
-  if (!cell || cell.delta === null) return null
+  // A ZERO delta renders nothing. "−0 (−0%)" on every identical row was pure noise — two equal
+  // numbers side by side already say they are equal.
+  if (!cell || cell.delta === null || cell.delta === 0) return null
   const sign = cell.delta > 0 ? '+' : '−'
   const abs = formatValue(row, Math.abs(cell.delta), currency, brlRate, lang)
   const pct = cell.deltaPct === null ? null : `${cell.delta > 0 ? '+' : '−'}${Math.abs(Math.round(cell.deltaPct * 100))}%`
   return (
-    <div style={{ fontSize: 11, color: TONE_COLOR[cell.tone], marginTop: 2, whiteSpace: 'nowrap' }}>
+    <div style={{ fontSize: 10.5, color: TONE_COLOR[cell.tone], marginTop: 1, whiteSpace: 'nowrap' }}>
       {sign}{abs}{pct && <span style={{ opacity: 0.8 }}> ({pct})</span>}
     </div>
   )
@@ -217,7 +218,7 @@ const TONE_COLOR: Record<string, string> = {
 }
 
 const HEAD: React.CSSProperties = {
-  fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)',
+  fontSize: 10.5, fontWeight: 700, color: 'var(--text-tertiary)',
   textTransform: 'uppercase', letterSpacing: 0.3,
   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 }

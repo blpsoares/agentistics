@@ -236,14 +236,14 @@ export function buildCompareRows(
  *  would invent a judgement the metric does not support. */
 function bestOf(values: (number | null)[], polarity: MetricPolarity): number | null {
   if (polarity === 'neutral') return null
-  let best: number | null = null
-  let bestValue = 0
-  values.forEach((v, i) => {
-    if (v === null) return
-    if (best === null) { best = i; bestValue = v; return }
-    const wins = polarity === 'lower-better' ? v < bestValue : v > bestValue
-    if (wins) { best = i; bestValue = v }
-  })
+  const present = values.filter((v): v is number => v !== null)
   // A single comparable side is not a winner over anything.
-  return values.filter(v => v !== null).length > 1 ? best : null
+  if (present.length < 2) return null
+
+  const bestValue = polarity === 'lower-better' ? Math.min(...present) : Math.max(...present)
+  // A TIE HAS NO WINNER. Strict comparison left the first side crowned whenever the values were
+  // equal, so two identical columns showed a crown on one of them — the table asserting a
+  // difference the numbers do not contain.
+  if (present.filter(v => v === bestValue).length > 1) return null
+  return values.findIndex(v => v === bestValue)
 }

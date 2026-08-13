@@ -71,6 +71,19 @@ describe('buildCompareRows — tone and the winner', () => {
     const rows = buildCompareRows([side({ costUSD: 100 }), side({ costUSD: null })], ['api', 'api'])
     expect(row(rows, 'cost').bestIndex).toBeNull()
   })
+
+  test('a TIE has no winner', () => {
+    // Strict comparison left the first side crowned whenever the values were equal, so two
+    // identical columns showed a crown on one — the table asserting a difference the numbers do
+    // not contain.
+    expect(row(buildCompareRows([side({ sessions: 624 }), side({ sessions: 624 })], ['api', 'api']), 'sessions').bestIndex).toBeNull()
+    expect(row(buildCompareRows([side({ costUSD: 50 }), side({ costUSD: 50 }), side({ costUSD: 90 })], ['api', 'api', 'api']), 'cost').bestIndex).toBeNull()
+  })
+
+  test('a clear winner among ties elsewhere is still crowned', () => {
+    const rows = buildCompareRows([side({ costUSD: 90 }), side({ costUSD: 90 }), side({ costUSD: 40 })], ['api', 'api', 'api'])
+    expect(row(rows, 'cost').bestIndex).toBe(2)
+  })
 })
 
 describe('buildCompareRows — basis', () => {

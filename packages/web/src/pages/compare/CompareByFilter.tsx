@@ -186,6 +186,24 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
           }}
         />
         <button
+          onClick={addSide}
+          disabled={sides.length >= MAX_COMPARISON_SIDES}
+          title={sides.length >= MAX_COMPARISON_SIDES
+            ? (pt ? `Máximo de ${MAX_COMPARISON_SIDES} lados` : `At most ${MAX_COMPARISON_SIDES} sides`)
+            : undefined}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 12px',
+            borderRadius: 'var(--radius-md)', cursor: sides.length >= MAX_COMPARISON_SIDES ? 'default' : 'pointer',
+            fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
+            border: '1px solid var(--border)', background: 'var(--bg-elevated)',
+            color: sides.length >= MAX_COMPARISON_SIDES ? 'var(--text-tertiary)' : 'var(--text-secondary)',
+            opacity: sides.length >= MAX_COMPARISON_SIDES ? 0.5 : 1, flexShrink: 0,
+          }}
+        >
+          <Plus size={13} />
+          {pt ? 'Lado' : 'Side'} {String.fromCharCode(65 + sides.length)}
+        </button>
+        <button
           onClick={() => setOnHome(v => !v)}
           title={pt ? 'Exibir esta comparação na Home' : 'Show this comparison on Home'}
           style={{
@@ -271,45 +289,7 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
               <FiltersBar {...barProps} filters={s.filters} onChange={f => setSideFilters(s.id, f)} />
             </SideCard>
           ))}
-          {/* The add affordance is a CARD IN THE GRID, beside the sides it extends. As a button
-              under the grid it sat below the fold on a wide screen and read as "you cannot add
-              more". */}
-          {sides.length < MAX_COMPARISON_SIDES && (
-            <button
-              onClick={addSide}
-              style={{
-                minHeight: 110, display: 'flex', flexDirection: 'column', alignItems: 'center',
-                justifyContent: 'center', gap: 7, borderRadius: 'var(--radius-lg)',
-                border: '1px dashed var(--border)', background: 'transparent',
-                color: 'var(--text-tertiary)', fontSize: 12.5, fontWeight: 600,
-                cursor: 'pointer', fontFamily: 'inherit',
-              }}
-            >
-              <Plus size={18} />
-              {pt
-                ? `Adicionar lado ${String.fromCharCode(65 + sides.length)}`
-                : `Add side ${String.fromCharCode(65 + sides.length)}`}
-            </button>
-          )}
         </div>
-      )}
-
-      {isMobile && sides.length < MAX_COMPARISON_SIDES && (
-        <button
-          onClick={addSide}
-          style={{
-            width: '100%', minHeight: 44, display: 'inline-flex', alignItems: 'center',
-            justifyContent: 'center', gap: 7, borderRadius: 'var(--radius-lg)',
-            border: '1px dashed var(--border)', background: 'transparent',
-            color: 'var(--text-secondary)', fontSize: 12.5, fontWeight: 600,
-            cursor: 'pointer', fontFamily: 'inherit',
-          }}
-        >
-          <Plus size={14} />
-          {pt
-            ? `Adicionar lado ${String.fromCharCode(65 + sides.length)}`
-            : `Add side ${String.fromCharCode(65 + sides.length)}`}
-        </button>
       )}
 
       <ComparisonTable rows={rows} sides={tableSides} currency={ctx.currency} brlRate={ctx.brlRate} lang={ctx.lang} />
