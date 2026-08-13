@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats } from './useData'
 import { mergeStatsCaches } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
 import type { SessionMeta } from '@agentistics/core'
@@ -1307,5 +1307,78 @@ describe('summarizeApiCostByDay', () => {
     const out = summarizeApiCostByDay(days, 10, 1000)
     expect(out.undatedCostUSD).toBeCloseTo(-20, 9)
     expect(out.undatedTokens).toBe(-2000)
+  })
+})
+
+describe('the Claude harness chip reads the cache, not only the surviving sessions', () => {
+  // Regression: `harnessesFiltered` was true for ANY harness selection, so picking Claude — the one
+  // harness `stats-cache.json` is entirely made of — pushed every aggregate onto the per-session
+  // sum. Claude deletes transcripts after 30 days while the cache keeps the totals, so the same
+  // scope reported a smaller number WITH the chip than without it. On real data that showed up as
+  // the plan multiple moving 24,5× → 24,2× across a filter that should not have moved it at all.
+  const cache: import('@agentistics/core').StatsCache = {
+    version: 1,
+    lastComputedDate: '2026-06-02',
+    dailyActivity: [
+      { date: '2026-06-01', sessionCount: 400, messageCount: 1200, toolCallCount: 0 },
+      { date: '2026-06-02', sessionCount: 100, messageCount: 300, toolCallCount: 0 },
+    ],
+    dailyModelTokens: [],
+    modelUsage: {
+      'claude-sonnet-4-5': {
+        inputTokens: 8_000_000, outputTokens: 2_000_000,
+        cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0,
+      },
+    },
+    totalSessions: 500,
+    totalMessages: 1500,
+    longestSession: { sessionId: 'x', duration: 1, messageCount: 1, timestamp: '2026-06-01T00:00:00Z' },
+    firstSessionDate: '2026-06-01',
+    hourCounts: {},
+    totalSpeculationTimeSavedMs: 0,
+  }
+
+  // One Codex session and NO Claude session docs — the deep Claude history exists only in the cache.
+  const codexSession = {
+    session_id: 'cx1', harness: 'codex', start_time: '2026-06-02T10:00:00Z',
+    project_path: '/p', user_message_count: 2, assistant_message_count: 2,
+    input_tokens: 1000, output_tokens: 1000,
+    cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+    model: 'gpt-5', tool_counts: {},
+  } as unknown as SessionMeta
+
+  const data = {
+    statsCache: cache,
+    sessions: [codexSession],
+    allSessions: [codexSession],
+    projects: [],
+    harnesses: ['claude', 'codex'],
+  } as unknown as import('@agentistics/core').AppData
+
+  const filters = (over: Partial<import('@agentistics/core').Filters>): import('@agentistics/core').Filters =>
+    ({ dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], ...over })
+
+  const all = computeDerivedStats(data, filters({}))!
+  const claudeOnly = computeDerivedStats(data, filters({ harnesses: ['claude'] }))!
+  const codexOnly = computeDerivedStats(data, filters({ harnesses: ['codex'] }))!
+
+  test('picking Claude keeps the cache history instead of collapsing to zero', () => {
+    // The old behaviour: no Claude session docs → nothing to sum → a confident 0 next to a cache
+    // holding ten million tokens.
+    expect(claudeOnly.totalCostUSD).toBeGreaterThan(0)
+    expect(claudeOnly.totalSessions).toBe(500)
+    expect(claudeOnly.totalMessages).toBe(1500)
+  })
+
+  test('unfiltered is Claude plus the others, so removing the others lands exactly on Claude', () => {
+    expect(all.totalCostUSD - codexOnly.totalCostUSD).toBeCloseTo(claudeOnly.totalCostUSD, 6)
+    expect(all.totalSessions - codexOnly.totalSessions).toBe(claudeOnly.totalSessions)
+  })
+
+  test('a MIXED selection stays session-based — a cache branch would drop Codex', () => {
+    // `nonClaudeInRange` is empty whenever any harness chip is set, so the cache-backed branch
+    // cannot serve a selection that also contains a harness the cache knows nothing about.
+    const mixed = computeDerivedStats(data, filters({ harnesses: ['claude', 'codex'] }))!
+    expect(mixed.totalSessions).toBe(1)
   })
 })

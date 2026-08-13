@@ -29,11 +29,11 @@ import { TagCloud } from '../components/TagCloud'
 import { ToolMetricsPanel } from '../components/ToolMetricsPanel'
 import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
 import { RecentSessions } from '../components/RecentSessions'
-import { capable, HARNESS_PROVIDERS } from '../lib/harness'
+import { capable, HARNESS_LABELS, HARNESS_PROVIDERS } from '../lib/harness'
 import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
 import { PlanValuePanel } from '../components/PlanValuePanel'
 import { HomeComparisons } from '../components/HomeComparisons'
-import { planCostSubtitle, viewCost } from '../lib/costBasis'
+import { planCostSubtitle, planScopeHarnesses, planScopeNote } from '../lib/costBasis'
 
 type CardId = 'messages' | 'sessions' | 'tool-calls' | 'input-tokens' | 'output-tokens' | 'cost' | 'streak' | 'longest-session' | 'commits' | 'files'
 
@@ -63,11 +63,20 @@ export default function HomePage() {
   const claudePlanFactor = costBasis === 'plan' && planBasis.basis
     ? planAllocation(planBasis.basis).byHarness.claude ?? null
     : null
+  const planScope = planBasis.basis ? planScopeHarnesses(planBasis.basis) : null
   function planCostSub(activeLang: Lang): string {
+    const lg = activeLang === 'pt' ? 'pt' : 'en'
     return planCostSubtitle({
       multiple: planBasis.basis?.multiple ?? null,
       coveredDays: planBasis.basis?.coverage.coveredDays ?? 0,
-      lang: activeLang === 'pt' ? 'pt' : 'en',
+      scope: planScope
+        ? planScopeNote({
+            covered: planScope.covered.map(h => HARNESS_LABELS[h] ?? h),
+            inScope: planScope.inScope,
+            lang: lg,
+          })
+        : null,
+      lang: lg,
     })
   }
 
@@ -94,9 +103,17 @@ export default function HomePage() {
       // user who filtered "all time" and got a figure over the last 90 days (as far back as the
       // daily series reaches) has a correct number under a misleading heading, and naming the
       // days measured is the only thing that corrects it.
-      const planView = viewCost(d.totalCostUSD, { basis: costBasis, factor: planFactor })
-      const showPlan = costBasis === 'plan' && !planView.unavailable && planBasis.basis !== null
-      const shownUSD = showPlan ? planView.usd : d.totalCostUSD
+      //
+      // C IS READ STRAIGHT OFF THE BASIS. It used to be `totalCostUSD × aggregateFactor`, which is
+      // only equal to C when the filter's scope is exactly the covered scope — and it usually is
+      // not. Unfiltered, `totalCostUSD` spans every harness while the factor is C/A of the ONE
+      // that has a plan, so the headline came out as C inflated by the other harnesses' share of A
+      // (measured: R$2.500,86 against a real R$500 × 126/30.44 = R$2.069,65, and the panel right
+      // below it — which always read `planCostUSD` — printed the correct figure at the same time).
+      // A rescale is the right shape for a per-ROW allocation and the wrong shape for the total.
+      const planUsable = costBasis === 'plan' && planBasis.basis !== null && planBasis.basis.coverage.computable
+      const showPlan = planUsable && planBasis.basis !== null
+      const shownUSD = showPlan && planBasis.basis ? planBasis.basis.planCostUSD : d.totalCostUSD
       card = (
         <StatCard
           label={showPlan ? (lang === 'pt' ? 'Custo do plano' : 'Plan cost') : (lang === 'pt' ? 'Custo estimado' : 'Est. cost')}

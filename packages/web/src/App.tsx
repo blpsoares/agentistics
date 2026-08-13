@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import { usePlanBasis } from './hooks/usePlanBasis'
-import { viewCost } from './lib/costBasis'
+import { planScopeHarnesses, planScopeNote } from './lib/costBasis'
 import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
@@ -1738,11 +1738,24 @@ export default function AppLayout() {
 
   // The header totals strip, in whichever basis is active. It carries no label of its own, so the
   // tooltip is where "this is your plan cost, not an API estimate" has to be said.
-  const headerPlanFactor = planBasis.basis ? planAllocation(planBasis.basis).aggregateFactor : null
-  const headerCostView = viewCost(derived?.totalCostUSD ?? 0, { basis: costBasis, factor: headerPlanFactor })
-  const headerCostUSD = headerCostView.usd
-  const headerCostTitle = headerCostView.basis === 'plan'
-    ? (lang === 'pt' ? 'Custo do seu plano no período medido' : 'Your plan cost over the measured period')
+  // C straight off the basis, never `totalCostUSD × factor` — see the long note on the HomePage
+  // cost card. The strip and the card must agree to the cent, so they read the same field.
+  const headerPlanBasis = costBasis === 'plan' && planBasis.basis?.coverage.computable
+    ? planBasis.basis
+    : null
+  const headerCostUSD = headerPlanBasis ? headerPlanBasis.planCostUSD : (derived?.totalCostUSD ?? 0)
+  const headerCostScope = headerPlanBasis
+    ? planScopeNote({
+        covered: planScopeHarnesses(headerPlanBasis).covered.map(h => HARNESS_LABELS[h] ?? h),
+        inScope: planScopeHarnesses(headerPlanBasis).inScope,
+        lang: lang === 'pt' ? 'pt' : 'en',
+      })
+    : null
+  const headerCostTitle = headerPlanBasis
+    ? [
+        lang === 'pt' ? 'Custo do seu plano no período medido' : 'Your plan cost over the measured period',
+        headerCostScope,
+      ].filter(Boolean).join(' · ')
     : (lang === 'pt' ? 'Estimativa a preços de API' : 'API-price estimate')
 
   const models = useMemo(() => {
@@ -2067,11 +2080,33 @@ export default function AppLayout() {
               ? 'Configurações → Cobrança (períodos cadastrados) + as sessões filtradas'
               : 'Settings → Billing (registered periods) + the filtered sessions',
             formula: pt
-              ? 'C = Σ período [mensal × dias na janela / 30,44]\nV = A / C\n\nA = o custo a preços de API dos MESMOS dias.'
-              : 'C = Σ period [monthly × days in window / 30.44]\nV = A / C\n\nA = the API-price cost of the SAME days.',
+              ? 'C = Σ dos períodos:  mensalidade × dias no filtro ÷ 30,44\n'
+                + 'A = custo a preços de API dos MESMOS dias\n'
+                + 'V = A ÷ C          (quantas vezes o plano se pagou)\n'
+                + '$/1M efetivo = C ÷ (tokens cobertos ÷ 1.000.000)\n\n'
+                + 'Ex.: R$ 500/mês, 126 dias dentro do filtro\n'
+                + '     500 × 126 ÷ 30,44 = R$ 2.069,65\n\n'
+                + '30,44 = média de dias por mês (365,25 ÷ 12).'
+              : 'C = Σ over periods:  monthly × days in filter ÷ 30.44\n'
+                + 'A = API-price cost of the SAME days\n'
+                + 'V = A ÷ C          (how many times the plan paid for itself)\n'
+                + 'effective $/1M = C ÷ (covered tokens ÷ 1,000,000)\n\n'
+                + 'E.g.: $100/mo, 126 days inside the filter\n'
+                + '      100 × 126 ÷ 30.44 = $413.93\n\n'
+                + '30.44 = average days per month (365.25 ÷ 12).',
             note: pt
-              ? 'Dias sem plano cadastrado saem dos DOIS lados — do custo do plano e do valor de API — para que o múltiplo compare o mesmo período. O rodapé do card diz a janela realmente medida, que pode ser menor que o filtro: a série diária do Claude não alcança todo o histórico, e o que ela não alcança é declarado à parte em vez de ser jogado num dia qualquer. O valor mensal é o que você digitou; conversão de BRL usa a cotação de /api/rates.'
-              : 'Days with no registered plan leave BOTH sides — the plan cost and the API value — so the multiple compares the same period. The card’s subtitle names the window actually measured, which can be narrower than your filter: Claude’s daily series does not reach the whole history, and what it cannot reach is reported separately rather than dropped onto some day. The monthly amount is the one you typed; BRL is converted at the /api/rates figure.',
+              ? 'POR QUE TEM CENTAVOS: o rateio é por DIA, não por mês de calendário. 126 dias não são 4 meses redondos, são 4,139 meses — e essa é a única leitura que sobrevive a um filtro arbitrário: "meio mês" não significa nada para 10 dias soltos no meio de maio.\n\n'
+                + 'POR QUE VOCÊ CADASTRA PERÍODOS: nenhum arquivo em nenhuma máquina registra qual plano estava valendo quando. Por isso a cobrança é uma LINHA DO TEMPO: cada período é rateado com o próprio preço, então uma janela que atravessa uma troca de plano soma as duas partes corretamente em vez de aplicar o preço de hoje ao passado inteiro.\n\n'
+                + 'DIAS SEM PLANO SAEM DOS DOIS LADOS — do custo do plano e do valor de API — senão o múltiplo compararia períodos diferentes. O rodapé do card diz quantos dias foram realmente medidos, que pode ser menos que o filtro.\n\n'
+                + 'ESTE NÚMERO É O C, LIDO DIRETO — não é o total da tela reescalado. Por isso ele pode ser menor que os cards ao lado: eles contam todos os harnesses, e o C cobre só os que têm plano cadastrado. Quando os dois escopos diferem, o rodapé nomeia o que está coberto ("só Claude Code").\n\n'
+                + 'POR LINHA (modelo, repositório, agente) o valor é RATEIO, não medição: ninguém consegue dizer que fatia de uma mensalidade fixa um modelo "usou". Dentro de um mesmo harness é um reescalonamento linear, então a ordem e as proporções se mantêm exatas.\n\n'
+                + 'A mensalidade é a que você digitou; BRL converte pela cotação de /api/rates. Cache não reduz assinatura — ele estende seu limite de uso —, por isso o painel de cache continua em base API.'
+              : 'WHY IT HAS CENTS: proration is by DAY, not by calendar month. 126 days is not 4 round months, it is 4.139 months — and that is the only reading that survives an arbitrary filter: "half a month" means nothing for 10 loose days in the middle of May.\n\n'
+                + 'WHY YOU REGISTER PERIODS: no file on any machine records which plan was in force when. That is why billing is a TIMELINE: each period is prorated at its own price, so a window spanning a plan change adds both parts correctly instead of applying today\'s price to the whole past.\n\n'
+                + 'DAYS WITH NO REGISTERED PLAN LEAVE BOTH SIDES — the plan cost and the API value — otherwise the multiple would compare different periods. The card\'s subtitle names how many days were actually measured, which can be fewer than your filter.\n\n'
+                + 'THIS FIGURE IS C, READ DIRECTLY — not the page total rescaled. So it can be smaller than the cards beside it: those count every harness, while C covers only the ones with a registered plan. When the two scopes differ, the subtitle names what is covered ("Claude Code only").\n\n'
+                + 'PER ROW (model, repository, agent) the figure is an ALLOCATION, not a measurement: nobody can say what share of a flat monthly fee a given model "used". Within one harness it is a linear rescale, so rankings and proportions survive exactly.\n\n'
+                + 'The monthly amount is the one you typed; BRL is converted at the /api/rates figure. Cache does not reduce a subscription — it extends your rate limit — which is why the cache panel stays in API basis.',
           }
         : {
             label: pt ? 'Custo estimado' : 'Estimated cost',

@@ -1109,7 +1109,18 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
     // Aggregate stats
     // Use filteredSessions when project/model/non-claude-harness filter is active
     // (statsCache has no per-project/model/harness granularity)
-    const harnessesFiltered = (filters.harnesses?.length ?? 0) > 0
+    // A selection of EXACTLY Claude is NOT a cache-blind scope. `stats-cache.json` is Claude's own
+    // history and holds nothing else, so it answers that selection precisely — which is what the
+    // comment above already promised ("Claude harness selected → statsCache history + gap days")
+    // while this flag quietly did the opposite. Treating it as a session-only filter made the SAME
+    // scope report a different number with the chip set than without it: the deep history the cache
+    // retains and the session list no longer does simply vanished. Measured on real data as a 1.2%
+    // drop in A, which showed up as the plan multiple moving 24,5× → 24,2× on the same window.
+    //
+    // A MIXED selection (`['claude','codex']`) stays session-based: `nonClaudeInRange` is empty
+    // whenever any harness chip is set, so a cache-backed branch would silently drop Codex.
+    const claudeOnlyHarness = harnessSel.length === 1 && harnessSel[0] === 'claude'
+    const harnessesFiltered = harnessActive && !claudeOnlyHarness
     const sessionFiltered = cacheBlindScope || nonClaudeHarness || harnessesFiltered || (userFiltered && !hasUserStats)
 
     const totalMessages = sessionFiltered

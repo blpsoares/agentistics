@@ -11,7 +11,7 @@
  * plan figure is an ALLOCATION — no row was individually billed — and a label that can be
  * forgotten will be.
  */
-import type { CostBasis } from '@agentistics/core'
+import type { AggregatePlanBasis, CostBasis, HarnessId } from '@agentistics/core'
 
 export interface CostView {
   usd: number
@@ -65,6 +65,45 @@ export function costBasisMarker(view: CostView, lang: 'pt' | 'en'): string | nul
 }
 
 /**
+ * Which harnesses a plan figure actually covers, and how many were on screen.
+ *
+ * `perHarness` holds one entry per harness present in the FILTERED data; the computable ones are
+ * the only ones a plan cost was produced for. The two counts differing is the normal case — most
+ * people register one subscription while several harnesses show up in their sessions — and it is
+ * the fact the headline has to state, because the cards beside it count all of them.
+ */
+export function planScopeHarnesses(basis: AggregatePlanBasis): {
+  covered: HarnessId[]
+  inScope: number
+} {
+  const entries = Object.entries(basis.perHarness) as [HarnessId, { coverage: { computable: boolean } }][]
+  return {
+    covered: entries.filter(([, r]) => r.coverage.computable).map(([harness]) => harness),
+    inScope: entries.length,
+  }
+}
+
+/**
+ * The short scope note, or `null` when the figure covers everything in scope and saying so would
+ * be noise.
+ *
+ * Takes already-labelled names: the label table is a web concern and this module is pure wiring.
+ */
+export function planScopeNote(args: {
+  covered: readonly string[]
+  inScope: number
+  lang: 'pt' | 'en'
+}): string | null {
+  const { covered, inScope, lang } = args
+  const pt = lang === 'pt'
+  if (covered.length === 0 || covered.length >= inScope) return null
+  if (covered.length === 1) return pt ? `só ${covered[0]}` : `${covered[0]} only`
+  return pt
+    ? `${covered.length} de ${inScope} harnesses`
+    : `${covered.length} of ${inScope} harnesses`
+}
+
+/**
  * The sentence under a plan-cost headline.
  *
  * It always names the WINDOW that was measured. That is the whole job: a user who filtered
@@ -77,9 +116,11 @@ export function planCostSubtitle(args: {
   multiple: number | null
   /** Days the plan actually covered. Named because it is what makes the figure non-round. */
   coveredDays: number
+  /** `planScopeNote`'s output. Appended when the figure covers less than what is on screen. */
+  scope?: string | null
   lang: 'pt' | 'en'
 }): string {
-  const { multiple, coveredDays, lang } = args
+  const { multiple, coveredDays, scope, lang } = args
   const pt = lang === 'pt'
 
   // ONE SHORT LINE, and no longer than its neighbours'. This sits in a KPI card whose siblings
@@ -92,8 +133,12 @@ export function planCostSubtitle(args: {
   const value = mult
     ? (pt ? `${mult} o valor de API` : `${mult} the API value`)
     : (pt ? 'custo do seu plano' : 'your plan cost')
-  if (coveredDays <= 0) return value
-  return pt ? `${value} · ${coveredDays}d rateados` : `${value} · ${coveredDays}d prorated`
+  // The scope replaces "rateados"/"prorated" rather than joining it: the line has to stay one
+  // short line, and "which harnesses" outranks a word that only restates the day count beside it.
+  const days = coveredDays > 0
+    ? (scope ? `${coveredDays}d` : (pt ? `${coveredDays}d rateados` : `${coveredDays}d prorated`))
+    : null
+  return [value, days, scope].filter(Boolean).join(' · ')
 }
 
 /** A multiple, for display. `null` stays `null` — an absent multiple is not "1×". */

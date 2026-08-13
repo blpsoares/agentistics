@@ -519,6 +519,19 @@ actually pays.
   this month" rather than "what did this window cost". api-mode days commit nothing to it.
 - **A Claude-only metric allocates against Claude's own C/A**, never the cross-harness aggregate —
   `AgentMetricsPanel` would otherwise price agents partly against a plan paying for something else.
+- **The HEADLINE is `planCostUSD` read straight off the basis — never `totalCostUSD × factor`.**
+  That rescale is the right shape for a per-ROW allocation and the wrong shape for the total: the
+  factor is `C/A` of the COVERED harnesses while `totalCostUSD` spans every harness in the filter,
+  so multiplying them yields neither C nor an allocation. Measured: R$2.500,86 on screen against a
+  real `500 × 126/30.44 = R$2.069,65`, with `PlanValuePanel` — which always read `planCostUSD` —
+  printing the correct figure directly below it. When the covered scope is narrower than what is on
+  screen, `planScopeNote` names it ("só Claude Code"), because the cards beside the headline count
+  every harness and an unexplained smaller number reads as a bug.
+- **A harness selection of exactly `['claude']` is NOT cache-blind.** `stats-cache.json` IS Claude's
+  history, so that selection is served by the cache; treating it as a session-only filter made the
+  same scope report LESS with the chip than without it (Claude deletes transcripts after 30 days,
+  the cache keeps the totals). A MIXED selection stays session-based — `nonClaudeInRange` is empty
+  whenever any chip is set, so a cache-backed branch would silently drop the other harness.
 - **Per-row plan figures are ALLOCATIONS, labelled as such.** Within one harness it is a linear
   rescale by C/A, so rankings and proportions survive exactly; across harnesses the factors differ
   and the label is the only thing stopping it being read as a measurement.

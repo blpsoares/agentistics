@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { costBasisMarker, formatMultiple, planCostSubtitle, viewCost } from './costBasis'
+import { costBasisMarker, formatMultiple, planCostSubtitle, planScopeHarnesses, planScopeNote, viewCost } from './costBasis'
 
 describe('viewCost', () => {
   test('api basis is an identity', () => {
@@ -76,6 +76,10 @@ describe('planCostSubtitle', () => {
       // A guard against regressing to a paragraph, not a pixel measurement — the card ellipsizes
       // at its own width anyway. The version this replaced ran to 110 characters.
       expect(out.length).toBeLessThan(40)
+      // The scope costs a few characters and is worth them; it must not cost a second line.
+      const scoped = planCostSubtitle({ ...base, lang, scope: 'só Claude Code' })
+      expect(scoped).not.toContain('\n')
+      expect(scoped.length).toBeLessThan(50)
     }
   })
 
@@ -92,6 +96,52 @@ describe('planCostSubtitle', () => {
 
   test('no covered days leaves only the headline phrase', () => {
     expect(planCostSubtitle({ ...base, coveredDays: 0 })).toBe('24,5× o valor de API')
+  })
+
+  test('a scope note replaces "rateados" rather than joining it', () => {
+    // Both would overflow the one line this slot gets, and "which harnesses" outranks a word that
+    // only restates the day count sitting next to it.
+    const out = planCostSubtitle({ ...base, scope: 'só Claude Code' })
+    expect(out).toBe('24,5× o valor de API · 126d · só Claude Code')
+    expect(out).not.toContain('rateados')
+  })
+
+  test('the scope is dropped from the line when there is none to state', () => {
+    expect(planCostSubtitle({ ...base, scope: null })).toBe('24,5× o valor de API · 126d rateados')
+  })
+})
+
+describe('planScopeHarnesses + planScopeNote — the headline says what it covers', () => {
+  /** Only the field the helpers read; the rest of PlanBasisResult is irrelevant here. */
+  const part = (computable: boolean) => ({ coverage: { computable } })
+  const agg = (perHarness: Record<string, { coverage: { computable: boolean } }>) =>
+    ({ perHarness } as unknown as Parameters<typeof planScopeHarnesses>[0])
+
+  test('covers everything in scope → nothing to say', () => {
+    const scope = planScopeHarnesses(agg({ claude: part(true) }))
+    expect(scope).toEqual({ covered: ['claude'], inScope: 1 })
+    expect(planScopeNote({ covered: ['Claude Code'], inScope: 1, lang: 'pt' })).toBeNull()
+  })
+
+  test('one covered harness out of several is named, not counted', () => {
+    // The common case by far: one subscription registered, six harnesses on screen. "só Claude
+    // Code" is the whole explanation for why the headline is smaller than the cards beside it.
+    const scope = planScopeHarnesses(agg({
+      claude: part(true), codex: part(false), gemini: part(false),
+    }))
+    expect(scope).toEqual({ covered: ['claude'], inScope: 3 })
+    expect(planScopeNote({ covered: ['Claude Code'], inScope: 3, lang: 'pt' })).toBe('só Claude Code')
+    expect(planScopeNote({ covered: ['Claude Code'], inScope: 3, lang: 'en' })).toBe('Claude Code only')
+  })
+
+  test('several covered harnesses are counted rather than listed', () => {
+    // Listing four labels is what made this line a paragraph the last time.
+    expect(planScopeNote({ covered: ['a', 'b'], inScope: 5, lang: 'pt' })).toBe('2 de 5 harnesses')
+    expect(planScopeNote({ covered: ['a', 'b'], inScope: 5, lang: 'en' })).toBe('2 of 5 harnesses')
+  })
+
+  test('nothing covered says nothing — that case renders N/A, not a scope note', () => {
+    expect(planScopeNote({ covered: [], inScope: 3, lang: 'pt' })).toBeNull()
   })
 })
 
