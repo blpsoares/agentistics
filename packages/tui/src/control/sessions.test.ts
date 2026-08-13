@@ -4,7 +4,7 @@ import {
   sessionRows, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
   projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
-  sessionHandle, worktreeName, sessionRunning,
+  sessionHandle, worktreeName, sessionRunning, asideRowKey, resolveAsideCursor,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -960,55 +960,6 @@ describe('sessionNamed', () => {
   })
 })
 
-describe('the default-arrangement row', () => {
-  const verbs = {
-    attach: 'Attach', resume: 'Reopen', rename: 'Rename', note: 'Note', task: 'Task',
-    kill: 'Stop', openTask: 'Open whole task', finishTask: 'Finish task',
-    new: 'New', search: 'Search', group: 'Group',
-  }
-  const groups = {
-    repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
-    project: 'project',
-  }
-  const toggles = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks', active: 'only active' }
-  const heads = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
-
-  it('is offered at the head of the VIEW section, and states whether it is on', () => {
-    // A key with no row is a feature only the footer knows about — and this menu exists precisely
-    // so that nothing on the screen is reachable by keystroke alone.
-    const rows = asideRows({
-      actions: sessionActions(session('m')),
-      actionWords: verbs,
-      grouping: 'project',
-      groupWords: groups,
-      toggles: { closed: false, exited: false, unfiled: false, done: false, active: false },
-      toggleWords: toggles,
-      headings: heads,
-      showUnfiled: false,
-      presetLabel: 'active · project',
-      presetOn: true,
-    })
-    const view = rows.findIndex(r => r.kind === 'heading' && r.label === 'VIEW')
-    const preset = rows[view + 1]
-    expect(preset?.kind).toBe('preset')
-    expect(preset).toMatchObject({ label: 'active · project', on: true })
-  })
-
-  it('is absent when the caller does not offer one', () => {
-    const rows = asideRows({
-      actions: sessionActions(session('m')),
-      actionWords: verbs,
-      grouping: 'project',
-      groupWords: groups,
-      toggles: { closed: false, exited: false, unfiled: false, done: false, active: false },
-      toggleWords: toggles,
-      headings: heads,
-      showUnfiled: false,
-    })
-    expect(rows.some(r => r.kind === 'preset')).toBe(false)
-  })
-})
-
 describe('grouping by project', () => {
   it('files a WORKTREE under the project it belongs to, not under its own folder', () => {
     // Three worktrees of one repository are three places to work on ONE project. Keying on the
@@ -1073,5 +1024,57 @@ describe('the only-active toggle', () => {
       const show = rows.findIndex(r => r.kind === 'heading' && r.label === 'SHOW')
       expect(rows[show + 1]).toMatchObject({ kind: 'toggle', toggle: 'active', on: true })
     }
+  })
+})
+
+describe('resolveAsideCursor', () => {
+  const rows: Parameters<typeof resolveAsideCursor>[0] = [
+    { kind: 'heading', label: 'ACTIONS' },
+    { kind: 'action', action: 'attach', label: 'Attach', enabled: true },
+    { kind: 'action', action: 'kill', label: 'Stop', enabled: true },
+    { kind: 'rule' },
+    { kind: 'heading', label: 'VIEW' },
+    { kind: 'group', value: 'project', label: 'project', on: true },
+    { kind: 'toggle', toggle: 'active', label: 'only active', on: true },
+  ]
+
+  it('keeps the cursor on the SAME row when the list is rebuilt around it', () => {
+    // The cursor used to be an index into the selectable rows, and which verbs are enabled depends
+    // on the selected session — so moving down the fleet renumbered every row beneath the actions
+    // block and the menu cursor jumped, usually into the first section, which then opened.
+    const shorter: typeof rows = [
+      { kind: 'heading', label: 'ACTIONS' },
+      { kind: 'action', action: 'resume', label: 'Reopen', enabled: true },
+      { kind: 'rule' },
+      { kind: 'heading', label: 'VIEW' },
+      { kind: 'group', value: 'project', label: 'project', on: true },
+      { kind: 'toggle', toggle: 'active', label: 'only active', on: true },
+    ]
+    expect(asideRowKey(rows[6]!)).toBe('toggle:active')
+    expect(resolveAsideCursor(shorter, 'toggle:active')).toBe(5)
+    expect(asideRowKey(shorter[5]!)).toBe('toggle:active')
+  })
+
+  it('lands on the NEAREST selectable row when its own row is gone', () => {
+    // A verb that becomes unavailable moves the cursor one place, never to the top of the menu —
+    // the top is in the first section, and landing there opens it.
+    const without: typeof rows = rows.filter(r => !(r.kind === 'action' && r.action === 'kill'))
+    const at = resolveAsideCursor(without, 'action:kill')
+    expect(at).toBeGreaterThan(0)
+    expect(without[at]!.kind).not.toBe('heading')
+  })
+
+  it('never lands on a heading, a rule, or a disabled verb', () => {
+    const disabled: typeof rows = rows.map(r =>
+      r.kind === 'action' && r.action === 'kill' ? { ...r, enabled: false } : r)
+    const at = resolveAsideCursor(disabled, 'action:kill')
+    const row = disabled[at]!
+    expect(row.kind).not.toBe('heading')
+    expect(row.kind).not.toBe('rule')
+    if (row.kind === 'action') expect(row.enabled).toBe(true)
+  })
+
+  it('reports -1 when there is nothing to land on at all', () => {
+    expect(resolveAsideCursor([{ kind: 'heading', label: 'X' }], 'action:attach')).toBe(-1)
   })
 })

@@ -784,15 +784,7 @@ export type AsideRow =
   | { kind: 'task'; name: string; count: number; on: boolean; done?: boolean }
   /** One project directory, with its session count. `name: ''` is "every project". */
   | { kind: 'project'; name: string; count: number; on: boolean }
-  /**
-   * The DEFAULT arrangement, as one press.
-   *
-   * Every switch on this screen is remembered, which is what people asked for and also what makes
-   * an arrangement you fiddled with weeks ago follow you around. `ctrl+r` restores it, but a key
-   * with no row is a feature only the footer knows about — and this menu exists precisely so that
-   * nothing is reachable by keystroke alone.
-   */
-  | { kind: 'preset'; label: string; on: boolean }
+
 
 /** The three things the list can be told to withhold. */
 export type SessionToggle = 'closed' | 'exited' | 'unfiled' | 'done' | 'active'
@@ -824,10 +816,6 @@ export function asideRows(o: {
   toggles: Record<SessionToggle, boolean>
   toggleWords: Record<SessionToggle, string>
   headings: { actions: string; view: string; show: string }
-  /** Already-localized name of the default arrangement, when the menu should offer it. */
-  presetLabel?: string
-  /** Whether the list is currently arranged exactly that way. */
-  presetOn?: boolean
   /** `unfiled` only means anything while grouping by task, so it is ABSENT otherwise. */
   showUnfiled: boolean
   /**
@@ -860,9 +848,6 @@ export function asideRows(o: {
     rows.push({ kind: 'action', action: a.action, label: o.actionWords[a.action], enabled: a.enabled })
   }
   rows.push({ kind: 'rule' }, { kind: 'heading', label: o.headings.view })
-  if (o.presetLabel !== undefined) {
-    rows.push({ kind: 'preset', label: o.presetLabel, on: o.presetOn === true })
-  }
   for (const g of GROUPINGS) {
     rows.push({ kind: 'group', value: g, label: o.groupWords[g], on: g === o.grouping })
   }
@@ -936,6 +921,48 @@ export function taskCounts(list: readonly ControlSession[]): Array<{ name: strin
   return [...counts.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name))
+}
+
+/**
+ * A stable NAME for a menu row, so a cursor can survive the list being rebuilt — PURE.
+ *
+ * The cursor used to be an index into the SELECTABLE rows, and that list changes composition
+ * constantly: which verbs are enabled depends on the selected session, so moving down the fleet
+ * silently renumbered every row beneath the actions block and the menu cursor jumped — usually back
+ * into the first section, which then opened. An index is not an identity.
+ *
+ * Keyed by kind and by what the row acts on, never by position.
+ */
+export function asideRowKey(row: AsideRow): string {
+  switch (row.kind) {
+    case 'action': return `action:${row.action}`
+    case 'group': return `group:${row.value}`
+    case 'toggle': return `toggle:${row.toggle}`
+    case 'task': return `task:${row.name}`
+    case 'project': return `project:${row.name}`
+    case 'heading': return `heading:${row.label}`
+    case 'rule': return 'rule'
+  }
+}
+
+/**
+ * Where the cursor lands after the menu is rebuilt — PURE.
+ *
+ * The SAME row when it is still there and still selectable; otherwise the nearest selectable row to
+ * where it was, so a verb that becomes unavailable moves the cursor by one place rather than to the
+ * top of the menu.
+ */
+export function resolveAsideCursor(rows: readonly AsideRow[], wanted: string): number {
+  const picks = asideSelectable(rows)
+  if (picks.length === 0) return -1
+  const exact = picks.find(i => asideRowKey(rows[i]!) === wanted)
+  if (exact !== undefined) return exact
+  // Not there any more: fall back to where it WAS, which for a disabled verb is the row that took
+  // its place. Never the top — a cursor that jumps to the first section makes that section open.
+  const previous = rows.findIndex(r => asideRowKey(r) === wanted)
+  if (previous < 0) return picks[0]!
+  return picks.reduce((best, i) =>
+    Math.abs(i - previous) < Math.abs(best - previous) ? i : best, picks[0]!)
 }
 
 /** Index of the nth row the cursor may land on: never a heading, a rule, or a disabled action. */
