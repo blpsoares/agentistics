@@ -38,9 +38,10 @@ import {
   CLAUDE_SETTINGS_FILE,
   CLAUDE_SETTINGS_LOCAL_FILE,
   STATS_CACHE_FILE,
+  CODEX_AUTH_FILE,
 } from './config'
-import { detectBilling } from '@agentistics/core'
-import type { BillingDetection, BillingSignals, HarnessId, StatsCache } from '@agentistics/core'
+import { detectBilling, detectCodexBilling } from '@agentistics/core'
+import type { BillingDetection, BillingSignals, CodexSignals, HarnessId, StatsCache } from '@agentistics/core'
 
 /** The env keys that indicate third-party routing. Their values are plain configuration. */
 const ROUTING_KEYS = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'ANTHROPIC_BASE_URL'] as const
@@ -145,6 +146,65 @@ export async function readBillingSignals(): Promise<BillingSignals> {
 }
 
 /**
+ * One claim out of a JWT, without ever handling the JWT as a credential.
+ *
+ * A JWT is three dot-separated base64url segments: header, payload, signature. Only the PAYLOAD is
+ * read, only the named claim is returned, and the token string never leaves this function — it is
+ * not stored, not logged and not put in `CodexSignals`. The signature is deliberately NOT verified:
+ * verifying would need OpenAI's keys over the network, and the point here is not to trust the token
+ * but to read what the user's own machine already believes about their plan. A forged token in the
+ * user's own home directory would mis-price only their own dashboard.
+ *
+ * Returns null for anything that is not a readable payload — this is a convenience, never a gate.
+ */
+export function readJwtClaim(jwt: string, claim: string): unknown {
+  try {
+    const payload = jwt.split('.')[1]
+    if (!payload) return null
+    const json = Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+    return (JSON.parse(json) as Record<string, unknown>)[claim] ?? null
+  } catch {
+    return null
+  }
+}
+
+/** The claim OpenAI stamps the ChatGPT tier into. */
+const CHATGPT_PLAN_CLAIM = 'https://api.openai.com/auth'
+
+/**
+ * Codex's signals, from `~/.codex/auth.json`.
+ *
+ * Two fields and nothing else: whether an API key is configured (presence only — the value is a
+ * credential) and the plan tier lifted out of the OAuth id token's payload. The account id, the
+ * bearer tokens and the expiry all sit in the same file and none of them is read.
+ */
+export async function readCodexSignals(): Promise<CodexSignals> {
+  const auth = await safeReadJson<Record<string, unknown>>(CODEX_AUTH_FILE)
+  if (!auth) return {}
+
+  const signals: CodexSignals = {}
+  if (typeof auth['OPENAI_API_KEY'] === 'string' && auth['OPENAI_API_KEY'] !== '') {
+    signals.apiKey = 'set'
+  }
+
+  const tokens = auth['tokens']
+  const idToken = tokens && typeof tokens === 'object'
+    ? (tokens as Record<string, unknown>)['id_token']
+    : undefined
+  if (typeof idToken === 'string' && idToken !== '') {
+    // The claim's value is itself an object and the plan is one of its keys. Read defensively — a
+    // shape change upstream must yield no plan, never a throw and never a wrong plan.
+    const auth0 = readJwtClaim(idToken, CHATGPT_PLAN_CLAIM)
+    const planType = auth0 && typeof auth0 === 'object'
+      ? (auth0 as Record<string, unknown>)['chatgpt_plan_type']
+      : undefined
+    if (typeof planType === 'string' && planType !== '') signals.planType = planType.toLowerCase()
+  }
+
+  return signals
+}
+
+/**
  * One proposal per harness in scope.
  *
  * Only Claude has signals on disk today. The others still get an entry, with `source: 'none'`,
@@ -152,18 +212,18 @@ export async function readBillingSignals(): Promise<BillingSignals> {
  * detected for Codex" tells the user the timeline for that harness is theirs to fill in.
  */
 export async function detectBillingLocal(harnesses: readonly HarnessId[]): Promise<BillingDetection[]> {
-  const signals = await readBillingSignals()
-  return harnesses.map((harness) =>
-    harness === 'claude'
-      ? detectBilling(signals)
-      : {
-          harness,
-          mode: 'unknown' as const,
-          source: 'none' as const,
-          confidence: 'guess' as const,
-          evidenceEn: 'This product cannot read how this harness is billed — enter it yourself.',
-          evidencePt: 'Este produto não consegue ler como este harness é cobrado — informe você mesmo.',
-          proposalOnly: true as const,
-        },
-  )
+  const [signals, codex] = await Promise.all([readBillingSignals(), readCodexSignals()])
+  return harnesses.map((harness) => {
+    if (harness === 'claude') return detectBilling(signals)
+    if (harness === 'codex') return detectCodexBilling(codex)
+    return {
+      harness,
+      mode: 'unknown' as const,
+      source: 'none' as const,
+      confidence: 'guess' as const,
+      evidenceEn: 'This product cannot read how this harness is billed — enter it yourself.',
+      evidencePt: 'Este produto não consegue ler como este harness é cobrado — informe você mesmo.',
+      proposalOnly: true as const,
+    }
+  })
 }

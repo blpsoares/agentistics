@@ -529,7 +529,12 @@ actually pays.
   secrets, a mail address and account identifiers; `billing-detect.test.ts` greps the module's own
   source and fails if one is so much as mentioned. Never shell out to the macOS Keychain.
   Detection is a PROPOSAL — it cannot know when a plan started, which is what the timeline needs
-  most.
+  most. **Codex's tier is only ever written inside the ID token's payload**, so `readJwtClaim`
+  decodes that segment and returns one named claim; the token itself is never held, and the guard
+  list grew `access_token`/`refresh_token` so the module cannot name the pair beside it. **A tier
+  detected as FREE proposes `mode: 'unknown'`, not a subscription of zero** (zero is not a price —
+  it would make every multiple infinite), and the settings screen states the finding while
+  withholding the "use what we detected" button, which would open a form prefilled with nothing.
 - **The basis toggle is a GATE**: disabled until `billingReadiness().ready`, and pressing it
   disabled opens the setup prompt rather than doing nothing.
 

@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'fs'
-import { readBillingSignals, detectBillingLocal } from './billing-detect'
+import { readBillingSignals, detectBillingLocal, readCodexSignals, readJwtClaim } from './billing-detect'
 import { HARNESS_ORDER } from '@agentistics/core'
 
 /**
@@ -20,6 +20,10 @@ const FORBIDDEN = [
   'display' + 'Name',
   'customApiKey' + 'Responses',
   'mcp' + 'OAuth',
+  // Codex's `~/.codex/auth.json` holds the OAuth pair beside the plan claim. The module reads the
+  // ID token (it is the only place the tier is written) and must never so much as name these two.
+  'access' + '_token',
+  'refresh' + '_token',
 ]
 
 describe('billing-detect — the whitelist is the security boundary', () => {
@@ -120,9 +124,10 @@ describe('detectBillingLocal', () => {
 
   test('a harness with no detector says so instead of being omitted', async () => {
     // A silent gap reads as "already handled"; an explicit "nothing detected" tells the user the
-    // timeline for that harness is theirs to fill in.
-    const out = await detectBillingLocal(['codex'])
-    expect(out[0]).toMatchObject({ harness: 'codex', mode: 'unknown', source: 'none' })
+    // timeline for that harness is theirs to fill in. Gemini, not Codex: Codex HAS a detector now,
+    // so on a machine that is logged into it this assertion would be about the machine, not the code.
+    const out = await detectBillingLocal(['gemini'])
+    expect(out[0]).toMatchObject({ harness: 'gemini', mode: 'unknown', source: 'none' })
     expect(out[0]!.evidenceEn.length).toBeGreaterThan(0)
     expect(out[0]!.evidencePt.length).toBeGreaterThan(0)
   })
@@ -136,5 +141,52 @@ describe('detectBillingLocal', () => {
 
   test('an empty harness list yields nothing rather than a default', async () => {
     expect(await detectBillingLocal([])).toEqual([])
+  })
+})
+
+describe('readJwtClaim — the payload, and only the named claim', () => {
+  /** Build a JWT-shaped string. The signature segment is deliberate junk: it is never read. */
+  function jwt(payload: unknown): string {
+    const b64 = (o: unknown) => Buffer.from(JSON.stringify(o), 'utf8').toString('base64url')
+    return `${b64({ alg: 'RS256' })}.${b64(payload)}.not-a-signature`
+  }
+
+  test('returns the claim asked for and nothing beside it', () => {
+    const token = jwt({ plan: { tier: 'pro' }, sub: 'someone' })
+    expect(readJwtClaim(token, 'plan')).toEqual({ tier: 'pro' })
+  })
+
+  test('a claim that is not there is null, not undefined and not a throw', () => {
+    expect(readJwtClaim(jwt({ a: 1 }), 'b')).toBeNull()
+  })
+
+  test('base64url is decoded — the - and _ alphabet, not standard base64', () => {
+    // A payload whose encoding contains both substituted characters. Decoded as plain base64 it
+    // yields mojibake and then a parse error, i.e. a silently absent plan rather than a loud one.
+    const token = jwt({ 'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' }, x: '?>>?~~' })
+    expect(readJwtClaim(token, 'https://api.openai.com/auth')).toEqual({ chatgpt_plan_type: 'plus' })
+  })
+
+  test('junk in every shape yields null rather than throwing', () => {
+    for (const bad of ['', 'a', 'a.b', 'a.b.c', '..', 'x.!!!!.z']) {
+      expect(readJwtClaim(bad, 'anything')).toBeNull()
+    }
+  })
+})
+
+describe('readCodexSignals', () => {
+  test('reads this machine without throwing and carries only the two whitelisted fields', async () => {
+    // Runs against whatever this machine actually has — the point is the SHAPE, which must hold
+    // whether the file is present, absent or malformed.
+    const signals = await readCodexSignals()
+    for (const key of Object.keys(signals)) {
+      expect(['planType', 'apiKey']).toContain(key)
+    }
+    if (signals.apiKey !== undefined) expect(signals.apiKey).toBe('set')
+    if (signals.planType !== undefined) {
+      expect(typeof signals.planType).toBe('string')
+      // Lowercased on the way in, so the pure detector matches on one spelling.
+      expect(signals.planType).toBe(signals.planType.toLowerCase())
+    }
   })
 })

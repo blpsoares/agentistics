@@ -29,7 +29,7 @@ export const CLAUDE_CREDENTIALS_FILE = process.env.CLAUDE_CREDENTIALS_FILE ?? jo
 // `~/.claude.json` is a SIBLING of the .claude directory, not a child, so it cannot be derived
 // from CLAUDE_DIR — a container mounting the host dir at /host-claude would resolve it to
 // `/.claude.json`. Defaults to the home copy and takes an explicit override instead.
-export const CLAUDE_JSON_FILE = process.env.CLAUDE_JSON_FILE ?? join(HOME_DIR, '.claude.json')
+export const CLAUDE_JSON_FILE =process.env.CLAUDE_JSON_FILE ?? join(HOME_DIR, '.claude.json')
 export const PORT = parseInt(process.env.PORT ?? '47291', 10)
 // The web dashboard is served on WEB_PORT (PORT + 1 by default → 47292). In binary mode the
 // server binds BOTH: PORT (47291) is always the api + mcp endpoint, WEB_PORT (47292) is what you
@@ -162,6 +162,9 @@ export const TEAM_SYNC_FILE = process.env.AGENTISTICS_TEAM_SYNC_FILE ?? join(AGE
 // ---------------------------------------------------------------------------
 export const CODEX_DIR = process.env.CODEX_DIR ?? (_selfContributingCentral ? '/host-codex' : join(HOME_DIR, '.codex'))
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, 'sessions')
+// Codex's own billing signal. `auth.json` holds the OAuth tokens AND an optional API key; only
+// the plan tier and the PRESENCE of a key are ever read — see `billing-detect.ts`.
+export const CODEX_AUTH_FILE = process.env.CODEX_AUTH_FILE ?? join(CODEX_DIR, 'auth.json')
 
 // ---------------------------------------------------------------------------
 // Gemini CLI harness. Override with GEMINI_DIR; disable with AGENTISTICS_HARNESS_GEMINI=0.

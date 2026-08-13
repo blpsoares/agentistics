@@ -64,12 +64,30 @@ export interface BillingSignals {
   }
 }
 
+/**
+ * Codex's equivalent, and the ONLY other harness whose plan is legible offline.
+ *
+ * The plan sits in a claim of the OAuth id token — a JWT, and therefore a bearer credential. The
+ * reader decodes ONLY its payload segment, lifts this one claim, and lets the token itself go; it
+ * never reaches this module, is never stored and is never logged. The other harnesses have no
+ * local answer at all: Copilot's tier comes from the GitHub API, Gemini's is inferable only from
+ * an OAuth scope string, Kimi is API-key billed by definition and Antigravity's token carries no
+ * plan metadata.
+ */
+export interface CodexSignals {
+  /** The `chatgpt_plan_type` claim, lowercased. Never the token it came from. */
+  planType?: string
+  /** PRESENCE only: an API key is configured, so this machine bills per token. */
+  apiKey?: 'set'
+}
+
 export type BillingDetectionSource =
   | 'env_thirdparty'
   | 'claude_json_oauth'
   | 'credentials'
   | 'env_api_key'
   | 'zero_cost_heuristic'
+  | 'codex_id_token'
   | 'none'
 
 export interface BillingDetection {
@@ -262,5 +280,73 @@ export function detectBilling(signals: BillingSignals): BillingDetection {
     confidence: 'guess',
     evidenceEn: 'No billing signal was found on this machine.',
     evidencePt: 'Nenhum sinal de cobrança foi encontrado nesta máquina.',
+  }
+}
+
+/** ChatGPT plan claim → catalog id. Only the tiers the catalog names; anything else is a
+ *  subscription with no id, which the form then asks the user to pick. */
+const CHATGPT_PLANS: Record<string, string> = {
+  plus: 'openai-plus',
+  pro: 'openai-pro',
+  go: 'openai-go',
+  business: 'openai-business',
+  team: 'openai-business',
+  enterprise: 'openai-business',
+}
+
+/**
+ * Codex's chain. Shorter than Claude's because there is less to read: an API key, or the plan
+ * claim, or nothing.
+ *
+ * A FREE plan is reported as `unknown`, not as a subscription of zero. Zero is not a price — a
+ * period priced at nothing would make every multiple infinite — and "you are on the free tier,
+ * there is no subscription to register" is the honest sentence.
+ */
+export function detectCodexBilling(signals: CodexSignals): BillingDetection {
+  const base = { harness: 'codex' as HarnessId, proposalOnly: true } as const
+
+  if (signals.apiKey === 'set') {
+    return {
+      ...base,
+      mode: 'api',
+      planId: 'api-payg',
+      source: 'env_api_key',
+      confidence: 'likely',
+      evidenceEn: '~/.codex/auth.json holds an API key, so this machine bills per token.',
+      evidencePt: '~/.codex/auth.json tem uma chave de API, então esta máquina é cobrada por token.',
+    }
+  }
+
+  const plan = (signals.planType ?? '').toLowerCase()
+  if (plan === 'free') {
+    return {
+      ...base,
+      mode: 'unknown',
+      source: 'codex_id_token',
+      confidence: 'exact',
+      evidenceEn: 'Your ChatGPT account is on the free tier — there is no subscription cost to register.',
+      evidencePt: 'Sua conta ChatGPT está no plano gratuito — não há custo de assinatura a cadastrar.',
+    }
+  }
+  if (plan) {
+    const planId = CHATGPT_PLANS[plan]
+    return {
+      ...base,
+      mode: 'subscription',
+      ...(planId ? { planId } : {}),
+      source: 'codex_id_token',
+      confidence: planId ? 'exact' : 'likely',
+      evidenceEn: `Your ChatGPT sign-in reports the "${plan}" plan.`,
+      evidencePt: `Seu login do ChatGPT informa o plano "${plan}".`,
+    }
+  }
+
+  return {
+    ...base,
+    mode: 'unknown',
+    source: 'none',
+    confidence: 'guess',
+    evidenceEn: 'No billing signal was found for Codex on this machine.',
+    evidencePt: 'Nenhum sinal de cobrança do Codex foi encontrado nesta máquina.',
   }
 }

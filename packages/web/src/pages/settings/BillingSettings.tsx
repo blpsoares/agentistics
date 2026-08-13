@@ -160,6 +160,16 @@ export default function BillingSettings() {
   /** This harness's proposal. `source: 'none'` means nothing was detected, which the empty state
    *  says out loud rather than leaving a silent gap. */
   const detection = detections?.find(d => d.harness === harness)
+  /**
+   * The proposal that can actually SEED a period, which is not the same as the proposal that has
+   * something to say. Codex's free tier is detected exactly — `source: 'codex_id_token'`,
+   * `confidence: 'exact'` — and its whole content is "there is nothing to register". Offering
+   * "use what we detected" there would open a form prefilled with nothing under a claim that it
+   * was. The sentence is still shown; only the button is withheld.
+   */
+  const seedable = detection && detection.source !== 'none' && detection.mode !== 'unknown'
+    ? detection
+    : null
 
   const { current, history } = useMemo(() => splitTimeline(periods, today()), [periods])
   const [showHistory, setShowHistory] = useState(false)
@@ -339,16 +349,16 @@ export default function BillingSettings() {
           </p>
           {/* Detection is the PRIMARY action here, not a card beside one. It answers most of the
               form, and the sentence under it names the single thing it cannot know. */}
-          {detection && detection.source !== 'none' ? (
+          {seedable ? (
             <>
               <button onClick={openFromDetection} style={primaryBtn(isMobile)}>
                 <Sparkles size={15} />
-                {detection.planId
-                  ? (pt ? `Usar ${findPlan(detection.planId)?.label ?? detection.planId}` : `Use ${findPlan(detection.planId)?.label ?? detection.planId}`)
+                {seedable.planId
+                  ? (pt ? `Usar ${findPlan(seedable.planId)?.label ?? seedable.planId}` : `Use ${findPlan(seedable.planId)?.label ?? seedable.planId}`)
                   : (pt ? 'Usar o que detectamos' : 'Use what we detected')}
               </button>
               <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 8, lineHeight: 1.5 }}>
-                {pt ? detection.evidencePt : detection.evidenceEn}{' '}
+                {pt ? seedable.evidencePt : seedable.evidenceEn}{' '}
                 <strong style={{ color: 'var(--text-secondary)' }}>
                   {pt ? 'Falta s\u00f3 a data em que voc\u00ea come\u00e7ou a pagar.' : 'Only the date you started paying is missing.'}
                 </strong>
@@ -358,10 +368,19 @@ export default function BillingSettings() {
               </button>
             </>
           ) : (
-            <button onClick={openNew} style={primaryBtn(isMobile)}>
-              <Plus size={15} />
-              {pt ? 'Cadastrar meu plano' : 'Register my plan'}
-            </button>
+            <>
+              {/* Detected, but with nothing to prefill \u2014 the free tier being the case that exists
+                  today. The finding is still worth saying: it is the answer to "why is this empty". */}
+              {detection && detection.source !== 'none' && (
+                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', margin: '0 0 12px', lineHeight: 1.5 }}>
+                  {pt ? detection.evidencePt : detection.evidenceEn}
+                </div>
+              )}
+              <button onClick={openNew} style={primaryBtn(isMobile)}>
+                <Plus size={15} />
+                {pt ? 'Cadastrar meu plano' : 'Register my plan'}
+              </button>
+            </>
           )}
         </div>
       )}

@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { detectBilling } from './billingDetect'
-import type { BillingSignals } from './billingDetect'
+import { detectBilling, detectCodexBilling } from './billingDetect'
+import type { BillingSignals, CodexSignals } from './billingDetect'
 import { findPlan } from './plan-catalog'
 
 const empty: BillingSignals = { env: {}, hasApiKeyHelper: false }
@@ -136,5 +136,70 @@ describe('detectBilling — invariants', () => {
 
   test('detection never proposes a price — only the user sets one', () => {
     for (const c of cases) expect('price' in detectBilling(c)).toBe(false)
+  })
+})
+
+describe('detectCodexBilling', () => {
+  const codexCases: CodexSignals[] = [
+    {},
+    { apiKey: 'set' },
+    { planType: 'free' },
+    { planType: 'plus' },
+    { planType: 'pro' },
+    { planType: 'go' },
+    { planType: 'business' },
+    { planType: 'team' },
+    { planType: 'enterprise' },
+    { planType: 'a_tier_that_does_not_exist_yet' },
+    { apiKey: 'set', planType: 'pro' },
+  ]
+
+  test('an api key wins over the plan claim — a key is what actually bills', () => {
+    // Both signals can be present: someone on Plus who also configured a key for scripting. The
+    // key is the one that produces an invoice per token, so it decides.
+    const out = detectCodexBilling({ apiKey: 'set', planType: 'pro' })
+    expect(out.mode).toBe('api')
+    expect(out.planId).toBe('api-payg')
+  })
+
+  test('each named tier resolves to a catalog id that exists', () => {
+    for (const plan of ['plus', 'pro', 'go', 'business', 'team', 'enterprise']) {
+      const out = detectCodexBilling({ planType: plan })
+      expect(out.mode).toBe('subscription')
+      expect(out.planId).toBeDefined()
+      // An id the catalog does not hold would render a blank plan name and prefill no price.
+      expect(findPlan(out.planId!)).toBeDefined()
+    }
+  })
+
+  test('an unknown tier is still a subscription, just without an id', () => {
+    // OpenAI can name a tier tomorrow. Reporting "not detected" would be worse than reporting
+    // "you are on a subscription, pick which" — the mode is the part that is certain.
+    const out = detectCodexBilling({ planType: 'a_tier_that_does_not_exist_yet' })
+    expect(out.mode).toBe('subscription')
+    expect(out.planId).toBeUndefined()
+    expect(out.confidence).toBe('likely')
+  })
+
+  test('the free tier is unknown, never a subscription priced at zero', () => {
+    // A period priced at zero makes every value multiple infinite. There is nothing to register.
+    const out = detectCodexBilling({ planType: 'free' })
+    expect(out.mode).toBe('unknown')
+    expect(out.planId).toBeUndefined()
+  })
+
+  test('no signal at all says so instead of guessing', () => {
+    expect(detectCodexBilling({})).toMatchObject({ mode: 'unknown', source: 'none' })
+  })
+
+  test('every result is a codex proposal, bilingual, and carries no price', () => {
+    for (const c of codexCases) {
+      const out = detectCodexBilling(c)
+      expect(out.harness).toBe('codex')
+      expect(out.proposalOnly).toBe(true)
+      expect('price' in out).toBe(false)
+      expect(out.evidenceEn.length).toBeGreaterThan(0)
+      expect(out.evidencePt.length).toBeGreaterThan(0)
+    }
   })
 })

@@ -439,6 +439,20 @@ reason to hold, not even in memory.
 2. **A shape walk** over the real result, asserting the key set is a subset of `BillingSignals`
    and that no value is long, contains `@`, or carries a credential-shaped prefix.
 
+**Codex's plan lives inside a bearer token, and only its payload is read.** `~/.codex/auth.json`
+holds an OAuth pair and an optional API key beside the one fact wanted — the ChatGPT tier, which
+OpenAI writes nowhere else but as a claim inside the ID token. `readJwtClaim` splits the token,
+base64url-decodes the **payload segment only**, and returns the one named claim; the token string
+never leaves that function and is not stored, logged or put in `CodexSignals`, which carries two
+fields total (`planType`, and `apiKey: 'set'` as a presence). The source-text guard is extended
+with `access_token` and `refresh_token` accordingly, so the module cannot name the pair sitting
+beside what it reads.
+
+The signature is deliberately **not** verified: verifying would need OpenAI's keys over the
+network, and the question here is not whether the token is genuine but what the user's own machine
+already believes about their plan. A forged token in someone's own home directory mis-prices only
+their own dashboard, and the result is a proposal they confirm.
+
 **macOS is not probed.** The credentials there live in the login Keychain, and this product does
 NOT shell out to `security` to reach them — that raises a system prompt, and a metrics dashboard
 has no business asking someone to unlock their keychain. An absent signal is absent, and the
