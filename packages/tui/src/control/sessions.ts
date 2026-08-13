@@ -32,8 +32,68 @@ export function sessionRank(s: ControlSession): number {
   return RANK[s.state]
 }
 
-export function sortSessions(list: readonly ControlSession[]): ControlSession[] {
+/**
+ * What a list can be ordered BY.
+ *
+ * `state` is the default and is not merely one option among the others: it puts what is blocked on
+ * you at the top, which is the reason this screen exists. Every other order is a way of ANSWERING a
+ * question ("what is costing me", "where was I an hour ago"), and each keeps state as its tiebreak
+ * so a run of equal values still surfaces the blocked one first.
+ */
+export type SessionSort = 'state' | 'name' | 'started' | 'usage' | 'project'
+
+export const SESSION_SORTS: readonly SessionSort[] = ['state', 'name', 'started', 'usage', 'project'] as const
+
+export interface SessionOrder {
+  by: SessionSort
+  /** `desc` is newest / largest / most-urgent first — the direction each key is useful in. */
+  dir: 'asc' | 'desc'
+}
+
+export const DEFAULT_ORDER: SessionOrder = { by: 'state', dir: 'desc' }
+
+/**
+ * Tokens as a NUMBER for ordering, from the already-formatted string the host sent.
+ *
+ * The host formats `51.7k` because every other surface wants it formatted, and re-deriving the
+ * number here beats asking it to send both — but it must parse the SUFFIX, or `9.9k` sorts above
+ * `1.2M` and the column that exists to show what is expensive points at the cheapest row.
+ */
+export function usageOf(s: ControlSession): number {
+  const raw = (s.tokens ?? '').trim()
+  const n = Number.parseFloat(raw)
+  if (!Number.isFinite(n)) return 0
+  const unit = raw.replace(/[\d.,\s]/g, '').toUpperCase()
+  return n * (unit.startsWith('M') ? 1e6 : unit.startsWith('K') ? 1e3 : 1)
+}
+
+/**
+ * Order a list — PURE.
+ *
+ * STATE is every key's tiebreak, not only its own: a screen sorted by name that buries a session
+ * waiting on approval among nine idle ones has lost the thing it is for. The direction flips the
+ * primary key only, so `asc` by name still puts the blocked session first among equal names.
+ */
+export function sortSessions(
+  list: readonly ControlSession[],
+  order: SessionOrder = DEFAULT_ORDER,
+): ControlSession[] {
+  // `primary` returns negative when `a` belongs FIRST in the direction the key is useful in, which
+  // `desc` names: most urgent, A to Z, largest, newest. `asc` is that flipped. One convention for
+  // every key, rather than a per-key argument about which way round its "descending" runs.
+  const primary = (a: ControlSession, b: ControlSession): number => {
+    switch (order.by) {
+      case 'state': return sessionRank(a) - sessionRank(b)
+      case 'name': return a.title.localeCompare(b.title)
+      case 'project': return (a.projectGroup || a.project).localeCompare(b.projectGroup || b.project)
+      case 'usage': return usageOf(b) - usageOf(a)
+      case 'started': return (b.startedAt ?? 0) - (a.startedAt ?? 0)
+    }
+  }
+  const sign = order.dir === 'asc' ? -1 : 1
   return [...list].sort((a, b) => {
+    const byPrimary = primary(a, b) * sign
+    if (byPrimary !== 0) return byPrimary
     const byRank = sessionRank(a) - sessionRank(b)
     if (byRank !== 0) return byRank
     return (b.startedAt ?? 0) - (a.startedAt ?? 0)
@@ -106,8 +166,9 @@ export function groupSessions(
   unknownLabels: { harness: string; model: string; project: string; task: string; repo: string },
   /** The tasks the user marked finished — a statement about the WORK, not about any session. */
   doneTasks: readonly string[] = [],
+  order: SessionOrder = DEFAULT_ORDER,
 ): SessionGroup[] {
-  if (by === 'none') return [{ key: '', label: '', sessions: sortSessions(list) }]
+  if (by === 'none') return [{ key: '', label: '', sessions: sortSessions(list, order) }]
 
   const groups = new Map<string, SessionGroup>()
   for (const s of list) {
@@ -130,7 +191,7 @@ export function groupSessions(
   // Groups ordered by their most urgent member, so the box holding a blocked session is the one at
   // the top — grouping must not bury the thing the screen exists to surface.
   return [...groups.values()]
-    .map(g => ({ ...g, sessions: sortSessions(g.sessions) }))
+    .map(g => ({ ...g, sessions: sortSessions(g.sessions, order) }))
     .sort((a, b) => {
       const byRank = sessionRank(a.sessions[0]!) - sessionRank(b.sessions[0]!)
       return byRank !== 0 ? byRank : a.label.localeCompare(b.label)
@@ -784,10 +845,27 @@ export type AsideRow =
   | { kind: 'task'; name: string; count: number; on: boolean; done?: boolean }
   /** One project directory, with its session count. `name: ''` is "every project". */
   | { kind: 'project'; name: string; count: number; on: boolean }
+  /** One STATE the list may keep, with how many rows wear it. */
+  | { kind: 'state'; value: SessionState; label: string; count: number; on: boolean }
+  /** One ordering, and whether it is the one in force. */
+  | { kind: 'sort'; value: SessionSort; label: string; on: boolean; dir: 'asc' | 'desc' }
 
 
 /** The three things the list can be told to withhold. */
-export type SessionToggle = 'closed' | 'exited' | 'unfiled' | 'done' | 'active'
+export type SessionToggle = 'closed' | 'exited' | 'unfiled' | 'done' | 'active' | 'detail'
+
+/**
+ * Every state a row can wear, in the order the menu lists them: most urgent first, history last.
+ *
+ * The list is exhaustive on purpose — `Record`-shaped elsewhere, a plain array here — so a new
+ * state added to `SessionState` shows up as a missing row rather than as a filter that silently
+ * drops every session wearing it.
+ */
+export const SESSION_STATES: readonly SessionState[] =
+  ['waiting-approval', 'waiting', 'working', 'exited', 'lost', 'closed', 'unknown'] as const
+
+/** The three that mean something is alive on the other end — what `only active` keeps. */
+export const ACTIVE_STATES: readonly SessionState[] = ['working', 'waiting', 'waiting-approval'] as const
 
 /**
  * Is this session RUNNING right now — PURE.
@@ -816,6 +894,21 @@ export function asideRows(o: {
   toggles: Record<SessionToggle, boolean>
   toggleWords: Record<SessionToggle, string>
   headings: { actions: string; view: string; show: string }
+  /** The ordering block, when the menu should offer one. */
+  sort?: { heading: string; words: Record<SessionSort, string>; by: SessionSort; dir: 'asc' | 'desc' }
+  /**
+   * The per-STATE block: which states are kept, what each is called, and how many wear it.
+   *
+   * Counted over the fleet rather than over the filtered list, for the same reason the tasks are:
+   * the count is what says a state has anything in it, and counting after the filter would report
+   * the number the filter left — which for an unselected state is always zero.
+   */
+  states?: {
+    heading: string
+    words: Record<SessionState, string>
+    counts: Partial<Record<SessionState, number>>
+    kept: readonly SessionState[]
+  }
   /** `unfiled` only means anything while grouping by task, so it is ABSENT otherwise. */
   showUnfiled: boolean
   /**
@@ -858,14 +951,38 @@ export function asideRows(o: {
   // switch that appears to do nothing is one people conclude is broken. Listed first, it reads as
   // what it is — the strict answer, with the widening ones beneath.
   const toggles: SessionToggle[] = o.showUnfiled
-    ? ['active', 'closed', 'exited', 'done', 'unfiled']
-    : ['active', 'closed', 'exited', 'done']
+    ? ['active', 'closed', 'exited', 'done', 'unfiled', 'detail']
+    : ['active', 'closed', 'exited', 'done', 'detail']
   for (const t of toggles) {
     rows.push({ kind: 'toggle', toggle: t, label: o.toggleWords[t], on: o.toggles[t] })
   }
 
   // The tasks, last, and only when there are any: a heading over an empty section is a promise the
   // screen cannot keep.
+  // ORDER, then STATE: the first is how the list is arranged and belongs beside the grouping, the
+  // second is what it contains and belongs beside the switches that decide the same thing.
+  if (o.sort) {
+    rows.push({ kind: 'rule' }, { kind: 'heading', label: o.sort.heading })
+    for (const by of SESSION_SORTS) {
+      rows.push({
+        kind: 'sort', value: by, label: o.sort.words[by], on: by === o.sort.by, dir: o.sort.dir,
+      })
+    }
+  }
+
+  if (o.states) {
+    rows.push({ kind: 'rule' }, { kind: 'heading', label: o.states.heading })
+    for (const value of SESSION_STATES) {
+      const count = o.states.counts[value] ?? 0
+      // A state nothing on this machine wears is not a filter, it is a row that does nothing.
+      if (count === 0 && !o.states.kept.includes(value)) continue
+      rows.push({
+        kind: 'state', value, label: o.states.words[value], count,
+        on: o.states.kept.includes(value),
+      })
+    }
+  }
+
   if (o.tasks && o.tasks.counts.length > 0) {
     const done = o.tasks.done ?? []
     rows.push({ kind: 'rule' }, { kind: 'heading', label: o.tasks.heading })
@@ -939,6 +1056,8 @@ export function asideRowKey(row: AsideRow): string {
     case 'group': return `group:${row.value}`
     case 'toggle': return `toggle:${row.toggle}`
     case 'task': return `task:${row.name}`
+    case 'state': return `state:${row.value}`
+    case 'sort': return `sort:${row.value}`
     case 'project': return `project:${row.name}`
     case 'heading': return `heading:${row.label}`
     case 'rule': return 'rule'
