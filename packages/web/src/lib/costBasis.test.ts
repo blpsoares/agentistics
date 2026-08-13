@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { costBasisMarker, formatMultiple, viewCost } from './costBasis'
+import { costBasisMarker, formatMultiple, planCostSubtitle, viewCost } from './costBasis'
 
 describe('viewCost', () => {
   test('api basis is an identity', () => {
@@ -60,6 +60,46 @@ describe('costBasisMarker', () => {
     const v = viewCost(10, { basis: 'plan', factor: null })
     expect(costBasisMarker(v, 'en')).toBe('no registered plan')
     expect(costBasisMarker(v, 'pt')).toBe('sem plano cadastrado')
+  })
+})
+
+describe('planCostSubtitle', () => {
+  const base = { multiple: 24.5, window: { from: '2026-04-10', to: '2026-08-13' }, coveredDays: 126, uncoveredDays: 0, lang: 'pt' as const }
+
+  test('explains why a fixed monthly price shows a broken figure', () => {
+    // "The subscription is fixed, why is it R$2.069,65?" is the first question this number
+    // raises. The window alone did not answer it; the day count plus "prorated" does.
+    const out = planCostSubtitle(base)
+    expect(out).toContain('126 dias')
+    expect(out).toContain('rateados')
+  })
+
+  test('always names the measured window', () => {
+    // A user who filtered "all time" and got a figure over 126 days has a correct number under a
+    // misleading heading.
+    expect(planCostSubtitle(base)).toContain('2026-04-10')
+    expect(planCostSubtitle(base)).toContain('2026-08-13')
+  })
+
+  test('leads with the multiple', () => {
+    expect(planCostSubtitle(base).startsWith('24,5×')).toBe(true)
+    expect(planCostSubtitle({ ...base, lang: 'en' }).startsWith('24.5×')).toBe(true)
+  })
+
+  test('names uncovered days when there are any, and stays quiet when there are none', () => {
+    expect(planCostSubtitle({ ...base, uncoveredDays: 145 })).toContain('145')
+    expect(planCostSubtitle(base)).not.toContain('sem plano')
+  })
+
+  test('a single day is singular in both languages', () => {
+    expect(planCostSubtitle({ ...base, coveredDays: 1 })).toContain('1 dia rateado')
+    expect(planCostSubtitle({ ...base, coveredDays: 1, lang: 'en' })).toContain('1 day prorated')
+  })
+
+  test('an absent multiple simply drops out rather than printing a dash', () => {
+    const out = planCostSubtitle({ ...base, multiple: null })
+    expect(out).not.toContain('×')
+    expect(out).toContain('126 dias')
   })
 })
 

@@ -76,23 +76,33 @@ export function costBasisMarker(view: CostView, lang: 'pt' | 'en'): string | nul
 export function planCostSubtitle(args: {
   multiple: number | null
   window: { from: string; to: string } | null
+  /** Days the plan actually covered. Named because it is what makes the figure non-round. */
+  coveredDays: number
   uncoveredDays: number
   lang: 'pt' | 'en'
 }): string {
-  const { multiple, window, uncoveredDays, lang } = args
+  const { multiple, window, coveredDays, uncoveredDays, lang } = args
   const pt = lang === 'pt'
   const parts: string[] = []
 
   const mult = formatMultiple(multiple, lang)
   if (mult) parts.push(pt ? `${mult} o valor de API` : `${mult} the API value`)
 
+  // "Why is a fixed monthly price showing R$2.069,65?" is the first question this figure raises,
+  // and the answer is that the window is 126 days — not a whole number of months. Saying
+  // "prorated" beside the day count answers it before it is asked; the window alone did not.
+  if (coveredDays > 0) {
+    parts.push(pt
+      ? `${coveredDays} dia${coveredDays === 1 ? '' : 's'} rateados do seu mensal`
+      : `${coveredDays} day${coveredDays === 1 ? '' : 's'} prorated from your monthly`)
+  }
   if (window) {
-    parts.push(pt ? `medido de ${window.from} a ${window.to}` : `measured ${window.from} → ${window.to}`)
+    parts.push(pt ? `${window.from} a ${window.to}` : `${window.from} → ${window.to}`)
   }
   if (uncoveredDays > 0) {
     parts.push(pt
-      ? `${uncoveredDays} dia${uncoveredDays === 1 ? '' : 's'} sem plano cadastrado`
-      : `${uncoveredDays} day${uncoveredDays === 1 ? '' : 's'} with no registered plan`)
+      ? `${uncoveredDays} sem plano cadastrado`
+      : `${uncoveredDays} with no registered plan`)
   }
 
   return parts.join(' · ')

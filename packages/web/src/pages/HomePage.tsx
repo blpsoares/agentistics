@@ -31,7 +31,6 @@ import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
 import { RecentSessions } from '../components/RecentSessions'
 import { capable, HARNESS_PROVIDERS } from '../lib/harness'
 import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
-import { CostBasisToggle } from '../components/CostBasisToggle'
 import { PlanValuePanel } from '../components/PlanValuePanel'
 import { HomeComparisons } from '../components/HomeComparisons'
 import { planCostSubtitle, viewCost } from '../lib/costBasis'
@@ -68,19 +67,11 @@ export default function HomePage() {
     return planCostSubtitle({
       multiple: planBasis.basis?.multiple ?? null,
       window: planBasis.window,
+      coveredDays: planBasis.basis?.coverage.coveredDays ?? 0,
       uncoveredDays: planBasis.basis?.coverage.uncoveredDays ?? 0,
       lang: activeLang === 'pt' ? 'pt' : 'en',
     })
   }
-  const CostBasisButton = ({ lang: l }: { lang: Lang }) => (
-    <CostBasisToggle
-      basis={costBasis}
-      ready={billingReady.ready && planBasis.basis !== null}
-      onChange={setCostBasis}
-      onSetup={openBillingSetup}
-      lang={l === 'pt' ? 'pt' : 'en'}
-    />
-  )
 
   function renderCard(id: CardId) {
     const fullKey = `kpi.${id}`
@@ -117,13 +108,13 @@ export default function HomePage() {
           sizeBasis={widerValue(fmtCost(shownUSD, 'USD', brlRate), fmtCost(shownUSD, 'BRL', brlRate))}
           sub={showPlan ? planCostSub(lang) : costCardSub(lang, filters.harness)}
           icon={<TrendingUp size={15} />} accent="var(--anthropic-orange)" info={infoItems[5]} onInfoClick={() => setInfoModalIndex(5)}
+          // Only the currency lives here. The API/Plan switch moved to the filter bar, where it
+          // was asked for and where people look to change what they are seeing — keeping a second
+          // copy on the card crowded a narrow header into wrapping its own label onto two lines.
           action={
-            <span style={{ display: 'inline-flex', gap: 4 }}>
-              <CostBasisButton lang={lang} />
-              <button onClick={() => setCurrency(currency === 'USD' ? 'BRL' : 'USD')} style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s', letterSpacing: '0.03em' }} title={currency === 'USD' ? 'Switch to BRL (R$)' : 'Switch to USD'}>
-                {currency}
-              </button>
-            </span>
+            <button onClick={() => setCurrency(currency === 'USD' ? 'BRL' : 'USD')} style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s', letterSpacing: '0.03em' }} title={currency === 'USD' ? 'Switch to BRL (R$)' : 'Switch to USD'}>
+              {currency}
+            </button>
           }
         />
       )
