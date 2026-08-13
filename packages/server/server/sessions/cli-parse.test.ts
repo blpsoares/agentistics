@@ -64,3 +64,63 @@ describe('parseSessionArgs', () => {
     expect(parseSessionArgs([])).toEqual({ kind: 'help' })
   })
 })
+
+describe('batch — the form an assistant drives', () => {
+  it('parses a task and one session per --session', () => {
+    const cmd = parseSessionArgs([
+      'batch', '--task', 'auth', '--session', 'claude: fix the store', '--session', 'codex: port tests',
+    ])
+    expect(cmd).toMatchObject({
+      kind: 'batch',
+      task: 'auth',
+      specs: [
+        { harness: 'claude', prompt: 'fix the store' },
+        { harness: 'codex', prompt: 'port tests' },
+      ],
+    })
+  })
+
+  it('applies a shared --cwd to every session, and lets @ override it', () => {
+    // A batch is usually many assistants on ONE repository, and repeating the path per session is
+    // how a generated command line gets long enough to be got wrong.
+    const cmd = parseSessionArgs([
+      'batch', '--task', 't', '--cwd', '/repo',
+      '--session', 'claude: a', '--session', 'codex@/other: b',
+    ])
+    expect(cmd).toMatchObject({
+      specs: [{ cwd: '/repo' }, { cwd: '/other' }],
+    })
+  })
+
+  it('refuses a batch with no task, because the sessions must belong together', () => {
+    expect(parseSessionArgs(['batch', '--session', 'claude: a'])).toMatchObject({ kind: 'error' })
+  })
+
+  it('refuses a batch with no sessions', () => {
+    expect(parseSessionArgs(['batch', '--task', 't'])).toMatchObject({ kind: 'error' })
+  })
+
+  it('refuses an unknown harness by name rather than starting nothing silently', () => {
+    const cmd = parseSessionArgs(['batch', '--task', 't', '--session', 'gpt5: hi'])
+    expect(cmd).toMatchObject({ kind: 'error' })
+    expect((cmd as { message: string }).message).toContain('gpt5')
+  })
+
+  it('takes a session with no prompt at all', () => {
+    expect(parseSessionArgs(['batch', '--task', 't', '--session', 'claude'])).toMatchObject({
+      specs: [{ harness: 'claude' }],
+    })
+  })
+
+  it('carries --json through', () => {
+    expect(parseSessionArgs(['batch', '--task', 't', '--session', 'claude: a', '--json']))
+      .toMatchObject({ json: true })
+    expect(parseSessionArgs(['list', '--json'])).toMatchObject({ kind: 'list', json: true })
+  })
+
+  it('parses open with a multi-word task name', () => {
+    expect(parseSessionArgs(['open', 'auth', 'refactor'])).toMatchObject({
+      kind: 'open', task: 'auth refactor',
+    })
+  })
+})

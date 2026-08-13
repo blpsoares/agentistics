@@ -18,12 +18,51 @@ nothing else changes.
 
 ## Commands
 
-    agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"]
-    agentop session list
+    agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>]
+                              [--cwd <path>] [--name "label"] [--task "<name>"]
+    agentop session list   [--json]
     agentop session attach <id|name>
     agentop session kill   <id|name>
     agentop session rename <id|name> "label"
     agentop session note   <id|name> "text"
+
+## Orchestrating several at once
+
+The form an ASSISTANT should drive. It exists because doing this through the single-session command
+means N invocations, N ids to scrape out of N lines of prose, and no way to say the sessions belong
+together — so the caller ends up holding state the tool could have held.
+
+    agentop session batch --task "<name>" [--cwd <path>] [--model <id>] [--effort <level>] \
+                          --session "<harness>[@<cwd>]: <prompt>" [--session "..."] [--json]
+    agentop session open  "<task>" [--json]
+
+Three assistants on one repository, in parallel:
+
+    agentop session batch --task "auth-refactor" --cwd ~/app --json \
+      --session "claude: refactor the token store" \
+      --session "codex: port the tests" \
+      --session "gemini: review the migration"
+
+Every session starts detached — a batch has no single terminal to hand over — and all of them are
+filed under the task, so `open` brings the whole task back later and the cockpit groups them
+together. `--cwd`/`--model`/`--effort` given before the sessions are defaults for all of them; an
+`@<cwd>` on a session overrides it.
+
+`--json` prints the started ids as data, and `agentop session list --json` reads the fleet back the
+same way — id, status, activity, task and the conversation id each row could reopen. A session that
+fails to start does NOT abort the rest: four that started are four that are running, and every
+outcome is reported.
+
+## The cockpit
+
+`agentop` → the **sessions** tab. Every verb is a VISIBLE button as well as a letter: `tab` moves
+between the list and the action row, the arrows move along it, `enter` runs it, and it is clickable.
+The letters are accelerators, never the only way in.
+
+The list holds the whole fleet — sessions agentop runs, assistants running beside it, and
+conversations that are closed — in sections, with history always separated from what is live.
+`/` searches all of it, including a closed conversation's opening prompt, which is what a person
+actually remembers about work they put down.
 
 `--bg` detaches and returns immediately. Without it the session takes over your terminal; the
 detach keystroke is printed before it does, read from your own tmux prefix rather than assumed.

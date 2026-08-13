@@ -39,6 +39,19 @@ export function sortSessions(list: readonly ControlSession[]): ControlSession[] 
   })
 }
 
+/**
+ * The rows matching what was typed — the SAME predicate for every kind of row.
+ *
+ * One function rather than a filter per state: a search that quietly skipped closed conversations
+ * would be a search that cannot find the thing it was most likely opened to find. `searchText` is
+ * composed by the host and already carries a closed conversation's opening prompt.
+ */
+export function filterSessions(list: readonly ControlSession[], query: string): ControlSession[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return [...list]
+  return list.filter(v => v.searchText.includes(q))
+}
+
 export function attentionOf(list: readonly ControlSession[]): number {
   return list.filter(s => s.state === 'waiting' || s.state === 'waiting-approval').length
 }
@@ -103,19 +116,53 @@ export function groupSessions(
  * until the first group boundary.
  */
 export type SessionRow =
-  | { kind: 'heading'; label: string; count: number }
+  | { kind: 'heading'; label: string; count: number; muted?: boolean }
+  /** A blank line between sections. Air INSIDE a list is what makes its sections readable. */
+  | { kind: 'spacer' }
   | { kind: 'session'; session: ControlSession }
 
-export function sessionRows(groups: readonly SessionGroup[]): SessionRow[] {
+/**
+ * Flatten the groups into the rows actually drawn — headings and the air between them included.
+ *
+ * Two things happen here that grouping alone does not give you:
+ *
+ *  - **History is always its own section.** A conversation that is CLOSED is not a session that is
+ *    running, and putting the two in one undifferentiated run made the list read as if seven things
+ *    were open when three of them had been over for a day. Even with grouping off, the closed rows
+ *    get their own heading.
+ *  - **A blank line before each heading.** The sections were distinguishable only by reading every
+ *    row's first word, which is not a visual hierarchy — it is a list that happens to be sorted.
+ *
+ * One flat list rather than nested loops because the CURSOR moves over it: with headings drawn
+ * separately, the selected index and the drawn rows are two different countings of one screen, and
+ * they agree right up until the first group boundary.
+ */
+export function sessionRows(groups: readonly SessionGroup[], closedLabel?: string): SessionRow[] {
   const out: SessionRow[] = []
+
+  const push = (label: string, sessions: readonly ControlSession[], muted?: boolean) => {
+    if (sessions.length === 0) return
+    if (out.length > 0) out.push({ kind: 'spacer' })
+    if (label !== '') out.push({ kind: 'heading', label, count: sessions.length, ...(muted ? { muted } : {}) })
+    for (const session of sessions) out.push({ kind: 'session', session })
+  }
+
   for (const g of groups) {
-    if (g.label !== '') out.push({ kind: 'heading', label: g.label, count: g.sessions.length })
-    for (const session of g.sessions) out.push({ kind: 'session', session })
+    const live = g.sessions.filter(x => x.state !== 'closed')
+    const closed = g.sessions.filter(x => x.state === 'closed')
+    // An empty KEY is an absence ("no task"), not a category, and is drawn as one.
+    push(g.label, live, g.key === '')
+    if (closed.length > 0) {
+      // Inside a named group the closed block still says which group it belongs to, so a heading
+      // read on its own is never ambiguous.
+      const label = closedLabel ?? ''
+      push(g.label !== '' && label ? `${g.label} · ${label}` : label, closed, true)
+    }
   }
   return out
 }
 
-/** Index of the nth selectable row, so the cursor never lands on a heading. */
+/** Index of the nth selectable row, so the cursor never lands on a heading or a blank. */
 export function selectableIndexes(rows: readonly SessionRow[]): number[] {
   const out: number[] = []
   rows.forEach((r, i) => { if (r.kind === 'session') out.push(i) })

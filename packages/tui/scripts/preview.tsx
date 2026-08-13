@@ -378,7 +378,7 @@ const FAKE_FLEET: ControlSessions = {
   sessions: withSearchText([
     {
       id: 'a1b2c3', title: 'migrate the auth store', harness: 'claude',
-      cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus',
+      cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus', task: 'billing',
       state: 'waiting-approval', stateLabel: 'needs approval', actionable: true,
       startedAt: Date.now() - 22 * 60_000, attached: false,
     },
@@ -406,6 +406,20 @@ const FAKE_FLEET: ControlSessions = {
       cwd: '/home/dev/aipe', project: 'aipe',
       state: 'unknown', stateLabel: 'external', actionable: false,
       startedAt: Date.now() - 40 * 60_000, attached: false,
+    },
+    {
+      id: 'closed:1', title: 'wire up the billing basis', harness: 'claude',
+      cwd: '/home/dev/agentistics', project: 'agentistics', task: 'billing',
+      state: 'closed', stateLabel: 'closed', actionable: false,
+      resume: { sessionId: 'c1', title: 'wire up the billing basis' },
+      startedAt: Date.now() - 26 * 60 * 60_000, attached: false,
+    },
+    {
+      id: 'closed:2', title: 'billing: reconcile the ledger', harness: 'codex',
+      cwd: '/home/dev/agentistics', project: 'agentistics', task: 'billing',
+      state: 'closed', stateLabel: 'closed', actionable: false,
+      resume: { sessionId: 'c2', title: 'billing: reconcile the ledger' },
+      startedAt: Date.now() - 30 * 60 * 60_000, attached: false,
     },
   ]),
 }

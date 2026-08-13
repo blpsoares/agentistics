@@ -127,8 +127,13 @@ export function buildSessionViews(o: {
   /** Everything this machine has ever recorded, newest first. Used to name what an external process
    *  is driving, and to offer the conversations that are not running at all. */
   conversations?: readonly Conversation[]
-  /** How many closed conversations to offer. A machine with hundreds of them must not drown the
-   *  handful that are actually running. */
+  /**
+   * How many closed conversations to offer.
+   *
+   * Small on purpose. A machine with hundreds of them must not drown the handful that are actually
+   * running — the list is for what is happening, and SEARCH is how an older conversation is found.
+   * Forty made the closed block longer than everything else on the screen put together.
+   */
   closedLimit?: number
 }): SessionView[] {
   const managed: SessionView[] = o.reconciled.map(r => {
@@ -194,7 +199,7 @@ export function buildSessionViews(o: {
 
   const closed: SessionView[] = conversations
     .filter(c => !running.has(c.sessionId))
-    .slice(0, o.closedLimit ?? 40)
+    .slice(0, o.closedLimit ?? 12)
     .map(c => ({
       id: `closed:${c.sessionId}`,
       harness: c.harness,

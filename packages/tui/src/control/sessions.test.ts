@@ -95,22 +95,56 @@ describe('groupSessions', () => {
 })
 
 describe('sessionRows / selectableIndexes', () => {
-  it('draws a heading per named group and never makes it selectable', () => {
+  it('draws a heading per named group, with air between them', () => {
     const groups = groupSessions(
       [session('a', { harness: 'claude' }), session('b', { harness: 'codex' })],
       'harness',
       UNKNOWN,
     )
     const rows = sessionRows(groups)
-    expect(rows.map(r => r.kind)).toEqual(['heading', 'session', 'heading', 'session'])
-    // The cursor moves over ONE list; counting rows and sessions separately is what makes a
-    // selection and its highlight disagree at the first group boundary.
-    expect(selectableIndexes(rows)).toEqual([1, 3])
+    expect(rows.map(r => r.kind)).toEqual(['heading', 'session', 'spacer', 'heading', 'session'])
   })
 
-  it('draws no heading when grouping is off', () => {
+  it('never lets the cursor land on a heading or a blank', () => {
+    // The cursor moves over ONE list; counting rows and sessions separately is what makes a
+    // selection and its highlight disagree at the first group boundary.
+    const rows = sessionRows(groupSessions(
+      [session('a', { harness: 'claude' }), session('b', { harness: 'codex' })], 'harness', UNKNOWN,
+    ))
+    expect(selectableIndexes(rows)).toEqual([1, 4])
+    for (const i of selectableIndexes(rows)) expect(rows[i]!.kind).toBe('session')
+  })
+
+  it('draws no heading when grouping is off and nothing is closed', () => {
     const rows = sessionRows(groupSessions([session('a')], 'none', UNKNOWN))
     expect(rows.map(r => r.kind)).toEqual(['session'])
+  })
+
+  it('always gives closed conversations their own section, even with grouping off', () => {
+    // A conversation that is over is not a session that is running. Putting the two in one
+    // undifferentiated run made the list read as if everything on it were open.
+    const rows = sessionRows(groupSessions(
+      [session('live'), session('old', { state: 'closed', stateLabel: 'closed' })],
+      'none',
+      UNKNOWN,
+    ), 'closed')
+    expect(rows.map(r => r.kind)).toEqual(['session', 'spacer', 'heading', 'session'])
+    const heading = rows.find(r => r.kind === 'heading')
+    expect(heading).toMatchObject({ label: 'closed', count: 1, muted: true })
+  })
+
+  it('names the group a closed block belongs to, so a heading is never ambiguous', () => {
+    const rows = sessionRows(groupSessions(
+      [session('old', { state: 'closed', stateLabel: 'closed', task: 'billing' })],
+      'task',
+      UNKNOWN,
+    ), 'closed')
+    expect(rows.find(r => r.kind === 'heading')).toMatchObject({ label: 'billing · closed' })
+  })
+
+  it('marks an absence bucket as muted, so it does not read as a category', () => {
+    const rows = sessionRows(groupSessions([session('a')], 'task', UNKNOWN), 'closed')
+    expect(rows.find(r => r.kind === 'heading')).toMatchObject({ label: 'no task', muted: true })
   })
 })
 

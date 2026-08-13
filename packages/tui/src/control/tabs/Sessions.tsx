@@ -20,12 +20,15 @@ import type {
 import type { ControlStrings } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
+import { actionAtColumn, fitActionRow } from '../chrome.ts'
+import { ActionRow } from '../Chrome'
 import { Divider } from '../Surface'
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
 import { SessionWizard } from './SessionWizard'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
-  QUESTION_ROWS, sessionsLayout, type DetailLine, type SessionGrouping, type SessionRow,
+  QUESTION_ROWS, actionLabels, filterSessions, sessionActions, sessionsLayout,
+  type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
 } from '../sessions'
 import { isActivation, wheelDelta } from '../mouse'
 import { usePointer } from '../pointer'
@@ -52,6 +55,10 @@ const STATE_COLOR: Record<SessionState, string | undefined> = {
  * down — typing a session name would otherwise quit the app on the `q` and refresh it on the `r`.
  */
 type Ask =
+  | { kind: 'search' }
+  | { kind: 'task'; session: ControlSession }
+  | { kind: 'openTask'; session: ControlSession }
+  | { kind: 'resume'; session: ControlSession }
   | { kind: 'rename'; session: ControlSession }
   | { kind: 'note'; session: ControlSession }
   | { kind: 'kill'; session: ControlSession }
@@ -80,9 +87,19 @@ export function Sessions({
   const [grouping, setGrouping] = useState<SessionGrouping>('none')
   const [cursor, setCursor] = useState(0)
   const [ask, setAsk] = useState<Ask | null>(null)
+  const [query, setQuery] = useState('')
+  /**
+   * Whether the visible action row has the keyboard.
+   *
+   * The row is there so the screen can be used WITHOUT knowing any letters — every verb is spelled
+   * out, reachable with `tab` and the arrows, and clickable. The letters stay as accelerators for
+   * people who already know them; they were never meant to be the only way in.
+   */
+  const [actionsFocused, setActionsFocused] = useState(false)
+  const [actionIndex, setActionIndex] = useState(0)
 
   const rows = useMemo(() => sessionRows(groupSessions(
-    fleet?.sessions ?? [],
+    filterSessions(fleet?.sessions ?? [], query),
     grouping,
     {
       harness: s.sessionsUnknownHarness,
@@ -90,7 +107,7 @@ export function Sessions({
       project: s.sessionsUnknownProject,
       task: s.sessionsUnknownTask,
     },
-  )), [fleet?.sessions, grouping, s])
+  ), s.sessionsClosedWord), [fleet?.sessions, grouping, query, s])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
 
@@ -119,7 +136,14 @@ export function Sessions({
   // A question needs room whether or not the detail pane earned any, so it sets the floor. The
   // cockpit reserves `QUESTION_ROWS` for the same reason: a prompt with nowhere to draw is a prompt
   // the user cannot answer.
-  const layout = sessionsLayout(height, ask ? Math.max(QUESTION_ROWS, detail.length) : detail.length)
+  // The action row is drawn from this screen's own budget, so it is subtracted BEFORE the split. A
+  // row taken without being paid for is composited over the one under it, which reads as a corrupt
+  // frame rather than a cramped one.
+  const actionRows = height >= 8 ? 1 : 0
+  const layout = sessionsLayout(
+    Math.max(1, height - actionRows),
+    ask ? Math.max(QUESTION_ROWS, detail.length) : detail.length,
+  )
 
   /**
    * Act on the selected row, or say why it cannot be acted on.
@@ -129,6 +153,38 @@ export function Sessions({
    * refusal is a sentence rather than a silently ignored keypress: a control that does nothing and
    * says nothing is indistinguishable from a broken one.
    */
+  const actions = useMemo(() => sessionActions(selected), [selected])
+  const at2 = Math.min(actionIndex, Math.max(0, actions.length - 1))
+  const actionWords = useMemo(() => actionLabels(actions, {
+    attach: s.actSessions.attach,
+    resume: s.actSessions.resume,
+    rename: s.actSessions.rename,
+    note: s.actSessions.note,
+    task: s.actSessions.task,
+    kill: s.actSessions.kill,
+    openTask: s.actSessions.openTask,
+    new: s.actSessions.newSession,
+    search: s.actSessions.search,
+    group: s.actSessions.group,
+  }), [actions, s])
+
+  /** Run one verb, whether it arrived from a letter, an arrow key or a click. */
+  const runAction = useCallback((a: SessionAction) => {
+    if (a === 'new') { if (host.spawnSession) setAsk({ kind: 'new' }); return }
+    if (a === 'search') { setAsk({ kind: 'search' }); return }
+    if (a === 'group') {
+      const i = GROUPINGS.indexOf(grouping)
+      setGrouping(GROUPINGS[(i + 1) % GROUPINGS.length]!)
+      setCursor(0)
+      return
+    }
+    if (!selected) return
+    if (a === 'attach') return actOn('attach')
+    if (a === 'resume') { setAsk({ kind: 'resume', session: selected }); return }
+    if (a === 'openTask') { setAsk({ kind: 'openTask', session: selected }); return }
+    return actOn(a)
+  }, [host, grouping, selected])
+
   const actOn = useCallback((kind: Ask['kind'] | 'attach') => {
     if (!selected) return
     if (!selected.actionable) {
@@ -193,14 +249,18 @@ export function Sessions({
     // a hint for a key that does nothing is the one bug this footer exists to prevent.
     onChrome(ask
       ? { capture: true, hints: [s.keyBack] }
-      : {
-          capture: false,
-          hints: [
-            s.keyQuit, s.keyTabs, s.keySessionsNew, s.keyMove, s.keySessionsAttach,
-            s.keySessionsRename, s.keySessionsNote, s.keySessionsKill, s.keySessionsGroup,
-          ],
-        })
-  }, [isActive, onChrome, s, ask])
+      : actionsFocused
+        // While the action row has the keyboard it is a horizontal list, so it claims the arrows —
+        // and the footer stops saying they change screen for exactly as long as that is true.
+        ? { capture: false, claimArrows: true, hints: [s.keyQuit, s.keyActionMove, s.keyRun, s.keyBack] }
+        : {
+            capture: false,
+            hints: [
+              s.keyQuit, s.keyTabs, s.keySessionsActions, s.keyMove, s.keySessionsSearch,
+              s.keySessionsNew, s.keySessionsGroup,
+            ],
+          })
+  }, [isActive, onChrome, s, ask, actionsFocused])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
@@ -210,6 +270,20 @@ export function Sessions({
       return setCursor(next)
     }
     if (!isActivation(p)) return
+
+    // The action row is the LAST row this screen draws. Resolved against the very same fit the row
+    // was rendered from, so a click and the drawn cells can never disagree.
+    if (actionRows > 0 && p.y === layout.list + (layout.summary ? 1 : 0)) {
+      const fit = fitActionRow(actionWords, at2, width)
+      const hit = actionAtColumn(fit, p.x)
+      if (hit !== null) {
+        setActionsFocused(true)
+        setActionIndex(hit)
+        runAction(actions[hit]!)
+      }
+      return
+    }
+
     // The list starts under the summary row; a click anywhere else on the screen is a click on
     // nothing, which is not an error to report.
     const listTop = layout.summary ? 1 : 0
@@ -267,10 +341,19 @@ export function Sessions({
         <Box flexDirection="column" height={layout.list} flexShrink={0}>
           {visible.map((row, i) => {
             const index = offset + i
+            if (row.kind === 'spacer') return <Text key={`s${index}`}> </Text>
             if (row.kind === 'heading') {
+              // A heading is drawn as a HEADING: accented, bold, with a rule running out to the
+              // edge. Dim grey at the same weight as its rows is not a hierarchy — it is a list that
+              // happens to be sorted, which is what this screen was.
+              const head = `${row.label}  ${row.count}`
+              const rule = Math.max(0, width - head.length - 3)
               return (
-                <Text key={`h${index}`} dimColor bold wrap="truncate">
-                  {truncate(`${row.label}  (${row.count})`, width)}
+                <Text key={`h${index}`} wrap="truncate">
+                  <Text color={row.muted ? COLORS.muted : COLORS.secondary} bold={!row.muted}>
+                    {truncate(head, width)}
+                  </Text>
+                  <Text dimColor>{rule > 0 ? `  ${'─'.repeat(rule)}` : ''}</Text>
                 </Text>
               )
             }
@@ -286,6 +369,10 @@ export function Sessions({
         </Box>
       )}
 
+      {actionRows > 0 ? (
+        <ActionRow labels={actionWords} selected={at2} focused={actionsFocused} width={width} />
+      ) : null}
+
       {ask ? (
         <>
           <Divider width={width} />
@@ -299,6 +386,8 @@ export function Sessions({
               void run(fn, label).then(onRefreshFleet)
             }}
             host={host}
+            query={query}
+            onQuery={setQuery}
           />
         </>
       ) : layout.detail > 0 && detail.length > 0 ? (
@@ -405,7 +494,13 @@ function Detail({ lines, width, rows }: {
  * In place of the facts rather than over them: a modal floating above a list is a second thing to
  * read at the moment the user is deciding, and the row being acted on is still visible above.
  */
-function Question({ ask, strings: s, width, onClose, onRun, host }: {
+/**
+ * The questions this screen asks, drawn where the detail pane was.
+ *
+ * In place of the facts rather than over them: a modal floating above a list is a second thing to
+ * read at the moment the user is deciding, and the row being acted on stays visible above.
+ */
+function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery }: {
   /** Never `new` — the wizard takes the whole screen and is rendered before this is reached. */
   ask: Exclude<Ask, { kind: 'new' }>
   strings: ControlStrings
@@ -413,7 +508,23 @@ function Question({ ask, strings: s, width, onClose, onRun, host }: {
   onClose: () => void
   onRun: (fn: () => Promise<ActionResult>, label?: string) => void
   host: ControlHost
+  query: string
+  onQuery: (q: string) => void
 }) {
+  if (ask.kind === 'search') {
+    return (
+      <TextPrompt
+        label={s.sessionsSearchLabel}
+        defaultValue={query}
+        width={width}
+        onCancel={onClose}
+        // Applied on submit rather than per keystroke: the list under it is re-grouped and re-sorted
+        // on every change, and a cursor that jumps while someone is still typing is unusable.
+        onSubmit={value => { onQuery(value.trim()); onClose() }}
+      />
+    )
+  }
+
   const { session } = ask
 
   if (ask.kind === 'kill') {
@@ -428,27 +539,76 @@ function Question({ ask, strings: s, width, onClose, onRun, host }: {
           if (!yes) return onClose()
           const kill = host.killSession
           if (!kill) return onClose()
-          onRun(() => kill.call(host, session.id), s.keySessionsKill)
+          onRun(() => kill.call(host, session.id), s.actSessions.kill)
+        }}
+      />
+    )
+  }
+
+  if (ask.kind === 'resume') {
+    const target = session.resume
+    return (
+      <ConfirmPrompt
+        // The conversation's OWN title is in the question, which is what lets the person — who knows
+        // what they were doing — judge whether it is the right one. No heuristic here could.
+        label={`${s.sessionsResumeConfirm(target?.title ?? session.title)}${
+          session.state === 'unknown' ? ` ${s.sessionsResumeRunning}` : ''}`}
+        yesLabel={s.yes}
+        noLabel={s.no}
+        width={width}
+        onCancel={onClose}
+        onAnswer={(yes: boolean) => {
+          const resume = host.resumeSession
+          if (!yes || !target || !resume) return onClose()
+          onRun(() => resume.call(host, {
+            sessionId: target.sessionId,
+            harness: session.harness,
+            cwd: session.cwd,
+            label: target.title,
+            attach: false,
+          }).then(r => ({ ok: r.ok, message: r.message })), s.actSessions.resume)
+        }}
+      />
+    )
+  }
+
+  if (ask.kind === 'openTask') {
+    const task = session.task ?? ''
+    return (
+      <ConfirmPrompt
+        label={s.sessionsOpenTaskConfirm(task, 0)}
+        yesLabel={s.yes}
+        noLabel={s.no}
+        width={width}
+        onCancel={onClose}
+        onAnswer={(yes: boolean) => {
+          const open = host.openTask
+          if (!yes || !open) return onClose()
+          onRun(() => open.call(host, task), s.actSessions.openTask)
         }}
       />
     )
   }
 
   const isRename = ask.kind === 'rename'
+  const isTask = ask.kind === 'task'
   return (
     <TextPrompt
-      label={isRename ? s.sessionsRenamePrompt : s.sessionsNotePrompt}
+      label={isRename ? s.sessionsRenamePrompt : isTask ? s.sessionsTaskPrompt : s.sessionsNotePrompt}
       // The current value is offered as the default, so `enter` on an unchanged field is a no-op
       // rather than a way to accidentally blank a name.
-      defaultValue={(isRename ? session.title : session.note) ?? ''}
+      defaultValue={(isRename ? session.title : isTask ? session.task : session.note) ?? ''}
       width={width}
       onCancel={onClose}
       onSubmit={value => {
         const text = value.trim()
-        if (!text) return onClose()
-        const fn = isRename ? host.renameSession : host.noteSession
+        const fn = isRename ? host.renameSession : isTask ? host.taskSession : host.noteSession
         if (!fn) return onClose()
-        onRun(() => fn.call(host, session.id, text), isRename ? s.keySessionsRename : s.keySessionsNote)
+        if (!text && !isTask) return onClose()
+        onRun(
+          () => fn.call(host, session.id, text),
+          isRename ? s.actSessions.rename : isTask ? s.actSessions.task : s.actSessions.note,
+        )
       }}
     />
   )
