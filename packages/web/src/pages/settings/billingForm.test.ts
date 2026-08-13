@@ -1,6 +1,8 @@
 import { describe, test, expect } from 'bun:test'
 import {
   applyPlan,
+  splitTimeline,
+  modeLabel,
   currencySymbol,
   formatAmountDisplay,
   parseAmountInput,
@@ -172,6 +174,58 @@ describe('describeError', () => {
       expect(ptText.length).toBeGreaterThan(0)
       expect(en).not.toBe(ptText)
     }
+  })
+})
+
+describe('splitTimeline', () => {
+  const sub = (id: string, from: string, to?: string): BillingPeriod => ({
+    id, mode: 'subscription', planId: 'anthropic-pro', from, ...(to ? { to } : {}),
+    price: { amount: 20, currency: 'USD' },
+  })
+
+  test('the ongoing plan is the current one', () => {
+    const { current, history } = splitTimeline([sub('a', '2026-01-01', '2026-03-31'), sub('b', '2026-04-01')], '2026-08-13')
+    expect(current?.id).toBe('b')
+    expect(history.map(p => p.id)).toEqual(['a'])
+  })
+
+  test('a closed period covering today is current too', () => {
+    const { current } = splitTimeline([sub('a', '2026-08-01', '2026-08-31')], '2026-08-13')
+    expect(current?.id).toBe('a')
+  })
+
+  test('nothing covers today — the screen has no current plan to lead with', () => {
+    const { current, history } = splitTimeline([sub('a', '2026-01-01', '2026-03-31')], '2026-08-13')
+    expect(current).toBeNull()
+    expect(history.map(p => p.id)).toEqual(['a'])
+  })
+
+  test('history reads backwards from now', () => {
+    const { history } = splitTimeline(
+      [sub('a', '2026-01-01', '2026-02-28'), sub('b', '2026-03-01', '2026-04-30'), sub('c', '2026-05-01')],
+      '2026-08-13',
+    )
+    expect(history.map(p => p.id)).toEqual(['b', 'a'])
+  })
+
+  test('overlapping periods still render something — the latest start wins', () => {
+    // Refused everywhere else, but preferences.json is hand-editable; the screen must not go
+    // blank while the timeline warns separately.
+    const { current } = splitTimeline([sub('a', '2026-01-01'), sub('b', '2026-06-01')], '2026-08-13')
+    expect(current?.id).toBe('b')
+  })
+
+  test('a future period is not current', () => {
+    expect(splitTimeline([sub('a', '2027-01-01')], '2026-08-13').current).toBeNull()
+  })
+})
+
+describe('modeLabel', () => {
+  test('says how you are billed, in words, in both languages', () => {
+    expect(modeLabel('subscription', 'pt')).toBe('Assinatura')
+    expect(modeLabel('api', 'pt')).toBe('Pago por token')
+    expect(modeLabel('thirdparty', 'en')).toBe('Billed by a third party')
+    expect(modeLabel('unknown', 'en')).toBe('Billing unknown')
   })
 })
 

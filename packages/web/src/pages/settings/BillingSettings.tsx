@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Pencil, Trash2, Sparkles, AlertTriangle, Info } from 'lucide-react'
+import { Plus, Pencil, Trash2, Sparkles, AlertTriangle, Info, ArrowRightLeft, ChevronDown } from 'lucide-react'
 import {
   HARNESS_ORDER,
   billingReadiness,
   findPlan,
   plansForHarness,
   sortPeriods,
+  dayFromIndex,
+  dayIndex,
   validateTimeline,
   type BillingDetection,
   type BillingPeriod,
@@ -23,14 +25,16 @@ import {
   Checkbox,
   ConfirmModal,
   FieldInput,
-  RecordCard,
-  RecordCardAction,
+
+
   SectionHeader,
   Select,
   TabSelect,
 } from './primitives'
 import {
   applyPlan,
+  splitTimeline,
+  modeLabel,
   currencySymbol,
   formatAmountDisplay,
   parseAmountInput,
@@ -152,9 +156,13 @@ export default function BillingSettings() {
     return describeError(hit, pt ? 'pt' : 'en', other ? periodName(other) : undefined)
   }
 
+
+  /** This harness's proposal. `source: 'none'` means nothing was detected, which the empty state
+   *  says out loud rather than leaving a silent gap. */
   const detection = detections?.find(d => d.harness === harness)
-  const canUseDetection =
-    detection !== undefined && detection.source !== 'none' && periods.length === 0
+
+  const { current, history } = useMemo(() => splitTimeline(periods, today()), [periods])
+  const [showHistory, setShowHistory] = useState(false)
 
   const openNew = () => openDraft(emptyDraft())
   const openFromDetection = () => {
@@ -165,15 +173,44 @@ export default function BillingSettings() {
     openDraft(next)
   }
 
+  /**
+   * "I changed plan" — the whole operation, in one step.
+   *
+   * Changing plan is TWO edits to the timeline: close the old period and open a new one the day
+   * after. Asking the user to do both by hand is how a timeline ends up with a gap (nothing
+   * covers the seam) or an overlap (both cover it), and both are refused later with an error that
+   * reads as the app being fussy. So the new draft opens starting TODAY and the old period is
+   * closed at yesterday on save — the seam is exact by construction.
+   */
+  const [changingFrom, setChangingFrom] = useState<string | null>(null)
+  const openChange = () => {
+    if (!current) return
+    setChangingFrom(current.id)
+    openDraft({ ...emptyDraft(), from: today(), ongoing: true })
+  }
+
   const saveDraft = async () => {
     if (!draft) return
     // The button is never disabled. A greyed-out control with nothing to explain it is the same
     // dead click as a toggle that does nothing — pressing it reveals what is missing instead.
     if (draftErrors.length > 0) { setShowErrors(true); return }
     const period = periodFromDraft(draft, newPeriodId)
-    const rest = periods.filter(p => p.id !== period.id)
+    let rest = periods.filter(p => p.id !== period.id)
+
+    // Closing the outgoing plan is the second half of "I changed plan", applied here so the two
+    // edits land together. Yesterday relative to the NEW period's start, so the seam is exact
+    // whatever date the user picked.
+    if (changingFrom) {
+      const dayBefore = dayIndex(period.from)
+      rest = rest.map(p =>
+        p.id === changingFrom && dayBefore !== null && !p.to
+          ? { ...p, to: dayFromIndex(dayBefore - 1) }
+          : p)
+    }
+
     await persist([...rest, period])
     setDraft(null)
+    setChangingFrom(null)
   }
 
   // A live figure read from the vendor's page today beats the compiled-in one, which is only ever
@@ -196,15 +233,6 @@ export default function BillingSettings() {
   }), [harness, pt, planPrices])
 
   const selectedEntry = draft?.planId ? findPlan(draft.planId) : undefined
-  const rangeLabel = (p: BillingPeriod) =>
-    `${p.from} → ${p.to ?? (pt ? 'em curso' : 'ongoing')}`
-  const priceLabel = (p: BillingPeriod) =>
-    p.price
-      ? `${p.price.currency} ${p.price.amount}/${pt ? 'mês' : 'mo'}`
-      : p.mode === 'api'
-        ? (pt ? 'por token' : 'per token')
-        : '—'
-
   const readiness = billingReadiness(ctx.billing, harnesses)
 
   return (
@@ -226,37 +254,6 @@ export default function BillingSettings() {
         </div>
       )}
 
-      {canUseDetection && detection && (
-        <div style={{ marginBottom: 14 }}>
-          <RecordCard
-            title={
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                <Sparkles size={14} style={{ color: 'var(--anthropic-orange)' }} />
-                {pt ? 'Detectado nesta máquina' : 'Detected on this machine'}
-              </span>
-            }
-            subtitle={pt ? detection.evidencePt : detection.evidenceEn}
-            fields={[
-              {
-                label: pt ? 'Plano' : 'Plan',
-                value: detection.planId ? (findPlan(detection.planId)?.label ?? detection.planId) : (pt ? 'não identificado' : 'not identified'),
-              },
-              {
-                label: pt ? 'Falta' : 'Missing',
-                // The one thing detection can never know, stated plainly so the button does not
-                // look like it will finish the job on its own.
-                value: pt ? 'a data em que você começou a pagar' : 'the date you started paying',
-              },
-            ]}
-            actions={
-              <RecordCardAction onClick={openFromDetection} label={pt ? 'Usar como base' : 'Use as a starting point'}>
-                {pt ? 'Usar como base' : 'Use as a starting point'}
-              </RecordCardAction>
-            }
-          />
-        </div>
-      )}
-
       {timelineErrors.size > 0 && (
         <div style={{
           display: 'flex', gap: 9, alignItems: 'flex-start', marginBottom: 14,
@@ -272,92 +269,147 @@ export default function BillingSettings() {
         </div>
       )}
 
-      {periods.length === 0 ? (
+      {/* THE CURRENT PLAN LEADS. "What am I paying?" is the question people arrive with; the
+          timeline is the data model that makes a plan CHANGE priceable, and it belongs below. */}
+      {current ? (
         <div style={{
-          padding: '18px 16px', borderRadius: 'var(--radius-lg)',
-          border: '1px dashed var(--border)', background: 'var(--bg-card)',
-          fontSize: 12.5, color: 'var(--text-tertiary)', lineHeight: 1.55,
+          border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)',
+          background: 'var(--bg-card)', padding: '16px 18px', marginBottom: 12,
         }}>
-          {pt
-            ? 'Nenhum período cadastrado para este harness. Adicione um para começar — pode ser uma assinatura, ou "API — pago por uso" se você paga por token.'
-            : 'No periods registered for this harness. Add one to begin — a subscription, or “API — pay as you go” if you pay per token.'}
-        </div>
-      ) : isMobile ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {periods.map(p => (
-            <RecordCard
-              key={p.id}
-              title={periodName(p) || (pt ? 'Sem plano' : 'No plan')}
-              subtitle={rangeLabel(p)}
-              fields={[
-                { label: pt ? 'Valor' : 'Amount', value: priceLabel(p) },
-                { label: pt ? 'Cobrança' : 'Billing', value: modeLabel(p.mode, pt) },
-              ]}
-              actions={
-                <>
-                  <RecordCardAction onClick={() => openDraft(draftFromPeriod(p))} label={pt ? 'Editar' : 'Edit'}>
-                    <Pencil size={14} />
-                  </RecordCardAction>
-                  <RecordCardAction onClick={() => setConfirmDelete(p)} danger label={pt ? 'Remover' : 'Remove'}>
-                    <Trash2 size={14} />
-                  </RecordCardAction>
-                </>
-              }
-            />
-          ))}
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>
+                {periodName(current) || (pt ? 'Sem plano' : 'No plan')}
+              </div>
+              {/* The billing TYPE in words. It changes what every figure in the app means — a
+                  third-party period computes no plan cost at all — so it is said, not implied. */}
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 3 }}>
+                {modeLabel(current.mode, pt ? 'pt' : 'en')}
+                {current.price && ` \u00b7 ${currencySymbol(current.price.currency)} ${formatAmountDisplay(String(current.price.amount), current.price.currency)}${pt ? '/m\u00eas' : '/mo'}`}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 5 }}>
+                {pt ? 'desde' : 'since'} {current.from}
+                {current.to
+                  ? ` \u00b7 ${pt ? 'at\u00e9' : 'until'} ${current.to}`
+                  : ` \u00b7 ${pt ? 'em curso' : 'ongoing'}`}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+              <button onClick={() => openDraft(draftFromPeriod(current))} style={iconBtn} title={pt ? 'Editar' : 'Edit'}>
+                <Pencil size={15} />
+              </button>
+              <button onClick={() => setConfirmDelete(current)} style={{ ...iconBtn, color: 'var(--accent-red)' }} title={pt ? 'Remover' : 'Remove'}>
+                <Trash2 size={15} />
+              </button>
+            </div>
+          </div>
+          {/* One action, named for what actually happens. "Add period" is the database talking;
+              nobody adds a period, they change plan — and doing both halves in one step is what
+              keeps the timeline correct instead of making it a chore. */}
+          <button onClick={openChange} style={{
+            marginTop: 14, display: 'inline-flex', alignItems: 'center', gap: 7,
+            padding: isMobile ? '12px 16px' : '9px 14px',
+            width: isMobile ? '100%' : undefined, justifyContent: isMobile ? 'center' : undefined,
+            borderRadius: 'var(--radius-md)', border: '1px solid var(--border)',
+            background: 'var(--bg-elevated)', color: 'var(--text-primary)',
+            fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+          }}>
+            <ArrowRightLeft size={14} />
+            {pt ? 'Troquei de plano' : 'I changed plan'}
+          </button>
         </div>
       ) : (
-        <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-            <thead>
-              <tr style={{ background: 'var(--bg-hover)' }}>
-                <Th>{pt ? 'Plano' : 'Plan'}</Th>
-                <Th>{pt ? 'Período' : 'Period'}</Th>
-                <Th>{pt ? 'Valor' : 'Amount'}</Th>
-                <Th>{pt ? 'Cobrança' : 'Billing'}</Th>
-                <Th align="right">{''}</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {periods.map(p => {
-                const bad = (timelineErrors.get(p.id) ?? []).length > 0
-                return (
-                  <tr key={p.id} style={{ borderTop: '1px solid var(--border)' }}>
-                    <Td>
-                      <span style={{ color: bad ? 'var(--accent-red)' : 'var(--text-primary)', fontWeight: 600 }}>
-                        {periodName(p) || (pt ? 'Sem plano' : 'No plan')}
-                      </span>
-                    </Td>
-                    <Td>{rangeLabel(p)}</Td>
-                    <Td>{priceLabel(p)}</Td>
-                    <Td>{modeLabel(p.mode, pt)}</Td>
-                    <Td align="right">
-                      <button onClick={() => openDraft(draftFromPeriod(p))} style={iconBtn} title={pt ? 'Editar' : 'Edit'}>
-                        <Pencil size={14} />
-                      </button>
-                      <button onClick={() => setConfirmDelete(p)} style={{ ...iconBtn, color: 'var(--accent-red)' }} title={pt ? 'Remover' : 'Remove'}>
-                        <Trash2 size={14} />
-                      </button>
-                    </Td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+        <div style={{
+          border: '1px dashed var(--border)', borderRadius: 'var(--radius-lg)',
+          background: 'var(--bg-card)', padding: 18, marginBottom: 12,
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 5 }}>
+            {periods.length > 0
+              ? (pt ? 'Nenhum plano ativo hoje' : 'No plan active today')
+              : (pt ? 'Voc\u00ea ainda n\u00e3o cadastrou como paga' : 'You have not registered how you pay')}
+          </div>
+          <p style={{ fontSize: 12.5, color: 'var(--text-tertiary)', lineHeight: 1.55, margin: '0 0 14px' }}>
+            {periods.length > 0
+              ? (pt
+                  ? 'Os per\u00edodos abaixo j\u00e1 terminaram. Cadastre o plano atual para voltar a calcular o custo real.'
+                  : 'The periods below have all ended. Register the current plan to compute the real cost again.')
+              : (pt
+                  ? 'Sem isso, todo custo continua sendo uma estimativa a pre\u00e7os de API.'
+                  : 'Without it, every cost stays an API-price estimate.')}
+          </p>
+          {/* Detection is the PRIMARY action here, not a card beside one. It answers most of the
+              form, and the sentence under it names the single thing it cannot know. */}
+          {detection && detection.source !== 'none' ? (
+            <>
+              <button onClick={openFromDetection} style={primaryBtn(isMobile)}>
+                <Sparkles size={15} />
+                {detection.planId
+                  ? (pt ? `Usar ${findPlan(detection.planId)?.label ?? detection.planId}` : `Use ${findPlan(detection.planId)?.label ?? detection.planId}`)
+                  : (pt ? 'Usar o que detectamos' : 'Use what we detected')}
+              </button>
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 8, lineHeight: 1.5 }}>
+                {pt ? detection.evidencePt : detection.evidenceEn}{' '}
+                <strong style={{ color: 'var(--text-secondary)' }}>
+                  {pt ? 'Falta s\u00f3 a data em que voc\u00ea come\u00e7ou a pagar.' : 'Only the date you started paying is missing.'}
+                </strong>
+              </div>
+              <button onClick={openNew} style={linkBtn}>
+                {pt ? 'ou cadastrar manualmente' : 'or register it manually'}
+              </button>
+            </>
+          ) : (
+            <button onClick={openNew} style={primaryBtn(isMobile)}>
+              <Plus size={15} />
+              {pt ? 'Cadastrar meu plano' : 'Register my plan'}
+            </button>
+          )}
         </div>
       )}
 
-      <button onClick={openNew} style={{
-        marginTop: 12, display: 'inline-flex', alignItems: 'center', gap: 7,
-        padding: isMobile ? '12px 16px' : '8px 14px', width: isMobile ? '100%' : undefined,
-        justifyContent: isMobile ? 'center' : undefined,
-        borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)',
-        background: 'var(--bg-card)', color: 'var(--text-primary)',
-        fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-      }}>
-        <Plus size={14} />
-        {pt ? 'Adicionar período' : 'Add period'}
-      </button>
+      {/* History, collapsed. It exists so a window spanning a plan change is priced correctly, and
+          it is consulted far less often than the plan in force. */}
+      {history.length > 0 && (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+          <button
+            onClick={() => setShowHistory(v => !v)}
+            style={{
+              width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              gap: 8, padding: '11px 14px', border: 'none', background: 'transparent',
+              cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600,
+              color: 'var(--text-secondary)', minHeight: isMobile ? 44 : undefined,
+            }}
+          >
+            <span>{pt ? `Hist\u00f3rico (${history.length})` : `History (${history.length})`}</span>
+            <ChevronDown size={15} style={{ transform: showHistory ? 'rotate(180deg)' : undefined, transition: 'transform 0.18s' }} />
+          </button>
+          {showHistory && history.map(p => (
+            <div key={p.id} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+              padding: '10px 14px', borderTop: '1px solid var(--border)',
+            }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                  {periodName(p) || (pt ? 'Sem plano' : 'No plan')}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                  {modeLabel(p.mode, pt ? 'pt' : 'en')}
+                  {p.price && ` \u00b7 ${currencySymbol(p.price.currency)} ${formatAmountDisplay(String(p.price.amount), p.price.currency)}`}
+                  {' \u00b7 '}{p.from} \u2192 {p.to ?? (pt ? 'em curso' : 'ongoing')}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                <button onClick={() => openDraft(draftFromPeriod(p))} style={iconBtn} title={pt ? 'Editar' : 'Edit'}>
+                  <Pencil size={14} />
+                </button>
+                <button onClick={() => setConfirmDelete(p)} style={{ ...iconBtn, color: 'var(--accent-red)' }} title={pt ? 'Remover' : 'Remove'}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
 
       {saveError && (
         <div style={{ marginTop: 10, fontSize: 12, color: 'var(--accent-red)' }}>{saveError}</div>
@@ -518,14 +570,6 @@ export default function BillingSettings() {
   )
 }
 
-function modeLabel(mode: BillingPeriod['mode'], pt: boolean): string {
-  switch (mode) {
-    case 'subscription': return pt ? 'Assinatura' : 'Subscription'
-    case 'api': return pt ? 'Por token' : 'Per token'
-    case 'thirdparty': return pt ? 'Terceiro' : 'Third party'
-    default: return pt ? 'Desconhecida' : 'Unknown'
-  }
-}
 
 /**
  * Errors render inline under their field, never as a toast: on a phone this form is a full-screen
@@ -632,6 +676,27 @@ function DateField({ label, value, max, onChange }: {
 }
 
 const cellPad = { padding: '9px 12px', textAlign: 'left' as const }
+/** The one prominent action a screen state offers. Full width on a phone, where a 44px target is
+ *  the rule and a floated button is a miss waiting to happen. */
+const primaryBtn = (isMobile: boolean): React.CSSProperties => ({
+  display: 'inline-flex', alignItems: 'center', gap: 8,
+  padding: isMobile ? '13px 18px' : '10px 16px',
+  width: isMobile ? '100%' : undefined,
+  justifyContent: isMobile ? 'center' : undefined,
+  minHeight: isMobile ? 44 : undefined,
+  borderRadius: 'var(--radius-md)', border: 'none',
+  background: 'var(--anthropic-orange)', color: '#fff',
+  fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+})
+
+/** The quiet alternative beside it. Deliberately not a second button: two equally weighted
+ *  choices in an empty state is the same as none. */
+const linkBtn: React.CSSProperties = {
+  display: 'block', marginTop: 10, padding: 0, border: 'none', background: 'none',
+  color: 'var(--text-tertiary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
+  textDecoration: 'underline',
+}
+
 const iconBtn: React.CSSProperties = {
   background: 'none', border: 'none', cursor: 'pointer', padding: 6,
   color: 'var(--text-tertiary)', display: 'inline-flex', alignItems: 'center',

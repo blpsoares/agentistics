@@ -9,11 +9,14 @@
 import {
   findPlan,
   validatePeriod,
+  sortPeriods,
+  dayIndex,
   type BillingCurrency,
   type BillingMode,
   type BillingPeriod,
   type BillingPeriodError,
   type PlanCatalogEntry,
+  type BillingDay,
 } from '@agentistics/core'
 
 export interface PeriodDraft {
@@ -163,6 +166,54 @@ export function describeError(error: BillingPeriodError, lang: 'pt' | 'en', plan
         : (pt
             ? 'Este período se sobrepõe a outro. Dois planos não podem cobrir o mesmo dia.'
             : 'This period overlaps another. Two plans cannot cover the same day.')
+  }
+}
+
+// ── what the screen leads with ───────────────────────────────────────────────────────────────
+
+/**
+ * Split a timeline into the plan in force TODAY and everything else.
+ *
+ * The screen leads with the current plan because that is the question people arrive with — "what
+ * am I paying?" — while the timeline is the data model that makes a plan CHANGE priceable. Both
+ * are needed; only one belongs at the top.
+ *
+ * With overlapping periods (a hand edit, refused everywhere else) the latest start wins, so the
+ * screen still renders something coherent while the timeline warns separately.
+ */
+export function splitTimeline(
+  periods: readonly BillingPeriod[],
+  today: BillingDay,
+): { current: BillingPeriod | null; history: BillingPeriod[] } {
+  const now = dayIndex(today)
+  if (now === null) return { current: null, history: sortPeriods(periods) }
+
+  let current: BillingPeriod | null = null
+  let bestStart = -Infinity
+  for (const p of periods) {
+    const from = dayIndex(p.from)
+    if (from === null || from > now) continue
+    const to = p.to ? dayIndex(p.to) : Number.POSITIVE_INFINITY
+    if (to === null || to < now) continue
+    if (from > bestStart) { current = p; bestStart = from }
+  }
+
+  return {
+    current,
+    // Newest first: a history list is read backwards from where you are now.
+    history: sortPeriods(periods.filter(p => p.id !== current?.id)).reverse(),
+  }
+}
+
+/** How this period is billed, in the user's words. The screen says it out loud because it changes
+ *  what every figure in the app means — a third-party period computes no plan cost at all. */
+export function modeLabel(mode: BillingMode, lang: 'pt' | 'en'): string {
+  const pt = lang === 'pt'
+  switch (mode) {
+    case 'subscription': return pt ? 'Assinatura' : 'Subscription'
+    case 'api': return pt ? 'Pago por token' : 'Billed per token'
+    case 'thirdparty': return pt ? 'Cobrado por terceiro' : 'Billed by a third party'
+    default: return pt ? 'Cobrança desconhecida' : 'Billing unknown'
   }
 }
 

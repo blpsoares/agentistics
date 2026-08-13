@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { Plus, Trash2, Save, Home as HomeIcon, X } from 'lucide-react'
+import { Plus, Trash2, Save, Check, Home as HomeIcon, X } from 'lucide-react'
 import {
   MAX_COMPARISON_SIDES,
   MIN_COMPARISON_SIDES,
@@ -52,6 +52,10 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
   const [onHome, setOnHome] = useState(false)
   /** Mobile mounts ONE filter bar; this is the side it edits. */
   const [editing, setEditing] = useState(0)
+  /** What the last save (or load) wrote. Without it the button stayed orange forever after
+   *  saving, reading as a pending action that never completes — there was no way for the screen
+   *  to say "this is already saved". */
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null)
 
   const derivedSides = useComparisonSides({
     data: ctx.data,
@@ -91,6 +95,10 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
     setEditing(e => Math.min(e, sides.length - 2))
   }
 
+  const snapshot = JSON.stringify({ name: name.trim(), onHome, bases, sides })
+  const dirty = savedSnapshot !== snapshot
+  const canSave = name.trim() !== '' && dirty
+
   const save = async () => {
     const trimmed = name.trim()
     if (!trimmed) return
@@ -101,6 +109,7 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
       ...(onHome ? { onHome: true } : {}),
     }
     setLoadedId(comparison.id)
+    setSavedSnapshot(snapshot)
     await ctx.saveComparisons(upsertComparison(ctx.comparisons, comparison))
   }
 
@@ -111,6 +120,12 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
     setLoadedId(c.id)
     setOnHome(c.onHome === true)
     setEditing(0)
+    setSavedSnapshot(JSON.stringify({
+      name: c.name,
+      onHome: c.onHome === true,
+      bases: c.sides.map(x => x.basis ?? 'api'),
+      sides: c.sides,
+    }))
   }
 
   const drop = async (id: string) => {
@@ -201,7 +216,7 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
           }}
         >
           <Plus size={13} />
-          {pt ? 'Lado' : 'Side'} {String.fromCharCode(65 + sides.length)}
+          {pt ? 'Adicionar coluna comparativa' : 'Add comparison column'}
         </button>
         <button
           onClick={() => setOnHome(v => !v)}
@@ -217,20 +232,27 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
           <HomeIcon size={13} />
           {pt ? 'Na Home' : 'On Home'}
         </button>
+        {/* Orange ONLY while there is something to save. Once saved it goes quiet and says so —
+            a permanently highlighted button reads as an action still owed. */}
         <button
           onClick={() => void save()}
-          disabled={name.trim() === ''}
-          title={name.trim() === '' ? (pt ? 'Dê um nome para salvar' : 'Name it to save') : undefined}
+          disabled={!canSave}
+          title={name.trim() === ''
+            ? (pt ? 'Dê um nome para salvar' : 'Name it to save')
+            : !dirty ? (pt ? 'Nada mudou desde o último salvamento' : 'Nothing changed since the last save') : undefined}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px',
-            borderRadius: 'var(--radius-md)', border: 'none', fontFamily: 'inherit', fontSize: 12,
-            fontWeight: 600, cursor: name.trim() === '' ? 'default' : 'pointer',
-            background: name.trim() === '' ? 'var(--bg-hover)' : 'var(--anthropic-orange)',
-            color: name.trim() === '' ? 'var(--text-tertiary)' : '#fff',
+            borderRadius: 'var(--radius-md)', fontFamily: 'inherit', fontSize: 12,
+            fontWeight: 600, cursor: canSave ? 'pointer' : 'default', flexShrink: 0,
+            border: canSave ? 'none' : '1px solid var(--border)',
+            background: canSave ? 'var(--anthropic-orange)' : 'transparent',
+            color: canSave ? '#fff' : 'var(--text-tertiary)',
           }}
         >
-          <Save size={13} />
-          {loadedId ? (pt ? 'Atualizar' : 'Update') : (pt ? 'Salvar' : 'Save')}
+          {canSave ? <Save size={13} /> : savedSnapshot !== null ? <Check size={13} /> : <Save size={13} />}
+          {canSave
+            ? (loadedId ? (pt ? 'Atualizar' : 'Update') : (pt ? 'Salvar' : 'Save'))
+            : savedSnapshot !== null ? (pt ? 'Salvo' : 'Saved') : (pt ? 'Salvar' : 'Save')}
         </button>
       </div>
 
