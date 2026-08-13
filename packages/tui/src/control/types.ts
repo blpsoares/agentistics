@@ -421,6 +421,14 @@ export interface SessionViewPrefs {
   sort?: { by: string; dir: 'asc' | 'desc' }
   /** Whether the detail pane under the list is drawn at all. */
   hideDetail?: boolean
+  /**
+   * Session ids the user has MARKED, so a row can be found again without searching for it.
+   *
+   * Persisted for the same reason the arrangement is: detaching from a session remounts this
+   * screen, and a mark that did not survive that would be gone at exactly the moment it was most
+   * useful — you marked the row because you were about to go into it.
+   */
+  marked?: string[]
 }
 
 /**

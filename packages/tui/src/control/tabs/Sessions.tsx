@@ -152,6 +152,13 @@ export function Sessions({
   )
   const [hideDetail, setHideDetail] = useState(view?.hideDetail ?? false)
   /**
+   * The rows the user MARKED — a highlighter, not a selection.
+   *
+   * Kept by session id rather than by position, because the list re-sorts under it every five
+   * seconds: a mark that meant "the third row" would be on someone else's session by the next poll.
+   */
+  const [marked, setMarked] = useState<ReadonlySet<string>>(new Set(view?.marked ?? []))
+  /**
    * Whether the visible action row has the keyboard.
    *
    * The row is there so the screen can be used WITHOUT knowing any letters — every verb is spelled
@@ -486,6 +493,7 @@ export function Sessions({
     setStates(null)
     setOrder(DEFAULT_ORDER)
     setHideDetail(false)
+    setMarked(new Set())
     setHideEmptyTask(!DEFAULT_SESSION_VIEW.showUnfiled)
     setTaskFilter(null)
     setProjectFilter(null)
@@ -622,6 +630,18 @@ export function Sessions({
     if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
     if (input === 'l') { setOnlyActive(v => !v); setCursor(0); return }
     if (input === 'd') { setHideDetail(v => !v); return }
+    // The HIGHLIGHTER. `space` because it is the mark key of every list that has one, and because
+    // it is the only unclaimed key on this screen that a person reaches for without being told.
+    if (input === ' ') {
+      if (!selected) return
+      setMarked(prev => {
+        const next = new Set(prev)
+        if (next.has(selected.id)) next.delete(selected.id)
+        else next.add(selected.id)
+        return next
+      })
+      return
+    }
     if (input === 'u' && grouping === 'task') { setHideEmptyTask(v => !v); setCursor(0); return }
     if (input === 'a') return runAction('new')
     // Attaching has its OWN key because `enter` deliberately does not do it any more: enter opens
@@ -668,6 +688,7 @@ export function Sessions({
     setStates(view.states ? new Set(view.states as SessionState[]) : null)
     setOrder((view.sort as SessionOrder | undefined) ?? DEFAULT_ORDER)
     setHideDetail(view.hideDetail ?? false)
+    setMarked(new Set(view.marked ?? []))
   }, [view])
 
   // Written whenever any part of the arrangement moves, rather than at each call site: four setters
@@ -684,11 +705,12 @@ export function Sessions({
     onView({
       grouping, showClosed, showExited, showUnfiled: !hideEmptyTask, showDone, onlyActive,
       hideDetail,
+      ...(marked.size > 0 ? { marked: [...marked] } : {}),
       ...(states ? { states: [...states] } : {}),
       sort: order,
     })
   }, [grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
-      states, order, onView, view])
+      states, order, marked, onView, view])
 
   useEffect(() => {
     if (!isActive) return
@@ -1079,6 +1101,7 @@ export function Sessions({
                 key={row.session.id}
                 session={row.session}
                 selected={selected?.id === row.session.id}
+                marked={marked.has(row.session.id)}
                 columns={columns}
                 width={listBody}
               />
@@ -1235,9 +1258,11 @@ function SummaryRow({
   )
 }
 
-function SessionRowView({ session, selected, columns, width }: {
+function SessionRowView({ session, selected, marked, columns, width }: {
   session: ControlSession
   selected: boolean
+  /** The user's own highlight. Survives re-sorting, and outlives the cursor moving away. */
+  marked: boolean
   columns: SessionColumns
   width: number
 }) {
@@ -1248,7 +1273,13 @@ function SessionRowView({ session, selected, columns, width }: {
 
   return (
     <Text wrap="truncate">
-      <Text color={selected ? COLORS.accent : undefined}>{selected ? '❯ ' : '  '}</Text>
+      {/* Two cells, and they answer different questions: the caret is WHERE THE CURSOR IS, the bar
+          is WHAT YOU MARKED. Sharing one cell would make a mark vanish under the cursor, which is
+          the one moment you are looking straight at it. The bar is `info` rather than the accent
+          on purpose — the accent means focus everywhere else in this app, and a highlight that
+          wore it would read as "this is selected" on four rows at once. */}
+      <Text color={selected ? COLORS.accent : undefined}>{selected ? '❯' : ' '}</Text>
+      <Text color={marked ? COLORS.info : undefined} bold={marked}>{marked ? '▌' : ' '}</Text>
       {/* Colour AND word, always paired — and PADDED, so every title starts in the same column.
           Two spaces between unpadded cells is what made this read as a jumble of words: the state
           words differ by ten characters, so nothing after them ever lined up. */}
@@ -1261,7 +1292,10 @@ function SessionRowView({ session, selected, columns, width }: {
         {padCell(session.stateLabel, columns.state)}
       </Text>
       {columns.title > 0 ? (
-        <Text color={selected ? COLORS.accent : undefined} bold={selected}>
+        <Text
+          color={selected ? COLORS.accent : marked ? COLORS.info : undefined}
+          bold={selected || marked}
+        >
           {gap + padCell(session.title, columns.title)}
         </Text>
       ) : null}

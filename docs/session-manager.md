@@ -95,6 +95,13 @@ every table has and the only one that does not need a second control. Every key 
 tiebreak: a screen sorted by name that buries a session waiting on approval among nine idle ones has
 lost the thing it is for.
 
+`space` **marks a row** — a highlighter, not a selection. The mark is a bar in the gutter beside the
+cursor caret, in a different colour from the accent (which means *focus* everywhere else in this
+app, so a highlight wearing it would read as "this is selected" on four rows at once), plus the name
+in that colour. It is kept by session id, because the list re-sorts under it every five seconds and
+a mark meaning "the third row" would be on someone else's session by the next poll — and it survives
+detaching, which is exactly when you needed it.
+
 The detail pane has its own switch (`d`). It is a pane, not a fact, and a screen is allowed to be a
 list — but a QUESTION still takes the region whatever the switch says, because a prompt with nowhere
 to draw cannot be answered.

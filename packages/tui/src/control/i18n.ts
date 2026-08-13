@@ -308,6 +308,7 @@ export interface ControlStrings {
   sessionsHideClosed: string
   keySessionsActive: string
   keySessionsDetail: string
+  keySessionsMark: string
   keySessionsClosed: string
   keySessionsNoTask: string
   /** How to change screen where the arrows belong to the screen itself. */
@@ -617,6 +618,7 @@ const EN: ControlStrings = {
   sessionsHideClosed: 'closed: hidden',
   keySessionsActive: 'l only active',
   keySessionsDetail: 'd detail',
+  keySessionsMark: 'space mark',
   keySessionsClosed: 'c closed',
   keySessionsNoTask: 'u unfiled',
   keyTabsAlt: '[ ] screens',
@@ -914,6 +916,7 @@ const PT: ControlStrings = {
   sessionsHideClosed: 'fechadas: ocultas',
   keySessionsActive: 'l só ativas',
   keySessionsDetail: 'd detalhe',
+  keySessionsMark: 'space marcar',
   keySessionsClosed: 'c fechadas',
   keySessionsNoTask: 'u sem tarefa',
   keyTabsAlt: '[ ] telas',

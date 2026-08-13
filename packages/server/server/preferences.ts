@@ -62,6 +62,7 @@ export interface Preferences {
     states?: string[]
     sort?: { by: string; dir: 'asc' | 'desc' }
     hideDetail?: boolean
+    marked?: string[]
   }
   /**
    * The session TASKS the user has marked finished.
