@@ -341,6 +341,22 @@ function fakeHost(opts: Options): ControlHost {
       return () => { watchers.delete(handler) }
     },
     readLog: async (source, maxLines) => (LOG[source] ?? []).slice(-maxLines),
+
+    // The session verbs, as an EMPTY fleet: no screen draws them yet, and a preview host that
+    // invented sessions would be showing frames nothing renders. The Sessions screen arrives with
+    // its own fixtures — a session waiting for approval, one working, one unreadable, an external
+    // row, a very long cwd — because those are the cases its layout has to survive.
+    sessions: async () => ({ views: [] }),
+    startSession: done,
+    killSession: done,
+    renameSession: done,
+    noteSession: done,
+    // Nothing to attach to here, and the refusal is the honest answer rather than an argv that
+    // would hand a real terminal to a session that does not exist.
+    attachCommand: async () => null,
+    detachHint: async () => 'Ctrl-b then d',
+    projectChoices: async () => [],
+    sessionHarnesses: async () => [],
   }
 }
 

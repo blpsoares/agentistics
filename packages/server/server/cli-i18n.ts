@@ -17,6 +17,9 @@
  * longer exists document a program that no longer exists.
  */
 
+import { STARTABLE_HARNESSES } from './sessions/spawn-spec'
+import type { SpawnPlanError } from './sessions/types'
+
 export type CliLang = 'en' | 'pt'
 
 export interface CliStrings {
@@ -159,6 +162,40 @@ export interface CliStrings {
   upgradeDone: string
   upgradeFailed: (code: number) => string
 
+  // the session manager — the Sessions tab's outcomes, and the refusals it shares with
+  // `agentop session …`. The row itself is built from a `SessionView`, whose STATE is an enum the
+  // TUI turns into a word; everything the host says ABOUT a session is here.
+  /**
+   * Why sessions cannot be managed on this box at all.
+   *
+   * The backend answers in English (a platform module has no language of its own), so the host
+   * translates by backend ID rather than by matching its sentence — see `BACKEND_UNAVAILABLE` in
+   * cli-start.ts.
+   */
+  sessionsNoTmux: string
+  /** The list itself could not be read. Not the same claim as "nothing is running". */
+  sessionsReadFailed: string
+  /**
+   * The four ways a spawn request can be refused before anything runs — shared verbatim with
+   * `agentop session`, which passes the English table (see `explainSpawnError`).
+   */
+  spawnUnsupportedHarness: (harness: string, supported: string[]) => string
+  spawnModelUnsupported: (harness: string) => string
+  spawnEffortUnsupported: (harness: string) => string
+  spawnUnknownEffort: (harness: string, value: string, accepted: string[]) => string
+  /** The backend refused to host it; `reason` is the backend's own words, which do not translate. */
+  sessionStartFailed: (reason: string) => string
+  sessionStarted: (harness: string, id: string) => string
+  sessionKilled: (id: string) => string
+  /** The backend would not confirm the kill, so the registry entry was KEPT — say both halves. */
+  sessionKillUnconfirmed: (id: string) => string
+  /** Nothing by that id, on either side. A row can outlive the session it names by one refresh. */
+  sessionGone: (id: string) => string
+  /** A running session the registry does not know: there is no entry to carry a label or a note. */
+  sessionNotRegistered: string
+  sessionRenamed: (label: string) => string
+  sessionNoted: string
+
   // critical (unattended) update — printed by `agentop check-update`
   updateCriticalTitle: string
   updateCriticalInstalling: (version: string) => string
@@ -297,6 +334,23 @@ const EN: CliStrings = {
   upgradeDone: 'upgraded, and everything that was running was restarted onto the new version.',
   upgradeFailed: (code) => `upgrade exited ${code} — see the output above.`,
 
+  sessionsNoTmux: 'tmux is not installed — install it to manage background sessions',
+  sessionsReadFailed: 'could not read the sessions on this machine.',
+  spawnUnsupportedHarness: (harness, supported) =>
+    `${harness} cannot be started by agentop yet. Supported: ${supported.join(', ')}.`,
+  spawnModelUnsupported: (harness) => `${harness} has no model flag, so --model cannot be applied.`,
+  spawnEffortUnsupported: (harness) => `${harness} has no effort flag, so --effort cannot be applied.`,
+  spawnUnknownEffort: (harness, value, accepted) =>
+    `${harness} does not accept effort "${value}". Accepted: ${accepted.join(', ')}.`,
+  sessionStartFailed: (reason) => `could not start the session: ${reason}`,
+  sessionStarted: (harness, id) => `started ${harness} session ${id}.`,
+  sessionKilled: (id) => `killed ${id}.`,
+  sessionKillUnconfirmed: (id) => `could not confirm ${id} was killed — it may still be running, so its entry was kept.`,
+  sessionGone: (id) => `no session ${id} any more.`,
+  sessionNotRegistered: 'that session has no registry entry to update — it was not started by agentop.',
+  sessionRenamed: (label) => `renamed to "${label}".`,
+  sessionNoted: 'note saved.',
+
   updateCriticalTitle: 'Critical update — installing automatically',
   updateCriticalInstalling: (v) => `v${v} is being installed in the background; your terminal is free.`,
   updateCriticalLog: (p) => `Progress: ${p}`,
@@ -432,6 +486,23 @@ const PT: CliStrings = {
   upgradeFailed: (code) => `o upgrade saiu com ${code} — veja a saída acima.`,
   prefsWriteFailed: 'não consegui gravar as preferências.',
 
+  sessionsNoTmux: 'tmux não está instalado — instale para gerenciar sessões em background',
+  sessionsReadFailed: 'não consegui ler as sessões desta máquina.',
+  spawnUnsupportedHarness: (harness, supported) =>
+    `o agentop ainda não sabe iniciar ${harness}. Suportados: ${supported.join(', ')}.`,
+  spawnModelUnsupported: (harness) => `${harness} não tem flag de modelo, então --model não se aplica.`,
+  spawnEffortUnsupported: (harness) => `${harness} não tem flag de esforço, então --effort não se aplica.`,
+  spawnUnknownEffort: (harness, value, accepted) =>
+    `${harness} não aceita o esforço "${value}". Aceitos: ${accepted.join(', ')}.`,
+  sessionStartFailed: (reason) => `não consegui iniciar a sessão: ${reason}`,
+  sessionStarted: (harness, id) => `sessão ${harness} ${id} iniciada.`,
+  sessionKilled: (id) => `${id} encerrada.`,
+  sessionKillUnconfirmed: (id) => `não deu para confirmar que ${id} morreu — pode ainda estar rodando, então mantive o registro.`,
+  sessionGone: (id) => `não existe mais a sessão ${id}.`,
+  sessionNotRegistered: 'essa sessão não tem registro para atualizar — ela não foi iniciada pelo agentop.',
+  sessionRenamed: (label) => `renomeada para "${label}".`,
+  sessionNoted: 'nota salva.',
+
   updateCriticalTitle: 'Atualização crítica — instalando automaticamente',
   updateCriticalInstalling: (v) => `a v${v} está sendo instalada em segundo plano; seu terminal está livre.`,
   updateCriticalLog: (p) => `Acompanhe em: ${p}`,
@@ -477,6 +548,28 @@ const TABLE: Record<CliLang, CliStrings> = { en: EN, pt: PT }
 
 export function cliStrings(lang: CliLang): CliStrings {
   return TABLE[lang] ?? EN
+}
+
+/**
+ * Why a session could not even be planned, in one sentence.
+ *
+ * Shared by both front ends — `agentop session` passes `cliStrings('en')`, the control center
+ * passes whatever language it is speaking — because a refusal is a rule about what the harnesses
+ * support, and two copies of it would eventually name different supported harnesses. The list of
+ * startable ones is read from `SPAWN_SPECS` here rather than taken from the caller, for the same
+ * reason `STARTABLE_HARNESSES` exists at all.
+ */
+export function explainSpawnError(e: SpawnPlanError, s: CliStrings): string {
+  switch (e.code) {
+    case 'unsupported-harness':
+      return s.spawnUnsupportedHarness(e.harness, STARTABLE_HARNESSES)
+    case 'model-unsupported':
+      return s.spawnModelUnsupported(e.harness)
+    case 'effort-unsupported':
+      return s.spawnEffortUnsupported(e.harness)
+    case 'unknown-effort':
+      return s.spawnUnknownEffort(e.harness, e.value, e.accepted)
+  }
 }
 
 /**

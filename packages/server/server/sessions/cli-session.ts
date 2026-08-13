@@ -1,22 +1,27 @@
 /**
  * cli-session.ts — the `agentop session …` handlers.
  *
- * Every decision is already made by a pure module: `parseSessionArgs` says what was asked,
- * `planSpawn` says what to run, `resolveSessionRef` says which session was meant, and
- * `reconcileSessions` says what exists. This file does I/O and prints.
+ * Every decision is already made beneath it: `parseSessionArgs` says what was asked,
+ * `resolveSessionRef` says which session was meant, `reconcileSessions` says what exists, and
+ * `verbs.ts` performs the start and the kill — the same code the control center's host runs, so
+ * the two front ends can differ in what they SAY and never in what they do.
+ *
+ * This file does I/O and prints, in English. The control center is the surface that follows the
+ * user's language.
  */
 
 import { resolve } from 'node:path'
-import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
+import { cliStrings, explainSpawnError } from '../cli-i18n'
 import { parseSessionArgs, type SessionCommand } from './cli-parse'
-import { SPAWN_SPECS, planSpawn } from './spawn-spec'
+import { STARTABLE_HARNESSES as STARTABLE } from './spawn-spec'
 import { reconcileSessions, resolveSessionRef, type ReconciledSession, type RefCandidate } from './session-ref'
-import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './registry'
+import { patchSession, readRegistry } from './registry'
+import { killManagedSession, startManagedSession } from './verbs'
 import { resolveBackend } from './index'
-import type { SessionBackend, SpawnPlanError } from './types'
+import type { SessionBackend } from './types'
 
-/** Derived from the specs, never a second hand-written list — the two could not then disagree. */
-const STARTABLE: HarnessId[] = HARNESS_ORDER.filter(h => SPAWN_SPECS[h] !== null)
+/** This CLI speaks English; the control center is the surface that follows the user's language. */
+const EN = cliStrings('en')
 
 const USAGE = `Usage:
   agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"]
@@ -34,19 +39,6 @@ Harnesses that can be started: ${STARTABLE.join(', ')}`
  * against this so a session `list` shows is never one only `list` can name.
  */
 const toRefCandidate = (r: ReconciledSession): RefCandidate => ({ id: r.id, label: r.managed?.label })
-
-function explainPlanError(e: SpawnPlanError): string {
-  switch (e.code) {
-    case 'unsupported-harness':
-      return `${e.harness} cannot be started by agentop yet. Supported: ${STARTABLE.join(', ')}.`
-    case 'model-unsupported':
-      return `${e.harness} has no model flag, so --model cannot be applied.`
-    case 'effort-unsupported':
-      return `${e.harness} has no effort flag, so --effort cannot be applied.`
-    case 'unknown-effort':
-      return `${e.harness} does not accept effort "${e.value}". Accepted: ${e.accepted.join(', ')}.`
-  }
-}
 
 export async function runSession(argv: string[]): Promise<number> {
   const cmd = parseSessionArgs(argv)
@@ -71,40 +63,31 @@ async function start(
   cmd: Extract<SessionCommand, { kind: 'start' }>,
   backend: SessionBackend,
 ): Promise<number> {
-  // A relative --cwd must resolve against the CALLER's directory: passed through unresolved it
-  // reaches `tmux new-session -c` and is interpreted by the tmux SERVER's own cwd instead, and it
-  // is written verbatim into the registry, where `list` would print it back meaningless from
-  // anywhere else.
+  // Resolved here as well as inside `startManagedSession` (which is idempotent on an absolute
+  // path), because the confirmation line below prints it: a relative `--cwd` echoed back verbatim
+  // is as meaningless in the terminal as it would be in the registry.
   const cwd = cmd.cwd ? resolve(cmd.cwd) : process.cwd()
-  const planned = planSpawn({
-    harness: cmd.harness, cwd, prompt: cmd.prompt, model: cmd.model, effort: cmd.effort,
-  })
-  if (!planned.ok) { console.error(explainPlanError(planned.error)); return 1 }
-
-  const id = newSessionId()
-  try {
-    await backend.spawn({ id, cwd, argv: planned.plan.argv, ...(planned.plan.sendKeys ? { sendKeys: planned.plan.sendKeys } : {}) })
-  } catch (e) {
-    console.error(`Could not start the session: ${e instanceof Error ? e.message : String(e)}`)
-    return 1
-  }
-
-  await addSession({
-    id,
+  const started = await startManagedSession({
     harness: cmd.harness,
     cwd,
-    createdAt: new Date().toISOString(),
+    ...(cmd.prompt ? { prompt: cmd.prompt } : {}),
     ...(cmd.model ? { model: cmd.model } : {}),
     ...(cmd.effort ? { effort: cmd.effort } : {}),
     ...(cmd.label ? { label: cmd.label } : {}),
-  })
+  }, backend)
+  if (!started.ok) {
+    console.error(started.kind === 'plan'
+      ? explainSpawnError(started.error, EN)
+      : `Could not start the session: ${started.message}`)
+    return 1
+  }
 
   if (cmd.background) {
-    console.log(`Started ${cmd.harness} session ${id}${cmd.label ? ` (${cmd.label})` : ''} in ${cwd}`)
-    console.log(`Attach with: agentop session attach ${id}`)
+    console.log(`Started ${cmd.harness} session ${started.id}${cmd.label ? ` (${cmd.label})` : ''} in ${cwd}`)
+    console.log(`Attach with: agentop session attach ${started.id}`)
     return 0
   }
-  return execAttach(id, backend)
+  return execAttach(started.id, backend)
 }
 
 /**
@@ -142,26 +125,24 @@ async function attach(ref: string, backend: SessionBackend): Promise<number> {
 }
 
 async function kill(ref: string, backend: SessionBackend): Promise<number> {
-  const registry = await readRegistry()
-  const reconciled = reconcileSessions(registry, await backend.list())
+  const reconciled = reconcileSessions(await readRegistry(), await backend.list())
   const found = resolveSessionRef(reconciled.map(toRefCandidate), ref)
   if (!found.ok) { console.error(refError(ref, found.reason, found.matches)); return 1 }
   const { id } = found.session
-  const statusBefore = reconciled.find(r => r.id === id)?.status
 
-  const confirmed = await backend.kill(id)
-  // A session that was already `lost` (the backend has nothing by this id — there was never
-  // anything for `kill` to do) or `exited` (the hosted command already finished) is safe to clear
-  // even on a backend report we cannot trust, because the reconciled view established BEFORE this
-  // call already knew nothing was running. This is the fallback, not the common path: an ordinary
-  // kill still relies on `confirmed`, so a real failure never gets papered over.
-  if (!confirmed && statusBefore !== 'lost' && statusBefore !== 'exited') {
-    console.error(`Could not confirm ${id} was killed — it may still be running. Its registry entry was kept.`)
-    return 1
+  // The reconciled view above resolved the ref, so `not-found` here means the session went away
+  // between that read and the kill — the same answer as an unmatched ref, and never a silent zero.
+  switch (await killManagedSession(id, backend)) {
+    case 'killed':
+      console.log(`Killed ${id}.`)
+      return 0
+    case 'unconfirmed':
+      console.error(`Could not confirm ${id} was killed — it may still be running. Its registry entry was kept.`)
+      return 1
+    case 'not-found':
+      console.error(refError(ref, 'not-found', []))
+      return 1
   }
-  await removeSession(id)
-  console.log(`Killed ${id}.`)
-  return 0
 }
 
 async function patch(

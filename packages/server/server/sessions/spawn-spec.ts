@@ -10,7 +10,7 @@
  * verified is absent, not guessed.
  */
 
-import type { HarnessId } from '@agentistics/core'
+import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
 import type { SpawnRequest, SpawnPlanResult, SpawnSpec } from './types'
 
 export const SPAWN_SPECS: Record<HarnessId, SpawnSpec | null> = {
@@ -50,6 +50,16 @@ export const SPAWN_SPECS: Record<HarnessId, SpawnSpec | null> = {
   copilot: null,
   antigravity: null,
 }
+
+/**
+ * The harnesses agentop can start, DERIVED from the specs above.
+ *
+ * Never a second hand-written list: it is what the CLI's usage prints, what its "supported"
+ * refusals name and what the control center's wizard offers, and three copies of it would be three
+ * chances for a harness to be startable in one place and absent in another. Ordered by
+ * `HARNESS_ORDER` so every surface lists them the same way.
+ */
+export const STARTABLE_HARNESSES: HarnessId[] = HARNESS_ORDER.filter(h => SPAWN_SPECS[h] !== null)
 
 /** Decide the exact argv (and any text to type in) for a requested session. */
 export function planSpawn(req: SpawnRequest): SpawnPlanResult {

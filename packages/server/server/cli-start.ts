@@ -2,7 +2,9 @@
  * cli-start.ts — the logic behind the `agentop` control center.
  *
  * This module owns everything the control center DOES: what the current mode is, which services
- * are up, and what each action performs. The Ink layer (`@agentistics/tui/control`) owns only how
+ * are up, which assistant sessions are running, and what each action performs. The real work of
+ * the last two lives under `sessions/`; what is here is the composition and the wording. The Ink
+ * layer (`@agentistics/tui/control`) owns only how
  * that is drawn — the two meet at `ControlHost`, implemented here, whose methods return an
  * already-localized `ActionResult` instead of printing.
  *
@@ -40,17 +42,37 @@ import type {
   ControlHost,
   ControlService,
   ControlStatus,
+  HarnessChoice,
   LogSource,
+  NewSessionRequest,
   RestartOption,
   RuntimeId,
   ServiceId,
   ServiceRef,
   ServiceRuntimeState,
   ServiceState,
+  SessionSnapshot,
   StartOption,
   StartRequest,
+  // The re-declared halves of the session contract. Aliased so the server's own declarations keep
+  // their plain names below — see SESSION_CONTRACT_MATCHES, which holds the two together.
+  ProjectChoice as ControlProjectChoice,
+  SessionState as ControlSessionState,
+  SessionView as ControlSessionView,
 } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
+import { harnessProcesses, type HarnessProcess } from './live-sessions'
+import { loadConsolidated } from './consolidate'
+import { createLimiter } from './utils'
+import { resolveBackend } from './sessions/index'
+import { patchSession, readRegistry } from './sessions/registry'
+import { reconcileSessions } from './sessions/session-ref'
+import { buildSessionViews, type SessionView } from './sessions/monitor'
+import { buildProjectChoices, searchProjects, type ProjectChoice } from './sessions/project-search'
+import { SPAWN_SPECS, STARTABLE_HARNESSES } from './sessions/spawn-spec'
+import { killManagedSession, startManagedSession } from './sessions/verbs'
+import type { SessionState } from './sessions/attention'
+import type { CaptureResult, ManagedSession, SessionBackend } from './sessions/types'
 import { readPreferences, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
 import { centralStartPlan, runCentral, type CentralStartPlan } from './cli-central'
 import { onOutputLine, publishLines, streamCommand } from './cli-stream'
@@ -68,7 +90,7 @@ import { memberConnect, memberLeave } from './cli-member'
 import { enableAutostart, type AutostartMode } from './autostart'
 import { confirm } from './cli-ui'
 import { CURRENT_VERSION, getVersionInfo } from './version'
-import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
+import { cliStrings, explainSpawnError, type CliLang, type CliStrings } from './cli-i18n'
 import { resolveLang } from './cli-lang'
 
 export type StartResult = number | 'foreground'
@@ -909,6 +931,146 @@ export async function restartAllServices(rebuild = false, flags: RebuildFlags = 
 }
 
 // ---------------------------------------------------------------------------
+// Sessions — the fleet the Sessions tab draws, and the verbs it performs
+// ---------------------------------------------------------------------------
+
+/**
+ * The compile-time cross-check that holds the two declarations of the session contract together.
+ *
+ * `SessionView`, `ProjectChoice` and `SessionState` exist TWICE: here, in the modules that compute
+ * them, and in `packages/tui/src/control/types.ts`, which re-declares them structurally because
+ * CLAUDE.md fixes the dependency direction as `server -> tui` — the TUI may not import
+ * `packages/server/server/*`. Two declarations of one shape drift in silence: a field is added on
+ * this side, the screen keeps rendering the old shape, and nothing anywhere fails.
+ *
+ * So the compiler is made to fail instead. `SameShape` compares the KEY SETS as well as mutual
+ * assignability, because assignability alone accepts an optional field added to only one side —
+ * which is exactly the shape of the drift worth catching. Anything but `true` in the tuple below is
+ * a type error, and `bun tsc --noEmit` runs in the pre-commit hook.
+ */
+type SameType<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+type SameShape<A, B> = SameType<keyof A, keyof B> extends true ? SameType<A, B> : false
+
+export const SESSION_CONTRACT_MATCHES: [
+  SameShape<SessionView, ControlSessionView>,
+  SameShape<ProjectChoice, ControlProjectChoice>,
+  SameType<SessionState, ControlSessionState>,
+] = [true, true, true]
+
+/**
+ * Why a backend cannot run here, in the host's language.
+ *
+ * The backend answers in English — it is a platform module with no language of its own — and this
+ * screen speaks the user's. Keyed by the backend ID rather than by matching its sentence, which
+ * would silently stop translating the day the wording changes, and a `Record` so a new backend
+ * cannot be added without deciding what to say about it.
+ */
+const BACKEND_UNAVAILABLE: Record<SessionBackend['id'], (s: CliStrings) => string | undefined> = {
+  tmux: s => s.sessionsNoTmux,
+  // Phase 4 (Windows). Until that backend exists there is no sentence of ours to say, and its own
+  // words are then the truest thing available.
+  pty: () => undefined,
+}
+
+async function backendBlocked(backend: SessionBackend, s: CliStrings): Promise<string | undefined> {
+  const raw = await backend.unavailable()
+  return raw ? BACKEND_UNAVAILABLE[backend.id](s) ?? raw : undefined
+}
+
+/**
+ * How much of a pane the attention classifier is shown, and how many panes are read at once.
+ *
+ * 40 lines is what every fixture under `sessions/fixtures/` was captured at, so it is the frame the
+ * rules in `attention.ts` were actually read from — asking for more would show the classifier
+ * scrollback no rule was written against, and asking for less could cut a dialog in half.
+ *
+ * A capture is a `tmux` process, and this runs on a timer for every running session, so it is the
+ * one place this feature can get expensive: the limiter bounds the burst rather than the total.
+ */
+const CAPTURE_LINES = 40
+const CAPTURE_CONCURRENCY = 4
+
+/**
+ * What `sessionSnapshot` reads besides the backend, injectable so the composition can be exercised
+ * without a registry file or a `/proc` scan. The defaults are the real thing; nothing but a test
+ * passes this.
+ */
+export interface SessionSources {
+  registry?: () => Promise<ManagedSession[]>
+  processes?: () => Promise<HarnessProcess[]>
+  nowMs?: () => number
+}
+
+/**
+ * The whole fleet: what the registry believes, what the backend hosts, what `/proc` shows, and a
+ * frame per running session for the attention classifier.
+ *
+ * NEVER THROWS, and never answers a bare empty list. The Sessions screen polls this on a timer, so
+ * a rejection would take the control center down seconds after it opened — and an empty list
+ * rendered as "nothing is running" when the truth is "nothing could be looked at" is the confident
+ * zero this codebase forbids everywhere else.
+ */
+export async function sessionSnapshot(
+  backend: SessionBackend,
+  s: CliStrings,
+  sources: SessionSources = {},
+): Promise<SessionSnapshot> {
+  const blocked = await backendBlocked(backend, s)
+  if (blocked) return { views: [], unavailable: blocked }
+
+  try {
+    const [registry, hosted, processes] = await Promise.all([
+      (sources.registry ?? readRegistry)(),
+      backend.list(),
+      (sources.processes ?? harnessProcesses)(),
+    ])
+    const reconciled = reconcileSessions(registry, hosted)
+
+    // Only the RUNNING ones: a `lost` session has no pane to read, and an `exited` one's last frame
+    // cannot change what `buildSessionViews` already knows about it.
+    const limit = createLimiter(CAPTURE_CONCURRENCY)
+    const captures: Record<string, CaptureResult> = {}
+    await Promise.all(reconciled
+      .filter(r => r.status === 'running')
+      .map(r => limit(async () => { captures[r.id] = await backend.capture(r.id, CAPTURE_LINES) })))
+
+    const nowMs = (sources.nowMs ?? Date.now)()
+    return { views: buildSessionViews({ nowMs, reconciled, captures, processes }) }
+  } catch {
+    // Something under this composition failed in a way none of its modules promised to survive.
+    // Saying so is the only honest answer: the list is unknown, not empty.
+    return { views: [], unavailable: s.sessionsReadFailed }
+  }
+}
+
+/**
+ * The project picker's list, rebuilt at most every TTL.
+ *
+ * The wizard calls `projectChoices` on every KEYSTROKE, and building the list means reading the
+ * whole consolidate store — hundreds of small JSON files. The search itself is pure and cheap, so
+ * only the list is cached, in module scope: one control center per process, and a directory that
+ * appears mid-wizard is worth exactly nothing to the person typing its name right now.
+ */
+const PROJECT_CHOICES_TTL_MS = 30_000
+let projectChoiceCache: { at: number; choices: ProjectChoice[] } | null = null
+
+async function projectChoiceList(): Promise<ProjectChoice[]> {
+  const now = Date.now()
+  const cached = projectChoiceCache
+  if (cached && now - cached.at < PROJECT_CHOICES_TTL_MS) return cached.choices
+  try {
+    const store = await loadConsolidated()
+    const choices = buildProjectChoices([...store.values()])
+    projectChoiceCache = { at: now, choices }
+    return choices
+  } catch {
+    // A failed read keeps whatever was already built rather than emptying the picker under the
+    // cursor; with nothing built yet the list is empty, and a typed path still starts a session.
+    return cached?.choices ?? []
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Talking to the terminal while Ink owns it
 // ---------------------------------------------------------------------------
 
@@ -1571,6 +1733,114 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const r = await sh(['sh', '-c', `docker logs --tail ${maxLines} ${ids[0]} 2>&1`])
       if (r.code !== 0) return []
       return r.out.split('\n').filter(line => line.length > 0)
+    },
+
+    // -- the sessions tab ----------------------------------------------------
+    //
+    // Every verb below composes the `sessions/` modules and says the outcome; none of them decides
+    // anything the modules there already decide. A throw is deliberately not caught in the four
+    // action verbs — the control center's `run()` turns one into a failed `ActionResult` carrying
+    // the error's own message, which is more truthful than a sentence of ours guessing at it.
+    // `sessions()` is the exception, because it is POLLED rather than run through `run()`.
+
+    async sessions(): Promise<SessionSnapshot> {
+      return sessionSnapshot(await resolveBackend(), S())
+    },
+
+    async startSession(req: NewSessionRequest): Promise<ActionResult & { id?: string }> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backendBlocked(backend, s)
+      if (blocked) return { ok: false, message: blocked }
+
+      const started = await startManagedSession(req, backend)
+      if (started.ok) {
+        return { ok: true, id: started.id, message: s.sessionStarted(req.harness, started.id) }
+      }
+      // A plan error is a rule about what the harness supports, worded once for both front ends;
+      // a spawn failure is the backend's own sentence, which has no localized form.
+      return {
+        ok: false,
+        message: started.kind === 'plan'
+          ? explainSpawnError(started.error, s)
+          : s.sessionStartFailed(started.message),
+      }
+    },
+
+    async killSession(id: string): Promise<ActionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backendBlocked(backend, s)
+      if (blocked) return { ok: false, message: blocked }
+
+      switch (await killManagedSession(id, backend)) {
+        case 'killed': return { ok: true, message: s.sessionKilled(id) }
+        // Not "killed anyway": the entry was kept on purpose, and the row stays so the user can
+        // see what is still there and try again.
+        case 'unconfirmed': return { ok: false, message: s.sessionKillUnconfirmed(id) }
+        case 'not-found': return { ok: false, message: s.sessionGone(id) }
+      }
+    },
+
+    /**
+     * A label and a note are registry METADATA, so neither verb touches the backend: an
+     * `unregistered` row (the backend hosts it, the registry never knew it) has nothing to patch
+     * and is told so, and a `lost` one — the tmux server was restarted — can still be tidied up.
+     */
+    async renameSession(id: string, label: string): Promise<ActionResult> {
+      const s = S()
+      return (await patchSession(id, { label }))
+        ? { ok: true, message: s.sessionRenamed(label) }
+        : { ok: false, message: s.sessionNotRegistered }
+    },
+
+    async noteSession(id: string, note: string): Promise<ActionResult> {
+      const s = S()
+      return (await patchSession(id, { note }))
+        ? { ok: true, message: s.sessionNoted }
+        : { ok: false, message: s.sessionNotRegistered }
+    },
+
+    /**
+     * The argv, or `null` — and the liveness check is what makes the `null` mean something.
+     *
+     * `SessionView.attachable` already says this, and the screen offers the verb accordingly; this
+     * is the same question asked again at the moment of the keypress, because a session can exit
+     * between two polls and handing back an argv for a session that is gone would hand the user a
+     * terminal takeover that dies immediately.
+     */
+    async attachCommand(id: string): Promise<string[] | null> {
+      const backend = await resolveBackend()
+      if (await backend.unavailable()) return null
+      const alive = (await backend.list()).some(b => b.id === id && b.alive)
+      return alive ? backend.attachCommand(id) : null
+    },
+
+    async detachHint(): Promise<string> {
+      return (await resolveBackend()).detachHint()
+    },
+
+    async projectChoices(query: string, limit: number): Promise<ProjectChoice[]> {
+      return searchProjects(await projectChoiceList(), query, limit)
+    },
+
+    /**
+     * DERIVED from `SPAWN_SPECS`, never a second list: a harness with no spec is absent here, so
+     * the wizard cannot offer a start that `planSpawn` would refuse by name a keypress later.
+     */
+    async sessionHarnesses(): Promise<HarnessChoice[]> {
+      return STARTABLE_HARNESSES.map(id => {
+        // Non-null by construction: `STARTABLE_HARNESSES` is exactly the ids whose spec is not null.
+        const spec = SPAWN_SPECS[id]!
+        return {
+          id,
+          // The harness id IS the word — it is what the CLI prints, what the docs use and what the
+          // user types. Untranslated for the same reason `native`/`docker` are.
+          label: id,
+          models: spec.modelSuggestions,
+          efforts: spec.efforts ?? [],
+        }
+      })
     },
   }
 }

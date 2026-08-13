@@ -7,6 +7,7 @@
  * lets the whole surface be rewritten without changing a single behaviour.
  */
 
+import type { HarnessId } from '@agentistics/core'
 import type { CliLang } from './lang'
 
 export type TabId = 'services' | 'setup' | 'logs' | 'cheatsheet' | 'help' | 'contribute'
@@ -296,6 +297,125 @@ export interface ActionResult {
   message: string
 }
 
+// ---------------------------------------------------------------------------
+// Sessions — the assistant sessions this machine hosts, and the ones it can only watch
+// ---------------------------------------------------------------------------
+
+/**
+ * `SessionState`, `SessionView` and `ProjectChoice` are STRUCTURALLY RE-DECLARED here.
+ *
+ * All three exist already, under `packages/server/server/sessions/` (`attention.ts`, `monitor.ts`,
+ * `project-search.ts`) — and this package may not import them. CLAUDE.md fixes the dependency
+ * direction as `server -> tui`: the server builds a `ControlHost` out of its own modules and hands
+ * it over, and nothing in here ever reads a file, spawns a process or imports
+ * `packages/server/server/*`. Reversing that for the sake of three interfaces would put Bun/Node
+ * APIs on the import graph of a package whose whole job is to draw.
+ *
+ * Two declarations of one shape drift. `cli-start.ts` therefore holds a compile-time cross-check
+ * (`SESSION_CONTRACT_MATCHES`) that fails `bun tsc --noEmit` the moment either side gains, loses or
+ * retypes a field — change one, change the other, in the same commit.
+ */
+
+/**
+ * What a session is doing — an ENUM the TUI turns into a word, exactly like `ServiceState` and
+ * `BootState`, and the one thing on a row that does NOT arrive already localized.
+ *
+ * The distinctions are the point, and flattening any of them is the confident-zero this codebase
+ * forbids: `idle-unknown` is "the frame was read and no rule matched it", `unreadable` is "the
+ * frame could not be read at all", and `external` is a process seen only in `/proc` — no pane, so
+ * no attention state was ever looked for. None of the three may be rendered as "idle".
+ */
+export type SessionState =
+  | 'working'
+  | 'waiting-approval'
+  | 'waiting-input'
+  | 'idle-unknown'
+  | 'unreadable'
+  | 'exited'
+  | 'external'
+
+/** One row of the fleet — a session agentop hosts, or a bare process it only observed. */
+export interface SessionView {
+  id: string
+  harness: HarnessId
+  cwd: string
+  /** The user's label, or '' when they never gave one. */
+  label: string
+  note: string
+  state: SessionState
+  /** True for a session agentop hosts (whether or not the registry still knows it); false for a
+   *  bare process this monitor only observed in /proc. */
+  managed: boolean
+  attached: boolean
+  createdMs?: number
+  lastActivityMs?: number
+  attachable: boolean
+  killable: boolean
+  /** Set for an external row so the UI can say WHY it offers nothing. */
+  externalReason?: 'not-hosted-by-agentop'
+}
+
+/**
+ * The fleet, or the reason there cannot be one.
+ *
+ * A record rather than a bare `SessionView[]` because those are two different facts: an empty list
+ * means nothing is running, `unavailable` means nothing could be looked at (no tmux on this box).
+ * Rendering the second as the first is the same error as a harness capability rendered as `0`.
+ * `unavailable` is already localized, like every other string the host hands over.
+ */
+export interface SessionSnapshot {
+  views: SessionView[]
+  unavailable?: string
+}
+
+/**
+ * What the new-session wizard collected.
+ *
+ * There is deliberately no "attached" flag: starting and attaching are two verbs. The backend
+ * always starts a session detached and `attachCommand()` hands the terminal over afterwards, so
+ * "start it attached" is a start FOLLOWED BY an attach — and an attach that fails never costs the
+ * user the session they just created.
+ */
+export interface NewSessionRequest {
+  harness: HarnessId
+  /** Absolute, or relative to where `agentop` itself was launched — the host resolves it before it
+   *  can reach the backend, which would otherwise read it against ITS own working directory. */
+  cwd: string
+  prompt?: string
+  model?: string
+  effort?: string
+  label?: string
+}
+
+/**
+ * A harness the wizard may offer, DERIVED on the host from `SPAWN_SPECS`.
+ *
+ * A harness agentop cannot start yet is simply ABSENT — never listed and failing, the same rule a
+ * service row follows for a start this box cannot perform.
+ */
+export interface HarnessChoice {
+  id: HarnessId
+  /** Deliberately untranslated, like `native`/`docker`: it is the word the CLI and the docs use. */
+  label: string
+  /**
+   * Models to suggest, NOT a closed list. `claude --help` documents `--model` as an alias "or a
+   * model's full name", so a picker that refused anything outside this list would reject valid
+   * input the day a model ships. Empty when the harness publishes no suggestions.
+   */
+  models: string[]
+  /** A genuine closed enum, printed by the CLI itself. Empty when it has no effort flag at all. */
+  efforts: string[]
+}
+
+/** Somewhere a new session could start — a directory this machine has already recorded work in. */
+export interface ProjectChoice {
+  path: string
+  /** `org/repo`, or '' when the directory has no recorded remote. Never invented. */
+  repo: string
+  lastActiveMs: number
+  sessions: number
+}
+
 export interface ControlHost {
   /** Re-detect config + services. Must never throw; failures come back as `unknown` services. */
   refresh(): Promise<ControlStatus>
@@ -399,6 +519,66 @@ export interface ControlHost {
    * reads exactly that one, which is what the full-screen Logs screen's selector needs.
    */
   readLog(source: LogSource, maxLines: number): Promise<string[]>
+
+  // -- the sessions tab ------------------------------------------------------
+
+  /**
+   * The whole fleet, as of now. Must never throw — the Sessions screen polls this on a timer, and
+   * a rejection there would take the control center down five seconds after it opened.
+   *
+   * Reading it costs a capture per RUNNING session, so it is the one call on this interface worth
+   * not making more often than the screen actually repaints.
+   */
+  sessions(): Promise<SessionSnapshot>
+
+  /**
+   * Start a session and register it. The id comes back so the caller can select the new row — and
+   * attach to it, which is a separate verb (see `NewSessionRequest`).
+   *
+   * `id` is absent on failure, and only on failure: a start that reached the backend is recorded
+   * before this returns, so an id here always names a session `sessions()` will list.
+   */
+  startSession(req: NewSessionRequest): Promise<ActionResult & { id?: string }>
+
+  /**
+   * Kill a session and forget it. Reports failure rather than clearing the registry entry when the
+   * backend could not confirm the session is gone — a still-running session with no registry entry
+   * is one nothing can name again.
+   */
+  killSession(id: string): Promise<ActionResult>
+
+  /** Set the row's label. Fails for a session with no registry entry, which has none to patch. */
+  renameSession(id: string, label: string): Promise<ActionResult>
+  /** Same contract as `renameSession`, for the free-text note. */
+  noteSession(id: string, note: string): Promise<ActionResult>
+
+  /**
+   * The argv to exec to take over the terminal, or `null` when this session cannot be attached to
+   * — the backend cannot run here, the session is gone, or its command has already exited.
+   *
+   * Returned rather than executed for the same reason the backend returns it: the attach needs the
+   * REAL tty, which it can only have once Ink has been unmounted and the alternate buffer left.
+   */
+  attachCommand(id: string): Promise<string[] | null>
+
+  /**
+   * The real detach keystroke, read from the backend — never assumed to be `Ctrl-b`, which is only
+   * the default and is the first thing a tmux user rebinds. It has to be said BEFORE the terminal
+   * is handed over: a user who cannot get out is stranded in a session that hides their shell.
+   */
+  detachHint(): Promise<string>
+
+  /**
+   * Directories a new session could start in, ranked, filtered by `query`.
+   *
+   * Called on every keystroke of the wizard's search field, so the host caches the underlying list;
+   * an empty query is the unfiltered head of it. It answers "where have I worked", not "what exists
+   * on disk" — a path the machine has never seen is accepted by the caller as typed.
+   */
+  projectChoices(query: string, limit: number): Promise<ProjectChoice[]>
+
+  /** The harnesses agentop can actually start here. See `HarnessChoice`. */
+  sessionHarnesses(): Promise<HarnessChoice[]>
 }
 
 /**

@@ -7,10 +7,12 @@ import {
   parseContainerFacts,
   parseElapsedSeconds,
   pidsToKill,
+  sessionSnapshot,
   startOptionsFor,
   targetRuntimes,
 } from './cli-start'
 import { cliStrings } from './cli-i18n'
+import type { BackendSession, ManagedSession, SessionBackend } from './sessions/types'
 import type { RuntimeId, ServiceRuntimeState } from '@agentistics/tui/control'
 
 // Regression for the "kill and restart" self-termination bug: the CLI health check
@@ -427,6 +429,95 @@ test('parseBootState never INVENTS an off — an unknown answer is silence', () 
 
 test('parseBootState reads the FIRST line, which is where systemd puts the word', () => {
   expect(parseBootState('enabled\nsome trailing noise')).toBe('on')
+})
+
+// ---------------------------------------------------------------------------
+// the fleet the Sessions tab draws
+// ---------------------------------------------------------------------------
+//
+// `sessionSnapshot` is the composition behind `ControlHost.sessions()`: the registry, the backend,
+// `/proc` and one captured frame per RUNNING session. Its two rules are that it never reports an
+// empty list it cannot stand behind, and that it never captures a pane it does not need to read.
+
+const backendOf = (over: Partial<SessionBackend> = {}): SessionBackend => ({
+  id: 'tmux',
+  unavailable: async () => undefined,
+  spawn: async () => {},
+  list: async () => [],
+  capture: async () => ({ ok: true, lines: [] }),
+  kill: async () => true,
+  attachCommand: () => [],
+  detachHint: async () => 'Ctrl-b then d',
+  ...over,
+})
+
+const managedOf = (id: string): ManagedSession =>
+  ({ id, harness: 'claude', cwd: `/home/u/${id}`, createdAt: '2026-08-12T10:00:00.000Z' })
+
+const hostedOf = (id: string, alive: boolean): BackendSession =>
+  ({ id, createdMs: 1_000, attached: false, alive, lastActivityMs: 1_000 })
+
+// An empty list rendered as "nothing is running" is a confident zero: the truth on a box without
+// tmux is that nothing could be LOOKED at. This is the one case the whole record shape exists for.
+test('a backend that cannot run here yields a REASON, never a bare empty list', async () => {
+  const snapshot = await sessionSnapshot(
+    backendOf({ unavailable: async () => 'tmux is not installed — install it to manage background sessions' }),
+    EN,
+  )
+  expect(snapshot.views).toEqual([])
+  expect(snapshot.unavailable).toBe(EN.sessionsNoTmux)
+})
+
+// The backend is a platform module with no language of its own, and this screen speaks the user's.
+test('the unavailable reason is the HOST language, not the backend own English', async () => {
+  const snapshot = await sessionSnapshot(backendOf({ unavailable: async () => 'tmux is not installed' }), PT)
+  expect(snapshot.unavailable).toBe(PT.sessionsNoTmux)
+  expect(snapshot.unavailable).not.toBe('tmux is not installed')
+})
+
+// A backend the table has no sentence for keeps its own words — the truest thing available — rather
+// than being silently reported as available, or as tmux.
+test('a backend this table cannot translate keeps its own reason', async () => {
+  const snapshot = await sessionSnapshot(
+    backendOf({ id: 'pty', unavailable: async () => 'the pty backend is not implemented yet' }),
+    EN,
+  )
+  expect(snapshot.unavailable).toBe('the pty backend is not implemented yet')
+})
+
+// A capture is a tmux process, run for every session on a five-second timer — the one place this
+// feature can get expensive. A `lost` session has no pane at all and an `exited` one's last frame
+// cannot change what the view already knows, so neither is read.
+test('only RUNNING sessions are captured, and only the 40 lines the classifier was written for', async () => {
+  const asked: Array<[string, number]> = []
+  const snapshot = await sessionSnapshot(
+    backendOf({
+      list: async () => [hostedOf('running1', true), hostedOf('exited1', false)],
+      capture: async (id, lines) => { asked.push([id, lines]); return { ok: true, lines: [] } },
+    }),
+    EN,
+    {
+      // 'lost1' is in the registry and not in the backend; 'exited1' is hosted but finished.
+      registry: async () => [managedOf('running1'), managedOf('exited1'), managedOf('lost1')],
+      processes: async () => [],
+      nowMs: () => 1_000_000,
+    },
+  )
+  expect(asked).toEqual([['running1', 40]])
+  expect(snapshot.unavailable).toBeUndefined()
+  expect(snapshot.views.map(v => v.id).sort()).toEqual(['exited1', 'lost1', 'running1'])
+})
+
+// The screen POLLS this, outside the shell's action wrapper that turns a throw into a message — so
+// a rejection here would take the control center down. It must degrade, and it must degrade into
+// "the list is unknown" rather than "the list is empty".
+test('a composition that fails says so instead of reporting an empty fleet', async () => {
+  const snapshot = await sessionSnapshot(backendOf(), EN, {
+    registry: async () => { throw new Error('registry on fire') },
+    processes: async () => [],
+  })
+  expect(snapshot.views).toEqual([])
+  expect(snapshot.unavailable).toBe(EN.sessionsReadFailed)
 })
 
 test('buildService says nothing about boot unless it was told', () => {
