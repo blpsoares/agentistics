@@ -864,18 +864,28 @@ export type SessionToggle = 'closed' | 'exited' | 'unfiled' | 'done' | 'active' 
 export const SESSION_STATES: readonly SessionState[] =
   ['waiting-approval', 'waiting', 'working', 'exited', 'lost', 'closed', 'unknown'] as const
 
-/** The three that mean something is alive on the other end — what `only active` keeps. */
-export const ACTIVE_STATES: readonly SessionState[] = ['working', 'waiting', 'waiting-approval'] as const
+/**
+ * The states that mean something is ALIVE on the other end — what `only active` keeps.
+ *
+ * `unknown` is in the list, and that is not a hedge. It is the state of an EXTERNAL session, and an
+ * external row exists precisely because `/proc` reported a live assistant process: the thing that
+ * cannot be read is its ACTIVITY, never whether it is running. Leaving it out hid exactly the
+ * sessions someone opened outside agentop and is in the middle of — the ones most likely to be
+ * forgotten, since agentop is not the thing that started them.
+ */
+export const ACTIVE_STATES: readonly SessionState[] =
+  ['working', 'waiting', 'waiting-approval', 'unknown'] as const
 
 /**
  * Is this session RUNNING right now — PURE.
  *
- * The three states that mean something is alive on the other end. `exited`, `lost`, `closed` and
- * `unknown` (an external process, whose state cannot be read at all) are not running, and the
- * "only active" switch keeps none of them.
+ * `exited`, `lost` and `closed` are not. `unknown` IS: it is what an external session wears, and an
+ * external row exists because a live assistant process was found — what cannot be read there is the
+ * activity, not the existence. Treating "we cannot say what it is doing" as "it is not running" hid
+ * every session started outside agentop from the one filter meant to show what is happening.
  */
 export function sessionRunning(s: ControlSession): boolean {
-  return s.state === 'working' || s.state === 'waiting' || s.state === 'waiting-approval'
+  return ACTIVE_STATES.includes(s.state)
 }
 
 /**
