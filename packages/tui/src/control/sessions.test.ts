@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionActions, sessionCells,
   sessionRows, sessionsLayout, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
+  sessionColumns,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -405,6 +406,45 @@ describe('summaryCells', () => {
     // reads as "the entire screen vanished", not as "one row is too wide".
     for (let w = 0; w <= 220; w++) {
       expect(rendered(summaryCells({ ...full, width: w }))).toBeLessThanOrEqual(Math.max(w, 0) || 0)
+    }
+  })
+})
+
+describe('sessionColumns', () => {
+  const rows = [
+    session('a', { stateLabel: 'needs approval', title: 'migrate the auth store', harness: 'claude', project: 'agentistics' }),
+    session('b', { stateLabel: 'exited', title: 'release notes', harness: 'codex', project: 'aipe' }),
+  ]
+  const drawn = (c: ReturnType<typeof sessionColumns>) =>
+    2 + c.state + (c.title ? 2 + c.title : 0) + (c.harness ? 2 + c.harness : 0) + (c.where ? 2 + c.where : 0)
+
+  it('sizes every column to the widest row on screen, so the cells line up', () => {
+    // Two spaces between unpadded cells started every title at a different column, because the
+    // state words differ by ten characters. Nothing after them ever lined up.
+    const c = sessionColumns(rows, 100)
+    expect(c.state).toBe('needs approval'.length)
+    expect(c.title).toBe('migrate the auth store'.length)
+    expect(c.harness).toBe('claude'.length)
+  })
+
+  it('gives the title what it NEEDS, not the whole remainder', () => {
+    // Stretching it to the leftover pushed the harness and the directory to the far edge with a
+    // field of blank between — the old misalignment wearing a different shape.
+    expect(sessionColumns(rows, 200).title).toBe('migrate the auth store'.length)
+  })
+
+  it('gives up the directory first, then the harness', () => {
+    // The directory goes while the harness still fits, and the harness only once the title has
+    // already been squeezed to almost nothing — the state word outlives both.
+    expect(sessionColumns(rows, 46).where).toBe(0)
+    expect(sessionColumns(rows, 46).harness).toBeGreaterThan(0)
+    expect(sessionColumns(rows, 24).harness).toBe(0)
+    expect(sessionColumns(rows, 24).state).toBe("needs approval".length)
+  })
+
+  it('never asks for more columns than it was given, at any width', () => {
+    for (let w = 4; w <= 160; w++) {
+      expect(drawn(sessionColumns(rows, w))).toBeLessThanOrEqual(Math.max(w, 2 + 'needs approval'.length + 3))
     }
   })
 })

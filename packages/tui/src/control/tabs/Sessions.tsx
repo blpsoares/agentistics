@@ -27,7 +27,8 @@ import { SessionWizard } from './SessionWizard'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, actionLabels, enabledActionIndexes, filterSessions, sessionActions,
-  sessionsLayout, summaryCells, type OfferedAction,
+  sessionsLayout, summaryCells, sessionColumns, padCell,
+  type OfferedAction, type SessionColumns,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
 } from '../sessions'
 import { isActivation, wheelDelta } from '../mouse'
@@ -337,6 +338,17 @@ export function Sessions({
   const offset = windowOffset(at < 0 ? 0 : selectable[at]!, rows.length, layout.list)
   const visible = rows.slice(offset, offset + layout.list)
 
+  // Measured across the rows ON SCREEN, so the state, harness and directory columns line up. A
+  // single long title thirty rows down must not narrow every visible row to pay for something
+  // nobody can see.
+  const columns = useMemo(
+    () => sessionColumns(
+      visible.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
+      width,
+    ),
+    [visible, width],
+  )
+
   // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
   // search field in the middle, and squeezing that under a list would give the one control that
   // decides where work happens three rows to show its results in.
@@ -435,6 +447,7 @@ export function Sessions({
                 key={row.session.id}
                 session={row.session}
                 selected={selected?.id === row.session.id}
+                columns={columns}
                 width={width}
               />
             )
@@ -556,29 +569,37 @@ function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyT
   )
 }
 
-function SessionRowView({ session, selected, width }: {
+function SessionRowView({ session, selected, columns, width }: {
   session: ControlSession
   selected: boolean
+  columns: SessionColumns
   width: number
 }) {
-  // Two columns for the cursor, so the cells are fitted against what is genuinely left.
-  const cells = sessionCells(session, Math.max(1, width - 2))
   // `harness` is a plain string here because it can be EMPTY — a session the registry has
   // forgotten runs a harness nobody recorded. An empty one simply gets no colour.
   const harnessColor = harnessColorOf(session.harness)
+  const gap = '  '
 
   return (
     <Text wrap="truncate">
       <Text color={selected ? COLORS.accent : undefined}>{selected ? '❯ ' : '  '}</Text>
-      {/* Colour AND word, always paired. */}
+      {/* Colour AND word, always paired — and PADDED, so every title starts in the same column.
+          Two spaces between unpadded cells is what made this read as a jumble of words: the state
+          words differ by ten characters, so nothing after them ever lined up. */}
       <Text color={STATE_COLOR[session.state]} bold={session.state === 'waiting-approval'}>
-        {cells.state}
+        {padCell(session.stateLabel, columns.state)}
       </Text>
-      {cells.title ? (
-        <Text color={selected ? COLORS.accent : undefined} bold={selected}>{`  ${cells.title}`}</Text>
+      {columns.title > 0 ? (
+        <Text color={selected ? COLORS.accent : undefined} bold={selected}>
+          {gap + padCell(session.title, columns.title)}
+        </Text>
       ) : null}
-      {cells.harness ? <Text color={harnessColor}>{`  ${cells.harness}`}</Text> : null}
-      {cells.where ? <Text dimColor>{`  ${cells.where}`}</Text> : null}
+      {columns.harness > 0 ? (
+        <Text color={harnessColor}>{gap + padCell(session.harness, columns.harness)}</Text>
+      ) : null}
+      {columns.where > 0 ? (
+        <Text dimColor>{gap + padCell(session.project, columns.where)}</Text>
+      ) : null}
     </Text>
   )
 }

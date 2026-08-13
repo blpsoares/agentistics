@@ -474,3 +474,63 @@ export function summaryCells(o: {
 
   return { ...groupOnly, group: o.group.slice(0, Math.max(0, width)) }
 }
+
+// ---------------------------------------------------------------------------
+// column alignment
+// ---------------------------------------------------------------------------
+
+export interface SessionColumns {
+  state: number
+  title: number
+  harness: number
+  where: number
+}
+
+/**
+ * The column widths for a screenful of rows — PURE.
+ *
+ * Computed ACROSS the visible rows rather than per row, which is the whole point: the state words
+ * have very different lengths ("needs approval" against "waiting"), so a row that merely separates
+ * its cells with two spaces starts every title at a different column and every harness after that.
+ * The result reads as a jumble of words rather than as a list of sessions.
+ *
+ * Widths come from what is on screen, not from the whole fleet: a single long title thirty rows
+ * down must not narrow every visible row to pay for something nobody can see.
+ *
+ * The give-up order is unchanged — the directory goes first, then the harness, then the title is
+ * squeezed — because the STATE is the one cell nothing else on the frame repeats.
+ */
+export function sessionColumns(rows: readonly ControlSession[], width: number): SessionColumns {
+  const widest = (pick: (s: ControlSession) => string) =>
+    rows.reduce((n, s) => Math.max(n, pick(s).length), 0)
+
+  const state = widest(s => s.stateLabel)
+  const harness = widest(s => s.harness)
+  const where = widest(s => s.project)
+  // Two for the cursor, then a gap before each cell after the first.
+  const chrome = 2 + GAP * 3
+
+  // Everything fits: the title takes what it NEEDS, not what is left. Stretching it to the full
+  // remainder pushed the harness and the directory to the far edge with a field of blank between, which
+  // is just the old misalignment wearing a different shape — the eye still has to travel.
+  const title = widest(s => s.title)
+  if (chrome + state + title + harness + where <= width) {
+    return { state, title: Math.max(1, title), harness, where }
+  }
+  // Too wide with every title at full length: the title gives up the difference, since it is the
+  // one cell that reads fine truncated.
+  if (chrome + state + harness + where + 8 <= width) {
+    return { state, title: Math.max(1, width - chrome - state - harness - where), harness, where }
+  }
+  // Drop the directory, then the harness — the same order a single row gives them up.
+  if (2 + GAP * 2 + state + harness + 1 <= width) {
+    return { state, title: Math.max(1, width - 2 - GAP * 2 - state - harness), harness, where: 0 }
+  }
+  return { state, title: Math.max(1, width - 2 - GAP - state), harness: 0, where: 0 }
+}
+
+/** Pad or truncate a cell to exactly `w` columns. `0` means the column is not drawn. */
+export function padCell(text: string, w: number): string {
+  if (w <= 0) return ''
+  return text.length >= w ? truncateCell(text, w) : text + ' '.repeat(w - text.length)
+}
