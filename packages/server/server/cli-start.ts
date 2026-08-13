@@ -1194,10 +1194,22 @@ function explainSpawnError(e: SpawnPlanError, s: CliStrings): string {
  * BEFORE anything is spawned, so an unsupported flag is a sentence rather than a session that starts
  * and dies with a usage error on a screen nobody is looking at.
  */
-/** The stored fleet arrangement, or nothing when this machine has never chosen one. */
-async function sessionViewPref(): Promise<{ sessionView?: SessionViewPrefs }> {
+/**
+ * The stored fleet arrangement — ALWAYS present, falling back to the defaults.
+ *
+ * Never absent, and that is the whole point. The screen restores the stored arrangement when one
+ * arrives and only starts persisting its own once it has; with an absent value it could not tell
+ * "the status has not loaded yet" from "this machine never chose", so on every remount — which is
+ * exactly what detaching from a session does — it wrote its DEFAULTS over the arrangement it was
+ * about to be handed. The grouping came back to `list` after every attach, twice.
+ */
+async function sessionViewPref(): Promise<{ sessionView: SessionViewPrefs }> {
   const stored = (await readPreferences()).sessionView
-  return stored ? { sessionView: stored } : {}
+  return {
+    sessionView: stored ?? {
+      grouping: 'none', showClosed: false, showExited: false, showUnfiled: true, showDone: false,
+    },
+  }
 }
 
 async function spawnManaged(req: {
@@ -1838,10 +1850,14 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // out of a session is stranded in a buffer that hides their shell, and a line printed once
       // before the handover scrolls away the moment anything else happens.
       const detachHint = await (await resolveBackend()).detachHint().catch(() => '')
+      // Read on every snapshot rather than cached: the toggle and the verb both write it, and a
+      // stale copy would leave a task the user just finished still heading a live section.
+      const finishedTasks = (await readPreferences()).finishedTasks ?? []
       return {
         sessions: snap.sessions.map(v => toControlSession(v, s)),
         attention: snap.attention,
         rang: snap.rang,
+        ...(finishedTasks.length > 0 ? { finishedTasks } : {}),
         ...(detachHint ? { detachHint } : {}),
         ...(snap.unavailable ? { unavailable: snap.unavailable } : {}),
       }
@@ -1880,6 +1896,24 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       if (!(await patchSession(id, { endedAt: new Date().toISOString() }))) await removeSession(id)
       forgetConversations()
       return { ok: true, message: s.sessKilled(id) }
+    },
+
+    /**
+     * Mark a task finished, or reopen it.
+     *
+     * The state to SET rather than a toggle, so the screen and the store can never disagree about
+     * what the button just did. Nothing about the sessions changes: a finished task is a statement
+     * about the WORK, and its sessions stay listed, attachable and killable behind one switch.
+     */
+    async finishTask(task: string, done: boolean): Promise<ActionResult> {
+      const s = S()
+      if (!task) return { ok: false, message: s.sessNoTask }
+      const current = (await readPreferences()).finishedTasks ?? []
+      const next = done
+        ? (current.includes(task) ? current : [...current, task])
+        : current.filter(t => t !== task)
+      await writePreferences({ finishedTasks: next })
+      return { ok: true, message: done ? s.sessTaskFinished(task) : s.sessTaskReopened(task) }
     },
 
     async renameSession(id: string, label: string): Promise<ActionResult> {

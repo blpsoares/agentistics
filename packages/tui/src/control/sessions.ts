@@ -8,6 +8,7 @@
  * one, and neither is visible in a screenshot of a wide terminal.
  */
 
+import { PANE_FRAME_Y } from './chrome.ts'
 import type { ControlSession, SessionState } from './types'
 
 // ---------------------------------------------------------------------------
@@ -69,6 +70,8 @@ export interface SessionGroup {
   /** Display-ready. An empty key is a fact that was never recorded, and says so in words. */
   label: string
   sessions: ControlSession[]
+  /** A TASK the user has marked finished. Only ever set while grouping by task. */
+  done?: boolean
 }
 
 /**
@@ -83,6 +86,8 @@ export function groupSessions(
   list: readonly ControlSession[],
   by: SessionGrouping,
   unknownLabels: { harness: string; model: string; project: string; task: string },
+  /** The tasks the user marked finished — a statement about the WORK, not about any session. */
+  doneTasks: readonly string[] = [],
 ): SessionGroup[] {
   if (by === 'none') return [{ key: '', label: '', sessions: sortSessions(list) }]
 
@@ -95,7 +100,10 @@ export function groupSessions(
     const label = key !== '' ? key : unknownLabels[by]
     const found = groups.get(key)
     if (found) found.sessions.push(s)
-    else groups.set(key, { key, label, sessions: [s] })
+    else {
+      const done = by === 'task' && key !== '' && doneTasks.includes(key)
+      groups.set(key, { key, label, sessions: [s], ...(done ? { done: true } : {}) })
+    }
   }
 
   // Groups ordered by their most urgent member, so the box holding a blocked session is the one at
@@ -137,7 +145,12 @@ export type SessionRow =
  * separately, the selected index and the drawn rows are two different countings of one screen, and
  * they agree right up until the first group boundary.
  */
-export function sessionRows(groups: readonly SessionGroup[], closedLabel?: string): SessionRow[] {
+export function sessionRows(
+  groups: readonly SessionGroup[],
+  closedLabel?: string,
+  /** Already-localized word marking a finished task's heading, e.g. "finished". */
+  doneLabel?: string,
+): SessionRow[] {
   const out: SessionRow[] = []
 
   const push = (label: string, sessions: readonly ControlSession[], muted?: boolean) => {
@@ -157,8 +170,11 @@ export function sessionRows(groups: readonly SessionGroup[], closedLabel?: strin
   for (const g of groups) {
     const live = g.sessions.filter(isLive)
     const closed = g.sessions.filter(s => !isLive(s))
-    // An empty KEY is an absence ("no task"), not a category, and is drawn as one.
-    push(g.label, live, g.key === '')
+    // An empty KEY is an absence ("no task"), not a category, and is drawn as one. A FINISHED task
+    // says so in its heading and is muted with it: the sessions are still listed and still
+    // attachable, so the screen must say why they are set apart rather than merely dimming them.
+    const head = g.done && doneLabel ? `${g.label} · ${doneLabel}` : g.label
+    push(head, live, g.key === '' || Boolean(g.done))
     if (closed.length > 0) {
       // Inside a named group the closed block still says which group it belongs to, so a heading
       // read on its own is never ambiguous.
@@ -234,15 +250,6 @@ function truncateCell(text: string, width: number): string {
 // ---------------------------------------------------------------------------
 // the screen's budget
 // ---------------------------------------------------------------------------
-
-export interface SessionsLayout {
-  /** Rows the list gets. At least one — a screen with no list is not a smaller screen. */
-  list: number
-  /** Rows the detail pane gets, or 0 when the screen is too short to earn one. */
-  detail: number
-  /** Whether the summary row above the list fits. */
-  summary: boolean
-}
 
 // ---------------------------------------------------------------------------
 // the detail pane's content
@@ -343,42 +350,6 @@ export function detailLines(s: ControlSession, labels: {
  */
 export const QUESTION_ROWS = 5
 
-/** The fewest rows a detail pane is worth: its divider plus something to say. */
-const DETAIL_MIN = 4
-/** The fewest list rows worth keeping before the detail pane is dropped entirely. */
-const LIST_MIN = 4
-const SUMMARY_ROWS = 1
-
-/**
- * Split the screen between the list and the detail pane.
- *
- * `rowCount` is what stops this leaving air. The list is given what it can USE — five sessions never
- * need fourteen rows — and everything left over goes to the detail pane, which always has more to
- * say than it has room for. Budgeting the list at a fixed share instead left eight dead rows under a
- * three-row detail pane on an ordinary terminal, which the control center's own rule calls a fault:
- * air under a pane is a fault, air inside one is a pane.
- *
- * The list still wins a genuine shortage: when the two cannot both be served, the detail pane is
- * what goes, because the list is what the screen IS. And `Math.max(1, height - chrome)` is
- * deliberately not the shape of any of this — it hands out a row that does not exist.
- */
-export function sessionsLayout(height: number, detailWanted = 0): SessionsLayout {
-  if (height <= 2) return { list: Math.max(1, height), detail: 0, summary: false }
-
-  const summary = height >= 6
-  const available = height - (summary ? SUMMARY_ROWS : 0)
-
-  // Nothing selected, or too short to hold both: the list takes everything.
-  if (detailWanted <= 0 || available < LIST_MIN + DETAIL_MIN) {
-    return { list: available, detail: 0, summary }
-  }
-
-  // The pane asks for its divider plus its lines, and is capped at half the screen — a session with
-  // a long note must not push the list it was selected from off the screen. Everything else goes to
-  // the list, which is a scrolling region and can hold empty rows honestly.
-  const detail = Math.min(detailWanted + 1, Math.max(DETAIL_MIN, Math.floor(available / 2)))
-  return { list: available - detail, detail, summary }
-}
 
 // ---------------------------------------------------------------------------
 // the visible action row
@@ -386,7 +357,8 @@ export function sessionsLayout(height: number, detailWanted = 0): SessionsLayout
 
 /** What a verb DOES, independent of what it is called in either language. */
 export type SessionAction =
-  | 'attach' | 'resume' | 'rename' | 'note' | 'task' | 'kill' | 'openTask' | 'new' | 'search' | 'group'
+  | 'attach' | 'resume' | 'rename' | 'note' | 'task' | 'kill' | 'openTask' | 'finishTask'
+  | 'new' | 'search' | 'group'
 
 /**
  * The verbs offered for the selected row — PURE, and the single answer both the drawn row and a
@@ -432,6 +404,10 @@ export function sessionActions(selected: ControlSession | undefined): OfferedAct
     { action: 'note', enabled: hosted },
     { action: 'task', enabled: hosted },
     { action: 'openTask', enabled: hosted && hasTask },
+    // Finishing needs only a TASK, not a live session: the ordinary moment to close a piece of work
+    // is when its last session has already ended, and requiring a hosted row would make the verb
+    // unreachable at exactly that moment.
+    { action: 'finishTask', enabled: hasTask },
     { action: 'kill', enabled: hosted },
     // These three need no selection at all and are therefore never dim.
     { action: 'new', enabled: true },
@@ -504,6 +480,15 @@ export function summaryCells(o: {
 export interface SessionColumns {
   state: number
   title: number
+  /**
+   * The task the session is filed under.
+   *
+   * `0` when nothing on screen carries one, and `0` while GROUPING BY TASK — there the heading over
+   * the row already says it, and repeating it on every row under that heading is a column of the
+   * same word. Everywhere else it must be on the row: filing a session under a task and then not
+   * being able to see which task it is in is the feature not working.
+   */
+  task: number
   /** Tokens + cost. `0` when nothing on screen has any — never a column of blanks. */
   metrics: number
   harness: number
@@ -535,11 +520,17 @@ export function sessionMetric(s: ControlSession): string {
  * The give-up order is unchanged — the directory goes first, then the harness, then the title is
  * squeezed — because the STATE is the one cell nothing else on the frame repeats.
  */
-export function sessionColumns(rows: readonly ControlSession[], width: number): SessionColumns {
+export function sessionColumns(
+  rows: readonly ControlSession[],
+  width: number,
+  /** True while the HEADING above each row already names the task, so the cell would repeat it. */
+  groupedByTask = false,
+): SessionColumns {
   const widest = (pick: (s: ControlSession) => string) =>
     rows.reduce((n, s) => Math.max(n, pick(s).length), 0)
 
   const state = widest(s => s.stateLabel)
+  const task = groupedByTask ? 0 : widest(s => s.task ?? '')
   const metrics = widest(sessionMetric)
   const harness = widest(s => s.harness)
   const where = widest(s => s.project)
@@ -553,9 +544,9 @@ export function sessionColumns(rows: readonly ControlSession[], width: number): 
    * no session reports usage draws no metrics column, and paying its gap anyway would narrow every
    * title on the screen to reserve a space nothing occupies.
    */
-  const overhead = (m: number, h: number, w: number) => {
-    const drawn = [state, 1, m, h, w].filter(n => n > 0).length
-    return 2 + state + m + h + w + GAP * (drawn - 1)
+  const overhead = (k: number, m: number, h: number, w: number) => {
+    const drawn = [state, 1, k, m, h, w].filter(n => n > 0).length
+    return 2 + state + k + m + h + w + GAP * (drawn - 1)
   }
 
   // The fewest columns a title is worth. Below it the row has a state word and an ellipsis, which
@@ -566,23 +557,26 @@ export function sessionColumns(rows: readonly ControlSession[], width: number): 
   // STATE and the NAME are what a row cannot lose — the state because nothing else on the frame
   // says whether this session is waiting for you, the name because a row you cannot identify is not
   // a row you can act on.
-  const ladder: Array<[number, number, number]> = [
-    [metrics, harness, where],
-    [metrics, harness, 0],
-    [metrics, 0, 0],
-    [0, 0, 0],
+  const ladder: Array<[number, number, number, number]> = [
+    [task, metrics, harness, where],
+    [task, metrics, harness, 0],
+    [task, metrics, 0, 0],
+    [task, 0, 0, 0],
+    [0, 0, 0, 0],
   ]
-  for (const [m, h, w] of ladder) {
-    const room = width - overhead(m, h, w)
+  for (const [k, m, h, w] of ladder) {
+    const room = width - overhead(k, m, h, w)
     // The title takes what it NEEDS, not what is left: stretching it to the full remainder pushed
     // the trailing cells to the far edge with a field of blank between, which is the old
     // misalignment wearing a different shape.
-    if (room >= MIN_TITLE || (m === 0 && h === 0 && w === 0)) {
-      return { state, title: Math.max(1, Math.min(title, room)), metrics: m, harness: h, where: w }
+    if (room >= MIN_TITLE || (k === 0 && m === 0 && h === 0 && w === 0)) {
+      return {
+        state, title: Math.max(1, Math.min(title, room)), task: k, metrics: m, harness: h, where: w,
+      }
     }
   }
   /* c8 ignore next */
-  return { state, title: 1, metrics: 0, harness: 0, where: 0 }
+  return { state, title: 1, task: 0, metrics: 0, harness: 0, where: 0 }
 }
 
 /** Pad or truncate a cell to exactly `w` columns. `0` means the column is not drawn. */
@@ -598,12 +592,16 @@ export function padCell(text: string, w: number): string {
 export interface CockpitLayout {
   /** Columns the aside menu takes. `0` when the terminal is too narrow to carry one. */
   aside: number
-  /** Columns the list takes — everything the aside leaves, minus the divider between them. */
+  /** Columns the list takes — everything the aside leaves, minus the gap between them. */
   list: number
-  /** Rows the list band gets. */
+  /** Rows the list band gets, FRAME INCLUDED — every region here is a framed pane. */
   band: number
   /** Rows the detail pane gets under it, or 0 when the screen cannot pay for one. */
   detail: number
+  /** Whether the summary row above the sessions fits INSIDE the list pane. */
+  summary: boolean
+  /** Rows for session rows inside the list pane, frame and summary already paid for. */
+  listRows: number
 }
 
 /** The aside's natural width: wide enough for its longest label, within bounds. */
@@ -646,11 +644,26 @@ export function sessionsCockpit(o: {
   // One column of divider between the two panes, and only when there are two.
   const list = Math.max(1, width - (aside > 0 ? aside + 1 : 0))
 
-  if (height <= COCKPIT_DETAIL_MIN + 2 || o.detailWanted <= 0) {
-    return { aside, list, band: height, detail: 0 }
+  // Every region is a FRAMED pane now, so the frame is part of the arithmetic rather than something
+  // the component pays for out of rows this function already handed to content. A screen whose
+  // budget and whose frames are decided in two places is one where they disagree by two rows, and
+  // Ink composites the overflow rather than clipping it — which reads as a corrupted frame.
+  const finish = (band: number, detail: number): CockpitLayout => {
+    const inner = Math.max(0, band - PANE_FRAME_Y)
+    // The summary is the first thing given up: it describes the list, and a list with no rows left
+    // has nothing to describe.
+    const summary = inner >= 4
+    return { aside, list, band, detail, summary, listRows: Math.max(1, inner - (summary ? 1 : 0)) }
   }
-  const detail = Math.min(o.detailWanted + 1, Math.max(COCKPIT_DETAIL_MIN, Math.floor(height / 2)))
-  return { aside, list, band: height - detail, detail }
+
+  if (height <= COCKPIT_DETAIL_MIN + 2 || o.detailWanted <= 0) return finish(height, 0)
+  // `+ PANE_FRAME_Y`: what the pane asks for is its LINES, and the frame around them is this
+  // function's to pay.
+  const detail = Math.min(
+    o.detailWanted + PANE_FRAME_Y,
+    Math.max(COCKPIT_DETAIL_MIN, Math.floor(height / 2)),
+  )
+  return finish(height - detail, detail)
 }
 
 // ---------------------------------------------------------------------------
@@ -665,10 +678,12 @@ export type AsideRow =
   | { kind: 'group'; value: SessionGrouping; label: string; on: boolean }
   | { kind: 'toggle'; toggle: SessionToggle; label: string; on: boolean }
   /** One task, with how many sessions are filed under it. `name: ''` is "all of them". */
-  | { kind: 'task'; name: string; count: number; on: boolean }
+  | { kind: 'task'; name: string; count: number; on: boolean; done?: boolean }
+  /** One project directory, with its session count. `name: ''` is "every project". */
+  | { kind: 'project'; name: string; count: number; on: boolean }
 
 /** The three things the list can be told to withhold. */
-export type SessionToggle = 'closed' | 'exited' | 'unfiled'
+export type SessionToggle = 'closed' | 'exited' | 'unfiled' | 'done'
 
 /**
  * The aside's rows, in reading order — PURE, so what is drawn and what a click resolves against are
@@ -695,7 +710,23 @@ export function asideRows(o: {
    * picking one should narrow the list you are already looking at rather than take you somewhere
    * else and make you come back.
    */
-  tasks?: { counts: ReadonlyArray<{ name: string; count: number }>; active: string | null; heading: string; allLabel: string }
+  tasks?: {
+    counts: ReadonlyArray<{ name: string; count: number }>
+    active: string | null
+    heading: string
+    allLabel: string
+    /** The finished ones, marked in the list so the menu states what it already knows. */
+    done?: readonly string[]
+  }
+  /**
+   * The project directories in the fleet, with their session counts.
+   *
+   * A second scope beside the tasks, and the answer to "where is that session I had open" — a task
+   * is something you declared, a project is something every session already has. Picking one
+   * narrows the list you are already looking at, which is what makes this a drill-down rather than
+   * a separate screen you have to come back from.
+   */
+  projects?: { counts: ReadonlyArray<{ name: string; count: number }>; active: string | null; heading: string; allLabel: string }
 }): AsideRow[] {
   const rows: AsideRow[] = [{ kind: 'heading', label: o.headings.actions }]
   for (const a of o.actions) {
@@ -706,7 +737,11 @@ export function asideRows(o: {
     rows.push({ kind: 'group', value: g, label: o.groupWords[g], on: g === o.grouping })
   }
   rows.push({ kind: 'rule' }, { kind: 'heading', label: o.headings.show })
-  const toggles: SessionToggle[] = o.showUnfiled ? ['closed', 'exited', 'unfiled'] : ['closed', 'exited']
+  // `done` sits with the other two because it is the same kind of thing — what the list withholds.
+  // `unfiled` only means anything while grouping by task and is ABSENT otherwise.
+  const toggles: SessionToggle[] = o.showUnfiled
+    ? ['closed', 'exited', 'done', 'unfiled']
+    : ['closed', 'exited', 'done']
   for (const t of toggles) {
     rows.push({ kind: 'toggle', toggle: t, label: o.toggleWords[t], on: o.toggles[t] })
   }
@@ -714,13 +749,42 @@ export function asideRows(o: {
   // The tasks, last, and only when there are any: a heading over an empty section is a promise the
   // screen cannot keep.
   if (o.tasks && o.tasks.counts.length > 0) {
+    const done = o.tasks.done ?? []
     rows.push({ kind: 'rule' }, { kind: 'heading', label: o.tasks.heading })
     rows.push({ kind: 'task', name: '', count: 0, on: o.tasks.active === null })
     for (const t of o.tasks.counts) {
-      rows.push({ kind: 'task', name: t.name, count: t.count, on: o.tasks.active === t.name })
+      rows.push({
+        kind: 'task', name: t.name, count: t.count, on: o.tasks.active === t.name,
+        ...(done.includes(t.name) ? { done: true } : {}),
+      })
+    }
+  }
+
+  if (o.projects && o.projects.counts.length > 0) {
+    rows.push({ kind: 'rule' }, { kind: 'heading', label: o.projects.heading })
+    rows.push({ kind: 'project', name: '', count: 0, on: o.projects.active === null })
+    for (const p of o.projects.counts) {
+      rows.push({ kind: 'project', name: p.name, count: p.count, on: o.projects.active === p.name })
     }
   }
   return rows
+}
+
+/**
+ * How many sessions each PROJECT directory has — PURE, and counted over the whole fleet.
+ *
+ * Same rule as `taskCounts`: the count is what says a project has work in it, and counting after
+ * the filters would report the number the filter left.
+ */
+export function projectCounts(list: readonly ControlSession[]): Array<{ name: string; count: number }> {
+  const counts = new Map<string, number>()
+  for (const s of list) {
+    if (!s.project) continue
+    counts.set(s.project, (counts.get(s.project) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name))
 }
 
 /**

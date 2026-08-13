@@ -57,7 +57,16 @@ export interface Preferences {
     showClosed: boolean
     showExited: boolean
     showUnfiled: boolean
+    showDone?: boolean
   }
+  /**
+   * The session TASKS the user has marked finished.
+   *
+   * A task is a free string on a session, so "finished" cannot live on the sessions — it is a
+   * statement about the work, and the work outlives any one of its sessions. Kept here beside the
+   * arrangement for the same reason: the control center owns no persistence.
+   */
+  finishedTasks?: string[]
   /** @deprecated legacy boolean — read by resolveArchiveMode for migration only */
   archiveSessions?: boolean
   /** Team mode configuration. Absent / mode=solo means solo behavior (no push). */

@@ -23,13 +23,17 @@ import type { TabChrome } from '../ControlCenter'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import { ACTION_SEP, actionAtColumn, fitActionRow } from '../chrome.ts'
 import { Divider } from '../Surface'
+import { Pane, paneBody, paneRows } from '../Pane'
+
+/** Columns a pane spends on its left edge: one of border, one of padding. */
+const PANE_EDGE_X = 2
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
 import { SessionWizard } from './SessionWizard'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, actionLabels, asideRows, asideSelectable, enabledActionIndexes, filterSessions,
-  sessionActions, sessionsCockpit, sessionsLayout, summaryCells, sessionColumns, padCell,
-  taskCounts, sessionMetric,
+  sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
+  taskCounts, projectCounts, sessionMetric,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
 } from '../sessions'
@@ -61,6 +65,8 @@ type Ask =
   /** Everything about WHAT the list shows, in one vertical panel. */
   | { kind: 'view' }
   | { kind: 'search' }
+  /** Finishing or reopening a TASK — the session is only how the task was named. */
+  | { kind: 'finishTask'; session: ControlSession }
   | { kind: 'task'; session: ControlSession }
   | { kind: 'openTask'; session: ControlSession }
   | { kind: 'resume'; session: ControlSession }
@@ -98,6 +104,10 @@ export function Sessions({
   const [cursor, setCursor] = useState(0)
   const [ask, setAsk] = useState<Ask | null>(null)
   const [query, setQuery] = useState('')
+  // A second scope beside the task one. Both are RUNTIME scopes rather than stored arrangement:
+  // "which project am I looking through right now" is not something a restart should remember.
+  const [projectFilter, setProjectFilter] = useState<string | null>(null)
+  const [showDone, setShowDone] = useState(false)
   /**
    * Whether the visible action row has the keyboard.
    *
@@ -137,6 +147,7 @@ export function Sessions({
   const [focus, setFocus] = useState<'list' | 'aside'>('list')
   const [asideIndex, setAsideIndex] = useState(0)
 
+  const done = useMemo(() => new Set(fleet?.finishedTasks ?? []), [fleet?.finishedTasks])
   const rows = useMemo(() => sessionRows(groupSessions(
     filterSessions(
       (fleet?.sessions ?? []).filter(v =>
@@ -144,6 +155,12 @@ export function Sessions({
         && (showExited || (v.state !== 'exited' && v.state !== 'lost'))
         // Scoped to one task: every verb still works, on the rows inside it.
         && (taskFilter === null || v.task === taskFilter)
+        // The project drill-down. Exact, never a prefix — two projects can share a first word.
+        && (projectFilter === null || v.project === projectFilter)
+        // A FINISHED task's sessions are withheld, not removed: the work is over and it stops
+        // competing for the screen with the work that is not. Scoping TO that task overrides the
+        // switch, or picking a finished task from the menu would empty the list.
+        && (showDone || taskFilter !== null || !(v.task && done.has(v.task)))
         // Only ever applies while grouping by task: everywhere else an unfiled session is simply a
         // session, and hiding it would make the list lie about how many there are.
         && !(hideEmptyTask && grouping === 'task' && !v.task)),
@@ -156,7 +173,11 @@ export function Sessions({
       project: s.sessionsUnknownProject,
       task: s.sessionsUnknownTask,
     },
-  ), s.sessionsClosedWord), [fleet?.sessions, grouping, query, showClosed, showExited, hideEmptyTask, taskFilter, s])
+    fleet?.finishedTasks ?? [],
+  ), s.sessionsClosedWord, s.sessionsDoneWord), [
+    fleet?.sessions, fleet?.finishedTasks, done, grouping, query, showClosed, showExited,
+    hideEmptyTask, showDone, taskFilter, projectFilter, s,
+  ])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
 
@@ -195,11 +216,7 @@ export function Sessions({
   // The action row is drawn from this screen's own budget, so it is subtracted BEFORE the split. A
   // row taken without being paid for is composited over the one under it, which reads as a corrupt
   // frame rather than a cramped one.
-  const actionRows = height >= 12 ? 2 : height >= 8 ? 1 : 0
-  const layout = sessionsLayout(
-    Math.max(1, height - actionRows),
-    ask ? Math.max(QUESTION_ROWS, detail.length) : detail.length,
-  )
+  const detailWanted = ask ? Math.max(QUESTION_ROWS, detail.length) : detail.length
 
   /**
    * Act on the selected row, or say why it cannot be acted on.
@@ -223,6 +240,7 @@ export function Sessions({
     task: s.actSessions.task,
     kill: s.actSessions.kill,
     openTask: s.actSessions.openTask,
+    finishTask: s.actSessions.finishTask,
     new: s.actSessions.newSession,
     search: s.actSessions.search,
     group: s.actSessions.group,
@@ -233,14 +251,15 @@ export function Sessions({
     actionWords: {
       attach: s.actSessions.attach, resume: s.actSessions.resume, rename: s.actSessions.rename,
       note: s.actSessions.note, task: s.actSessions.task, kill: s.actSessions.kill,
-      openTask: s.actSessions.openTask, new: s.actSessions.newSession,
+      openTask: s.actSessions.openTask, finishTask: s.actSessions.finishTask,
+      new: s.actSessions.newSession,
       search: s.actSessions.search, group: s.actSessions.group,
     },
     grouping,
     groupWords: s.sessionsGroupings,
-    toggles: { closed: showClosed, exited: showExited, unfiled: !hideEmptyTask },
+    toggles: { closed: showClosed, exited: showExited, unfiled: !hideEmptyTask, done: showDone },
     toggleWords: {
-      closed: s.toggleClosed, exited: s.toggleExited, unfiled: s.toggleUnfiled,
+      closed: s.toggleClosed, exited: s.toggleExited, unfiled: s.toggleUnfiled, done: s.toggleDone,
     },
     headings: { actions: s.asideActions, view: s.asideView, show: s.asideShow },
     showUnfiled: grouping === 'task',
@@ -251,8 +270,20 @@ export function Sessions({
       active: taskFilter,
       heading: s.asideTasks,
       allLabel: s.asideAllTasks,
+      done: fleet?.finishedTasks ?? [],
     },
-  }), [actions, grouping, showClosed, showExited, hideEmptyTask, taskFilter, fleet?.sessions, s])
+    // The other half of the drill-down: a task is something you declared, a project is something
+    // every session already has — which makes it the scope that can find a session you never filed.
+    projects: {
+      counts: projectCounts(fleet?.sessions ?? []),
+      active: projectFilter,
+      heading: s.asideProjects,
+      allLabel: s.asideAllProjects,
+    },
+  }), [
+    actions, grouping, showClosed, showExited, hideEmptyTask, showDone, taskFilter, projectFilter,
+    fleet?.sessions, fleet?.finishedTasks, s,
+  ])
 
   const asidePicks = useMemo(() => asideSelectable(asideList), [asideList])
   const asideAt = asidePicks.length === 0 ? -1 : Math.min(asideIndex, asidePicks.length - 1)
@@ -262,12 +293,15 @@ export function Sessions({
     () => asideList.reduce((n, r) => Math.max(n, 'label' in r ? r.label.length + 2 : 0), 0),
     [asideList],
   )
-  const cockpit = sessionsCockpit({
-    width,
-    height,
-    asideLabel,
-    detailWanted: ask ? Math.max(QUESTION_ROWS, detail.length) : detail.length,
-  })
+  // Probed once for the aside, then again for real. The action row exists ONLY on a terminal too
+  // narrow to carry the menu — where it is the only menu there is — and whether that is the case
+  // depends on the width alone, so one extra call settles it without either budget guessing at the
+  // other. A row taken without being paid for is composited over the one under it.
+  const probe = sessionsCockpit({ width, height, asideLabel, detailWanted })
+  const actionRows = probe.aside > 0 ? 0 : height >= 12 ? 2 : height >= 8 ? 1 : 0
+  const cockpit = actionRows === 0
+    ? probe
+    : sessionsCockpit({ width, height: Math.max(1, height - actionRows), asideLabel, detailWanted })
 
 
   /** Run one verb, whether it arrived from a letter, an arrow key or a click. */
@@ -282,6 +316,9 @@ export function Sessions({
     if (a === 'attach') return actOn('attach')
     if (a === 'resume') { setAsk({ kind: 'resume', session: selected }); return }
     if (a === 'openTask') { setAsk({ kind: 'openTask', session: selected }); return }
+    // Asked rather than done: finishing is a statement about a whole piece of work, and the
+    // confirmation is where the screen says what happens to its sessions.
+    if (a === 'finishTask') { setAsk({ kind: 'finishTask', session: selected }); return }
     return actOn(a)
   }, [host, grouping, selected])
 
@@ -312,10 +349,12 @@ export function Sessions({
     if (row.kind === 'action') { if (row.enabled) runAction(row.action); return }
     if (row.kind === 'group') { setGrouping(row.value); setCursor(0); return }
     if (row.kind === 'task') { setTaskFilter(row.name || null); setCursor(0); return }
+    if (row.kind === 'project') { setProjectFilter(row.name || null); setCursor(0); return }
     if (row.kind !== 'toggle') return
     setCursor(0)
     if (row.toggle === 'closed') return setShowClosed(v => !v)
     if (row.toggle === 'exited') return setShowExited(v => !v)
+    if (row.toggle === 'done') return setShowDone(v => !v)
     return setHideEmptyTask(v => !v)
   }, [asideList, runAction])
 
@@ -371,6 +410,15 @@ export function Sessions({
       // No menu to move to on a narrow terminal, so enter keeps its old meaning there.
       return runAction(actions[liveActions[0] ?? 0]?.action ?? 'new')
     }
+    // `esc` DROPS whatever is narrowing the list, one layer at a time, most-recent first. A search
+    // could only be undone by opening the field and clearing it, and the field re-submitted the old
+    // query on an empty enter — so a typo in the search box was a list that could not be got back.
+    if (key.escape) {
+      if (query) { setQuery(''); setCursor(0); return }
+      if (projectFilter !== null) { setProjectFilter(null); setCursor(0); return }
+      if (taskFilter !== null) { setTaskFilter(null); setCursor(0); return }
+      return
+    }
     if (input === 'v') return runAction('group')
     if (input === 'c') { setShowClosed(v => !v); setCursor(0); return }
     if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
@@ -408,15 +456,25 @@ export function Sessions({
     setShowClosed(view.showClosed)
     setShowExited(view.showExited)
     setHideEmptyTask(!view.showUnfiled)
+    // Absent reads as OFF, which is the point of finishing a task at all — and it is the same rule
+    // the stored `showClosed` follows, so a preferences file written before this existed opens with
+    // finished work put away rather than with the switch inverted.
+    setShowDone(view.showDone ?? false)
   }, [view])
 
   // Written whenever any part of the arrangement moves, rather than at each call site: four setters
   // that each had to remember to persist is four places for one to be forgotten. It waits for the
   // restore, so the defaults of a first render never overwrite what was stored.
   useEffect(() => {
-    if (!restored.current && view) return
-    onView({ grouping, showClosed, showExited, showUnfiled: !hideEmptyTask })
-  }, [grouping, showClosed, showExited, hideEmptyTask, onView, view])
+    // NOTHING is written before the restore has happened. The guard used to be
+    // `!restored.current && view`, which let the very first render write while `view` was still
+    // undefined — and `view` is undefined on every remount until the host's status arrives. Detach
+    // returns to a freshly mounted screen, so the defaults landed on disk a moment before the
+    // stored arrangement was read, and the arrangement was gone. `sessionViewPref` now always
+    // answers, so an absent `view` means "not loaded yet" and nothing else.
+    if (!restored.current) return
+    onView({ grouping, showClosed, showExited, showUnfiled: !hideEmptyTask, showDone })
+  }, [grouping, showClosed, showExited, hideEmptyTask, showDone, onView, view])
 
   useEffect(() => {
     if (!isActive) return
@@ -456,12 +514,19 @@ export function Sessions({
     }
     if (!isActivation(p)) return
 
-    // The MENU is the left column of the band. Answered FIRST, because every hit test below is
+    // Every region is a FRAMED pane, so a click is resolved in pane coordinates: `PANE_EDGE_X`
+    // columns of border and padding on the left, one row of title on the top. Resolving against the
+    // content's own origin without paying for the frame is a menu that answers one row above the
+    // row you pointed at, which is worse than one that does not answer at all.
+    const inPane = (x0: number, w: number, y0: number, h: number) =>
+      p.x >= x0 + PANE_EDGE_X && p.x < x0 + w - PANE_EDGE_X
+      && p.y >= y0 + 1 && p.y < y0 + h - 1
+
+    // The MENU is the left pane of the band. Answered FIRST, because every hit test below is
     // written in the list's coordinates — and the menu was not answering the mouse at all, which
     // for a menu built to be clicked is the whole of it not working.
-    if (cockpit.aside > 0 && p.x < cockpit.aside && p.y < cockpit.band) {
-      const asideOffset = windowOffset(Math.max(0, asideRow), asideList.length, cockpit.band)
-      const index = asideOffset + p.y
+    if (cockpit.aside > 0 && inPane(0, cockpit.aside, 0, cockpit.band)) {
+      const index = asideOffset + (p.y - 1)
       const row = asideList[index]
       if (!row || row.kind === 'heading' || row.kind === 'rule') return
       if (row.kind === 'action' && !row.enabled) return
@@ -470,16 +535,28 @@ export function Sessions({
       runAside(index)
       return
     }
-    // The divider column belongs to neither pane; a click on it is a click on nothing.
-    if (cockpit.aside > 0 && p.x === cockpit.aside) return
 
-    // The summary row states what is being shown; the controls live in the view panel, which a
-    // click on that row opens. One place to change these, rather than two that can disagree.
-    if (layout.summary && p.y === 0) { setAsk({ kind: 'view' }); return }
+    const listX = cockpit.aside > 0 ? cockpit.aside + 1 : 0
+    if (inPane(listX, cockpit.list, 0, cockpit.band)) {
+      // Clicking the list is also how you FOCUS it, which is the other half of the orange border:
+      // a pointer that selects a row without moving the focus leaves the keys still talking to the
+      // menu, and the frame then says one thing while the arrows do another.
+      setFocus('list')
+      setActionsFocused(false)
+      const y = p.y - 1
+      // The summary row states what is being shown; the controls live in the view panel, which a
+      // click on that row opens. One place to change these, rather than two that can disagree.
+      if (cockpit.summary && y === 0) { setAsk({ kind: 'view' }); return }
+      const row = offset + (y - (cockpit.summary ? 1 : 0))
+      if (row < 0 || row >= rows.length) return
+      const found = selectable.indexOf(row)
+      if (found >= 0) setCursor(found)
+      return
+    }
 
-    // The action row is the LAST row this screen draws. Resolved against the very same fit the row
-    // was rendered from, so a click and the drawn cells can never disagree.
-    if (actionRows > 0 && p.y === layout.list + (layout.summary ? 1 : 0)) {
+    // The action row is drawn UNDER the band, and only where there is no menu. Resolved against the
+    // very same fit the row was rendered from, so a click and the drawn cells can never disagree.
+    if (actionRows > 0 && p.y === cockpit.band + (actionRows > 1 ? 1 : 0)) {
       const fit = fitActionRow(actionWords, at2, width)
       const hit = actionAtColumn(fit, p.x)
       // A click on a DIM verb does nothing at all: the row keeps its shape so the menu is legible,
@@ -489,20 +566,14 @@ export function Sessions({
         setActionIndex(liveActions.indexOf(hit))
         runAction(actions[hit]!.action)
       }
-      return
     }
-
-    // The list starts under the summary row; a click anywhere else on the screen is a click on
-    // nothing, which is not an error to report.
-    const listTop = layout.summary ? 1 : 0
-    const row = offset + (p.y - listTop)
-    if (p.y < listTop || row < 0 || row >= rows.length) return
-    const found = selectable.indexOf(row)
-    if (found >= 0) setCursor(found)
   }, { isActive })
 
-  const offset = windowOffset(at < 0 ? 0 : selectable[at]!, rows.length, layout.list)
-  const visible = rows.slice(offset, offset + layout.list)
+  const offset = windowOffset(at < 0 ? 0 : selectable[at]!, rows.length, cockpit.listRows)
+  const visible = rows.slice(offset, offset + cockpit.listRows)
+  // Slicing from zero would leave the view switches below the fold on a short terminal — invisible,
+  // and still the thing `enter` would act on.
+  const asideOffset = windowOffset(Math.max(0, asideRow), asideList.length, paneRows(cockpit.band))
 
   // Measured across the rows ON SCREEN, so the state, harness and directory columns line up. A
   // single long title thirty rows down must not narrow every visible row to pay for something
@@ -511,8 +582,9 @@ export function Sessions({
     () => sessionColumns(
       visible.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
       cockpit.list,
+      grouping === 'task',
     ),
-    [visible, cockpit.list],
+    [visible, cockpit.list, grouping],
   )
 
   // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
@@ -560,45 +632,56 @@ export function Sessions({
     )
   }
 
-  // `flexShrink={0}`: the budget above is this screen's contract with the pane around it, and a Box
-  // that shrinks would spend the same rows again on Yoga's terms.
-  const listWidth = cockpit.list
+  const listBody = paneBody(cockpit.list)
 
+  // Three framed panes, and the one with the keyboard wears the accent border. The screen used to
+  // be a single frame with two unmarked columns inside it, so there was nothing on the screen that
+  // said which of them the arrows were talking to — "I'm lost, I don't know what is selected" is
+  // the exact failure, and it is the same one the services cockpit solved by framing its regions.
   return (
     <Box flexDirection="column" width={width} flexShrink={0}>
-      {/* The BAND: the menu beside the list. Everything this screen can do is on the left, visible,
-          navigable and clickable — which is the whole point of it existing. */}
       <Box flexDirection="row" width={width} flexShrink={0}>
       {cockpit.aside > 0 ? (
         <>
-          <AsideMenu
-            rows={asideList}
-            cursor={asideRow}
+          <Pane
+            title={s.sessionsPaneMenu}
             focused={focus === 'aside'}
             width={cockpit.aside}
             height={cockpit.band}
-            // Slicing from zero would leave the view switches below the fold on a short terminal —
-            // invisible, and still the thing `enter` would act on.
-            offset={windowOffset(Math.max(0, asideRow), asideList.length, cockpit.band)}
-            allTasksLabel={s.asideAllTasks}
-          />
-          <Box flexDirection="column" width={1} flexShrink={0}>
-            {Array.from({ length: cockpit.band }, (_, i) => (
-              <Text key={i} dimColor>│</Text>
-            ))}
-          </Box>
+          >
+            <AsideMenu
+              rows={asideList}
+              cursor={asideRow}
+              focused={focus === 'aside'}
+              width={paneBody(cockpit.aside)}
+              height={paneRows(cockpit.band)}
+              offset={asideOffset}
+              allTasksLabel={s.asideAllTasks}
+              allProjectsLabel={s.asideAllProjects}
+            />
+          </Pane>
+          {/* The frames provide the separation the drawn divider used to; the gap is the column
+              `sessionsCockpit` already withheld from the list. */}
+          <Box width={1} flexShrink={0} />
         </>
       ) : null}
 
-      <Box flexDirection="column" width={listWidth} flexShrink={0}>
-      {layout.summary ? (
+      <Pane
+        title={s.tabsShort.sessions}
+        focused={focus === 'list' && !actionsFocused}
+        width={cockpit.list}
+        height={cockpit.band}
+      >
+      {cockpit.summary ? (
         <SummaryRow
           fleet={fleet}
           grouping={grouping}
           strings={s}
-          width={listWidth}
+          width={listBody}
           showClosed={showClosed}
           hideEmptyTask={grouping === 'task' ? hideEmptyTask : null}
+          query={query}
+          scope={projectFilter ?? taskFilter ?? ''}
         />
       ) : null}
 
@@ -611,11 +694,8 @@ export function Sessions({
         // not, the host's own sentence is what the summary row is already showing.
         <Text dimColor>{fleet.unavailable ? '' : s.sessionsEmpty}</Text>
       ) : (
-        // NO fixed height: the rows pack upward so the action row and the detail pane sit directly
-        // under the list. Padding this region to the full budget put them at the BOTTOM of a tall
-        // screen — on a tablet that is thirty blank rows between a five-row list and its controls,
-        // and it reads as the controls having disappeared. The leftover space belongs at the very
-        // bottom of the frame, where nobody is looking for anything.
+        // NO fixed height: the rows pack upward so nothing sits at the bottom of a tall pane with a
+        // field of blank above it. The leftover space belongs at the very bottom of the frame.
         <Box flexDirection="column" flexShrink={0}>
           {visible.map((row, i) => {
             const index = offset + i
@@ -625,11 +705,11 @@ export function Sessions({
               // edge. Dim grey at the same weight as its rows is not a hierarchy — it is a list that
               // happens to be sorted, which is what this screen was.
               const head = `${row.label}  ${row.count}`
-              const rule = Math.max(0, listWidth - head.length - 3)
+              const rule = Math.max(0, listBody - head.length - 3)
               return (
                 <Text key={`h${index}`} wrap="truncate">
                   <Text color={row.muted ? COLORS.muted : COLORS.secondary} bold={!row.muted}>
-                    {truncate(head, listWidth)}
+                    {truncate(head, listBody)}
                   </Text>
                   <Text dimColor>{rule > 0 ? `  ${'─'.repeat(rule)}` : ''}</Text>
                 </Text>
@@ -641,21 +721,20 @@ export function Sessions({
                 session={row.session}
                 selected={selected?.id === row.session.id}
                 columns={columns}
-                width={listWidth}
+                width={listBody}
               />
             )
           })}
         </Box>
       )}
-      </Box>
+      </Pane>
       </Box>
 
-      {/* The action row stays as the KEYBOARD path for a narrow terminal that has no menu, and as a
-          familiar horizontal echo of it where there is one. It is drawn full width, under the band,
-          because it acts on the selection rather than on either pane. */}
-      {actionRows > 0 && cockpit.aside === 0 ? (
+      {/* The action row stays as the KEYBOARD path for a narrow terminal that has no menu. Drawn
+          full width, under the band, because it acts on the selection rather than on either pane. */}
+      {actionRows > 0 ? (
         <>
-          {height >= 12 ? <Text> </Text> : null}
+          {actionRows > 1 ? <Text> </Text> : null}
           <SessionActionRow
             labels={actionWords}
             actions={actions}
@@ -666,29 +745,34 @@ export function Sessions({
         </>
       ) : null}
 
-      {ask ? (
-        <>
-          <Divider width={width} />
-          <Question
-            ask={ask as Exclude<Ask, { kind: 'new' } | { kind: 'view' }>}
-            strings={s}
-            width={width}
-            onClose={() => setAsk(null)}
-            onRun={(fn, label) => {
-              setAsk(null)
-              void run(fn, label).then(onRefreshFleet)
-            }}
-            host={host}
-            query={query}
-            onQuery={setQuery}
-            fleet={fleet}
-          />
-        </>
-      ) : layout.detail > 0 && detail.length > 0 ? (
-        <>
-          <Divider width={width} />
-          <Detail lines={detail} width={width} rows={layout.detail - 1} />
-        </>
+      {/* The third pane: what you selected, or the question you were just asked. A question owns the
+          keyboard, so the frame says so — the accent is where the keys go, everywhere, always. */}
+      {cockpit.detail > 0 && (ask || detail.length > 0) ? (
+        <Pane
+          title={ask ? s.sessionsPaneAsk : s.sessionsPaneDetail}
+          focused={Boolean(ask)}
+          width={width}
+          height={cockpit.detail}
+        >
+          {ask ? (
+            <Question
+              ask={ask as Exclude<Ask, { kind: 'new' } | { kind: 'view' }>}
+              strings={s}
+              width={paneBody(width)}
+              onClose={() => setAsk(null)}
+              onRun={(fn, label) => {
+                setAsk(null)
+                void run(fn, label).then(onRefreshFleet)
+              }}
+              host={host}
+              query={query}
+              onQuery={setQuery}
+              fleet={fleet}
+            />
+          ) : (
+            <Detail lines={detail} width={paneBody(width)} rows={paneRows(cockpit.detail)} />
+          )}
+        </Pane>
       ) : null}
     </Box>
   )
@@ -718,7 +802,7 @@ export function Sessions({
  * neither findable nor obviously switches. The controls moved to the view panel; this row's job is
  * to state the answer, so a glance tells you why the list looks the way it does.
  */
-function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyTask }: {
+function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyTask, query, scope }: {
   fleet: ControlSessions | null | undefined
   grouping: SessionGrouping
   strings: ControlStrings
@@ -726,6 +810,10 @@ function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyT
   showClosed: boolean
   /** `null` when the setting does not apply — grouping by anything but task. */
   hideEmptyTask: boolean | null
+  /** The active search, or `''`. Stated HERE because a list narrowed silently reads as an empty one. */
+  query: string
+  /** The active task or project scope, already localized, or `''`. */
+  scope: string
 }) {
   if (fleet?.unavailable) {
     return <Text color={COLORS.accent} wrap="truncate">{truncate(fleet.unavailable, width)}</Text>
@@ -741,8 +829,13 @@ function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyT
   // MEASURED, never left to Yoga: a row that wraps takes two of the screen's rows while its budget
   // counted one, and everything below it — the action row, the detail pane, the footer — is pushed
   // off the bottom. That failure reads as "the whole screen vanished", not as "one row is too wide".
+  // A SCOPE outranks the grouping on this row. The grouping is a preference you set once; a search
+  // or a drill-down is a reason the list in front of you is short, and a list that is short for a
+  // reason nobody stated is one people read as broken. It carries the key that drops it, because
+  // the whole complaint was not being able to get back.
+  const narrowed = query ? s.sessionsSearching(query) : scope
   const cells = summaryCells({
-    group: `${s.sessionsGroupBy} ${s.sessionsGroupings[grouping]}`,
+    group: narrowed || `${s.sessionsGroupBy} ${s.sessionsGroupings[grouping]}`,
     hiding: hiding.length > 0 ? `− ${hiding.join(', ')}` : '',
     count: s.sessionsCount(fleet?.sessions.length ?? 0),
     waiting: waiting > 0 ? s.sessionsWaitingCount(waiting) : '',
@@ -752,8 +845,14 @@ function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyT
   return (
     <Box flexDirection="row" width={width} justifyContent="space-between" flexShrink={0}>
       <Text wrap="truncate">
-        <Text dimColor>{`${s.sessionsGroupBy} `}</Text>
-        <Text bold>{cells.group.slice(s.sessionsGroupBy.length + 1)}</Text>
+        {narrowed ? (
+          <Text color={COLORS.accent} bold>{cells.group}</Text>
+        ) : (
+          <>
+            <Text dimColor>{`${s.sessionsGroupBy} `}</Text>
+            <Text bold>{cells.group.slice(s.sessionsGroupBy.length + 1)}</Text>
+          </>
+        )}
         {cells.hiding ? <Text dimColor>{`   ${cells.hiding}`}</Text> : null}
       </Text>
       <Text wrap="truncate">
@@ -790,6 +889,13 @@ function SessionRowView({ session, selected, columns, width }: {
         <Text color={selected ? COLORS.accent : undefined} bold={selected}>
           {gap + padCell(session.title, columns.title)}
         </Text>
+      ) : null}
+      {/* The TASK, right of the name. Filing a session under a task and then not being able to see
+          which task it is in is the feature not working — the fact only existed in the detail pane
+          and in a grouping you had to switch to. `sessionColumns` drops the cell while grouping BY
+          task, where the heading over the row already says it. */}
+      {columns.task > 0 ? (
+        <Text color={COLORS.secondary}>{gap + padCell(session.task ?? '', columns.task)}</Text>
       ) : null}
       {/* Usage sits right of the name and left of the harness — it is a number about THIS row, and
           a row you are deciding whether to close is one whose cost you want beside its name rather
@@ -872,7 +978,11 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
       <Text dimColor>{truncate(s.promptHint, width)}</Text>
       <TextPrompt
         label={s.sessionsSearchLabel}
-        defaultValue={query}
+        // The current query is a PLACEHOLDER, never a `defaultValue`. `TextPrompt` treats a default
+        // as the answer to an empty submit — correct for renaming, where enter means "leave it as
+        // it is", and exactly wrong here: it made an empty enter re-apply the very query the user
+        // was trying to drop, so a search could not be undone from the field that set it.
+        placeholder={query}
         width={width}
         onCancel={onClose}
         // Applied on submit rather than per keystroke: the list under it is re-grouped and re-sorted
@@ -947,6 +1057,28 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
           const open = host.openTask
           if (!yes || !open) return onClose()
           onRun(() => open.call(host, task), s.actSessions.openTask)
+        }}
+      />
+    )
+  }
+
+  if (ask.kind === 'finishTask') {
+    const task = session.task ?? ''
+    const already = (fleet?.finishedTasks ?? []).includes(task)
+    const count = (fleet?.sessions ?? []).filter(v => v.task === task).length
+    return (
+      <ConfirmPrompt
+        // The question states what happens to the SESSIONS, because that is the part nobody can
+        // guess: finishing a task hides them behind a switch, it does not stop or delete anything.
+        label={already ? s.sessionsReopenConfirm(task) : s.sessionsFinishConfirm(task, count)}
+        yesLabel={s.yes}
+        noLabel={s.no}
+        width={width}
+        onCancel={onClose}
+        onAnswer={(yes: boolean) => {
+          const finish = host.finishTask
+          if (!yes || !finish) return onClose()
+          onRun(() => finish.call(host, task, !already), s.actSessions.finishTask)
         }}
       />
     )
@@ -1229,7 +1361,9 @@ function TaskChoice({ host, strings: s, current, width, onCancel, onPick }: {
  * Every row states its own state — a filled dot for a grouping in force or a switch that is on —
  * because a menu that shows only a cursor makes you press things to find out what they already were.
  */
-function AsideMenu({ rows, cursor, focused, width, height, offset, allTasksLabel }: {
+function AsideMenu({
+  rows, cursor, focused, width, height, offset, allTasksLabel, allProjectsLabel,
+}: {
   rows: readonly AsideRow[]
   /** Index into `rows` of the row under the cursor, or `-1`. */
   cursor: number
@@ -1239,6 +1373,7 @@ function AsideMenu({ rows, cursor, focused, width, height, offset, allTasksLabel
   offset: number
   /** What the "every task" row is called — localized chrome the menu does not own. */
   allTasksLabel: string
+  allProjectsLabel: string
 }) {
   const inner = Math.max(1, width - 2)
   return (
@@ -1259,8 +1394,13 @@ function AsideMenu({ rows, cursor, focused, width, height, offset, allTasksLabel
         // A task row carries its COUNT, which is what says the task has work in it. The label is
         // truncated around it rather than the count being dropped: a task named at its full length
         // with no number tells you nothing you did not already know from the grouping.
-        const count = row.kind === 'task' && row.name ? ` ${row.count}` : ''
-        const label = row.kind === 'task' ? (row.name || allTasksLabel) : row.label
+        const scoped = row.kind === 'task' || row.kind === 'project'
+        const count = scoped && row.name ? ` ${row.count}` : ''
+        const allLabel = row.kind === 'project' ? allProjectsLabel : allTasksLabel
+        // A finished task wears a tick, so the menu states what it already knows rather than making
+        // someone select it to find out.
+        const tick = row.kind === 'task' && row.done ? '✓ ' : ''
+        const label = scoped ? tick + (row.name || allLabel) : row.label
         return (
           <Text key={`${row.kind}${i}`} wrap="truncate" dimColor={!enabled}>
             <Text color={active ? COLORS.accent : undefined}>{active ? '❯' : ' '}</Text>

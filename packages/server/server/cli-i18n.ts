@@ -107,6 +107,9 @@ export interface CliStrings {
   /** The fallback title for a session the user never named. */
   sessUntitled: (harness: string, project: string) => string
   sessKilled: (id: string) => string
+  sessNoTask: string
+  sessTaskFinished: (task: string) => string
+  sessTaskReopened: (task: string) => string
   sessKillUnconfirmed: (id: string) => string
   sessRenamed: string
   /** Printed on the way into an attach, with the REAL detach key. */
@@ -301,6 +304,9 @@ const EN: CliStrings = {
     `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
   sessKilled: (id: string) => `stopped ${id}.`,
+  sessNoTask: 'that session has no task.',
+  sessTaskFinished: (task: string) => `"${task}" marked finished.`,
+  sessTaskReopened: (task: string) => `"${task}" reopened.`,
   sessKillUnconfirmed: (id: string) =>
     `could not confirm ${id} was stopped — it may still be running, so its record was kept.`,
   sessRenamed: 'session renamed.',
@@ -474,6 +480,9 @@ const PT: CliStrings = {
     `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando", como qualquer outra pausa.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
   sessKilled: (id: string) => `${id} encerrada.`,
+  sessNoTask: 'essa sessão não tem tarefa.',
+  sessTaskFinished: (task: string) => `"${task}" marcada como finalizada.`,
+  sessTaskReopened: (task: string) => `"${task}" reaberta.`,
   sessKillUnconfirmed: (id: string) =>
     `não deu para confirmar que ${id} foi encerrada — ela pode continuar rodando, então o registro dela foi mantido.`,
   sessRenamed: 'sessão renomeada.',

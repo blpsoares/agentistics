@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test'
 import {
   attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionActions, sessionCells,
-  sessionRows, sessionsLayout, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
-  sessionColumns, sessionsCockpit, asideRows, asideSelectable,
+  sessionRows, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
+  sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -187,55 +187,6 @@ describe('sessionCells', () => {
   })
 })
 
-describe('sessionsLayout', () => {
-  it('gives the detail pane exactly its lines plus a divider, and the list the rest', () => {
-    // Sized to what it HAS to say, not to a constant: a pane budgeted at a fixed height leaves dead
-    // rows under it, and air under a pane is what the control center calls a fault. The list takes
-    // the difference, which is honest — a list with room to grow is a list, not air.
-    const l = sessionsLayout(20, 3)
-    expect(l.summary).toBe(true)
-    expect(l.detail).toBe(4)
-    expect(l.list).toBe(15)
-    expect(l.list + l.detail + 1).toBe(20)
-  })
-
-  it('caps the detail pane at half the screen, however much it wants to say', () => {
-    // A session carrying a long note must never push the list it was selected from off the screen.
-    const l = sessionsLayout(20, 100)
-    expect(l.detail).toBe(9)
-    expect(l.list).toBe(10)
-    expect(l.list + l.detail + 1).toBe(20)
-  })
-
-  it('draws no detail pane when nothing is selected', () => {
-    const l = sessionsLayout(20, 0)
-    expect(l.detail).toBe(0)
-    expect(l.list).toBe(19)
-  })
-
-  it('drops the detail pane before it starves the list', () => {
-    const l = sessionsLayout(7, 6)
-    expect(l.detail).toBe(0)
-    expect(l.list).toBe(6)
-  })
-
-  it('drops the summary row on a very short screen', () => {
-    expect(sessionsLayout(5, 3).summary).toBe(false)
-  })
-
-  it('leaves no row unspent and none invented, at any height and any amount to say', () => {
-    for (let h = 1; h <= 40; h++) {
-      for (const wanted of [0, 1, 3, 5, 12, 200]) {
-        const l = sessionsLayout(h, wanted)
-        const used = l.list + l.detail + (l.summary ? 1 : 0)
-        expect(used).toBe(Math.max(1, h))
-        expect(l.list).toBeGreaterThanOrEqual(1)
-        expect(l.detail).toBeGreaterThanOrEqual(0)
-      }
-    }
-  })
-})
-
 describe('detailLines', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
@@ -271,7 +222,8 @@ describe('detailLines', () => {
 describe('sessionActions', () => {
   const words = {
     attach: 'Attach', resume: 'Reopen', rename: 'Rename', note: 'Note', task: 'Task',
-    kill: 'Stop', openTask: 'Open whole task', new: 'New', search: 'Search', group: 'Group',
+    kill: 'Stop', openTask: 'Open whole task', finishTask: 'Finish task',
+    new: 'New', search: 'Search', group: 'Group',
   }
   const of = (s?: ControlSession) => sessionActions(s).map(a => a.action)
   const on = (s?: ControlSession) => sessionActions(s).filter(a => a.enabled).map(a => a.action)
@@ -493,7 +445,8 @@ describe('sessionColumns', () => {
       session('b', { stateLabel: 'exited', title: 'release notes', harness: 'codex', project: 'aipe' }),
     ]
     const wide = (c: ReturnType<typeof sessionColumns>) =>
-      2 + c.state + (c.title ? 2 + c.title : 0) + (c.metrics ? 2 + c.metrics : 0)
+      2 + c.state + (c.title ? 2 + c.title : 0) + (c.task ? 2 + c.task : 0)
+      + (c.metrics ? 2 + c.metrics : 0)
       + (c.harness ? 2 + c.harness : 0) + (c.where ? 2 + c.where : 0)
     for (let w = 4; w <= 200; w++) {
       expect(wide(sessionColumns(withUse, w)))
@@ -552,10 +505,11 @@ describe('sessionsCockpit', () => {
 describe('asideRows', () => {
   const words = {
     attach: 'Attach', resume: 'Reopen', rename: 'Rename', note: 'Note', task: 'Task',
-    kill: 'Stop', openTask: 'Open whole task', new: 'New', search: 'Search', group: 'Group',
+    kill: 'Stop', openTask: 'Open whole task', finishTask: 'Finish task',
+    new: 'New', search: 'Search', group: 'Group',
   }
   const groupWords = { none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project' }
-  const toggleWords = { closed: 'closed', exited: 'finished', unfiled: 'no task' }
+  const toggleWords = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks' }
   const headings = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
 
   const build = (o: Partial<Parameters<typeof asideRows>[0]> = {}) => asideRows({
@@ -563,7 +517,7 @@ describe('asideRows', () => {
     actionWords: words,
     grouping: 'none',
     groupWords,
-    toggles: { closed: false, exited: false, unfiled: false },
+    toggles: { closed: false, exited: false, unfiled: false, done: false },
     toggleWords,
     headings,
     showUnfiled: false,
@@ -580,7 +534,7 @@ describe('asideRows', () => {
   })
 
   it('states every row own state, so nothing must be pressed to be discovered', () => {
-    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, unfiled: false } })
+    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, unfiled: false, done: false } })
     expect(rows.find(r => r.kind === 'group' && r.value === 'task')).toMatchObject({ on: true })
     expect(rows.find(r => r.kind === 'group' && r.value === 'none')).toMatchObject({ on: false })
     expect(rows.find(r => r.kind === 'toggle' && r.toggle === 'closed')).toMatchObject({ on: true })
@@ -601,5 +555,124 @@ describe('asideRows', () => {
     }
     // The disabled verbs are still PRESENT — the menu keeps its shape.
     expect(rows.some(r => r.kind === 'action' && r.action === 'rename' && !r.enabled)).toBe(true)
+  })
+})
+
+describe('finished tasks', () => {
+  const fleet = [
+    session('a', { task: 'ship the cockpit', title: 'a' }),
+    session('b', { task: 'ship the cockpit', title: 'b' }),
+    session('c', { task: 'pricing audit', title: 'c' }),
+  ]
+  const group = (done: string[]) =>
+    groupSessions(fleet, 'task', UNKNOWN, done)
+
+  it('marks only the task the user finished, and only while grouping by task', () => {
+    const g = group(['ship the cockpit'])
+    expect(g.find(x => x.key === 'ship the cockpit')?.done).toBe(true)
+    expect(g.find(x => x.key === 'pricing audit')?.done).toBeUndefined()
+    // The same names mean nothing on another dimension: a PROJECT called after a finished task is
+    // not a finished project.
+    const byProject = groupSessions(fleet, 'project', UNKNOWN, ['a'])
+    expect(byProject.every(x => x.done === undefined)).toBe(true)
+  })
+
+  it('says so in the heading and mutes it, rather than only dimming the rows', () => {
+    const rows = sessionRows(group(['ship the cockpit']), 'closed', 'finished')
+    const head = rows.find(r => r.kind === 'heading' && r.label.startsWith('ship the cockpit'))
+    expect(head).toBeDefined()
+    expect((head as { label: string }).label).toBe('ship the cockpit · finished')
+    expect((head as { muted?: boolean }).muted).toBe(true)
+  })
+
+  it('leaves the heading alone when the caller has no word for it', () => {
+    // The module owns no strings, so an absent label is silence rather than an invented English one.
+    const rows = sessionRows(group(['ship the cockpit']), 'closed')
+    const head = rows.find(r => r.kind === 'heading') as { label: string }
+    expect(head.label).not.toContain('·')
+  })
+})
+
+describe('projectCounts', () => {
+  it('counts sessions per project, busiest first, ties by name', () => {
+    const counts = projectCounts([
+      session('a', { project: 'agentistics' }),
+      session('b', { project: 'agentistics' }),
+      session('c', { project: 'zuke' }),
+      session('d', { project: 'aipe' }),
+    ])
+    expect(counts).toEqual([
+      { name: 'agentistics', count: 2 },
+      { name: 'aipe', count: 1 },
+      { name: 'zuke', count: 1 },
+    ])
+  })
+
+  it('omits a session with no project rather than inventing a bucket for it', () => {
+    expect(projectCounts([session('a', { project: '' })])).toEqual([])
+  })
+})
+
+describe('the task cell', () => {
+  const filed = [
+    session('a', { stateLabel: 'waiting', title: 'migrate the auth store', task: 'billing' }),
+    session('b', { stateLabel: 'waiting', title: 'flaky test hunt' }),
+  ]
+
+  it('is a column of its own, sized to the widest task on screen', () => {
+    expect(sessionColumns(filed, 140).task).toBe('billing'.length)
+  })
+
+  it('is ABSENT while grouping by task, where the heading already says it', () => {
+    // A column repeating the word in the heading above every row under it is not information.
+    expect(sessionColumns(filed, 140, true).task).toBe(0)
+  })
+
+  it('draws no column when nothing on screen is filed', () => {
+    expect(sessionColumns([session('b', { stateLabel: 'waiting', title: 'x' })], 140).task).toBe(0)
+  })
+
+  it('outlives the usage, the harness and the directory as the row narrows', () => {
+    const rows = [session('a', {
+      stateLabel: 'needs approval', title: 'migrate the auth store', task: 'billing',
+      tokens: '51.7k', cost: '$1.24', harness: 'claude', project: 'agentistics',
+    })]
+    const lost = (pick: (c: ReturnType<typeof sessionColumns>) => number) => {
+      for (let w = 220; w >= 4; w--) if (pick(sessionColumns(rows, w)) === 0) return w
+      return 0
+    }
+    expect(lost(c => c.where)).toBeGreaterThan(lost(c => c.harness))
+    expect(lost(c => c.harness)).toBeGreaterThan(lost(c => c.metrics))
+    expect(lost(c => c.metrics)).toBeGreaterThan(lost(c => c.task))
+  })
+})
+
+describe('sessionsCockpit budget', () => {
+  const at = (height: number, detailWanted = 4) =>
+    sessionsCockpit({ width: 120, height, asideLabel: 16, detailWanted })
+
+  it('pays for every pane FRAME out of its own arithmetic', () => {
+    // The screen draws three framed panes. A budget that hands out content rows and then lets the
+    // component pay for the borders overspends by two rows per pane, and Ink COMPOSITES the
+    // overflow rather than clipping it — which reads as a corrupted frame, not a cramped one.
+    for (let h = 4; h <= 60; h++) {
+      const l = at(h)
+      expect(l.band + l.detail).toBeLessThanOrEqual(h)
+      // Whatever the pane hands to content, plus its frame, is what the band was given.
+      expect(l.listRows + (l.summary ? 1 : 0)).toBeLessThanOrEqual(Math.max(1, l.band - 2))
+    }
+  })
+
+  it('gives up the summary row before the last session row', () => {
+    // The summary describes the list; a list with no rows left has nothing to describe.
+    const tall = at(40)
+    expect(tall.summary).toBe(true)
+    const short = at(8)
+    expect(short.listRows).toBeGreaterThanOrEqual(1)
+    if (!short.summary) expect(short.listRows).toBeGreaterThanOrEqual(1)
+  })
+
+  it('always leaves at least one row for a session', () => {
+    for (let h = 1; h <= 60; h++) expect(at(h).listRows).toBeGreaterThanOrEqual(1)
   })
 })

@@ -549,16 +549,18 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
           />
         </Screen>
 
+        {/* Like the services cockpit, the sessions screen frames its OWN regions — a menu, the
+            list and the detail — so the one holding the keyboard can wear the accent border. One
+            frame around all three said nothing about which of them the arrows were talking to. */}
         <Screen visible={tab === 'sessions'}>
-          <Pane title={s.tabsShort.sessions} width={width} height={height}>
             <Sessions
               host={host}
               // Polled by the shell, not by this screen — the counter it feeds is in the header,
               // which is on every tab.
               fleet={fleet}
               strings={s}
-              width={bodyWidth}
-              height={bodyRows}
+              width={width}
+              height={height}
               isActive={tab === 'sessions'}
               run={run}
               onChrome={reportChrome}
@@ -571,7 +573,6 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
               view={status?.sessionView}
               onView={v => { void host.setSessionView?.(v) }}
             />
-          </Pane>
         </Screen>
 
         <Screen visible={tab === 'setup'}>

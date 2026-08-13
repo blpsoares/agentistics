@@ -375,16 +375,21 @@ const FAKE_PROJECTS: ProjectOption[] = [
 const FAKE_FLEET: ControlSessions = {
   attention: 2,
   rang: [],
+  detachHint: 'Ctrl-b then d',
+  finishedTasks: ['billing'],
   sessions: withSearchText([
     {
       id: 'a1b2c3', title: 'migrate the auth store', harness: 'claude',
       cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus', task: 'billing',
       state: 'waiting-approval', stateLabel: 'needs approval', actionable: true,
+      // Usage on SOME rows and not others, deliberately: the column is sized to the widest row that
+      // has any, and a fixture where every row carries one would never exercise the padding.
+      tokens: '51.7k', cost: '$1.24',
       startedAt: Date.now() - 22 * 60_000, attached: false,
     },
     {
       id: 'd4e5f6', title: 'flaky test hunt', harness: 'codex',
-      cwd: '/home/dev/prontuario', project: 'prontuario',
+      cwd: '/home/dev/prontuario', project: 'prontuario', task: 'flaky triage',
       note: 'reproduces only on CI', state: 'waiting', stateLabel: 'waiting',
       actionable: true, approvalBlind: 'agentop has no verified screen markers for codex, so a blocking question here shows as "waiting" like any other pause.',
       startedAt: Date.now() - 3 * 60_000, attached: false,
@@ -393,6 +398,7 @@ const FAKE_FLEET: ControlSessions = {
       id: '778899', title: 'rewrite the importer', harness: 'kimi',
       cwd: '/home/dev/embark', project: 'embark', model: 'kimi-k3',
       state: 'working', stateLabel: 'working', actionable: true,
+      tokens: '308.2k', cost: '$0.91',
       startedAt: Date.now() - 90_000, attached: true,
     },
     {

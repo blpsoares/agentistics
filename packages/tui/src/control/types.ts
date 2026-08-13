@@ -364,6 +364,14 @@ export interface SessionViewPrefs {
   showExited: boolean
   /** Only meaningful while grouping by task, but stored either way so it survives a detour. */
   showUnfiled: boolean
+  /**
+   * Whether the sessions of a FINISHED task are listed.
+   *
+   * Absent reads as `false`, which is the point of marking a task finished at all: the work is over
+   * and its sessions stop competing for the screen with the work that is not. It is a filter and
+   * never a deletion — the sessions are still there, still attachable, one toggle away.
+   */
+  showDone?: boolean
 }
 
 export interface ControlSessions {
@@ -382,6 +390,15 @@ export interface ControlSessions {
    * get out is stranded in a buffer that hides their shell.
    */
   detachHint?: string
+  /**
+   * The tasks the user has marked FINISHED.
+   *
+   * On the snapshot rather than derived from the sessions, because it is a statement about the WORK
+   * and not about any session's state: a task is over when the person says it is, which is a
+   * different fact from every one of its sessions having exited. Sessions of a finished task are
+   * hidden by default and shown by a toggle.
+   */
+  finishedTasks?: string[]
 }
 
 export type TeamMode = 'solo' | 'central' | 'member'
@@ -582,6 +599,15 @@ export interface ControlHost {
    * someone believing they had their whole task back.
    */
   openTask?(task: string): Promise<ActionResult>
+
+  /**
+   * Mark a task finished, or reopen it. Absent on a host that cannot remember the answer.
+   *
+   * Takes the state to SET rather than toggling, so the screen and the store can never disagree
+   * about what the button just did — a toggle computed from a snapshot one poll old flips the wrong
+   * way the moment two things happen between polls.
+   */
+  finishTask?(task: string, done: boolean): Promise<ActionResult>
 
   /**
    * The harnesses this machine can actually START, with what each of them accepts.

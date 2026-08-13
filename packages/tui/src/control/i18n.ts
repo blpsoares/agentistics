@@ -209,6 +209,19 @@ export interface ControlStrings {
   sessionsMetrics: string
   /** Label of the detail line stating how to LEAVE an attached session. */
   sessionsDetach: string
+  /** Marks a finished task's heading, and the word the toggle uses. */
+  sessionsDoneWord: string
+  /** Pane titles — the SHORT lowercase names, the same words the tab bar prints. */
+  sessionsPaneMenu: string
+  sessionsPaneDetail: string
+  sessionsPaneAsk: string
+  sessionsFinishConfirm: (task: string, count: number) => string
+  sessionsReopenConfirm: (task: string) => string
+  asideProjects: string
+  asideAllProjects: string
+  toggleDone: string
+  /** States the active search on the summary row, and how to drop it. */
+  sessionsSearching: (query: string) => string
   /** How long ago, from a whole number of SECONDS — the caller does the clock arithmetic so this
    *  stays a pure formatter. */
   sessionsAgo: (seconds: number) => string
@@ -232,6 +245,7 @@ export interface ControlStrings {
     task: string
     kill: string
     openTask: string
+    finishTask: string
     newSession: string
     search: string
     group: string
@@ -460,6 +474,17 @@ const EN: ControlStrings = {
   sessionsTask: 'task',
   sessionsMetrics: 'usage',
   sessionsDetach: 'to detach',
+  sessionsDoneWord: 'finished',
+  sessionsPaneMenu: 'menu',
+  sessionsPaneDetail: 'detail',
+  sessionsPaneAsk: 'question',
+  sessionsFinishConfirm: (task, count) =>
+    `Mark "${task}" finished? Its ${count} session${count === 1 ? '' : 's'} stay listed behind the "finished tasks" switch.`,
+  sessionsReopenConfirm: task => `Reopen "${task}"?`,
+  asideProjects: 'PROJECTS',
+  asideAllProjects: 'every project',
+  toggleDone: 'finished tasks',
+  sessionsSearching: q => `search: ${q} · esc clears`,
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `${sec}s ago`
     const min = Math.round(sec / 60)
@@ -482,8 +507,9 @@ const EN: ControlStrings = {
     rename: 'Rename',
     note: 'Note',
     task: 'Task',
-    kill: 'Stop',
+    kill: 'Stop session',
     openTask: 'Open whole task',
+    finishTask: 'Finish task',
     newSession: 'New session',
     search: 'Search',
     group: 'Group',
@@ -703,6 +729,17 @@ const PT: ControlStrings = {
   sessionsTask: 'tarefa',
   sessionsMetrics: 'uso',
   sessionsDetach: 'para sair',
+  sessionsDoneWord: 'finalizada',
+  sessionsPaneMenu: 'menu',
+  sessionsPaneDetail: 'detalhe',
+  sessionsPaneAsk: 'pergunta',
+  sessionsFinishConfirm: (task, count) =>
+    `Finalizar "${task}"? Suas ${count} sessõe${count === 1 ? '' : 's'} continuam listadas atrás do interruptor "tarefas finalizadas".`,
+  sessionsReopenConfirm: task => `Reabrir "${task}"?`,
+  asideProjects: 'PROJETOS',
+  asideAllProjects: 'todos os projetos',
+  toggleDone: 'tarefas finalizadas',
+  sessionsSearching: q => `busca: ${q} · esc limpa`,
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `há ${sec}s`
     const min = Math.round(sec / 60)
@@ -725,8 +762,9 @@ const PT: ControlStrings = {
     rename: 'Renomear',
     note: 'Nota',
     task: 'Tarefa',
-    kill: 'Encerrar',
+    kill: 'Encerrar sessão',
     openTask: 'Abrir tarefa toda',
+    finishTask: 'Finalizar tarefa',
     newSession: 'Nova sessão',
     search: 'Buscar',
     group: 'Agrupar',
