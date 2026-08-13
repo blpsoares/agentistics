@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  buildCandidates, candidateLabel, matchScore, searchCandidates, withFixedCandidates,
+  buildCandidates, candidateLabel, candidatePath, matchScore, searchCandidates, withFixedCandidates,
   type ProjectCandidate,
 } from './project-search'
 
@@ -138,5 +138,41 @@ describe('candidateLabel', () => {
 
   it('says only the directory when it belongs to no repository', () => {
     expect(candidateLabel(cand({ name: 'scratch' }))).toBe('scratch')
+  })
+})
+
+describe('candidatePath', () => {
+  const HOME = '/home/dev'
+  const at = (path: string) => cand({ path, name: path.split('/').pop() ?? path })
+
+  it('shortens the home directory to a tilde', () => {
+    expect(candidatePath(at('/home/dev/agentistics'), HOME)).toBe('~/agentistics')
+  })
+
+  it('leaves a path outside home alone', () => {
+    expect(candidatePath(at('/opt/work'), HOME)).toBe('/opt/work')
+  })
+
+  it('elides the MIDDLE, so two same-named directories stay distinguishable', () => {
+    // Cutting the head collapsed these two into one string on a real machine, re-creating the very
+    // ambiguity the path is displayed to remove.
+    const a = candidatePath(at('/home/dev/aipe-blpsoares/embark-me/packages/portifolio'), HOME, 30)
+    const b = candidatePath(at('/home/dev/embark-me/packages/portifolio'), HOME, 30)
+    expect(a).not.toBe(b)
+    expect(a.length).toBeLessThanOrEqual(30)
+    expect(b.length).toBeLessThanOrEqual(30)
+  })
+
+  it('always keeps the final segment, which is the directory being offered', () => {
+    const out = candidatePath(at('/home/dev/a/b/c/d/e/f/g/the-project'), HOME, 24)
+    expect(out.endsWith('the-project')).toBe(true)
+    expect(out.length).toBeLessThanOrEqual(24)
+  })
+
+  it('never exceeds the width it was given, at any width', () => {
+    for (let w = 6; w <= 60; w++) {
+      const out = candidatePath(at('/home/dev/one/two/three/four/five/six/seven'), HOME, w)
+      expect(out.length).toBeLessThanOrEqual(Math.max(w, 'seven'.length + 4))
+    }
   })
 })

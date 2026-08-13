@@ -238,7 +238,7 @@ describe('sessionsLayout', () => {
 describe('detailLines', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
-    external: 'started outside agentop',
+    external: 'started outside agentop', closed: 'not running', doing: 'saying', task: 'task', metrics: 'usage',
   }
   const ago = () => '5m ago'
 
@@ -311,5 +311,39 @@ describe('sessionActions', () => {
     for (const a of sessionActions(session('m', { task: 'X' }))) {
       expect(words[a].length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('detailLines — the two non-actionable rows say different things', () => {
+  const labels = {
+    where: 'where', model: 'model', note: 'note', started: 'started',
+    external: 'started outside agentop', closed: 'not running', doing: 'saying',
+    task: 'task', metrics: 'usage',
+  }
+  const ago = () => '5m ago'
+
+  it('says a closed conversation is not running, never that it started elsewhere', () => {
+    // One sentence for both said "started outside agentop" about a conversation agentop may well
+    // have started and that is simply over.
+    const l = detailLines(session('c', { state: 'closed', actionable: false }), labels, ago)
+    expect(l.find(x => x.key === 'closed')?.value).toBe('not running')
+    expect(l.map(x => x.key)).not.toContain('external')
+  })
+
+  it('still says a foreign session started elsewhere', () => {
+    const l = detailLines(session('e', { state: 'unknown', actionable: false }), labels, ago)
+    expect(l.map(x => x.key)).toContain('external')
+    expect(l.map(x => x.key)).not.toContain('closed')
+  })
+
+  it('leads with what the session is saying, when it is saying anything', () => {
+    const l = detailLines(session('m', { lastLines: ['● done'] }), labels, ago)
+    expect(l[0]).toMatchObject({ label: 'saying', value: '● done', say: true })
+  })
+
+  it('shows usage only where the conversation recorded any', () => {
+    expect(detailLines(session('m'), labels, ago).map(x => x.key)).not.toContain('metrics')
+    const l = detailLines(session('m', { tokens: '41.4K', cost: 'USD 0.26' }), labels, ago)
+    expect(l.find(x => x.key === 'metrics')?.value).toBe('41.4K  ·  USD 0.26')
   })
 })

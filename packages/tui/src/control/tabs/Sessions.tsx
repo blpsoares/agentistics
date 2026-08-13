@@ -21,6 +21,7 @@ import type { ControlStrings } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import { actionAtColumn, fitActionRow } from '../chrome.ts'
+import { sourceAtColumn, sourceRowFit } from '../surface.ts'
 import { ActionRow } from '../Chrome'
 import { Divider } from '../Surface'
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
@@ -95,11 +96,29 @@ export function Sessions({
    * out, reachable with `tab` and the arrows, and clickable. The letters stay as accelerators for
    * people who already know them; they were never meant to be the only way in.
    */
+  /**
+   * Whether closed conversations are listed at all.
+   *
+   * OFF by default. The screen is about what is happening, and on a real machine the history is an
+   * order of magnitude bigger than the fleet — it buried the live rows the first time it shipped on.
+   * One keypress and one visible toggle bring it back, and search reaches it either way.
+   */
+  const [showClosed, setShowClosed] = useState(false)
+  /** Whether the "no task" bucket is listed while grouping by task. Hidden by default: the point of
+   *  grouping by task is seeing the tasks, and everything unfiled is the biggest group there is. */
+  const [hideEmptyTask, setHideEmptyTask] = useState(true)
   const [actionsFocused, setActionsFocused] = useState(false)
   const [actionIndex, setActionIndex] = useState(0)
 
   const rows = useMemo(() => sessionRows(groupSessions(
-    filterSessions(fleet?.sessions ?? [], query),
+    filterSessions(
+      (fleet?.sessions ?? []).filter(v =>
+        (showClosed || v.state !== 'closed')
+        // Only ever applies while grouping by task: everywhere else an unfiled session is simply a
+        // session, and hiding it would make the list lie about how many there are.
+        && !(hideEmptyTask && grouping === 'task' && !v.task)),
+      query,
+    ),
     grouping,
     {
       harness: s.sessionsUnknownHarness,
@@ -107,7 +126,7 @@ export function Sessions({
       project: s.sessionsUnknownProject,
       task: s.sessionsUnknownTask,
     },
-  ), s.sessionsClosedWord), [fleet?.sessions, grouping, query, s])
+  ), s.sessionsClosedWord), [fleet?.sessions, grouping, query, showClosed, hideEmptyTask, s])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
 
@@ -128,6 +147,10 @@ export function Sessions({
     note: s.sessionsNote,
     started: s.sessionsStarted,
     external: s.sessionsExternalNote,
+    closed: s.sessionsClosedNote,
+    doing: s.sessionsDoing,
+    task: s.sessionsTask,
+    metrics: s.sessionsMetrics,
     // The clock arithmetic happens HERE, not in the pure module and not in the string table: the
     // host reports the INSTANT a session started, and the pane repaints far more often than the
     // poll runs, so a duration computed anywhere upstream would freeze at whatever it was.
@@ -139,6 +162,15 @@ export function Sessions({
   // The action row is drawn from this screen's own budget, so it is subtracted BEFORE the split. A
   // row taken without being paid for is composited over the one under it, which reads as a corrupt
   // frame rather than a cramped one.
+  // Measured ONCE and handed to both the row and the pointer, so the cells a click resolves against
+  // are the very cells that were drawn.
+  const groupFit = useMemo(() => sourceRowFit(
+    s.sessionsGroupBy,
+    GROUPINGS.map(g => s.sessionsGroupings[g]),
+    Math.max(0, GROUPINGS.indexOf(grouping)),
+    Math.max(1, width - 24),
+  ), [s, grouping, width])
+
   const actionRows = height >= 8 ? 1 : 0
   const layout = sessionsLayout(
     Math.max(1, height - actionRows),
@@ -217,25 +249,33 @@ export function Sessions({
       shift: key.shift,
     }
 
-    if (input === 'v') {
-      const i = GROUPINGS.indexOf(grouping)
-      setGrouping(GROUPINGS[(i + 1) % GROUPINGS.length]!)
-      // The rows are about to be rearranged entirely, so the old index means nothing. Landing on
-      // the top is the only position that is still true after a regroup.
-      setCursor(0)
+    // `tab` moves between the list and the VISIBLE action row, which is what makes every verb
+    // reachable without knowing a single letter.
+    if (key.tab) { setActionsFocused(f => !f); return }
+
+    if (actionsFocused) {
+      if (key.escape) { setActionsFocused(false); return }
+      if (key.return) return runAction(actions[at2] ?? 'new')
+      if (key.leftArrow) return setActionIndex(Math.max(0, at2 - 1))
+      if (key.rightArrow) return setActionIndex(Math.min(actions.length - 1, at2 + 1))
       return
     }
 
-    // The verbs. `k` is deliberately NOT the kill key — it is `up` in this list, and a key that
-    // moves the cursor on one screen and destroys work on another is the shape of a real accident.
-    // `a` opens the wizard and needs no selection at all — it is the one verb that is about the
-    // fleet rather than about a row, which is also why an empty list still offers it.
-    if (input === 'a' && host.spawnSession) { setAsk({ kind: 'new' }); return }
-
-    if (key.return) return actOn('attach')
-    if (input === 'x') return actOn('kill')
-    if (input === 'n') return actOn('rename')
-    if (input === 't') return actOn('note')
+    // EVERY key goes through `runAction`, which is the same dispatcher the visible row and a mouse
+    // click use. It used to call `actOn('attach')` directly here, so `enter` on a session agentop
+    // does not run refused with "cannot be controlled from here" while the action row beside it was
+    // offering Reopen — one screen answering the same gesture two different ways.
+    if (key.return) return runAction(actions[0] ?? 'new')
+    if (input === 'v') return runAction('group')
+    if (input === 'c') { setShowClosed(v => !v); setCursor(0); return }
+    if (input === 'u' && grouping === 'task') { setHideEmptyTask(v => !v); setCursor(0); return }
+    if (input === 'a') return runAction('new')
+    if (input === '/') return runAction('search')
+    // `k` is deliberately NOT the kill key — it is `up` in this list, and a key that moves the
+    // cursor on one screen and destroys work on another is the shape of a real accident.
+    if (input === 'x') return runAction('kill')
+    if (input === 'n') return runAction('rename')
+    if (input === 't') return runAction('note')
 
     if (selectable.length > 0) {
       const next = resolveListKey(nav, Math.max(0, at), selectable.length)
@@ -257,10 +297,11 @@ export function Sessions({
             capture: false,
             hints: [
               s.keyQuit, s.keyTabs, s.keySessionsActions, s.keyMove, s.keySessionsSearch,
-              s.keySessionsNew, s.keySessionsGroup,
+              s.keySessionsNew, s.keySessionsGroup, s.keySessionsClosed,
+              ...(grouping === 'task' ? [s.keySessionsNoTask] : []),
             ],
           })
-  }, [isActive, onChrome, s, ask, actionsFocused])
+  }, [isActive, onChrome, s, ask, actionsFocused, grouping])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
@@ -270,6 +311,18 @@ export function Sessions({
       return setCursor(next)
     }
     if (!isActivation(p)) return
+
+    // The grouping selector is the FIRST row.
+    if (layout.summary && p.y === 0) {
+      const hit = sourceAtColumn(groupFit, p.x)
+      if (hit !== null) { setGrouping(GROUPINGS[hit]!); setCursor(0); return }
+      // The right-hand end of this row is the closed toggle. Clicking what a row SAYS is true is how
+      // a person expects to change it.
+      const toggleFrom = width - (showClosed ? s.sessionsShowClosed : s.sessionsHideClosed).length
+        - s.sessionsCount(fleet?.sessions.length ?? 0).length - 3
+      if (p.x >= toggleFrom) { setShowClosed(v => !v); setCursor(0) }
+      return
+    }
 
     // The action row is the LAST row this screen draws. Resolved against the very same fit the row
     // was rendered from, so a click and the drawn cells can never disagree.
@@ -326,7 +379,15 @@ export function Sessions({
   return (
     <Box flexDirection="column" width={width} flexShrink={0}>
       {layout.summary ? (
-        <SummaryRow fleet={fleet} grouping={grouping} strings={s} width={width} />
+        <SummaryRow
+          fleet={fleet}
+          grouping={grouping}
+          strings={s}
+          width={width}
+          fit={groupFit}
+          showClosed={showClosed}
+          hideEmptyTask={grouping === 'task' ? hideEmptyTask : null}
+        />
       ) : null}
 
       {fleet === undefined ? (
@@ -407,26 +468,57 @@ export function Sessions({
  * looking at when they act on it, and a number they have to look away to read is a number they stop
  * trusting.
  */
-function SummaryRow({ fleet, grouping, strings: s, width }: {
+/**
+ * How many, how many are waiting — and the grouping, as a row of CELLS rather than a corner label.
+ *
+ * The dimension used to be a word in the corner cycled by a hidden `v`, which is the shape of a
+ * control nobody finds: the screen said `GROUP task` without ever saying that was a thing you could
+ * change, let alone how. Now every dimension is on screen, the current one is underlined, and
+ * clicking one selects it — the same selector idiom the Logs screen uses for its sources, measured
+ * by the same pure fit so a click and the drawn cells can never disagree.
+ */
+function SummaryRow({ fleet, grouping, strings: s, width, fit, showClosed, hideEmptyTask }: {
   fleet: ControlSessions | null | undefined
   grouping: SessionGrouping
   strings: ControlStrings
   width: number
+  fit: ReturnType<typeof sourceRowFit>
+  showClosed: boolean
+  /** Only meaningful while grouping BY TASK; the toggle is hidden otherwise rather than inert. */
+  hideEmptyTask: boolean | null
 }) {
   if (fleet?.unavailable) {
     return <Text color={COLORS.accent} wrap="truncate">{truncate(fleet.unavailable, width)}</Text>
   }
-  const n = fleet?.sessions.length ?? 0
   const waiting = fleet?.attention ?? 0
+  const index = GROUPINGS.indexOf(grouping)
+
   return (
     <Box flexDirection="row" width={width} justifyContent="space-between">
+      <Box flexDirection="row" flexShrink={0}>
+        <Text dimColor bold>{fit.label ? fit.label + '  ' : ''}</Text>
+        {fit.labels.map((cell, i) => {
+          const active = fit.from + i === index
+          return (
+            <Text key={cell} color={active ? COLORS.accent : undefined} dimColor={!active}>
+              {i > 0 ? '   ' : ''}
+              <Text bold={active} underline={active}>{cell}</Text>
+            </Text>
+          )
+        })}
+      </Box>
       <Text>
-        <Text dimColor>{s.sessionsCount(n)}</Text>
+        {/* Stated as a SETTING rather than as a verb, so the row says what is true now as well as
+            what pressing it would do. */}
+        <Text dimColor>{showClosed ? s.sessionsShowClosed : s.sessionsHideClosed}</Text>
+        {hideEmptyTask !== null ? (
+          <Text dimColor>{`   ${hideEmptyTask ? s.sessionsNoTaskHidden : s.sessionsNoTaskShown}`}</Text>
+        ) : null}
+        <Text dimColor>{`   ${s.sessionsCount(fleet?.sessions.length ?? 0)}`}</Text>
         {waiting > 0 ? (
           <Text color={COLORS.accent} bold>{`   ${s.sessionsWaitingCount(waiting)}`}</Text>
         ) : null}
       </Text>
-      <Text dimColor>{`${s.sessionsGroupBy} ${s.sessionsGroupings[grouping]}`}</Text>
     </Box>
   )
 }
@@ -480,8 +572,12 @@ function Detail({ lines, width, rows }: {
     <Box flexDirection="column">
       {lines.slice(0, Math.max(0, rows)).map(l => (
         <Text key={l.key} wrap="truncate" dimColor={l.note}>
-          {l.label ? <Text dimColor>{l.label.padEnd(labelWidth)}  </Text> : null}
-          {truncate(l.value, Math.max(1, width - (l.label ? labelWidth + 2 : 0)))}
+          {l.label ? <Text dimColor>{l.label.padEnd(labelWidth)}  </Text> : <Text>{' '.repeat(labelWidth + 2)}</Text>}
+          {/* What the assistant said is drawn in the text colour: it is the content, and everything
+              else on this pane is a label for it. */}
+          <Text color={l.say ? COLORS.text : undefined}>
+            {truncate(l.value, Math.max(1, width - labelWidth - 2))}
+          </Text>
         </Text>
       ))}
     </Box>

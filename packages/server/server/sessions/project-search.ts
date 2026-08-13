@@ -60,6 +60,44 @@ export function candidateLabel(c: ProjectCandidate): string {
 }
 
 /**
+ * The PATH, shortened for display — and the reason the list is usable at all.
+ *
+ * Without it every row is a bare directory name, and a machine with six directories called
+ * `portifolio` renders six identical rows with no way to tell which is which. The name answers
+ * "what", this answers "which one", and the search is worthless without the second.
+ *
+ * `$HOME` becomes `~`, and a long path is elided in the MIDDLE rather than at either end.
+ *
+ * That is the whole point and it took a real machine to see it: cutting the head collapsed
+ * `~/aipe-blpsoares/embark-me/packages/portifolio` and `~/embark-me/packages/portifolio` into the
+ * same string, so the display re-created the very ambiguity it exists to remove. Cutting the tail
+ * would do the same to two siblings. Both ends carry a discriminator; the middle is what can go.
+ */
+export function candidatePath(c: ProjectCandidate, home: string, max = 44): string {
+  const short = home && c.path.startsWith(home) ? `~${c.path.slice(home.length)}` : c.path
+  if (short.length <= max) return short
+
+  const parts = short.split('/')
+  if (parts.length <= 3) return `…${short.slice(short.length - max + 1)}`
+
+  // The head is the first TWO segments, not one: under `$HOME` the first is always `~`, which
+  // distinguishes nothing. `~/aipe-blpsoares/…/portifolio` and `~/embark-me/…/portifolio` are the
+  // real case this was got wrong on — with a one-segment head they rendered identically.
+  const head = `${parts[0]}/${parts[1]}`
+  const tailStart = 2
+  let tail = parts[parts.length - 1] ?? ''
+  for (let i = parts.length - 2; i >= tailStart; i--) {
+    const next = `${parts[i]}/${tail}`
+    if (head.length + 2 + next.length > max) break
+    tail = next
+  }
+  const out = `${head}/…/${tail}`
+  // A head long enough to blow the budget on its own still has to fit; the tail is the segment that
+  // must survive, because it is the directory actually being offered.
+  return out.length <= max ? out : `…/${tail}`.slice(0, Math.max(tail.length + 2, max))
+}
+
+/**
  * Fold the sessions of the local store into one candidate per DIRECTORY.
  *
  * Per directory rather than per repository: a session starts in a path, and two worktrees of one
@@ -109,7 +147,8 @@ function baseName(path: string): string {
 /**
  * Does the query match, and how well?
  *
- * Three tiers, strongest first, because they mean different things to a person typing:
+ * Four tiers, strongest first, because they mean different things to a person typing:
+ *  3 — the NAME is exactly the query. Typing a project's name means that project.
  *  2 — the NAME starts with the query. "agen" meaning the project called agentistics.
  *  1 — the name or the repo contains it. "vibes" finding `org/opvibes`.
  *  0 — the full path contains it. The fallback for someone typing a directory fragment.
@@ -124,6 +163,10 @@ export function matchScore(c: ProjectCandidate, query: string): number {
   if (q === '') return 0
 
   const name = c.name.toLowerCase()
+  // An EXACT name is what someone typing a project's name means, and it must outrank the dozen
+  // directories that merely contain those letters — `por` matching `exports`, `Crash Reports` and
+  // `import_data` is correct substring behaviour and useless ordering.
+  if (name === q) return 3
   if (name.startsWith(q)) return 2
   if (name.includes(q)) return 1
   if (c.remote && c.remote.toLowerCase().includes(q)) return 1

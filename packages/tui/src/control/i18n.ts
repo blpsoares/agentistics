@@ -204,11 +204,15 @@ export interface ControlStrings {
   sessionsModel: string
   sessionsNote: string
   sessionsStarted: string
+  sessionsDoing: string
+  sessionsTask: string
+  sessionsMetrics: string
   /** How long ago, from a whole number of SECONDS — the caller does the clock arithmetic so this
    *  stays a pure formatter. */
   sessionsAgo: (seconds: number) => string
   /** The external row's own sentence, in the detail pane. */
   sessionsExternalNote: string
+  sessionsClosedNote: string
   keySessionsGroup: string
   keySessionsAttach: string
   keySessionsKill: string
@@ -237,6 +241,12 @@ export interface ControlStrings {
   sessionsSearchLabel: string
   sessionsSearchEmpty: string
   sessionsClosedWord: string
+  sessionsShowClosed: string
+  sessionsHideClosed: string
+  keySessionsClosed: string
+  keySessionsNoTask: string
+  sessionsNoTaskHidden: string
+  sessionsNoTaskShown: string
   /** The wizard's six questions. */
   wizHarness: string
   wizWhere: string
@@ -416,6 +426,9 @@ const EN: ControlStrings = {
   sessionsModel: 'model',
   sessionsNote: 'note',
   sessionsStarted: 'started',
+  sessionsDoing: 'saying',
+  sessionsTask: 'task',
+  sessionsMetrics: 'usage',
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `${sec}s ago`
     const min = Math.round(sec / 60)
@@ -423,6 +436,7 @@ const EN: ControlStrings = {
     return `${Math.floor(min / 60)}h ${min % 60}m ago`
   },
   sessionsExternalNote: 'started outside agentop — listed, but it cannot be attached or stopped here.',
+  sessionsClosedNote: 'not running — reopen it to pick this conversation back up.',
   keySessionsGroup: 'v group',
   keySessionsAttach: '⏎ attach',
   keySessionsKill: 'x kill',
@@ -452,6 +466,12 @@ const EN: ControlStrings = {
   sessionsSearchLabel: 'Search sessions and closed conversations',
   sessionsSearchEmpty: 'nothing matches.',
   sessionsClosedWord: 'closed',
+  sessionsShowClosed: 'closed: shown',
+  sessionsHideClosed: 'closed: hidden',
+  keySessionsClosed: 'c closed',
+  keySessionsNoTask: 'u unfiled',
+  sessionsNoTaskHidden: 'unfiled: hidden',
+  sessionsNoTaskShown: 'unfiled: shown',
   wizHarness: 'Which assistant?',
   wizWhere: 'Where should it start?',
   wizWhereHint: 'search any folder under your home — or paste a full path',
@@ -624,6 +644,9 @@ const PT: ControlStrings = {
   sessionsModel: 'modelo',
   sessionsNote: 'nota',
   sessionsStarted: 'iniciada',
+  sessionsDoing: 'dizendo',
+  sessionsTask: 'tarefa',
+  sessionsMetrics: 'uso',
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `há ${sec}s`
     const min = Math.round(sec / 60)
@@ -631,6 +654,7 @@ const PT: ControlStrings = {
     return `há ${Math.floor(min / 60)}h ${min % 60}min`
   },
   sessionsExternalNote: 'iniciada fora do agentop — listada, mas não dá para anexar nem parar por aqui.',
+  sessionsClosedNote: 'não está rodando — reabra para retomar esta conversa.',
   keySessionsGroup: 'v agrupar',
   keySessionsAttach: '⏎ anexar',
   keySessionsKill: 'x encerrar',
@@ -660,6 +684,12 @@ const PT: ControlStrings = {
   sessionsSearchLabel: 'Buscar sessões e conversas fechadas',
   sessionsSearchEmpty: 'nada corresponde.',
   sessionsClosedWord: 'fechada',
+  sessionsShowClosed: 'fechadas: visíveis',
+  sessionsHideClosed: 'fechadas: ocultas',
+  keySessionsClosed: 'c fechadas',
+  keySessionsNoTask: 'u sem tarefa',
+  sessionsNoTaskHidden: 'sem tarefa: ocultas',
+  sessionsNoTaskShown: 'sem tarefa: visíveis',
   wizHarness: 'Qual assistente?',
   wizWhere: 'Onde ela começa?',
   wizWhereHint: 'busque qualquer pasta na sua home — ou cole um caminho completo',

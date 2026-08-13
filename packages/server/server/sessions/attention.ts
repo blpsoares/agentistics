@@ -69,3 +69,44 @@ export function attentionOf(o: {
 
   return 'waiting'
 }
+
+/** A line that is only box-drawing or rule characters — a frame's furniture, never its content. */
+const RULE = /^[─━═╌┄┈╭╰╮╯┌└┐┘│|+\-=_~]+$/
+/** An empty input box: the prompt glyph with nothing after it. */
+const EMPTY_PROMPT = /^[❯>›»]\s*$/
+
+/**
+ * The last few lines of the frame that actually say something — PURE.
+ *
+ * This is the "what is it doing right now" a person wants when they select a session, and it costs
+ * nothing extra: the frame was already captured to decide the state.
+ *
+ * The hard part is not finding the last lines, it is not returning the harness's own CHROME. Every
+ * one of these CLIs draws the same structure — the conversation, then an input box, then a status
+ * strip — so the content is everything ABOVE the box, and the box announces itself with a rule or a
+ * border. Cutting there is structural rather than a per-harness pattern, which matters: a pattern
+ * list would need re-probing on every CLI release, and this does not.
+ *
+ * Verified against real frames from claude 2.1.231, codex 0.113.0 and kimi 0.35.0 — see the tests.
+ */
+export function frameTail(frame: readonly string[], max = 4): string[] {
+  // Everything from the last rule or box edge onward is the input box and the status strip.
+  let end = frame.length
+  for (let i = frame.length - 1; i >= 0; i--) {
+    if (RULE.test((frame[i] ?? '').trim())) { end = i; break }
+  }
+
+  const body = frame.slice(0, end)
+  const out: string[] = []
+  for (let i = body.length - 1; i >= 0 && out.length < max; i--) {
+    const line = (body[i] ?? '').trim()
+    if (!line) continue
+    if (RULE.test(line) || EMPTY_PROMPT.test(line)) continue
+    // A harness with no rule around its box (codex) ends on a status strip instead: a run of
+    // `·`-separated facts. Dropped only at the very END of the frame, where it is chrome — the same
+    // characters mid-conversation are something the assistant actually said.
+    if (out.length === 0 && end === frame.length && line.includes(' · ') && !line.startsWith('●')) continue
+    out.push(line)
+  }
+  return out.reverse()
+}

@@ -11,7 +11,7 @@
  */
 
 import type { HarnessId, SessionMeta } from '@agentistics/core'
-import { sessionLabel } from '@agentistics/core'
+import { calcCost, sessionLabel } from '@agentistics/core'
 import { loadConsolidated } from '../consolidate'
 import { sessionAtCwd } from '../live-sessions'
 import { SPAWN_SPECS } from './spawn-spec'
@@ -34,6 +34,9 @@ export interface Conversation {
   resumable: boolean
   /** The opening prompt, kept for search. Never rendered as a title — `sessionLabel` does that. */
   firstPrompt: string
+  /** Total tokens, when the harness records them. Absent is NOT zero — see HARNESS_CAPABILITIES. */
+  tokens?: number
+  costUSD?: number
 }
 
 const CACHE_TTL_MS = 30_000
@@ -51,6 +54,8 @@ function lastActivityOf(s: SessionMeta): number {
 
 export function toConversation(s: SessionMeta): Conversation {
   const harness = (s.harness ?? 'claude') as HarnessId
+  const total = (s.input_tokens ?? 0) + (s.output_tokens ?? 0)
+    + (s.cache_read_input_tokens ?? 0) + (s.cache_creation_input_tokens ?? 0)
   return {
     sessionId: s.session_id,
     harness,
@@ -61,6 +66,23 @@ export function toConversation(s: SessionMeta): Conversation {
     lastActivityMs: lastActivityOf(s),
     resumable: SPAWN_SPECS[harness]?.resume !== undefined,
     firstPrompt: s.first_prompt ?? '',
+    // Absent rather than zero when the harness records none: a confident 0 next to real numbers is
+    // the same lie `HARNESS_CAPABILITIES` exists to prevent on the dashboard.
+    ...(total > 0 ? { tokens: total } : {}),
+    // Through `calcCost`, never an inline rate: CLAUDE.md makes that the single source of truth, and
+    // a second arithmetic here would disagree with the dashboard the first time a price changed.
+    ...(total > 0 && s.model
+      ? {
+          costUSD: calcCost({
+            inputTokens: s.input_tokens ?? 0,
+            outputTokens: s.output_tokens ?? 0,
+            cacheReadInputTokens: s.cache_read_input_tokens ?? 0,
+            cacheCreationInputTokens: s.cache_creation_input_tokens ?? 0,
+            webSearchRequests: 0,
+            costUSD: 0,
+          }, s.model),
+        }
+      : {}),
   }
 }
 

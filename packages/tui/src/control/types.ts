@@ -314,6 +314,17 @@ export interface ControlSession {
    * offered rather than offered and wrong.
    */
   resume?: { sessionId: string; title: string }
+  /**
+   * The last few meaningful lines of this session's screen — what it is saying right now.
+   *
+   * Present only for a session agentop hosts; there is no frame to read for anything else, and an
+   * invented one would be the worst possible thing to put under "what is it doing".
+   */
+  lastLines?: string[]
+  /** Already-formatted token count, when this row's conversation has metrics. */
+  tokens?: string
+  /** Already-formatted cost, same. */
+  cost?: string
   /** Everything this row can be found by, already lowercased — including a closed conversation's
    *  opening prompt, which is what a person remembers about work they put down. */
   searchText: string
@@ -569,6 +580,13 @@ export interface ProjectOption {
   path: string
   /** Already-composed display label — the directory name, and the repo when it belongs to one. */
   label: string
+  /**
+   * The path, shortened for display.
+   *
+   * Not decoration: a machine with six directories called `portifolio` renders six identical rows
+   * without it, and the search field is the one control that decides where work happens.
+   */
+  detail: string
   /**
    * Why it is being offered, so the list can say so — and so a folder that was merely FOUND is not
    * mistaken for one you have worked in.

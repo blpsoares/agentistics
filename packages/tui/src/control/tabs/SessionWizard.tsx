@@ -404,12 +404,18 @@ function ProjectSearch({ host, strings: s, width, height, isActive, onPick }: {
         list.slice(offset, offset + page).map((o, i) => {
           const active = offset + i === at
           const word = sourceWord(o)
+          // The PATH is what makes two directories of the same name distinguishable, so it is drawn
+          // on every row and it is the cell that survives — the name and the provenance word are
+          // both guessable from it, and neither of them is a substitute for it.
+          const right = `${o.detail}${word ? `   ${word}` : ''}`
+          const nameRoom = Math.max(6, width - 2 - right.length - 2)
           return (
             <Text key={o.path} wrap="truncate">
               <Text color={active ? COLORS.accent : undefined}>{active ? '❯ ' : '  '}</Text>
-              <Text color={active ? COLORS.accent : undefined}>
-                {truncate(o.label, Math.max(1, width - 2 - (word ? word.length + 3 : 0)))}
+              <Text color={active ? COLORS.accent : undefined} bold={active}>
+                {truncate(o.label, nameRoom)}
               </Text>
+              <Text dimColor>{`  ${truncate(o.detail, Math.max(1, width - 4 - nameRoom))}`}</Text>
               {word ? <Text dimColor>{`   ${word}`}</Text> : null}
             </Text>
           )

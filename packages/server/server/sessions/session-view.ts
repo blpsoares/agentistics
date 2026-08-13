@@ -38,6 +38,13 @@ export interface SessionView {
   status: ReconciledSession['status'] | 'external' | 'closed'
   /** ABSENT for an external session — not capturable, so not knowable. */
   activity?: SessionActivity
+  /**
+   * The last few meaningful lines of this session's screen — what it is saying right now.
+   *
+   * Only ever present for a session agentop hosts: it comes from the frame that was captured to
+   * decide the state, so it costs nothing extra, and there is no frame to read for anything else.
+   */
+  lastLines?: string[]
   label?: string
   note?: string
   model?: string
@@ -54,6 +61,9 @@ export interface SessionView {
    * an id — so the verb is simply not offered rather than offered and wrong.
    */
   resume?: { sessionId: string; title: string }
+  /** Metrics of the conversation behind this row, when it has any. Absent is never zero. */
+  tokens?: number
+  costUSD?: number
   /**
    * Whether this harness has probed approval rules at all.
    *
@@ -123,6 +133,8 @@ export function filterSessions(views: readonly SessionView[], query: string): Se
 export function buildSessionViews(o: {
   reconciled: readonly ReconciledSession[]
   activity: ReadonlyMap<string, SessionActivity>
+  /** The tail of each hosted session's screen, keyed by session id. */
+  tails?: ReadonlyMap<string, string[]>
   processes: readonly HarnessProcess[]
   /** Everything this machine has ever recorded, newest first. Used to name what an external process
    *  is driving, and to offer the conversations that are not running at all. */
@@ -145,6 +157,7 @@ export function buildSessionViews(o: {
       cwd: r.managed?.cwd ?? '',
       status: r.status,
       ...(activity ? { activity } : {}),
+      ...((o.tails?.get(r.id)?.length ?? 0) > 0 ? { lastLines: o.tails!.get(r.id)! } : {}),
       ...(r.managed?.label ? { label: r.managed.label } : {}),
       ...(r.managed?.note ? { note: r.managed.note } : {}),
       ...(r.managed?.model ? { model: r.managed.model } : {}),
@@ -188,6 +201,8 @@ export function buildSessionViews(o: {
       attached: false,
       approvalDetection: false,
       ...(conv?.resumable ? { resume: { sessionId: conv.sessionId, title: conv.title } } : {}),
+      ...(conv?.tokens !== undefined ? { tokens: conv.tokens } : {}),
+      ...(conv?.costUSD !== undefined ? { costUSD: conv.costUSD } : {}),
       searchText: searchTextOf(p.harness, p.cwd, conv?.title, conv?.firstPrompt),
     }
   })
@@ -210,6 +225,8 @@ export function buildSessionViews(o: {
       attached: false,
       approvalDetection: false,
       ...(c.resumable ? { resume: { sessionId: c.sessionId, title: c.title } } : {}),
+      ...(c.tokens !== undefined ? { tokens: c.tokens } : {}),
+      ...(c.costUSD !== undefined ? { costUSD: c.costUSD } : {}),
       searchText: searchTextOf(c.harness, c.cwd, c.title, c.firstPrompt),
     }))
 

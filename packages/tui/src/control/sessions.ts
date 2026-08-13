@@ -248,6 +248,8 @@ export interface DetailLine {
   value: string
   /** A caveat rather than a fact — rendered dim. */
   note?: boolean
+  /** A line the assistant itself wrote, rendered in the text colour rather than as a label. */
+  say?: boolean
 }
 
 /**
@@ -267,17 +269,45 @@ export function detailLines(s: ControlSession, labels: {
   note: string
   started: string
   external: string
+  /** Said on a conversation that is not running — a different fact from "started elsewhere". */
+  closed: string
+  doing: string
+  task: string
+  metrics: string
 }, ago: (startedAt: number) => string): DetailLine[] {
   const out: DetailLine[] = []
+
+  // WHAT IT IS SAYING comes first, because it is the reason someone selected the row. Everything
+  // below is context for it.
+  if (s.lastLines?.length) {
+    s.lastLines.forEach((line, i) => {
+      out.push({ key: `say${i}`, label: i === 0 ? labels.doing : '', value: line, say: true })
+    })
+  }
+
   out.push({ key: 'where', label: labels.where, value: s.cwd })
+  if (s.task) out.push({ key: 'task', label: labels.task, value: s.task })
   if (s.model) out.push({ key: 'model', label: labels.model, value: s.model })
+  // Tokens and cost only where the conversation actually recorded them. Absent is never rendered as
+  // zero — the same N/A-versus-a-confident-0 rule the dashboard applies to harness capabilities.
+  if (s.tokens || s.cost) {
+    out.push({
+      key: 'metrics',
+      label: labels.metrics,
+      value: [s.tokens, s.cost].filter(Boolean).join('  ·  '),
+    })
+  }
   if (s.note) out.push({ key: 'note', label: labels.note, value: s.note })
   if (s.startedAt !== undefined) {
     out.push({ key: 'started', label: labels.started, value: ago(s.startedAt) })
   }
   // The two caveats, last and dim. Each is a statement the state word cannot make on its own, and
   // each is present only where it is TRUE — an absent caveat is not a reassurance, it is silence.
-  if (!s.actionable) out.push({ key: 'external', label: '', value: labels.external, note: true })
+  // The two non-actionable rows are non-actionable for DIFFERENT reasons, and one sentence for both
+  // said "started outside agentop" about a conversation that agentop may well have started and that
+  // is simply over.
+  if (s.state === 'closed') out.push({ key: 'closed', label: '', value: labels.closed, note: true })
+  else if (!s.actionable) out.push({ key: 'external', label: '', value: labels.external, note: true })
   if (s.approvalBlind) out.push({ key: 'blind', label: '', value: s.approvalBlind, note: true })
   return out
 }

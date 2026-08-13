@@ -14,7 +14,7 @@
 import { createLimiter } from '../utils'
 import type { HarnessProcess } from '../live-sessions'
 import { rulesFor } from './attention-rules'
-import { attentionOf, digestFrame } from './attention'
+import { attentionOf, digestFrame, frameTail } from './attention'
 import { loadConversations, type Conversation } from './conversations'
 import { reconcileSessions } from './session-ref'
 import {
@@ -105,6 +105,7 @@ export function createSessionsPoller(o: {
 
       const nextDigest = new Map<string, string>()
       const activity = new Map<string, SessionActivity>()
+      const tails = new Map<string, string[]>()
 
       await Promise.all(reconciled.map(r => limit(async () => {
         const b = r.backend
@@ -114,6 +115,7 @@ export function createSessionsPoller(o: {
         const frame = await o.backend.capture(r.id, lines).catch(() => [] as string[])
         const frameDigest = digestFrame(frame)
         nextDigest.set(r.id, frameDigest)
+        tails.set(r.id, frameTail(frame))
 
         const harness = harnessOf.get(r.id)
         const rules = harness ? rulesFor(harness) : undefined
@@ -129,7 +131,7 @@ export function createSessionsPoller(o: {
         }))
       })))
 
-      const sessions = buildSessionViews({ reconciled, activity, processes, conversations })
+      const sessions = buildSessionViews({ reconciled, activity, tails, processes, conversations })
       const rang = bellTransitions(prevActivity, sessions)
 
       prevDigest = nextDigest

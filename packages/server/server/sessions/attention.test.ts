@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { QUIET_MS, attentionOf, digestFrame } from './attention'
+import { QUIET_MS, attentionOf, digestFrame, frameTail } from './attention'
 import type { AttentionRules } from './types'
 
 const NOW = 1_786_600_000_000
@@ -74,5 +74,65 @@ describe('attentionOf', () => {
     // The first poll of a long-quiet session has no prevDigest. Treating "unknown" as "changed"
     // would show every session as working for one interval after the cockpit opens.
     expect(attentionOf({ ...base, prevDigest: undefined })).toBe('waiting')
+  })
+})
+
+describe('frameTail — what the session is saying', () => {
+  // VERBATIM from a real claude 2.1.231 session, 2026-08-13: a prompt, the answer, a status line,
+  // then the input box and the footer.
+  const CLAUDE = [
+    ' ⚠ 4 MCP servers need authentication · run /mcp',
+    '',
+    '❯ diga apenas: estou pronto',
+    '',
+    '● estou pronto',
+    '',
+    '✻ Cooked for 2s',
+    '',
+    '────────────────────────────────────────',
+    '❯ ',
+    '────────────────────────────────────────',
+    '  ⏸ manual mode on · ? for shortcuts · ← 6 agents                          /rc',
+  ]
+
+  it('returns what the assistant said, never the input box or the footer', () => {
+    const tail = frameTail(CLAUDE)
+    expect(tail).toContain('● estou pronto')
+    expect(tail.some(l => l.includes('manual mode on'))).toBe(false)
+    expect(tail.some(l => l.startsWith('❯ ') && l.trim() === '❯')).toBe(false)
+    expect(tail.some(l => /^─+$/.test(l))).toBe(false)
+  })
+
+  it('keeps the lines in the order they were written', () => {
+    const tail = frameTail(CLAUDE)
+    expect(tail.indexOf('❯ diga apenas: estou pronto')).toBeLessThan(tail.indexOf('● estou pronto'))
+  })
+
+  it('drops a trailing status strip on a harness that draws no rule', () => {
+    // codex 0.113.0: a ghost placeholder and a `·`-separated status strip, with no box rule at all.
+    const codex = [
+      '• Hi',
+      '',
+      '› Find and fix a bug in @filename',
+      '',
+      '  gpt-5.4-mini low · 100% left · /tmp/scratchpad',
+    ]
+    expect(frameTail(codex)).toContain('• Hi')
+    expect(frameTail(codex).some(l => l.includes('100% left'))).toBe(false)
+  })
+
+  it('keeps a mid-conversation line that happens to contain the same separator', () => {
+    // The separator is only chrome at the very END of a frame. A sentence the assistant wrote that
+    // uses it is content, and dropping it would silently eat real answers.
+    const frame = ['● done · ready', '────────', '❯ ', '────────', '  x · y']
+    expect(frameTail(frame)).toEqual(['● done · ready'])
+  })
+
+  it('returns nothing rather than furniture when there is nothing to say', () => {
+    expect(frameTail(['────────', '❯ ', '────────'])).toEqual([])
+  })
+
+  it('honours the line budget', () => {
+    expect(frameTail(['a', 'b', 'c', 'd', 'e', 'f'], 2)).toEqual(['e', 'f'])
   })
 })

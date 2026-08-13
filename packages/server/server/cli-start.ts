@@ -32,7 +32,7 @@ import { spawn } from 'node:child_process'
 import { writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
-import { DEFAULT_TEAM, HARNESS_ORDER, type HarnessId, type TeamConnection } from '@agentistics/core'
+import { DEFAULT_TEAM, HARNESS_ORDER, fmt, fmtCost, type HarnessId, type TeamConnection } from '@agentistics/core'
 import type {
   ActionResult,
   ActionTarget,
@@ -84,7 +84,7 @@ import { scanProcesses } from './live-sessions'
 import { resolveBackend } from './sessions'
 import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
 import { findProjects } from './sessions/project-source'
-import { candidateLabel } from './sessions/project-search'
+import { candidateLabel, candidatePath } from './sessions/project-search'
 import type { SpawnPlanError } from './sessions/types'
 import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
@@ -1294,14 +1294,21 @@ function toControlSession(v: SessionView, s: CliStrings): ControlSession {
     state,
     stateLabel: stateLabel(state, s),
     actionable: v.status !== 'external' && v.status !== 'closed',
-    // Stated only where it is TRUE and only for a session we actually drive: an external row cannot
-    // have its approval detected either way, and saying so twice on the same screen is noise.
-    ...(v.status !== 'external' && !v.approvalDetection && harness
+    // Stated only where it is TRUE and only for a session we actually HOST. A row that is closed or
+    // running outside agentop has no screen to read at all, so "approval detection is unavailable
+    // for this harness" is not merely noise there — it is false, and it said so about claude, which
+    // is probed.
+    ...(v.status !== 'external' && v.status !== 'closed' && !v.approvalDetection && harness
       ? { approvalBlind: s.sessApprovalBlind(harness) }
       : {}),
     ...(v.createdMs !== undefined ? { startedAt: v.createdMs } : {}),
     ...(v.task ? { task: v.task } : {}),
     ...(v.resume ? { resume: v.resume } : {}),
+    ...(v.lastLines?.length ? { lastLines: v.lastLines } : {}),
+    // Already formatted, because formatting is a presentation concern the host owns for everything
+    // else it hands over — and `fmt`/`fmtCost` are the shared helpers the dashboard uses.
+    ...(v.tokens !== undefined ? { tokens: fmt(v.tokens) } : {}),
+    ...(v.costUSD !== undefined ? { cost: fmtCost(v.costUSD) } : {}),
     searchText: v.searchText,
     attached: v.attached,
   }
@@ -1931,7 +1938,12 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
 
     async searchProjects(query: string): Promise<ProjectOption[]> {
       const found = await findProjects(query, process.cwd())
-      return found.map(c => ({ path: c.path, label: candidateLabel(c), source: c.source }))
+      return found.map(c => ({
+        path: c.path,
+        label: candidateLabel(c),
+        detail: candidatePath(c, homedir()),
+        source: c.source,
+      }))
     },
 
     /**
