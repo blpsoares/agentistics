@@ -201,8 +201,11 @@ ids that JUST entered attention — so the BEL fires on a transition and not onc
 Every 5 seconds (`SESSION_POLL_MS`, env-overridable), it:
 
 1. reads the registry and `backend.list()`,
-2. captures a frame **only** for sessions that are alive and did not move on the cheap signal —
-   a session already known to be `working` costs no `capture-pane`,
+2. captures a frame for every ALIVE session, concurrency-bounded by `createLimiter`. Skipping the
+   capture of a session already known to be working was considered and rejected: a skipped capture
+   leaves its digest stale, so the poll after it goes quiet compares against an old frame and
+   reports one more interval of `working` than is true. A `capture-pane` per live session every
+   five seconds is cheap; a state that lags the truth is not,
 3. runs the pure functions,
 4. reads `scanProcesses()` for the external half,
 5. emits a `SessionSnapshot`.
