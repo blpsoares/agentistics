@@ -209,6 +209,16 @@ export interface ControlStrings {
   /** The external row's own sentence, in the detail pane. */
   sessionsExternalNote: string
   keySessionsGroup: string
+  keySessionsAttach: string
+  keySessionsKill: string
+  keySessionsRename: string
+  keySessionsNote: string
+  /** The rename / note prompts, and the kill confirmation. */
+  sessionsRenamePrompt: string
+  sessionsNotePrompt: string
+  sessionsKillConfirm: (title: string) => string
+  /** Said when a verb is pressed on a row that cannot take it. */
+  sessionsNotActionable: string
 
   /** Static tabs. */
   helpIntro: string
@@ -370,6 +380,14 @@ const EN: ControlStrings = {
   },
   sessionsExternalNote: 'started outside agentop — listed, but it cannot be attached or stopped here.',
   keySessionsGroup: 'v group',
+  keySessionsAttach: '⏎ attach',
+  keySessionsKill: 'x kill',
+  keySessionsRename: 'n name',
+  keySessionsNote: 't note',
+  sessionsRenamePrompt: 'Name this session',
+  sessionsNotePrompt: 'Describe this session',
+  sessionsKillConfirm: (title: string) => `Stop "${title}"? The assistant running in it is ended.`,
+  sessionsNotActionable: 'that session was not started by agentop, so it cannot be driven from here.',
 
   helpIntro: 'Every command, with the flags that matter. `agentop --help` prints this plain.',
   cheatIntro: 'The commands worth remembering.',
@@ -527,6 +545,14 @@ const PT: ControlStrings = {
   },
   sessionsExternalNote: 'iniciada fora do agentop — listada, mas não dá para anexar nem parar por aqui.',
   keySessionsGroup: 'v agrupar',
+  keySessionsAttach: '⏎ anexar',
+  keySessionsKill: 'x encerrar',
+  keySessionsRename: 'n nomear',
+  keySessionsNote: 't nota',
+  sessionsRenamePrompt: 'Dê um nome a esta sessão',
+  sessionsNotePrompt: 'Descreva esta sessão',
+  sessionsKillConfirm: (title: string) => `Encerrar "${title}"? O assistente que roda nela é finalizado.`,
+  sessionsNotActionable: 'essa sessão não foi iniciada pelo agentop, então não dá para controlá-la daqui.',
 
   helpIntro: 'Todos os comandos, com as flags que importam. `agentop --help` imprime isto puro.',
   cheatIntro: 'Os comandos que vale a pena lembrar.',

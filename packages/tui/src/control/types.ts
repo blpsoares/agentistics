@@ -479,10 +479,49 @@ export interface ControlHost {
    * contract exists to prevent.
    */
   sessions?(): Promise<ControlSessions>
+
+  /**
+   * What it takes to attach to a session, or `null` when this one cannot be attached.
+   *
+   * Returned rather than PERFORMED, exactly as the backend's own `attachCommand` is: attaching needs
+   * the real tty, which it can only have once the control center has released it. The cockpit
+   * reports the intent as `ControlExit.attach` and `cli-start.ts` takes over — the same discipline
+   * `central.sh init` already follows.
+   */
+  attachSession?(id: string): Promise<AttachTicket | null>
+
+  killSession?(id: string): Promise<ActionResult>
+  renameSession?(id: string, label: string): Promise<ActionResult>
+  noteSession?(id: string, text: string): Promise<ActionResult>
+}
+
+/** Everything the caller needs to hand the terminal over and get the user back afterwards. */
+export interface AttachTicket {
+  /** Exec'd with inherited stdio once Ink has unmounted and the alternate buffer is released. */
+  argv: string[]
+  /**
+   * The REAL detach keystroke, read from the backend — never assumed to be `Ctrl-b`.
+   *
+   * Printed before the handover: a user who cannot get out is stranded in a buffer that hides their
+   * shell, and a tmux prefix the user rebound would make a guessed hint actively wrong.
+   */
+  detachHint: string
+  /** Already-localized name of what is being attached to, for the sentence printed on the way in. */
+  label: string
 }
 
 /**
  * Why the control center stopped. `foreground` tells `cli.ts` to fall through to the in-process
  * server startup, exactly as the old launcher's `'foreground'` sentinel did.
  */
-export type ControlExit = { kind: 'quit'; code: number } | { kind: 'foreground' }
+export type ControlExit =
+  | { kind: 'quit'; code: number }
+  | { kind: 'foreground' }
+  /**
+   * Hand the terminal to a session, then COME BACK.
+   *
+   * The Ink app never execs anything itself: it unmounts, `cli-start.ts` runs the argv with the real
+   * tty, and when that returns it re-enters the control center on the sessions tab. The loop is what
+   * makes attach and detach feel like two halves of one gesture rather than an exit.
+   */
+  | { kind: 'attach'; ticket: AttachTicket }

@@ -105,6 +105,14 @@ export interface CliStrings {
   sessApprovalBlind: (harness: string) => string
   /** The fallback title for a session the user never named. */
   sessUntitled: (harness: string, project: string) => string
+  sessKilled: (id: string) => string
+  sessKillUnconfirmed: (id: string) => string
+  sessRenamed: string
+  /** Printed on the way into an attach, with the REAL detach key. */
+  sessAttaching: (title: string, detach: string) => string
+  sessNoted: string
+  /** A session the backend hosts but the registry never recorded has no metadata to patch. */
+  sessNoRegistryEntry: string
   dockerMissing: string
   dockerUnreachable: string
   foregroundLater: string
@@ -278,6 +286,14 @@ const EN: CliStrings = {
   sessApprovalBlind: (harness: string) =>
     `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
+  sessKilled: (id: string) => `stopped ${id}.`,
+  sessKillUnconfirmed: (id: string) =>
+    `could not confirm ${id} was stopped — it may still be running, so its record was kept.`,
+  sessRenamed: 'session renamed.',
+  sessAttaching: (title: string, detach: string) =>
+    `Attaching to ${title}. To leave it running and come back here, press ${detach}.`,
+  sessNoted: 'note saved.',
+  sessNoRegistryEntry: 'that session has no record to update — it was not started by agentop.',
   dockerMissing: 'docker not installed',
   dockerUnreachable: 'docker is installed but not answering',
   foregroundLater: 'foreground starts once this screen closes.',
@@ -425,6 +441,14 @@ const PT: CliStrings = {
   sessApprovalBlind: (harness: string) =>
     `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando", como qualquer outra pausa.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
+  sessKilled: (id: string) => `${id} encerrada.`,
+  sessKillUnconfirmed: (id: string) =>
+    `não deu para confirmar que ${id} foi encerrada — ela pode continuar rodando, então o registro dela foi mantido.`,
+  sessRenamed: 'sessão renomeada.',
+  sessAttaching: (title: string, detach: string) =>
+    `Anexando a ${title}. Para deixá-la rodando e voltar aqui, aperte ${detach}.`,
+  sessNoted: 'nota salva.',
+  sessNoRegistryEntry: 'essa sessão não tem registro para atualizar — não foi o agentop que iniciou ela.',
   dockerMissing: 'docker não instalado',
   dockerUnreachable: 'docker instalado, mas não responde',
   foregroundLater: 'o foreground sobe assim que esta tela fechar.',

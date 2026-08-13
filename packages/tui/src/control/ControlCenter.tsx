@@ -175,32 +175,37 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
     host.sessions ? null : undefined,
   )
 
-  useEffect(() => {
+  /**
+   * One read of the fleet, callable on demand as well as on the interval.
+   *
+   * The sessions screen calls it straight after an action, because a kill or a rename the user just
+   * performed has to be visible before the next tick — a list that ignores you for five seconds
+   * reads as a list that ignored you.
+   */
+  const pollFleet = useCallback(async () => {
     const read = host.sessions
     if (!read) return
-    let alive = true
-
-    const poll = async () => {
-      let next: ControlSessions
-      try {
-        next = await read.call(host)
-      } catch {
-        // `sessions()` is contracted never to throw. If it does anyway, the stale list beats a
-        // blank one — reporting an empty fleet would say every running session had ended.
-        return
-      }
-      if (!alive) return
-      setFleet(next)
-      // The bell rings for the TRANSITION into waiting, which the host computed; ringing on the
-      // level would beep every five seconds for as long as a question went unanswered. It goes
-      // through `writeFrame` because nothing may write to the alternate buffer around Ink.
-      if (next.rang.length > 0) writeFrame(BEL)
+    let next: ControlSessions
+    try {
+      next = await read.call(host)
+    } catch {
+      // `sessions()` is contracted never to throw. If it does anyway, the stale list beats a blank
+      // one — reporting an empty fleet would say every running session had ended.
+      return
     }
-
-    void poll()
-    const timer = setInterval(() => { void poll() }, SESSION_POLL_MS)
-    return () => { alive = false; clearInterval(timer) }
+    setFleet(next)
+    // The bell rings for the TRANSITION into waiting, which the host computed; ringing on the level
+    // would beep every five seconds for as long as a question went unanswered. It goes through
+    // `writeFrame` because nothing may write to the alternate buffer around Ink.
+    if (next.rang.length > 0) writeFrame(BEL)
   }, [host])
+
+  useEffect(() => {
+    if (!host.sessions) return
+    void pollFleet()
+    const timer = setInterval(() => { void pollFleet() }, SESSION_POLL_MS)
+    return () => clearInterval(timer)
+  }, [host, pollFleet])
 
   /**
    * The task the last action started, or `null` when nothing has been performed yet.
@@ -547,6 +552,7 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
         <Screen visible={tab === 'sessions'}>
           <Pane title={s.tabsShort.sessions} width={width} height={height}>
             <Sessions
+              host={host}
               // Polled by the shell, not by this screen — the counter it feeds is in the header,
               // which is on every tab.
               fleet={fleet}
@@ -554,7 +560,12 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
               width={bodyWidth}
               height={bodyRows}
               isActive={tab === 'sessions'}
+              run={run}
               onChrome={reportChrome}
+              onExit={onExit}
+              // An action the user just took must be visible before the next tick, or the screen
+              // looks like it ignored them.
+              onRefreshFleet={() => { void pollFleet() }}
             />
           </Pane>
         </Screen>

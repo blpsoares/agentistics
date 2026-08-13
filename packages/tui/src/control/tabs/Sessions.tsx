@@ -14,14 +14,17 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Box, Text, useInput } from 'ink'
-import type { ControlSession, ControlSessions, SessionState } from '../types'
+import type {
+  ActionResult, ControlExit, ControlHost, ControlSession, ControlSessions, SessionState,
+} from '../types'
 import type { ControlStrings } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import { Divider } from '../Surface'
+import { ConfirmPrompt, TextPrompt } from '../Prompt'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
-  sessionsLayout, type DetailLine, type SessionGrouping, type SessionRow,
+  QUESTION_ROWS, sessionsLayout, type DetailLine, type SessionGrouping, type SessionRow,
 } from '../sessions'
 import { isActivation, wheelDelta } from '../mouse'
 import { usePointer } from '../pointer'
@@ -42,7 +45,19 @@ const STATE_COLOR: Record<SessionState, string | undefined> = {
   unknown: COLORS.muted,
 }
 
-export function Sessions({ fleet, strings: s, width, height, isActive, onChrome }: {
+/**
+ * A question this screen is asking. While one is open it reports `capture`, so the global keys stand
+ * down — typing a session name would otherwise quit the app on the `q` and refresh it on the `r`.
+ */
+type Ask =
+  | { kind: 'rename'; session: ControlSession }
+  | { kind: 'note'; session: ControlSession }
+  | { kind: 'kill'; session: ControlSession }
+
+export function Sessions({
+  host, fleet, strings: s, width, height, isActive, run, onChrome, onExit, onRefreshFleet,
+}: {
+  host: ControlHost
   /** `null` until the first poll lands, `undefined` when the host has no fleet at all. The two are
    *  different sentences and the screen must not collapse them. */
   fleet: ControlSessions | null | undefined
@@ -50,10 +65,17 @@ export function Sessions({ fleet, strings: s, width, height, isActive, onChrome 
   width: number
   height: number
   isActive: boolean
+  /** The shell's single funnel for performing anything — spinner, status line, refresh. */
+  run: (fn: () => Promise<ActionResult>, label?: string) => Promise<ActionResult>
   onChrome: (chrome: TabChrome) => void
+  onExit: (exit: ControlExit) => void
+  /** Re-poll immediately rather than waiting out the interval — an action the user just took must
+   *  be visible in the list before the next tick, or the screen looks like it ignored them. */
+  onRefreshFleet: () => void
 }) {
   const [grouping, setGrouping] = useState<SessionGrouping>('none')
   const [cursor, setCursor] = useState(0)
+  const [ask, setAsk] = useState<Ask | null>(null)
 
   const rows = useMemo(() => sessionRows(groupSessions(
     fleet?.sessions ?? [],
@@ -89,7 +111,38 @@ export function Sessions({ fleet, strings: s, width, height, isActive, onChrome 
     // poll runs, so a duration computed anywhere upstream would freeze at whatever it was.
   }, startedAt => s.sessionsAgo(Math.max(0, Math.round((Date.now() - startedAt) / 1000)))) : []),
   [selected, s])
-  const layout = sessionsLayout(height, detail.length)
+  // A question needs room whether or not the detail pane earned any, so it sets the floor. The
+  // cockpit reserves `QUESTION_ROWS` for the same reason: a prompt with nowhere to draw is a prompt
+  // the user cannot answer.
+  const layout = sessionsLayout(height, ask ? Math.max(QUESTION_ROWS, detail.length) : detail.length)
+
+  /**
+   * Act on the selected row, or say why it cannot be acted on.
+   *
+   * An external session is LISTED because the fleet in one place is the point, and refused here
+   * because agentop did not start it — it has no backend to attach to and no record to rename. The
+   * refusal is a sentence rather than a silently ignored keypress: a control that does nothing and
+   * says nothing is indistinguishable from a broken one.
+   */
+  const actOn = useCallback((kind: Ask['kind'] | 'attach') => {
+    if (!selected) return
+    if (!selected.actionable) {
+      void run(async () => ({ ok: false, message: s.sessionsNotActionable }))
+      return
+    }
+    if (kind === 'attach') {
+      const attach = host.attachSession
+      if (!attach) return
+      void (async () => {
+        const ticket = await attach.call(host, selected.id)
+        // The screen never execs anything: it reports the intent, the shell releases the terminal,
+        // and `cli-start.ts` hands it over. Coming back is the other half of the same gesture.
+        if (ticket) onExit({ kind: 'attach', ticket })
+      })()
+      return
+    }
+    setAsk({ kind, session: selected })
+  }, [selected, host, run, onExit, s])
 
   useInput((input, key) => {
     const nav: NavKey = {
@@ -112,19 +165,33 @@ export function Sessions({ fleet, strings: s, width, height, isActive, onChrome 
       return
     }
 
+    // The verbs. `k` is deliberately NOT the kill key — it is `up` in this list, and a key that
+    // moves the cursor on one screen and destroys work on another is the shape of a real accident.
+    if (key.return) return actOn('attach')
+    if (input === 'x') return actOn('kill')
+    if (input === 'n') return actOn('rename')
+    if (input === 't') return actOn('note')
+
     if (selectable.length > 0) {
       const next = resolveListKey(nav, Math.max(0, at), selectable.length)
       if (next !== at) setCursor(next)
     }
-  }, { isActive })
+  }, { isActive: isActive && ask === null })
 
   useEffect(() => {
     if (!isActive) return
-    onChrome({
-      capture: false,
-      hints: [s.keyQuit, s.keyTabs, s.keyMove, s.keySessionsGroup, s.keyRefresh],
-    })
-  }, [isActive, onChrome, s])
+    // While a question is open the global keys stand down and the footer says only what works —
+    // a hint for a key that does nothing is the one bug this footer exists to prevent.
+    onChrome(ask
+      ? { capture: true, hints: [s.keyBack] }
+      : {
+          capture: false,
+          hints: [
+            s.keyQuit, s.keyTabs, s.keyMove, s.keySessionsAttach, s.keySessionsRename,
+            s.keySessionsNote, s.keySessionsKill, s.keySessionsGroup,
+          ],
+        })
+  }, [isActive, onChrome, s, ask])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
@@ -185,7 +252,22 @@ export function Sessions({ fleet, strings: s, width, height, isActive, onChrome 
         </Box>
       )}
 
-      {layout.detail > 0 && detail.length > 0 ? (
+      {ask ? (
+        <>
+          <Divider width={width} />
+          <Question
+            ask={ask}
+            strings={s}
+            width={width}
+            onClose={() => setAsk(null)}
+            onRun={(fn, label) => {
+              setAsk(null)
+              void run(fn, label).then(onRefreshFleet)
+            }}
+            host={host}
+          />
+        </>
+      ) : layout.detail > 0 && detail.length > 0 ? (
         <>
           <Divider width={width} />
           <Detail lines={detail} width={width} rows={layout.detail - 1} />
@@ -280,5 +362,59 @@ function Detail({ lines, width, rows }: {
         </Text>
       ))}
     </Box>
+  )
+}
+
+/**
+ * The three questions this screen asks, drawn where the detail pane was.
+ *
+ * In place of the facts rather than over them: a modal floating above a list is a second thing to
+ * read at the moment the user is deciding, and the row being acted on is still visible above.
+ */
+function Question({ ask, strings: s, width, onClose, onRun, host }: {
+  ask: Ask
+  strings: ControlStrings
+  width: number
+  onClose: () => void
+  onRun: (fn: () => Promise<ActionResult>, label?: string) => void
+  host: ControlHost
+}) {
+  const { session } = ask
+
+  if (ask.kind === 'kill') {
+    return (
+      <ConfirmPrompt
+        label={s.sessionsKillConfirm(session.title)}
+        yesLabel={s.yes}
+        noLabel={s.no}
+        width={width}
+        onCancel={onClose}
+        onAnswer={(yes: boolean) => {
+          if (!yes) return onClose()
+          const kill = host.killSession
+          if (!kill) return onClose()
+          onRun(() => kill.call(host, session.id), s.keySessionsKill)
+        }}
+      />
+    )
+  }
+
+  const isRename = ask.kind === 'rename'
+  return (
+    <TextPrompt
+      label={isRename ? s.sessionsRenamePrompt : s.sessionsNotePrompt}
+      // The current value is offered as the default, so `enter` on an unchanged field is a no-op
+      // rather than a way to accidentally blank a name.
+      defaultValue={(isRename ? session.title : session.note) ?? ''}
+      width={width}
+      onCancel={onClose}
+      onSubmit={value => {
+        const text = value.trim()
+        if (!text) return onClose()
+        const fn = isRename ? host.renameSession : host.noteSession
+        if (!fn) return onClose()
+        onRun(() => fn.call(host, session.id, text), isRename ? s.keySessionsRename : s.keySessionsNote)
+      }}
+    />
   )
 }

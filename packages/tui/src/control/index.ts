@@ -146,6 +146,7 @@ export async function runControlCenter(opts: ControlCenterOptions): Promise<Cont
 export type {
   ActionResult,
   ActionTarget,
+  AttachTicket,
   BootState,
   RestartOption,
   RestartRequest,

@@ -231,6 +231,15 @@ export function detailLines(s: ControlSession, labels: {
   return out
 }
 
+/**
+ * The rows a QUESTION needs, floor.
+ *
+ * A confirmation is a wrapped sentence, a blank and two answers; anything less hides one of the
+ * answers, which is worse than not asking — the user is looking at a destructive verb with only the
+ * word "Yes" on screen. The cockpit reserves its own `QUESTION_ROWS` for exactly this reason.
+ */
+export const QUESTION_ROWS = 5
+
 /** The fewest rows a detail pane is worth: its divider plus something to say. */
 const DETAIL_MIN = 4
 /** The fewest list rows worth keeping before the detail pane is dropped entirely. */

@@ -36,6 +36,7 @@ import { DEFAULT_TEAM, type TeamConnection } from '@agentistics/core'
 import type {
   ActionResult,
   ActionTarget,
+  AttachTicket,
   BootState,
   ControlHost,
   ControlService,
@@ -51,6 +52,7 @@ import type {
   ServiceState,
   SessionState,
   StartOption,
+  TabId,
   StartRequest,
 } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
@@ -75,7 +77,7 @@ import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
 import { resolveLang } from './cli-lang'
 import { scanProcesses } from './live-sessions'
 import { resolveBackend } from './sessions'
-import { readRegistry } from './sessions/registry'
+import { patchSession, readRegistry, removeSession } from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
 import type { SessionView } from './sessions/session-view'
 
@@ -1108,6 +1110,28 @@ async function tailFile(path: string, maxLines: number): Promise<string[]> {
 }
 
 /**
+ * Hand the terminal to a session and wait for the user to come back.
+ *
+ * Printing here is SAFE and everywhere else in this flow is not: the control center has unmounted
+ * and left the alternate buffer by the time this runs, so the hint lands on the primary screen where
+ * it belongs. The hint itself is the whole reason this is not a bare spawn — a user who cannot get
+ * out is stranded in a buffer that hides their shell, and the key is read from the backend rather
+ * than assumed, because a tmux prefix the user rebound would make a guessed `Ctrl-b` actively wrong.
+ */
+async function execAttachTicket(ticket: AttachTicket, s: CliStrings): Promise<void> {
+  console.log(s.sessAttaching(ticket.label, ticket.detachHint))
+  const [bin, ...rest] = ticket.argv
+  if (!bin) return
+  await new Promise<void>(resolve => {
+    const child = spawn(bin, rest, { stdio: 'inherit' })
+    child.on('exit', () => resolve())
+    // A backend that cannot be exec'd must not wedge the loop: the control center comes straight
+    // back up and the failure is visible as the session simply still being there.
+    child.on('error', () => resolve())
+  })
+}
+
+/**
  * The session poller, created once for the life of the process.
  *
  * A singleton on purpose, and not for speed: the poller carries the previous frame digest and the
@@ -1682,6 +1706,48 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         ...(snap.unavailable ? { unavailable: snap.unavailable } : {}),
       }
     },
+
+    async attachSession(id: string): Promise<AttachTicket | null> {
+      const s = S()
+      const backend = await resolveBackend()
+      if (await backend.unavailable()) return null
+      // The label comes from the registry so the sentence printed on the way in names what the user
+      // selected, not an id they never typed.
+      const managed = (await readRegistry()).find(r => r.id === id)
+      return {
+        argv: backend.attachCommand(id),
+        detachHint: await backend.detachHint(),
+        label: managed?.label ?? id,
+      }
+    },
+
+    /**
+     * Stop a session, and delete its registry entry only once the backend CONFIRMS it is gone.
+     *
+     * The same rule `agentop session kill` follows, and for the same reason: clearing the entry on an
+     * unconfirmed kill turns a still-running session into one nothing can name again.
+     */
+    async killSession(id: string): Promise<ActionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+      if (!(await backend.kill(id))) return { ok: false, message: s.sessKillUnconfirmed(id) }
+      await removeSession(id)
+      return { ok: true, message: s.sessKilled(id) }
+    },
+
+    async renameSession(id: string, label: string): Promise<ActionResult> {
+      const s = S()
+      const ok = await patchSession(id, { label })
+      return ok ? { ok: true, message: s.sessRenamed } : { ok: false, message: s.sessNoRegistryEntry }
+    },
+
+    async noteSession(id: string, text: string): Promise<ActionResult> {
+      const s = S()
+      const ok = await patchSession(id, { note: text })
+      return ok ? { ok: true, message: s.sessNoted } : { ok: false, message: s.sessNoRegistryEntry }
+    },
   }
 }
 
@@ -1709,8 +1775,19 @@ export async function runStart(): Promise<StartResult> {
   // unconfigured user on a list of services to start would leave the mode and the history-
   // preservation consent — the two things the wizard existed to ask — behind a tab they have no
   // reason to look for.
-  const exit = await runControlCenter({ lang, host, tab: (await isUnconfigured()) ? 'setup' : undefined })
-  if (exit.kind !== 'foreground') return exit.code
+  let tab: TabId | undefined = (await isUnconfigured()) ? 'setup' : undefined
+
+  // Attach and detach are two halves of ONE gesture, so this is a loop rather than an exit. The Ink
+  // app never execs anything: it unmounts, the session gets the real tty here, and when the user
+  // detaches the control center comes back up on the tab they left from. Anything else would make
+  // "look at a session" a one-way trip out of the application.
+  for (;;) {
+    const exit = await runControlCenter({ lang, host, tab })
+    if (exit.kind === 'foreground') break
+    if (exit.kind === 'quit') return exit.code
+    await execAttachTicket(exit.ticket, cliStrings(host.lang))
+    tab = 'sessions'
+  }
 
   // The terminal is ours again, so the two questions the foreground start has always asked can be
   // asked the way they always were — and in the same order: free the port first (a refusal aborts
