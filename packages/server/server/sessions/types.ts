@@ -96,6 +96,38 @@ export interface ManagedSession {
   note?: string
 }
 
+/**
+ * What a session is doing right now.
+ *
+ * There is deliberately no `idle`. An interactive assistant whose process is alive and whose screen
+ * has stopped moving is, by construction, waiting for the person in front of it — there is no third
+ * thing it could be doing. What genuinely cannot always be known is WHY it is waiting, and that
+ * uncertainty lives in `AttentionRules.approval` being absent for a harness nobody has probed, which
+ * the UI states in words. A state word is the wrong place to put it: `idle` reads as "nothing to do
+ * here" on exactly the session that is blocked on a permission prompt.
+ */
+export type SessionActivity =
+  | 'working'
+  | 'waiting-approval'
+  | 'waiting'
+  | 'exited'
+
+/** The screen markers of ONE harness, read from real frames. See `attention-rules.ts`. */
+export interface AttentionRules {
+  /** A frame matching one of these is a question the session is blocked on. */
+  approval: RegExp[]
+  /**
+   * Proof the session is working, even if it did not redraw between two polls.
+   *
+   * Optional because it does not always exist: codex draws the same footer and the same ghost
+   * placeholder while streaming output as it does while sitting idle. For such a harness movement
+   * is the only working signal there is, and claiming otherwise would be a guess.
+   */
+  working?: RegExp[]
+  /** Provenance — the exact CLI version the frames came from, and the date. */
+  probed: string
+}
+
 export interface SessionBackend {
   readonly id: 'tmux' | 'pty'
   /** Why this backend cannot run here, already localized. Absent when it can. */
