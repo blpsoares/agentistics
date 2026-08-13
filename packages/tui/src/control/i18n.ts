@@ -226,8 +226,6 @@ export interface ControlStrings {
   sessionsFinishConfirm: (task: string, count: number) => string
   sessionsReopenConfirm: (task: string) => string
   asideProjects: string
-  /** The default arrangement, offered as one row: what the list opens as. */
-  asidePreset: string
   asideAllProjects: string
   toggleDone: string
   /** The strict switch: only what is running. Overrides the other three. */
@@ -524,7 +522,6 @@ const EN: ControlStrings = {
     `Mark "${task}" finished? Its ${count} session${count === 1 ? '' : 's'} stay listed behind the "finished tasks" switch.`,
   sessionsReopenConfirm: task => `Reopen "${task}"?`,
   asideProjects: 'PROJECTS',
-  asidePreset: 'active · project',
   asideAllProjects: 'every project',
   toggleDone: 'finished tasks',
   toggleActive: 'only active',
@@ -806,7 +803,6 @@ const PT: ControlStrings = {
     `Finalizar "${task}"? Suas ${count} sessõe${count === 1 ? '' : 's'} continuam listadas atrás do interruptor "tarefas finalizadas".`,
   sessionsReopenConfirm: task => `Reabrir "${task}"?`,
   asideProjects: 'PROJETOS',
-  asidePreset: 'ativos · projeto',
   asideAllProjects: 'todos os projetos',
   toggleDone: 'tarefas finalizadas',
   toggleActive: 'apenas ativas',

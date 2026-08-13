@@ -52,7 +52,8 @@ import { SessionWizard } from './SessionWizard'
 import { TaskChoice } from '../TaskChoice'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
-  QUESTION_ROWS, actionLabels, asideRows, asideSelectable, enabledActionIndexes, filterSessions,
+  QUESTION_ROWS, actionLabels, asideRows, asideSelectable, asideRowKey, resolveAsideCursor,
+  enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
   taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
   asideSections, asideFold, scrollBar, THUMB,
@@ -177,7 +178,15 @@ export function Sessions({
   const [taskFilter, setTaskFilter] = useState<string | null>(null)
   /** Which pane has the keyboard. The aside is a real pane, not a strip of hints. */
   const [focus, setFocus] = useState<'list' | 'aside'>('list')
-  const [asideIndex, setAsideIndex] = useState(0)
+  /**
+   * WHICH ROW the menu cursor is on, by name rather than by position.
+   *
+   * It used to be an index into the selectable rows, and that list changes composition constantly —
+   * which verbs are enabled depends on the selected session — so moving down the fleet renumbered
+   * every row beneath the actions block and the menu cursor jumped, usually back into the first
+   * section, which then opened. An index is not an identity.
+   */
+  const [asideKey, setAsideKey] = useState('action:attach')
 
   const done = useMemo(() => new Set(fleet?.finishedTasks ?? []), [fleet?.finishedTasks])
   const rows = useMemo(() => sessionRows(groupSessions(
@@ -290,16 +299,6 @@ export function Sessions({
     group: s.actSessions.group,
   }), [actions, s])
 
-  // Whether the list is arranged exactly as the app opens. Compared against the ONE default rather
-  // than against a second copy of it, so the row cannot claim to be on while it is not.
-  const isDefaultView = grouping === DEFAULT_SESSION_VIEW.grouping
-    && showClosed === DEFAULT_SESSION_VIEW.showClosed
-    && showExited === DEFAULT_SESSION_VIEW.showExited
-    && showDone === (DEFAULT_SESSION_VIEW.showDone ?? false)
-    && onlyActive === (DEFAULT_SESSION_VIEW.onlyActive ?? false)
-    && hideEmptyTask === !DEFAULT_SESSION_VIEW.showUnfiled
-    && taskFilter === null && projectFilter === null && query === ''
-
   const asideList = useMemo(() => asideRows({
     actions,
     actionWords: {
@@ -320,8 +319,6 @@ export function Sessions({
       active: s.toggleActive,
     },
     headings: { actions: s.asideActions, view: s.asideView, show: s.asideShow },
-    presetLabel: s.asidePreset,
-    presetOn: isDefaultView,
     showUnfiled: grouping === 'task',
     tasks: {
       // Counted over the WHOLE fleet: the count is what says a task has work in it, and counting
@@ -342,15 +339,22 @@ export function Sessions({
     },
   }), [
     actions, grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, taskFilter,
-    projectFilter, fleet?.sessions, fleet?.finishedTasks, isDefaultView, s,
+    projectFilter, fleet?.sessions, fleet?.finishedTasks, s,
   ])
 
   const asidePicks = useMemo(() => asideSelectable(asideList), [asideList])
+  // Re-resolved on every render against the list as it now is, so nothing has to remember to fix
+  // the cursor after a rebuild.
+  const asideRow = resolveAsideCursor(asideList, asideKey)
+  const asideAt = asidePicks.indexOf(asideRow)
+  /** Move the cursor by NAME — the one setter every key, click and jump goes through. */
+  const setAsideRow = useCallback((index: number) => {
+    const row = asideList[index]
+    if (row) setAsideKey(asideRowKey(row))
+  }, [asideList])
   // The menu's titled blocks, derived from the same flat list the cursor walks.
   const sections = useMemo(() => asideSections(asideList), [asideList])
 
-  const asideAt = asidePicks.length === 0 ? -1 : Math.min(asideIndex, asidePicks.length - 1)
-  const asideRow = asideAt < 0 ? -1 : asidePicks[asideAt]!
 
   const asideLabel = useMemo(
     () => asideList.reduce((n, r) => Math.max(n, 'label' in r ? r.label.length + 2 : 0), 0),
@@ -430,8 +434,8 @@ export function Sessions({
     if (target === undefined) return
     setFocus('aside')
     setActionsFocused(false)
-    setAsideIndex(Math.max(0, asidePicks.indexOf(target)))
-  }, [sections, asidePicks])
+    setAsideRow(target)
+  }, [sections, setAsideRow])
 
   /**
    * Put the arrangement back to how the app opens on a fresh machine.
@@ -460,7 +464,6 @@ export function Sessions({
     if (row.kind === 'group') { setGrouping(row.value); setCursor(0); return }
     if (row.kind === 'task') { setTaskFilter(row.name || null); setCursor(0); return }
     if (row.kind === 'project') { setProjectFilter(row.name || null); setCursor(0); return }
-    if (row.kind === 'preset') return resetView()
     if (row.kind !== 'toggle') return
     setCursor(0)
     if (row.toggle === 'closed') return setShowClosed(v => !v)
@@ -511,8 +514,8 @@ export function Sessions({
         const step = key.rightArrow ? 1 : -1
         return gotoSection((activeSection + step + sections.length) % sections.length)
       }
-      if (key.upArrow || input === 'k') return setAsideIndex(Math.max(0, asideAt - 1))
-      if (key.downArrow || input === 'j') return setAsideIndex(Math.min(asidePicks.length - 1, asideAt + 1))
+      if (key.upArrow || input === 'k') return setAsideRow(asidePicks[Math.max(0, asideAt - 1)] ?? asideRow)
+      if (key.downArrow || input === 'j') return setAsideRow(asidePicks[Math.min(asidePicks.length - 1, asideAt + 1)] ?? asideRow)
       return
     }
 
@@ -533,7 +536,10 @@ export function Sessions({
     if (key.return) {
       if (cockpit.aside > 0 && selected) {
         setFocus('aside')
-        setAsideIndex(0)
+        // The first verb this row can actually take, by name — the row-specific verb is `attach`
+        // on a running session and `resume` on everything else, so a fixed index would land on
+        // whichever happened to be first.
+        setAsideRow(asidePicks[0] ?? 0)
         return
       }
       // No menu to move to on a narrow terminal, so enter keeps its old meaning there.
@@ -699,7 +705,7 @@ export function Sessions({
       if (!row || row.kind === 'heading' || row.kind === 'rule') return
       if (row.kind === 'action' && !row.enabled) return
       setFocus('aside')
-      setAsideIndex(Math.max(0, asidePicks.indexOf(index)))
+      setAsideRow(index)
       runAside(index)
       return
     }

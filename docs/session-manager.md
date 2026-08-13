@@ -101,9 +101,8 @@ remembered across runs.
 That default is strict on purpose, and has one consequence worth knowing: when nothing is running,
 it shows an empty list. The screen says *why* and names the key that lifts it — the sessions a
 reboot turned into `lost` rows are still there, still named and still reopenable, so "no sessions"
-would be false, and a blank pane under a strict filter is indistinguishable from a broken one. `ctrl+r` puts it back to that default, and so does the row at the top of the
-**view** block — every switch here is sticky, which is also how an arrangement you fiddled with weeks
-ago follows you around, and a key with no row is a feature only the footer knows about.
+would be false, and a blank pane under a strict filter is indistinguishable from a broken one. `ctrl+r` puts it back to that default — every switch here is sticky, which
+is also how an arrangement you fiddled with weeks ago follows you around.
 
 Grouping by **repository** is the other useful one: a session is opened in a directory, but the thing
 a person thinks in is the repository, and three worktrees of `agentistics` are three places to work
