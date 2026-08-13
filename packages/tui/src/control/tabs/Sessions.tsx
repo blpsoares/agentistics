@@ -163,7 +163,7 @@ export function Sessions({
   // The action row is drawn from this screen's own budget, so it is subtracted BEFORE the split. A
   // row taken without being paid for is composited over the one under it, which reads as a corrupt
   // frame rather than a cramped one.
-  const actionRows = height >= 8 ? 1 : 0
+  const actionRows = height >= 12 ? 2 : height >= 8 ? 1 : 0
   const layout = sessionsLayout(
     Math.max(1, height - actionRows),
     ask ? Math.max(QUESTION_ROWS, detail.length) : detail.length,
@@ -400,7 +400,12 @@ export function Sessions({
         // not, the host's own sentence is what the summary row is already showing.
         <Text dimColor>{fleet.unavailable ? '' : s.sessionsEmpty}</Text>
       ) : (
-        <Box flexDirection="column" height={layout.list} flexShrink={0}>
+        // NO fixed height: the rows pack upward so the action row and the detail pane sit directly
+        // under the list. Padding this region to the full budget put them at the BOTTOM of a tall
+        // screen — on a tablet that is thirty blank rows between a five-row list and its controls,
+        // and it reads as the controls having disappeared. The leftover space belongs at the very
+        // bottom of the frame, where nobody is looking for anything.
+        <Box flexDirection="column" flexShrink={0}>
           {visible.map((row, i) => {
             const index = offset + i
             if (row.kind === 'spacer') return <Text key={`s${index}`}> </Text>
@@ -432,7 +437,12 @@ export function Sessions({
       )}
 
       {actionRows > 0 ? (
-        <ActionRow labels={actionWords} selected={at2} focused={actionsFocused} width={width} />
+        <>
+          {/* One row of air, so the verbs read as a separate thing from the rows they act on rather
+              than as another list entry. Only spent when the screen can afford it. */}
+          {height >= 12 ? <Text> </Text> : null}
+          <ActionRow labels={actionWords} selected={at2} focused={actionsFocused} width={width} />
+        </>
       ) : null}
 
       {ask ? (

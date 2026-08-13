@@ -34,6 +34,10 @@ const CAPTURE_LINES = 60
  *  process per session all at once. */
 const CAPTURE_CONCURRENCY = 4
 
+/** How much of what a session is saying to carry. Enough that a tall pane has something to fill it
+ *  with; the pane cuts from the bottom to whatever it can actually draw. */
+const TAIL_LINES = 8
+
 export interface SessionSnapshot {
   sessions: SessionView[]
   /** How many are waiting on a person. Drives the header counter. */
@@ -115,7 +119,7 @@ export function createSessionsPoller(o: {
         const frame = await o.backend.capture(r.id, lines).catch(() => [] as string[])
         const frameDigest = digestFrame(frame)
         nextDigest.set(r.id, frameDigest)
-        tails.set(r.id, frameTail(frame))
+        tails.set(r.id, frameTail(frame, TAIL_LINES))
 
         const harness = harnessOf.get(r.id)
         const rules = harness ? rulesFor(harness) : undefined
