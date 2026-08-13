@@ -35,6 +35,7 @@ import { cheatContent, contributeContent, helpContent } from './content'
 import { StaticTab } from './tabs/Static'
 import { Logs } from './tabs/Logs'
 import { Services } from './tabs/Services'
+import { Sessions } from './tabs/Sessions'
 import { Setup } from './tabs/Setup'
 
 /**
@@ -275,10 +276,27 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   // against what it will actually draw. Everything else is fixed: a blank, the tab bar, its rule,
   // the status line and the footer. The update notice costs no row of its own — it is a dot on the
   // header's right-hand tag.
+  /**
+   * How many sessions are waiting on the user, as the Sessions screen last counted them.
+   *
+   * Held here rather than on that screen because it is drawn on the HEADER, which every tab wears —
+   * that is the whole point of it. It arrives through a callback of its own rather than on
+   * `ScreenChrome`, because the chrome is scoped to whichever screen is on top (see `reports`) and
+   * this number has to keep arriving from a screen nobody is looking at.
+   */
+  const [attention, setAttention] = useState(0)
+  const reportAttention = useCallback((count: number) => {
+    setAttention(prev => (prev === count ? prev : count))
+  }, [])
+
   const header = headerLayout({
     mode: status?.mode ?? '',
     version: status?.version ?? '',
     latestVersion: status?.latestVersion,
+    // Worded here, where the language lives, and empty when nothing is waiting: `headerMeta` has no
+    // string table, and a tag that said `0 waiting on you` would be a confident zero on the one row
+    // the user cannot dismiss.
+    attention: attention > 0 ? s.sessionsAttention(attention) : '',
     width,
   })
   const height = bodyHeight(rows, header.rows)
@@ -288,7 +306,7 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   // Only the three interactive screens report, and only they clear their own flags again. Scoping
   // every claim to them means a screen that never reports cannot inherit a stale `true` and lock
   // the global keys with no owner left to release them.
-  const reports = tab === 'services' || tab === 'setup' || tab === 'logs'
+  const reports = tab === 'services' || tab === 'sessions' || tab === 'setup' || tab === 'logs'
   const capturing = chrome.capture && reports
   const arrowsClaimed = Boolean(chrome.claimArrows) && reports
 
@@ -481,6 +499,23 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
             // `m` key together rather than leaving a control for a device that cannot report.
             mouseOn={mouseOn}
             onMouse={mouse ? toggleMouse : undefined}
+          />
+        </Screen>
+
+        {/* Like the cockpit, and unlike every other screen: `Sessions` draws its own panes, so it
+            receives the FULL width and height rather than the inside of one the shell framed. */}
+        <Screen visible={tab === 'sessions'}>
+          <Sessions
+            host={host}
+            strings={s}
+            width={width}
+            height={height}
+            isActive={tab === 'sessions'}
+            run={run}
+            onChrome={reportChrome}
+            // Not on the chrome: the count has to keep arriving while this tab is NOT the one on
+            // screen, which is exactly when the header is the only place it can be said.
+            onAttention={reportAttention}
           />
         </Screen>
 

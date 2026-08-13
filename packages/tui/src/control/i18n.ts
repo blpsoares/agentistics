@@ -200,6 +200,14 @@ export interface ControlStrings {
 
   /** Nothing running here — a real empty fleet, never the answer to "sessions cannot be read". */
   sessionsEmpty: string
+  /**
+   * Said before the FIRST snapshot lands, and only then.
+   *
+   * A screen of its own rather than `sessionsEmpty` shown early: "no sessions on this machine yet"
+   * drawn while nobody has looked is the confident zero this codebase keeps out of every other
+   * surface, and reading the fleet costs one capture per running session — long enough to be seen.
+   */
+  sessionsLoading: string
   /** How many rows are waiting on the user right now. Shown as the screen's own badge. */
   sessionsAttention: (n: number) => string
   /** Said on the row you are already inside — it is why this terminal shows what it shows. */
@@ -228,6 +236,18 @@ export interface ControlStrings {
   actRename: string
   actNote: string
   actKill: string
+
+  /**
+   * The three questions a session row can raise.
+   *
+   * The kill question NAMES the row (`sessionName` — the label, the id, or the directory), because
+   * it is the one irreversible verb on this screen and "kill it?" beside a list whose cursor the
+   * question is drawn over answers "which one?" with a shrug. The other two are prompts, and their
+   * placeholders are the CURRENT value: a rename that starts empty hides what it is replacing.
+   */
+  sessionKillQuestion: (name: string) => string
+  sessionRenamePrompt: string
+  sessionNotePrompt: string
 
   /**
    * The new-session wizard's steps, each named by the question it asks.
@@ -414,6 +434,7 @@ const EN: ControlStrings = {
     'not hosted by agentop — this machine only saw the process, so it cannot be attached, renamed or killed from here.',
 
   sessionsEmpty: 'no sessions on this machine yet.',
+  sessionsLoading: 'reading the fleet…',
   sessionsAttention: (n) => `${n} waiting on you`,
   sessionAttached: 'attached',
   sessionNotAttachable: 'that session cannot be attached — it is gone, or its command has exited.',
@@ -430,6 +451,10 @@ const EN: ControlStrings = {
   actRename: 'Rename',
   actNote: 'Note',
   actKill: 'Kill',
+
+  sessionKillQuestion: (name) => `Kill ${name} and forget it?`,
+  sessionRenamePrompt: 'New label for this session',
+  sessionNotePrompt: 'Note on this session',
 
   sessionStepHarness: 'Which assistant?',
   sessionStepProject: 'Where should it run?',
@@ -595,6 +620,7 @@ const PT: ControlStrings = {
     'não é hospedada pelo agentop — esta máquina só viu o processo, então não dá para anexar, renomear nem encerrar por aqui.',
 
   sessionsEmpty: 'nenhuma sessão nesta máquina ainda.',
+  sessionsLoading: 'lendo as sessões…',
   sessionsAttention: (n) => `${n} esperando você`,
   sessionAttached: 'anexada',
   sessionNotAttachable: 'não dá para anexar nessa sessão — ela sumiu, ou o comando dela já terminou.',
@@ -611,6 +637,10 @@ const PT: ControlStrings = {
   actRename: 'Renomear',
   actNote: 'Nota',
   actKill: 'Encerrar',
+
+  sessionKillQuestion: (name) => `Encerrar ${name} e esquecer dela?`,
+  sessionRenamePrompt: 'Novo nome para esta sessão',
+  sessionNotePrompt: 'Nota nesta sessão',
 
   sessionStepHarness: 'Qual assistente?',
   sessionStepProject: 'Onde ela vai rodar?',

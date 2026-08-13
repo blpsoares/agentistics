@@ -13,16 +13,21 @@ import { truncate } from '../components/Primitives'
 import { brandMark } from '../components/Wordmark'
 import {
   ACTION_SEP,
+  detailPlan,
   fitActionRow,
+  fitDetailLines,
   footerHints,
   headerMetaWidth,
   tabUnderline,
   type ConfigCells,
+  type DetailLine,
+  type DetailTone,
   type HeaderLayout,
   type HeaderMeta,
   type TabSpec,
   type TabStripLayout,
 } from './chrome.ts'
+import { SectionHeader } from './Surface'
 import type { ServiceState, TabId } from './types'
 import type { ControlStrings } from './i18n'
 
@@ -79,11 +84,19 @@ export function Header({ layout, width }: { layout: HeaderLayout; width: number 
   )
 }
 
-/** The machine's identity: mode, version, and the update dot. Same run in both header branches. */
+/**
+ * The machine's identity: mode, version, how many sessions are waiting, and the update dot. The
+ * same run in both header branches.
+ *
+ * The attention count is `COLORS.info`, which is the tone `SESSION_STATE_TONE` already gives the two
+ * waiting states — one colour for "this is waiting on you" wherever it appears — and it carries a
+ * NUMBER and a WORD, never a bare glyph, so it survives a terminal that flattens the palette.
+ */
 function HeaderTag({ meta }: { meta: HeaderMeta }) {
   return (
     <Text>
       <Text dimColor>{meta.text}</Text>
+      {meta.attention ? <Text color={COLORS.info}>{` · ${meta.attention}`}</Text> : null}
       {/* Glyph plus version, in accent: the dot alone would carry the whole message in color. */}
       {meta.update ? <Text color={COLORS.accent}>{` · ${meta.update}`}</Text> : null}
     </Text>
@@ -371,5 +384,162 @@ export function ActionRow({ labels, selected, focused, width }: {
       {more ? <Text dimColor>{' ›'}</Text> : null}
     </Text>
   )
+}
+
+/** Tone → colour. The one place a `DetailTone` becomes a colour, so the mapping cannot drift. */
+const TONE_COLOR: Record<DetailTone, string | undefined> = {
+  plain: COLORS.text,
+  muted: undefined,
+  good: COLORS.success,
+  bad: COLORS.danger,
+  info: COLORS.info,
+}
+
+/**
+ * What a detail pane draws: the composed lines and the label column they align on.
+ *
+ * Narrower than `DetailContent` on purpose. A service's content also carries an `alert` — the
+ * two-copies-fighting-over-one-port sentence — which is already IN `lines` by the time it reaches
+ * here, and a session has no such fact at all. Taking only the two fields this component reads is
+ * what lets `detailContent` and `sessionDetailLines` feed the same pane rather than two copies of
+ * it, each with its own idea of what a tone looks like.
+ */
+export interface DetailPaneContent {
+  lines: DetailLine[]
+  labelWidth: number
+}
+
+/**
+ * The detail pane's rows, budgeted by `detailPlan` so the ACTION row is the last thing to go and
+ * sits on the pane's floor.
+ *
+ * A pane that dropped its verbs and kept a URL would be a readout; the reason the actions live here
+ * rather than in a menu of their own is that they belong to the thing described above them.
+ *
+ * The lines arrive already composed and already ordered by whichever builder produced them, in the
+ * order they must survive a short pane — for a service the ALERT leads, for a session its STATE
+ * does, because a pane with one fact row must not spend it on `native · pid 48213 · up 2h14m` while
+ * the same program is running twice, nor on a directory while the session is waiting to be let
+ * through. This component maps a `kind` to a shape and a `tone` to a colour, and decides nothing.
+ */
+export function DetailBody({ content, actions, actionIndex, focused, width, rows }: {
+  content: DetailPaneContent | null
+  actions: string[]
+  actionIndex: number
+  focused: boolean
+  width: number
+  rows: number
+}) {
+  if (!content) return null
+
+  const labelWidth = content.labelWidth
+  // Cut to the rows this pane has BEFORE the plan is drawn up, so a slice that landed on a section
+  // rule takes the rule with it — see `fitDetailLines`. The action row's own row is reserved here
+  // because `detailPlan` will spend it either way.
+  const shown = fitDetailLines(content.lines, Math.max(0, rows - (actions.length > 0 ? 1 : 0)))
+  const facts = shown.map((line, i) => {
+    const key = `${line.kind}${i}`
+    if (line.kind === 'blank') return <Text key={key}> </Text>
+    // The same titled rule the linear screens use, so a section reads the same everywhere in the
+    // app — and it is what turns a dozen facts into four things you can find with your eye.
+    if (line.kind === 'section') return <SectionHeader key={key} title={line.label} width={width} />
+    if (line.kind === 'text') {
+      return (
+        <Text key={key} color={TONE_COLOR[line.tone]} dimColor={line.tone === 'muted'}>
+          {truncate(line.value, width)}
+        </Text>
+      )
+    }
+    return (
+      <Text key={key}>
+        <Text dimColor>{truncate(line.label, labelWidth).padEnd(labelWidth)}</Text>
+        <Text color={TONE_COLOR[line.tone]}>
+          {' ' + truncate(line.value, Math.max(1, width - labelWidth - 1))}
+        </Text>
+      </Text>
+    )
+  })
+
+  const plan = detailPlan(rows, facts.length, actions.length > 0)
+
+  return (
+    <>
+      {facts.slice(0, plan.facts)}
+      {/* Air between the facts and a row that stops a server — and it is the pane's slack, not a
+          single separator row: this pane owns everything under the band, so on a tall terminal it
+          has rows to spare. Under the verbs they read as a dead region; over them they read as air,
+          and the verbs stop moving as the selection changes. */}
+      {Array.from({ length: plan.pad }, (_, i) => <Text key={`pad${i}`}> </Text>)}
+      {plan.actions
+        ? <ActionRow labels={actions} selected={actionIndex} focused={focused} width={width} />
+        : null}
+    </>
+  )
+}
+
+/**
+ * One row of the sessions list: cursor, state, harness, name, directory.
+ *
+ * The cell widths are handed in, measured across the whole fleet at once by `sessionCells` — a row
+ * that measured itself would be a column that wobbles as the cursor moves — and the NAME comes from
+ * `sessionName`, the same function that measured the column.
+ *
+ * Two differences from `ServiceLine`, both deliberate:
+ *
+ *  - There is NO GLYPH. A service has three states and a `●`/`○`/`?` vocabulary that still says
+ *    running-or-not; a session has seven, and no glyph tells "needs approval" from "the frame could
+ *    not be read". The word is the state, which is why `sessionCells` keeps it last and whole.
+ *  - The DIRECTORY is cut from the LEFT. A path's tail is what identifies it — `…/agentop-sessions`
+ *    names a worktree, `/home/mithrandir/…` names a home directory every row shares.
+ */
+export function SessionLine({ word, tone, harness, name, cwd, selected, focused, cells }: {
+  /** The state in WORDS, already localized. Never dropped — see `sessionCells`. */
+  word: string
+  /** How the state is painted. Emphasis only: the word beside it carries the meaning. */
+  tone: DetailTone
+  harness: string
+  name: string
+  cwd: string
+  selected: boolean
+  /** The list has the keyboard. The cursor is drawn either way — the detail pane is a view OF it. */
+  focused?: boolean
+  cells: { state: number; harness: number; name: number; cwd: number }
+}) {
+  // A row nothing is asking of recedes, but never the cursor on it: a dim selection is a selection
+  // you cannot find, and this list is what drives the pane beside it.
+  const quiet = tone === 'muted' && !selected
+  const cell = (text: string, width: number) => truncate(text, width).padEnd(width)
+
+  return (
+    <Text>
+      <Text color={selected && focused ? COLORS.accent : undefined} dimColor={selected && !focused}>
+        {selected ? '❯ ' : '  '}
+      </Text>
+      {/* Colour never carries the meaning alone — the word says it too, for a flattened palette. */}
+      <Text color={TONE_COLOR[tone]} dimColor={tone === 'muted'}>{cell(word, cells.state)}</Text>
+      {cells.harness > 0 ? <Text dimColor>{' ' + cell(harness, cells.harness)}</Text> : null}
+      {cells.name > 0
+        ? (
+          <Text color={quiet ? undefined : COLORS.text} dimColor={quiet} bold={selected && focused}>
+            {' ' + cell(name, cells.name)}
+          </Text>
+        )
+        : null}
+      {cells.cwd > 0 ? <Text dimColor>{' ' + cell(truncateStart(cwd, cells.cwd), cells.cwd)}</Text> : null}
+    </Text>
+  )
+}
+
+/**
+ * `truncate`'s mirror: keep the END of the string.
+ *
+ * Only paths use it, and only because a path is identified by its tail. Cutting a directory the way
+ * every other cell is cut turns four different worktrees into four rows reading `/home/mithran…`.
+ */
+export function truncateStart(text: string, max: number): string {
+  if (max <= 0) return ''
+  if (text.length <= max) return text
+  if (max === 1) return '…'
+  return '…' + text.slice(text.length - (max - 1))
 }
 

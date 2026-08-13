@@ -39,6 +39,8 @@ import {
   type ControlService,
   type ControlStatus,
   type ServiceRuntimeState,
+  type SessionSnapshot,
+  type SessionView,
   type TabId,
 } from '../src/control/types'
 import type { CliLang } from '../src/control/lang'
@@ -76,6 +78,17 @@ const CASES: readonly Case[] = ['solo', 'central', 'member', 'conflict', 'nodock
  */
 type TaskState = 'off' | 'running' | 'done'
 
+/**
+ * Which fleet the Sessions screen is given.
+ *
+ * The three shapes a `SessionSnapshot` can take, and they are three different screens: rows,
+ * "nothing is running here", and "nothing could be looked at" — the last of which must never be
+ * rendered as the second.
+ */
+type Fleet = 'full' | 'empty' | 'unavailable'
+
+const FLEETS: readonly Fleet[] = ['full', 'empty', 'unavailable'] as const
+
 interface Options {
   cols: number
   rows: number
@@ -86,6 +99,8 @@ interface Options {
   keys: string[]
   /** Stream a build into the output channel: `running` (unfinished) or `done`. */
   task: TaskState
+  /** Which fleet the Sessions screen gets. */
+  fleet: Fleet
   /**
    * Pretend the history consent has never been answered.
    *
@@ -112,13 +127,17 @@ const USAGE = `
     --task   running|done   the next start/restart streams a build into the output pane
                             and either never finishes (running) or does (done);
                             reach it with --keys enter,enter
+    --fleet  ${FLEETS.join('|')}
+                            what --screen sessions is given (default full)
+                            full = the awkward rows; unavailable = no tmux on this box
     --pending               history consent still unanswered, so a start opens the
                             gate: --pending --keys enter,right,enter
 `
 
 function parseArgs(argv: string[]): Options {
   const opts: Options = {
-    cols: 100, rows: 34, lang: 'en', screen: 'services', mode: 'solo', keys: [], task: 'off', pending: false,
+    cols: 100, rows: 34, lang: 'en', screen: 'services', mode: 'solo', keys: [],
+    task: 'off', fleet: 'full', pending: false,
   }
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]
@@ -135,6 +154,10 @@ function parseArgs(argv: string[]): Options {
         break
       case '--mode':
         opts.mode = CASES.find(c => c === value) ?? 'solo'
+        i++
+        break
+      case '--fleet':
+        opts.fleet = FLEETS.find(f => f === value) ?? 'full'
         i++
         break
       case '--screen': {
@@ -292,6 +315,122 @@ const BUILD_CHUNKS: string[] = [
   `  compiled ./release/agentop\n#5 DONE 41.3s\n\n#6 exporting to image\n#6 DONE 3.1s\n${ESC}[?25h`,
 ]
 
+/**
+ * The fleet, stocked with the rows this screen's layout has to survive rather than with a happy one.
+ *
+ * In the order the host sorts them — ATTENTION FIRST, which is the order the screen renders and
+ * therefore the order a preview has to arrive in. What is here on purpose:
+ *
+ *  - a session waiting for APPROVAL and one waiting for INPUT (the two rows the counter and the BEL
+ *    are about), one WORKING, one this terminal is already ATTACHED to;
+ *  - one `unreadable` and one `exited` — two of the three quiet states, neither of which may render
+ *    as "idle", and the exited one is the case where `attachable` is false while `killable` is not;
+ *  - an EXTERNAL row, which offers no verb at all and whose id is the `ext:` bookkeeping string that
+ *    `sessionName` must refuse to use as a name;
+ *  - a cwd long enough that a 200-column terminal still cannot show all of it, which is what makes
+ *    the directory column the first cell `sessionCells` gives away.
+ */
+const MINUTE = 60_000
+
+function fleet(now: number): SessionView[] {
+  return [
+    {
+      id: 'a1b2c3d4',
+      harness: 'claude',
+      cwd: '/home/mithrandir/agentistics/.claude/worktrees/agentop-sessions-tui/packages/tui/src/control',
+      label: 'sessions cockpit',
+      note: 'do not kill — the rename prompt is half typed',
+      state: 'waiting-approval',
+      managed: true,
+      attached: false,
+      createdMs: now - 92 * MINUTE,
+      lastActivityMs: now - MINUTE,
+      attachable: true,
+      killable: true,
+    },
+    {
+      id: 'e5f6a7b8',
+      harness: 'codex',
+      cwd: '/home/mithrandir/prontuario/packages/front',
+      label: '',
+      note: '',
+      state: 'waiting-input',
+      managed: true,
+      attached: false,
+      createdMs: now - 14 * MINUTE,
+      lastActivityMs: now - 3 * MINUTE,
+      attachable: true,
+      killable: true,
+    },
+    {
+      id: '9c0d1e2f',
+      harness: 'claude',
+      cwd: '/home/mithrandir/agentistics',
+      label: 'dev server',
+      note: '',
+      state: 'working',
+      managed: true,
+      // The row this terminal is already inside — the detail pane says so, and it is why the pane
+      // and the list must not both claim to be the thing you are looking at.
+      attached: true,
+      createdMs: now - 3 * 60 * MINUTE,
+      lastActivityMs: now - 5_000,
+      attachable: true,
+      killable: true,
+    },
+    {
+      id: '3a4b5c6d',
+      harness: 'gemini',
+      cwd: '/home/mithrandir/projects/ia/rig-contratos-classificacao',
+      label: '',
+      note: '',
+      state: 'unreadable',
+      managed: true,
+      attached: false,
+      createdMs: now - 40 * MINUTE,
+      attachable: true,
+      killable: true,
+    },
+    {
+      id: '7e8f9a0b',
+      harness: 'kimi',
+      cwd: '/tmp/scratch',
+      label: 'nightly sweep',
+      note: 'finished clean; kept for the transcript',
+      state: 'exited',
+      managed: true,
+      attached: false,
+      createdMs: now - 11 * 60 * MINUTE,
+      lastActivityMs: now - 4 * 60 * MINUTE,
+      // Its command is gone, so there is nothing to attach to — but the registry entry is still
+      // there to rename, annotate and clear.
+      attachable: false,
+      killable: true,
+    },
+    {
+      id: 'ext:copilot:/home/mithrandir/blpsoares/orgs/opvibes/embark:1754932001',
+      harness: 'copilot',
+      cwd: '/home/mithrandir/blpsoares/orgs/opvibes/embark',
+      label: '',
+      note: '',
+      state: 'external',
+      managed: false,
+      attached: false,
+      attachable: false,
+      killable: false,
+      externalReason: 'not-hosted-by-agentop',
+    },
+  ]
+}
+
+function fakeFleet(opts: Options, s: CliStrings): SessionSnapshot {
+  if (opts.fleet === 'empty') return { views: [] }
+  // Already localized by the host, exactly as it is in `cli-start.ts` — and NOT an empty list: this
+  // is the answer the screen must not render as "nothing is running".
+  if (opts.fleet === 'unavailable') return { views: [], unavailable: s.sessionsNoTmux }
+  return { views: fleet(Date.now()) }
+}
+
 function fakeHost(opts: Options): ControlHost {
   const done = async () => ({ ok: true, message: 'preview — nothing was performed' })
 
@@ -342,18 +481,16 @@ function fakeHost(opts: Options): ControlHost {
     },
     readLog: async (source, maxLines) => (LOG[source] ?? []).slice(-maxLines),
 
-    // The session verbs, as an EMPTY fleet: no screen draws them yet, and a preview host that
-    // invented sessions would be showing frames nothing renders. The Sessions screen arrives with
-    // its own fixtures — a session waiting for approval, one working, one unreadable, an external
-    // row, a very long cwd — because those are the cases its layout has to survive.
-    sessions: async () => ({ views: [] }),
+    // The fleet `--fleet` asked for. Re-read on every poll, exactly as the real one is.
+    sessions: async () => fakeFleet(opts, cliStrings(opts.lang)),
     startSession: done,
     killSession: done,
     renameSession: done,
     noteSession: done,
-    // Nothing to attach to here, and the refusal is the honest answer rather than an argv that
-    // would hand a real terminal to a session that does not exist.
-    attachCommand: async () => null,
+    // The argv a real backend would hand back. Nothing here execs it — the preview has no terminal
+    // to hand over — but returning it is what makes `--keys enter` show the success path as well as
+    // the refusal, and an external row is refused by its own `attachable: false` before it gets here.
+    attachCommand: async id => (id.startsWith('ext:') ? null : ['tmux', 'attach', '-t', `agentop-${id}`]),
     detachHint: async () => 'Ctrl-b then d',
     projectChoices: async () => [],
     sessionHarnesses: async () => [],
@@ -457,7 +594,7 @@ async function main(): Promise<void> {
   const over = lines.filter(l => visibleWidth(l) > opts.cols)
 
   const out = [
-    `  ${opts.mode} · ${opts.screen} · ${opts.lang} · ${opts.cols}x${opts.rows}`,
+    `  ${opts.mode} · ${opts.screen}${opts.screen === 'sessions' ? `/${opts.fleet}` : ''} · ${opts.lang} · ${opts.cols}x${opts.rows}`,
     tens,
     units,
     ...lines,

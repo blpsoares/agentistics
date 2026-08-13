@@ -38,9 +38,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import { truncate } from '../../components/Primitives'
-import { COLORS } from '../../theme'
-import { ActionRow, ConfigLine, CONFLICT_GLYPH, ServiceLine, STATE_GLYPH, stateWord } from '../Chrome'
-import { SectionHeader } from '../Surface'
+import { ConfigLine, CONFLICT_GLYPH, DetailBody, ServiceLine, STATE_GLYPH, stateWord } from '../Chrome'
 // The same position label the log viewer wears, from the same pure helper: two screens showing a
 // window into a longer list must not describe it differently.
 import { windowLabel } from '../surface.ts'
@@ -52,16 +50,12 @@ import {
   cockpitRects,
   configCells,
   detailContent,
-  detailPlan,
   fitActionRow,
-  fitDetailLines,
   fitValue,
   serviceCells,
   SERVICE_MARKER,
   stripScheme,
   type CockpitContent,
-  type DetailContent,
-  type DetailTone,
 } from '../chrome.ts'
 import { listRowAt, paneHit, paneOrigin, rectHit, type Rect } from '../hit'
 import { isActivation, wheelDelta } from '../mouse'
@@ -1296,78 +1290,3 @@ export function Services({
   }
 }
 
-/** Tone → colour. The one place a `DetailTone` becomes a colour, so the mapping cannot drift. */
-const TONE_COLOR: Record<DetailTone, string | undefined> = {
-  plain: COLORS.text,
-  muted: undefined,
-  good: COLORS.success,
-  bad: COLORS.danger,
-  info: COLORS.info,
-}
-
-/**
- * The detail pane's rows, budgeted by `detailPlan` so the ACTION row is the last thing to go and
- * sits on the pane's floor.
- *
- * A pane that dropped its verbs and kept a URL would be a readout; the reason the actions live here
- * rather than in a menu of their own is that they belong to the thing described above them.
- *
- * The lines arrive already composed and already ordered by `detailContent`, in the order they must
- * survive a short pane — the ALERT leads, because a pane with one fact row must not spend it on
- * `native · pid 48213 · up 2h14m` while the same program is running twice. This component maps a
- * `kind` to a shape and a `tone` to a colour, and decides nothing.
- */
-function DetailBody({ content, actions, actionIndex, focused, width, rows }: {
-  content: DetailContent | null
-  actions: string[]
-  actionIndex: number
-  focused: boolean
-  width: number
-  rows: number
-}) {
-  if (!content) return null
-
-  const labelWidth = content.labelWidth
-  // Cut to the rows this pane has BEFORE the plan is drawn up, so a slice that landed on a section
-  // rule takes the rule with it — see `fitDetailLines`. The action row's own row is reserved here
-  // because `detailPlan` will spend it either way.
-  const shown = fitDetailLines(content.lines, Math.max(0, rows - (actions.length > 0 ? 1 : 0)))
-  const facts = shown.map((line, i) => {
-    const key = `${line.kind}${i}`
-    if (line.kind === 'blank') return <Text key={key}> </Text>
-    // The same titled rule the linear screens use, so a section reads the same everywhere in the
-    // app — and it is what turns a dozen facts into four things you can find with your eye.
-    if (line.kind === 'section') return <SectionHeader key={key} title={line.label} width={width} />
-    if (line.kind === 'text') {
-      return (
-        <Text key={key} color={TONE_COLOR[line.tone]} dimColor={line.tone === 'muted'}>
-          {truncate(line.value, width)}
-        </Text>
-      )
-    }
-    return (
-      <Text key={key}>
-        <Text dimColor>{truncate(line.label, labelWidth).padEnd(labelWidth)}</Text>
-        <Text color={TONE_COLOR[line.tone]}>
-          {' ' + truncate(line.value, Math.max(1, width - labelWidth - 1))}
-        </Text>
-      </Text>
-    )
-  })
-
-  const plan = detailPlan(rows, facts.length, actions.length > 0)
-
-  return (
-    <>
-      {facts.slice(0, plan.facts)}
-      {/* Air between the facts and a row that stops a server — and it is the pane's slack, not a
-          single separator row: this pane owns everything under the band, so on a tall terminal it
-          has rows to spare. Under the verbs they read as a dead region; over them they read as air,
-          and the verbs stop moving as the selection changes. */}
-      {Array.from({ length: plan.pad }, (_, i) => <Text key={`pad${i}`}> </Text>)}
-      {plan.actions
-        ? <ActionRow labels={actions} selected={actionIndex} focused={focused} width={width} />
-        : null}
-    </>
-  )
-}

@@ -244,6 +244,38 @@ describe('headerMeta', () => {
       expect(headerMetaWidth(meta)).toBeLessThanOrEqual(width)
     }
   })
+
+  test('carries the waiting count, and says nothing at all when nothing is waiting', () => {
+    const waiting = headerMeta({ mode: 'solo', version: '1.7.3', attention: '2 waiting on you', width: 60 })
+    expect(waiting.attention).toBe('2 waiting on you')
+    // Never `0 waiting on you`: the caller words it, and an empty run draws no glyph and no
+    // separator — a confident zero on the one row the user cannot dismiss.
+    expect(headerMeta({ mode: 'solo', version: '1.7.3', width: 60 }).attention).toBe('')
+  })
+
+  test('drops the VERSION before the waiting count, because only one of them is about right now', () => {
+    const tag = { mode: 'solo', version: '1.7.3', latestVersion: '1.7.4', attention: '2 waiting on you' }
+    const full = headerMeta({ ...tag, width: 60 })
+    expect(full.update).toBe('● 1.7.4')
+    expect(full.text).toBe('solo · v1.7.3')
+
+    // Wide enough for the mode and the count, not for the version beside them.
+    const squeezed = headerMeta({ ...tag, width: 'solo'.length + 3 + '2 waiting on you'.length })
+    expect(squeezed.attention).toBe('2 waiting on you')
+    expect(squeezed.text).toBe('solo')
+
+    // Below even that, the mode is the last thing standing — the count goes too rather than wrap.
+    expect(headerMeta({ ...tag, width: 6 }).attention).toBe('')
+  })
+
+  test('never exceeds its width with a count in the tag either', () => {
+    for (let width = 0; width <= 80; width++) {
+      const meta = headerMeta({
+        mode: 'member', version: '1.7.3', latestVersion: '1.7.4', attention: '3 waiting on you', width,
+      })
+      expect(headerMetaWidth(meta)).toBeLessThanOrEqual(width)
+    }
+  })
 })
 
 describe('headerLayout', () => {
@@ -1486,5 +1518,23 @@ describe('sessionsHints', () => {
       const hints = sessionsHints(focus, s, live)
       expect(hints.includes(s.keyQuit) || hints.includes(s.keyBack)).toBe(true)
     }
+  })
+
+  test('names `tab` only when there is a second region to reach', () => {
+    // It matters more here than on the cockpit: `enter` is ATTACH on this screen, so `tab` is the
+    // only way to the verbs at all.
+    expect(sessionsHints('list', s, { ...live, panes: 2 })).toContain(s.keyPane)
+    expect(sessionsHints('actions', s, { ...live, panes: 2 })).toContain(s.keyPane)
+    // A row with no verbs draws no action row, so `tab` cycles a list of one and is not named.
+    expect(sessionsHints('list', s, { ...live, panes: 1 })).not.toContain(s.keyPane)
+    expect(sessionsHints('list', s, live)).not.toContain(s.keyPane)
+  })
+
+  test('withholds `n new` only when the caller says the wizard cannot open', () => {
+    expect(sessionsHints('list', s, { ...live, canNew: false })).not.toContain(s.keyNewSession)
+    // Absent reads as offered, which is the steady state: the verb acts on no row, so there is
+    // always somewhere to start one.
+    expect(sessionsHints('list', s, live)).toContain(s.keyNewSession)
+    expect(sessionsHints('list', s, { ...live, canNew: true })).toContain(s.keyNewSession)
   })
 })

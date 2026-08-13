@@ -176,22 +176,34 @@ export interface HeaderMetaInput {
   mode: string
   version: string
   latestVersion?: string
+  /**
+   * How many sessions are waiting on the user, ALREADY LOCALIZED and empty when none are.
+   *
+   * A string rather than a number because this module holds no string table — every word on the
+   * header arrives already worded, exactly as the mode token does. Empty is the normal case, and an
+   * empty run costs nothing and draws nothing: a header that said `0 waiting on you` would be a
+   * confident zero in the one place the user cannot dismiss it.
+   */
+  attention?: string
   width: number
 }
 
 /**
- * `text` is the dim run; `update` is the accent-colored dot, empty when there is nothing to say.
- * Split rather than pre-joined because the dot is the only part that is not dim, and a component
- * cannot color the middle of a string it was handed whole.
+ * `text` is the dim run; `attention` is the count of sessions waiting on the user; `update` is the
+ * accent-colored dot. All three are split rather than pre-joined because each is a different color,
+ * and a component cannot color the middle of a string it was handed whole.
  */
 export interface HeaderMeta {
   text: string
+  /** Localized, and empty when nothing is waiting. */
+  attention: string
   update: string
 }
 
-/** What the two pieces cost together, separators included — the number the caller budgets against. */
+/** What the pieces cost together, separators included — the number the caller budgets against. */
 export function headerMetaWidth(meta: HeaderMeta): number {
-  return meta.text.length + (meta.update ? SEP.length + meta.update.length : 0)
+  const run = (piece: string) => (piece ? SEP.length + piece.length : 0)
+  return meta.text.length + run(meta.attention) + run(meta.update)
 }
 
 /**
@@ -201,27 +213,37 @@ export function headerMetaWidth(meta: HeaderMeta): number {
  * metrics to a central · http://198.51.100.199:48080" is a paragraph, not a tag. Only the short
  * token survives; the sentence and the endpoint moved to the config pane, which has rows to spare.
  *
- * Under width pressure the pieces drop from the right: the update notice first, then the version.
- * The mode token is the last thing standing because it is the only one that says WHICH machine you
- * are looking at — a version you cannot see is one `agentop --version` away, and the update dot
- * comes back the moment the terminal is wider.
+ * Under width pressure the pieces drop from the right: the update notice first, then the VERSION,
+ * then the attention count. The mode token is the last thing standing because it is the only one
+ * that says WHICH machine you are looking at — a version you cannot see is one `agentop --version`
+ * away, and the update dot comes back the moment the terminal is wider.
+ *
+ * The attention count outranks the version deliberately. A version is a static fact about the
+ * install and is one command away; the count is a fact about RIGHT NOW, and it is on the header
+ * rather than on the Sessions screen precisely so it reaches a user who is looking at something
+ * else. Dropping it before a number that has not changed since the binary was built would spend the
+ * row on the half nobody is waiting for.
  */
 export function headerMeta(input: HeaderMetaInput): HeaderMeta {
   const { mode, version, latestVersion, width } = input
-  if (width <= 0) return { text: '', update: '' }
+  if (width <= 0) return { text: '', attention: '', update: '' }
 
   const outdated = Boolean(latestVersion && latestVersion !== version)
   const text = version ? `${mode}${SEP}v${version}` : mode
+  const attention = input.attention ?? ''
   const update = outdated ? `● ${latestVersion}` : ''
 
-  const full = { text, update }
+  const full = { text, attention, update }
   if (headerMetaWidth(full) <= width) return full
 
-  const withoutUpdate = { text, update: '' }
+  const withoutUpdate = { text, attention, update: '' }
   if (headerMetaWidth(withoutUpdate) <= width) return withoutUpdate
 
-  if (mode.length <= width) return { text: mode, update: '' }
-  return { text: truncate(mode, width), update: '' }
+  const withoutVersion = { text: mode, attention, update: '' }
+  if (headerMetaWidth(withoutVersion) <= width) return withoutVersion
+
+  if (mode.length <= width) return { text: mode, attention: '', update: '' }
+  return { text: truncate(mode, width), attention: '', update: '' }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,8 +278,11 @@ export type HeaderLayout =
  *
  * THE THRESHOLD IS MEASURED, never written down: the art is `artWidth(WORDMARK_ART)` columns and
  * the meta is `headerMetaWidth` of the tag this machine actually produces — a mode word that is
- * `solo` or `member`, a version whose digits grow, and an update dot that only exists while there
- * is an update. A hardcoded 68 would be right for one of those combinations and wrong for the rest.
+ * `solo` or `member`, a version whose digits grow, an update dot that only exists while there is an
+ * update, and a translated attention count that exists only while sessions are waiting. A hardcoded
+ * 68 would be right for one of those combinations and wrong for the rest — and the count is the one
+ * that appears and disappears while the app is open, so a written-down threshold would be wrong on
+ * the very frame it mattered.
  *
  * The rule is deliberately all-or-nothing: the art costs a ROW as well as 38 columns, so it is only
  * worth taking when the meta beside it is complete. Below that the header degrades to the compact
@@ -1197,6 +1222,14 @@ const SESSION_STATE_TONE: Record<SessionState, DetailTone> = {
 }
 
 /**
+ * The same tone, for the LIST row — one mapping, so the pane and the row beside it cannot paint one
+ * session two colours. Emphasis only: every surface that uses this also carries the state's WORD.
+ */
+export function sessionStateTone(state: SessionState): DetailTone {
+  return SESSION_STATE_TONE[state] ?? 'plain'
+}
+
+/**
  * `SessionView.externalReason` in words — a `Record`, so a second reason cannot be added without one.
  *
  * It is the second un-localized enum on a row, after the state, and the one that answers "why does
@@ -1498,6 +1531,27 @@ export interface SessionHintContext {
   /** The fleet has at least one row, so there is something for `↑↓` to move between. */
   hasRows: boolean
   /**
+   * A new session can actually be started from here.
+   *
+   * OPTIONAL, and absent means yes — which is the steady state, since `n` acts on no row and there
+   * is always somewhere to start one. It exists for the window in which the wizard has not been
+   * built yet: a key that opens nothing must not be named, and the whole reason this function is
+   * separate from the component is that the decision is testable.
+   */
+  canNew?: boolean
+  /**
+   * How many focus regions the layout actually drew.
+   *
+   * `HintContext.panes` restated for this screen, and for the same reason: with one region `tab`
+   * cycles a list of one, so naming it advertises a key that does nothing. Absent reads as ONE,
+   * because a screen that does not say it has a second region has not drawn one.
+   *
+   * It matters more here than it does on the cockpit. `enter` is ATTACH on this screen rather than
+   * "step into the verbs", so `tab` is the only way to reach the action row at all — a footer that
+   * never names it leaves the verbs undiscoverable.
+   */
+  panes?: number
+  /**
    * The new-session wizard owns the keyboard.
    *
    * The same shape as `HintContext.task`, and for the same reason: it is a state of the SCREEN
@@ -1525,18 +1579,23 @@ export function sessionsHints(
   // that work are moving through the step, answering it, and backing out.
   if (ctx.wizard) return [s.keyBack, s.keyMove, s.keySelect]
 
+  // With one region on screen `tab` has nowhere to go, so it is not named — the same rule
+  // `cockpitHints` applies to its own pane count.
+  const pane = (ctx.panes ?? 1) > 1 ? [s.keyPane] : []
+
   if (focus === 'actions') {
     // `←→` belong to the action row here, exactly as they do in the cockpit, so `←→ screens` would
     // be the one false hint on this screen — and the way back out leads instead.
-    return [s.keyBack, s.keyActionMove, s.keyRun]
+    return [s.keyBack, s.keyActionMove, s.keyRun, ...pane]
   }
 
   return [
     s.keyQuit,
     s.keyTabs,
+    ...pane,
     ...(ctx.hasRows ? [s.keyMove] : []),
     ...(ctx.canAttach ? [s.keyAttach] : []),
-    s.keyNewSession,
+    ...(ctx.canNew === false ? [] : [s.keyNewSession]),
     ...(ctx.canEdit ? [s.keyRename, s.keyNote] : []),
     ...(ctx.canKill ? [s.keyKill] : []),
     s.keyRefresh,
