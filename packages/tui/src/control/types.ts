@@ -400,6 +400,15 @@ export interface SessionViewPrefs {
    * never a deletion — the sessions are still there, still attachable, one toggle away.
    */
   showDone?: boolean
+  /**
+   * Show ONLY what is running: working, waiting, waiting on approval. Nothing else, no exceptions.
+   *
+   * The one switch that OVERRIDES the "a row you named is never hidden" rule rather than widening
+   * alongside it. That rule exists so a reboot does not empty the list, and it is right by default —
+   * but it also means a machine with months of named work shows all of it, and someone who wants
+   * the four things they are actually doing had no way to say so. This is that way.
+   */
+  onlyActive?: boolean
 }
 
 /**

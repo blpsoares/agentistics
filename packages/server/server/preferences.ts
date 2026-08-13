@@ -58,6 +58,7 @@ export interface Preferences {
     showExited: boolean
     showUnfiled: boolean
     showDone?: boolean
+    onlyActive?: boolean
   }
   /**
    * The session TASKS the user has marked finished.

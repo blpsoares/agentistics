@@ -84,6 +84,11 @@ history switches. A machine restart makes every managed session `lost`, and with
 list came back empty after a reboot — with the session you had renamed and filed under a task gone,
 and the name with it.
 
+**`only active` (`l`) is the one switch that overrides that**, and it is why it leads the *show*
+block. The rule above is right by default, but on a machine with months of named work it shows all
+of it; this is how you ask for the four things you are actually doing and nothing else. Everything
+else in that block can only ever widen.
+
 `/` searches all of it, including a closed conversation's opening prompt, which is what a person
 actually remembers about work they put down. `esc` drops the search, then the project scope, then the
 task scope — the summary row states what is narrowing the list and which key clears it.
