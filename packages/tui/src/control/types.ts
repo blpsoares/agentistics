@@ -418,10 +418,15 @@ export interface SessionViewPrefs {
  * initial state, and the reset. Three copies of a default is three chances for the app to open on
  * one arrangement and reset to another.
  *
- * Active conversations, grouped by project: the grouping is the directory you are working in, and
- * the two history switches are off, so the list opens as what is happening rather than as
- * everything that ever has. A row the user NAMED is still shown whatever the switches say — see
- * `sessionNamed` — which is what brings a task back after the machine restarts.
+ * Only ACTIVE conversations, grouped by project. The list opens as what is happening rather than as
+ * everything that ever has — and `onlyActive` means that strictly, named rows included, which is
+ * the whole reason it exists.
+ *
+ * The consequence is deliberate and has to be stated somewhere the user can see it: when nothing is
+ * running, this default shows an EMPTY list. It is not empty because the fleet is — the sessions
+ * that a reboot turned into `lost` rows are still there, still named, still reopenable — so the
+ * screen says so in words and names the key that lifts the filter. A blank pane under a strict
+ * filter is indistinguishable from a broken one.
  */
 export const DEFAULT_SESSION_VIEW: SessionViewPrefs = {
   grouping: 'project',
@@ -429,6 +434,7 @@ export const DEFAULT_SESSION_VIEW: SessionViewPrefs = {
   showExited: false,
   showUnfiled: true,
   showDone: false,
+  onlyActive: true,
 }
 
 export interface ControlSessions {

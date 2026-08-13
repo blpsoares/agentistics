@@ -739,6 +739,21 @@ export function Sessions({
 
   const offset = windowOffset(at < 0 ? 0 : selectable[at]!, rows.length, cockpit.listRows)
   const visible = rows.slice(offset, offset + cockpit.listRows)
+  /**
+   * WHY the list is empty, which is never simply "there is nothing".
+   *
+   * The strict filter is only named when it is genuinely the thing that emptied the list — nothing
+   * is running AND there is a fleet behind it. Blaming it while a search is what removed the rows
+   * sends someone to the wrong switch, and blaming a search while nothing is running at all would
+   * hide the fact that the filter is on. Everything else is the plain sentence.
+   */
+  const runningCount = (fleet?.sessions ?? []).filter(sessionRunning).length
+  const narrowed = Boolean(query || projectFilter !== null || taskFilter !== null)
+  const emptyReason = onlyActive && runningCount === 0 && (fleet?.sessions.length ?? 0) > 0
+    ? s.sessionsEmptyActive(fleet!.sessions.length)
+    : narrowed ? s.sessionsEmptyFiltered
+    : s.sessionsEmpty
+
   // The bar takes a column, so the rows are measured against what is left — a table sized to the
   // full pane and then drawn beside a bar is a table truncated by one character on every row.
   const listBar = scrollBar({ offset, total: rows.length, rows: cockpit.listRows })
@@ -949,8 +964,15 @@ export function Sessions({
         <Text dimColor>{s.sessionsLoading}</Text>
       ) : rows.length === 0 ? (
         // An empty fleet is only ever reported as empty when the poll actually worked. When it did
-        // not, the host's own sentence is what the summary row is already showing.
-        <Text dimColor>{fleet.unavailable ? '' : s.sessionsEmpty}</Text>
+        // not, the host's own sentence is what the summary row is already showing. And a list
+        // emptied by a FILTER says which filter and which key lifts it: the sessions a reboot
+        // turned into `lost` rows are still there, still named and still reopenable, so "no
+        // sessions" would be false — and a blank pane under a strict filter is indistinguishable
+        // from a broken one.
+        <Text dimColor wrap="truncate">
+          {fleet.unavailable ? ''
+            : truncate(emptyReason, listBody)}
+        </Text>
       ) : (
         // NO fixed height: the rows pack upward so nothing sits at the bottom of a tall pane with a
         // field of blank above it. The leftover space belongs at the very bottom of the frame.

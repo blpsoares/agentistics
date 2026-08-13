@@ -901,8 +901,12 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   the list came back EMPTY, taking the session you had renamed and filed under a task with it.
   `named` is its own flag rather than inferred from `title`, because `title` always has a value: the
   host derives one whenever there is no label.
-- **The default arrangement is stated ONCE** (`DEFAULT_SESSION_VIEW`): active conversations, grouped
-  by project. The host's fallback, the screen's initial state and the `ctrl+r` reset all read it —
+- **The default arrangement is stated ONCE** (`DEFAULT_SESSION_VIEW`): ONLY ACTIVE conversations,
+  grouped by project. It is strict, so when nothing is running it shows an empty list — and the
+  screen must therefore say WHY and name the key that lifts it, since the `lost` rows behind it are
+  still there and still reopenable. The reason is chosen by what actually emptied the list: blaming
+  the filter while a search removed the rows sends someone to the wrong switch, and blaming a search
+  while nothing is running at all would hide that the filter is on. The host's fallback, the screen's initial state and the `ctrl+r` reset all read it —
   three copies of a default is three chances for the app to open on one arrangement and reset to
   another. It is persisted by the HOST (`setSessionView`), and **nothing is written before the
   restore has happened**: `sessionViewPref` always answers, so an absent `view` means "not loaded
