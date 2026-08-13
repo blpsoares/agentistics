@@ -988,8 +988,11 @@ describe('sessionRunning', () => {
     expect(at('working')).toBe(true)
     expect(at('waiting')).toBe(true)
     expect(at('waiting-approval')).toBe(true)
-    // An external process's state cannot be read at all, so it is not evidence of anything.
-    expect(at('unknown')).toBe(false)
+    // An EXTERNAL session wears `unknown`, and it is running: the row exists because a live
+    // assistant process was found. What cannot be read there is the activity, not the existence —
+    // and treating the one as the other hid every session started outside agentop from the one
+    // filter meant to show what is happening.
+    expect(at('unknown')).toBe(true)
     expect(at('exited')).toBe(false)
     expect(at('lost')).toBe(false)
     expect(at('closed')).toBe(false)
