@@ -417,6 +417,10 @@ export function Sessions({
     // a hint for a key that does nothing is the one bug this footer exists to prevent.
     onChrome(ask
       ? { capture: true, hints: [s.keyBack] }
+      : focus === 'aside' && cockpit.aside > 0
+        // The menu is a vertical list, so it answers ↑↓ and enter — and `esc` is the way back to the
+        // sessions. A hint for a key that does nothing here is the one bug this footer prevents.
+        ? { capture: false, hints: [s.keyQuit, s.keyMove, s.keyRun, s.keyBack] }
       : actionsFocused
         // While the action row has the keyboard it is a horizontal list, so it claims the arrows —
         // and the footer stops saying they change screen for exactly as long as that is true.
@@ -429,7 +433,7 @@ export function Sessions({
               ...(grouping === 'task' ? [s.keySessionsNoTask] : []),
             ],
           })
-  }, [isActive, onChrome, s, ask, actionsFocused, grouping])
+  }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
