@@ -1129,8 +1129,17 @@ async function tailFile(path: string, maxLines: number): Promise<string[]> {
  * out is stranded in a buffer that hides their shell, and the key is read from the backend rather
  * than assumed, because a tmux prefix the user rebound would make a guessed `Ctrl-b` actively wrong.
  */
+let printedDetachHint = false
+
 async function execAttachTicket(ticket: AttachTicket, s: CliStrings): Promise<void> {
-  console.log(s.sessAttaching(ticket.label, ticket.detachHint))
+  // Printed ONCE per run. Every attach used to announce itself, and tmux adds its own
+  // `[detached (from …)]` on the way out, so a session of ordinary use left a wall of the same two
+  // lines in the scrollback the control center then drew over. The hint is worth saying; saying it
+  // fourteen times is just noise, and the cockpit now carries it permanently anyway.
+  if (!printedDetachHint) {
+    console.log(s.sessAttaching(ticket.label, ticket.detachHint))
+    printedDetachHint = true
+  }
   const [bin, ...rest] = ticket.argv
   if (!bin) return
   await new Promise<void>(resolve => {
@@ -1761,6 +1770,20 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       return { ok: false, message: s.urlOpenFailed }
     },
 
+    /**
+     * Remember how the fleet list is arranged.
+     *
+     * Best-effort: a machine that cannot write its preferences still gets the arrangement for this
+     * run. Losing it across restarts is not worth failing anything for.
+     */
+    async setSessionView(view: SessionViewPrefs): Promise<void> {
+      try {
+        await writePreferences({ sessionView: view })
+      } catch {
+        // Deliberately silent — see above.
+      }
+    },
+
     async setLang(next: CliLang): Promise<void> {
       lang = next
       try { await writePreferences({ lang: next }) } catch { /* best-effort */ }
@@ -1811,10 +1834,15 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const s = S()
       const poller = await ensureSessionsPoller()
       const snap = await poller.poll()
+      // Carried on every snapshot so the cockpit can state it permanently: a user who cannot get
+      // out of a session is stranded in a buffer that hides their shell, and a line printed once
+      // before the handover scrolls away the moment anything else happens.
+      const detachHint = await (await resolveBackend()).detachHint().catch(() => '')
       return {
         sessions: snap.sessions.map(v => toControlSession(v, s)),
         attention: snap.attention,
         rang: snap.rang,
+        ...(detachHint ? { detachHint } : {}),
         ...(snap.unavailable ? { unavailable: snap.unavailable } : {}),
       }
     },
@@ -1845,7 +1873,12 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const blocked = await backend.unavailable()
       if (blocked) return { ok: false, message: blocked }
       if (!(await backend.kill(id))) return { ok: false, message: s.sessKillUnconfirmed(id) }
-      await removeSession(id)
+      // MARKED finished, never deleted. Removing the row took with it the only record of which
+      // conversation this was — the store had not caught up, so there was nothing left to offer as
+      // reopenable and the session simply vanished from the screen. A session you end is still a
+      // thing that happened, and picking it back up is the ordinary next thing to want.
+      if (!(await patchSession(id, { endedAt: new Date().toISOString() }))) await removeSession(id)
+      forgetConversations()
       return { ok: true, message: s.sessKilled(id) }
     },
 

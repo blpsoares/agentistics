@@ -447,6 +447,59 @@ describe('sessionColumns', () => {
       expect(drawn(sessionColumns(rows, w))).toBeLessThanOrEqual(Math.max(w, 2 + 'needs approval'.length + 3))
     }
   })
+
+  it('draws NO usage column when nothing on screen has any', () => {
+    // A fleet whose harnesses report no usage must not pay for the column, nor for the gap before
+    // it — reserving a space nothing occupies narrows every title on the screen.
+    expect(sessionColumns(rows, 100).metrics).toBe(0)
+    expect(sessionColumns(rows, 100).title).toBe('migrate the auth store'.length)
+  })
+
+  it('sizes the usage column to the widest row that has any', () => {
+    const withUse = [
+      session('a', { stateLabel: 'waiting', title: 'one', tokens: '51.7k', cost: '$1.20' }),
+      session('b', { stateLabel: 'waiting', title: 'two' }),
+    ]
+    expect(sessionColumns(withUse, 120).metrics).toBe('51.7k $1.20'.length)
+  })
+
+  it('gives up usage AFTER the directory and the harness, and never before the name', () => {
+    const withUse = [
+      session('a', { stateLabel: 'needs approval', title: 'migrate the auth store', tokens: '51.7k', cost: '$1.20' }),
+    ]
+    // The widths are MEASURED rather than guessed: the point is the ORDER cells are surrendered in,
+    // and pinning it to three hand-picked numbers tests the arithmetic of this particular fixture.
+    const lost = (pick: (c: ReturnType<typeof sessionColumns>) => number) => {
+      for (let w = 200; w >= 4; w--) if (pick(sessionColumns(withUse, w)) === 0) return w
+      return 0
+    }
+    const where = lost(c => c.where)
+    const harness = lost(c => c.harness)
+    const metrics = lost(c => c.metrics)
+    // Each is given up at a NARROWER width than the one before it — the directory first, the
+    // harness next, usage last.
+    expect(where).toBeGreaterThan(harness)
+    expect(harness).toBeGreaterThan(metrics)
+    // And the state word and a usable name outlive all three.
+    const bare = sessionColumns(withUse, metrics)
+    expect(bare.metrics).toBe(0)
+    expect(bare.state).toBe('needs approval'.length)
+    expect(bare.title).toBeGreaterThan(0)
+  })
+
+  it('never asks for more columns than it was given, WITH usage, at any width', () => {
+    const withUse = [
+      session('a', { stateLabel: 'needs approval', title: 'migrate the auth store', tokens: '51.7k', cost: '$1.20' }),
+      session('b', { stateLabel: 'exited', title: 'release notes', harness: 'codex', project: 'aipe' }),
+    ]
+    const wide = (c: ReturnType<typeof sessionColumns>) =>
+      2 + c.state + (c.title ? 2 + c.title : 0) + (c.metrics ? 2 + c.metrics : 0)
+      + (c.harness ? 2 + c.harness : 0) + (c.where ? 2 + c.where : 0)
+    for (let w = 4; w <= 200; w++) {
+      expect(wide(sessionColumns(withUse, w)))
+        .toBeLessThanOrEqual(Math.max(w, 2 + 'needs approval'.length + 3))
+    }
+  })
 })
 
 describe('sessionsCockpit', () => {

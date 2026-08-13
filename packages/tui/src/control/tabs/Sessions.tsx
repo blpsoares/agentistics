@@ -29,7 +29,7 @@ import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, actionLabels, asideRows, asideSelectable, enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, sessionsLayout, summaryCells, sessionColumns, padCell,
-  taskCounts,
+  taskCounts, sessionMetric,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
 } from '../sessions'
@@ -181,11 +181,14 @@ export function Sessions({
     doing: s.sessionsDoing,
     task: s.sessionsTask,
     metrics: s.sessionsMetrics,
+    // Absent when the backend did not report one — an invented keystroke is worse than none, since
+    // the whole point of this line is that it is the key that actually works here.
+    ...(fleet?.detachHint ? { detach: { label: s.sessionsDetach, keys: fleet.detachHint } } : {}),
     // The clock arithmetic happens HERE, not in the pure module and not in the string table: the
     // host reports the INSTANT a session started, and the pane repaints far more often than the
     // poll runs, so a duration computed anywhere upstream would freeze at whatever it was.
   }, startedAt => s.sessionsAgo(Math.max(0, Math.round((Date.now() - startedAt) / 1000)))) : []),
-  [selected, s])
+  [selected, s, fleet?.detachHint])
   // A question needs room whether or not the detail pane earned any, so it sets the floor. The
   // cockpit reserves `QUESTION_ROWS` for the same reason: a prompt with nowhere to draw is a prompt
   // the user cannot answer.
@@ -373,6 +376,10 @@ export function Sessions({
     if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
     if (input === 'u' && grouping === 'task') { setHideEmptyTask(v => !v); setCursor(0); return }
     if (input === 'a') return runAction('new')
+    // Attaching has its OWN key because `enter` deliberately does not do it any more: enter opens
+    // the menu, which is what made every other verb reachable, and the cost of that was three
+    // keystrokes for the thing this screen is most often opened to do.
+    if (input === 'o') return runAction('attach')
     if (input === '/') return runAction('search')
     // `k` is deliberately NOT the kill key — it is `up` in this list, and a key that moves the
     // cursor on one screen and destroys work on another is the shape of a real accident.
@@ -420,16 +427,21 @@ export function Sessions({
       : focus === 'aside' && cockpit.aside > 0
         // The menu is a vertical list, so it answers ↑↓ and enter — and `esc` is the way back to the
         // sessions. A hint for a key that does nothing here is the one bug this footer prevents.
-        ? { capture: false, hints: [s.keyQuit, s.keyMove, s.keyRun, s.keyBack] }
+        ? { capture: false, claimArrows: true, hints: [s.keyQuit, s.keyMove, s.keyRun, s.keyBack, s.keyTabsAlt] }
       : actionsFocused
         // While the action row has the keyboard it is a horizontal list, so it claims the arrows —
         // and the footer stops saying they change screen for exactly as long as that is true.
-        ? { capture: false, claimArrows: true, hints: [s.keyQuit, s.keyActionMove, s.keyRun, s.keyBack] }
+        ? { capture: false, claimArrows: true, hints: [s.keyQuit, s.keyActionMove, s.keyRun, s.keyBack, s.keyTabsAlt] }
         : {
+            // The LIST claims the arrows too, which is the whole reason `[`/`]` exist. `←`/`→` had
+            // no meaning inside this screen and every meaning outside it, so reading down a list
+            // and overshooting by one row left the screen entirely — the cursor keys of the thing
+            // you are reading must not also be the way out of it.
             capture: false,
+            claimArrows: true,
             hints: [
-              s.keyQuit, s.keyTabs, s.keySessionsActions, s.keyMove, s.keySessionsSearch,
-              s.keySessionsNew, s.keySessionsGroup, s.keySessionsClosed,
+              s.keyQuit, s.keyTabsAlt, s.keySessionsActions, s.keySessionsAttach, s.keyMove,
+              s.keySessionsSearch, s.keySessionsNew, s.keySessionsGroup, s.keySessionsClosed,
               ...(grouping === 'task' ? [s.keySessionsNoTask] : []),
             ],
           })
@@ -443,6 +455,23 @@ export function Sessions({
       return setCursor(next)
     }
     if (!isActivation(p)) return
+
+    // The MENU is the left column of the band. Answered FIRST, because every hit test below is
+    // written in the list's coordinates — and the menu was not answering the mouse at all, which
+    // for a menu built to be clicked is the whole of it not working.
+    if (cockpit.aside > 0 && p.x < cockpit.aside && p.y < cockpit.band) {
+      const asideOffset = windowOffset(Math.max(0, asideRow), asideList.length, cockpit.band)
+      const index = asideOffset + p.y
+      const row = asideList[index]
+      if (!row || row.kind === 'heading' || row.kind === 'rule') return
+      if (row.kind === 'action' && !row.enabled) return
+      setFocus('aside')
+      setAsideIndex(Math.max(0, asidePicks.indexOf(index)))
+      runAside(index)
+      return
+    }
+    // The divider column belongs to neither pane; a click on it is a click on nothing.
+    if (cockpit.aside > 0 && p.x === cockpit.aside) return
 
     // The summary row states what is being shown; the controls live in the view panel, which a
     // click on that row opens. One place to change these, rather than two that can disagree.
@@ -652,6 +681,7 @@ export function Sessions({
             host={host}
             query={query}
             onQuery={setQuery}
+            fleet={fleet}
           />
         </>
       ) : layout.detail > 0 && detail.length > 0 ? (
@@ -761,6 +791,12 @@ function SessionRowView({ session, selected, columns, width }: {
           {gap + padCell(session.title, columns.title)}
         </Text>
       ) : null}
+      {/* Usage sits right of the name and left of the harness — it is a number about THIS row, and
+          a row you are deciding whether to close is one whose cost you want beside its name rather
+          than one selection away in the detail pane. */}
+      {columns.metrics > 0 ? (
+        <Text color={COLORS.secondary}>{gap + padCell(sessionMetric(session), columns.metrics)}</Text>
+      ) : null}
       {columns.harness > 0 ? (
         <Text color={harnessColor}>{gap + padCell(session.harness, columns.harness)}</Text>
       ) : null}
@@ -817,7 +853,7 @@ function Detail({ lines, width, rows }: {
  * In place of the facts rather than over them: a modal floating above a list is a second thing to
  * read at the moment the user is deciding, and the row being acted on stays visible above.
  */
-function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery }: {
+function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery, fleet }: {
   /** Never `new` — the wizard takes the whole screen and is rendered before this is reached. */
   ask: Exclude<Ask, { kind: 'new' } | { kind: 'view' }>
   strings: ControlStrings
@@ -827,6 +863,8 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
   host: ControlHost
   query: string
   onQuery: (q: string) => void
+  /** Needed to say how many sessions a task actually has — the confirmation used to say zero. */
+  fleet: ControlSessions | null | undefined
 }) {
   if (ask.kind === 'search') {
     return (
@@ -894,9 +932,13 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
 
   if (ask.kind === 'openTask') {
     const task = session.task ?? ''
+    // Counted from the fleet rather than passed as a literal `0`, which is what it was — the
+    // question offered to reopen "all 0 sessions" of a task that plainly had some, which is the
+    // kind of number that makes a person stop trusting every other number on the screen.
+    const count = (fleet?.sessions ?? []).filter(v => v.task === task).length
     return (
       <ConfirmPrompt
-        label={s.sessionsOpenTaskConfirm(task, 0)}
+        label={s.sessionsOpenTaskConfirm(task, count)}
         yesLabel={s.yes}
         noLabel={s.no}
         width={width}

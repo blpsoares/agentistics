@@ -29,6 +29,18 @@ import type { AttentionRules, SessionActivity } from './types'
 export const QUIET_MS = 6_000
 
 /**
+ * How long a `working` MARKER may outlive the last thing drawn on the screen.
+ *
+ * Measured on a real session: claude's footer reads `esc to interrupt` whenever there is anything
+ * interruptible — including background agents — so a session whose main thread had been idle for
+ * 199 seconds still carried the marker and reported `working` forever. The marker's job is to catch
+ * a turn that is thinking without redrawing, which is a matter of seconds; past a minute of total
+ * silence the screen is simply not doing anything, and saying otherwise makes the one column this
+ * monitor exists for permanently wrong.
+ */
+export const MARKER_STALE_MS = 60_000
+
+/**
  * FNV-1a over the frame, joined with newlines.
  *
  * Dependency-free, and deliberately not a crypto hash: the only question ever asked of this value is
@@ -62,10 +74,17 @@ export function attentionOf(o: {
 
   const text = o.frame.join('\n')
   if (o.rules && o.rules.approval.some(re => re.test(text))) return 'waiting-approval'
-  if (o.rules?.working && o.rules.working.some(re => re.test(text))) return 'working'
 
+  // The marker is PROOF of work only while the screen has been moving at all recently. A footer
+  // that lingers is not evidence, and silence eventually outweighs it — see `MARKER_STALE_MS`.
+  const silentFor = o.nowMs - o.lastActivityMs
+  if (silentFor <= MARKER_STALE_MS && o.rules?.working && o.rules.working.some(re => re.test(text))) {
+    return 'working'
+  }
+
+  // A frame that CHANGED is direct evidence, and outranks any staleness rule: something drew it.
   if (o.prevDigest !== undefined && o.frameDigest !== o.prevDigest) return 'working'
-  if (o.nowMs - o.lastActivityMs < QUIET_MS) return 'working'
+  if (silentFor < QUIET_MS) return 'working'
 
   return 'waiting'
 }

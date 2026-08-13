@@ -10,7 +10,13 @@ const managed = (id: string, over: Partial<ManagedSession> = {}): ManagedSession
 })
 
 const backendSession = (id: string, over: Partial<BackendSession> = {}): BackendSession => ({
-  id, createdMs: NOW - 600_000, attached: false, alive: true, lastActivityMs: NOW - 600_000, ...over,
+  id,
+  createdMs: NOW - 600_000,
+  attached: false,
+  alive: true,
+  // Quiet enough that movement cannot fire, recent enough that a probed marker is still trusted.
+  lastActivityMs: NOW - 30_000,
+  ...over,
 })
 
 function fakeBackend(o: {

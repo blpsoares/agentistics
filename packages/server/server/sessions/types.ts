@@ -120,6 +120,15 @@ export interface ManagedSession {
    * carrying the same task are that task's sessions, and can be reopened together.
    */
   task?: string
+  /**
+   * When this session was FINISHED, ISO — set instead of deleting the entry.
+   *
+   * Killing used to remove the registry row outright, so a session you ended vanished from the
+   * screen and took with it the only record of which conversation it was: the store had not caught
+   * up yet, so there was nothing to offer as reopenable either. A session you finish is still a
+   * thing that happened, and reopening it is the ordinary next thing to want.
+   */
+  endedAt?: string
 }
 
 /**

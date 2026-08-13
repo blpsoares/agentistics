@@ -281,6 +281,16 @@ export function detailLines(s: ControlSession, labels: {
   doing: string
   task: string
   metrics: string
+  /**
+   * How to LEAVE an attached session, already localized, and the real keystroke the backend
+   * reported — never an assumed `Ctrl-b`.
+   *
+   * Said HERE, on the row you would attach to, because it used to be printed once as the terminal
+   * was handed over and then scrolled away under whatever the session drew next. A user who cannot
+   * get out is stranded in a buffer that hides their shell, and "read it before you press enter" is
+   * not a thing anyone does.
+   */
+  detach?: { label: string; keys: string }
 }, ago: (startedAt: number) => string): DetailLine[] {
   const out: DetailLine[] = []
 
@@ -313,6 +323,11 @@ export function detailLines(s: ControlSession, labels: {
   // The two non-actionable rows are non-actionable for DIFFERENT reasons, and one sentence for both
   // said "started outside agentop" about a conversation that agentop may well have started and that
   // is simply over.
+  // Only where attaching is actually offered: on a closed or external row it would answer a
+  // question the screen is not letting anyone ask.
+  if (labels.detach && s.actionable && s.state !== 'closed') {
+    out.push({ key: 'detach', label: labels.detach.label, value: labels.detach.keys })
+  }
   if (s.state === 'closed') out.push({ key: 'closed', label: '', value: labels.closed, note: true })
   else if (!s.actionable) out.push({ key: 'external', label: '', value: labels.external, note: true })
   if (s.approvalBlind) out.push({ key: 'blind', label: '', value: s.approvalBlind, note: true })
@@ -489,8 +504,21 @@ export function summaryCells(o: {
 export interface SessionColumns {
   state: number
   title: number
+  /** Tokens + cost. `0` when nothing on screen has any — never a column of blanks. */
+  metrics: number
   harness: number
   where: number
+}
+
+/**
+ * Tokens and cost as ONE cell — PURE, and EMPTY when the conversation recorded neither.
+ *
+ * Empty rather than a zero, for the same reason the detail pane omits the line: a harness that
+ * cannot report usage would otherwise show every one of its sessions costing nothing, which is a
+ * confident wrong number in the place a person looks to decide what to close.
+ */
+export function sessionMetric(s: ControlSession): string {
+  return [s.tokens, s.cost].filter(Boolean).join(' ')
 }
 
 /**
@@ -512,28 +540,49 @@ export function sessionColumns(rows: readonly ControlSession[], width: number): 
     rows.reduce((n, s) => Math.max(n, pick(s).length), 0)
 
   const state = widest(s => s.stateLabel)
+  const metrics = widest(sessionMetric)
   const harness = widest(s => s.harness)
   const where = widest(s => s.project)
-  // Two for the cursor, then a gap before each cell after the first.
-  const chrome = 2 + GAP * 3
-
-  // Everything fits: the title takes what it NEEDS, not what is left. Stretching it to the full
-  // remainder pushed the harness and the directory to the far edge with a field of blank between, which
-  // is just the old misalignment wearing a different shape — the eye still has to travel.
   const title = widest(s => s.title)
-  if (chrome + state + title + harness + where <= width) {
-    return { state, title: Math.max(1, title), harness, where }
+
+  /**
+   * Columns everything BUT the title costs: two for the cursor, the cells, and a gap between each
+   * pair of cells that is actually drawn.
+   *
+   * Counted from the cells rather than from a constant because a cell can be ZERO — a fleet where
+   * no session reports usage draws no metrics column, and paying its gap anyway would narrow every
+   * title on the screen to reserve a space nothing occupies.
+   */
+  const overhead = (m: number, h: number, w: number) => {
+    const drawn = [state, 1, m, h, w].filter(n => n > 0).length
+    return 2 + state + m + h + w + GAP * (drawn - 1)
   }
-  // Too wide with every title at full length: the title gives up the difference, since it is the
-  // one cell that reads fine truncated.
-  if (chrome + state + harness + where + 8 <= width) {
-    return { state, title: Math.max(1, width - chrome - state - harness - where), harness, where }
+
+  // The fewest columns a title is worth. Below it the row has a state word and an ellipsis, which
+  // names nothing — so the screen gives up a whole cell instead.
+  const MIN_TITLE = 8
+
+  // The give-up order, least important first: the directory, then the harness, then the usage. The
+  // STATE and the NAME are what a row cannot lose — the state because nothing else on the frame
+  // says whether this session is waiting for you, the name because a row you cannot identify is not
+  // a row you can act on.
+  const ladder: Array<[number, number, number]> = [
+    [metrics, harness, where],
+    [metrics, harness, 0],
+    [metrics, 0, 0],
+    [0, 0, 0],
+  ]
+  for (const [m, h, w] of ladder) {
+    const room = width - overhead(m, h, w)
+    // The title takes what it NEEDS, not what is left: stretching it to the full remainder pushed
+    // the trailing cells to the far edge with a field of blank between, which is the old
+    // misalignment wearing a different shape.
+    if (room >= MIN_TITLE || (m === 0 && h === 0 && w === 0)) {
+      return { state, title: Math.max(1, Math.min(title, room)), metrics: m, harness: h, where: w }
+    }
   }
-  // Drop the directory, then the harness — the same order a single row gives them up.
-  if (2 + GAP * 2 + state + harness + 1 <= width) {
-    return { state, title: Math.max(1, width - 2 - GAP * 2 - state - harness), harness, where: 0 }
-  }
-  return { state, title: Math.max(1, width - 2 - GAP - state), harness: 0, where: 0 }
+  /* c8 ignore next */
+  return { state, title: 1, metrics: 0, harness: 0, where: 0 }
 }
 
 /** Pad or truncate a cell to exactly `w` columns. `0` means the column is not drawn. */

@@ -150,12 +150,16 @@ export function buildSessionViews(o: {
 }): SessionView[] {
   const managed: SessionView[] = o.reconciled.map(r => {
     const harness = r.managed?.harness
-    const activity = o.activity.get(r.id)
+    // A session the user FINISHED reports `exited` whatever the backend still holds: the row exists
+    // to be reopened, and calling it `running` because a dead tmux pane lingers would put it back
+    // among the things you can talk to.
+    const finished = Boolean(r.managed?.endedAt)
+    const activity = finished ? ('exited' as const) : o.activity.get(r.id)
     return {
       id: r.id,
       ...(harness ? { harness } : {}),
       cwd: r.managed?.cwd ?? '',
-      status: r.status,
+      status: finished ? ('exited' as const) : r.status,
       ...(activity ? { activity } : {}),
       ...((o.tails?.get(r.id)?.length ?? 0) > 0 ? { lastLines: o.tails!.get(r.id)! } : {}),
       ...(r.managed?.label ? { label: r.managed.label } : {}),
@@ -164,6 +168,15 @@ export function buildSessionViews(o: {
       ...(r.managed?.effort ? { effort: r.managed.effort } : {}),
       ...(r.managed?.task ? { task: r.managed.task } : {}),
       ...(r.backend ? { createdMs: r.backend.createdMs } : {}),
+      // Reopening a finished session is the whole reason its row is kept. Resolved the same way an
+      // external process's conversation is — by harness and directory — and absent when nothing
+      // can be resolved, rather than offering a verb with no target.
+      ...(finished && harness
+        ? (() => {
+            const conv = conversationForProcess(o.conversations ?? [], { harness, cwd: r.managed?.cwd ?? '' })
+            return conv?.resumable ? { resume: { sessionId: conv.sessionId, title: conv.title } } : {}
+          })()
+        : {}),
       attached: r.backend?.attached ?? false,
       approvalDetection: harness !== undefined && rulesFor(harness) !== undefined,
       searchText: searchTextOf(harness, r.managed?.cwd, r.managed?.label, r.managed?.note, r.managed?.task),

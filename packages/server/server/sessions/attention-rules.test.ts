@@ -10,7 +10,9 @@ const quiet = (frame: string[], harness: 'claude' | 'codex' | 'kimi' | 'gemini' 
   const rules = rulesFor(harness)
   return attentionOf({
     alive: true,
-    lastActivityMs: NOW - 600_000,
+    // Past QUIET_MS so movement cannot fire, but INSIDE `MARKER_STALE_MS` so a probed marker is
+    // still trusted: these tests are about what the frame says, not about staleness.
+    lastActivityMs: NOW - 30_000,
     nowMs: NOW,
     frame,
     frameDigest: 'same',

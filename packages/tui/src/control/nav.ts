@@ -54,10 +54,18 @@ export type NavAction =
  * `←→ screens`. `esc` is the way back out, one keypress from every screen again.
  */
 export function resolveTabKey(key: NavKey, current: TabId, arrows = true): TabId | null {
-  if (!arrows) return null
   const i = TAB_ORDER.indexOf(current)
   const at = (n: number) => TAB_ORDER[(n + TAB_ORDER.length) % TAB_ORDER.length]!
 
+  // `[` and `]` change screen ALWAYS, claim or no claim, and they are what lets a screen take the
+  // arrows for itself without stranding anyone. The sessions cockpit does exactly that: its arrows
+  // belong to its list and its menu, and leaving a tab by accident while reading a list was the
+  // single most reported annoyance of that screen. The brackets are also what the active tab now
+  // wears, so the key and the mark on the target are the same two characters.
+  if (key.input === '[') return at(i - 1)
+  if (key.input === ']') return at(i + 1)
+
+  if (!arrows) return null
   if (key.leftArrow) return at(i - 1)
   if (key.rightArrow) return at(i + 1)
   return null

@@ -374,6 +374,14 @@ export interface ControlSessions {
   rang: string[]
   /** Already-localized reason this list may not be the whole truth. Never an empty list alone. */
   unavailable?: string
+  /**
+   * The REAL keystroke that leaves an attached session, read from the backend.
+   *
+   * On the snapshot rather than only on the attach, so the screen can state it permanently. It was
+   * printed once before handing the terminal over and then scrolled away — and a user who cannot
+   * get out is stranded in a buffer that hides their shell.
+   */
+  detachHint?: string
 }
 
 export type TeamMode = 'solo' | 'central' | 'member'

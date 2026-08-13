@@ -207,6 +207,8 @@ export interface ControlStrings {
   sessionsDoing: string
   sessionsTask: string
   sessionsMetrics: string
+  /** Label of the detail line stating how to LEAVE an attached session. */
+  sessionsDetach: string
   /** How long ago, from a whole number of SECONDS — the caller does the clock arithmetic so this
    *  stays a pure formatter. */
   sessionsAgo: (seconds: number) => string
@@ -271,6 +273,8 @@ export interface ControlStrings {
   sessionsHideClosed: string
   keySessionsClosed: string
   keySessionsNoTask: string
+  /** How to change screen where the arrows belong to the screen itself. */
+  keyTabsAlt: string
   sessionsNoTaskHidden: string
   sessionsNoTaskShown: string
   /** The wizard's six questions. */
@@ -455,6 +459,7 @@ const EN: ControlStrings = {
   sessionsDoing: 'saying',
   sessionsTask: 'task',
   sessionsMetrics: 'usage',
+  sessionsDetach: 'to detach',
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `${sec}s ago`
     const min = Math.round(sec / 60)
@@ -464,7 +469,7 @@ const EN: ControlStrings = {
   sessionsExternalNote: 'started outside agentop — listed, but it cannot be attached or stopped here.',
   sessionsClosedNote: 'not running — reopen it to pick this conversation back up.',
   keySessionsGroup: 'v group',
-  keySessionsAttach: '⏎ attach',
+  keySessionsAttach: 'o attach',
   keySessionsKill: 'x kill',
   keySessionsRename: 'n name',
   keySessionsNote: 't note',
@@ -519,6 +524,7 @@ const EN: ControlStrings = {
   sessionsHideClosed: 'closed: hidden',
   keySessionsClosed: 'c closed',
   keySessionsNoTask: 'u unfiled',
+  keyTabsAlt: '[ ] screens',
   sessionsNoTaskHidden: 'unfiled: hidden',
   sessionsNoTaskShown: 'unfiled: shown',
   wizHarness: 'Which assistant?',
@@ -696,6 +702,7 @@ const PT: ControlStrings = {
   sessionsDoing: 'dizendo',
   sessionsTask: 'tarefa',
   sessionsMetrics: 'uso',
+  sessionsDetach: 'para sair',
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `há ${sec}s`
     const min = Math.round(sec / 60)
@@ -705,7 +712,7 @@ const PT: ControlStrings = {
   sessionsExternalNote: 'iniciada fora do agentop — listada, mas não dá para anexar nem parar por aqui.',
   sessionsClosedNote: 'não está rodando — reabra para retomar esta conversa.',
   keySessionsGroup: 'v agrupar',
-  keySessionsAttach: '⏎ anexar',
+  keySessionsAttach: 'o anexar',
   keySessionsKill: 'x encerrar',
   keySessionsRename: 'n nomear',
   keySessionsNote: 't nota',
@@ -760,6 +767,7 @@ const PT: ControlStrings = {
   sessionsHideClosed: 'fechadas: ocultas',
   keySessionsClosed: 'c fechadas',
   keySessionsNoTask: 'u sem tarefa',
+  keyTabsAlt: '[ ] telas',
   sessionsNoTaskHidden: 'sem tarefa: ocultas',
   sessionsNoTaskShown: 'sem tarefa: visíveis',
   wizHarness: 'Qual assistente?',

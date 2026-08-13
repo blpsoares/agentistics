@@ -136,3 +136,47 @@ describe('frameTail — what the session is saying', () => {
     expect(frameTail(['a', 'b', 'c', 'd', 'e', 'f'], 2)).toEqual(['e', 'f'])
   })
 })
+
+describe('a working marker that outlives the screen', () => {
+  // VERBATIM from a real claude session, 2026-08-13: the footer offers `esc to interrupt` because
+  // background AGENTS exist, while the main thread had drawn nothing for 199 seconds.
+  const LINGERING = [
+    '  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← 6 agents · ↓ to manage      /rc',
+    '  ● main',
+    '  ◯ general-purpose  Fix findings from auto-rehydrate final review        1m 17s · ↓ 51.7k',
+  ]
+  const rules: AttentionRules = { probed: 'test', approval: [], working: [/esc to interrupt/] }
+
+  const after = (silentMs: number) => attentionOf({
+    alive: true,
+    lastActivityMs: NOW - silentMs,
+    nowMs: NOW,
+    frame: LINGERING,
+    frameDigest: 'same',
+    prevDigest: 'same',
+    rules,
+  })
+
+  it('trusts the marker while the screen has moved recently', () => {
+    expect(after(10_000)).toBe('working')
+  })
+
+  it('stops trusting it once the screen has been silent for a minute', () => {
+    // The session reported `working` for as long as it existed, which makes the one column this
+    // monitor is for permanently wrong.
+    expect(after(199_000)).toBe('waiting')
+  })
+
+  it('still calls a CHANGED frame working, however long the gap says', () => {
+    // A frame that changed is direct evidence: something drew it. That outranks any staleness rule.
+    expect(attentionOf({
+      alive: true,
+      lastActivityMs: NOW - 600_000,
+      nowMs: NOW,
+      frame: LINGERING,
+      frameDigest: 'new',
+      prevDigest: 'old',
+      rules,
+    })).toBe('working')
+  })
+})

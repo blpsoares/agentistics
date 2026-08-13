@@ -144,7 +144,11 @@ export function TabBar({ layout, width, dim }: {
                 dimColor={!cell.active || dim}
                 color={cell.active && !dim ? COLORS.accent : undefined}
               >
-                {` ${cell.label} `}
+                {/* The active cell is BRACKETED as well as coloured. Colour alone answers "where am
+                    I" only on a terminal that renders it — and the brackets cost nothing, because
+                    they take the very columns the inactive cells spend on padding, so the widths
+                    `fitTabs` measured (and a click is resolved against) are unchanged. */}
+                {cell.active ? `[${cell.label}]` : ` ${cell.label} `}
               </Text>
             </Box>
           ))}
