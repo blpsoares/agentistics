@@ -17,6 +17,7 @@ import { resolveBackend } from './index'
 import { scanProcesses } from '../live-sessions'
 import { createSessionsPoller } from './sessions-host'
 import { needsAttention, type SessionView } from './session-view'
+import { planTaskReopen, taskReopenSucceeded } from './task-reopen'
 import type { SessionBackend, SpawnPlanError } from './types'
 
 /** Derived from the specs, never a second hand-written list — the two could not then disagree. */
@@ -233,13 +234,25 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
     return 1
   }
   const conversations = await loadConversations()
-  const started: string[] = []
-  const skipped: string[] = []
+  const live = new Set((await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id))
+  // The DECISION is the pure `planTaskReopen`, shared with the cockpit's verb. The two used to be
+  // separate implementations and had drifted: only one retired the row it replaced, so the same
+  // gesture left a different registry depending on where you pressed it.
+  const plan = planTaskReopen({
+    entries: wanted,
+    liveIds: live,
+    conversationFor: m => {
+      const conv = conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
+      return conv?.resumable ? { sessionId: conv.sessionId, title: conv.title } : null
+    },
+  })
 
-  for (const m of wanted) {
-    const conv = conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
-    if (!conv?.resumable) { skipped.push(m.id); continue }
-    const planned = planSpawn({ harness: m.harness, cwd: m.cwd, resumeId: conv.sessionId })
+  const started: string[] = []
+  const skipped: string[] = [...plan.skipped]
+
+  for (const row of plan.reopen) {
+    const m = row.entry
+    const planned = planSpawn({ harness: m.harness, cwd: m.cwd, resumeId: row.resumeId })
     if (!planned.ok) { skipped.push(m.id); continue }
     const id = newSessionId()
     try {
@@ -247,20 +260,25 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
     } catch { skipped.push(m.id); continue }
     await addSession({
       id, harness: m.harness, cwd: m.cwd, createdAt: new Date().toISOString(), task,
-      ...(m.label ? { label: m.label } : {}),
+      label: row.label,
+      ...(m.note ? { note: m.note } : {}),
     })
+    // The old row is RETIRED, not deleted: it is still a thing that happened, and it stops standing
+    // beside its own continuation with the same name on it.
+    await patchSession(m.id, { endedAt: new Date().toISOString() })
     started.push(id)
   }
 
   if (json) {
-    console.log(JSON.stringify({ task, started, skipped }, null, 2))
+    console.log(JSON.stringify({ task, started, skipped, already: plan.already }, null, 2))
   } else {
     for (const id of started) console.log(id)
     // Reported, never silent: a partial reopen presented as a success leaves someone believing they
     // have their whole task back.
-    console.log(`\n${started.length} reopened${skipped.length ? `, ${skipped.length} could not be` : ''}.`)
+    const alreadyUp = plan.already.length ? `, ${plan.already.length} already running` : ''
+    console.log(`\n${started.length} reopened${skipped.length ? `, ${skipped.length} could not be` : ''}${alreadyUp}.`)
   }
-  return started.length === 0 ? 1 : 0
+  return taskReopenSucceeded(plan, started.length) ? 0 : 1
 }
 
 async function list(backend: SessionBackend, json = false): Promise<number> {

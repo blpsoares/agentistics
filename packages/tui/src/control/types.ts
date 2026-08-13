@@ -717,6 +717,15 @@ export interface ResumeSessionRequest {
   cwd: string
   /** Already-composed name for the new session, so the row keeps reading the same. */
   label: string
+  /**
+   * The registry row this reopen REPLACES, when there is one.
+   *
+   * Reopening spawns a new session, so without this the old row stays beside it: a laptop closed
+   * and opened twice leaves a task holding two dead twins and one live session, all with the same
+   * name. The host retires the named row and carries its note and its task onto the new one — what
+   * you wrote about a piece of work must survive picking that work back up.
+   */
+  replaces?: string
   attach: boolean
 }
 
@@ -726,6 +735,14 @@ export interface SpawnSessionResult {
   message: string
   /** Present only on a successful ATTACHED start — the shell reports it as `ControlExit.attach`. */
   ticket?: AttachTicket
+  /**
+   * The id of the session that was started, on success.
+   *
+   * Returned so a caller that is REPLACING an older row can carry its note onto the new one — the
+   * spawn is the only place that knows the id, and asking the registry afterwards would be a guess
+   * about which of several rows in the same directory is the one just created.
+   */
+  id?: string
 }
 
 /** Everything the caller needs to hand the terminal over and get the user back afterwards. */

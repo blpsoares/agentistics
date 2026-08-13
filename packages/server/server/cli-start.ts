@@ -90,6 +90,7 @@ import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
 import { findProjects } from './sessions/project-source'
 import { candidatePath } from './sessions/project-search'
 import { repoFacts, type RepoFacts } from './sessions/repo-facts'
+import { planTaskReopen, taskReopenSucceeded } from './sessions/task-reopen'
 import type { SpawnPlanError } from './sessions/types'
 import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
@@ -1265,9 +1266,10 @@ async function spawnManaged(req: {
   })
 
   const name = req.label ?? id
-  if (!req.attach) return { ok: true, message: s.sessStartedBg(name) }
+  if (!req.attach) return { ok: true, id, message: s.sessStartedBg(name) }
   return {
     ok: true,
+    id,
     message: s.sessStarted(name),
     ticket: { argv: backend.attachCommand(id), detachHint: await backend.detachHint(), label: name },
   }
@@ -1973,16 +1975,29 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
      */
     async resumeSession(req: ResumeSessionRequest): Promise<SpawnSessionResult> {
       const s = S()
+      // What the old row knew about this work — its task and its note — comes with it. A reopen
+      // that dropped them would file the recovered session nowhere and lose what someone wrote
+      // about it, which is most of the reason the row was worth keeping across the reboot.
+      const previous = req.replaces
+        ? (await readRegistry()).find(m => m.id === req.replaces)
+        : undefined
       const spawned = await spawnManaged({
         harness: req.harness as HarnessId,
         cwd: req.cwd,
         resumeId: req.sessionId,
         label: req.label,
         attach: req.attach,
+        ...(previous?.task ? { task: previous.task } : {}),
       }, s)
-      // The store's view of what is running just changed, and the next poll must see it rather than
-      // waiting out the cache and showing the conversation as still closed.
-      if (spawned.ok) forgetConversations()
+      if (spawned.ok) {
+        if (previous?.note && spawned.id) await patchSession(spawned.id, { note: previous.note })
+        // The old row is RETIRED rather than deleted: it is still a thing that happened, and it
+        // stops standing beside its own continuation with the same name on it.
+        if (previous) await patchSession(previous.id, { endedAt: new Date().toISOString() })
+        // The store's view of what is running just changed, and the next poll must see it rather
+        // than waiting out the cache and showing the conversation as still closed.
+        forgetConversations()
+      }
       return spawned
     },
 
@@ -1999,24 +2014,42 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       if (wanted.length === 0) return { ok: false, message: s.sessTaskEmpty(task) }
 
       const conversations = await loadConversations()
+      const backend = await resolveBackend()
+      const live = new Set(
+        (await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id),
+      )
+      // The DECISION is the pure `planTaskReopen`, shared with `agentop session open` — the two
+      // were separate implementations of one gesture and had already drifted.
+      const plan = planTaskReopen({
+        entries: wanted,
+        liveIds: live,
+        conversationFor: m => {
+          const conv = conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
+          return conv?.resumable ? { sessionId: conv.sessionId, title: conv.title } : null
+        },
+      })
+
       let opened = 0
-      let skipped = 0
-      for (const m of wanted) {
-        const conv = conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
-        if (!conv?.resumable) { skipped++; continue }
+      let skipped = plan.skipped.length
+      for (const row of plan.reopen) {
+        const m = row.entry
         const r = await spawnManaged({
           harness: m.harness,
           cwd: m.cwd,
-          resumeId: conv.sessionId,
-          label: m.label ?? conv.title,
+          resumeId: row.resumeId,
+          label: row.label,
           task,
           attach: false,
         }, s)
-        if (r.ok) opened++
-        else skipped++
+        if (!r.ok) { skipped++; continue }
+        opened++
+        // Retired, so a laptop closed and opened twice does not leave the task holding two dead
+        // twins and one live session, all under the same name.
+        await patchSession(m.id, { endedAt: new Date().toISOString() })
+        if (m.note && r.id) await patchSession(r.id, { note: m.note })
       }
       forgetConversations()
-      return opened > 0
+      return taskReopenSucceeded(plan, opened)
         ? { ok: true, message: s.sessTaskOpened(task, opened, skipped) }
         : { ok: false, message: s.sessTaskNoneOpened(task, skipped) }
     },

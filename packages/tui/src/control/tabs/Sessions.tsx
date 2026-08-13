@@ -1246,7 +1246,13 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
             sessionId: target.sessionId,
             harness: session.harness,
             cwd: session.cwd,
-            label: target.title,
+            // The user's own name wins over the conversation's derived one. A reopen that renamed
+            // the row back to whatever the transcript called it undoes the rename every time.
+            label: session.named ? session.title : target.title,
+            // Only a MANAGED row is replaced. An external process's id is synthetic and a closed
+            // conversation's is the harness's own — retiring either would be naming a registry row
+            // that does not exist, which the host answers by doing nothing rather than by guessing.
+            ...(session.actionable ? { replaces: session.id } : {}),
             attach: false,
           }).then(r => ({ ok: r.ok, message: r.message })), s.actSessions.resume)
         }}
