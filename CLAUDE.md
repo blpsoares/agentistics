@@ -87,6 +87,23 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          previous list plus a reason rather than reporting an empty one.
   │                          `project-search.ts` / `project-source.ts` feed the wizard's search
   │                          field from the LOCAL store, so it works with the server stopped.
+  │                          **A reboot takes tmux and leaves the registry**, so every managed
+  │                          session reconciles to `lost` while keeping its name, note and task —
+  │                          `session-view.ts` therefore offers REOPEN for any managed row that is
+  │                          not running, not only for one the user finished, and the pure
+  │                          `task-reopen.ts` holds what "open the whole task" means (a running row
+  │                          is left alone and reported as `already`, never as a skip; a FINISHED
+  │                          row is not resurrected; an unresolvable one is skipped AND counted;
+  │                          everything reopened RETIRES the row it replaced, or a laptop closed
+  │                          twice leaves the task holding dead twins under one name). It is shared
+  │                          by `agentop session open` and the cockpit's verb, which were two
+  │                          implementations of one gesture and had already drifted.
+  │                          `repo-facts.ts` answers which REPOSITORY a directory belongs to,
+  │                          keyed on the git REMOTE — the only key a worktree provably shares with
+  │                          its main checkout, since their directory names deliberately differ —
+  │                          falling back to the COMMON git dir's parent (`--show-toplevel` would
+  │                          answer with the worktree, which is the one name that must not become
+  │                          the key). Memoized by directory: the poll runs every five seconds.
   │                          See docs/session-manager.md
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
@@ -850,12 +867,49 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   in the HEADER because it must be readable from every tab, and it outranks the version under width
   pressure — a version is one `agentop --version` away, a session waiting on you is why the app is
   open. The bell rings on the TRANSITION into waiting, never on the level.
-- **`enter` attaches, and attaching is a `ControlExit`, not an exec.** The Ink app unmounts,
+- **`o` attaches, and attaching is a `ControlExit`, not an exec.** The Ink app unmounts,
   `cli-start.ts` gives the session the real tty, and `runStart` LOOPS — so detaching comes back to
-  the sessions tab. The detach key is read from the backend and printed first; a user who cannot get
-  out is stranded in a buffer that hides their shell. **The kill key is `x`, never `k`** — `k` is
-  `up` in this list, and a key that navigates on one screen and destroys work on another is a real
-  accident waiting to happen.
+  the sessions tab. `enter` opens the MENU instead, which is what made every other verb reachable.
+  The detach key is read from the backend, carried on the fleet SNAPSHOT and stated on the row —
+  printed once before the handover, it scrolled away under whatever the session drew next, and a
+  user who cannot get out is stranded in a buffer that hides their shell. **The kill key is `x`,
+  never `k`** — `k` is `up` in this list, and a key that navigates on one screen and destroys work
+  on another is a real accident waiting to happen. **Pressing `o` on a row with nothing RUNNING
+  asks whether to reopen that conversation** rather than refusing (external rows included): the
+  row-specific verb is decided by what is running, not by whether agentop hosts the row, or a
+  session whose backend died offers a button whose only outcome is an error.
+- **The sessions cockpit is three framed panes and claims the ARROWS.** Menu, fleet, detail; the one
+  holding the keyboard wears the accent border, and clicking the list focuses it too — a pointer
+  that moves the selection without moving the focus leaves the frame saying one thing while the keys
+  do another. `←`/`→` had no meaning inside the screen and every meaning outside it, so overshooting
+  a list by one row left the screen entirely; `[` and `]` change tab ALWAYS, claim or no claim, and
+  the active tab wears those brackets. Inside the menu the arrows step between SECTIONS, and `1`-`9`
+  jump to one from either pane — a soft keyboard has no arrow keys at all, so the digits are the way
+  in that always exists.
+- **The menu FOLDS, and every section keeps its name.** `asideFold` is the one answer for every
+  height: the section holding the cursor is a framed pane with all of its rows, the others open in
+  reading order while they fit WHOLE, and what does not fit keeps its NAME on one row. Opening a
+  section part-way was the middle ground and the worst of the three — a block cut to two rows says
+  no more than its heading did. The leftover goes to the open section so the column ends flush with
+  the list: air under a pane is a fault, air inside one is a pane.
+- **A row the user NAMED is never withheld by the history switches** (`sessionNamed`). A machine
+  restart makes every managed session `lost`, and with those switches off — which is how they ship —
+  the list came back EMPTY, taking the session you had renamed and filed under a task with it.
+  `named` is its own flag rather than inferred from `title`, because `title` always has a value: the
+  host derives one whenever there is no label.
+- **The default arrangement is stated ONCE** (`DEFAULT_SESSION_VIEW`): active conversations, grouped
+  by project. The host's fallback, the screen's initial state and the `ctrl+r` reset all read it —
+  three copies of a default is three chances for the app to open on one arrangement and reset to
+  another. It is persisted by the HOST (`setSessionView`), and **nothing is written before the
+  restore has happened**: `sessionViewPref` always answers, so an absent `view` means "not loaded
+  yet" and nothing else. It used to mean both that and "never chosen", so every remount — which is
+  what detaching is — wrote the defaults a moment before the stored arrangement arrived.
+- **Every column is measured against the CONTENT width, headings included.** `sessionColumns` and
+  `projectColumns` size each column to the widest row ON SCREEN and to its own heading — a heading
+  wider than its column is truncated, and a truncated heading sits over a cell it no longer names.
+  A cell nothing on screen carries is ZERO and costs no gap. Measuring against the pane rather than
+  its body made every column four characters too wide, and the table survived only because Ink
+  truncated it.
 - **`stats-cache.json` stays Claude-only here too.** `selectors.ts` reads Claude totals from the
   cache and every other harness from per-session sums; `applyHarnessFilter` blanks the cache when
   a non-Claude harness is selected, or Claude's numbers would survive the filter.

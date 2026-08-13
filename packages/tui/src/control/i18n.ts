@@ -202,7 +202,7 @@ export interface ControlStrings {
   sessionsUnknownRepo: string
   sessionsWorktreeTag: string
   /** The sessions list's column headings — an unlabelled column is one you have to learn. */
-  sessionsCols: Record<'state' | 'title' | 'task' | 'worktree' | 'metrics' | 'harness' | 'where', string>
+  sessionsCols: Record<'id' | 'state' | 'title' | 'task' | 'worktree' | 'metrics' | 'harness' | 'where', string>
   /** Detail-pane field labels. */
   sessionsWhere: string
   sessionsModel: string
@@ -222,6 +222,8 @@ export interface ControlStrings {
   sessionsFinishConfirm: (task: string, count: number) => string
   sessionsReopenConfirm: (task: string) => string
   asideProjects: string
+  /** The default arrangement, offered as one row: what the list opens as. */
+  asidePreset: string
   asideAllProjects: string
   toggleDone: string
   /** States the active search on the summary row, and how to drop it. */
@@ -234,6 +236,8 @@ export interface ControlStrings {
   sessionsClosedNote: string
   keySessionsGroup: string
   keySessionsAttach: string
+  /** How to put the arrangement back to how the app opens on a fresh machine. */
+  keySessionsReset: string
   keySessionsKill: string
   keySessionsRename: string
   keySessionsNote: string
@@ -484,13 +488,14 @@ const EN: ControlStrings = {
   /** Said on a row whose directory is a linked worktree. Short: it is a CELL, not a sentence. */
   sessionsWorktreeTag: 'worktree',
   sessionsCols: {
+    id: 'id',
     state: 'state',
     title: 'session',
     task: 'task',
-    worktree: 'kind',
+    worktree: 'worktree',
     metrics: 'usage',
     harness: 'harness',
-    where: 'folder',
+    where: 'project',
   },
   sessionsWhere: 'where',
   sessionsModel: 'model',
@@ -508,6 +513,7 @@ const EN: ControlStrings = {
     `Mark "${task}" finished? Its ${count} session${count === 1 ? '' : 's'} stay listed behind the "finished tasks" switch.`,
   sessionsReopenConfirm: task => `Reopen "${task}"?`,
   asideProjects: 'PROJECTS',
+  asidePreset: 'active · project',
   asideAllProjects: 'every project',
   toggleDone: 'finished tasks',
   sessionsSearching: q => `search: ${q} · esc clears`,
@@ -521,6 +527,7 @@ const EN: ControlStrings = {
   sessionsClosedNote: 'not running — reopen it to pick this conversation back up.',
   keySessionsGroup: 'v group',
   keySessionsAttach: 'o attach',
+  keySessionsReset: '^r reset view',
   keySessionsKill: 'x kill',
   keySessionsRename: 'n name',
   keySessionsNote: 't note',
@@ -757,13 +764,14 @@ const PT: ControlStrings = {
   sessionsUnknownRepo: 'sem repositório',
   sessionsWorktreeTag: 'worktree',
   sessionsCols: {
+    id: 'id',
     state: 'estado',
     title: 'sessão',
     task: 'tarefa',
-    worktree: 'tipo',
+    worktree: 'worktree',
     metrics: 'uso',
     harness: 'harness',
-    where: 'pasta',
+    where: 'projeto',
   },
   sessionsWhere: 'onde',
   sessionsModel: 'modelo',
@@ -781,6 +789,7 @@ const PT: ControlStrings = {
     `Finalizar "${task}"? Suas ${count} sessõe${count === 1 ? '' : 's'} continuam listadas atrás do interruptor "tarefas finalizadas".`,
   sessionsReopenConfirm: task => `Reabrir "${task}"?`,
   asideProjects: 'PROJETOS',
+  asidePreset: 'ativos · projeto',
   asideAllProjects: 'todos os projetos',
   toggleDone: 'tarefas finalizadas',
   sessionsSearching: q => `busca: ${q} · esc limpa`,
@@ -794,6 +803,7 @@ const PT: ControlStrings = {
   sessionsClosedNote: 'não está rodando — reabra para retomar esta conversa.',
   keySessionsGroup: 'v agrupar',
   keySessionsAttach: 'o anexar',
+  keySessionsReset: '^r restaurar view',
   keySessionsKill: 'x encerrar',
   keySessionsRename: 'n nomear',
   keySessionsNote: 't nota',

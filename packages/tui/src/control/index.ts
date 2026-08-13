@@ -177,5 +177,5 @@ export type {
   TabId,
   TeamMode,
 } from './types'
-export { TAB_ORDER } from './types'
+export { TAB_ORDER, DEFAULT_SESSION_VIEW } from './types'
 export type { CliLang } from './lang'

@@ -21,6 +21,10 @@ describe('decideRepoFacts', () => {
     })
     expect(main.repo).toBe('blpsoares/agentistics')
     expect(wt.repo).toBe('blpsoares/agentistics')
+    // And the folder the project is CALLED here is the main checkout either way — that is what the
+    // "by project" grouping keys on, so a worktree does not file itself as its own project.
+    expect(main.root).toBe('agentistics')
+    expect(wt.root).toBe('agentistics')
   })
 
   it('calls a LINKED worktree one, and the main checkout not one', () => {
@@ -40,7 +44,7 @@ describe('decideRepoFacts', () => {
     expect(decideRepoFacts({
       remote: '', gitDir: '/home/d/agentistics/.git/worktrees/session-monitor',
       commonDir: '/home/d/agentistics/.git',
-    })).toEqual({ repo: 'agentistics', worktree: true })
+    })).toEqual({ repo: 'agentistics', root: 'agentistics', worktree: true })
   })
 
   it('ignores a remote git cannot key on, rather than inventing a name from it', () => {

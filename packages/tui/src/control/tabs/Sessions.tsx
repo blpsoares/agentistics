@@ -20,6 +20,7 @@ import type {
 } from '../types'
 import type { ControlStrings } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
+import { DEFAULT_SESSION_VIEW } from '../types'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import { ACTION_SEP, actionAtColumn, fitActionRow } from '../chrome.ts'
 import { Divider } from '../Surface'
@@ -53,7 +54,8 @@ import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, actionLabels, asideRows, asideSelectable, enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
-  taskCounts, projectCounts, sessionMetric, asideSections, asideFold, scrollBar, THUMB,
+  taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName,
+  asideSections, asideFold, scrollBar, THUMB,
   sessionNamed,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
@@ -121,17 +123,16 @@ export function Sessions({
   /** Store the arrangement, so a restart does not throw away what the user chose. */
   onView: (v: SessionViewPrefs) => void
 }) {
-  // Repository by default: a session is opened in a directory, but the thing a person thinks in is
-  // the repository, and three worktrees of one repo are three places to work on ONE project — a
-  // list that files them under three unrelated folder names has split the work, not organised it.
-  const [grouping, setGrouping] = useState<SessionGrouping>(view?.grouping ?? 'repo')
+  const [grouping, setGrouping] = useState<SessionGrouping>(
+    view?.grouping ?? DEFAULT_SESSION_VIEW.grouping,
+  )
   const [cursor, setCursor] = useState(0)
   const [ask, setAsk] = useState<Ask | null>(null)
   const [query, setQuery] = useState('')
   // A second scope beside the task one. Both are RUNTIME scopes rather than stored arrangement:
   // "which project am I looking through right now" is not something a restart should remember.
   const [projectFilter, setProjectFilter] = useState<string | null>(null)
-  const [showDone, setShowDone] = useState(false)
+  const [showDone, setShowDone] = useState(view?.showDone ?? DEFAULT_SESSION_VIEW.showDone ?? false)
   /**
    * Whether the visible action row has the keyboard.
    *
@@ -146,10 +147,10 @@ export function Sessions({
    * order of magnitude bigger than the fleet — it buried the live rows the first time it shipped on.
    * One keypress and one visible toggle bring it back, and search reaches it either way.
    */
-  const [showClosed, setShowClosed] = useState(view?.showClosed ?? false)
+  const [showClosed, setShowClosed] = useState(view?.showClosed ?? DEFAULT_SESSION_VIEW.showClosed)
   /** Whether the "no task" bucket is listed while grouping by task. Hidden by default: the point of
    *  grouping by task is seeing the tasks, and everything unfiled is the biggest group there is. */
-  const [hideEmptyTask, setHideEmptyTask] = useState(!(view?.showUnfiled ?? false))
+  const [hideEmptyTask, setHideEmptyTask] = useState(!(view?.showUnfiled ?? DEFAULT_SESSION_VIEW.showUnfiled))
   const [actionsFocused, setActionsFocused] = useState(false)
   const [actionIndex, setActionIndex] = useState(0)
   /**
@@ -159,7 +160,7 @@ export function Sessions({
    * different thing from a conversation that was never ours, and someone who wants yesterday's
    * conversations back does not necessarily want every pane that exited today.
    */
-  const [showExited, setShowExited] = useState(view?.showExited ?? false)
+  const [showExited, setShowExited] = useState(view?.showExited ?? DEFAULT_SESSION_VIEW.showExited)
   /**
    * The task the list is scoped to, or `null` for the whole fleet.
    *
@@ -277,6 +278,15 @@ export function Sessions({
     group: s.actSessions.group,
   }), [actions, s])
 
+  // Whether the list is arranged exactly as the app opens. Compared against the ONE default rather
+  // than against a second copy of it, so the row cannot claim to be on while it is not.
+  const isDefaultView = grouping === DEFAULT_SESSION_VIEW.grouping
+    && showClosed === DEFAULT_SESSION_VIEW.showClosed
+    && showExited === DEFAULT_SESSION_VIEW.showExited
+    && showDone === (DEFAULT_SESSION_VIEW.showDone ?? false)
+    && hideEmptyTask === !DEFAULT_SESSION_VIEW.showUnfiled
+    && taskFilter === null && projectFilter === null && query === ''
+
   const asideList = useMemo(() => asideRows({
     actions,
     actionWords: {
@@ -293,6 +303,8 @@ export function Sessions({
       closed: s.toggleClosed, exited: s.toggleExited, unfiled: s.toggleUnfiled, done: s.toggleDone,
     },
     headings: { actions: s.asideActions, view: s.asideView, show: s.asideShow },
+    presetLabel: s.asidePreset,
+    presetOn: isDefaultView,
     showUnfiled: grouping === 'task',
     tasks: {
       // Counted over the WHOLE fleet: the count is what says a task has work in it, and counting
@@ -313,7 +325,7 @@ export function Sessions({
     },
   }), [
     actions, grouping, showClosed, showExited, hideEmptyTask, showDone, taskFilter, projectFilter,
-    fleet?.sessions, fleet?.finishedTasks, s,
+    fleet?.sessions, fleet?.finishedTasks, isDefaultView, s,
   ])
 
   const asidePicks = useMemo(() => asideSelectable(asideList), [asideList])
@@ -404,6 +416,24 @@ export function Sessions({
     setAsideIndex(Math.max(0, asidePicks.indexOf(target)))
   }, [sections, asidePicks])
 
+  /**
+   * Put the arrangement back to how the app opens on a fresh machine.
+   *
+   * One function behind `ctrl+r` and behind the menu row, because a keystroke and a button that
+   * both claim to do the same thing and are written twice are two things that will one day differ.
+   */
+  const resetView = useCallback(() => {
+    setGrouping(DEFAULT_SESSION_VIEW.grouping)
+    setShowClosed(DEFAULT_SESSION_VIEW.showClosed)
+    setShowExited(DEFAULT_SESSION_VIEW.showExited)
+    setShowDone(DEFAULT_SESSION_VIEW.showDone ?? false)
+    setHideEmptyTask(!DEFAULT_SESSION_VIEW.showUnfiled)
+    setTaskFilter(null)
+    setProjectFilter(null)
+    setQuery('')
+    setCursor(0)
+  }, [])
+
   /** Run whatever an aside row means — the same path a key and a click both take. */
   const runAside = useCallback((index: number) => {
     const row = asideList[index]
@@ -412,13 +442,14 @@ export function Sessions({
     if (row.kind === 'group') { setGrouping(row.value); setCursor(0); return }
     if (row.kind === 'task') { setTaskFilter(row.name || null); setCursor(0); return }
     if (row.kind === 'project') { setProjectFilter(row.name || null); setCursor(0); return }
+    if (row.kind === 'preset') return resetView()
     if (row.kind !== 'toggle') return
     setCursor(0)
     if (row.toggle === 'closed') return setShowClosed(v => !v)
     if (row.toggle === 'exited') return setShowExited(v => !v)
     if (row.toggle === 'done') return setShowDone(v => !v)
     return setHideEmptyTask(v => !v)
-  }, [asideList, runAction])
+  }, [asideList, runAction, resetView])
 
   useInput((input, key) => {
     const nav: NavKey = {
@@ -498,6 +529,11 @@ export function Sessions({
       if (taskFilter !== null) { setTaskFilter(null); setCursor(0); return }
       return
     }
+    // `ctrl+r` puts the arrangement back to how the app opens on a fresh machine. Every switch on
+    // this screen is remembered, which is what people asked for and also what makes an arrangement
+    // you fiddled with three weeks ago follow you around — and finding your way out of it one
+    // toggle at a time means knowing what the defaults were.
+    if (key.ctrl && input === 'r') { resetView(); return }
     if (input === 'v') return runAction('group')
     if (input === 'c') { setShowClosed(v => !v); setCursor(0); return }
     if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
@@ -581,6 +617,7 @@ export function Sessions({
               s.keySessionsAttach, s.keyMove,
               s.keySessionsSearch, s.keySessionsNew, s.keySessionsGroup, s.keySessionsClosed,
               ...(grouping === 'task' ? [s.keySessionsNoTask] : []),
+              s.keySessionsReset,
             ],
           })
   }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping])
@@ -708,7 +745,6 @@ export function Sessions({
       listBody,
       {
         groupedByTask: grouping === 'task',
-        worktreeWord: s.sessionsWorktreeTag,
         ...(cockpit.header ? { headings: s.sessionsCols } : {}),
       },
     ),
@@ -874,7 +910,8 @@ export function Sessions({
           same measured widths so the heading can never sit over the wrong column. */}
       {cockpit.header && rows.length > 0 ? (
         <Text dimColor wrap="truncate">
-          {'  ' + padCell(s.sessionsCols.state, columns.state)}
+          {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')
+            + padCell(s.sessionsCols.state, columns.state)}
           {columns.title > 0 ? '  ' + padCell(s.sessionsCols.title, columns.title) : ''}
           {columns.worktree > 0 ? '  ' + padCell(s.sessionsCols.worktree, columns.worktree) : ''}
           {columns.task > 0 ? '  ' + padCell(s.sessionsCols.task, columns.task) : ''}
@@ -922,7 +959,6 @@ export function Sessions({
                 selected={selected?.id === row.session.id}
                 columns={columns}
                 width={listBody}
-                worktreeWord={s.sessionsWorktreeTag}
               />
             )
           })}
@@ -1068,13 +1104,11 @@ function SummaryRow({ fleet, grouping, strings: s, width, showClosed, hideEmptyT
   )
 }
 
-function SessionRowView({ session, selected, columns, width, worktreeWord }: {
+function SessionRowView({ session, selected, columns, width }: {
   session: ControlSession
   selected: boolean
   columns: SessionColumns
   width: number
-  /** Already-localized word for a linked worktree — this component owns no strings. */
-  worktreeWord: string
 }) {
   // `harness` is a plain string here because it can be EMPTY — a session the registry has
   // forgotten runs a harness nobody recorded. An empty one simply gets no colour.
@@ -1087,6 +1121,11 @@ function SessionRowView({ session, selected, columns, width, worktreeWord }: {
       {/* Colour AND word, always paired — and PADDED, so every title starts in the same column.
           Two spaces between unpadded cells is what made this read as a jumble of words: the state
           words differ by ten characters, so nothing after them ever lined up. */}
+      {/* The HANDLE. `agentop session attach 3f5f` takes a prefix, so this is the one thing on the
+          row that names the session to anything but this screen. */}
+      {columns.id > 0 ? (
+        <Text dimColor>{padCell(sessionHandle(session), columns.id) + gap}</Text>
+      ) : null}
       <Text color={STATE_COLOR[session.state]} bold={session.state === 'waiting-approval'}>
         {padCell(session.stateLabel, columns.state)}
       </Text>
@@ -1100,9 +1139,7 @@ function SessionRowView({ session, selected, columns, width, worktreeWord }: {
           The word, never a glyph alone — a distinction announced in a symbol is one that has to be
           taught before the screen can be read. */}
       {columns.worktree > 0 ? (
-        <Text color={COLORS.secondary}>
-          {gap + padCell(session.worktree ? worktreeWord : '', columns.worktree)}
-        </Text>
+        <Text color={COLORS.secondary}>{gap + padCell(worktreeName(session), columns.worktree)}</Text>
       ) : null}
       {/* The TASK, right of the name. Filing a session under a task and then not being able to see
           which task it is in is the feature not working — the fact only existed in the detail pane
@@ -1121,7 +1158,7 @@ function SessionRowView({ session, selected, columns, width, worktreeWord }: {
         <Text color={harnessColor}>{gap + padCell(session.harness, columns.harness)}</Text>
       ) : null}
       {columns.where > 0 ? (
-        <Text dimColor>{gap + padCell(session.project, columns.where)}</Text>
+        <Text dimColor>{gap + padCell(session.projectGroup || session.project, columns.where)}</Text>
       ) : null}
     </Text>
   )

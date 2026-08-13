@@ -64,6 +64,7 @@ import type {
   TabId,
   StartRequest,
 } from '@agentistics/tui/control'
+import { DEFAULT_SESSION_VIEW } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
 import { readPreferences, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
 import { centralStartPlan, runCentral, type CentralStartPlan } from './cli-central'
@@ -1210,11 +1211,7 @@ function explainSpawnError(e: SpawnPlanError, s: CliStrings): string {
  */
 async function sessionViewPref(): Promise<{ sessionView: SessionViewPrefs }> {
   const stored = (await readPreferences()).sessionView
-  return {
-    sessionView: stored ?? {
-      grouping: 'repo', showClosed: false, showExited: false, showUnfiled: true, showDone: false,
-    },
-  }
+  return { sessionView: stored ?? DEFAULT_SESSION_VIEW }
 }
 
 async function spawnManaged(req: {
@@ -1346,6 +1343,9 @@ function toControlSession(
     // value, because the host derives one whenever there is no label.
     ...(v.label || v.note || v.task ? { named: true } : {}),
     ...(facts.repo ? { repo: facts.repo } : {}),
+    // Only when it differs: a session in the main checkout groups under its own folder already, and
+    // a field repeating what is beside it is one more thing that can disagree.
+    ...(facts.root && facts.root !== project ? { projectGroup: facts.root } : {}),
     ...(facts.worktree ? { worktree: true } : {}),
     ...(v.resume ? { resume: v.resume } : {}),
     ...(v.lastLines?.length ? { lastLines: v.lastLines } : {}),

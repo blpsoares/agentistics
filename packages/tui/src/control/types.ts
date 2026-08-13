@@ -310,6 +310,16 @@ export interface ControlSession {
    * them under three unrelated names. Absent for a directory that is not in a repository at all.
    */
   repo?: string
+  /**
+   * What the "by project" grouping keys on, when it is not simply the directory name.
+   *
+   * The main checkout's folder for anything inside a repository — so the three worktrees of
+   * `agentistics` group under `agentistics` rather than under `session-monitor`, `billing-basis`
+   * and `agentistics`, which files one project as three. It is a SEPARATE field from `project`
+   * because the row must still say which directory it is actually in: with several worktrees open
+   * at once, the folder cell is the only thing telling them apart.
+   */
+  projectGroup?: string
   /** True only for a LINKED worktree. Said on the row, because it changes what the row IS. */
   worktree?: boolean
   /**
@@ -390,6 +400,26 @@ export interface SessionViewPrefs {
    * never a deletion — the sessions are still there, still attachable, one toggle away.
    */
   showDone?: boolean
+}
+
+/**
+ * How the fleet list opens on a machine that has never chosen — and what `ctrl+r` restores.
+ *
+ * Stated ONCE, here, because three places used to spell it out: the host's fallback, the screen's
+ * initial state, and the reset. Three copies of a default is three chances for the app to open on
+ * one arrangement and reset to another.
+ *
+ * Active conversations, grouped by project: the grouping is the directory you are working in, and
+ * the two history switches are off, so the list opens as what is happening rather than as
+ * everything that ever has. A row the user NAMED is still shown whatever the switches say — see
+ * `sessionNamed` — which is what brings a task back after the machine restarts.
+ */
+export const DEFAULT_SESSION_VIEW: SessionViewPrefs = {
+  grouping: 'project',
+  showClosed: false,
+  showExited: false,
+  showUnfiled: true,
+  showDone: false,
 }
 
 export interface ControlSessions {

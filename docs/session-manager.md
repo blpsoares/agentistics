@@ -55,19 +55,92 @@ outcome is reported.
 
 ## The cockpit
 
-`agentop` → the **sessions** tab. Every verb is a VISIBLE button as well as a letter: `tab` moves
-between the list and the action row, the arrows move along it, `enter` runs it, and it is clickable.
-The letters are accelerators, never the only way in.
+`agentop` → the **sessions** tab. It is three framed panes — a menu, the fleet, and a detail pane
+under both — and the one holding the keyboard wears an accent border, so "where am I" is answered by
+the screen rather than remembered.
 
-The list holds the whole fleet — sessions agentop runs, assistants running beside it, and
-conversations that are closed — in sections, with history always separated from what is live.
+### The menu
+
+Everything the screen can do is on the left, visible and clickable: **actions**, **view**, **show**,
+**tasks**, **projects**. Each block is its own box; the one you are in is open and the rest keep
+their NAME on a single row, so nothing is ever hidden behind a fold that does not announce itself. A
+terminal tall enough opens every block at once.
+
+Sections are numbered. `1`–`9` jump straight to one, from the fleet list as well as from the menu,
+and `←`/`→` step between them — a soft keyboard has no arrow keys, so the digits are the way in that
+always exists. Clicking a collapsed name opens it.
+
+### The fleet
+
+The list holds everything — sessions agentop runs, assistants running beside it, and conversations
+that are closed — in sections, with history always separated from what is live. Columns are measured
+across the visible rows and carry a header, so the handle, state, name, worktree, task, usage,
+harness and project line up and say what they are. The handle is the first characters of the session
+id — `agentop session attach 3f5f` resolves a prefix, so it is the one thing on the row that names
+the session to something other than this screen.
+
+**What you named, you keep seeing.** A row you gave a name, a note or a task is never withheld by the
+history switches. A machine restart makes every managed session `lost`, and without that rule the
+list came back empty after a reboot — with the session you had renamed and filed under a task gone,
+and the name with it.
+
 `/` searches all of it, including a closed conversation's opening prompt, which is what a person
-actually remembers about work they put down.
+actually remembers about work they put down. `esc` drops the search, then the project scope, then the
+task scope — the summary row states what is narrowing the list and which key clears it.
 
-`--bg` detaches and returns immediately. Without it the session takes over your terminal; the
-detach keystroke is printed before it does, read from your own tmux prefix rather than assumed.
+### The view, and the default
 
-`--cwd` defaults to the directory you are in.
+The list opens as **active conversations, grouped by project**, and every change you make is
+remembered across runs. `ctrl+r` puts it back to that default, and so does the row at the top of the
+**view** block — every switch here is sticky, which is also how an arrangement you fiddled with weeks
+ago follows you around, and a key with no row is a feature only the footer knows about.
+
+Grouping by **repository** is the other useful one: a session is opened in a directory, but the thing
+a person thinks in is the repository, and three worktrees of `agentistics` are three places to work
+on ONE project. The repository is keyed by the git REMOTE wherever there is one — the only key a
+worktree provably shares with its main checkout, since their directory names deliberately differ —
+and falls back to the main checkout's folder name.
+
+**By project** keys on the main checkout too, not on the directory: a session opened in
+`agentistics/.claude/worktrees/session-monitor` files under `agentistics`, and the worktree column
+says which checkout it is. Keying on the directory name filed three checkouts of one project as
+three projects, which is the split the repository dimension exists to avoid — and since this is the
+default grouping, it was the first thing anyone saw.
+
+### Tasks
+
+A task is whatever you say it is: a free string, chosen while starting a session or added later, and
+several sessions carrying the same one are that task's sessions. The menu lists them with counts, a
+task scopes the list, and **Open whole task** brings all of its sessions back at once.
+
+Reopening a task is safe to press twice. A session still running is left alone rather than duplicated,
+one you finished is not resurrected, one whose conversation cannot be resolved is skipped *and
+counted*, and everything reopened retires the row it replaced — so a laptop closed and opened twice
+does not leave a task holding dead twins under one name. Names, notes and task stay with the session
+through a reopen.
+
+A task can be marked **finished**, which puts its sessions away behind a switch beside "closed" and
+"exited". It stops nothing and deletes nothing.
+
+### Attaching
+
+`enter` opens the menu for the selected row; `o` attaches. Attaching unmounts the app, hands the
+terminal over, and comes back to this tab when you detach — the detach keystroke is read from your
+own tmux prefix and stated on the row before you press anything, never assumed.
+
+Pressing `o` on a row with nothing running asks whether to pick that conversation back up instead of
+refusing — external sessions included, since agentop did not start those but the conversation is on
+this disk either way. `x` stops a session; it is deliberately not `k`, which moves the cursor.
+
+### Starting one
+
+`a` opens the wizard: harness → folder → task → model → effort → prompt → background or attached.
+The folder step is a searchable table of every directory under your home — folder, repository, path
+and why it is being offered — grouped by repository, with the directory you are standing in first.
+It reads the local store, so it works with the server stopped.
+
+`--bg` detaches and returns immediately. Without it the session takes over your terminal; the detach
+keystroke is printed before it does. `--cwd` defaults to the directory you are in.
 
 ## What a session is doing
 
@@ -79,7 +152,7 @@ detach keystroke is printed before it does, read from your own tmux prefix rathe
 | `waiting` | alive and still — it is waiting for you |
 | `NEEDS APPROVAL` | a blocking question is on screen |
 | `exited` | the command finished; the session is still listable and its last frame readable |
-| `lost` | the registry knows it, the backend does not |
+| `lost` | the registry knows it, the backend does not — a reboot puts every session here, and each one keeps its name and offers Reopen |
 | `external` | an assistant running on this machine that agentop did not start — listed, but not attachable |
 
 There is deliberately no `idle`. An interactive assistant that is alive and whose screen has stopped
@@ -115,5 +188,12 @@ wired up because the key could not be verified from the CLI itself, and agentop 
 
 ## Where state lives
 
-`~/.agentistics/managed-sessions.json` — the sessions agentop started, with their labels and notes.
-tmux is authoritative about what is running; this file is authoritative about what it means.
+`~/.agentistics/managed-sessions.json` — the sessions agentop started, with their labels, notes and
+tasks, and an `endedAt` on the ones that are over. tmux is authoritative about what is RUNNING; this
+file is authoritative about what it MEANS, which is why a reboot takes the first and leaves the
+second. A session is marked finished rather than deleted: it is still a thing that happened, and
+reopening it is the ordinary next thing to want.
+
+`~/.agentistics/preferences.json` — `sessionView` (how the list is arranged) and `finishedTasks`
+(the tasks you marked done). Both are properties of this machine rather than of any session, which
+is why they do not live in the registry.

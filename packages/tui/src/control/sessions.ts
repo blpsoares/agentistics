@@ -115,7 +115,9 @@ export function groupSessions(
       : by === 'model' ? (s.model ?? '')
       : by === 'task' ? (s.task ?? '')
       : by === 'repo' ? (s.repo ?? '')
-      : s.project
+      // The PROJECT is what the work is called, which for anything in a repository is the main
+      // checkout — never the worktree's own directory, or one project files as three.
+      : (s.projectGroup || s.project)
     const label = key !== '' ? key : unknownLabels[by]
     const found = groups.get(key)
     if (found) found.sessions.push(s)
@@ -506,6 +508,14 @@ export function summaryCells(o: {
 // ---------------------------------------------------------------------------
 
 export interface SessionColumns {
+  /**
+   * The first few characters of the session id.
+   *
+   * It is the HANDLE: `agentop session attach 3f5f` takes a prefix, so the row that shows one is
+   * the row you can act on from another terminal. Fixed width and always drawn — it is five columns
+   * and it is the only thing on the screen that names the session to anything but this screen.
+   */
+  id: number
   state: number
   title: number
   /**
@@ -517,12 +527,45 @@ export interface SessionColumns {
    * being able to see which task it is in is the feature not working.
    */
   task: number
-  /** The worktree word. `0` when no row on screen is one — never a column of blanks. */
+  /**
+   * The worktree's own folder name. `0` when no row on screen is one — never a column of blanks.
+   *
+   * The NAME rather than the word "worktree": with the list grouped by project, the heading already
+   * says which project and the folder cell says the same, so a cell repeating "worktree" on every
+   * row told you the kind and never which one. Three checkouts of one repository are told apart by
+   * exactly this.
+   */
   worktree: number
   /** Tokens + cost. `0` when nothing on screen has any — never a column of blanks. */
   metrics: number
   harness: number
   where: number
+}
+
+/** How much of a session id a row shows. Enough to be unambiguous in practice, and to type. */
+export const ID_CELL = 5
+
+/**
+ * The handle: the leading characters of the id, which is what the CLI resolves a prefix against.
+ *
+ * Empty for a row that has no id of ours — an external process and a closed conversation are named
+ * by the harness, not by agentop, and showing five characters of a synthetic id would offer a
+ * handle that `agentop session attach` cannot resolve.
+ */
+export function sessionHandle(s: ControlSession): string {
+  return s.id.startsWith('external:') || s.id.startsWith('closed:') ? '' : s.id.slice(0, ID_CELL)
+}
+
+/**
+ * What a worktree row is CALLED — its own directory name, or `''` when it is not one.
+ *
+ * The folder cell shows the PROJECT once the project grouping keys on the main checkout, so this is
+ * the cell that says which checkout of it you are looking at. The NAME rather than the word
+ * "worktree": a cell repeating one word on every such row told you the kind and never which one,
+ * and three checkouts of one repository are told apart by exactly this.
+ */
+export function worktreeName(s: ControlSession): string {
+  return s.worktree ? s.project : ''
 }
 
 /**
@@ -556,8 +599,6 @@ export function sessionColumns(
   o: {
     /** True while the HEADING above each row already names the task, so the cell would repeat it. */
     groupedByTask?: boolean
-    /** Already-localized word for a linked worktree; this module owns no strings. */
-    worktreeWord?: string
     /**
      * The column HEADINGS, when a header row is being drawn.
      *
@@ -576,13 +617,15 @@ export function sessionColumns(
     return data === 0 ? 0 : Math.max(data, head(key))
   }
 
+  const id = widest('id', sessionHandle)
   const state = widest('state', s => s.stateLabel)
   const task = o.groupedByTask ? 0 : widest('task', s => s.task ?? '')
-  const worktreeWord = o.worktreeWord ?? ''
-  const worktree = rows.some(s => s.worktree) ? Math.max(worktreeWord.length, head('worktree')) : 0
+  const worktree = widest('worktree', worktreeName)
   const metrics = widest('metrics', sessionMetric)
   const harness = widest('harness', s => s.harness)
-  const where = widest('where', s => s.project)
+  // The PROJECT, not the directory: once the grouping keys on the main checkout, a folder cell
+  // showing the worktree's own name says something the worktree cell already says better.
+  const where = widest('where', s => s.projectGroup || s.project)
   const title = widest('title', s => s.title)
 
   /**
@@ -594,8 +637,8 @@ export function sessionColumns(
    * title on the screen to reserve a space nothing occupies.
    */
   const overhead = (wt: number, k: number, m: number, h: number, w: number) => {
-    const drawn = [state, 1, wt, k, m, h, w].filter(n => n > 0).length
-    return 2 + state + wt + k + m + h + w + GAP * (drawn - 1)
+    const drawn = [id, state, 1, wt, k, m, h, w].filter(n => n > 0).length
+    return 2 + id + state + wt + k + m + h + w + GAP * (drawn - 1)
   }
 
   // The fewest columns a title is worth. Below it the row has a state word and an ellipsis, which
@@ -621,13 +664,13 @@ export function sessionColumns(
     // misalignment wearing a different shape.
     if (room >= MIN_TITLE || (wt === 0 && k === 0 && m === 0 && h === 0 && w === 0)) {
       return {
-        state, title: Math.max(1, Math.min(title, room)),
+        id, state, title: Math.max(1, Math.min(title, room)),
         worktree: wt, task: k, metrics: m, harness: h, where: w,
       }
     }
   }
   /* c8 ignore next */
-  return { state, title: 1, worktree: 0, task: 0, metrics: 0, harness: 0, where: 0 }
+  return { id: 0, state: 1, title: 1, worktree: 0, task: 0, metrics: 0, harness: 0, where: 0 }
 }
 
 /** Pad or truncate a cell to exactly `w` columns. `0` means the column is not drawn. */
@@ -741,6 +784,15 @@ export type AsideRow =
   | { kind: 'task'; name: string; count: number; on: boolean; done?: boolean }
   /** One project directory, with its session count. `name: ''` is "every project". */
   | { kind: 'project'; name: string; count: number; on: boolean }
+  /**
+   * The DEFAULT arrangement, as one press.
+   *
+   * Every switch on this screen is remembered, which is what people asked for and also what makes
+   * an arrangement you fiddled with weeks ago follow you around. `ctrl+r` restores it, but a key
+   * with no row is a feature only the footer knows about — and this menu exists precisely so that
+   * nothing is reachable by keystroke alone.
+   */
+  | { kind: 'preset'; label: string; on: boolean }
 
 /** The three things the list can be told to withhold. */
 export type SessionToggle = 'closed' | 'exited' | 'unfiled' | 'done'
@@ -761,6 +813,10 @@ export function asideRows(o: {
   toggles: Record<SessionToggle, boolean>
   toggleWords: Record<SessionToggle, string>
   headings: { actions: string; view: string; show: string }
+  /** Already-localized name of the default arrangement, when the menu should offer it. */
+  presetLabel?: string
+  /** Whether the list is currently arranged exactly that way. */
+  presetOn?: boolean
   /** `unfiled` only means anything while grouping by task, so it is ABSENT otherwise. */
   showUnfiled: boolean
   /**
@@ -793,6 +849,9 @@ export function asideRows(o: {
     rows.push({ kind: 'action', action: a.action, label: o.actionWords[a.action], enabled: a.enabled })
   }
   rows.push({ kind: 'rule' }, { kind: 'heading', label: o.headings.view })
+  if (o.presetLabel !== undefined) {
+    rows.push({ kind: 'preset', label: o.presetLabel, on: o.presetOn === true })
+  }
   for (const g of GROUPINGS) {
     rows.push({ kind: 'group', value: g, label: o.groupWords[g], on: g === o.grouping })
   }

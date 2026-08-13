@@ -22,6 +22,17 @@ import { repoShortName, normalizeGitRemote } from '@agentistics/core'
 export interface RepoFacts {
   /** `org/repo` from the remote, else the main checkout's folder name. Absent outside a repo. */
   repo?: string
+  /**
+   * The MAIN checkout's folder name — `agentistics` even when asked from inside one of its
+   * worktrees. Absent outside a repository.
+   *
+   * Separate from `repo` because it is a different question: `repo` identifies the project across
+   * machines and needs the remote, this one is what the project is CALLED here and exists whether
+   * or not anything was ever pushed. It is what the "by project" grouping keys on — a worktree
+   * grouped under its own directory name files three checkouts of one project as three projects,
+   * which is the same split the repository dimension exists to avoid.
+   */
+  root?: string
   /** True only for a LINKED worktree — the main checkout of a repo is not one. */
   worktree: boolean
 }
@@ -50,12 +61,13 @@ export function decideRepoFacts(o: {
   const inRepo = o.commonDir !== ''
   if (!inRepo) return NONE
   const worktree = o.gitDir !== '' && o.gitDir !== o.commonDir
-  const named = normalizeGitRemote(o.remote)
-  if (named) return { repo: repoShortName(named), worktree }
-  // No remote: the COMMON git dir's parent is the main checkout even when asked from a worktree,
-  // which is the whole reason it is read instead of `--show-toplevel`.
+  // The COMMON git dir's parent is the main checkout even when asked from a worktree, which is the
+  // whole reason it is read instead of `--show-toplevel`. Computed always, not only as a fallback:
+  // it is what the project is CALLED here, and a repository with no remote still has a name.
   const root = basename(dirname(o.commonDir.replace(/[/\\]+$/, '')))
-  return root ? { repo: root, worktree } : { worktree }
+  const named = normalizeGitRemote(o.remote)
+  if (named) return { repo: repoShortName(named), worktree, ...(root ? { root } : {}) }
+  return root ? { repo: root, root, worktree } : { worktree }
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {

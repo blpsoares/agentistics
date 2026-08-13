@@ -4,6 +4,7 @@ import {
   sessionRows, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
   projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
+  sessionHandle, worktreeName,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -754,29 +755,42 @@ describe('projectPickRows', () => {
 
 describe('the worktree cell', () => {
   const wt = [
-    session('a', { stateLabel: 'waiting', title: 'one', worktree: true }),
-    session('b', { stateLabel: 'waiting', title: 'two' }),
+    session('a', { stateLabel: 'waiting', title: 'one', worktree: true, project: 'session-monitor' }),
+    session('b', { stateLabel: 'waiting', title: 'two', project: 'agentistics' }),
   ]
 
   it('draws nothing when no row on screen is a worktree', () => {
     const plain = [session('b', { stateLabel: 'waiting', title: 'two' })]
-    expect(sessionColumns(plain, 140, { worktreeWord: 'worktree' }).worktree).toBe(0)
+    expect(sessionColumns(plain, 140).worktree).toBe(0)
   })
 
-  it('is sized to the WORD, not to the rows that happen to carry it', () => {
-    // It is a flag, not a value: every row that has it says the same thing, so the column is the
-    // width of the word and the rows that are not worktrees are blank under it.
-    expect(sessionColumns(wt, 140, { worktreeWord: 'worktree' }).worktree).toBe('worktree'.length)
+  it('carries the worktree NAME, not the word "worktree"', () => {
+    // Grouped by project the heading already says which project, so a cell repeating one word on
+    // every such row told you the kind and never which one. Three checkouts are told apart here.
+    expect(worktreeName(wt[0]!)).toBe('session-monitor')
+    expect(worktreeName(wt[1]!)).toBe('')
+    expect(sessionColumns(wt, 140).worktree).toBe('session-monitor'.length)
   })
 
   it('is given up before the name, and after nothing else', () => {
-    // It is the first cell surrendered: it qualifies the row rather than identifying it, and a
-    // narrow terminal that keeps the flag but loses the directory has kept the lesser fact.
     const lost = (pick: (c: ReturnType<typeof sessionColumns>) => number) => {
-      for (let w = 200; w >= 4; w--) if (pick(sessionColumns(wt, w, { worktreeWord: 'worktree' })) === 0) return w
+      for (let w = 200; w >= 4; w--) if (pick(sessionColumns(wt, w)) === 0) return w
       return 0
     }
     expect(lost(c => c.worktree)).toBeLessThan(lost(c => c.where))
+  })
+})
+
+describe('sessionHandle', () => {
+  it('is the prefix `agentop session attach` resolves against', () => {
+    expect(sessionHandle(session('3f5f4dd461'))).toBe('3f5f4')
+  })
+
+  it('is EMPTY for a row agentop did not name', () => {
+    // An external process and a closed conversation are named by the harness. Showing five
+    // characters of a synthetic id offers a handle the CLI cannot resolve.
+    expect(sessionHandle(session('external:claude:/repo:0'))).toBe('')
+    expect(sessionHandle(session('closed:abc-def'))).toBe('')
   })
 })
 
@@ -943,5 +957,75 @@ describe('sessionNamed', () => {
     // nothing about whether anyone chose it.
     expect(sessionNamed(session('a', { title: 'claude in agentistics' }))).toBe(false)
     expect(sessionNamed(session('a', { title: 'x', named: true }))).toBe(true)
+  })
+})
+
+describe('the default-arrangement row', () => {
+  const verbs = {
+    attach: 'Attach', resume: 'Reopen', rename: 'Rename', note: 'Note', task: 'Task',
+    kill: 'Stop', openTask: 'Open whole task', finishTask: 'Finish task',
+    new: 'New', search: 'Search', group: 'Group',
+  }
+  const groups = {
+    repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
+    project: 'project',
+  }
+  const toggles = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks' }
+  const heads = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
+
+  it('is offered at the head of the VIEW section, and states whether it is on', () => {
+    // A key with no row is a feature only the footer knows about — and this menu exists precisely
+    // so that nothing on the screen is reachable by keystroke alone.
+    const rows = asideRows({
+      actions: sessionActions(session('m')),
+      actionWords: verbs,
+      grouping: 'project',
+      groupWords: groups,
+      toggles: { closed: false, exited: false, unfiled: false, done: false },
+      toggleWords: toggles,
+      headings: heads,
+      showUnfiled: false,
+      presetLabel: 'active · project',
+      presetOn: true,
+    })
+    const view = rows.findIndex(r => r.kind === 'heading' && r.label === 'VIEW')
+    const preset = rows[view + 1]
+    expect(preset?.kind).toBe('preset')
+    expect(preset).toMatchObject({ label: 'active · project', on: true })
+  })
+
+  it('is absent when the caller does not offer one', () => {
+    const rows = asideRows({
+      actions: sessionActions(session('m')),
+      actionWords: verbs,
+      grouping: 'project',
+      groupWords: groups,
+      toggles: { closed: false, exited: false, unfiled: false, done: false },
+      toggleWords: toggles,
+      headings: heads,
+      showUnfiled: false,
+    })
+    expect(rows.some(r => r.kind === 'preset')).toBe(false)
+  })
+})
+
+describe('grouping by project', () => {
+  it('files a WORKTREE under the project it belongs to, not under its own folder', () => {
+    // Three worktrees of one repository are three places to work on ONE project. Keying on the
+    // directory name files them as three projects, which is the split the repository dimension
+    // exists to avoid — and it is the default grouping, so it is the first thing anyone sees.
+    const g = groupSessions([
+      session('a', { project: 'session-monitor', projectGroup: 'agentistics' }),
+      session('b', { project: 'agentistics' }),
+      session('c', { project: 'billing-basis', projectGroup: 'agentistics' }),
+    ], 'project', UNKNOWN)
+    expect(g).toHaveLength(1)
+    expect(g[0]!.key).toBe('agentistics')
+    expect(g[0]!.sessions).toHaveLength(3)
+  })
+
+  it('falls back to the directory when the session belongs to no repository', () => {
+    const g = groupSessions([session('a', { project: 'scratch' })], 'project', UNKNOWN)
+    expect(g[0]!.key).toBe('scratch')
   })
 })

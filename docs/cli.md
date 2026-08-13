@@ -393,20 +393,31 @@ hosted by tmux on its own socket (`-L agentop`), so it survives `agentop` exitin
 with your own tmux sessions.
 
 ```bash
-agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"]
-agentop session list
+agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"] [--task "<name>"]
+agentop session list   [--json]
 agentop session attach <id|name>
 agentop session kill   <id|name>
 agentop session rename <id|name> "label"
 agentop session note   <id|name> "text"
+
+# several at once, filed under one task — the form an assistant should drive
+agentop session batch --task "<name>" [--cwd <path>] --session "<harness>: <prompt>" [--session ...] [--json]
+agentop session open  "<task>" [--json]
 ```
 
 `--bg` detaches and returns immediately; without it the session takes over your terminal, and the
 detach keystroke is printed first (read from your own tmux prefix, never assumed to be `Ctrl-b`).
 `--cwd` defaults to the directory you are in and is resolved to an absolute path.
 
+`batch` starts every session detached and files them all under one task; `open` brings that whole
+task back later — safe to press twice, since a session still running is left alone rather than
+duplicated and everything reopened retires the row it replaced. Sessions keep their name, note and
+task across a reopen, and across a reboot: tmux is authoritative about what is running, the registry
+about what it means.
+
 Needs **tmux** (Linux, macOS); Windows support arrives with the PTY backend. Full command reference,
-harness support table and where state lives: see [docs/session-manager.md](session-manager.md).
+the cockpit, harness support table and where state lives: see
+[docs/session-manager.md](session-manager.md).
 
 ---
 

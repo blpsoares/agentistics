@@ -406,7 +406,7 @@ const FAKE_FLEET: ControlSessions = {
     {
       id: 'aabbcc', title: 'release notes', harness: 'claude',
       cwd: '/home/dev/agentistics/.claude/worktrees/notes', project: 'notes',
-      repo: 'blpsoares/agentistics', worktree: true,
+      repo: 'blpsoares/agentistics', projectGroup: 'agentistics', worktree: true,
       state: 'exited', stateLabel: 'exited', actionable: true,
       startedAt: Date.now() - 4 * 60 * 60_000, attached: false,
     },
