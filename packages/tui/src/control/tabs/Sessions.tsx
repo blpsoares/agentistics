@@ -1134,6 +1134,10 @@ export function Sessions({
       {cockpit.detail > 0 && (ask || (!hideDetail && detail.length > 0)) ? (
         <Pane
           title={ask ? s.sessionsPaneAsk : s.sessionsPaneDetail}
+          // The key that puts this pane away, written ON the pane. It lives as a row in the `show`
+          // block too, but that block is collapsed by default and five rows deep — a control for a
+          // thing you are looking straight at belongs on the thing.
+          badge={ask ? '' : s.sessionsDetailHide}
           focused={Boolean(ask)}
           width={width}
           height={cockpit.detail}

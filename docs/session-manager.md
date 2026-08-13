@@ -102,11 +102,14 @@ in that colour. It is kept by session id, because the list re-sorts under it eve
 a mark meaning "the third row" would be on someone else's session by the next poll — and it survives
 detaching, which is exactly when you needed it.
 
-The detail pane has its own switch (`d`). It is a pane, not a fact, and a screen is allowed to be a
+The detail pane has its own switch (`d`), written on the pane itself as well as offered in the
+*show* block — a control for a thing you are looking straight at belongs on the thing. It is a pane, not a fact, and a screen is allowed to be a
 list — but a QUESTION still takes the region whatever the switch says, because a prompt with nowhere
 to draw cannot be answered.
 
-**`only active` (`l`) is the one switch that overrides that**, and it is why it leads the *show*
+**`only active` (`l`) counts EXTERNAL sessions as active**, because an external row exists precisely
+because a live assistant process was found: what cannot be read there is its activity, never whether
+it is running. It is the one switch that overrides the rule above, and it is why it leads the *show*
 block. The rule above is right by default, but on a machine with months of named work it shows all
 of it; this is how you ask for the four things you are actually doing and nothing else. Everything
 else in that block can only ever widen.

@@ -232,6 +232,8 @@ export interface ControlStrings {
   toggleActive: string
   /** The detail pane's own switch: it is a pane, not a fact, and a screen is allowed to be a list. */
   toggleDetail: string
+  /** Written on the detail pane itself: the key that puts it away. */
+  sessionsDetailHide: string
   asideSort: string
   asideStates: string
   sessionsSorts: Record<'state' | 'name' | 'started' | 'usage' | 'project', string>
@@ -536,6 +538,7 @@ const EN: ControlStrings = {
   toggleDone: 'finished tasks',
   toggleActive: 'only active',
   toggleDetail: 'detail pane',
+  sessionsDetailHide: 'd hides',
   asideSort: 'ORDER',
   asideStates: 'STATE',
   sessionsSorts: {
@@ -834,6 +837,7 @@ const PT: ControlStrings = {
   toggleDone: 'tarefas finalizadas',
   toggleActive: 'apenas ativas',
   toggleDetail: 'painel de detalhe',
+  sessionsDetailHide: 'd oculta',
   asideSort: 'ORDENAR',
   asideStates: 'ESTADO',
   sessionsSorts: {
