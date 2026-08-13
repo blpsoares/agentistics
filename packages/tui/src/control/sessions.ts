@@ -375,27 +375,62 @@ export type SessionAction =
  * one running outside agentop has nothing to rename; a row whose harness cannot reopen by id gets no
  * reopen at all.
  */
-export function sessionActions(selected: ControlSession | undefined): SessionAction[] {
-  const out: SessionAction[] = ['new', 'search', 'group']
-  if (!selected) return out
+export interface OfferedAction {
+  action: SessionAction
+  /** False when this row cannot take it. Drawn DIM and skipped by the cursor — never selectable. */
+  enabled: boolean
+}
 
-  const managed = selected.state !== 'unknown' && selected.state !== 'closed'
-  if (managed) out.unshift('attach')
-  else if (selected.resume) out.unshift('resume')
+/**
+ * The verbs, ALWAYS all of them, each marked with whether this row can take it.
+ *
+ * The rule everywhere else in this control center is that a verb which cannot work is absent. Here
+ * that was wrong, and it took watching someone use it to see why: with a fleet of sessions agentop
+ * did not start, the row shrank from nine verbs to four, and the honest reading of a menu that lost
+ * five items is that the feature broke. Absence communicates nothing about WHY.
+ *
+ * So the shape stays constant and the unavailable verbs are dimmed. Nothing failing is ever offered
+ * — the cursor skips them and a click does nothing — but the screen no longer implies that renaming
+ * a session stopped existing because the one you selected cannot be renamed.
+ */
+export function sessionActions(selected: ControlSession | undefined): OfferedAction[] {
+  const hosted = selected !== undefined
+    && selected.state !== 'unknown'
+    && selected.state !== 'closed'
+  const canReopen = Boolean(selected?.resume)
+  const hasTask = Boolean(selected?.task)
 
-  if (managed) {
-    out.push('rename', 'note', 'task', 'kill')
-    if (selected.task) out.push('openTask')
-  }
-  return out
+  return [
+    // The row-specific verb comes first, and which one it is depends on what the row IS: a session
+    // we host is attached to, one we do not is reopened. They are never both live.
+    ...(hosted
+      ? [{ action: 'attach' as const, enabled: true }]
+      : [{ action: 'resume' as const, enabled: canReopen }]),
+    { action: 'rename', enabled: hosted },
+    { action: 'note', enabled: hosted },
+    { action: 'task', enabled: hosted },
+    { action: 'openTask', enabled: hosted && hasTask },
+    { action: 'kill', enabled: hosted },
+    // These three need no selection at all and are therefore never dim.
+    { action: 'new', enabled: true },
+    { action: 'search', enabled: true },
+    { action: 'group', enabled: true },
+  ]
 }
 
 /** The already-localized labels for those verbs, in the order they are offered. */
 export function actionLabels(
-  actions: readonly SessionAction[],
+  actions: readonly OfferedAction[],
   words: Record<SessionAction, string>,
 ): string[] {
-  return actions.map(a => words[a])
+  return actions.map(a => words[a.action])
+}
+
+/** Index of the nth ENABLED verb, so the cursor never lands on one that cannot run. */
+export function enabledActionIndexes(actions: readonly OfferedAction[]): number[] {
+  const out: number[] = []
+  actions.forEach((a, i) => { if (a.enabled) out.push(i) })
+  return out
 }
 
 /**

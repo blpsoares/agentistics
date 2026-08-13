@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionActions, sessionCells,
-  sessionRows, sessionsLayout, sortSessions, summaryCells,
+  sessionRows, sessionsLayout, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -272,44 +272,62 @@ describe('sessionActions', () => {
     attach: 'Attach', resume: 'Reopen', rename: 'Rename', note: 'Note', task: 'Task',
     kill: 'Stop', openTask: 'Open whole task', new: 'New', search: 'Search', group: 'Group',
   }
+  const of = (s?: ControlSession) => sessionActions(s).map(a => a.action)
+  const on = (s?: ControlSession) => sessionActions(s).filter(a => a.enabled).map(a => a.action)
 
-  it('always offers the verbs that need no selection', () => {
-    // The screen must be usable when the fleet is empty — which is exactly when someone most needs
-    // to start something.
-    expect(sessionActions(undefined)).toEqual(['new', 'search', 'group'])
+  it('always offers the SAME set, whatever is selected', () => {
+    // A menu that loses five of its nine items reads as a broken feature, not as a row that cannot
+    // take them. The shape stays constant; what changes is which ones are live.
+    const shape = of(session('m'))
+    expect(of(undefined).length).toBe(shape.length)
+    expect(of(session('e', { state: 'unknown', actionable: false })).length).toBe(shape.length)
+    expect(shape).toContain('rename')
+    expect(shape).toContain('kill')
   })
 
-  it('offers attach and the metadata verbs on a session agentop runs', () => {
-    const a = sessionActions(session('m'))
-    expect(a[0]).toBe('attach')
+  it('enables only what needs no selection when nothing is selected', () => {
+    expect(on(undefined)).toEqual(['new', 'search', 'group'])
+  })
+
+  it('enables attach and the metadata verbs on a session agentop runs', () => {
+    const a = on(session('m'))
+    expect(a).toContain('attach')
     expect(a).toContain('rename')
     expect(a).toContain('kill')
+    expect(a).not.toContain('resume')
   })
 
-  it('offers reopen instead of attach on a row agentop does not run', () => {
-    // A verb that cannot work is ABSENT, never present and refusing: there is no process of ours to
-    // attach to, but the conversation can be reopened.
+  it('offers reopen in attach position on a row agentop does not run, and dims the rest', () => {
     const external = session('e', {
       state: 'unknown', actionable: false, resume: { sessionId: 's1', title: 'auth' },
     })
-    expect(sessionActions(external)[0]).toBe('resume')
-    expect(sessionActions(external)).not.toContain('attach')
-    expect(sessionActions(external)).not.toContain('rename')
+    expect(of(external)[0]).toBe('resume')
+    expect(on(external)).toContain('resume')
+    // Still PRESENT, so the menu keeps its shape — just not runnable here.
+    expect(of(external)).toContain('rename')
+    expect(on(external)).not.toContain('rename')
   })
 
-  it('offers nothing row-specific when the harness cannot reopen by id', () => {
+  it('dims reopen too when the harness cannot reopen by id', () => {
     const external = session('e', { state: 'unknown', actionable: false })
-    expect(sessionActions(external)).toEqual(['new', 'search', 'group'])
+    expect(of(external)).toContain('resume')
+    expect(on(external)).toEqual(['new', 'search', 'group'])
   })
 
-  it('offers the whole task only once the session is filed under one', () => {
-    expect(sessionActions(session('m'))).not.toContain('openTask')
-    expect(sessionActions(session('m', { task: 'XPTO' }))).toContain('openTask')
+  it('enables the whole task only once the session is filed under one', () => {
+    expect(on(session('m'))).not.toContain('openTask')
+    expect(on(session('m', { task: 'XPTO' }))).toContain('openTask')
+  })
+
+  it('never lets the cursor land on a verb that cannot run', () => {
+    const external = session('e', { state: 'unknown', actionable: false })
+    const offered = sessionActions(external)
+    for (const i of enabledActionIndexes(offered)) expect(offered[i]!.enabled).toBe(true)
   })
 
   it('labels every verb it offers, in the caller language', () => {
-    for (const a of sessionActions(session('m', { task: 'X' }))) {
-      expect(words[a].length).toBeGreaterThan(0)
+    for (const l of actionLabels(sessionActions(session('m', { task: 'X' })), words)) {
+      expect(l.length).toBeGreaterThan(0)
     }
   })
 })

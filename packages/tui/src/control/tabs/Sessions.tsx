@@ -20,14 +20,14 @@ import type {
 import type { ControlStrings } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
-import { actionAtColumn, fitActionRow } from '../chrome.ts'
-import { ActionRow } from '../Chrome'
+import { ACTION_SEP, actionAtColumn, fitActionRow } from '../chrome.ts'
 import { Divider } from '../Surface'
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
 import { SessionWizard } from './SessionWizard'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
-  QUESTION_ROWS, actionLabels, filterSessions, sessionActions, sessionsLayout, summaryCells,
+  QUESTION_ROWS, actionLabels, enabledActionIndexes, filterSessions, sessionActions,
+  sessionsLayout, summaryCells, type OfferedAction,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
 } from '../sessions'
 import { isActivation, wheelDelta } from '../mouse'
@@ -178,7 +178,11 @@ export function Sessions({
    * says nothing is indistinguishable from a broken one.
    */
   const actions = useMemo(() => sessionActions(selected), [selected])
-  const at2 = Math.min(actionIndex, Math.max(0, actions.length - 1))
+  // The cursor moves over the ENABLED verbs only; the dim ones keep the row's shape and are never
+  // landed on. Clamped every render, because which are enabled changes with the selection.
+  const liveActions = useMemo(() => enabledActionIndexes(actions), [actions])
+  const liveAt = liveActions.length === 0 ? 0 : Math.min(actionIndex, liveActions.length - 1)
+  const at2 = liveActions[liveAt] ?? 0
   const actionWords = useMemo(() => actionLabels(actions, {
     attach: s.actSessions.attach,
     resume: s.actSessions.resume,
@@ -245,9 +249,9 @@ export function Sessions({
 
     if (actionsFocused) {
       if (key.escape) { setActionsFocused(false); return }
-      if (key.return) return runAction(actions[at2] ?? 'new')
-      if (key.leftArrow) return setActionIndex(Math.max(0, at2 - 1))
-      if (key.rightArrow) return setActionIndex(Math.min(actions.length - 1, at2 + 1))
+      if (key.return) return runAction(actions[at2]?.action ?? 'new')
+      if (key.leftArrow) return setActionIndex(Math.max(0, liveAt - 1))
+      if (key.rightArrow) return setActionIndex(Math.min(liveActions.length - 1, liveAt + 1))
       return
     }
 
@@ -255,7 +259,7 @@ export function Sessions({
     // click use. It used to call `actOn('attach')` directly here, so `enter` on a session agentop
     // does not run refused with "cannot be controlled from here" while the action row beside it was
     // offering Reopen — one screen answering the same gesture two different ways.
-    if (key.return) return runAction(actions[0] ?? 'new')
+    if (key.return) return runAction(actions[liveActions[0] ?? 0]?.action ?? 'new')
     if (input === 'v') return runAction('group')
     if (input === 'c') { setShowClosed(v => !v); setCursor(0); return }
     if (input === 'u' && grouping === 'task') { setHideEmptyTask(v => !v); setCursor(0); return }
@@ -311,10 +315,12 @@ export function Sessions({
     if (actionRows > 0 && p.y === layout.list + (layout.summary ? 1 : 0)) {
       const fit = fitActionRow(actionWords, at2, width)
       const hit = actionAtColumn(fit, p.x)
-      if (hit !== null) {
+      // A click on a DIM verb does nothing at all: the row keeps its shape so the menu is legible,
+      // not so that unavailable things can be pressed.
+      if (hit !== null && actions[hit]?.enabled) {
         setActionsFocused(true)
-        setActionIndex(hit)
-        runAction(actions[hit]!)
+        setActionIndex(liveActions.indexOf(hit))
+        runAction(actions[hit]!.action)
       }
       return
     }
@@ -441,7 +447,13 @@ export function Sessions({
           {/* One row of air, so the verbs read as a separate thing from the rows they act on rather
               than as another list entry. Only spent when the screen can afford it. */}
           {height >= 12 ? <Text> </Text> : null}
-          <ActionRow labels={actionWords} selected={at2} focused={actionsFocused} width={width} />
+          <SessionActionRow
+            labels={actionWords}
+            actions={actions}
+            selected={at2}
+            focused={actionsFocused}
+            width={width}
+          />
         </>
       ) : null}
 
@@ -833,5 +845,48 @@ function ViewOptions({
         )
       })}
     </Box>
+  )
+}
+
+/**
+ * The verbs, all of them, with the ones this row cannot take drawn dim.
+ *
+ * A local row rather than the shared `ActionRow`: that one takes plain labels and cannot say that a
+ * cell is unavailable, and the services cockpit it was written for has no such state. The FIT is
+ * still the shared, tested one, so what is drawn and what a click resolves against are the same
+ * measurement.
+ */
+function SessionActionRow({ labels, actions, selected, focused, width }: {
+  labels: string[]
+  actions: readonly OfferedAction[]
+  selected: number
+  focused: boolean
+  width: number
+}) {
+  const fit = fitActionRow(labels, selected, width)
+  return (
+    <Text wrap="truncate">
+      <Text dimColor>{fit.less ? '‹ ' : '  '}</Text>
+      {fit.labels.map((cell, i) => {
+        const index = fit.from + i
+        const enabled = actions[index]?.enabled ?? false
+        const active = index === selected && focused
+        return (
+          <Text key={cell} dimColor={!enabled}>
+            {i > 0 ? ACTION_SEP : ''}
+            {/* Underlined as well as accented, the same way the cockpit marks the verb it would
+                run: which cell is selected must survive a flattened palette. */}
+            <Text
+              color={active ? COLORS.accent : enabled ? undefined : COLORS.muted}
+              bold={active}
+              underline={active}
+            >
+              {cell}
+            </Text>
+          </Text>
+        )
+      })}
+      <Text dimColor>{fit.more ? ' ›' : ''}</Text>
+    </Text>
   )
 }
