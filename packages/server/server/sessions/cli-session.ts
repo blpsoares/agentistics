@@ -13,6 +13,9 @@ import { SPAWN_SPECS, planSpawn } from './spawn-spec'
 import { reconcileSessions, resolveSessionRef, type ReconciledSession, type RefCandidate } from './session-ref'
 import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './registry'
 import { resolveBackend } from './index'
+import { scanProcesses } from '../live-sessions'
+import { createSessionsPoller } from './sessions-host'
+import { needsAttention, type SessionView } from './session-view'
 import type { SessionBackend, SpawnPlanError } from './types'
 
 /** Derived from the specs, never a second hand-written list — the two could not then disagree. */
@@ -122,14 +125,52 @@ async function execAttach(
   return await p.exited
 }
 
+/** The word each state wears. `external` says outright that this row is not ours to drive. */
+function stateWord(v: SessionView): string {
+  if (v.status === 'external') return 'external'
+  if (v.status === 'lost') return 'lost'
+  switch (v.activity) {
+    case 'waiting-approval': return 'NEEDS APPROVAL'
+    case 'waiting': return 'waiting'
+    case 'working': return 'working'
+    case 'exited': return 'exited'
+    default: return v.status
+  }
+}
+
 async function list(backend: SessionBackend): Promise<number> {
-  const rows = reconcileSessions(await readRegistry(), await backend.list())
-  if (rows.length === 0) { console.log('No sessions.'); return 0 }
-  for (const r of rows) {
-    const harness = r.managed?.harness ?? 'unknown'
-    const name = r.managed?.label ?? ''
-    const cwd = r.managed?.cwd ?? ''
-    console.log(`${r.id}\t${r.status}\t${harness}\t${name}\t${cwd}`)
+  const poller = createSessionsPoller({ backend, readRegistry, scanProcesses })
+  const snap = await poller.poll()
+
+  if (snap.unavailable) console.error(snap.unavailable)
+  if (snap.sessions.length === 0) {
+    // Only claim "nothing is running" when the poll actually succeeded — an unavailable backend has
+    // not established that, and saying so would be a confident zero.
+    if (!snap.unavailable) console.log('No sessions.')
+    return snap.unavailable ? 1 : 0
+  }
+
+  for (const v of snap.sessions) {
+    const id = v.status === 'external' ? '-' : v.id
+    // `?` rather than a guessed harness: an unregistered session's harness is genuinely unrecorded.
+    console.log(`${id}\t${stateWord(v)}\t${v.harness ?? '?'}\t${v.label ?? ''}\t${v.cwd}`)
+  }
+
+  const waiting = snap.sessions.filter(v => needsAttention(v.activity))
+  if (waiting.length > 0) {
+    console.log(`\n${waiting.length} session(s) waiting on you: ${waiting.map(v => v.label ?? v.id).join(', ')}`)
+  }
+
+  // A harness with no probed rules cannot distinguish a permission prompt from an ordinary pause.
+  // Saying so is the difference between a gap and a wrong answer.
+  const blind = [...new Set(
+    snap.sessions
+      .filter(v => v.status !== 'external' && !v.approvalDetection)
+      .map(v => v.harness)
+      .filter((h): h is NonNullable<typeof h> => h !== undefined),
+  )]
+  if (blind.length > 0) {
+    console.log(`Approval detection is not available for: ${blind.join(', ')} — those sessions show as "waiting" either way.`)
   }
   return 0
 }
