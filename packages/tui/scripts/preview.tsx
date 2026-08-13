@@ -36,6 +36,9 @@ import { ControlCenter } from '../src/control/ControlCenter'
 import {
   TAB_ORDER,
   type ControlHost,
+  type ControlSession,
+  type ControlSessions,
+  type ProjectOption,
   type ControlService,
   type ControlStatus,
   type ServiceRuntimeState,
@@ -341,7 +344,102 @@ function fakeHost(opts: Options): ControlHost {
       return () => { watchers.delete(handler) }
     },
     readLog: async (source, maxLines) => (LOG[source] ?? []).slice(-maxLines),
+    sessions: async () => FAKE_FLEET,
+    startableHarnesses: async () => [
+      { id: 'claude', label: 'claude', modelSuggestions: ['opus', 'sonnet', 'haiku'], supportsModel: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      { id: 'codex', label: 'codex', modelSuggestions: ['gpt-5.4', 'gpt-5.4-mini'], supportsModel: true, efforts: [] },
+      { id: 'kimi', label: 'kimi', modelSuggestions: ['kimi-k3'], supportsModel: true, efforts: [] },
+    ],
+    searchProjects: async (query: string) => FAKE_PROJECTS
+      .filter(p => p.label.toLowerCase().includes(query.trim().toLowerCase())),
+    spawnSession: async () => ({ ok: true, message: 'preview — nothing was performed' }),
   }
+}
+
+/**
+ * A fleet worth looking at: one blocked on a question, one waiting, one working, one finished, and
+ * one running outside agentop.
+ *
+ * Deliberately covers every state the row can wear, because the point of the preview is to catch a
+ * row that does not fit — and the state word is the one cell the screen may never give up, so the
+ * widest of them (`needs approval`) has to be on screen at every width being checked.
+ */
+const FAKE_PROJECTS: ProjectOption[] = [
+  { path: '/home/dev/agentistics', label: 'agentistics', repo: 'blpsoares/agentistics', detail: '~/agentistics', source: 'cwd' },
+  { path: '/home/dev/prontuario', label: 'prontuario', repo: 'org/prontuario', detail: '~/prontuario', source: 'history' },
+  { path: '/home/dev/agentistics-wt', label: 'session-monitor', repo: 'blpsoares/agentistics', detail: '~/agentistics/…/worktrees/session-monitor', source: 'history' },
+  { path: '/home/dev/embark', label: 'embark', detail: '~/orgs/opvibes/embark', source: 'repo' },
+  { path: '/home/dev/embark2', label: 'embark', detail: '~/archive/2024/embark', source: 'folder' },
+  { path: '/home/dev/scratch', label: 'scratch', detail: '~/scratch', source: 'folder' },
+]
+
+const FAKE_FLEET: ControlSessions = {
+  attention: 2,
+  rang: [],
+  detachHint: 'Ctrl-b then d',
+  finishedTasks: ['billing'],
+  sessions: withSearchText([
+    {
+      id: 'a1b2c3', title: 'migrate the auth store', harness: 'claude',
+      cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus', task: 'billing',
+      repo: 'blpsoares/agentistics',
+      state: 'waiting-approval', stateLabel: 'needs approval', actionable: true,
+      // Usage on SOME rows and not others, deliberately: the column is sized to the widest row that
+      // has any, and a fixture where every row carries one would never exercise the padding.
+      tokens: '51.7k', cost: '$1.24',
+      startedAt: Date.now() - 22 * 60_000, attached: false,
+    },
+    {
+      id: 'd4e5f6', title: 'flaky test hunt', harness: 'codex',
+      cwd: '/home/dev/prontuario', project: 'prontuario', task: 'flaky triage', repo: 'org/prontuario',
+      note: 'reproduces only on CI', state: 'waiting', stateLabel: 'waiting',
+      actionable: true, approvalBlind: 'agentop has no verified screen markers for codex, so a blocking question here shows as "waiting" like any other pause.',
+      startedAt: Date.now() - 3 * 60_000, attached: false,
+    },
+    {
+      id: '778899', title: 'rewrite the importer', harness: 'kimi',
+      cwd: '/home/dev/embark', project: 'embark', model: 'kimi-k3',
+      state: 'working', stateLabel: 'working', actionable: true,
+      tokens: '308.2k', cost: '$0.91',
+      startedAt: Date.now() - 90_000, attached: true,
+    },
+    {
+      id: 'aabbcc', title: 'release notes', harness: 'claude',
+      cwd: '/home/dev/agentistics/.claude/worktrees/notes', project: 'notes',
+      repo: 'blpsoares/agentistics', projectGroup: 'agentistics', worktree: true,
+      state: 'exited', stateLabel: 'exited', actionable: true,
+      startedAt: Date.now() - 4 * 60 * 60_000, attached: false,
+    },
+    {
+      id: 'external:claude:/home/dev/aipe:0', title: 'claude in aipe', harness: 'claude',
+      cwd: '/home/dev/aipe', project: 'aipe',
+      state: 'unknown', stateLabel: 'external', actionable: false,
+      startedAt: Date.now() - 40 * 60_000, attached: false,
+    },
+    {
+      id: 'closed:1', title: 'wire up the billing basis', harness: 'claude',
+      cwd: '/home/dev/agentistics', project: 'agentistics', task: 'billing',
+      state: 'closed', stateLabel: 'closed', actionable: false,
+      resume: { sessionId: 'c1', title: 'wire up the billing basis' },
+      startedAt: Date.now() - 26 * 60 * 60_000, attached: false,
+    },
+    {
+      id: 'closed:2', title: 'billing: reconcile the ledger', harness: 'codex',
+      cwd: '/home/dev/agentistics', project: 'agentistics', task: 'billing',
+      state: 'closed', stateLabel: 'closed', actionable: false,
+      resume: { sessionId: 'c2', title: 'billing: reconcile the ledger' },
+      startedAt: Date.now() - 30 * 60 * 60_000, attached: false,
+    },
+  ]),
+}
+
+/** The preview's fixtures say what they ARE; the searchable blob is derived, exactly as the host
+ *  derives it, so the two can never disagree about what a row can be found by. */
+function withSearchText(rows: Array<Omit<ControlSession, 'searchText'>>): ControlSession[] {
+  return rows.map(r => ({
+    ...r,
+    searchText: [r.title, r.harness, r.cwd, r.note, r.task].filter(Boolean).join(' ').toLowerCase(),
+  }))
 }
 
 // ---------------------------------------------------------------------------

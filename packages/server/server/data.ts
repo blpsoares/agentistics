@@ -872,6 +872,25 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     // the uploader and the central, which has no filesystem to recover it from.
     await resolveProjectFacts(sessions, projects, gitResolvedPaths)
 
+    // --- The user's own session names ---
+    // A label someone typed in the session manager is the ONE label nothing upstream may overwrite,
+    // which is the whole reason to be able to set one. It is stamped here, after every harness's
+    // sessions are in one list, and only where the link is unambiguous — `linkManagedSessions`
+    // refuses in both directions rather than attributing on a coin flip, because a name on the
+    // WRONG conversation is a user reading someone else's work under a title they chose themselves.
+    //
+    // Before writeConsolidated, so the name reaches the store and survives the harness deleting its
+    // transcript — and it is scrubbed by `redactSecrets` on the way to a central exactly like
+    // `first_prompt`, which it sits beside in `sessionLabel()`.
+    try {
+      const { readRegistry } = await import('./sessions/registry')
+      const { applySessionLabels, linkManagedSessions } = await import('./sessions/link-sessions')
+      applySessionLabels(sessions, linkManagedSessions(await readRegistry(), sessions))
+    } catch (err) {
+      // A registry that cannot be read costs some labels, never the build.
+      console.warn('[session] could not apply session labels:', String(err))
+    }
+
     // Persist non-Claude sessions to the consolidate store too. The Claude-only
     // writeConsolidated() above runs before this merge, so without this the store
     // (and therefore the team uploader, which pushes loadConsolidated()) would only

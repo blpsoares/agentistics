@@ -232,6 +232,42 @@ describe('headerMeta', () => {
       expect(headerMetaWidth(meta)).toBeLessThanOrEqual(width)
     }
   })
+
+  test('says nothing about waiting sessions when none are waiting', () => {
+    expect(headerMeta({ mode: 'solo', version: '1.7.4', width: 60 }).alert).toBe('')
+    expect(headerMeta({ mode: 'solo', version: '1.7.4', attention: 0, width: 60 }).alert).toBe('')
+  })
+
+  test('states the waiting count with a glyph, not a bare number', () => {
+    // A bare accent-coloured digit beside a dim one says nothing on a terminal that drops colour,
+    // and this is the piece the user is meant to act on.
+    const meta = headerMeta({ mode: 'solo', version: '1.7.4', attention: 2, width: 60 })
+    expect(meta.alert).toContain('2')
+    expect(meta.alert.length).toBeGreaterThan(1)
+  })
+
+  test('keeps the waiting count after the version has been given up', () => {
+    // The drop order is least-actionable-first: update, then version, then the counter. A version
+    // is one `agentop --version` away; a session waiting on you is why the app is open.
+    const squeezed = headerMeta({
+      mode: 'solo', version: '1.7.3', latestVersion: '1.7.4', attention: 3, width: 12,
+    })
+    expect(squeezed.text).toBe('solo')
+    expect(squeezed.update).toBe('')
+    expect(squeezed.alert).toContain('3')
+  })
+
+  test('gives up the counter only to keep the mode, and never overflows', () => {
+    for (let width = 0; width <= 80; width++) {
+      const meta = headerMeta({
+        mode: 'central', version: '1.7.3', latestVersion: '1.7.4', attention: 7, width,
+      })
+      expect(headerMetaWidth(meta)).toBeLessThanOrEqual(width)
+    }
+    const tiny = headerMeta({ mode: 'central', version: '1.7.3', attention: 7, width: 8 })
+    expect(tiny.text).toBe('central')
+    expect(tiny.alert).toBe('')
+  })
 })
 
 describe('headerLayout', () => {

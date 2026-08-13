@@ -9,10 +9,11 @@
 
 import type { CliLang } from './lang'
 
-export type TabId = 'services' | 'setup' | 'logs' | 'cheatsheet' | 'help' | 'contribute'
+export type TabId = 'services' | 'sessions' | 'setup' | 'logs' | 'cheatsheet' | 'help' | 'contribute'
 
 export const TAB_ORDER: readonly TabId[] = [
   'services',
+  'sessions',
   'setup',
   'logs',
   'cheatsheet',
@@ -264,6 +265,190 @@ export interface ControlService {
  */
 export type BootState = 'on' | 'off'
 
+// ---------------------------------------------------------------------------
+// the session fleet
+// ---------------------------------------------------------------------------
+
+/**
+ * What a session is doing, machine-readable — the colour, the sort and the counter read this.
+ *
+ * `unknown` is for an EXTERNAL session: an assistant running on this machine that agentop did not
+ * start. Its screen cannot be captured and its backend cannot be asked, so no state can honestly be
+ * claimed for it. The same N/A-versus-a-confident-0 rule the detail pane applies to `boot`.
+ */
+export type SessionState =
+  | 'working'
+  | 'waiting-approval'
+  | 'waiting'
+  | 'exited'
+  | 'lost'
+  /** Running, but agentop did not start it — nothing about it is capturable. */
+  | 'unknown'
+  /** Not running at all: a conversation on this machine that can usually be reopened. */
+  | 'closed'
+
+/**
+ * One session, as the host currently sees it.
+ *
+ * Every displayable string arrives already localized, exactly as `ControlService` does — the TUI
+ * owns no logic, so it neither decides what a session is doing nor what to call it.
+ */
+export interface ControlSession {
+  id: string
+  /** Already-localized display name: the user's label when there is one, else a derived one. */
+  title: string
+  /** Harness id, or `''` when the registry has forgotten it. The colour and grouping key. */
+  harness: string
+  cwd: string
+  /** The last path segment of `cwd` — the "by project" grouping key, computed by the host. */
+  project: string
+  /**
+   * The REPOSITORY this session's directory belongs to, `org/repo` or the checkout's folder name.
+   *
+   * A separate grouping from `project`, and the one that matches how the work is organised: three
+   * worktrees of one repo are three places to work on ONE thing, and grouping by directory files
+   * them under three unrelated names. Absent for a directory that is not in a repository at all.
+   */
+  repo?: string
+  /**
+   * What the "by project" grouping keys on, when it is not simply the directory name.
+   *
+   * The main checkout's folder for anything inside a repository — so the three worktrees of
+   * `agentistics` group under `agentistics` rather than under `session-monitor`, `billing-basis`
+   * and `agentistics`, which files one project as three. It is a SEPARATE field from `project`
+   * because the row must still say which directory it is actually in: with several worktrees open
+   * at once, the folder cell is the only thing telling them apart.
+   */
+  projectGroup?: string
+  /** True only for a LINKED worktree. Said on the row, because it changes what the row IS. */
+  worktree?: boolean
+  /**
+   * Whether the user deliberately MARKED this session — gave it a name, a note or a task.
+   *
+   * Its own flag rather than something the screen infers from `title`, because `title` always has a
+   * value: the host derives one when there is no label, so "has a title" says nothing about whether
+   * anyone chose it. The history switches make an exception of a marked row — see `sessionNamed`.
+   */
+  named?: boolean
+  model?: string
+  note?: string
+  /** The piece of work this session belongs to, when the user said so. Groups the list. */
+  task?: string
+  /**
+   * The conversation this row could REOPEN, when there is one.
+   *
+   * Present on a row that is running outside agentop (the conversation it appears to be driving) and
+   * on a closed one (itself). Absent when the harness cannot reopen by id, so the verb is not
+   * offered rather than offered and wrong.
+   */
+  resume?: { sessionId: string; title: string }
+  /**
+   * The last few meaningful lines of this session's screen — what it is saying right now.
+   *
+   * Present only for a session agentop hosts; there is no frame to read for anything else, and an
+   * invented one would be the worst possible thing to put under "what is it doing".
+   */
+  lastLines?: string[]
+  /** Already-formatted token count, when this row's conversation has metrics. */
+  tokens?: string
+  /** Already-formatted cost, same. */
+  cost?: string
+  /** Everything this row can be found by, already lowercased — including a closed conversation's
+   *  opening prompt, which is what a person remembers about work they put down. */
+  searchText: string
+  state: SessionState
+  /** Already-localized state word, e.g. "needs approval". */
+  stateLabel: string
+  /**
+   * Whether this row can be acted on at all.
+   *
+   * False for an external session, which is listed because "the fleet in one place" is the point,
+   * and marked because offering it verbs that cannot work would be worse than not listing it.
+   */
+  actionable: boolean
+  /**
+   * Already-localized sentence, present only when this harness has no probed approval markers.
+   *
+   * Its presence is the statement: a blocking question on such a session reads as plain `waiting`,
+   * so the detail pane says so rather than letting the state word imply a certainty it does not have.
+   */
+  approvalBlind?: string
+  /** When it started, epoch ms. An instant rather than a duration — see `ServiceRuntimeState`. */
+  startedAt?: number
+  attached: boolean
+}
+
+/**
+ * How the fleet list is arranged, remembered ACROSS RUNS.
+ *
+ * It lives on the status rather than in the TUI for the same reason the language and the mouse do:
+ * the control center owns no persistence. Without it the grouping was per-run state, so every
+ * restart threw away the arrangement someone had chosen — which reads as the screen forgetting on
+ * its own rather than as a setting that was never stored.
+ */
+export interface SessionViewPrefs {
+  grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo'
+  showClosed: boolean
+  showExited: boolean
+  /** Only meaningful while grouping by task, but stored either way so it survives a detour. */
+  showUnfiled: boolean
+  /**
+   * Whether the sessions of a FINISHED task are listed.
+   *
+   * Absent reads as `false`, which is the point of marking a task finished at all: the work is over
+   * and its sessions stop competing for the screen with the work that is not. It is a filter and
+   * never a deletion — the sessions are still there, still attachable, one toggle away.
+   */
+  showDone?: boolean
+}
+
+/**
+ * How the fleet list opens on a machine that has never chosen — and what `ctrl+r` restores.
+ *
+ * Stated ONCE, here, because three places used to spell it out: the host's fallback, the screen's
+ * initial state, and the reset. Three copies of a default is three chances for the app to open on
+ * one arrangement and reset to another.
+ *
+ * Active conversations, grouped by project: the grouping is the directory you are working in, and
+ * the two history switches are off, so the list opens as what is happening rather than as
+ * everything that ever has. A row the user NAMED is still shown whatever the switches say — see
+ * `sessionNamed` — which is what brings a task back after the machine restarts.
+ */
+export const DEFAULT_SESSION_VIEW: SessionViewPrefs = {
+  grouping: 'project',
+  showClosed: false,
+  showExited: false,
+  showUnfiled: true,
+  showDone: false,
+}
+
+export interface ControlSessions {
+  sessions: ControlSession[]
+  /** How many are waiting on a person. Drives the header counter, from every tab. */
+  attention: number
+  /** Ids that JUST entered attention. The shell rings the terminal bell for these, once. */
+  rang: string[]
+  /** Already-localized reason this list may not be the whole truth. Never an empty list alone. */
+  unavailable?: string
+  /**
+   * The REAL keystroke that leaves an attached session, read from the backend.
+   *
+   * On the snapshot rather than only on the attach, so the screen can state it permanently. It was
+   * printed once before handing the terminal over and then scrolled away — and a user who cannot
+   * get out is stranded in a buffer that hides their shell.
+   */
+  detachHint?: string
+  /**
+   * The tasks the user has marked FINISHED.
+   *
+   * On the snapshot rather than derived from the sessions, because it is a statement about the WORK
+   * and not about any session's state: a task is over when the person says it is, which is a
+   * different fact from every one of its sessions having exited. Sessions of a finished task are
+   * hidden by default and shown by a toggle.
+   */
+  finishedTasks?: string[]
+}
+
 export type TeamMode = 'solo' | 'central' | 'member'
 
 export type ArchiveMode = 'consolidate' | 'full' | 'off'
@@ -279,6 +464,8 @@ export interface ControlStatus {
   latestVersion?: string
   /** The history-preservation setting in force, or `undefined` while it is still unanswered. */
   archiveMode?: ArchiveMode
+  /** How the fleet list was last arranged. Absent on a machine that has never chosen. */
+  sessionView?: SessionViewPrefs
   /**
    * Whether the terminal should report the mouse. Defaults to ON — the mouse is the thing a user
    * reaches for first, and `m` (or this preference) is how someone who wants their terminal's own
@@ -358,6 +545,13 @@ export interface ControlHost {
   setLang(lang: CliLang): Promise<void>
 
   /**
+   * Remember how the fleet list is arranged. Same shape as `setLang`, and for the same reason: a
+   * preference the control center can toggle is a preference the host stores. Best-effort — a
+   * machine that cannot write its preferences still gets the setting for this run.
+   */
+  setSessionView?(view: SessionViewPrefs): Promise<void>
+
+  /**
    * Persist whether the mouse reports. Same shape as `setLang`, and for the same reason: the
    * control center owns no persistence, so a preference it can toggle is a preference the host
    * stores. Best-effort — a machine that cannot write its preferences still gets the toggle for
@@ -399,10 +593,215 @@ export interface ControlHost {
    * reads exactly that one, which is what the full-screen Logs screen's selector needs.
    */
   readLog(source: LogSource, maxLines: number): Promise<string[]>
+
+  /**
+   * The session fleet, re-read. Must never throw — a failed poll comes back as the previous list
+   * plus an `unavailable` sentence, never as an empty one.
+   *
+   * OPTIONAL, and its absence means the feature does not exist here: a host that does not implement
+   * it gets no `sessions` tab content beyond a sentence saying so. Same treatment as `openUrl?`,
+   * and for the same reason — a screen that offers what the host cannot do is the one bug this
+   * contract exists to prevent.
+   */
+  sessions?(): Promise<ControlSessions>
+
+  /**
+   * What it takes to attach to a session, or `null` when this one cannot be attached.
+   *
+   * Returned rather than PERFORMED, exactly as the backend's own `attachCommand` is: attaching needs
+   * the real tty, which it can only have once the control center has released it. The cockpit
+   * reports the intent as `ControlExit.attach` and `cli-start.ts` takes over — the same discipline
+   * `central.sh init` already follows.
+   */
+  attachSession?(id: string): Promise<AttachTicket | null>
+
+  killSession?(id: string): Promise<ActionResult>
+  renameSession?(id: string, label: string): Promise<ActionResult>
+  noteSession?(id: string, text: string): Promise<ActionResult>
+  /** File this session under a piece of work. Empty string clears it. */
+  taskSession?(id: string, task: string): Promise<ActionResult>
+
+  /**
+   * The tasks that already exist on this machine.
+   *
+   * So filing a session under one is a PICK rather than a spelling test: a task is a free string, so
+   * typing "auth-refactor" a second time as "auth refactor" makes two tasks that look like one and
+   * group like two. Offering what exists is what keeps that from happening.
+   */
+  sessionTasks?(): Promise<string[]>
+
+  /**
+   * Reopen a conversation as a NEW managed session.
+   *
+   * This is what makes a closed conversation, or one running outside agentop, something the cockpit
+   * can act on at all: it cannot attach to a process it did not start, but it can start a session
+   * that resumes the same conversation.
+   */
+  resumeSession?(req: ResumeSessionRequest): Promise<SpawnSessionResult>
+
+  /**
+   * Reopen every session of one task, in the background.
+   *
+   * The point of naming a task is getting all of its work back at once. Sessions whose conversation
+   * cannot be resolved are SKIPPED AND COUNTED in the result — a silent partial reopen would leave
+   * someone believing they had their whole task back.
+   */
+  openTask?(task: string): Promise<ActionResult>
+
+  /**
+   * Mark a task finished, or reopen it. Absent on a host that cannot remember the answer.
+   *
+   * Takes the state to SET rather than toggling, so the screen and the store can never disagree
+   * about what the button just did — a toggle computed from a snapshot one poll old flips the wrong
+   * way the moment two things happen between polls.
+   */
+  finishTask?(task: string, done: boolean): Promise<ActionResult>
+
+  /**
+   * The harnesses this machine can actually START, with what each of them accepts.
+   *
+   * Derived by the host from the spawn specs, so a harness with no spec is ABSENT from the wizard
+   * rather than offered and failing — the same rule the CLI already follows. The wizard renders
+   * whatever comes back and knows nothing about which CLI takes which flag.
+   */
+  startableHarnesses?(): Promise<SessionHarnessOption[]>
+
+  /** Places a new session could start, ranked. `query` may be empty, which opens on recency. */
+  searchProjects?(query: string): Promise<ProjectOption[]>
+
+  /** Start one. An attached request comes back with a ticket the shell hands to `ControlExit`. */
+  spawnSession?(req: SpawnSessionRequest): Promise<SpawnSessionResult>
+}
+
+/** One harness the wizard may offer, and the shape of the questions it earns. */
+export interface SessionHarnessOption {
+  id: string
+  /** Already-localized name. */
+  label: string
+  /**
+   * Models to OFFER — never a validation list. `claude --help` documents `--model` as an alias "or
+   * a model's full name", so refusing anything outside a fixed list would reject valid input the
+   * day a model ships. The wizard therefore lets the value be typed as well as picked.
+   */
+  modelSuggestions: string[]
+  /** Absent when the CLI has no model flag at all, which is a different thing from an empty list. */
+  supportsModel: boolean
+  /** A genuine closed enum printed by the CLI itself, so this one IS validated. Empty = none. */
+  efforts: string[]
+}
+
+/** One place a session could start. */
+export interface ProjectOption {
+  /** The directory. The only field that is load-bearing. */
+  path: string
+  /**
+   * The directory NAME, on its own.
+   *
+   * On its own, and not joined to the repo any more: the picker draws a measured TABLE, and a cell
+   * that already contains two facts and a separator cannot be aligned against anything. It read as
+   * a paragraph per row — which, on a machine with twenty candidates, is what made it unusable.
+   */
+  label: string
+  /** The repository it belongs to (`org/repo`), when it belongs to one. Its own column. */
+  repo?: string
+  /**
+   * The path, shortened for display.
+   *
+   * Not decoration: a machine with six directories called `portifolio` renders six identical rows
+   * without it, and the search field is the one control that decides where work happens.
+   */
+  detail: string
+  /**
+   * Why it is being offered, so the list can say so — and so a folder that was merely FOUND is not
+   * mistaken for one you have worked in.
+   *
+   * `cwd` where you are standing · `history` somewhere sessions have run · `repo` a git repository
+   * found on disk · `folder` any other directory found on disk · `typed` a path given in full.
+   */
+  source: 'cwd' | 'history' | 'repo' | 'folder' | 'typed'
+}
+
+export interface SpawnSessionRequest {
+  harness: string
+  cwd: string
+  /**
+   * The piece of work this session belongs to, chosen while starting it.
+   *
+   * Declared, and not merely spread in by the wizard: TypeScript runs no excess-property check on a
+   * spread, so a field the request type does not know about is dropped in silence — the wizard
+   * would ask the question and throw the answer away.
+   */
+  task?: string
+  prompt?: string
+  model?: string
+  effort?: string
+  label?: string
+  /** Take the terminal now, versus start detached and stay here. */
+  attach: boolean
+}
+
+export interface ResumeSessionRequest {
+  /** The HARNESS's own conversation id. */
+  sessionId: string
+  harness: string
+  cwd: string
+  /** Already-composed name for the new session, so the row keeps reading the same. */
+  label: string
+  /**
+   * The registry row this reopen REPLACES, when there is one.
+   *
+   * Reopening spawns a new session, so without this the old row stays beside it: a laptop closed
+   * and opened twice leaves a task holding two dead twins and one live session, all with the same
+   * name. The host retires the named row and carries its note and its task onto the new one — what
+   * you wrote about a piece of work must survive picking that work back up.
+   */
+  replaces?: string
+  attach: boolean
+}
+
+export interface SpawnSessionResult {
+  ok: boolean
+  /** Already-localized outcome for the status line. */
+  message: string
+  /** Present only on a successful ATTACHED start — the shell reports it as `ControlExit.attach`. */
+  ticket?: AttachTicket
+  /**
+   * The id of the session that was started, on success.
+   *
+   * Returned so a caller that is REPLACING an older row can carry its note onto the new one — the
+   * spawn is the only place that knows the id, and asking the registry afterwards would be a guess
+   * about which of several rows in the same directory is the one just created.
+   */
+  id?: string
+}
+
+/** Everything the caller needs to hand the terminal over and get the user back afterwards. */
+export interface AttachTicket {
+  /** Exec'd with inherited stdio once Ink has unmounted and the alternate buffer is released. */
+  argv: string[]
+  /**
+   * The REAL detach keystroke, read from the backend — never assumed to be `Ctrl-b`.
+   *
+   * Printed before the handover: a user who cannot get out is stranded in a buffer that hides their
+   * shell, and a tmux prefix the user rebound would make a guessed hint actively wrong.
+   */
+  detachHint: string
+  /** Already-localized name of what is being attached to, for the sentence printed on the way in. */
+  label: string
 }
 
 /**
  * Why the control center stopped. `foreground` tells `cli.ts` to fall through to the in-process
  * server startup, exactly as the old launcher's `'foreground'` sentinel did.
  */
-export type ControlExit = { kind: 'quit'; code: number } | { kind: 'foreground' }
+export type ControlExit =
+  | { kind: 'quit'; code: number }
+  | { kind: 'foreground' }
+  /**
+   * Hand the terminal to a session, then COME BACK.
+   *
+   * The Ink app never execs anything itself: it unmounts, `cli-start.ts` runs the argv with the real
+   * tty, and when that returns it re-enters the control center on the sessions tab. The loop is what
+   * makes attach and detach feel like two halves of one gesture rather than an exit.
+   */
+  | { kind: 'attach'; ticket: AttachTicket }

@@ -64,6 +64,10 @@ export const ARCHIVE_STATS_DIR = join(ARCHIVE_DIR, 'stats-cache')
 export const CONSOLIDATED_DIR = join(AGENTISTICS_DATA_DIR, 'sessions')
 // Persisted workflow runs (survive Claude's transcript cleanup): <data dir>/workflows/<runId>.json
 export const WORKFLOWS_STORE_DIR = join(AGENTISTICS_DATA_DIR, 'workflows')
+// Session-manager registry: the sessions `agentop session` started, with their labels and notes.
+// Deliberately NOT inside CONSOLIDATED_DIR — `loadConsolidated` reads every flat *.json at that
+// root as a legacy Claude session, so a registry file there would be parsed as session metrics.
+export const MANAGED_SESSIONS_FILE = join(AGENTISTICS_DATA_DIR, 'managed-sessions.json')
 
 // ---------------------------------------------------------------------------
 // Team mode (Phase 1: folder union). When AGENTISTICS_TEAM=1 the server unions

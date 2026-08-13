@@ -17,6 +17,14 @@ export const COLORS = {
   info: '#38bdf8',
   text: '#ffffff',
   muted: 'gray',
+  /**
+   * A pane's title when it does not have the keyboard.
+   *
+   * Lighter than the border and lighter than `dimColor`, which is what the titles used to be: a
+   * label the terminal renders at half intensity over a dark background is not a quiet label, it is
+   * an unreadable one — and these titles are the only thing saying what each box holds.
+   */
+  label: '#a1a1aa',
   border: '#3f3f46',
 } as const
 
