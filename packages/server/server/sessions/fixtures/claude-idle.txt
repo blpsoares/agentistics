@@ -1,0 +1,40 @@
+
+ ▐▛███▜▌   Claude Code v2.1.229
+▝▜█████▛▘  Opus 5 (1M context) with high effort · Claude Max
+  ▘▘ ▝▝    ~/agentistics
+
+ ⚠ 1 MCP server needs authentication · run /mcp
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────── Build agentop harness cockpit with session management ──
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← 5 agents                                                                   /rc

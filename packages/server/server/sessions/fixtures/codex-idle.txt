@@ -1,0 +1,51 @@
+> You are in /home/mithrandir/agentistics
+
+  Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt
+  injection.
+
+› 1. Yes, continue
+  2. No, quit
+
+  Press enter to continue
+
+
+╭─────────────────────────────────────────────────╮
+│ ✨ Update available! 0.113.0 -> 0.147.0         │
+│ Run bun install -g @openai/codex to update.     │
+│                                                 │
+│ See full release notes:                         │
+│ https://github.com/openai/codex/releases/latest │
+╰─────────────────────────────────────────────────╯
+
+╭────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.113.0)                     │
+│                                                │
+│ model:     gpt-5.4-mini low   /model to change │
+│ directory: ~/agentistics                       │
+╰────────────────────────────────────────────────╯
+
+  Tip: New Codex is included in your plan for free through March 2nd – let’s build together.
+
+
+› Explain this codebase
+
+  gpt-5.4-mini low · 100% left · ~/agentistics
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
