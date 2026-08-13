@@ -11,8 +11,18 @@
 
 import type { BackendSession, ManagedSession } from './types'
 
-export type RefResult =
-  | { ok: true; session: ManagedSession }
+/**
+ * What `resolveSessionRef` needs from a candidate — deliberately narrower than `ManagedSession`, so
+ * it can also resolve against the RECONCILED view (registry ∪ backend), whose backend-only rows
+ * have an id but no registry metadata at all. See `cli-session.ts`'s `attach`/`kill`.
+ */
+export interface RefCandidate {
+  id: string
+  label?: string
+}
+
+export type RefResult<T extends RefCandidate = ManagedSession> =
+  | { ok: true; session: T }
   | { ok: false; reason: 'not-found' | 'ambiguous'; matches: string[] }
 
 export interface ReconciledSession {
@@ -28,18 +38,27 @@ export interface ReconciledSession {
   status: 'running' | 'exited' | 'lost' | 'unregistered'
 }
 
-/** Resolve a user-typed reference: exact id, then exact label (case-insensitive), then id prefix. */
-export function resolveSessionRef(list: ManagedSession[], ref: string): RefResult {
-  const exact = list.find(s => s.id === ref)
+/**
+ * Resolve a user-typed reference: exact id, then exact label (case-insensitive), then id prefix.
+ *
+ * Trimmed ONCE, up front, and that one value feeds all three tiers — the id and prefix tiers used
+ * to match the raw (untrimmed) `ref` while only the label tier trimmed it, so a reference with
+ * stray whitespace could fail id matching yet still match a label. A ref that trims to '' matches
+ * nothing at any tier, which the early return guarantees regardless of what the list contains.
+ */
+export function resolveSessionRef<T extends RefCandidate>(list: T[], ref: string): RefResult<T> {
+  const needle = ref.trim()
+  if (needle === '') return { ok: false, reason: 'not-found', matches: [] }
+
+  const exact = list.find(s => s.id === needle)
   if (exact) return { ok: true, session: exact }
 
-  const needle = ref.trim().toLowerCase()
-
-  const byLabel = list.filter(s => (s.label ?? '').trim().toLowerCase() === needle && needle !== '')
+  const lower = needle.toLowerCase()
+  const byLabel = list.filter(s => (s.label ?? '').trim().toLowerCase() === lower)
   if (byLabel.length === 1) return { ok: true, session: byLabel[0]! }
   if (byLabel.length > 1) return { ok: false, reason: 'ambiguous', matches: byLabel.map(s => s.id) }
 
-  const byPrefix = list.filter(s => s.id.startsWith(ref) && ref !== '')
+  const byPrefix = list.filter(s => s.id.startsWith(needle))
   if (byPrefix.length === 1) return { ok: true, session: byPrefix[0]! }
   if (byPrefix.length > 1) return { ok: false, reason: 'ambiguous', matches: byPrefix.map(s => s.id) }
 

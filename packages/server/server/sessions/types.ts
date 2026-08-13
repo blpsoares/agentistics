@@ -104,7 +104,14 @@ export interface SessionBackend {
   list(): Promise<BackendSession[]>
   /** Newest-last lines of the last rendered frame, trailing blanks removed. */
   capture(id: string, lines: number): Promise<string[]>
-  kill(id: string): Promise<void>
+  /**
+   * Kill the session and report whether it is confirmed GONE afterwards. "Already gone" (the
+   * session finished or was removed between `list` and this call) counts as success — the caller
+   * asked for the outcome, not for one particular command to have run. A `false` means the backend
+   * could not confirm the session is gone, so a caller that deletes its registry entry on `true`
+   * alone never turns a still-running session into one nothing can name again.
+   */
+  kill(id: string): Promise<boolean>
   /**
    * The argv a caller execs to attach. Returned rather than executed: the attach needs the real
    * tty, which it can only have after the caller has released it.

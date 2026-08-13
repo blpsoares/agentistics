@@ -103,6 +103,18 @@ export function trimCapture(lines: string[]): string[] {
 }
 
 /**
+ * True when tmux's stderr says the session (or the server behind it) is already gone rather than
+ * reporting a real failure to kill it — the wording tmux 3.2a itself uses (probed alongside the
+ * rest of this file): `can't find session` (a sibling session survives; ours does not), `no server
+ * running` (ours was the last session, so killing it took the server down too), and `error
+ * connecting to` (no server has ever started on our socket). Any other stderr is treated as a
+ * genuine failure, never guessed into a false "gone".
+ */
+export function isSessionGoneError(stderr: string): boolean {
+  return /can't find session|no server running|error connecting to/i.test(stderr)
+}
+
+/**
  * The real detach keystroke, from `show-options -g prefix` (e.g. `prefix C-b`).
  *
  * Read rather than assumed: tmux loads the user's `~/.tmux.conf` on our socket too, so a user who

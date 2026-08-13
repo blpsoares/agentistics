@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  LIST_FORMAT, attachArgs, capturePaneArgs, idFromTmuxName, killSessionArgs, newSessionArgs,
-  parsePrefix, parseTmuxList, sendKeysEnterArgs, sendKeysLiteralArgs, trimCapture, tmuxName,
+  LIST_FORMAT, attachArgs, capturePaneArgs, idFromTmuxName, isSessionGoneError, killSessionArgs,
+  newSessionArgs, parsePrefix, parseTmuxList, sendKeysEnterArgs, sendKeysLiteralArgs, trimCapture,
+  tmuxName,
 } from './tmux-cli'
 
 describe('names', () => {
@@ -91,5 +92,18 @@ describe('parsePrefix', () => {
   it('falls back to the raw value rather than claiming Ctrl-b', () => {
     expect(parsePrefix('prefix M-x')).toBe('M-x then d')
     expect(parsePrefix('')).toBe('the tmux prefix then d')
+  })
+})
+
+describe('isSessionGoneError', () => {
+  it('recognizes every wording tmux 3.2a uses for "already gone"', () => {
+    expect(isSessionGoneError("can't find session: agentop-a1")).toBe(true)
+    expect(isSessionGoneError('no server running on /tmp/tmux-1000/agentop')).toBe(true)
+    expect(isSessionGoneError('error connecting to /tmp/tmux-1000/agentop (No such file or directory)')).toBe(true)
+  })
+
+  it('treats any other stderr as a real failure, never a guessed "gone"', () => {
+    expect(isSessionGoneError('permission denied')).toBe(false)
+    expect(isSessionGoneError('')).toBe(false)
   })
 })

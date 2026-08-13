@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSessionRegistry, newSessionId } from './registry'
@@ -64,6 +64,40 @@ describe('createSessionRegistry', () => {
     await r.add(session('a1'))
     await r.remove('a1')
     expect(await r.read()).toEqual([])
+  })
+
+  it('does not rewrite the file when removing an id that was never there', async () => {
+    const r = createSessionRegistry(file)
+    await r.add(session('a1'))
+    const before = await readFile(file, 'utf-8')
+    await r.remove('nope')
+    expect(await readFile(file, 'utf-8')).toBe(before)
+    expect(await r.read()).toEqual([session('a1')])
+  })
+
+  it('drops a malformed entry rather than throwing or surfacing it', async () => {
+    // A hand-edited file can hold anything. `resolveSessionRef` calls `s.id.startsWith(...)` on
+    // every candidate, so an entry missing `id` must never reach a caller.
+    await writeFile(file, JSON.stringify([
+      { foo: 1 },
+      { id: 'a1', harness: 'claude', cwd: '/tmp' }, // missing createdAt — still a valid entry
+      { id: 'a2', cwd: '/tmp' }, // missing harness
+      { id: 'a3', harness: 'claude' }, // missing cwd
+      session('a4'),
+    ]), 'utf-8')
+    const list = await createSessionRegistry(file).read()
+    expect(list.map(s => s.id).sort()).toEqual(['a1', 'a4'])
+  })
+
+  it('quarantines corrupt bytes instead of overwriting them on the next write', async () => {
+    await writeFile(file, '{ not json', 'utf-8')
+    const r = createSessionRegistry(file)
+    expect(await r.read()).toEqual([]) // degrades to empty rather than throwing
+    await r.add(session('a1'))
+    // The bad bytes were moved aside, not erased, and the new file holds only the fresh write.
+    const dirEntries = await readdir(dir)
+    expect(dirEntries.some(f => f.startsWith('managed-sessions.json.corrupt-'))).toBe(true)
+    expect(await r.read()).toEqual([session('a1')])
   })
 
   it('serializes concurrent adds so a read-modify-write race cannot drop one', async () => {

@@ -48,6 +48,25 @@ describe('resolveSessionRef', () => {
   it('reports nothing found', () => {
     expect(resolveSessionRef(list, 'nope')).toEqual({ ok: false, reason: 'not-found', matches: [] })
   })
+
+  it('trims stray whitespace before matching an id, not only a label', () => {
+    // Previously only the label tier trimmed `ref` — an id or id-prefix reference with stray
+    // whitespace fell through to "not found" instead of matching, even though the same trimmed
+    // value would have matched a label.
+    expect(resolveSessionRef(list, '  a1b2c3d4  ')).toEqual({ ok: true, session: list[0]! })
+    expect(resolveSessionRef(list, '  zz  ')).toEqual({ ok: true, session: list[2]! })
+  })
+
+  it('still matches nothing when the reference trims to empty', () => {
+    expect(resolveSessionRef(list, '   ')).toEqual({ ok: false, reason: 'not-found', matches: [] })
+  })
+
+  it('prefers an exact label match over an id-prefix match on a different session', () => {
+    // "ab" is both an exact label of one session and an id-prefix of another's id — label wins,
+    // per the documented tier order (exact id, then exact label, then id prefix).
+    const twoTierList = [managed('zz9988', 'ab'), managed('ab1234')]
+    expect(resolveSessionRef(twoTierList, 'ab')).toEqual({ ok: true, session: twoTierList[0]! })
+  })
 })
 
 describe('reconcileSessions', () => {

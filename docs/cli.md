@@ -34,6 +34,7 @@ agentop --version    # print version (and a notice if an update exists)
 | [`watch`](#watch) | OpenTelemetry metrics daemon only (headless) |
 | [`central`](#central) | Manage the Team Mode central (wraps `central.sh`) |
 | [`member`](#member) | Join / leave / inspect a Team Mode central from this machine |
+| [`session`](#session) | Start / list / attach / kill background assistant sessions (tmux-backed) |
 | [`ci-push`](#ci-push) | One-shot push of a GitHub Actions run's metrics to a central (per repo) |
 | [`autostart`](#autostart) | Start a mode with the system (systemd user service) |
 | [`upgrade`](#upgrade) | Upgrade `agentop` to the latest release |
@@ -382,6 +383,30 @@ user:      alice-laptop
 last sync: 2026-07-01T12:34:56.000Z
 state:     ok
 ```
+
+---
+
+## `session`
+
+Start, list, attach to, name and stop assistant sessions in the background. A background session is
+hosted by tmux on its own socket (`-L agentop`), so it survives `agentop` exiting and never mixes
+with your own tmux sessions.
+
+```bash
+agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"]
+agentop session list
+agentop session attach <id|name>
+agentop session kill   <id|name>
+agentop session rename <id|name> "label"
+agentop session note   <id|name> "text"
+```
+
+`--bg` detaches and returns immediately; without it the session takes over your terminal, and the
+detach keystroke is printed first (read from your own tmux prefix, never assumed to be `Ctrl-b`).
+`--cwd` defaults to the directory you are in and is resolved to an absolute path.
+
+Needs **tmux** (Linux, macOS); Windows support arrives with the PTY backend. Full command reference,
+harness support table and where state lives: see [docs/session-manager.md](session-manager.md).
 
 ---
 

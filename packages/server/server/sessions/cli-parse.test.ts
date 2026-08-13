@@ -44,6 +44,17 @@ describe('parseSessionArgs', () => {
     expect(parseSessionArgs(['claude', '--model', '--bg'])).toEqual({ kind: 'error', message: expect.stringContaining('--model') })
   })
 
+  it('rejects an unknown option instead of silently ignoring it', () => {
+    expect(parseSessionArgs(['claude', '--nope'])).toEqual({ kind: 'error', message: expect.stringContaining('--nope') })
+  })
+
+  it('rejects two adjacent value flags rather than one swallowing the other as its value', () => {
+    // `--model` has no value of its own here — `--cwd` is the next TOKEN, not a model id — so this
+    // must be the same "missing value" error as `--model` followed by nothing at all.
+    expect(parseSessionArgs(['claude', '--model', '--cwd', '/srv/app']))
+      .toEqual({ kind: 'error', message: expect.stringContaining('--model') })
+  })
+
   it('rejects a subcommand missing its reference', () => {
     expect(parseSessionArgs(['attach'])).toEqual({ kind: 'error', message: expect.stringContaining('attach') })
     expect(parseSessionArgs(['rename', 'a1'])).toEqual({ kind: 'error', message: expect.stringContaining('rename') })

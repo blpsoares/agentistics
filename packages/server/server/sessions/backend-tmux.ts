@@ -4,24 +4,24 @@
  */
 
 import {
-  attachArgs, capturePaneArgs, killSessionArgs, listSessionsArgs, newSessionArgs, parsePrefix,
-  parseTmuxList, remainOnExitArgs, sendKeysEnterArgs, sendKeysLiteralArgs, showPrefixArgs,
-  trimCapture,
+  attachArgs, capturePaneArgs, isSessionGoneError, killSessionArgs, listSessionsArgs,
+  newSessionArgs, parsePrefix, parseTmuxList, remainOnExitArgs, sendKeysEnterArgs,
+  sendKeysLiteralArgs, showPrefixArgs, trimCapture,
 } from './tmux-cli'
 import type { BackendSession, BackendSpawn, SessionBackend } from './types'
 
 /** How long to wait for a harness to draw its prompt before typing into it. */
 const SEND_KEYS_DELAY_MS = 1200
 
-async function tmux(args: string[]): Promise<{ code: number; out: string }> {
+async function tmux(args: string[]): Promise<{ code: number; out: string; err: string }> {
   try {
     const p = Bun.spawn(['tmux', ...args], { stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' })
-    const out = await new Response(p.stdout).text()
-    return { code: await p.exited, out }
+    const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()])
+    return { code: await p.exited, out, err }
   } catch {
     // tmux is not on PATH. 127 is what a shell reports for that, and `unavailable()` is what
     // callers are meant to consult — no throw, so a missing tmux never crashes a caller.
-    return { code: 127, out: '' }
+    return { code: 127, out: '', err: '' }
   }
 }
 
@@ -67,7 +67,10 @@ export const tmuxBackend: SessionBackend = {
   },
 
   async kill(id: string) {
-    await tmux(killSessionArgs(id))
+    const { code, err } = await tmux(killSessionArgs(id))
+    // A non-zero exit that ISN'T "already gone" leaves the session running — reporting success
+    // anyway is exactly the bug this return value exists to prevent (see types.ts).
+    return code === 0 || isSessionGoneError(err)
   },
 
   attachCommand(id: string) {
