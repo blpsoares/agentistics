@@ -43,12 +43,13 @@ function PinnedComparison({ comparison, ctx }: { comparison: SavedComparison; ct
     brlRate: ctx.brlRate,
     tags: ctx.tags,
   })
-  const rows = buildCompareRows(derived, comparison.basis)
+  const rows = buildCompareRows(derived, comparison.sides.map(s => s.basis ?? 'api'))
 
   const sides: TableSide[] = comparison.sides.map((s, i) => ({
     id: s.id,
     label: s.label?.trim() || String.fromCharCode(65 + i),
     description: describeFilters(s.filters, pt ? 'pt' : 'en', id => HARNESS_LABELS[id as never] ?? id),
+    basis: s.basis ?? 'api',
   }))
 
   return (
@@ -58,7 +59,7 @@ function PinnedComparison({ comparison, ctx }: { comparison: SavedComparison; ct
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
           <GitCompare size={14} />
           {comparison.name}
-          {comparison.basis === 'plan' && (
+          {comparison.sides.some(s => s.basis === 'plan') && (
             <span style={{
               fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em',
               color: 'var(--anthropic-orange)', border: '1px solid var(--anthropic-orange)',

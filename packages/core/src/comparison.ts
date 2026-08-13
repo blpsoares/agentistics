@@ -24,6 +24,12 @@ export interface ComparisonSide {
   /** The user's own name for this side. Absent means "describe it from its filters". */
   label?: string
   filters: Filters
+  /** The cost basis THIS side is measured in.
+   *
+   *  Per side, not per comparison: "what my plan cost" against "what the same work would have
+   *  cost at API prices" is the central question this whole feature exists for, and a single
+   *  comparison-wide basis made it unaskable. Absent reads as `'api'`. */
+  basis?: CostBasis
 }
 
 export interface SavedComparison {
@@ -31,10 +37,9 @@ export interface SavedComparison {
   name: string
   /** Ordered, at least two. Index 0 is the baseline every delta is measured against. */
   sides: ComparisonSide[]
-  /** The cost basis this comparison is asked in. Saved WITH the comparison rather than read from
-   *  the page: "API vs plan" is often the whole point of the question, and a comparison that
-   *  silently changed basis with a global toggle would answer a different one. */
-  basis: CostBasis
+  /** @deprecated The comparison-wide basis, kept only to READ saves written before the basis
+   *  moved onto each side. `normalizeComparisons` migrates it down and nothing writes it. */
+  basis?: CostBasis
   /** Pin it to the Home page. */
   onHome?: boolean
 }
@@ -90,9 +95,13 @@ export function normalizeComparisons(raw: unknown): SavedComparison[] {
       const sr = s as Record<string, unknown>
       const filters = normalizeFilters(sr.filters)
       if (!filters || typeof sr.id !== 'string' || sr.id === '') continue
+      // A save written before the basis moved onto each side carries one comparison-wide value;
+      // it migrates down to every side, which is exactly what it meant.
+      const legacy = r.basis === 'plan' ? 'plan' : 'api'
       sides.push({
         id: sr.id,
         filters,
+        basis: sr.basis === 'plan' ? 'plan' : sr.basis === 'api' ? 'api' : legacy,
         ...(typeof sr.label === 'string' && sr.label !== '' ? { label: sr.label } : {}),
       })
     }
@@ -102,7 +111,6 @@ export function normalizeComparisons(raw: unknown): SavedComparison[] {
       id: r.id,
       name: r.name.trim(),
       sides: sides.slice(0, MAX_COMPARISON_SIDES),
-      basis: r.basis === 'plan' ? 'plan' : 'api',
       ...(r.onHome === true ? { onHome: true } : {}),
     })
   }

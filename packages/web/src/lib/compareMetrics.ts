@@ -96,6 +96,14 @@ export interface CompareSide {
 /** One side's cell in a row. */
 export interface CompareCell {
   value: number | null
+  /** The basis THIS column actually used. Columns may differ — comparing what a plan cost against
+   *  what the same work would have cost at API prices is the central question this feature exists
+   *  for, and forbidding it forbade the point. What must never happen is a column QUIETLY falling
+   *  back while wearing the other's label, which is why every cell carries its own. */
+  basis: MetricBasis
+  /** The side asked for the plan basis and could not have it, so this cell fell back to API.
+   *  Rendered as a caveat, never silently. */
+  fellBack: boolean
   /** Against the BASELINE (index 0). `null` on the baseline itself and when either side is
    *  missing. */
   delta: number | null
@@ -109,8 +117,10 @@ export interface CompareRow {
   metric: CompareMetricDef
   /** One per side, in the sides' own order. `cells[0]` is the baseline. */
   cells: CompareCell[]
-  /** The basis this row was actually rendered in. */
-  basis: MetricBasis
+  /** The columns do not all share a basis. The table then labels each one, because a delta
+   *  between a plan figure and an API figure is a deliberate answer here and an accident
+   *  everywhere else — the label is what tells them apart. */
+  mixedBasis: boolean
   /** The index of the best cell by this metric's polarity, or `null` for a neutral metric or when
    *  nothing is comparable. Drawn as a marker rather than left for the reader to work out. */
   bestIndex: number | null
@@ -179,33 +189,44 @@ function toneFor(delta: number | null, polarity: MetricPolarity): DeltaTone {
  * hardly matters; with three or more it is the whole meaning of the table, which is why the
  * baseline is fixed at the first side rather than chosen per row.
  */
-export function buildCompareRows(sides: readonly CompareSide[], basis: MetricBasis): CompareRow[] {
+export function buildCompareRows(
+  sides: readonly CompareSide[],
+  /** One basis PER SIDE, so "my plan" can be measured against "the same work at API prices".
+   *  A missing entry defaults to `'api'`. */
+  bases: readonly MetricBasis[],
+): CompareRow[] {
   if (sides.length === 0) return []
   const rows: CompareRow[] = []
 
   for (const metric of COMPARE_METRICS) {
-    let rowBasis: MetricBasis = metric.fixedBasis ?? basis
-
-    // The whole row falls back together, never one column at a time.
-    if (rowBasis === 'plan' && metric.key !== 'planMultiple') {
-      if (sides.some(s => s.planCostUSD === null)) rowBasis = 'api'
-    }
-
-    const values = sides.map(s => valueFor(s, metric.key, rowBasis))
+    const resolved = sides.map((side, i) => {
+      const asked: MetricBasis = metric.fixedBasis ?? bases[i] ?? 'api'
+      // Asking for the plan basis where no plan cost exists falls back to API — but the cell says
+      // so. A silent fallback wearing the plan label is the failure this per-column basis is
+      // designed around, not the mixed row itself.
+      const fellBack = asked === 'plan' && metric.key !== 'planMultiple' && side.planCostUSD === null
+      const basis: MetricBasis = fellBack ? 'api' : asked
+      return { basis, fellBack, value: valueFor(side, metric.key, basis) }
+    })
 
     // A row pinned to the plan basis is simply absent when NO side has one — a row that can only
     // ever say "no" in every column is noise.
-    if (metric.fixedBasis === 'plan' && values.every(v => v === null)) continue
+    if (metric.fixedBasis === 'plan' && resolved.every(r => r.value === null)) continue
 
-    const baseline = values[0] ?? null
-    const cells: CompareCell[] = values.map((value, i) => {
-      if (i === 0) return { value, delta: null, deltaPct: null, tone: 'flat' }
-      const delta = value === null || baseline === null ? null : value - baseline
+    const baseline = resolved[0]?.value ?? null
+    const cells: CompareCell[] = resolved.map((r, i) => {
+      if (i === 0) return { ...r, delta: null, deltaPct: null, tone: 'flat' }
+      const delta = r.value === null || baseline === null ? null : r.value - baseline
       const deltaPct = delta === null || baseline === null || baseline === 0 ? null : delta / baseline
-      return { value, delta, deltaPct, tone: toneFor(delta, metric.polarity) }
+      return { ...r, delta, deltaPct, tone: toneFor(delta, metric.polarity) }
     })
 
-    rows.push({ metric, cells, basis: rowBasis, bestIndex: bestOf(values, metric.polarity) })
+    rows.push({
+      metric,
+      cells,
+      mixedBasis: new Set(resolved.map(r => r.basis)).size > 1,
+      bestIndex: bestOf(resolved.map(r => r.value), metric.polarity),
+    })
   }
 
   return rows

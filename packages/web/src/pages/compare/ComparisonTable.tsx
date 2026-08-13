@@ -22,6 +22,9 @@ export interface TableSide {
   id: string
   label: string
   description?: string
+  /** The basis this side asks for. Shown in the header so a mixed table — plan against API, the
+   *  central question of this feature — reads as deliberate rather than inconsistent. */
+  basis?: 'api' | 'plan'
 }
 
 /**
@@ -54,7 +57,7 @@ export function ComparisonTable({ rows, sides, currency, brlRate, lang }: {
           }}>
             <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>
               {pt ? row.metric.labelPt : row.metric.labelEn}
-              {row.basis === 'plan' && <BasisTag pt={pt} />}
+              
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
               {sides.map((s, i) => (
@@ -62,6 +65,7 @@ export function ComparisonTable({ rows, sides, currency, brlRate, lang }: {
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
                     <span style={{ fontSize: 11.5, color: sideColour(i), fontWeight: 700 }}>
                       {s.label}
+                      {s.basis === 'plan' && <BasisTag pt={pt} />}
                       {row.bestIndex === i && <Crown size={11} style={{ marginLeft: 4, verticalAlign: -1 }} />}
                     </span>
                     <span style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
@@ -94,6 +98,7 @@ export function ComparisonTable({ rows, sides, currency, brlRate, lang }: {
           {sides.map((s, i) => (
             <span key={s.id} style={{ ...HEAD, color: sideColour(i) }} title={s.description}>
               {s.label}
+              {s.basis === 'plan' && <BasisTag pt={pt} />}
               {i === 0 && (
                 <span style={{ color: 'var(--text-tertiary)', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
                   {' '}· {pt ? 'base' : 'baseline'}
@@ -113,7 +118,7 @@ export function ComparisonTable({ rows, sides, currency, brlRate, lang }: {
           >
             <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
               {pt ? row.metric.labelPt : row.metric.labelEn}
-              {row.basis === 'plan' && <BasisTag pt={pt} />}
+              
             </div>
             {sides.map((s, i) => (
               <div key={s.id} style={{ minWidth: 0 }}>
@@ -128,6 +133,14 @@ export function ComparisonTable({ rows, sides, currency, brlRate, lang }: {
                   {row.bestIndex === i && <Crown size={12} style={{ color: sideColour(i), flexShrink: 0 }} />}
                 </div>
                 <DeltaText cell={row.cells[i]} row={row} currency={currency} brlRate={brlRate} lang={lang} />
+                {/* The one thing that must never be silent: this column asked for the plan basis
+                    and could not have it, so the figure beside it is an API one wearing a plan
+                    heading unless it says otherwise. */}
+                {row.cells[i]?.fellBack && (
+                  <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 2, whiteSpace: 'nowrap' }}>
+                    {pt ? 'sem plano · em API' : 'no plan · in API'}
+                  </div>
+                )}
                 <RowBar row={row} index={i} />
               </div>
             ))}

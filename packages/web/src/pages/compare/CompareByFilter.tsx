@@ -29,9 +29,11 @@ const blankFilters = (): Filters => ({ dateRange: 'all', customStart: '', custom
  * ("is Codex cheaper for me", "did this month cost more than last") are worth asking once and
  * reading forever.
  *
- * The BASIS belongs to the comparison rather than to the page. "API vs plan" is frequently the
- * whole question, and a saved comparison that silently followed a global toggle would answer a
- * different one each time it was opened.
+ * THE BASIS IS PER SIDE, on each card. A comparison-wide basis forbade the one question this
+ * whole feature was built to answer — what the plan cost against what the same work would have
+ * cost at API prices. A mixed table is deliberate here, so every column is labelled with the
+ * basis it used, and a column that ASKED for the plan basis and could not have it says so rather
+ * than quietly borrowing the other's heading.
  */
 export function CompareByFilter({ ctx }: { ctx: AppContext }) {
   const pt = ctx.lang === 'pt'
@@ -41,7 +43,9 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
     { id: newId('s'), filters: { ...ctx.filters } },
     { id: newId('s'), filters: blankFilters() },
   ])
-  const [basis, setBasis] = useState<CostBasis>(ctx.costBasis)
+  /** One basis PER SIDE. Comparing what the plan cost against what the same work would have cost
+   *  at API prices is the central question here, and a single comparison-wide basis forbade it. */
+  const [bases, setBases] = useState<CostBasis[]>(() => [ctx.costBasis, 'api'])
   const [name, setName] = useState('')
   /** The saved comparison currently loaded, so Save updates it instead of duplicating it. */
   const [loadedId, setLoadedId] = useState<string | null>(null)
@@ -56,7 +60,10 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
     brlRate: ctx.brlRate,
     tags: ctx.tags,
   })
-  const rows = useMemo(() => buildCompareRows(derivedSides, basis), [derivedSides, basis])
+  const rows = useMemo(() => buildCompareRows(derivedSides, bases), [derivedSides, bases])
+  const planUsable = ctx.billingReady.ready && ctx.planBasis.basis !== null
+  const setSideBasis = (i: number, b: CostBasis) =>
+    setBases(list => list.map((x, j) => (j === i ? b : x)))
 
   const harnessLabel = (id: string) => HARNESS_LABELS[id as HarnessId] ?? id
   const describe = (s: ComparisonSide) => describeFilters(s.filters, pt ? 'pt' : 'en', harnessLabel)
@@ -66,19 +73,23 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
     id: s.id,
     label: sideLabel(s, i),
     description: describe(s),
+    basis: bases[i] ?? 'api',
   }))
 
   const setSideFilters = (id: string, f: Filters) =>
     setSides(list => list.map(s => (s.id === id ? { ...s, filters: f } : s)))
-  const addSide = () =>
-    setSides(list => (list.length >= MAX_COMPARISON_SIDES ? list : [...list, { id: newId('s'), filters: blankFilters() }]))
-  const dropSide = (id: string) =>
-    setSides(list => {
-      if (list.length <= MIN_COMPARISON_SIDES) return list
-      const next = list.filter(s => s.id !== id)
-      setEditing(e => Math.min(e, next.length - 1))
-      return next
-    })
+  const addSide = () => {
+    if (sides.length >= MAX_COMPARISON_SIDES) return
+    setSides(list => [...list, { id: newId('s'), filters: blankFilters() }])
+    setBases(list => [...list, 'api'])
+  }
+  const dropSide = (id: string) => {
+    const at = sides.findIndex(s => s.id === id)
+    if (at === -1 || sides.length <= MIN_COMPARISON_SIDES) return
+    setSides(list => list.filter(s => s.id !== id))
+    setBases(list => list.filter((_, j) => j !== at))
+    setEditing(e => Math.min(e, sides.length - 2))
+  }
 
   const save = async () => {
     const trimmed = name.trim()
@@ -86,8 +97,7 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
     const comparison: SavedComparison = {
       id: loadedId ?? newId('cmp'),
       name: trimmed,
-      sides,
-      basis,
+      sides: sides.map((side, i) => ({ ...side, basis: bases[i] ?? 'api' })),
       ...(onHome ? { onHome: true } : {}),
     }
     setLoadedId(comparison.id)
@@ -96,7 +106,7 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
 
   const load = (c: SavedComparison) => {
     setSides(c.sides)
-    setBasis(c.basis)
+    setBases(c.sides.map(s => s.basis ?? 'api'))
     setName(c.name)
     setLoadedId(c.id)
     setOnHome(c.onHome === true)
@@ -175,28 +185,6 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
             color: 'var(--text-primary)', fontFamily: 'inherit',
           }}
         />
-        {/* The basis is part of the comparison, not the page — see the header. */}
-        <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', flexShrink: 0 }}>
-          {(['api', 'plan'] as const).map(b => {
-            const active = basis === b
-            const usable = b === 'api' || (ctx.billingReady.ready && ctx.planBasis.basis !== null)
-            return (
-              <button
-                key={b}
-                onClick={() => (usable ? setBasis(b) : ctx.openBillingSetup())}
-                title={!usable ? (pt ? 'Cadastre seu plano para comparar em custo real' : 'Register your plan to compare in real cost') : undefined}
-                style={{
-                  padding: '7px 13px', border: 'none', fontFamily: 'inherit', fontSize: 12,
-                  fontWeight: active ? 600 : 400, cursor: 'pointer', opacity: usable ? 1 : 0.55,
-                  background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
-                  color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                }}
-              >
-                {b === 'api' ? 'API' : (pt ? 'Plano' : 'Plan')}
-              </button>
-            )
-          })}
-        </div>
         <button
           onClick={() => setOnHome(v => !v)}
           title={pt ? 'Exibir esta comparação na Home' : 'Show this comparison on Home'}
@@ -252,6 +240,11 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
               index={editing}
               label={sideLabel(sides[editing]!, editing)}
               description={describe(sides[editing]!)}
+              basis={bases[editing] ?? 'api'}
+              onBasis={b => setSideBasis(editing, b)}
+              planUsable={planUsable}
+              onPlanSetup={ctx.openBillingSetup}
+              pt={pt}
               onRemove={sides.length > MIN_COMPARISON_SIDES ? () => dropSide(sides[editing]!.id) : undefined}
               removeLabel={pt ? 'Remover lado' : 'Remove side'}
             >
@@ -267,29 +260,55 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
               index={i}
               label={sideLabel(s, i)}
               description={describe(s)}
+              basis={bases[i] ?? 'api'}
+              onBasis={b => setSideBasis(i, b)}
+              planUsable={planUsable}
+              onPlanSetup={ctx.openBillingSetup}
+              pt={pt}
               onRemove={sides.length > MIN_COMPARISON_SIDES ? () => dropSide(s.id) : undefined}
               removeLabel={pt ? 'Remover lado' : 'Remove side'}
             >
               <FiltersBar {...barProps} filters={s.filters} onChange={f => setSideFilters(s.id, f)} />
             </SideCard>
           ))}
+          {/* The add affordance is a CARD IN THE GRID, beside the sides it extends. As a button
+              under the grid it sat below the fold on a wide screen and read as "you cannot add
+              more". */}
+          {sides.length < MAX_COMPARISON_SIDES && (
+            <button
+              onClick={addSide}
+              style={{
+                minHeight: 110, display: 'flex', flexDirection: 'column', alignItems: 'center',
+                justifyContent: 'center', gap: 7, borderRadius: 'var(--radius-lg)',
+                border: '1px dashed var(--border)', background: 'transparent',
+                color: 'var(--text-tertiary)', fontSize: 12.5, fontWeight: 600,
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              <Plus size={18} />
+              {pt
+                ? `Adicionar lado ${String.fromCharCode(65 + sides.length)}`
+                : `Add side ${String.fromCharCode(65 + sides.length)}`}
+            </button>
+          )}
         </div>
       )}
 
-      {sides.length < MAX_COMPARISON_SIDES && (
+      {isMobile && sides.length < MAX_COMPARISON_SIDES && (
         <button
           onClick={addSide}
           style={{
-            alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 7,
-            padding: isMobile ? '12px 16px' : '8px 14px', width: isMobile ? '100%' : undefined,
-            justifyContent: isMobile ? 'center' : undefined,
-            borderRadius: 'var(--radius-lg)', border: '1px dashed var(--border)',
-            background: 'transparent', color: 'var(--text-secondary)',
-            fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            width: '100%', minHeight: 44, display: 'inline-flex', alignItems: 'center',
+            justifyContent: 'center', gap: 7, borderRadius: 'var(--radius-lg)',
+            border: '1px dashed var(--border)', background: 'transparent',
+            color: 'var(--text-secondary)', fontSize: 12.5, fontWeight: 600,
+            cursor: 'pointer', fontFamily: 'inherit',
           }}
         >
           <Plus size={14} />
-          {pt ? 'Adicionar lado' : 'Add side'}
+          {pt
+            ? `Adicionar lado ${String.fromCharCode(65 + sides.length)}`
+            : `Add side ${String.fromCharCode(65 + sides.length)}`}
         </button>
       )}
 
@@ -304,10 +323,15 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
   )
 }
 
-function SideCard({ index, label, description, onRemove, removeLabel, children }: {
+function SideCard({ index, label, description, basis, onBasis, planUsable, onPlanSetup, pt, onRemove, removeLabel, children }: {
   index: number
   label: string
   description: string
+  basis: CostBasis
+  onBasis: (b: CostBasis) => void
+  planUsable: boolean
+  onPlanSetup: () => void
+  pt: boolean
   onRemove?: () => void
   removeLabel: string
   children: React.ReactNode
@@ -337,12 +361,36 @@ function SideCard({ index, label, description, onRemove, removeLabel, children }
           <Trash2 size={13} />
         </button>
       )}
-      <div style={{
-        fontSize: 12, color: 'var(--text-secondary)', marginBottom: 9, lineHeight: 1.4,
-        paddingRight: onRemove ? 24 : 0,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>
-        {description}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 9, paddingRight: onRemove ? 24 : 0 }}>
+        {/* This side's basis. Per card, because comparing a plan against API prices is the
+            question, and the answer changes with WHICH side is which. */}
+        <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', flexShrink: 0 }}>
+          {(['api', 'plan'] as const).map(b => {
+            const active = basis === b
+            const usable = b === 'api' || planUsable
+            return (
+              <button
+                key={b}
+                onClick={() => (usable ? onBasis(b) : onPlanSetup())}
+                title={!usable ? (pt ? 'Cadastre seu plano para comparar em custo real' : 'Register your plan to compare in real cost') : undefined}
+                style={{
+                  padding: '4px 9px', border: 'none', fontFamily: 'inherit', fontSize: 11,
+                  fontWeight: active ? 700 : 400, cursor: 'pointer', opacity: usable ? 1 : 0.5,
+                  background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                  color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                }}
+              >
+                {b === 'api' ? 'API' : (pt ? 'Plano' : 'Plan')}
+              </button>
+            )
+          })}
+        </div>
+        <span style={{
+          fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.4, minWidth: 0,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {description}
+        </span>
       </div>
       {children}
     </div>
