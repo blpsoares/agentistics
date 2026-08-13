@@ -61,11 +61,22 @@ export const ATTENTION_RULES: Record<HarnessId, AttentionRules | null> = {
       // `❯ 1. Yes, I trust this folder` (approval-trust line 13). What separates it from the idle
       // composer is the numbered option after the caret, never the caret itself — both frames
       // contain `❯`, so a rule leaning on the caret alone would call every dialog idle.
+      //
+      // CAVEAT, not a fix: the composer echoes the user's own prompt behind this same `❯`
+      // (approval-tool line 8 is `❯ Run the shell command: …`), so a prompt that itself begins
+      // `1. ` renders as `❯ 1. …` and matches this rule too. That is the ALARMING direction — an
+      // idle session briefly reads as a dialog — and it is usually demoted by the live composer
+      // being redrawn strictly below it; do not assume this rule is dialog-exclusive.
       /^[ \t\u00a0]*❯[ \t\u00a0]+\d+\.[ \t\u00a0]/,
-      // The dialog footer, in both fixtures: `Esc to cancel · Tab to amend` (tool, line 31) and
-      // `Enter to confirm · Esc to cancel` (trust, line 16). The two halves differ, `Esc to cancel`
-      // does not — and it appears nowhere in the idle frame.
-      /Esc to cancel/,
+      // The dialog footer, anchored to line-start (leading whitespace only): `Esc to cancel ·
+      // Tab to amend` (tool, line 32, one leading space). The workspace-trust fixture reads
+      // `Enter to confirm · Esc to cancel` (trust, line 17), where `Esc to cancel` is NOT at
+      // line-start, so this rule no longer covers it there — that fixture is still caught by the
+      // numbered-option rule above (`❯ 1. Yes, I trust this folder`, trust line 14). Unanchored,
+      // `Esc to cancel` is also an ordinary phrase an assistant can print while explaining a
+      // terminal UI; anchoring it to line-start keeps a transcript line from outvoting a real
+      // dialog in a quiet frame that has no input match to fall back on.
+      /^[ \t\u00a0]*Esc to cancel/,
     ],
     input: [
       // The empty composer, idle line 37. The character after the caret is a NO-BREAK SPACE
@@ -81,16 +92,34 @@ export const ATTENTION_RULES: Record<HarnessId, AttentionRules | null> = {
   // fixtures/codex-idle.txt, codex-approval-tool.txt, codex-approval-trust.txt (codex v0.113.0).
   codex: {
     approval: [
-      // The footer of every codex modal: `Press enter to continue` (trust, line 8) and
-      // `Press enter to confirm or esc to cancel` (approval-tool, line 56).
-      /Press enter to (?:continue|confirm)/,
+      // The footer of every codex modal, anchored to line-start (leading whitespace only):
+      // `Press enter to continue` (trust, line 9, two leading spaces) and `Press enter to
+      // confirm or esc to cancel` (approval-tool, line 57). Unanchored this is also an ordinary
+      // sentence an assistant can print while explaining a terminal UI, and a quiet frame with
+      // no input match at all would let that transcript line decide the whole classification.
+      /^[ \t]*Press enter to (?:continue|confirm)/,
       // The selected option: `› 1. Yes, continue` / `› 1. Yes, proceed (y)`.
+      //
+      // CAVEAT, not a fix: codex echoes the user's own prompt behind this same `›`
+      // (codex-idle line 30 is `› Explain this codebase`), so a prompt that itself begins
+      // `1. ` renders as `› 1. …` and matches this rule too — the ALARMING direction, usually
+      // demoted by the live composer redrawn strictly below it. Do not assume this rule is
+      // dialog-exclusive.
       /^[ \t]*›[ \t]+\d+\.[ \t]/,
     ],
     input: [
-      // The idle status line, `gpt-5.4-mini low · 100% left · ~/agentistics` (idle, line 31).
+      // The idle status line, `gpt-5.4-mini low · 100% left · ~/agentistics` (idle, line 32).
       // Absent from both approval frames, where the dialog takes the bottom of the screen.
       /\d+%[ \t]+left/,
+      // Redundancy against exactly this rule breaking: the `/model to change` hint from the
+      // fixed composer banner (codex-idle line 23, `model:     gpt-5.4-mini low   /model to
+      // change │`). If codex ever changes the status-line wording above, this line is what
+      // keeps a quiet codex frame from losing its only input match and falling back to whatever
+      // approval match is left higher in scrollback — silently reverting the positional fix to
+      // the reassuring-idle bug it exists to prevent. It also appears in the approval fixtures
+      // (it is part of the static startup banner), but always ABOVE the live dialog there, so
+      // positional matching still resolves those frames correctly.
+      /\/model to change/,
     ],
   },
 

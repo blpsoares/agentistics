@@ -157,6 +157,40 @@ describe('classifyAttention', () => {
   })
 })
 
+describe('classifyAttention — positional ordering, synthetic frames', () => {
+  // No committed fixture has both an approval match and an input match with the approval
+  // positioned LOWER (i.e. more recent) than the input match — the exact shape that pins the
+  // ordering rule rather than a hardcoded winner. These frames are synthetic on purpose: they
+  // exercise the real claude rules, just arranged in a shape no real capture happens to have.
+
+  it('an input match ABOVE an approval match still classifies waiting-approval (approval is lower, i.e. more recent)', () => {
+    // '? for shortcuts' (input) sits above ' ❯ 1. Yes' (approval) — the approval is the later,
+    // bottom-most line, so it must win even though an input pattern matched too.
+    expect(classifyAttention({
+      harness: 'claude', alive: true, ...quiet,
+      capture: { ok: true, lines: ['? for shortcuts', ' ❯ 1. Yes'] },
+    })).toBe('waiting-approval')
+  })
+
+  it('the mirror — an approval match ABOVE an input match classifies waiting-input', () => {
+    // This is the codex-scrollback case in miniature (an answered dialog sitting above the live
+    // composer): the approval line is above, the input line is the bottom-most one, so the
+    // session is genuinely waiting for input, not stuck on a stale dialog. Pins that the rule is
+    // positional in BOTH directions, not "approval always wins".
+    expect(classifyAttention({
+      harness: 'claude', alive: true, ...quiet,
+      capture: { ok: true, lines: ['❯ 1. Yes', '? for shortcuts'] },
+    })).toBe('waiting-input')
+  })
+
+  it('a tie — one line matching both an approval and an input pattern — classifies waiting-approval', () => {
+    expect(classifyAttention({
+      harness: 'claude', alive: true, ...quiet,
+      capture: { ok: true, lines: ['❯ 1. Yes ? for shortcuts'] },
+    })).toBe('waiting-approval')
+  })
+})
+
 describe('needsAttention', () => {
   it('is true exactly for the two states that are waiting on a person', () => {
     expect(needsAttention('waiting-approval')).toBe(true)
