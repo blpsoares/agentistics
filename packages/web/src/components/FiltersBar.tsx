@@ -60,6 +60,15 @@ interface Props {
    *  only sees their own scoped data, so those dimensions are hidden for them. Defaults to true
    *  (solo/non-central usage where the concept doesn't apply). */
   canFilterMembers?: boolean
+  /** The active cost basis. Omit `onCostBasisChange` to hide the control entirely (a central, or
+   *  a bar embedded where the basis makes no sense). */
+  costBasis?: 'api' | 'plan'
+  onCostBasisChange?: (b: 'api' | 'plan') => void
+  /** The plan basis can actually be computed. When false the Plan button opens `onCostBasisSetup`
+   *  instead of switching — it stays visible, because a control that appears only once configured
+   *  never tells anyone it exists. */
+  costBasisReady?: boolean
+  onCostBasisSetup?: () => void
   /** Shows "Create tag with these filters" next to "+ Filter" when provided. The caller (App.tsx)
    *  decides whether the CURRENT filters map to anything a tag can be built from — see
    *  `canCreateTagFromFilters` in lib/filtersToTag.ts — and omits this entirely otherwise, so
@@ -96,7 +105,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters }: Props) {
+export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -355,6 +364,48 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             <TagIcon size={12} style={{ flexShrink: 0 }} />
             <span>{lang === 'pt' ? 'Criar tag' : 'Create tag'}</span>
           </button>
+        )}
+
+        {/* Cost basis — API ⇄ Plan.
+            It sits here, with the filters, because that is where people look for "change what I am
+            seeing". It is NOT a filter dimension though: it narrows nothing and adds no chip row —
+            it changes the UNIT every cost on the page is expressed in. Hence the separate segmented
+            control rather than an entry in the + Filter menu, which would promise a value picker
+            that does not exist. */}
+        {onCostBasisChange && (
+          <div style={{
+            display: 'inline-flex', borderRadius: 6, overflow: 'hidden',
+            border: '1px solid var(--border)', flexShrink: 0,
+            width: isMobile ? '100%' : undefined,
+          }}>
+            {(['api', 'plan'] as const).map(b => {
+              const active = costBasis === b
+              // Plan is offered even when it cannot be computed — pressing it then opens the setup
+              // prompt. A control that vanishes until configured never teaches anyone it exists.
+              const usable = b === 'api' || costBasisReady
+              return (
+                <button
+                  key={b}
+                  onClick={() => (usable ? onCostBasisChange(b) : onCostBasisSetup?.())}
+                  title={b === 'plan' && !usable
+                    ? (lang === 'pt' ? 'Cadastre seu plano para ver o custo real' : 'Register your plan to see the real cost')
+                    : undefined}
+                  style={{
+                    ...CTL,
+                    flex: isMobile ? 1 : undefined,
+                    justifyContent: 'center',
+                    border: 'none', borderRadius: 0,
+                    background: active ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                    color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                    fontWeight: active ? 600 : 400,
+                    opacity: usable ? 1 : 0.55,
+                  }}
+                >
+                  {b === 'api' ? 'API' : (lang === 'pt' ? 'Plano' : 'Plan')}
+                </button>
+              )
+            })}
+          </div>
         )}
 
         {/* + Filter — single entry point for all dimension filters (members/harnesses/

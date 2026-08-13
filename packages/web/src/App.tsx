@@ -2389,6 +2389,10 @@ export default function AppLayout() {
               <div style={{ overflow: (filtersCollapsed || filtersClip) ? 'hidden' : 'visible', minHeight: 0 }}>
                 <FiltersBar
                   only={filterDimsForRoute}
+                  costBasis={costBasis}
+                  onCostBasisChange={isCentral ? undefined : setCostBasis}
+                  costBasisReady={billingReady.ready && planBasis.basis !== null}
+                  onCostBasisSetup={openBillingSetup}
                   filters={filters}
                   onChange={setFilters}
                   projects={availableProjects}
@@ -2487,6 +2491,10 @@ export default function AppLayout() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <FiltersBar
                 only={filterDimsForRoute}
+                costBasis={costBasis}
+                onCostBasisChange={isCentral ? undefined : setCostBasis}
+                costBasisReady={billingReady.ready && planBasis.basis !== null}
+                onCostBasisSetup={openBillingSetup}
                 filters={filters}
                 onChange={setFilters}
                 projects={availableProjects}

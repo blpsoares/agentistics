@@ -234,11 +234,15 @@ export default function ComparePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const mode: 'harness' | 'filter' = searchParams.get('mode') === 'filter' ? 'filter' : 'harness'
   const setMode = (m: 'harness' | 'filter') => setSearchParams(m === 'filter' ? { mode: 'filter' } : {})
+  // A FRAGMENT, not a wrapper div. Every page here renders into a `<main>` that is a flex column
+  // with a 20px gap, so a page's top-level children ARE the spaced items. Wrapping them made the
+  // whole page one item and every section inside it lost its spacing — the sections collapsed
+  // into each other and the page read as broken.
   return (
-    <div>
+    <>
       <CompareModeSelector mode={mode} onChange={setMode} lang={ctx.lang} multiHarness={(ctx.data.harnesses?.length ?? 0) > 1} />
       {mode === 'filter' ? <CompareByFilter ctx={ctx} /> : <CompareByHarness />}
-    </div>
+    </>
   )
 }
 
@@ -254,7 +258,7 @@ function CompareModeSelector({ mode, onChange, lang, multiHarness }: {
     { id: 'filter', label: pt ? 'Por filtro' : 'By filter' },
   ]
   return (
-    <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: 16 }}>
+    <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden', alignSelf: 'flex-start' }}>
       {options.map(o => (
         <button
           key={o.id}

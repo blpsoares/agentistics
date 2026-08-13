@@ -15,6 +15,57 @@
  *    dash — the same N/A-versus-a-confident-0 discipline the rest of the product applies.
  */
 
+/**
+ * One side's filters, in words.
+ *
+ * The table compares two scopes; without a sentence naming each, the reader has to reverse-engineer
+ * them from two filter bars and hold both in their head. It stays short and generic on purpose —
+ * counts rather than lists — because a side that names nine projects is a paragraph, not a label.
+ */
+export function describeFilters(
+  f: {
+    dateRange: string
+    customStart?: string
+    customEnd?: string
+    projects?: string[]
+    models?: string[]
+    repos?: string[]
+    harnesses?: string[]
+    tags?: string[]
+  },
+  lang: 'pt' | 'en',
+  harnessLabel: (id: string) => string = id => id,
+): string {
+  const pt = lang === 'pt'
+  const parts: string[] = []
+
+  if (f.customStart || f.customEnd) {
+    parts.push(`${f.customStart || '…'} → ${f.customEnd || '…'}`)
+  } else {
+    parts.push(
+      f.dateRange === 'all' ? (pt ? 'todo o período' : 'all time')
+      : f.dateRange === '7d' ? (pt ? 'últimos 7 dias' : 'last 7 days')
+      : f.dateRange === '30d' ? (pt ? 'últimos 30 dias' : 'last 30 days')
+      : f.dateRange === '90d' ? (pt ? 'últimos 90 dias' : 'last 90 days')
+      : f.dateRange,
+    )
+  }
+
+  // Harnesses are named rather than counted: which assistant is usually the POINT of the
+  // comparison, and "2 harnesses" answers nothing.
+  const h = f.harnesses ?? []
+  if (h.length > 0 && h.length <= 3) parts.push(h.map(harnessLabel).join(' + '))
+  else if (h.length > 3) parts.push(pt ? `${h.length} harnesses` : `${h.length} harnesses`)
+
+  const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+  if (f.projects?.length) parts.push(count(f.projects.length, pt ? 'projeto' : 'project', pt ? 'projetos' : 'projects'))
+  if (f.repos?.length) parts.push(count(f.repos.length, pt ? 'repo' : 'repo', pt ? 'repos' : 'repos'))
+  if (f.models?.length) parts.push(count(f.models.length, pt ? 'modelo' : 'model', pt ? 'modelos' : 'models'))
+  if (f.tags?.length) parts.push(count(f.tags.length, 'tag', 'tags'))
+
+  return parts.join(' · ')
+}
+
 export type MetricPolarity = 'lower-better' | 'higher-better' | 'neutral'
 export type DeltaTone = 'good' | 'bad' | 'flat' | 'na'
 export type MetricFormat = 'cost' | 'count' | 'tokens' | 'percent' | 'multiple' | 'rate'

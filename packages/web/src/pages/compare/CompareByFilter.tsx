@@ -1,12 +1,16 @@
 import React, { useMemo, useState } from 'react'
-import { fmt, fmtCost, type Filters } from '@agentistics/core'
+import { fmt, fmtCost, type Filters, type HarnessId } from '@agentistics/core'
 import type { AppContext } from '../../lib/app-context'
 import { useDerivedStats } from '../../hooks/useData'
 import { computePlanBasisView } from '../../hooks/usePlanBasis'
-import { buildCompareRows, type CompareRow, type CompareSide } from '../../lib/compareMetrics'
+import { buildCompareRows, describeFilters, type CompareRow, type CompareSide } from '../../lib/compareMetrics'
 import { formatMultiple } from '../../lib/costBasis'
 import { FiltersBar } from '../../components/FiltersBar'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { HARNESS_LABELS } from '../../lib/harness'
+
+const COLOUR_A = 'var(--anthropic-orange)'
+const COLOUR_B = 'var(--accent-blue, #3b82f6)'
 
 /**
  * Two independent filter sets, side by side, with a curated A / B / Δ table.
@@ -40,6 +44,41 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
     () => buildCompareRows(sideA, sideB, ctx.costBasis),
     [sideA, sideB, ctx.costBasis],
   )
+
+  const harnessLabel = (id: string) => HARNESS_LABELS[id as HarnessId] ?? id
+  const describeA = describeFilters(filtersA, pt ? 'pt' : 'en', harnessLabel)
+  const describeB = describeFilters(filtersB, pt ? 'pt' : 'en', harnessLabel)
+  // Comparing a scope with itself yields a column of zeros. Detected on the DESCRIPTION rather
+  // than by deep-comparing the objects: two filter sets that read the same to the user are the
+  // same comparison, whatever their key order.
+  const identical = describeA === describeB
+
+  /** One-click ways into a comparison that actually shows something. */
+  const presets = useMemo(() => {
+    const all: Filters = { dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [] }
+    const out: { label: string; apply: () => void }[] = [
+      {
+        label: pt ? '30 dias vs. todo o período' : 'Last 30 days vs all time',
+        apply: () => { setFiltersA({ ...all, dateRange: '30d' }); setFiltersB(all) },
+      },
+      {
+        label: pt ? '7 dias vs. 30 dias' : 'Last 7 days vs last 30',
+        apply: () => { setFiltersA({ ...all, dateRange: '7d' }); setFiltersB({ ...all, dateRange: '30d' }) },
+      },
+    ]
+    const hs = ctx.harnesses ?? []
+    if (hs.length > 1) {
+      out.push({
+        label: `${harnessLabel(hs[0]!)} vs. ${harnessLabel(hs[1]!)}`,
+        apply: () => {
+          setFiltersA({ ...all, harnesses: [hs[0]!] })
+          setFiltersB({ ...all, harnesses: [hs[1]!] })
+        },
+      })
+    }
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctx.harnesses, pt])
 
   const barProps = {
     projects: ctx.data.projects ?? [],
@@ -79,7 +118,11 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
               </button>
             ))}
           </div>
-          <SideCard label={editing.toUpperCase()} accent>
+          <SideCard
+            label={editing.toUpperCase()}
+            colour={editing === 'a' ? COLOUR_A : COLOUR_B}
+            description={editing === 'a' ? describeA : describeB}
+          >
             <FiltersBar
               {...barProps}
               filters={editing === 'a' ? filtersA : filtersB}
@@ -89,12 +132,40 @@ export function CompareByFilter({ ctx }: { ctx: AppContext }) {
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
-          <SideCard label="A" accent>
+          <SideCard label="A" colour={COLOUR_A} description={describeA}>
             <FiltersBar {...barProps} filters={filtersA} onChange={setFiltersA} />
           </SideCard>
-          <SideCard label="B">
+          <SideCard label="B" colour={COLOUR_B} description={describeB}>
             <FiltersBar {...barProps} filters={filtersB} onChange={setFiltersB} />
           </SideCard>
+        </div>
+      )}
+
+      {identical && (
+        // The page opens with both sides on the same scope, which produces a table of zeros and
+        // reads as broken rather than as "you have not chosen anything yet". Saying so, with the
+        // one-click ways out, is the difference between an empty state and a bug.
+        <div style={{
+          display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+          padding: '10px 13px', borderRadius: 'var(--radius-lg)',
+          border: '1px dashed var(--border)', background: 'var(--bg-card)',
+        }}>
+          <span style={{ fontSize: 12.5, color: 'var(--text-tertiary)' }}>
+            {pt ? 'Os dois lados estão iguais. Comece por:' : 'Both sides are the same. Start with:'}
+          </span>
+          {presets.map(p => (
+            <button
+              key={p.label}
+              onClick={p.apply}
+              style={{
+                padding: '5px 11px', borderRadius: 999, cursor: 'pointer', fontFamily: 'inherit',
+                fontSize: 12, border: '1px solid var(--border)', background: 'var(--bg-elevated)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
         </div>
       )}
 
@@ -141,19 +212,35 @@ function useSide(
   }, [ctx.billing, ctx.brlRate, derived, filters])
 }
 
-function SideCard({ label, accent, children }: { label: string; accent?: boolean; children: React.ReactNode }) {
+/**
+ * One side's box.
+ *
+ * The colour is the SAME one the side's bars use in the table below, so "which column is this"
+ * needs no legend, and the description says in words what the filter bar says in chips — the
+ * table is read at a distance from the controls that produced it.
+ */
+function SideCard({ label, colour, description, children }: {
+  label: string
+  colour: string
+  description: string
+  children: React.ReactNode
+}) {
   return (
     <div style={{
-      border: `1px solid ${accent ? 'var(--anthropic-orange)' : 'var(--border)'}`,
-      borderRadius: 'var(--radius-lg)', background: 'var(--bg-card)', padding: '10px 12px 4px',
-      position: 'relative',
+      border: `1px solid ${colour}`, borderRadius: 'var(--radius-lg)',
+      background: 'var(--bg-card)', padding: '12px 12px 4px', position: 'relative',
     }}>
       <div style={{
         position: 'absolute', top: -9, left: 12, padding: '0 6px', background: 'var(--bg-base)',
-        fontSize: 10, fontWeight: 800, letterSpacing: '0.08em',
-        color: accent ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+        fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', color: colour,
       }}>
         {label}
+      </div>
+      <div style={{
+        fontSize: 12, color: 'var(--text-secondary)', marginBottom: 9, lineHeight: 1.4,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {description}
       </div>
       {children}
     </div>
@@ -192,33 +279,66 @@ function DeltaCell({ row, ctx }: { row: CompareRow; ctx: AppContext }) {
   )
 }
 
+/**
+ * The comparison, in the visual language the by-harness mode already uses: a big number with a
+ * proportional bar under it.
+ *
+ * A four-column grid of bare numerals made the reader do the comparison themselves — work the bar
+ * does at a glance. The bar is scaled to the larger of the two sides, so "which is bigger, and by
+ * roughly how much" is answered before anyone reads a digit, and the Δ column then says exactly
+ * how much.
+ */
 function MetricTable({ rows, ctx }: { rows: CompareRow[]; ctx: AppContext }) {
   const pt = ctx.lang === 'pt'
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-        <thead>
-          <tr style={{ background: 'var(--bg-hover)' }}>
-            <th style={{ ...TH, textAlign: 'left' }}>{pt ? 'Métrica' : 'Metric'}</th>
-            <th style={TH}>A</th>
-            <th style={TH}>B</th>
-            <th style={TH}>Δ</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(row => (
-            <tr key={row.metric.key} style={{ borderTop: '1px solid var(--border)' }}>
-              <td style={{ ...TD, textAlign: 'left', color: 'var(--text-primary)' }}>
-                {pt ? row.metric.labelPt : row.metric.labelEn}
-                {row.basis === 'plan' && <BasisTag pt={pt} />}
-              </td>
-              <td style={TD}>{formatValue(row, row.a, ctx)}</td>
-              <td style={TD}>{formatValue(row, row.b, ctx)}</td>
-              <td style={TD}><DeltaCell row={row} ctx={ctx} /></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+      {rows.map((row, i) => {
+        const max = Math.max(row.a ?? 0, row.b ?? 0)
+        return (
+          <div
+            key={row.metric.key}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(150px, 1.1fr) 1fr 1fr minmax(120px, 0.8fr)',
+              gap: 16, alignItems: 'center', padding: '13px 16px',
+              borderTop: i === 0 ? 'none' : '1px solid var(--border)',
+            }}
+          >
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+              {pt ? row.metric.labelPt : row.metric.labelEn}
+              {row.basis === 'plan' && <BasisTag pt={pt} />}
+            </div>
+            <SideValue row={row} value={row.a} max={max} ctx={ctx} accent="var(--anthropic-orange)" />
+            <SideValue row={row} value={row.b} max={max} ctx={ctx} accent="var(--accent-blue, #3b82f6)" />
+            <div style={{ textAlign: 'right' }}><DeltaCell row={row} ctx={ctx} /></div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** One side's figure: the number, then a bar scaled against the other side. */
+function SideValue({ row, value, max, ctx, accent }: {
+  row: CompareRow
+  value: number | null
+  max: number
+  ctx: AppContext
+  accent: string
+}) {
+  const pct = value !== null && max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{
+        fontSize: 15, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+        color: value === null ? 'var(--text-tertiary)' : 'var(--text-primary)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {formatValue(row, value, ctx)}
+      </div>
+      <div style={{ height: 4, background: 'var(--bg-elevated)', borderRadius: 2, marginTop: 6, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: accent, opacity: 0.75, borderRadius: 2, transition: 'width 0.35s ease-out' }} />
+      </div>
     </div>
   )
 }

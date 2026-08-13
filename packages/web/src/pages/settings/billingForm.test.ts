@@ -1,6 +1,9 @@
 import { describe, test, expect } from 'bun:test'
 import {
   applyPlan,
+  currencySymbol,
+  formatAmountDisplay,
+  parseAmountInput,
   describeError,
   draftFromPeriod,
   draftMode,
@@ -169,6 +172,85 @@ describe('describeError', () => {
       expect(ptText.length).toBeGreaterThan(0)
       expect(en).not.toBe(ptText)
     }
+  })
+})
+
+describe('parseAmountInput', () => {
+  test('keeps what was typed — 100 is a hundred, not one', () => {
+    // The "last two digits are cents" trick is maddening for prices that have no cents, which is
+    // every plan in the catalog.
+    expect(parseAmountInput('100')).toBe('100')
+    expect(parseAmountInput('20')).toBe('20')
+  })
+
+  test('accepts either separator, because keyboards differ', () => {
+    expect(parseAmountInput('24,99')).toBe('24.99')
+    expect(parseAmountInput('24.99')).toBe('24.99')
+  })
+
+  test('drops grouping and keeps the last separator as decimal when 1-2 digits follow', () => {
+    expect(parseAmountInput('1.234,56')).toBe('1234.56')
+    expect(parseAmountInput('1,234.56')).toBe('1234.56')
+    expect(parseAmountInput('1.5')).toBe('1.5')
+  })
+
+  test('a separator followed by three digits is GROUPING, not a decimal point', () => {
+    // The field displays the grouped form, so this exact string comes back through the parser on
+    // the next keystroke. Reading its last dot as a decimal would turn one million into one
+    // thousand while the user watched.
+    expect(parseAmountInput('1.234.567')).toBe('1234567')
+    expect(parseAmountInput('1,234,567')).toBe('1234567')
+  })
+
+  test('strips anything that is not a digit or separator', () => {
+    expect(parseAmountInput('R$ 100abc')).toBe('100')
+    expect(parseAmountInput('')).toBe('')
+  })
+
+  test('a trailing separator survives so the decimal can be typed', () => {
+    expect(parseAmountInput('24,')).toBe('24.')
+  })
+})
+
+describe('formatAmountDisplay', () => {
+  test('groups by the CURRENCY, not the interface language', () => {
+    // Someone reading the app in English who pays in reais still expects R$ 1.234,56.
+    expect(formatAmountDisplay('1234.56', 'BRL')).toBe('1.234,56')
+    expect(formatAmountDisplay('1234.56', 'USD')).toBe('1,234.56')
+  })
+
+  test('an integer amount shows no decimal part', () => {
+    expect(formatAmountDisplay('100', 'USD')).toBe('100')
+    expect(formatAmountDisplay('1000', 'BRL')).toBe('1.000')
+  })
+
+  test('a half-typed decimal is left alone', () => {
+    // Reformatting "1," to "1" the instant the comma is pressed makes the decimal impossible.
+    expect(formatAmountDisplay('24.', 'BRL')).toBe('24,')
+    expect(formatAmountDisplay('24.9', 'USD')).toBe('24.9')
+  })
+
+  test('empty stays empty rather than becoming a zero', () => {
+    expect(formatAmountDisplay('', 'USD')).toBe('')
+  })
+
+  test('round-trips through the parser — what is displayed re-parses to itself', () => {
+    // This is the invariant that keeps live formatting safe: every keystroke re-parses the string
+    // the field is currently showing, so display → parse → display must be a fixed point.
+    for (const [typed, currency] of [
+      ['1.234,56', 'BRL'], ['1,234.56', 'USD'],
+      ['1.234.567', 'BRL'], ['1,234,567', 'USD'],
+      ['100', 'USD'], ['24,99', 'BRL'],
+    ] as const) {
+      const once = formatAmountDisplay(parseAmountInput(typed), currency)
+      expect(once).toBe(typed)
+      expect(formatAmountDisplay(parseAmountInput(once), currency)).toBe(typed)
+    }
+  })
+
+  test('the symbol follows the currency', () => {
+    expect(currencySymbol('BRL')).toBe('R$')
+    expect(currencySymbol('USD')).toBe('$')
   })
 })
 

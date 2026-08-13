@@ -166,6 +166,62 @@ export function describeError(error: BillingPeriodError, lang: 'pt' | 'en', plan
   }
 }
 
+// ── the amount field ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Whatever the user typed → a canonical amount (dot decimal, no grouping).
+ *
+ * Deliberately NOT the "last two digits are cents" trick most money inputs use. That reads "100"
+ * as one real and is maddening when the amount you are typing genuinely has no cents — which is
+ * true of every plan price in the catalog. This keeps what was typed and only cleans it: digits,
+ * at most one separator, at most two decimals. Either separator is accepted, because a pt-BR
+ * keyboard produces a comma and a US one a dot, and the field should not care.
+ */
+export function parseAmountInput(raw: string): string {
+  const cleaned = raw.replace(/[^\d.,]/g, '')
+  const digitsOnly = () => cleaned.replace(/\D/g, '')
+
+  const lastSep = Math.max(cleaned.lastIndexOf('.'), cleaned.lastIndexOf(','))
+  if (lastSep === -1) return digitsOnly()
+
+  // A separator the user just typed, with nothing after it yet. Preserved so the decimal can
+  // actually be entered — collapsing it the instant the key is pressed makes that impossible.
+  if (lastSep === cleaned.length - 1) return `${cleaned.slice(0, lastSep).replace(/\D/g, '')}.`
+
+  const tail = cleaned.slice(lastSep + 1).replace(/\D/g, '')
+  // The last separator is the DECIMAL one only when 1-2 digits follow it. Three or more means it
+  // was grouping — and this matters beyond pedantry: the field displays the grouped form, so
+  // "1.234.567" comes straight back through this function on the next keystroke. Reading its last
+  // dot as a decimal point would turn one million into one thousand while the user watched.
+  if (tail.length > 2) return digitsOnly()
+  return `${cleaned.slice(0, lastSep).replace(/\D/g, '')}.${tail}`
+}
+
+/** The symbol shown in front of the field. */
+export function currencySymbol(currency: BillingCurrency): string {
+  return currency === 'BRL' ? 'R$' : '$'
+}
+
+/**
+ * A canonical amount → what the field shows.
+ *
+ * Grouping is applied to the integer part only, and the separators follow the CURRENCY rather
+ * than the interface language: someone reading the app in English who pays in reais still expects
+ * `R$ 1.234,56`. A trailing separator is preserved while typing — reformatting "1," to "1" the
+ * instant the comma is pressed makes the decimal impossible to enter.
+ */
+export function formatAmountDisplay(canonical: string, currency: BillingCurrency): string {
+  if (canonical === '') return ''
+  const brl = currency === 'BRL'
+  const group = brl ? '.' : ','
+  const decimal = brl ? ',' : '.'
+
+  const [intRaw = '', decRaw] = canonical.split('.')
+  const int = (intRaw || '0').replace(/\B(?=(\d{3})+(?!\d))/g, group)
+  if (decRaw === undefined) return int
+  return `${int}${decimal}${decRaw}`
+}
+
 /** The display name of a period: its own label, else the catalog's, else the raw id. */
 export function periodName(period: BillingPeriod): string {
   if (period.label) return period.label

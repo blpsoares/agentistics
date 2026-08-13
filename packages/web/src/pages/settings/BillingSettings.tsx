@@ -10,6 +10,7 @@ import {
   validateTimeline,
   type BillingDetection,
   type BillingPeriod,
+  type BillingCurrency,
   type BillingSettings as BillingSettingsShape,
   type BillingTimeline,
   type HarnessId,
@@ -30,6 +31,9 @@ import {
 } from './primitives'
 import {
   applyPlan,
+  currencySymbol,
+  formatAmountDisplay,
+  parseAmountInput,
   describeError,
   draftFromPeriod,
   draftWantsPrice,
@@ -384,22 +388,16 @@ export default function BillingSettings() {
 
             {draftWantsPrice(draft) && (
               <>
-                <FieldInput
+                <MoneyField
                   label={pt ? 'Valor por mês' : 'Amount per month'}
                   sub={pt
                     ? 'O que aparece na sua fatura. O valor sugerido pelo catálogo é só um ponto de partida.'
                     : 'What your invoice says. The catalog’s suggestion is only a starting point.'}
-                  value={draft.amount}
-                  onChange={v => setDraft(d => (d ? { ...d, amount: v } : d))}
-                  placeholder="100"
+                  amount={draft.amount}
+                  currency={draft.currency}
+                  onAmountChange={v => setDraft(d => (d ? { ...d, amount: v } : d))}
+                  onCurrencyChange={c => setDraft(d => (d ? { ...d, currency: c } : d))}
                 />
-                <div style={{ marginTop: -8, marginBottom: 14 }}>
-                  <TabSelect
-                    options={[{ value: 'USD', label: 'USD' }, { value: 'BRL', label: 'BRL' }]}
-                    value={draft.currency}
-                    onChange={v => setDraft(d => (d ? { ...d, currency: v as 'USD' | 'BRL' } : d))}
-                  />
-                </div>
                 <FieldError text={errorFor(['missing_price', 'non_positive_price', 'price_on_non_subscription'])} />
               </>
             )}
@@ -469,6 +467,65 @@ function FieldError({ text }: { text: string | null }) {
   return (
     <div style={{ fontSize: 11.5, color: 'var(--accent-red)', marginTop: -8, marginBottom: 12, lineHeight: 1.45 }}>
       {text}
+    </div>
+  )
+}
+
+/**
+ * The amount field: currency symbol inside the box, live grouping, currency picker attached.
+ *
+ * The symbol and the separators are part of the field rather than a label beside it, because the
+ * question "am I typing dollars or reais" has to be answerable without looking away from what you
+ * are typing — and the two are five-to-one apart, which is not a mistake anyone catches by
+ * re-reading a total later.
+ *
+ * The stored value stays canonical (dot decimal, no grouping); only the display is formatted.
+ * `parseAmountInput` is a fixed point over that display, so re-parsing what the field shows on
+ * every keystroke is safe — see its test.
+ */
+function MoneyField({ label, sub, amount, currency, onAmountChange, onCurrencyChange }: {
+  label: string
+  sub?: string
+  amount: string
+  currency: BillingCurrency
+  onAmountChange: (v: string) => void
+  onCurrencyChange: (c: BillingCurrency) => void
+}) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 2 }}>{label}</div>
+      {sub && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginBottom: 5, lineHeight: 1.45 }}>{sub}</div>}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+        <div style={{
+          flex: 1, display: 'flex', alignItems: 'center', gap: 6,
+          border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+          background: 'var(--bg-input)', padding: '0 11px',
+        }}>
+          <span style={{ color: 'var(--text-tertiary)', fontWeight: 600, flexShrink: 0 }}>
+            {currencySymbol(currency)}
+          </span>
+          <input
+            inputMode="decimal"
+            value={formatAmountDisplay(amount, currency)}
+            onChange={e => onAmountChange(parseAmountInput(e.target.value))}
+            placeholder={currency === 'BRL' ? '540,00' : '100.00'}
+            // No inline fontSize — the global >=16px guard in index.css is what stops iOS Safari
+            // zooming the viewport and breaking the sticky header.
+            style={{
+              flex: 1, minWidth: 0, padding: '9px 0', border: 'none', outline: 'none',
+              background: 'transparent', color: 'var(--text-primary)', fontFamily: 'inherit',
+            }}
+          />
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>/mês</span>
+        </div>
+        <div style={{ flexShrink: 0 }}>
+          <TabSelect
+            options={[{ value: 'USD', label: 'USD' }, { value: 'BRL', label: 'BRL' }]}
+            value={currency}
+            onChange={v => onCurrencyChange(v as BillingCurrency)}
+          />
+        </div>
+      </div>
     </div>
   )
 }
