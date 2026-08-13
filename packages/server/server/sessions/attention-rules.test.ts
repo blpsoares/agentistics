@@ -6,7 +6,7 @@ import { attentionOf } from './attention'
 const NOW = 1_786_600_000_000
 
 /** Quiet and unmoving, so only the frame decides. */
-const quiet = (frame: string[], harness: 'claude' | 'codex' | 'kimi') => {
+const quiet = (frame: string[], harness: 'claude' | 'codex' | 'kimi' | 'gemini' | 'copilot' | 'antigravity') => {
   const rules = rulesFor(harness)
   return attentionOf({
     alive: true,
@@ -127,5 +127,51 @@ describe('codex', () => {
 describe('kimi', () => {
   it('sees the blocking dialog', () => {
     expect(quiet(KIMI_APPROVAL, 'kimi')).toBe('waiting-approval')
+  })
+})
+
+/** gemini 0.55.1 — an authentication confirmation, the same select its trust prompt uses. */
+const GEMINI_APPROVAL = [
+  '│  Do you want to continue?                                                    │',
+  '│  ● 1. Yes                                                                    │',
+  '│    2. No                                                                     │',
+  '│  Enter to select · ↑/↓ to navigate · Esc to cancel                           │',
+]
+
+/** GitHub Copilot CLI 1.0.79 — the folder-trust dialog. */
+const COPILOT_APPROVAL = [
+  '│ Do you trust the files in this folder?                                       │',
+  '│ ❯ 1. Yes                                                                     │',
+  '│ ↑/↓ to navigate · enter to select · esc to cancel                            │',
+]
+
+/** agy 1.1.12 — the folder-trust dialog. Note the different wording. */
+const AGY_APPROVAL = [
+  'Do you trust the contents of this project?',
+  '> Yes, I trust this folder',
+  '  No, exit',
+  '  ↑/↓ Navigate · enter Confirm',
+]
+
+describe('the harnesses probed alongside their spawn specs', () => {
+  it('sees a gemini blocking dialog', () => {
+    expect(quiet(GEMINI_APPROVAL, 'gemini')).toBe('waiting-approval')
+  })
+
+  it('sees a copilot blocking dialog', () => {
+    expect(quiet(COPILOT_APPROVAL, 'copilot')).toBe('waiting-approval')
+  })
+
+  it('sees an agy blocking dialog', () => {
+    expect(quiet(AGY_APPROVAL, 'antigravity')).toBe('waiting-approval')
+  })
+
+  it('does not let one harness pattern answer for another', () => {
+    // agy words its footer `↑/↓ Navigate · enter Confirm` while copilot writes
+    // `↑/↓ to navigate · enter to select`. One shared guess would have matched neither exactly, and
+    // a pattern loose enough to match both would fire on any list with arrow-key help on it.
+    expect(quiet(AGY_APPROVAL, 'copilot')).toBe('waiting')
+    expect(quiet(COPILOT_APPROVAL, 'antigravity')).toBe('waiting')
+    expect(quiet(GEMINI_APPROVAL, 'claude')).toBe('waiting')
   })
 })

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'bun:test'
+import { HARNESS_ORDER } from '@agentistics/core'
+import { rulesFor } from './attention-rules'
 import type { HarnessProcess } from '../live-sessions'
 import type { ManagedSession, SessionActivity } from './types'
 import type { ReconciledSession } from './session-ref'
@@ -41,10 +43,15 @@ describe('buildSessionViews', () => {
     })
   })
 
-  it('says approval detection is unavailable for an unprobed harness', () => {
-    const reconciled = [row('a', { managed: managed('a', { harness: 'gemini' }) })]
-    const [v] = buildSessionViews({ reconciled, activity: new Map(), processes: [] })
-    expect(v!.approvalDetection).toBe(false)
+  it('reports approval detection exactly where rules exist, for every harness', () => {
+    // Written as an INVARIANT rather than against one harness that happens to be unprobed today:
+    // this test used to name gemini, and it broke the day gemini was probed — asserting a fact
+    // about the world instead of about the code, which is the wrong thing for a test to pin.
+    for (const harness of HARNESS_ORDER) {
+      const reconciled = [row('a', { managed: managed('a', { harness }) })]
+      const [v] = buildSessionViews({ reconciled, activity: new Map(), processes: [] })
+      expect(v!.approvalDetection).toBe(rulesFor(harness) !== undefined)
+    }
   })
 
   it('leaves the harness absent for a session the registry has forgotten', () => {

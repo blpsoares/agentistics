@@ -6,8 +6,15 @@ never mix with your own tmux sessions.
 
 ## Requirements
 
-tmux (Linux, macOS). Windows support arrives with the PTY backend; until then `agentop session`
-reports that tmux is required rather than failing at spawn time.
+tmux (Linux, macOS). **On Windows, run agentop inside WSL** — the CLI says so in those words rather
+than reporting a generic missing dependency.
+
+There is no native Windows backend, and the reason is recorded in `sessions/index.ts`: Bun exposes
+no PTY primitive (checked against 1.3.14), and the only alternative is a native module, which cannot
+be embedded in the single portable binary this project compiles to. Hosting a full-screen assistant
+TUI on plain pipes renders garbage, which is a worse failure than not starting — it looks like it
+worked. When a PTY primitive lands in Bun, `backend-pty.ts` slots in behind `SessionBackend` and
+nothing else changes.
 
 ## Commands
 
@@ -56,11 +63,13 @@ interval late and never early, which is the right way round for something a pers
 |---|---|---|---|
 | claude | positional argument | yes | `low, medium, high, xhigh, max` |
 | codex | positional argument | yes | not supported |
+| gemini | `--prompt-interactive` | yes | not supported |
+| antigravity (`agy`) | `--prompt-interactive` | yes | `low, medium, high` |
 | kimi | typed into the session | yes | not supported |
-| gemini, copilot, antigravity | not startable yet | — | — |
+| copilot | typed into the session | yes | not supported |
 
-`kimi` has no flag for an initial prompt in an interactive session — its `-p` runs one prompt
-non-interactively and exits — so agentop types the prompt in for you once the session is up.
+`kimi` and `copilot` have no flag for an initial prompt in an interactive session — their `-p` runs
+one prompt non-interactively and exits — so agentop types the prompt in once the session is up.
 
 Codex's reasoning effort is a `-c key=value` configuration override rather than a flag; it is not
 wired up because the key could not be verified from the CLI itself, and agentop does not guess flags.

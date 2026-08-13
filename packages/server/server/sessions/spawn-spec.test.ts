@@ -9,10 +9,23 @@ describe('SPAWN_SPECS', () => {
     }
   })
 
-  it('marks the harnesses that are not spawnable yet as null', () => {
-    expect(SPAWN_SPECS.gemini).toBeNull()
-    expect(SPAWN_SPECS.copilot).toBeNull()
-    expect(SPAWN_SPECS.antigravity).toBeNull()
+  it('gives every spawnable harness a way to receive an initial prompt', () => {
+    for (const id of HARNESS_ORDER) {
+      const spec = SPAWN_SPECS[id]
+      if (!spec) continue
+      expect(spec.prompt.kind).toBeDefined()
+      expect(spec.bin.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('never declares an effort flag without the enum that validates it', () => {
+    // The two go together or neither is trustworthy: a flag with no accepted list would pass any
+    // string through to a CLI that rejects it, which fails after the session has already started.
+    for (const id of HARNESS_ORDER) {
+      const spec = SPAWN_SPECS[id]
+      if (!spec) continue
+      expect(Boolean(spec.effortFlag)).toBe(Boolean(spec.efforts?.length))
+    }
   })
 })
 
@@ -50,9 +63,34 @@ describe('planSpawn', () => {
     expect(r).toEqual({ ok: false, error: { code: 'effort-unsupported', harness: 'kimi' } })
   })
 
-  it('refuses a harness with no spawn spec', () => {
-    const r = planSpawn({ harness: 'gemini', cwd: '/tmp' })
-    expect(r).toEqual({ ok: false, error: { code: 'unsupported-harness', harness: 'gemini' } })
+  it('passes a gemini prompt through the flag that stays interactive', () => {
+    // `--prompt-interactive` rather than the positional `query`: both stay interactive today, but
+    // only one says so in its own name, and a positional that silently goes headless is a trap.
+    const r = planSpawn({ harness: 'gemini', cwd: '/tmp', prompt: 'find the leak' })
+    expect(r).toEqual({ ok: true, plan: { argv: ['gemini', '--prompt-interactive', 'find the leak'] } })
+  })
+
+  it('types a copilot prompt in, because its -p exits after answering', () => {
+    const r = planSpawn({ harness: 'copilot', cwd: '/tmp', prompt: 'review this' })
+    expect(r).toEqual({ ok: true, plan: { argv: ['copilot'], sendKeys: 'review this' } })
+  })
+
+  it('accepts agy effort, which its own --help prints as a closed set', () => {
+    const r = planSpawn({ harness: 'antigravity', cwd: '/tmp', effort: 'high' })
+    expect(r).toEqual({ ok: true, plan: { argv: ['agy', '--effort', 'high'] } })
+  })
+
+  it('refuses an agy effort outside that set', () => {
+    const r = planSpawn({ harness: 'antigravity', cwd: '/tmp', effort: 'xhigh' })
+    expect(r).toEqual({
+      ok: false,
+      error: { code: 'unknown-effort', harness: 'antigravity', value: 'xhigh', accepted: ['low', 'medium', 'high'] },
+    })
+  })
+
+  it('refuses effort for gemini, which has no such flag', () => {
+    const r = planSpawn({ harness: 'gemini', cwd: '/tmp', effort: 'high' })
+    expect(r).toEqual({ ok: false, error: { code: 'effort-unsupported', harness: 'gemini' } })
   })
 
   it('does NOT validate the model against a closed list', () => {

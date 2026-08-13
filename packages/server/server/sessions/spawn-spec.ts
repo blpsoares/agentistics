@@ -6,8 +6,14 @@
  * harness whose entry is `null` is not spawnable by us yet, and every caller must therefore refuse
  * it by name rather than offering a verb that fails.
  *
- * EVERY flag below was read from that tool's own `--help` on 2026-08-12. A flag that could not be
- * verified is absent, not guessed.
+ * EVERY flag below was read from that tool's own `--help` — claude, codex and kimi on 2026-08-12,
+ * gemini, copilot and antigravity on 2026-08-13. A flag that could not be verified is absent, not
+ * guessed.
+ *
+ * Where `--help` prints no list of accepted MODELS, the suggestions are the ids this machine has
+ * actually run (read from the local session store) rather than ids recalled from anywhere else. They
+ * are a convenience for the picker and never a validation set — every one of these CLIs accepts a
+ * full model name, so refusing an unlisted value would reject valid input the day a model ships.
  */
 
 import type { HarnessId } from '@agentistics/core'
@@ -45,10 +51,42 @@ export const SPAWN_SPECS: Record<HarnessId, SpawnSpec | null> = {
     modelSuggestions: [],
   },
 
-  // Phase 5. Absent from the wizard and refused by name, rather than offered and failing.
-  gemini: null,
-  copilot: null,
-  antigravity: null,
+  // `-i, --prompt-interactive  Execute the provided prompt and continue in interactive mode`.
+  // Preferred over the positional `query` (which also stays interactive) because it says so in its
+  // own name — a positional that silently becomes headless on a future release is a trap, and this
+  // flag cannot.
+  gemini: {
+    bin: 'gemini',
+    prompt: { kind: 'flag', flag: '--prompt-interactive' },
+    modelFlag: '--model', // `-m, --model  Model  [string]`
+    // No model list is printed by `--help`, so these are the ids this machine has actually run
+    // rather than ids from memory. The list is a convenience, never a validation set.
+    modelSuggestions: ['gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+    // No effort flag exists.
+  },
+
+  // `-p, --prompt <text>  Execute a prompt in non-interactive mode (exits after completion)` — the
+  // same trap kimi has, so the prompt is TYPED IN instead of passed. There is no interactive prompt
+  // flag to use in its place.
+  copilot: {
+    bin: 'copilot',
+    prompt: { kind: 'send-keys' },
+    modelFlag: '--model', // `--model <model>  Set the AI model to use (use 'auto' to let Copilot pick)`
+    modelSuggestions: ['auto', 'claude-sonnet-4.6', 'gpt-5.3-codex'],
+  },
+
+  // `--prompt-interactive  Run an initial prompt interactively and continue the session`, plus a
+  // real closed effort enum — the only harness besides claude that documents one.
+  antigravity: {
+    bin: 'agy',
+    prompt: { kind: 'flag', flag: '--prompt-interactive' },
+    modelFlag: '--model', // `--model  Model for the current CLI session`
+    modelSuggestions: ['gemini-3.6-flash'],
+    effortFlag: '--effort',
+    // `--effort  Reasoning effort for the current CLI session (low|medium|high)` — printed by the
+    // CLI itself, so unlike codex's `-c` override this one IS verifiable and IS validated.
+    efforts: ['low', 'medium', 'high'],
+  },
 }
 
 /** Decide the exact argv (and any text to type in) for a requested session. */

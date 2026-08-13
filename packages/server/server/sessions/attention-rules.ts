@@ -49,11 +49,25 @@ export const ATTENTION_RULES: Record<HarnessId, AttentionRules | null> = {
     probed: 'kimi 0.35.0, 2026-08-13',
     approval: [/↑↓ navigate · Enter select · Esc exit/],
   },
-  // Not probed. These are startable only from a later phase; giving them invented patterns now
-  // would be the exact failure this file's header describes.
-  gemini: null,
-  copilot: null,
-  antigravity: null,
+  gemini: {
+    probed: 'gemini 0.55.1, 2026-08-13',
+    // Captured from TWO different blocking dialogs — the folder-trust prompt it opens with and an
+    // authentication confirmation — which is what makes this the component's footer rather than one
+    // dialog's wording.
+    approval: [/Enter to select · ↑\/↓ to navigate/],
+    // No working marker found: gemini's frame while a turn runs was not distinguishable from its
+    // idle one in the frames captured, so movement is the only signal. Absent, not approximated.
+  },
+  copilot: {
+    probed: 'GitHub Copilot CLI 1.0.79, 2026-08-13',
+    approval: [/↑\/↓ to navigate · enter to select/],
+  },
+  antigravity: {
+    probed: 'agy 1.1.12, 2026-08-13',
+    // agy words its footer differently from the others — `Navigate`/`Confirm` capitalised, no `esc`
+    // — which is precisely why each harness gets its own probed pattern instead of one shared guess.
+    approval: [/↑\/↓ Navigate · enter Confirm/],
+  },
 }
 
 /** The rules for a harness, or `undefined` when it was never probed. */
