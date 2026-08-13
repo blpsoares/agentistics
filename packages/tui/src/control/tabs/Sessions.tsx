@@ -56,6 +56,7 @@ import {
   enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
   taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
+  DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder,
   asideSections, asideFold, scrollBar, THUMB,
   sessionNamed,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
@@ -141,6 +142,22 @@ export function Sessions({
   const [onlyActive, setOnlyActive] = useState(
     view?.onlyActive ?? DEFAULT_SESSION_VIEW.onlyActive ?? false,
   )
+  // `null` means "the two switches above decide", which is the ordinary case. A Set means the user
+  // narrowed it further, and then it is the whole answer.
+  const [states, setStates] = useState<ReadonlySet<SessionState> | null>(
+    view?.states ? new Set(view.states as SessionState[]) : null,
+  )
+  const [order, setOrder] = useState<SessionOrder>(
+    (view?.sort as SessionOrder | undefined) ?? DEFAULT_ORDER,
+  )
+  const [hideDetail, setHideDetail] = useState(view?.hideDetail ?? false)
+  /**
+   * The rows the user MARKED — a highlighter, not a selection.
+   *
+   * Kept by session id rather than by position, because the list re-sorts under it every five
+   * seconds: a mark that meant "the third row" would be on someone else's session by the next poll.
+   */
+  const [marked, setMarked] = useState<ReadonlySet<string>>(new Set(view?.marked ?? []))
   /**
    * Whether the visible action row has the keyboard.
    *
@@ -195,7 +212,11 @@ export function Sessions({
         // ONLY ACTIVE is absolute: it answers the whole question above on its own, named rows
         // included. Everything else here can only ever widen, and the point of this switch is that
         // there is finally one that does not.
-        (onlyActive
+        // An explicit STATE set is the whole answer, ahead of both switches: it is the more
+        // specific thing the user said, and letting a switch widen past it would make ticking a
+        // box add rows it does not name.
+        (states ? states.has(v.state)
+          : onlyActive
           ? sessionRunning(v)
           // What you NAMED, you keep seeing. A machine restart makes every managed session `lost`,
           // and with the history switches off — which is how they ship — the list came back empty:
@@ -227,9 +248,10 @@ export function Sessions({
       repo: s.sessionsUnknownRepo,
     },
     fleet?.finishedTasks ?? [],
+    order,
   ), s.sessionsClosedWord, s.sessionsDoneWord), [
     fleet?.sessions, fleet?.finishedTasks, done, grouping, query, showClosed, showExited,
-    hideEmptyTask, showDone, onlyActive, taskFilter, projectFilter, s,
+    hideEmptyTask, showDone, onlyActive, states, order, taskFilter, projectFilter, s,
   ])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
@@ -269,7 +291,9 @@ export function Sessions({
   // The action row is drawn from this screen's own budget, so it is subtracted BEFORE the split. A
   // row taken without being paid for is composited over the one under it, which reads as a corrupt
   // frame rather than a cramped one.
-  const detailWanted = ask ? Math.max(QUESTION_ROWS, detail.length) : detail.length
+  // A QUESTION always gets its rows, switch or no switch: it is a prompt, and one with nowhere to
+  // draw cannot be answered. Only the FACTS are what the switch withholds.
+  const detailWanted = ask ? Math.max(QUESTION_ROWS, detail.length) : hideDetail ? 0 : detail.length
 
   /**
    * Act on the selected row, or say why it cannot be acted on.
@@ -299,6 +323,13 @@ export function Sessions({
     group: s.actSessions.group,
   }), [actions, s])
 
+  /** How many sessions wear each state, over the WHOLE fleet — see the note in `asideRows`. */
+  const stateCounts = useMemo(() => {
+    const out: Partial<Record<SessionState, number>> = {}
+    for (const v of fleet?.sessions ?? []) out[v.state] = (out[v.state] ?? 0) + 1
+    return out
+  }, [fleet?.sessions])
+
   const asideList = useMemo(() => asideRows({
     actions,
     actionWords: {
@@ -312,11 +343,11 @@ export function Sessions({
     groupWords: s.sessionsGroupings,
     toggles: {
       closed: showClosed, exited: showExited, unfiled: !hideEmptyTask, done: showDone,
-      active: onlyActive,
+      active: onlyActive, detail: !hideDetail,
     },
     toggleWords: {
       closed: s.toggleClosed, exited: s.toggleExited, unfiled: s.toggleUnfiled, done: s.toggleDone,
-      active: s.toggleActive,
+      active: s.toggleActive, detail: s.toggleDetail,
     },
     headings: { actions: s.asideActions, view: s.asideView, show: s.asideShow },
     showUnfiled: grouping === 'task',
@@ -329,6 +360,15 @@ export function Sessions({
       allLabel: s.asideAllTasks,
       done: fleet?.finishedTasks ?? [],
     },
+    sort: { heading: s.asideSort, words: s.sessionsSorts, by: order.by, dir: order.dir },
+    states: {
+      heading: s.asideStates,
+      words: s.sessionsStates,
+      // Counted over the WHOLE fleet: counting after the filter reports the number the filter left,
+      // which for an unselected state is always zero — a row that can never be turned back on.
+      counts: stateCounts,
+      kept: [...(states ?? ACTIVE_STATES)],
+    },
     // The other half of the drill-down: a task is something you declared, a project is something
     // every session already has — which makes it the scope that can find a session you never filed.
     projects: {
@@ -338,7 +378,8 @@ export function Sessions({
       allLabel: s.asideAllProjects,
     },
   }), [
-    actions, grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, taskFilter,
+    actions, grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
+    states, stateCounts, order, taskFilter,
     projectFilter, fleet?.sessions, fleet?.finishedTasks, s,
   ])
 
@@ -449,6 +490,10 @@ export function Sessions({
     setShowExited(DEFAULT_SESSION_VIEW.showExited)
     setShowDone(DEFAULT_SESSION_VIEW.showDone ?? false)
     setOnlyActive(DEFAULT_SESSION_VIEW.onlyActive ?? false)
+    setStates(null)
+    setOrder(DEFAULT_ORDER)
+    setHideDetail(false)
+    setMarked(new Set())
     setHideEmptyTask(!DEFAULT_SESSION_VIEW.showUnfiled)
     setTaskFilter(null)
     setProjectFilter(null)
@@ -464,12 +509,33 @@ export function Sessions({
     if (row.kind === 'group') { setGrouping(row.value); setCursor(0); return }
     if (row.kind === 'task') { setTaskFilter(row.name || null); setCursor(0); return }
     if (row.kind === 'project') { setProjectFilter(row.name || null); setCursor(0); return }
+    if (row.kind === 'sort') {
+      // Picking the order already in force FLIPS it, which is the gesture every table has and the
+      // only one that does not need a second control for the direction.
+      setOrder(o => (o.by === row.value
+        ? { by: o.by, dir: o.dir === 'desc' ? 'asc' : 'desc' }
+        : { by: row.value, dir: DEFAULT_ORDER.dir }))
+      setCursor(0)
+      return
+    }
+    if (row.kind === 'state') {
+      setStates(prev => {
+        const next = new Set(prev ?? ACTIVE_STATES)
+        if (next.has(row.value)) next.delete(row.value)
+        else next.add(row.value)
+        // Emptying it would show nothing at all, which is never what unticking the last box means.
+        return next.size === 0 ? null : next
+      })
+      setCursor(0)
+      return
+    }
     if (row.kind !== 'toggle') return
     setCursor(0)
     if (row.toggle === 'closed') return setShowClosed(v => !v)
     if (row.toggle === 'exited') return setShowExited(v => !v)
     if (row.toggle === 'done') return setShowDone(v => !v)
     if (row.toggle === 'active') return setOnlyActive(v => !v)
+    if (row.toggle === 'detail') return setHideDetail(v => !v)
     return setHideEmptyTask(v => !v)
   }, [asideList, runAction, resetView])
 
@@ -563,6 +629,19 @@ export function Sessions({
     if (input === 'c') { setShowClosed(v => !v); setCursor(0); return }
     if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
     if (input === 'l') { setOnlyActive(v => !v); setCursor(0); return }
+    if (input === 'd') { setHideDetail(v => !v); return }
+    // The HIGHLIGHTER. `space` because it is the mark key of every list that has one, and because
+    // it is the only unclaimed key on this screen that a person reaches for without being told.
+    if (input === ' ') {
+      if (!selected) return
+      setMarked(prev => {
+        const next = new Set(prev)
+        if (next.has(selected.id)) next.delete(selected.id)
+        else next.add(selected.id)
+        return next
+      })
+      return
+    }
     if (input === 'u' && grouping === 'task') { setHideEmptyTask(v => !v); setCursor(0); return }
     if (input === 'a') return runAction('new')
     // Attaching has its OWN key because `enter` deliberately does not do it any more: enter opens
@@ -601,7 +680,15 @@ export function Sessions({
     // the stored `showClosed` follows, so a preferences file written before this existed opens with
     // finished work put away rather than with the switch inverted.
     setShowDone(view.showDone ?? false)
-    setOnlyActive(view.onlyActive ?? false)
+    // The DEFAULT, not `false`. `showDone` above defaults to false so its `?? false` is right; this
+    // one defaults to TRUE, and copying the rule across turned the strict filter off on every
+    // preferences file written before it existed — then the persist effect wrote that off to disk,
+    // making it permanent. Reported from a real machine.
+    setOnlyActive(view.onlyActive ?? DEFAULT_SESSION_VIEW.onlyActive ?? false)
+    setStates(view.states ? new Set(view.states as SessionState[]) : null)
+    setOrder((view.sort as SessionOrder | undefined) ?? DEFAULT_ORDER)
+    setHideDetail(view.hideDetail ?? false)
+    setMarked(new Set(view.marked ?? []))
   }, [view])
 
   // Written whenever any part of the arrangement moves, rather than at each call site: four setters
@@ -615,8 +702,15 @@ export function Sessions({
     // stored arrangement was read, and the arrangement was gone. `sessionViewPref` now always
     // answers, so an absent `view` means "not loaded yet" and nothing else.
     if (!restored.current) return
-    onView({ grouping, showClosed, showExited, showUnfiled: !hideEmptyTask, showDone, onlyActive })
-  }, [grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, onView, view])
+    onView({
+      grouping, showClosed, showExited, showUnfiled: !hideEmptyTask, showDone, onlyActive,
+      hideDetail,
+      ...(marked.size > 0 ? { marked: [...marked] } : {}),
+      ...(states ? { states: [...states] } : {}),
+      sort: order,
+    })
+  }, [grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
+      states, order, marked, onView, view])
 
   useEffect(() => {
     if (!isActive) return
@@ -1007,6 +1101,7 @@ export function Sessions({
                 key={row.session.id}
                 session={row.session}
                 selected={selected?.id === row.session.id}
+                marked={marked.has(row.session.id)}
                 columns={columns}
                 width={listBody}
               />
@@ -1036,7 +1131,7 @@ export function Sessions({
 
       {/* The third pane: what you selected, or the question you were just asked. A question owns the
           keyboard, so the frame says so — the accent is where the keys go, everywhere, always. */}
-      {cockpit.detail > 0 && (ask || detail.length > 0) ? (
+      {cockpit.detail > 0 && (ask || (!hideDetail && detail.length > 0)) ? (
         <Pane
           title={ask ? s.sessionsPaneAsk : s.sessionsPaneDetail}
           focused={Boolean(ask)}
@@ -1163,9 +1258,11 @@ function SummaryRow({
   )
 }
 
-function SessionRowView({ session, selected, columns, width }: {
+function SessionRowView({ session, selected, marked, columns, width }: {
   session: ControlSession
   selected: boolean
+  /** The user's own highlight. Survives re-sorting, and outlives the cursor moving away. */
+  marked: boolean
   columns: SessionColumns
   width: number
 }) {
@@ -1176,7 +1273,13 @@ function SessionRowView({ session, selected, columns, width }: {
 
   return (
     <Text wrap="truncate">
-      <Text color={selected ? COLORS.accent : undefined}>{selected ? '❯ ' : '  '}</Text>
+      {/* Two cells, and they answer different questions: the caret is WHERE THE CURSOR IS, the bar
+          is WHAT YOU MARKED. Sharing one cell would make a mark vanish under the cursor, which is
+          the one moment you are looking straight at it. The bar is `info` rather than the accent
+          on purpose — the accent means focus everywhere else in this app, and a highlight that
+          wore it would read as "this is selected" on four rows at once. */}
+      <Text color={selected ? COLORS.accent : undefined}>{selected ? '❯' : ' '}</Text>
+      <Text color={marked ? COLORS.info : undefined} bold={marked}>{marked ? '▌' : ' '}</Text>
       {/* Colour AND word, always paired — and PADDED, so every title starts in the same column.
           Two spaces between unpadded cells is what made this read as a jumble of words: the state
           words differ by ten characters, so nothing after them ever lined up. */}
@@ -1189,7 +1292,10 @@ function SessionRowView({ session, selected, columns, width }: {
         {padCell(session.stateLabel, columns.state)}
       </Text>
       {columns.title > 0 ? (
-        <Text color={selected ? COLORS.accent : undefined} bold={selected}>
+        <Text
+          color={selected ? COLORS.accent : marked ? COLORS.info : undefined}
+          bold={selected || marked}
+        >
           {gap + padCell(session.title, columns.title)}
         </Text>
       ) : null}
@@ -1632,7 +1738,13 @@ function AsideMenu({
         // truncated around it rather than the count being dropped: a task named at its full length
         // with no number tells you nothing you did not already know from the grouping.
         const scoped = row.kind === 'task' || row.kind === 'project'
-        const count = scoped && row.name ? ` ${row.count}` : ''
+        // A STATE row carries its count for the same reason a task does — it is what says the
+        // filter has anything behind it. The ORDER row carries its direction instead, because
+        // picking the order already in force flips it and the arrow is what says which way.
+        const count = row.kind === 'state' ? ` ${row.count}`
+          : scoped && row.name ? ` ${row.count}`
+          : row.kind === 'sort' && row.on ? (row.dir === 'desc' ? ' ↓' : ' ↑')
+          : ''
         const allLabel = row.kind === 'project' ? allProjectsLabel : allTasksLabel
         // A finished task wears a tick, so the menu states what it already knows rather than making
         // someone select it to find out.

@@ -409,6 +409,26 @@ export interface SessionViewPrefs {
    * the four things they are actually doing had no way to say so. This is that way.
    */
   onlyActive?: boolean
+  /**
+   * The exact states the list keeps, when the user narrowed it beyond "active or everything".
+   *
+   * Absent means the two switches above decide, which is the ordinary case. Present, it is the
+   * whole answer — and it is stored as the states to KEEP rather than the ones to hide, so a state
+   * added to the product later is not silently included in a filter written before it existed.
+   */
+  states?: string[]
+  /** How the rows are ordered. Absent is by state — what is blocked on you, first. */
+  sort?: { by: string; dir: 'asc' | 'desc' }
+  /** Whether the detail pane under the list is drawn at all. */
+  hideDetail?: boolean
+  /**
+   * Session ids the user has MARKED, so a row can be found again without searching for it.
+   *
+   * Persisted for the same reason the arrangement is: detaching from a session remounts this
+   * screen, and a mark that did not survive that would be gone at exactly the moment it was most
+   * useful — you marked the row because you were about to go into it.
+   */
+  marked?: string[]
 }
 
 /**

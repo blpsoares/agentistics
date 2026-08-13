@@ -230,6 +230,14 @@ export interface ControlStrings {
   toggleDone: string
   /** The strict switch: only what is running. Overrides the other three. */
   toggleActive: string
+  /** The detail pane's own switch: it is a pane, not a fact, and a screen is allowed to be a list. */
+  toggleDetail: string
+  asideSort: string
+  asideStates: string
+  sessionsSorts: Record<'state' | 'name' | 'started' | 'usage' | 'project', string>
+  sessionsStates: Record<
+    'working' | 'waiting' | 'waiting-approval' | 'exited' | 'lost' | 'closed' | 'unknown', string
+  >
   /** States the active search on the summary row, and how to drop it. */
   sessionsSearching: (query: string) => string
   /** How long ago, from a whole number of SECONDS — the caller does the clock arithmetic so this
@@ -299,6 +307,8 @@ export interface ControlStrings {
   promptHint: string
   sessionsHideClosed: string
   keySessionsActive: string
+  keySessionsDetail: string
+  keySessionsMark: string
   keySessionsClosed: string
   keySessionsNoTask: string
   /** How to change screen where the arrows belong to the screen itself. */
@@ -525,6 +535,21 @@ const EN: ControlStrings = {
   asideAllProjects: 'every project',
   toggleDone: 'finished tasks',
   toggleActive: 'only active',
+  toggleDetail: 'detail pane',
+  asideSort: 'ORDER',
+  asideStates: 'STATE',
+  sessionsSorts: {
+    state: 'urgency', name: 'name', started: 'started', usage: 'usage', project: 'project',
+  },
+  sessionsStates: {
+    'waiting-approval': 'needs approval',
+    waiting: 'waiting',
+    working: 'working',
+    exited: 'exited',
+    lost: 'lost',
+    closed: 'closed',
+    unknown: 'external',
+  },
   sessionsSearching: q => `search: ${q} · esc clears`,
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `${sec}s ago`
@@ -592,6 +617,8 @@ const EN: ControlStrings = {
   promptHint: 'enter saves · esc cancels',
   sessionsHideClosed: 'closed: hidden',
   keySessionsActive: 'l only active',
+  keySessionsDetail: 'd detail',
+  keySessionsMark: 'space mark',
   keySessionsClosed: 'c closed',
   keySessionsNoTask: 'u unfiled',
   keyTabsAlt: '[ ] screens',
@@ -806,6 +833,21 @@ const PT: ControlStrings = {
   asideAllProjects: 'todos os projetos',
   toggleDone: 'tarefas finalizadas',
   toggleActive: 'apenas ativas',
+  toggleDetail: 'painel de detalhe',
+  asideSort: 'ORDENAR',
+  asideStates: 'ESTADO',
+  sessionsSorts: {
+    state: 'urgência', name: 'nome', started: 'início', usage: 'uso', project: 'projeto',
+  },
+  sessionsStates: {
+    'waiting-approval': 'precisa aprovação',
+    waiting: 'aguardando',
+    working: 'trabalhando',
+    exited: 'encerrada',
+    lost: 'perdida',
+    closed: 'fechada',
+    unknown: 'externa',
+  },
   sessionsSearching: q => `busca: ${q} · esc limpa`,
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `há ${sec}s`
@@ -873,6 +915,8 @@ const PT: ControlStrings = {
   promptHint: 'enter salva · esc cancela',
   sessionsHideClosed: 'fechadas: ocultas',
   keySessionsActive: 'l só ativas',
+  keySessionsDetail: 'd detalhe',
+  keySessionsMark: 'space marcar',
   keySessionsClosed: 'c fechadas',
   keySessionsNoTask: 'u sem tarefa',
   keyTabsAlt: '[ ] telas',
