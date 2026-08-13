@@ -5,6 +5,7 @@ import {
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
   projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
   sessionHandle, worktreeName, sessionRunning, asideRowKey, resolveAsideCursor,
+  DEFAULT_ORDER, usageOf,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -514,7 +515,7 @@ describe('asideRows', () => {
     new: 'New', search: 'Search', group: 'Group',
   }
   const groupWords = { repo: 'repo', none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project' }
-  const toggleWords = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks', active: 'only active' }
+  const toggleWords = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks', active: 'only active', detail: 'detail' }
   const headings = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
 
   const build = (o: Partial<Parameters<typeof asideRows>[0]> = {}) => asideRows({
@@ -522,7 +523,7 @@ describe('asideRows', () => {
     actionWords: words,
     grouping: 'none',
     groupWords,
-    toggles: { closed: false, exited: false, unfiled: false, done: false, active: false },
+    toggles: { closed: false, exited: false, unfiled: false, done: false, active: false, detail: false },
     toggleWords,
     headings,
     showUnfiled: false,
@@ -539,7 +540,7 @@ describe('asideRows', () => {
   })
 
   it('states every row own state, so nothing must be pressed to be discovered', () => {
-    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, unfiled: false, done: false, active: false } })
+    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, unfiled: false, done: false, active: false, detail: false } })
     expect(rows.find(r => r.kind === 'group' && r.value === 'task')).toMatchObject({ on: true })
     expect(rows.find(r => r.kind === 'group' && r.value === 'none')).toMatchObject({ on: false })
     expect(rows.find(r => r.kind === 'toggle' && r.toggle === 'closed')).toMatchObject({ on: true })
@@ -1007,10 +1008,10 @@ describe('the only-active toggle', () => {
       repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
       project: 'project',
     },
-    toggles: { closed: false, exited: false, unfiled: false, done: false, active: true },
+    toggles: { closed: false, exited: false, unfiled: false, done: false, active: true, detail: false },
     toggleWords: {
       closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks',
-      active: 'only active',
+      active: 'only active', detail: 'detail',
     },
     headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
     showUnfiled,
@@ -1076,5 +1077,55 @@ describe('resolveAsideCursor', () => {
 
   it('reports -1 when there is nothing to land on at all', () => {
     expect(resolveAsideCursor([{ kind: 'heading', label: 'X' }], 'action:attach')).toBe(-1)
+  })
+})
+
+describe('sortSessions', () => {
+  const rows = [
+    session('a', { title: 'zebra', state: 'exited' as SessionState, startedAt: 300, tokens: '1.2M' }),
+    session('b', { title: 'alpha', state: 'waiting' as SessionState, startedAt: 100, tokens: '9.9k' }),
+    session('c', { title: 'mango', state: 'waiting-approval' as SessionState, startedAt: 200, tokens: '5' }),
+  ]
+  const ids = (o: Parameters<typeof sortSessions>[1]) => sortSessions(rows, o).map(s => s.id)
+
+  it('puts what is blocked on you first by default', () => {
+    expect(ids(DEFAULT_ORDER)).toEqual(['c', 'b', 'a'])
+  })
+
+  it('reads the SUFFIX when ordering by usage', () => {
+    // `9.9k` above `1.2M` would point the column that exists to show what is expensive at the
+    // cheapest row on the screen.
+    expect(usageOf(session('x', { tokens: '1.2M' }))).toBe(1_200_000)
+    expect(usageOf(session('x', { tokens: '9.9k' }))).toBe(9_900)
+    expect(usageOf(session('x'))).toBe(0)
+    expect(ids({ by: 'usage', dir: 'desc' })).toEqual(['a', 'b', 'c'])
+  })
+
+  it('orders by name in the direction the key is USEFUL in, and flips', () => {
+    // `desc` names the useful direction for every key — most urgent, A to Z, largest, newest — so
+    // there is one convention rather than a per-key argument about which way its "descending" runs.
+    expect(ids({ by: 'name', dir: 'desc' })).toEqual(['b', 'c', 'a'])
+    expect(ids({ by: 'name', dir: 'asc' })).toEqual(['a', 'c', 'b'])
+  })
+
+  it('orders by start time, newest first', () => {
+    expect(ids({ by: 'started', dir: 'desc' })).toEqual(['a', 'c', 'b'])
+    expect(ids({ by: 'started', dir: 'asc' })).toEqual(['b', 'c', 'a'])
+  })
+
+  it('keeps STATE as the tiebreak of every other key', () => {
+    // A screen sorted by name that buries a session waiting on approval among nine idle ones has
+    // lost the thing it is for.
+    const tied = [
+      session('x', { title: 'same', state: 'exited' as SessionState }),
+      session('y', { title: 'same', state: 'waiting-approval' as SessionState }),
+    ]
+    expect(sortSessions(tied, { by: 'name', dir: 'desc' }).map(s => s.id)).toEqual(['y', 'x'])
+  })
+
+  it('never mutates what it was given', () => {
+    const before = rows.map(s => s.id)
+    sortSessions(rows, { by: 'name', dir: 'asc' })
+    expect(rows.map(s => s.id)).toEqual(before)
   })
 })
