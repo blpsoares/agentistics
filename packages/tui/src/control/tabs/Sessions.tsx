@@ -29,6 +29,7 @@ import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, actionLabels, asideRows, asideSelectable, enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, sessionsLayout, summaryCells, sessionColumns, padCell,
+  taskCounts,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
 } from '../sessions'
@@ -125,6 +126,13 @@ export function Sessions({
    * conversations back does not necessarily want every pane that exited today.
    */
   const [showExited, setShowExited] = useState(view?.showExited ?? false)
+  /**
+   * The task the list is scoped to, or `null` for the whole fleet.
+   *
+   * Scoping rather than navigating away: a task is a place you work out of, so picking one narrows
+   * the list you are already looking at and every verb keeps working on the rows inside it.
+   */
+  const [taskFilter, setTaskFilter] = useState<string | null>(null)
   /** Which pane has the keyboard. The aside is a real pane, not a strip of hints. */
   const [focus, setFocus] = useState<'list' | 'aside'>('list')
   const [asideIndex, setAsideIndex] = useState(0)
@@ -134,6 +142,8 @@ export function Sessions({
       (fleet?.sessions ?? []).filter(v =>
         (showClosed || v.state !== 'closed')
         && (showExited || (v.state !== 'exited' && v.state !== 'lost'))
+        // Scoped to one task: every verb still works, on the rows inside it.
+        && (taskFilter === null || v.task === taskFilter)
         // Only ever applies while grouping by task: everywhere else an unfiled session is simply a
         // session, and hiding it would make the list lie about how many there are.
         && !(hideEmptyTask && grouping === 'task' && !v.task)),
@@ -146,7 +156,7 @@ export function Sessions({
       project: s.sessionsUnknownProject,
       task: s.sessionsUnknownTask,
     },
-  ), s.sessionsClosedWord), [fleet?.sessions, grouping, query, showClosed, showExited, hideEmptyTask, s])
+  ), s.sessionsClosedWord), [fleet?.sessions, grouping, query, showClosed, showExited, hideEmptyTask, taskFilter, s])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
 
@@ -231,7 +241,15 @@ export function Sessions({
     },
     headings: { actions: s.asideActions, view: s.asideView, show: s.asideShow },
     showUnfiled: grouping === 'task',
-  }), [actions, grouping, showClosed, showExited, hideEmptyTask, s])
+    tasks: {
+      // Counted over the WHOLE fleet: the count is what says a task has work in it, and counting
+      // after the filters would report the number the filter left.
+      counts: taskCounts(fleet?.sessions ?? []),
+      active: taskFilter,
+      heading: s.asideTasks,
+      allLabel: s.asideAllTasks,
+    },
+  }), [actions, grouping, showClosed, showExited, hideEmptyTask, taskFilter, fleet?.sessions, s])
 
   const asidePicks = useMemo(() => asideSelectable(asideList), [asideList])
   const asideAt = asidePicks.length === 0 ? -1 : Math.min(asideIndex, asidePicks.length - 1)
@@ -290,6 +308,7 @@ export function Sessions({
     if (!row) return
     if (row.kind === 'action') { if (row.enabled) runAction(row.action); return }
     if (row.kind === 'group') { setGrouping(row.value); setCursor(0); return }
+    if (row.kind === 'task') { setTaskFilter(row.name || null); setCursor(0); return }
     if (row.kind !== 'toggle') return
     setCursor(0)
     if (row.toggle === 'closed') return setShowClosed(v => !v)
@@ -334,11 +353,21 @@ export function Sessions({
       return
     }
 
-    // EVERY key goes through `runAction`, which is the same dispatcher the visible row and a mouse
-    // click use. It used to call `actOn('attach')` directly here, so `enter` on a session agentop
-    // does not run refused with "cannot be controlled from here" while the action row beside it was
-    // offering Reopen — one screen answering the same gesture two different ways.
-    if (key.return) return runAction(actions[liveActions[0] ?? 0]?.action ?? 'new')
+    // `enter` on a session opens its MANAGEMENT rather than attaching to it.
+    //
+    // Attaching is the most drastic thing this screen does — it hands the whole terminal away — and
+    // making it the default answer to "I want to look at this" meant there was no way to reach the
+    // other verbs without already knowing where they were. Now enter moves to the menu, with the
+    // cursor on the first verb this row can take; attaching is the verb at the top of it.
+    if (key.return) {
+      if (cockpit.aside > 0 && selected) {
+        setFocus('aside')
+        setAsideIndex(0)
+        return
+      }
+      // No menu to move to on a narrow terminal, so enter keeps its old meaning there.
+      return runAction(actions[liveActions[0] ?? 0]?.action ?? 'new')
+    }
     if (input === 'v') return runAction('group')
     if (input === 'c') { setShowClosed(v => !v); setCursor(0); return }
     if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
@@ -518,6 +547,7 @@ export function Sessions({
             // Slicing from zero would leave the view switches below the fold on a short terminal —
             // invisible, and still the thing `enter` would act on.
             offset={windowOffset(Math.max(0, asideRow), asideList.length, cockpit.band)}
+            allTasksLabel={s.asideAllTasks}
           />
           <Box flexDirection="column" width={1} flexShrink={0}>
             {Array.from({ length: cockpit.band }, (_, i) => (
@@ -1153,7 +1183,7 @@ function TaskChoice({ host, strings: s, current, width, onCancel, onPick }: {
  * Every row states its own state — a filled dot for a grouping in force or a switch that is on —
  * because a menu that shows only a cursor makes you press things to find out what they already were.
  */
-function AsideMenu({ rows, cursor, focused, width, height, offset }: {
+function AsideMenu({ rows, cursor, focused, width, height, offset, allTasksLabel }: {
   rows: readonly AsideRow[]
   /** Index into `rows` of the row under the cursor, or `-1`. */
   cursor: number
@@ -1161,6 +1191,8 @@ function AsideMenu({ rows, cursor, focused, width, height, offset }: {
   width: number
   height: number
   offset: number
+  /** What the "every task" row is called — localized chrome the menu does not own. */
+  allTasksLabel: string
 }) {
   const inner = Math.max(1, width - 2)
   return (
@@ -1175,9 +1207,14 @@ function AsideMenu({ rows, cursor, focused, width, height, offset }: {
         }
         const active = i === cursor && focused
         // An action has no on/off state — a dot beside "Rename" would be claiming something. Only
-        // the switches and the grouping carry one.
+        // the switches, the grouping and the task scope carry one.
         const dot = row.kind === 'action' ? '  ' : row.on ? '● ' : '○ '
         const enabled = row.kind !== 'action' || row.enabled
+        // A task row carries its COUNT, which is what says the task has work in it. The label is
+        // truncated around it rather than the count being dropped: a task named at its full length
+        // with no number tells you nothing you did not already know from the grouping.
+        const count = row.kind === 'task' && row.name ? ` ${row.count}` : ''
+        const label = row.kind === 'task' ? (row.name || allTasksLabel) : row.label
         return (
           <Text key={`${row.kind}${i}`} wrap="truncate" dimColor={!enabled}>
             <Text color={active ? COLORS.accent : undefined}>{active ? '❯' : ' '}</Text>
@@ -1186,8 +1223,9 @@ function AsideMenu({ rows, cursor, focused, width, height, offset }: {
               color={active ? COLORS.accent : enabled ? undefined : COLORS.muted}
               bold={active}
             >
-              {truncate(row.label, Math.max(1, width - 3))}
+              {truncate(label, Math.max(1, width - 3 - count.length))}
             </Text>
+            {count ? <Text dimColor>{count}</Text> : null}
           </Text>
         )
       })}

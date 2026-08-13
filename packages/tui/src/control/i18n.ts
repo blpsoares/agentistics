@@ -258,6 +258,8 @@ export interface ControlStrings {
   asideActions: string
   asideView: string
   asideShow: string
+  asideTasks: string
+  asideAllTasks: string
   toggleClosed: string
   toggleExited: string
   toggleUnfiled: string
@@ -505,6 +507,8 @@ const EN: ControlStrings = {
   asideActions: 'ACTIONS',
   asideView: 'VIEW',
   asideShow: 'SHOW',
+  asideTasks: 'TASKS',
+  asideAllTasks: 'every task',
   toggleClosed: 'closed conversations',
   toggleExited: 'finished sessions',
   toggleUnfiled: 'sessions with no task',
@@ -744,6 +748,8 @@ const PT: ControlStrings = {
   asideActions: 'AÇÕES',
   asideView: 'VER',
   asideShow: 'MOSTRAR',
+  asideTasks: 'TAREFAS',
+  asideAllTasks: 'todas as tarefas',
   toggleClosed: 'conversas fechadas',
   toggleExited: 'sessões encerradas',
   toggleUnfiled: 'sessões sem tarefa',

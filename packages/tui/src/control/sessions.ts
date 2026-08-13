@@ -615,6 +615,8 @@ export type AsideRow =
   | { kind: 'action'; action: SessionAction; label: string; enabled: boolean }
   | { kind: 'group'; value: SessionGrouping; label: string; on: boolean }
   | { kind: 'toggle'; toggle: SessionToggle; label: string; on: boolean }
+  /** One task, with how many sessions are filed under it. `name: ''` is "all of them". */
+  | { kind: 'task'; name: string; count: number; on: boolean }
 
 /** The three things the list can be told to withhold. */
 export type SessionToggle = 'closed' | 'exited' | 'unfiled'
@@ -637,6 +639,14 @@ export function asideRows(o: {
   headings: { actions: string; view: string; show: string }
   /** `unfiled` only means anything while grouping by task, so it is ABSENT otherwise. */
   showUnfiled: boolean
+  /**
+   * The tasks in the fleet with their session counts, and which one the list is scoped to.
+   *
+   * Offered as a SECTION rather than as a separate screen: a task is a place you work out of, so
+   * picking one should narrow the list you are already looking at rather than take you somewhere
+   * else and make you come back.
+   */
+  tasks?: { counts: ReadonlyArray<{ name: string; count: number }>; active: string | null; heading: string; allLabel: string }
 }): AsideRow[] {
   const rows: AsideRow[] = [{ kind: 'heading', label: o.headings.actions }]
   for (const a of o.actions) {
@@ -651,7 +661,35 @@ export function asideRows(o: {
   for (const t of toggles) {
     rows.push({ kind: 'toggle', toggle: t, label: o.toggleWords[t], on: o.toggles[t] })
   }
+
+  // The tasks, last, and only when there are any: a heading over an empty section is a promise the
+  // screen cannot keep.
+  if (o.tasks && o.tasks.counts.length > 0) {
+    rows.push({ kind: 'rule' }, { kind: 'heading', label: o.tasks.heading })
+    rows.push({ kind: 'task', name: '', count: 0, on: o.tasks.active === null })
+    for (const t of o.tasks.counts) {
+      rows.push({ kind: 'task', name: t.name, count: t.count, on: o.tasks.active === t.name })
+    }
+  }
   return rows
+}
+
+/**
+ * How many sessions each task has — PURE, and counted over the WHOLE fleet.
+ *
+ * Over the whole fleet rather than the filtered list, because the count is what tells you a task
+ * has work in it: computing it after the filters would make picking a task report the number the
+ * filter left, which is the one number nobody is asking for.
+ */
+export function taskCounts(list: readonly ControlSession[]): Array<{ name: string; count: number }> {
+  const counts = new Map<string, number>()
+  for (const s of list) {
+    if (!s.task) continue
+    counts.set(s.task, (counts.get(s.task) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name))
 }
 
 /** Index of the nth row the cursor may land on: never a heading, a rule, or a disabled action. */
