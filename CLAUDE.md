@@ -509,8 +509,16 @@ actually pays.
   exist. The residue is the EXACT difference (`Σ days + undated === totalCostUSD`, pinned by a
   test) and is reported, never folded into a day it did not happen on. A **negative** residue is
   the two local sources contradicting each other and withholds the basis entirely.
-- **The plan basis is unavailable on a central.** It aggregates many machines and could only ever
-  hold its operator's timeline; Settings → Billing is hidden there too.
+- **The plan basis is unavailable on a central, and the refusal lives in `usePlanBasis`.** It
+  aggregates many machines and could only ever hold its operator's timeline; Settings → Billing is
+  hidden there too. Forcing `costBasis` to `'api'` is NOT the guard — two surfaces read `planBasis`
+  directly and bypass the switch (Home's "API vs your plan" panel, gated on
+  `basis?.coverage.computable`, and `CompareByFilter`'s per-side Plan button, gated on
+  `billingReady.ready && basis !== null`). A central whose `preferences.json` still carried a
+  timeline — a machine that used to be solo, or a hand edit — would then price a whole FLEET from
+  one operator's subscription. `central: true` returns `{basis: null, blocked: 'central'}` at the
+  single place the basis is computed, so there is nothing downstream to forget. Hiding the settings
+  screen is the cheap fix that leaves exactly that hole open.
 - **A panel where "plan" has no meaning renders in API basis and says so** — `CacheHitRatePanel`
   is hard-wired, because cache does not reduce a subscription bill, it extends a rate limit. Same
   rule as `HARNESS_CAPABILITIES`, applied to a basis instead of a metric. `BudgetPanel` likewise

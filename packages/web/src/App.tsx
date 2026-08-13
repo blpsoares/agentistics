@@ -1698,6 +1698,10 @@ export default function AppLayout() {
     billing,
     brlRate,
     filters,
+    // The basis does not exist on a central, and refusing HERE is what makes it unreachable: the
+    // surfaces that read `planBasis` directly (Home's plan panel, compare's per-side button) never
+    // pass through the `costBasis` switch below.
+    central: isCentral,
   })
   const billingReady = useMemo(
     () => billingReadiness(billing, data?.harnesses?.length ? data.harnesses : ['claude']),
