@@ -187,6 +187,10 @@ export interface ControlStrings {
 
   /** Sessions tab. */
   sessionsEmpty: string
+  /** The list is empty because `only active` is on, and this many sessions are being withheld. */
+  sessionsEmptyActive: (total: number) => string
+  /** The list is empty because a search or a scope is narrowing it. */
+  sessionsEmptyFiltered: string
   sessionsLoading: string
   /** Said when the host does not implement the fleet at all — not the same as an empty fleet. */
   sessionsUnsupported: string
@@ -471,6 +475,9 @@ const EN: ControlStrings = {
   logPaused: 'paused',
 
   sessionsEmpty: 'no sessions running.',
+  sessionsEmptyActive: (total: number) =>
+    `nothing running · ${total} session${total === 1 ? '' : 's'} withheld — l shows them`,
+  sessionsEmptyFiltered: 'nothing matches · esc clears the filter',
   sessionsLoading: 'reading…',
   sessionsUnsupported: 'session management is not available on this machine.',
   sessionsCount: (n: number) => (n === 1 ? '1 session' : `${n} sessions`),
@@ -751,6 +758,9 @@ const PT: ControlStrings = {
   logPaused: 'pausado',
 
   sessionsEmpty: 'nenhuma sessão em execução.',
+  sessionsEmptyActive: (total: number) =>
+    `nada rodando · ${total} ${total === 1 ? 'sessão retida' : 'sessões retidas'} — l mostra`,
+  sessionsEmptyFiltered: 'nada corresponde · esc limpa o filtro',
   sessionsLoading: 'lendo…',
   sessionsUnsupported: 'gerenciamento de sessões não está disponível nesta máquina.',
   sessionsCount: (n: number) => (n === 1 ? '1 sessão' : `${n} sessões`),
