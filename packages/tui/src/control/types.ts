@@ -524,6 +524,15 @@ export interface ControlHost {
   taskSession?(id: string, task: string): Promise<ActionResult>
 
   /**
+   * The tasks that already exist on this machine.
+   *
+   * So filing a session under one is a PICK rather than a spelling test: a task is a free string, so
+   * typing "auth-refactor" a second time as "auth refactor" makes two tasks that look like one and
+   * group like two. Offering what exists is what keeps that from happening.
+   */
+  sessionTasks?(): Promise<string[]>
+
+  /**
    * Reopen a conversation as a NEW managed session.
    *
    * This is what makes a closed conversation, or one running outside agentop, something the cockpit

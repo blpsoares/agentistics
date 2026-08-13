@@ -235,6 +235,9 @@ export interface ControlStrings {
     group: string
   }
   sessionsTaskPrompt: string
+  taskHint: string
+  taskNone: string
+  taskCurrent: string
   sessionsOpenTaskConfirm: (task: string, n: number) => string
   sessionsResumeConfirm: (title: string) => string
   sessionsResumeRunning: string
@@ -468,6 +471,9 @@ const EN: ControlStrings = {
     group: 'Group',
   },
   sessionsTaskPrompt: 'Which task does this session belong to?',
+  taskHint: 'pick one, or type a new name',
+  taskNone: 'no task',
+  taskCurrent: '(current)',
   sessionsOpenTaskConfirm: (task: string, n: number) =>
     `Reopen all ${n} session(s) of "${task}" in the background?`,
   sessionsResumeConfirm: (title: string) => `Reopen "${title}" as a session agentop manages?`,
@@ -695,6 +701,9 @@ const PT: ControlStrings = {
     group: 'Agrupar',
   },
   sessionsTaskPrompt: 'De qual tarefa esta sessão faz parte?',
+  taskHint: 'escolha uma, ou digite um nome novo',
+  taskNone: 'sem tarefa',
+  taskCurrent: '(atual)',
   sessionsOpenTaskConfirm: (task: string, n: number) =>
     `Reabrir todas as ${n} sessão(ões) de "${task}" em background?`,
   sessionsResumeConfirm: (title: string) => `Reabrir "${title}" como sessão gerenciada pelo agentop?`,

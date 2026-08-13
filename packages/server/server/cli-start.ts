@@ -1853,6 +1853,18 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       return ok ? { ok: true, message: s.sessNoted } : { ok: false, message: s.sessNoRegistryEntry }
     },
 
+    /** Every task in use, most-used first — the order that puts what you are working on at the top. */
+    async sessionTasks(): Promise<string[]> {
+      const counts = new Map<string, number>()
+      for (const m of await readRegistry()) {
+        if (!m.task) continue
+        counts.set(m.task, (counts.get(m.task) ?? 0) + 1)
+      }
+      return [...counts.entries()]
+        .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+        .map(([task]) => task)
+    },
+
     async taskSession(id: string, task: string): Promise<ActionResult> {
       const s = S()
       const ok = await patchSession(id, { task })
