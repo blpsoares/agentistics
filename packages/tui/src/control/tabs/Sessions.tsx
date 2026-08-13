@@ -41,7 +41,7 @@ function ScrollBar({ cells }: { cells: readonly string[] }) {
   return (
     <Box flexDirection="column" width={1} flexShrink={0}>
       {cells.map((c, i) => (
-        <Text key={i} color={c === '█' ? COLORS.label : COLORS.border}>{c}</Text>
+        <Text key={i} color={c === THUMB ? COLORS.accent : COLORS.border}>{c}</Text>
       ))}
     </Box>
   )
@@ -53,7 +53,8 @@ import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, actionLabels, asideRows, asideSelectable, enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
-  taskCounts, projectCounts, sessionMetric, asideSections, asideFold, scrollBar,
+  taskCounts, projectCounts, sessionMetric, asideSections, asideFold, scrollBar, THUMB,
+  sessionNamed,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
 } from '../sessions'
@@ -174,8 +175,14 @@ export function Sessions({
   const rows = useMemo(() => sessionRows(groupSessions(
     filterSessions(
       (fleet?.sessions ?? []).filter(v =>
-        (showClosed || v.state !== 'closed')
-        && (showExited || (v.state !== 'exited' && v.state !== 'lost'))
+        // What you NAMED, you keep seeing. A machine restart makes every managed session `lost`,
+        // and with the history switches off — which is how they ship — the list came back empty:
+        // the session you had renamed and filed under a task was gone, and so was the name. A row
+        // someone deliberately marked is their work, not anonymous history, so the two switches
+        // withhold everything EXCEPT that.
+        (sessionNamed(v)
+          || ((showClosed || v.state !== 'closed')
+            && (showExited || (v.state !== 'exited' && v.state !== 'lost'))))
         // Scoped to one task: every verb still works, on the rows inside it.
         && (taskFilter === null || v.task === taskFilter)
         // The project drill-down. Exact, never a prefix — two projects can share a first word.
@@ -351,6 +358,17 @@ export function Sessions({
 
   const actOn = useCallback((kind: Ask['kind'] | 'attach') => {
     if (!selected) return
+    // Asking to ATTACH to something with nothing running is asking to pick that conversation back
+    // up — so it is answered with the reopen question rather than refused. Pressing the one key
+    // that means "get me into this" and being told no, while a verb three rows down would have
+    // done it, is a refusal about bookkeeping rather than about anything the user did. It covers
+    // an EXTERNAL session too: agentop did not start it, but the conversation is on this disk.
+    const running = selected.state === 'working' || selected.state === 'waiting'
+      || selected.state === 'waiting-approval'
+    if (kind === 'attach' && !running && selected.resume) {
+      setAsk({ kind: 'resume', session: selected })
+      return
+    }
     if (!selected.actionable) {
       void run(async () => ({ ok: false, message: s.sessionsNotActionable }))
       return

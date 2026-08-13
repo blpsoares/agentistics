@@ -47,6 +47,18 @@ export function sortSessions(list: readonly ControlSession[]): ControlSession[] 
  * would be a search that cannot find the thing it was most likely opened to find. `searchText` is
  * composed by the host and already carries a closed conversation's opening prompt.
  */
+/**
+ * Whether the user deliberately MARKED this row — a name, a note, or a task — PURE.
+ *
+ * It is what the history switches make an exception of. A machine restart makes every managed
+ * session `lost`, and with those switches off (which is how they ship) the list came back empty:
+ * the session you had renamed and filed under a task was gone, and the name with it. A row someone
+ * named is their work, not anonymous history.
+ */
+export function sessionNamed(s: ControlSession): boolean {
+  return s.named === true
+}
+
 export function filterSessions(list: readonly ControlSession[], query: string): ControlSession[] {
   const q = query.trim().toLowerCase()
   if (q === '') return [...list]
@@ -395,16 +407,25 @@ export interface OfferedAction {
  * a session stopped existing because the one you selected cannot be renamed.
  */
 export function sessionActions(selected: ControlSession | undefined): OfferedAction[] {
+  // A row agentop still HOSTS: it has a registry entry, so it can be renamed, filed and stopped.
+  // `exited` and `lost` are hosted — a reboot loses every backend session while the registry keeps
+  // every name, and losing the verbs that edit those names is how a rename disappears.
   const hosted = selected !== undefined
     && selected.state !== 'unknown'
     && selected.state !== 'closed'
+  // ATTACHING is narrower: there has to be something running to attach TO. A hosted row whose
+  // backend is gone offers REOPEN instead, which is the verb that actually works on it — offering
+  // `attach` there was a button whose only outcome was an error.
+  const live = hosted
+    && (selected.state === 'working' || selected.state === 'waiting'
+      || selected.state === 'waiting-approval')
   const canReopen = Boolean(selected?.resume)
   const hasTask = Boolean(selected?.task)
 
   return [
-    // The row-specific verb comes first, and which one it is depends on what the row IS: a session
-    // we host is attached to, one we do not is reopened. They are never both live.
-    ...(hosted
+    // The row-specific verb comes first, and which one it is depends on what the row IS: something
+    // running is attached to, everything else is reopened. They are never both live.
+    ...(live
       ? [{ action: 'attach' as const, enabled: true }]
       : [{ action: 'resume' as const, enabled: canReopen }]),
     { action: 'rename', enabled: hosted },
@@ -1110,6 +1131,11 @@ export function asideFold(
  * Returns an EMPTY array when everything fits. A bar that is always drawn says "there is more" on a
  * list that has no more, which is the same class of lie as a confident zero.
  */
+/** The thumb: a heavy hairline, so it is the same width as the track and plainly darker. */
+export const THUMB = '┃'
+/** The track: the lightest vertical rule the box-drawing set has. */
+export const TRACK = '│'
+
 export function scrollBar(o: { offset: number; total: number; rows: number }): string[] {
   const rows = Math.max(0, o.rows)
   if (rows === 0 || o.total <= rows) return []
@@ -1120,5 +1146,8 @@ export function scrollBar(o: { offset: number; total: number; rows: number }): s
   const span = Math.max(1, o.total - rows)
   const offset = Math.max(0, Math.min(o.offset, span))
   const top = Math.round((offset / span) * (rows - thumb))
-  return Array.from({ length: rows }, (_, i) => (i >= top && i < top + thumb ? '█' : '│'))
+  // A HAIRLINE, not a block. `█` fills its whole cell, so beside a border it reads as a second
+  // wall rather than as a position — the bar is a fact about where you are, and it has to be
+  // legible without competing with the frame it sits inside.
+  return Array.from({ length: rows }, (_, i) => (i >= top && i < top + thumb ? THUMB : TRACK))
 }

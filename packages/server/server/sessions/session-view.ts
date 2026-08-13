@@ -171,7 +171,13 @@ export function buildSessionViews(o: {
       // Reopening a finished session is the whole reason its row is kept. Resolved the same way an
       // external process's conversation is — by harness and directory — and absent when nothing
       // can be resolved, rather than offering a verb with no target.
-      ...(finished && harness
+      // Reopening is offered for ANY managed row that is not running — one you finished, one whose
+      // command exited, and one the backend no longer has at all. That last case is a REBOOT: tmux
+      // is gone, every managed session is `lost`, and without this the sessions you were in the
+      // middle of came back as rows with no verb on them. Resolved the same way an external
+      // process's conversation is, and absent when nothing resolves rather than offering a verb
+      // with no target.
+      ...((finished || r.status === 'lost' || r.status === 'exited') && harness
         ? (() => {
             const conv = conversationForProcess(o.conversations ?? [], { harness, cwd: r.managed?.cwd ?? '' })
             return conv?.resumable ? { resume: { sessionId: conv.sessionId, title: conv.title } } : {}

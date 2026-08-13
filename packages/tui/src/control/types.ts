@@ -312,6 +312,14 @@ export interface ControlSession {
   repo?: string
   /** True only for a LINKED worktree. Said on the row, because it changes what the row IS. */
   worktree?: boolean
+  /**
+   * Whether the user deliberately MARKED this session — gave it a name, a note or a task.
+   *
+   * Its own flag rather than something the screen infers from `title`, because `title` always has a
+   * value: the host derives one when there is no label, so "has a title" says nothing about whether
+   * anyone chose it. The history switches make an exception of a marked row — see `sessionNamed`.
+   */
+  named?: boolean
   model?: string
   note?: string
   /** The piece of work this session belongs to, when the user said so. Groups the list. */

@@ -3,7 +3,7 @@ import {
   attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionActions, sessionCells,
   sessionRows, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
-  projectPickRows, groupProjects, asideSections, asideFold, scrollBar,
+  projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -885,10 +885,10 @@ describe('scrollBar', () => {
   it('puts the thumb at the top at the top, and at the bottom at the bottom', () => {
     const top = scrollBar({ offset: 0, total: 100, rows: 10 })
     const bottom = scrollBar({ offset: 90, total: 100, rows: 10 })
-    expect(top[0]).toBe('█')
-    expect(top[top.length - 1]).toBe('│')
-    expect(bottom[bottom.length - 1]).toBe('█')
-    expect(bottom[0]).toBe('│')
+    expect(top[0]).toBe(THUMB)
+    expect(top[top.length - 1]).toBe(TRACK)
+    expect(bottom[bottom.length - 1]).toBe(THUMB)
+    expect(bottom[0]).toBe(TRACK)
   })
 
   it('never fills the whole track, however long the list', () => {
@@ -896,14 +896,52 @@ describe('scrollBar', () => {
     for (const total of [11, 12, 20, 100, 5000]) {
       const bar = scrollBar({ offset: 0, total, rows: 10 })
       expect(bar).toHaveLength(10)
-      expect(bar.filter(c => c === '█').length).toBeLessThan(10)
-      expect(bar.filter(c => c === '█').length).toBeGreaterThanOrEqual(1)
+      expect(bar.filter(c => c === THUMB).length).toBeLessThan(10)
+      expect(bar.filter(c => c === THUMB).length).toBeGreaterThanOrEqual(1)
     }
   })
 
   it('clamps an offset past the end instead of drawing off the track', () => {
     const bar = scrollBar({ offset: 9999, total: 100, rows: 10 })
     expect(bar).toHaveLength(10)
-    expect(bar[bar.length - 1]).toBe('█')
+    expect(bar[bar.length - 1]).toBe(THUMB)
+  })
+})
+
+describe('what a row that is no longer running offers', () => {
+  const lost = session('a', {
+    stateLabel: 'lost', state: 'lost' as SessionState, actionable: true, named: true,
+    resume: { sessionId: 'c1', title: 'the work' },
+  })
+
+  it('offers REOPEN rather than attach — attaching to nothing is a button that only errors', () => {
+    const offered = sessionActions(lost)
+    expect(offered[0]!.action).toBe('resume')
+    expect(offered[0]!.enabled).toBe(true)
+    expect(offered.some(a => a.action === 'attach')).toBe(false)
+  })
+
+  it('keeps the verbs that edit what the user wrote', () => {
+    // A reboot loses every backend session while the registry keeps every name. Losing rename,
+    // note and task there is how a rename disappears.
+    const by = Object.fromEntries(sessionActions(lost).map(a => [a.action, a.enabled]))
+    expect(by.rename).toBe(true)
+    expect(by.note).toBe(true)
+    expect(by.task).toBe(true)
+    expect(by.kill).toBe(true)
+  })
+
+  it('still offers attach on a row that IS running', () => {
+    const live = session('b', { stateLabel: 'waiting', state: 'waiting' as SessionState })
+    expect(sessionActions(live)[0]!.action).toBe('attach')
+  })
+})
+
+describe('sessionNamed', () => {
+  it('is what the user MARKED, never what the host derived', () => {
+    // `title` always has a value — the host derives one when there is no label — so it can say
+    // nothing about whether anyone chose it.
+    expect(sessionNamed(session('a', { title: 'claude in agentistics' }))).toBe(false)
+    expect(sessionNamed(session('a', { title: 'x', named: true }))).toBe(true)
   })
 })
