@@ -39,6 +39,17 @@ describe('routeCapability', () => {
     expect(routeCapability('/api/nay-sessions')).toBe('localTranscripts')
     expect(routeCapability('/api/projects-list')).toBe('localTranscripts')
     expect(routeCapability('/api/team/proposals')).toBe('localTranscripts')
+    // Billing detection reads ~/.claude.json and the settings files. It extracts only non-secret
+    // fields, but the answer is still host configuration read out of the most sensitive files this
+    // product touches — there is no deployment that should read a transcript but not this.
+    expect(routeCapability('/api/billing/detect')).toBe('localTranscripts')
+  })
+
+  it('does not guard a near-miss billing path', () => {
+    // EXACT is exact: a typo in the registration must fail loudly here rather than silently
+    // leaving a host-reading route unguarded.
+    expect(routeCapability('/api/billing/detection')).toBeNull()
+    expect(routeCapability('/api/billing')).toBeNull()
   })
 
   it('maps the mcp admin routes', () => {

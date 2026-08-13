@@ -14,13 +14,16 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
+import { usePlanBasis } from './hooks/usePlanBasis'
+import { planScopeHarnesses, planScopeNote } from './lib/costBasis'
+import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
 import type { TagDef } from './lib/tagMatch'
 import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
-import type { Filters, HarnessId, HealthIssue, TeamConfig } from '@agentistics/core'
+import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, SavedComparison, TeamConfig } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
+import { billingReadiness, monthlyCommitment, normalizeBillingSettings, normalizeComparisons, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
 import { buildDeniedRepoLabels } from './lib/shareRepos'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
@@ -700,9 +703,9 @@ function MobileBottomNav({
     { key: 'tags', label: 'Tags', icon: TagIcon, onClick: () => { closeSheet(); navigate('/tags') }, active: location.pathname.startsWith('/tags') },
     { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { closeSheet(); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
     { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { closeSheet(); navigate('/export') }, active: location.pathname.startsWith('/export') },
-    ...(harnesses && harnesses.length > 1
-      ? [{ key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { closeSheet(); navigate('/compare') }, active: location.pathname.startsWith('/compare') } as Tile]
-      : []),
+    // Unconditional: the page's filter mode compares two SCOPES and needs no second harness.
+    // Only the by-harness mode inside it stays gated.
+    { key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { closeSheet(); navigate('/compare') }, active: location.pathname.startsWith('/compare') },
   ]
   const activeIssueCount = healthIssues?.length ?? 0
   const actionTiles: Tile[] = [
@@ -1007,7 +1010,8 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
     { to: '/tags',      labelPt: 'Tags',         labelEn: 'Tags',         icon: <TagIcon size={17} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={17} /> },
-    ...(harnesses && harnesses.length > 1 ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={17} /> }] : []),
+    // Unconditional — see the mobile tile: comparing two filter scopes needs no second harness.
+    { to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={17} /> },
   ]
   const footBtn: React.CSSProperties = {
     width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1180,7 +1184,11 @@ export default function AppLayout() {
   // Reset scroll to the top on every route change — otherwise navigating away while scrolled to the
   // bottom of a page lands the next page still scrolled down.
   useEffect(() => { window.scrollTo(0, 0) }, [location.pathname])
-  const isCustomPage = location.pathname === '/custom'
+  // Pages that render their OWN filter bar(s) and must not get the header's as well. `/custom`
+  // embeds one; `/compare?mode=filter` owns two, and three bars on one screen is not a page.
+  const isCustomPage =
+    location.pathname === '/custom'
+    || (location.pathname === '/compare' && new URLSearchParams(location.search).get('mode') === 'filter')
 
   /** Which filter dimensions a page can actually react to. Top usage ranks by member, team,
    *  machine, presence, repo, tag, project and model, so those narrow it meaningfully — harness is
@@ -1263,6 +1271,30 @@ export default function AppLayout() {
   const setLang = useCallback((l: Lang) => setLangState(l), [])
   const setTheme = useCallback((t: Theme) => setThemeState(t), [])
   const setCurrency = useCallback((c: 'USD' | 'BRL') => setCurrencyState(c), [])
+
+  // How this machine is actually billed. Local only — it never travels to a central.
+  const [billing, setBilling] = useState<BillingSettings>({ profiles: {} })
+  const [comparisons, setComparisons] = useState<SavedComparison[]>([])
+  const saveComparisons = useCallback(async (next: SavedComparison[]) => {
+    setComparisons(next)
+    await fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comparisons: next }),
+    })
+  }, [])
+  const [costBasisState, setCostBasisState] = useState<CostBasis>('api')
+  const [billingSetupOpen, setBillingSetupOpen] = useState(false)
+  // `writePreferencesTo` is a SHALLOW merge, so a partial PUT would replace the whole billing
+  // object with the fragment. The complete settings always go over the wire.
+  const saveBilling = useCallback(async (next: BillingSettings) => {
+    setBilling(next)
+    await fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ billing: next }),
+    })
+  }, [])
   const [brlRate, setBrlRate] = useState(5.70)
   const [filters, setFilters] = useState<Filters>({
     dateRange: 'all',
@@ -1500,8 +1532,13 @@ export default function AppLayout() {
     // only a real 200 response with no archiveMode may set it. On failure we retry with
     // backoff and leave state at `undefined` (neutral loading bg) so nothing false-gates.
     let cancelled = false
-    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean; team?: TeamConfig }) => {
+    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean; team?: TeamConfig; billing?: unknown }) => {
       if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
+      // Total and never throws: a hand-edited preferences.json must not blank the dashboard.
+      const nextBilling = normalizeBillingSettings(prefs.billing)
+      setBilling(nextBilling)
+      setCostBasisState(nextBilling.costBasis ?? 'api')
+      setComparisons(normalizeComparisons((prefs as Record<string, unknown>).comparisons))
       if (prefs.lang) setLangState(prefs.lang)
       if (prefs.theme) setThemeState(prefs.theme)
       if (prefs.currency) setCurrencyState(prefs.currency)
@@ -1652,6 +1689,74 @@ export default function AppLayout() {
   // Tags visible to the viewer; back both the `tags` filter dimension and the derived stats.
   const [tagsList, setTagsList] = useState<TagDef[]>([])
   const derived = useDerivedStats(data, filters, tagsList)
+
+  // ── the plan cost basis ──────────────────────────────────────────────────────────────────
+  // Computed ONCE here and passed down: two surfaces each cutting A their own way would tell two
+  // different stories about the same filter, and the point of the basis is that they agree.
+  const planBasis = usePlanBasis({
+    apiCostByDay: derived?.apiCostByDay,
+    billing,
+    brlRate,
+    filters,
+  })
+  const billingReady = useMemo(
+    () => billingReadiness(billing, data?.harnesses?.length ? data.harnesses : ['claude']),
+    [billing, data?.harnesses],
+  )
+  // A central aggregates many machines; pricing a whole fleet from its operator's own timeline
+  // would be a fabricated number, so the basis does not exist there at all. And a basis the data
+  // cannot support falls back rather than rendering a page of N/A.
+  const costBasis: CostBasis =
+    isCentral || !billingReady.ready || planBasis.basis === null ? 'api' : costBasisState
+  const setCostBasis = useCallback((b: CostBasis) => {
+    setCostBasisState(b)
+    void saveBilling({ ...billing, costBasis: b })
+  }, [billing, saveBilling])
+  const openBillingSetup = useCallback(() => setBillingSetupOpen(true), [])
+
+  // What the registered plans commit to THIS calendar month — a different question from the
+  // filter-window plan cost, and the one a monthly budget is set against.
+  const monthCommitment = useMemo(
+    () => (isCentral ? null : monthlyCommitment({
+      profiles: billing.profiles,
+      month: new Date().toISOString().slice(0, 10),
+      brlRate,
+    })),
+    [billing.profiles, brlRate, isCentral],
+  )
+
+  // The first-run invite repeats every load until dismissed for good — but only once preferences
+  // have actually loaded (`introDismissed` absent during loading would flash it at someone who
+  // dismissed it months ago), only with nothing registered yet, and never on a central.
+  const [billingIntroSeen, setBillingIntroSeen] = useState(false)
+  const showBillingIntro =
+    !isCentral
+    && !billingIntroSeen
+    && archiveChoice !== null
+    && billing.introDismissed !== true
+    && Object.keys(billing.profiles).length === 0
+
+  // The header totals strip, in whichever basis is active. It carries no label of its own, so the
+  // tooltip is where "this is your plan cost, not an API estimate" has to be said.
+  // C straight off the basis, never `totalCostUSD × factor` — see the long note on the HomePage
+  // cost card. The strip and the card must agree to the cent, so they read the same field.
+  const headerPlanBasis = costBasis === 'plan' && planBasis.basis?.coverage.computable
+    ? planBasis.basis
+    : null
+  const headerCostUSD = headerPlanBasis ? headerPlanBasis.planCostUSD : (derived?.totalCostUSD ?? 0)
+  const headerCostScope = headerPlanBasis
+    ? planScopeNote({
+        covered: planScopeHarnesses(headerPlanBasis).covered.map(h => HARNESS_LABELS[h] ?? h),
+        inScope: planScopeHarnesses(headerPlanBasis).inScope,
+        lang: lang === 'pt' ? 'pt' : 'en',
+      })
+    : null
+  const headerCostTitle = headerPlanBasis
+    ? [
+        lang === 'pt' ? 'Custo do seu plano no período medido' : 'Your plan cost over the measured period',
+        headerCostScope,
+      ].filter(Boolean).join(' · ')
+    : (lang === 'pt' ? 'Estimativa a preços de API' : 'API-price estimate')
 
   const models = useMemo(() => {
     if (!data) return []
@@ -1965,18 +2070,56 @@ export default function AppLayout() {
           ? 'O ativo NÃO conta o intervalo entre um turno acabar e você mandar o próximo — por isso uma sessão reaberta durante semanas deixa de aparecer como centenas de horas. Mas ele AINDA conta um turno que ficou parado esperando você (ex.: aprovação de permissão): separar isso exigiria um limite de ociosidade arbitrário. Sessões cuja transcrição o Claude já apagou não têm tempo ativo e ficam fora do ranking.'
           : 'Active time does NOT count the gap between a turn ending and your next prompt — which is why a session reopened over weeks no longer reads as hundreds of hours. It DOES still count a turn that sat waiting on you (e.g. a permission prompt): separating that would need an arbitrary idle threshold. Sessions whose transcript Claude already deleted have no active time and are excluded from the ranking.',
       },
-      {
-        label: pt ? 'Custo estimado' : 'Estimated cost',
-        source: twoPaths(
-          '~/.claude/stats-cache.json → modelUsage[model].{inputTokens, outputTokens, cacheRead, cacheWrite}',
-          pt ? 'tokens de cada sessão × preço do modelo dela' : "each session's tokens × its model's price"),
-        formula: pt
-          ? 'Σ modelo [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nUma sessão sem modelo conhecido usa a taxa média ponderada pelo mix de modelos do período.'
-          : 'Σ model [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nA session with no known model uses the average rate weighted by the period\'s model mix.',
-        note: pt
-          ? 'Preços vêm de três fontes, nesta ordem de confiança: páginas oficiais dos fornecedores, a base comunitária LiteLLM e a tabela embutida no app. Como os harnesses usam vários fornecedores (Anthropic, OpenAI, Google), os preços não são só da Anthropic. Veja Configurações → Preços para a tarifa e a origem de cada modelo que esta máquina realmente usou. É estimativa de preço de API — não é sua fatura nem sua assinatura.'
-          : 'Prices come from three sources, in this order of trust: the vendors\' official pages, the LiteLLM community dataset and the table built into the app. Because harnesses use several vendors (Anthropic, OpenAI, Google), prices are not Anthropic-only. See Settings → Pricing for the rate and origin of every model this machine actually used. This is an API-price estimate — not your invoice or your subscription.',
-      },
+      // Two different items, because in plan basis this card measures something else entirely.
+      // Leaving the API text up while the headline shows C would make the explanation itself the
+      // lie the whole feature exists to remove.
+      costBasis === 'plan'
+        ? {
+            label: pt ? 'Custo do plano' : 'Plan cost',
+            source: pt
+              ? 'Configurações → Cobrança (períodos cadastrados) + as sessões filtradas'
+              : 'Settings → Billing (registered periods) + the filtered sessions',
+            formula: pt
+              ? 'C = Σ dos períodos:  mensalidade × dias no filtro ÷ 30,44\n'
+                + 'A = custo a preços de API dos MESMOS dias\n'
+                + 'V = A ÷ C          (quantas vezes o plano se pagou)\n'
+                + '$/1M efetivo = C ÷ (tokens cobertos ÷ 1.000.000)\n\n'
+                + 'Ex.: R$ 500/mês, 126 dias dentro do filtro\n'
+                + '     500 × 126 ÷ 30,44 = R$ 2.069,65\n\n'
+                + '30,44 = média de dias por mês (365,25 ÷ 12).'
+              : 'C = Σ over periods:  monthly × days in filter ÷ 30.44\n'
+                + 'A = API-price cost of the SAME days\n'
+                + 'V = A ÷ C          (how many times the plan paid for itself)\n'
+                + 'effective $/1M = C ÷ (covered tokens ÷ 1,000,000)\n\n'
+                + 'E.g.: $100/mo, 126 days inside the filter\n'
+                + '      100 × 126 ÷ 30.44 = $413.93\n\n'
+                + '30.44 = average days per month (365.25 ÷ 12).',
+            note: pt
+              ? 'POR QUE TEM CENTAVOS: o rateio é por DIA, não por mês de calendário. 126 dias não são 4 meses redondos, são 4,139 meses — e essa é a única leitura que sobrevive a um filtro arbitrário: "meio mês" não significa nada para 10 dias soltos no meio de maio.\n\n'
+                + 'POR QUE VOCÊ CADASTRA PERÍODOS: nenhum arquivo em nenhuma máquina registra qual plano estava valendo quando. Por isso a cobrança é uma LINHA DO TEMPO: cada período é rateado com o próprio preço, então uma janela que atravessa uma troca de plano soma as duas partes corretamente em vez de aplicar o preço de hoje ao passado inteiro.\n\n'
+                + 'DIAS SEM PLANO SAEM DOS DOIS LADOS — do custo do plano e do valor de API — senão o múltiplo compararia períodos diferentes. O rodapé do card diz quantos dias foram realmente medidos, que pode ser menos que o filtro.\n\n'
+                + 'ESTE NÚMERO É O C, LIDO DIRETO — não é o total da tela reescalado. Por isso ele pode ser menor que os cards ao lado: eles contam todos os harnesses, e o C cobre só os que têm plano cadastrado. Quando os dois escopos diferem, o rodapé nomeia o que está coberto ("só Claude Code").\n\n'
+                + 'POR LINHA (modelo, repositório, agente) o valor é RATEIO, não medição: ninguém consegue dizer que fatia de uma mensalidade fixa um modelo "usou". Dentro de um mesmo harness é um reescalonamento linear, então a ordem e as proporções se mantêm exatas.\n\n'
+                + 'A mensalidade é a que você digitou; BRL converte pela cotação de /api/rates. Cache não reduz assinatura — ele estende seu limite de uso —, por isso o painel de cache continua em base API.'
+              : 'WHY IT HAS CENTS: proration is by DAY, not by calendar month. 126 days is not 4 round months, it is 4.139 months — and that is the only reading that survives an arbitrary filter: "half a month" means nothing for 10 loose days in the middle of May.\n\n'
+                + 'WHY YOU REGISTER PERIODS: no file on any machine records which plan was in force when. That is why billing is a TIMELINE: each period is prorated at its own price, so a window spanning a plan change adds both parts correctly instead of applying today\'s price to the whole past.\n\n'
+                + 'DAYS WITH NO REGISTERED PLAN LEAVE BOTH SIDES — the plan cost and the API value — otherwise the multiple would compare different periods. The card\'s subtitle names how many days were actually measured, which can be fewer than your filter.\n\n'
+                + 'THIS FIGURE IS C, READ DIRECTLY — not the page total rescaled. So it can be smaller than the cards beside it: those count every harness, while C covers only the ones with a registered plan. When the two scopes differ, the subtitle names what is covered ("Claude Code only").\n\n'
+                + 'PER ROW (model, repository, agent) the figure is an ALLOCATION, not a measurement: nobody can say what share of a flat monthly fee a given model "used". Within one harness it is a linear rescale, so rankings and proportions survive exactly.\n\n'
+                + 'The monthly amount is the one you typed; BRL is converted at the /api/rates figure. Cache does not reduce a subscription — it extends your rate limit — which is why the cache panel stays in API basis.',
+          }
+        : {
+            label: pt ? 'Custo estimado' : 'Estimated cost',
+            source: twoPaths(
+              '~/.claude/stats-cache.json → modelUsage[model].{inputTokens, outputTokens, cacheRead, cacheWrite}',
+              pt ? 'tokens de cada sessão × preço do modelo dela' : "each session's tokens × its model's price"),
+            formula: pt
+              ? 'Σ modelo [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nUma sessão sem modelo conhecido usa a taxa média ponderada pelo mix de modelos do período.'
+              : 'Σ model [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nA session with no known model uses the average rate weighted by the period\'s model mix.',
+            note: pt
+              ? 'Preços vêm de três fontes, nesta ordem de confiança: páginas oficiais dos fornecedores, a base comunitária LiteLLM e a tabela embutida no app. Como os harnesses usam vários fornecedores (Anthropic, OpenAI, Google), os preços não são só da Anthropic. Veja Configurações → Preços para a tarifa e a origem de cada modelo que esta máquina realmente usou. É estimativa de preço de API — não é sua fatura nem sua assinatura. Cadastrou seu plano? Configurações → Cobrança transforma isto no custo real.'
+              : 'Prices come from three sources, in this order of trust: the vendors\' official pages, the LiteLLM community dataset and the table built into the app. Because harnesses use several vendors (Anthropic, OpenAI, Google), prices are not Anthropic-only. See Settings → Pricing for the rate and origin of every model this machine actually used. This is an API-price estimate — not your invoice or your subscription. Registered your plan? Settings → Billing turns this into your real cost.',
+          },
       {
         label: pt ? 'Commits' : 'Commits',
         source: scoped
@@ -2180,6 +2323,21 @@ export default function AppLayout() {
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W), transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+      {/* The billing prompt. Mounted HERE, after the archive consent gate's early return above, so
+          the two can never stack on a first launch — one blocking modal behind one dismissible one
+          is a pile nobody reads. It is the same component for the first-run invite and for the
+          disabled cost-basis control, which opens it with the specific gaps listed. */}
+      <BillingIntroModal
+        open={(billingSetupOpen || showBillingIntro) && !isCentral}
+        mode={billingSetupOpen ? 'setup' : 'intro'}
+        gaps={billingSetupOpen ? billingReady.gaps : []}
+        lang={lang}
+        onClose={() => { setBillingSetupOpen(false); setBillingIntroSeen(true) }}
+        onNeverShowAgain={() => {
+          setBillingIntroSeen(true)
+          void saveBilling({ ...billing, introDismissed: true })
+        }}
+      />
       {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
       {!isMobile && <SideNav
         lang={lang}
@@ -2276,6 +2434,10 @@ export default function AppLayout() {
               <div style={{ overflow: (filtersCollapsed || filtersClip) ? 'hidden' : 'visible', minHeight: 0 }}>
                 <FiltersBar
                   only={filterDimsForRoute}
+                  costBasis={costBasis}
+                  onCostBasisChange={isCentral ? undefined : setCostBasis}
+                  costBasisReady={billingReady.ready && planBasis.basis !== null}
+                  onCostBasisSetup={openBillingSetup}
                   filters={filters}
                   onChange={setFilters}
                   projects={availableProjects}
@@ -2325,7 +2487,7 @@ export default function AppLayout() {
               >
                 <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
                 <span style={{ opacity: 0.35 }}>·</span>
-                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(derived.totalCostUSD, currency, brlRate)}</span>
+                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
                 <span style={{ opacity: 0.35 }}>·</span>
                 <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(derived.inputTokens + derived.outputTokens)}</strong> tok</span>
                 <ChevronDown size={16} style={{ marginLeft: 'auto', opacity: 0.6, transform: fleetOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
@@ -2374,6 +2536,10 @@ export default function AppLayout() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <FiltersBar
                 only={filterDimsForRoute}
+                costBasis={costBasis}
+                onCostBasisChange={isCentral ? undefined : setCostBasis}
+                costBasisReady={billingReady.ready && planBasis.basis !== null}
+                onCostBasisSetup={openBillingSetup}
                 filters={filters}
                 onChange={setFilters}
                 projects={availableProjects}
@@ -2401,7 +2567,7 @@ export default function AppLayout() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                 <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
                 <span style={{ opacity: 0.35 }}>·</span>
-                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(derived.totalCostUSD, currency, brlRate)}</span>
+                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
                 <span style={{ opacity: 0.35 }}>·</span>
                 <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(derived.inputTokens + derived.outputTokens)}</strong> tok</span>
               </div>
@@ -2545,6 +2711,9 @@ export default function AppLayout() {
           statsCache,
           filters, setFilters,
           lang, theme, currency, setCurrency, brlRate,
+          billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
+          comparisons, saveComparisons,
+          tags: tagsList, monthCommitment,
           chatModel, chatSoundEnabled, chatSoundId,
           savePreferences,
           pwaPrompt,

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Trophy, Cpu, Boxes, FolderOpen, GitBranch, Users, Monitor } from 'lucide-react'
-import { fmt, fmtCost, formatProjectName, repoShortName } from '@agentistics/core'
+import { fmt, fmtCost, formatProjectName, planAllocation, repoShortName } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { Section } from '../components/Section'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../lib/harness'
@@ -20,7 +20,8 @@ const METRICS: Array<{ id: TopMetric; en: string; pt: string }> = [
 const MEDALS = ['#eab308', '#94a3b8', '#b45309']
 
 export default function TopUsagePage() {
-  const { data, derived, filters, lang, currency, brlRate, isCentral, machines } = useOutletContext<AppContext>()
+  const ctx = useOutletContext<AppContext>()
+  const { data, derived, filters, lang, currency, brlRate, isCentral, machines } = ctx
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
   const [metric, setMetric] = useState<TopMetric>('cost')
@@ -77,8 +78,16 @@ export default function TopUsagePage() {
   const colourFor = (dim: TopDimension, key: string): string | null =>
     dim === 'harness' ? (HARNESS_COLORS[key as HarnessId] ?? null) : null
 
+  // One factor for the whole page. The RANKING is unaffected — a linear rescale cannot reorder
+  // anything — so what changes is the magnitude, and the note below says these are shares of a
+  // plan rather than charges anyone received.
+  const topPlanFactor = (ctx.costBasis === 'plan' && ctx.planBasis.basis
+    ? planAllocation(ctx.planBasis.basis).aggregateFactor
+    : null) ?? 1
+  const topAllocated = topPlanFactor !== 1
+
   const valueLabel = (e: TopEntry): string =>
-    metric === 'cost' ? fmtCost(e.cost, currency, brlRate)
+    metric === "cost" ? fmtCost(e.cost * topPlanFactor, currency, brlRate)
     : metric === 'tokens' ? `${fmt(e.tokens)} tok`
     : `${fmt(e.sessions)} ${e.sessions === 1 ? (pt ? 'sessão' : 'session') : (pt ? 'sessões' : 'sessions')}`
 
@@ -94,6 +103,16 @@ export default function TopUsagePage() {
             ? 'O pódio de cada dimensão, respeitando os filtros do topo da página. Trocar a métrica normalmente troca o vencedor — é justamente isso que ela mostra.'
             : "Each dimension's podium, honouring the filters at the top of the page. Changing the metric usually changes the winner — that is the point of offering the choice."}
         </div>
+        {/* Stated once, at the top, because it changes what every cost figure on the page MEANS —
+            not what it ranks. A linear rescale cannot reorder anything, so the podium is the same
+            podium; the amounts are shares of a plan nobody was billed per row for. */}
+        {topAllocated && metric === 'cost' && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+            {pt
+              ? 'Valores rateados a partir do custo do seu plano. A ordem do pódio é a mesma — o rateio é proporcional e não reordena nada.'
+              : 'Amounts are allocated from your plan cost. The podium order is unchanged — the allocation is proportional and cannot reorder anything.'}
+          </div>
+        )}
       </div>
 
       {/* Metric picker. Cost, tokens and sessions rank the same data differently: one heavy session
@@ -123,7 +142,7 @@ export default function TopUsagePage() {
           const result = cacheRank?.(dim.id) ?? rankTop(sessions, dim.id, metric)
           const Icon = dim.icon
           const totalLabel =
-            metric === 'cost' ? fmtCost(result.total, currency, brlRate)
+            metric === "cost" ? fmtCost(result.total * topPlanFactor, currency, brlRate)
             : metric === 'tokens' ? `${fmt(result.total)} tok`
             : `${fmt(result.total)}`
           return (

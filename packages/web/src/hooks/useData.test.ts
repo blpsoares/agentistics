@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals } from './useData'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats } from './useData'
 import { mergeStatsCaches } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
 import type { SessionMeta } from '@agentistics/core'
@@ -1221,5 +1221,164 @@ describe('repositoryGitTotals', () => {
 
   test('a project with no stats is skipped, not counted as zero', () => {
     expect(repositoryGitTotals([P('/a', 3), { path: '/b' }], null, false)?.commits).toBe(3)
+  })
+})
+
+// apportionModelUsage — the one implementation of the daily-token split
+describe('apportionModelUsage', () => {
+  const global = {
+    inputTokens: 500, outputTokens: 300, cacheReadInputTokens: 150, cacheCreationInputTokens: 50,
+    webSearchRequests: 0, costUSD: 0,
+  }
+
+  test('splits a day total in the global proportions', () => {
+    const out = apportionModelUsage(1000, global)
+    expect(out).toMatchObject({ inputTokens: 500, outputTokens: 300, cacheReadInputTokens: 150, cacheCreationInputTokens: 50 })
+  })
+
+  test('conserves the token total it was given', () => {
+    // The split is an approximation of the SHAPE, never of the volume — a day that loses tokens
+    // here would quietly under-price itself against a plan.
+    for (const total of [1000, 7777, 123_456]) {
+      const out = apportionModelUsage(total, global)
+      const sum = out.inputTokens + out.outputTokens + out.cacheReadInputTokens + out.cacheCreationInputTokens
+      expect(Math.abs(sum - total)).toBeLessThanOrEqual(2) // rounding only
+    }
+  })
+
+  test('with no global row it falls back to 70/30 and claims no cache', () => {
+    // Inventing a cache split would move tokens onto the cheapest rate in the table and
+    // understate the day.
+    for (const g of [undefined, { ...global, inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }]) {
+      const out = apportionModelUsage(1000, g)
+      expect(out).toMatchObject({ inputTokens: 700, outputTokens: 300, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 })
+    }
+  })
+
+  test('zero tokens yields zeros, never NaN', () => {
+    const out = apportionModelUsage(0, global)
+    expect(out.inputTokens + out.outputTokens + out.cacheReadInputTokens + out.cacheCreationInputTokens).toBe(0)
+  })
+})
+
+// summarizeApiCostByDay — the residue is a difference, never a reconciliation
+describe('summarizeApiCostByDay', () => {
+  const days = {
+    claude: {
+      '2026-04-02': { costUSD: 10, tokens: 1000, sessions: 2 },
+      '2026-04-05': { costUSD: 15, tokens: 1500, sessions: 3 },
+    },
+    codex: {
+      '2026-04-01': { costUSD: 5, tokens: 500, sessions: 1 },
+    },
+  }
+
+  test('the invariant holds: sum of days + undated === the headline', () => {
+    const out = summarizeApiCostByDay(days, 100, 10_000)
+    const summed = Object.values(out.days).flatMap(d => Object.values(d ?? {})).reduce((s, e) => s + e.costUSD, 0)
+    expect(summed + out.undatedCostUSD).toBeCloseTo(100, 9)
+    expect(out.undatedCostUSD).toBeCloseTo(70, 9)
+    expect(out.undatedTokens).toBe(7000)
+  })
+
+  test('a fully attributed total leaves no residue', () => {
+    const out = summarizeApiCostByDay(days, 30, 3000)
+    expect(out.undatedCostUSD).toBeCloseTo(0, 9)
+    expect(out.undatedTokens).toBe(0)
+  })
+
+  test('firstDay and lastDay span every harness, not just one', () => {
+    const out = summarizeApiCostByDay(days, 30, 3000)
+    expect(out.firstDay).toBe('2026-04-01') // codex, earlier than any claude day
+    expect(out.lastDay).toBe('2026-04-05')
+  })
+
+  test('no days at all: the whole total is undated and there is no window', () => {
+    const out = summarizeApiCostByDay({}, 42, 900)
+    expect(out.undatedCostUSD).toBe(42)
+    expect(out.firstDay).toBeNull()
+    expect(out.lastDay).toBeNull()
+  })
+
+  test('a negative residue is reported, not clamped away', () => {
+    // The daily series reporting MORE than the cumulative total is the two local sources
+    // contradicting each other. Hiding it behind a zero would let A exceed the total shown
+    // beside it; the consumer withholds the plan basis on this instead.
+    const out = summarizeApiCostByDay(days, 10, 1000)
+    expect(out.undatedCostUSD).toBeCloseTo(-20, 9)
+    expect(out.undatedTokens).toBe(-2000)
+  })
+})
+
+describe('the Claude harness chip reads the cache, not only the surviving sessions', () => {
+  // Regression: `harnessesFiltered` was true for ANY harness selection, so picking Claude — the one
+  // harness `stats-cache.json` is entirely made of — pushed every aggregate onto the per-session
+  // sum. Claude deletes transcripts after 30 days while the cache keeps the totals, so the same
+  // scope reported a smaller number WITH the chip than without it. On real data that showed up as
+  // the plan multiple moving 24,5× → 24,2× across a filter that should not have moved it at all.
+  const cache: import('@agentistics/core').StatsCache = {
+    version: 1,
+    lastComputedDate: '2026-06-02',
+    dailyActivity: [
+      { date: '2026-06-01', sessionCount: 400, messageCount: 1200, toolCallCount: 0 },
+      { date: '2026-06-02', sessionCount: 100, messageCount: 300, toolCallCount: 0 },
+    ],
+    dailyModelTokens: [],
+    modelUsage: {
+      'claude-sonnet-4-5': {
+        inputTokens: 8_000_000, outputTokens: 2_000_000,
+        cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0,
+      },
+    },
+    totalSessions: 500,
+    totalMessages: 1500,
+    longestSession: { sessionId: 'x', duration: 1, messageCount: 1, timestamp: '2026-06-01T00:00:00Z' },
+    firstSessionDate: '2026-06-01',
+    hourCounts: {},
+    totalSpeculationTimeSavedMs: 0,
+  }
+
+  // One Codex session and NO Claude session docs — the deep Claude history exists only in the cache.
+  const codexSession = {
+    session_id: 'cx1', harness: 'codex', start_time: '2026-06-02T10:00:00Z',
+    project_path: '/p', user_message_count: 2, assistant_message_count: 2,
+    input_tokens: 1000, output_tokens: 1000,
+    cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+    model: 'gpt-5', tool_counts: {},
+  } as unknown as SessionMeta
+
+  const data = {
+    statsCache: cache,
+    sessions: [codexSession],
+    allSessions: [codexSession],
+    projects: [],
+    harnesses: ['claude', 'codex'],
+  } as unknown as import('@agentistics/core').AppData
+
+  const filters = (over: Partial<import('@agentistics/core').Filters>): import('@agentistics/core').Filters =>
+    ({ dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], ...over })
+
+  const all = computeDerivedStats(data, filters({}))!
+  const claudeOnly = computeDerivedStats(data, filters({ harnesses: ['claude'] }))!
+  const codexOnly = computeDerivedStats(data, filters({ harnesses: ['codex'] }))!
+
+  test('picking Claude keeps the cache history instead of collapsing to zero', () => {
+    // The old behaviour: no Claude session docs → nothing to sum → a confident 0 next to a cache
+    // holding ten million tokens.
+    expect(claudeOnly.totalCostUSD).toBeGreaterThan(0)
+    expect(claudeOnly.totalSessions).toBe(500)
+    expect(claudeOnly.totalMessages).toBe(1500)
+  })
+
+  test('unfiltered is Claude plus the others, so removing the others lands exactly on Claude', () => {
+    expect(all.totalCostUSD - codexOnly.totalCostUSD).toBeCloseTo(claudeOnly.totalCostUSD, 6)
+    expect(all.totalSessions - codexOnly.totalSessions).toBe(claudeOnly.totalSessions)
+  })
+
+  test('a MIXED selection stays session-based — a cache branch would drop Codex', () => {
+    // `nonClaudeInRange` is empty whenever any harness chip is set, so the cache-backed branch
+    // cannot serve a selection that also contains a harness the cache knows nothing about.
+    const mixed = computeDerivedStats(data, filters({ harnesses: ['claude', 'codex'] }))!
+    expect(mixed.totalSessions).toBe(1)
   })
 })
