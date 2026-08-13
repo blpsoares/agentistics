@@ -80,13 +80,28 @@ export type PaneId = 'services' | 'config' | 'actions'
 export const PANE_ORDER: readonly PaneId[] = ['services', 'config', 'actions'] as const
 
 /**
- * `tab` / `shift+tab` cycle focus through the panes the CURRENT layout actually drew.
+ * The Sessions screen's two focusable regions, in the order `tab` walks them.
+ *
+ * The fleet is the selection and the action row acts on it — the same relationship the cockpit's
+ * services list has with its own verbs, which is why the two screens answer `tab` through the same
+ * reducer rather than through two copies of the arithmetic.
+ */
+export type SessionsFocus = 'list' | 'actions'
+
+export const SESSIONS_FOCUS_ORDER: readonly SessionsFocus[] = ['list', 'actions'] as const
+
+/**
+ * `tab` / `shift+tab` cycle focus through the regions the CURRENT layout actually drew.
  *
  * `panes` is passed in rather than assumed: a short terminal has no log pane and a narrow one may
  * have no config pane, and focus that lands on a pane which is not on screen is a cursor the user
  * cannot find and keys that appear to do nothing.
+ *
+ * Generic over the id because a focus ring is not a cockpit concept — the Sessions screen has its
+ * own two regions (`SessionsFocus`) and answers `tab` exactly the same way. One reducer is what
+ * keeps two screens from disagreeing about a key the footer documents once.
  */
-export function resolveFocusKey(key: NavKey, current: PaneId, panes: readonly PaneId[]): PaneId | null {
+export function resolveFocusKey<T extends string>(key: NavKey, current: T, panes: readonly T[]): T | null {
   if (!key.tab || panes.length === 0) return null
   const i = panes.indexOf(current)
   // An unknown current focus means the layout just dropped the pane we were on; `tab` should land

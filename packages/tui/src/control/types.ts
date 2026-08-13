@@ -10,10 +10,20 @@
 import type { HarnessId } from '@agentistics/core'
 import type { CliLang } from './lang'
 
-export type TabId = 'services' | 'setup' | 'logs' | 'cheatsheet' | 'help' | 'contribute'
+export type TabId = 'services' | 'sessions' | 'setup' | 'logs' | 'cheatsheet' | 'help' | 'contribute'
 
+/**
+ * The screens, in the order they are drawn and in the order `←`/`→` walk them.
+ *
+ * `sessions` is SECOND, right after the cockpit, because this list is not a declaration order that
+ * happens to be rendered — it IS the strip on screen and the cycle the arrows follow. The fleet is
+ * the tab a user opens most often (it is where the work is), so it sits one keypress from the front
+ * door and one keypress back from it; putting it after Setup and Logs would have buried the busiest
+ * screen behind two the user visits once.
+ */
 export const TAB_ORDER: readonly TabId[] = [
   'services',
+  'sessions',
   'setup',
   'logs',
   'cheatsheet',

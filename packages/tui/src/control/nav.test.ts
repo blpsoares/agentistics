@@ -14,6 +14,7 @@ import {
   resolveTailKey,
   scrollBy,
   scrollTailBy,
+  SESSIONS_FOCUS_ORDER,
   windowOffset,
   type NavKey,
   type PaneId,
@@ -63,6 +64,16 @@ describe('resolveTabKey', () => {
     expect(tab).toBe(FIRST)
   })
 
+  it('puts the fleet one → from the services cockpit, because that is the screen order', () => {
+    // `TAB_ORDER` IS the on-screen order and the `←`/`→` cycle order, and Sessions is the tab a
+    // user opens most — so it sits second, one keypress from the front door and one from the way
+    // back. Pinned here rather than left to the array literal: a later insertion that pushed it
+    // down the strip would be a silent change to the shape of the app.
+    expect(TAB_ORDER[1]).toBe('sessions')
+    expect(resolveTabKey(key({ rightArrow: true }), 'services')).toBe('sessions')
+    expect(resolveTabKey(key({ leftArrow: true }), 'sessions')).toBe('services')
+  })
+
   it('returns null for a key the screen switcher does not own', () => {
     expect(resolveTabKey(key({ input: 'x' }), FIRST)).toBeNull()
     expect(resolveTabKey(key({ upArrow: true }), FIRST)).toBeNull()
@@ -107,6 +118,19 @@ describe('resolveFocusKey', () => {
 
   it('lands on the first drawn pane when the current focus no longer exists', () => {
     expect(resolveFocusKey(key({ tab: true }), 'actions', ['services', 'config'])).toBe('services')
+  })
+
+  it('cycles ANY screen’s own focus list, not only the cockpit’s three panes', () => {
+    // The Sessions screen has two focusable regions of its own (the fleet and its action row), and
+    // they answer `tab` exactly as the cockpit's panes do. One reducer rather than a second copy of
+    // this arithmetic beside it: two implementations of "what does tab do" is how two screens end
+    // up disagreeing about a key the footer advertises once.
+    const regions = SESSIONS_FOCUS_ORDER
+    // Selection first, then the verbs that act on it — the cockpit's reading order, one pane fewer.
+    expect(regions).toEqual(['list', 'actions'])
+    expect(resolveFocusKey(key({ tab: true }), 'list', regions)).toBe('actions')
+    expect(resolveFocusKey(key({ tab: true }), 'actions', regions)).toBe('list')
+    expect(resolveFocusKey(key({ tab: true, shift: true }), 'list', regions)).toBe('actions')
   })
 
   it('answers nothing for any key that is not tab, and for a layout with no panes', () => {

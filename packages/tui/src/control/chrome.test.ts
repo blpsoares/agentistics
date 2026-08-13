@@ -32,13 +32,25 @@ import {
   QUESTION_ROWS,
   serviceCells,
   SERVICE_MARKER,
+  sessionCells,
+  sessionDetailLines,
+  sessionName,
+  sessionStateWord,
+  sessionsHints,
   stripScheme,
   tabStripWidth,
   tabUnderline,
   type CockpitContent,
+  type DetailLine,
   type TabSpec,
 } from './chrome.ts'
-import { TAB_ORDER, type ControlService, type ServiceRuntimeState } from './types'
+import {
+  TAB_ORDER,
+  type ControlService,
+  type ServiceRuntimeState,
+  type SessionState,
+  type SessionView,
+} from './types'
 import { PANE_ORDER } from './nav'
 import { brandMark, brandWidth, WORDMARK_ART } from '../components/Wordmark'
 import { controlStrings } from './i18n'
@@ -1202,5 +1214,277 @@ describe('actionAtColumn', () => {
 
   test('says nothing about an empty row', () => {
     expect(actionAtColumn(fitActionRow([], 0, 40), 2)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// the sessions screen
+// ---------------------------------------------------------------------------
+
+/** One row of the fleet. The defaults are a healthy managed session; every test bends one field. */
+const view = (over: Partial<SessionView> = {}): SessionView => ({
+  id: 'a1b2c3d4e5',
+  harness: 'claude',
+  cwd: '/home/dev/agentistics',
+  label: '',
+  note: '',
+  state: 'working',
+  managed: true,
+  attached: false,
+  attachable: true,
+  killable: true,
+  ...over,
+})
+
+describe('sessionStateWord', () => {
+  test('every state has a WORD in both languages, and none of them is `idle`', () => {
+    // `idle-unknown`, `unreadable` and `external` are three different facts — the frame said
+    // nothing, the frame could not be read, and there was never a frame to read. Rendering any of
+    // them as "idle" is the confident zero this codebase forbids everywhere else.
+    const states: SessionState[] = [
+      'working', 'waiting-approval', 'waiting-input', 'idle-unknown', 'unreadable', 'exited', 'external',
+    ]
+    for (const lang of ['en', 'pt'] as const) {
+      const s = controlStrings(lang)
+      const words = states.map(state => sessionStateWord(state, s))
+      for (const word of words) expect(word.length).toBeGreaterThan(0)
+      expect(words.map(w => w.toLowerCase())).not.toContain('idle')
+      // Seven states, seven distinct words: two states sharing one word is a distinction lost.
+      expect(new Set(words).size).toBe(states.length)
+    }
+  })
+})
+
+describe('sessionName', () => {
+  test('the user label wins, and an unlabelled managed row wears the id they would type', () => {
+    expect(sessionName(view({ label: 'refactor' }))).toBe('refactor')
+    expect(sessionName(view())).toBe('a1b2c3d4e5')
+  })
+
+  test('an external row wears its directory — `ext:claude:/x:0` is bookkeeping, not a name', () => {
+    const ext = view({ id: 'ext:claude:/home/dev/agentistics:0', managed: false, state: 'external' })
+    expect(sessionName(ext)).toBe('agentistics')
+  })
+})
+
+describe('sessionCells', () => {
+  const s = controlStrings('en')
+  const rows = [
+    view({ label: 'refactor', harness: 'claude', state: 'waiting-approval' }),
+    view({ id: 'ff00ff00ff', label: '', harness: 'codex', cwd: '/home/dev/prontuario', state: 'working' }),
+    view({ id: 'ext:gemini:/home/dev/x:0', managed: false, harness: 'gemini', cwd: '/home/dev/x', state: 'external' }),
+  ]
+  const widest = (pick: (v: SessionView) => string) => rows.reduce((n, r) => Math.max(n, pick(r).length), 0)
+  const stateWidth = widest(r => sessionStateWord(r.state, s))
+
+  test('a wide pane gets the measured widths, so the columns line up rather than merely fit', () => {
+    const cells = sessionCells(rows, 120, s)
+    expect(cells.state).toBe(stateWidth)
+    expect(cells.harness).toBe(widest(r => r.harness))
+    expect(cells.name).toBe(widest(sessionName))
+    expect(cells.cwd).toBe(widest(r => r.cwd))
+  })
+
+  test('gives up the cwd first, then the label, then the harness, and the state word LAST', () => {
+    // Same order and same reason as `serviceCells`: the state word is the only cell nothing else
+    // repeats — the detail pane says the directory, the name and the harness all over again — and a
+    // row that has been reduced to a colour is a fleet you cannot read at a glance.
+    const wide = sessionCells(rows, 120, s)
+    let cwdCut = 0
+    let nameCut = 0
+    let harnessGone = 0
+    // The widest terminal at which each cell has given way. Walking DOWN from a wide pane, the
+    // first width at which a cell suffers is the width the order is stated against.
+    for (let width = 120; width >= 1; width--) {
+      const c = sessionCells(rows, width, s)
+      if (!cwdCut && c.cwd < wide.cwd) cwdCut = width
+      if (!nameCut && c.name < wide.name) nameCut = width
+      if (!harnessGone && c.harness === 0) harnessGone = width
+    }
+    // The cwd goes first, then the name, then the harness — strictly, and each while the ones after
+    // it are still whole.
+    expect(cwdCut).toBeGreaterThan(nameCut)
+    expect(nameCut).toBeGreaterThan(harnessGone)
+    expect(sessionCells(rows, cwdCut, s)).toMatchObject({ name: wide.name, harness: wide.harness, state: wide.state })
+    expect(sessionCells(rows, nameCut, s)).toMatchObject({ cwd: 0, harness: wide.harness, state: wide.state })
+    expect(sessionCells(rows, harnessGone, s)).toMatchObject({ cwd: 0, name: 0, state: wide.state })
+  })
+
+  test('never reduces a row to a coloured glyph alone', () => {
+    // The services row can fall back to `●` because a glyph still says running-or-not. A session's
+    // state has seven values and no glyph vocabulary, so a one-column state cell would be a state
+    // announced in colour alone — the one thing this row may never do. The word is either whole, or
+    // it is the only thing the row draws and it takes every column there is.
+    for (let width = 1; width <= 120; width++) {
+      const c = sessionCells(rows, width, s)
+      if (c.state === 0) {
+        expect(c.harness + c.name + c.cwd).toBe(0)
+        continue
+      }
+      if (c.state < stateWidth) {
+        // A word this pane cannot hold whole is never drawn beside something else.
+        expect(c.harness + c.name + c.cwd).toBe(0)
+        expect(c.state).toBe(Math.max(0, width - SERVICE_MARKER))
+      }
+    }
+  })
+
+  test('the row always fits the pane it was measured against', () => {
+    for (let width = 1; width <= 120; width++) {
+      const c = sessionCells(rows, width, s)
+      const cell = (n: number) => (n > 0 ? n + 1 : 0)
+      const used = SERVICE_MARKER + c.state + cell(c.harness) + cell(c.name) + cell(c.cwd)
+      expect(used).toBeLessThanOrEqual(Math.max(SERVICE_MARKER, width))
+    }
+  })
+
+  test('degrades monotonically — no cell comes back as the pane gets narrower', () => {
+    for (let width = SERVICE_MARKER + 1; width < 120; width++) {
+      const here = sessionCells(rows, width, s)
+      const wider = sessionCells(rows, width + 1, s)
+      expect(wider.state).toBeGreaterThanOrEqual(here.state)
+      expect(wider.harness).toBeGreaterThanOrEqual(here.harness)
+      expect(wider.name).toBeGreaterThanOrEqual(here.name)
+      expect(wider.cwd).toBeGreaterThanOrEqual(here.cwd)
+    }
+  })
+
+  test('no rows is no columns rather than a negative width', () => {
+    expect(sessionCells([], 120, s)).toEqual({ state: 0, harness: 0, name: 0, cwd: 0 })
+  })
+})
+
+describe('sessionDetailLines', () => {
+  const s = controlStrings('en')
+  const NOW = 1_700_000_000_000
+  const texts = (d: { lines: DetailLine[] }) => d.lines.filter(l => l.kind === 'text').map(l => l.value)
+  const rows = (d: { lines: DetailLine[] }) =>
+    d.lines.filter(l => l.kind === 'row').map(l => ({ label: l.label, value: l.value }))
+  const all = (d: { lines: DetailLine[] }) => d.lines.map(l => `${l.label} ${l.value}`).join('\n')
+
+  test('leads with the state and states the harness, the directory and the age', () => {
+    const d = sessionDetailLines(
+      view({ createdMs: NOW - 134 * 60_000, lastActivityMs: NOW - 90_000 }),
+      s,
+      NOW,
+    )
+    expect(texts(d)[0]).toContain(sessionStateWord('working', s))
+    expect(rows(d)).toContainEqual({ label: s.sessionHarnessLabel, value: 'claude' })
+    expect(rows(d)).toContainEqual({ label: s.sessionDirLabel, value: '/home/dev/agentistics' })
+    expect(rows(d)).toContainEqual({ label: s.uptimeLabel, value: '2h14m' })
+    expect(rows(d)).toContainEqual({ label: s.sessionLastLabel, value: '1m' })
+  })
+
+  test('says nothing about a model, an effort or a note that was never recorded', () => {
+    const d = sessionDetailLines(view(), s, NOW)
+    const labels = rows(d).map(r => r.label)
+    expect(labels).not.toContain(s.sessionModelLabel)
+    expect(labels).not.toContain(s.sessionEffortLabel)
+    expect(labels).not.toContain(s.sessionNoteLabel)
+
+    const full = sessionDetailLines(view({ note: 'wait for the review' }), s, NOW, {
+      model: 'opus', effort: 'high',
+    })
+    expect(rows(full)).toContainEqual({ label: s.sessionModelLabel, value: 'opus' })
+    expect(rows(full)).toContainEqual({ label: s.sessionEffortLabel, value: 'high' })
+    expect(rows(full)).toContainEqual({ label: s.sessionNoteLabel, value: 'wait for the review' })
+  })
+
+  test('an EXTERNAL row says in words that agentop does not host it, and why that costs the attach', () => {
+    // `externalReason` is the second un-localized enum on the row. Left unrendered it is a session
+    // that offers no verbs and never says why — the most confusing thing this pane could do.
+    const d = sessionDetailLines(
+      view({ state: 'external', managed: false, attachable: false, killable: false, externalReason: 'not-hosted-by-agentop' }),
+      s,
+      NOW,
+    )
+    expect(texts(d)).toContain(s.sessionExternalWhy)
+    expect(s.sessionExternalWhy.toLowerCase()).toContain('agentop')
+    expect(all(d).toLowerCase()).not.toContain('idle')
+  })
+
+  test('an UNREADABLE row says the frame could not be read, and never reads as idle', () => {
+    const d = sessionDetailLines(view({ state: 'unreadable' }), s, NOW)
+    expect(texts(d)).toContain(s.sessionUnreadableWhy)
+    expect(texts(d)[0]).toContain(sessionStateWord('unreadable', s))
+    expect(all(d).toLowerCase()).not.toContain('idle')
+  })
+
+  test('the frame tail is LAST, so a short pane keeps the facts and drops the picture', () => {
+    const d = sessionDetailLines(view(), s, NOW, { frame: ['> bun test', 'ok 842 pass'] })
+    const frameAt = d.lines.findIndex(l => l.kind === 'section' && l.label === s.sectionFrame)
+    expect(frameAt).toBeGreaterThan(0)
+    expect(d.lines.slice(frameAt).some(l => l.value === 'ok 842 pass')).toBe(true)
+    // `fitDetailLines` cuts from the bottom, so the facts are what a three-row pane keeps.
+    const kept = fitDetailLines(d.lines, 3)
+    expect(kept.some(l => l.value === 'ok 842 pass')).toBe(false)
+    expect(kept[0]).toEqual(d.lines[0]!)
+  })
+
+  test('the label column is measured across the rows, so every value lines up', () => {
+    const d = sessionDetailLines(view({ note: 'x' }), s, NOW, { model: 'opus' })
+    for (const line of d.lines) {
+      if (line.kind === 'row') expect(line.label.length).toBeLessThanOrEqual(d.labelWidth)
+    }
+    expect(d.labelWidth).toBeGreaterThan(0)
+  })
+
+  test('an attached session says so — it is why the terminal you are on is already in it', () => {
+    expect(texts(sessionDetailLines(view({ attached: true }), s, NOW))[0]).toContain(s.sessionAttached)
+    expect(texts(sessionDetailLines(view(), s, NOW))[0]).not.toContain(s.sessionAttached)
+  })
+})
+
+describe('sessionsHints', () => {
+  const s = controlStrings('en')
+  /** A managed, running, attachable row with the list focused. */
+  const live = { canAttach: true, canKill: true, canEdit: true, hasRows: true }
+
+  test('offers attach only for a row that is attachable', () => {
+    expect(sessionsHints('list', s, live)).toContain(s.keyAttach)
+    // An external row, or one whose command has exited: `enter` on it does nothing, so the footer
+    // — the only documentation this screen has — must not name the key.
+    expect(sessionsHints('list', s, { ...live, canAttach: false })).not.toContain(s.keyAttach)
+  })
+
+  test('never names rename, note or kill for a row that cannot take them', () => {
+    const bare = sessionsHints('list', s, { canAttach: false, canKill: false, canEdit: false, hasRows: true })
+    expect(bare).not.toContain(s.keyRename)
+    expect(bare).not.toContain(s.keyNote)
+    expect(bare).not.toContain(s.keyKill)
+    expect(sessionsHints('list', s, live)).toContain(s.keyRename)
+    expect(sessionsHints('list', s, live)).toContain(s.keyKill)
+  })
+
+  test('names the three keys that work while the wizard is up, and no others', () => {
+    for (const focus of ['list', 'actions'] as const) {
+      const hints = sessionsHints(focus, s, { ...live, wizard: true })
+      expect(hints).toEqual([s.keyBack, s.keyMove, s.keySelect])
+      expect(hints).not.toContain(s.keyQuit)
+      expect(hints).not.toContain(s.keyTabs)
+      expect(hints).not.toContain(s.keyAttach)
+    }
+  })
+
+  test('an empty fleet still says how to start one, and names nothing that acts on a row', () => {
+    const empty = sessionsHints('list', s, { canAttach: false, canKill: false, canEdit: false, hasRows: false })
+    expect(empty).toContain(s.keyNewSession)
+    expect(empty).not.toContain(s.keyMove)
+    expect(empty).not.toContain(s.keyAttach)
+    expect(empty).toContain(s.keyQuit)
+  })
+
+  test('the action row says nothing about screens, because it has taken the arrows', () => {
+    const hints = sessionsHints('actions', s, live)
+    expect(hints).not.toContain(s.keyTabs)
+    expect(hints).toContain(s.keyActionMove)
+    expect(hints[0]).toBe(s.keyBack)
+  })
+
+  test('every focus can say how to leave', () => {
+    for (const focus of ['list', 'actions'] as const) {
+      const hints = sessionsHints(focus, s, live)
+      expect(hints.includes(s.keyQuit) || hints.includes(s.keyBack)).toBe(true)
+    }
   })
 })

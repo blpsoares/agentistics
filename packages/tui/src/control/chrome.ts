@@ -8,8 +8,8 @@
  * mounting Ink.
  */
 
-import type { ControlService, TabId } from './types'
-import type { PaneId } from './nav'
+import type { ControlService, SessionState, SessionView, TabId } from './types'
+import type { PaneId, SessionsFocus } from './nav'
 import type { ControlStrings } from './i18n'
 // Type-only, and therefore erased: `hit.ts` imports this module's values, so a runtime import back
 // would be a cycle. The rectangle is a hit-testing concept and belongs there; what belongs HERE is
@@ -715,6 +715,137 @@ export function serviceCells(
 }
 
 // ---------------------------------------------------------------------------
+// the sessions list's own columns
+// ---------------------------------------------------------------------------
+
+/**
+ * A `SessionState` as a WORD — a `Record`, so a new state fails the build until it has one.
+ *
+ * The state is the only thing on a row that does not arrive from the host already localized, and
+ * turning it into a word here (rather than into a colour in the component) is what keeps the list
+ * readable on a terminal with no palette. The three quiet states carry three different words on
+ * purpose: none of them may be worded as "idle", because "nothing said anything", "nothing could be
+ * read" and "there was never a pane to read" are three different facts about a session.
+ */
+const SESSION_STATE_WORD: Record<SessionState, (s: ControlStrings) => string> = {
+  'working': s => s.sessionStateWorking,
+  'waiting-approval': s => s.sessionStateApproval,
+  'waiting-input': s => s.sessionStateInput,
+  'idle-unknown': s => s.sessionStateUnclear,
+  'unreadable': s => s.sessionStateUnreadable,
+  'exited': s => s.sessionStateExited,
+  'external': s => s.sessionStateExternal,
+}
+
+export function sessionStateWord(state: SessionState, s: ControlStrings): string {
+  return SESSION_STATE_WORD[state]?.(s) ?? ''
+}
+
+/** The last segment of a path, with any trailing separators stripped. `''` for a path with none. */
+function baseName(path: string): string {
+  return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
+}
+
+/**
+ * What the row calls a session — one function, so the cell that MEASURES the column and the
+ * component that draws it can never disagree about what is in it.
+ *
+ * The user's label when they gave one. Otherwise the id, which for a managed session is the short
+ * token they would type at `agentop session attach <id>` — the most useful name a row can wear when
+ * it has no other. An EXTERNAL row's id is `ext:<harness>:<cwd>:<started>`, which is bookkeeping
+ * rather than a name, so it wears its directory instead.
+ */
+export function sessionName(view: SessionView): string {
+  if (view.label) return view.label
+  if (view.managed) return view.id
+  return baseName(view.cwd) || view.id
+}
+
+/** Cell widths inside a sessions row; `0` means the cell is not drawn. */
+export interface SessionCells {
+  state: number
+  harness: number
+  /** The row's NAME — `sessionName`, which is the label, the id or the directory. */
+  name: number
+  cwd: number
+}
+
+/** Below this a name stops naming anything: neither a label nor a 10-character id survives it. */
+const SESSION_NAME_FLOOR = 8
+/** Below this a path is a stub — `/home/…` answers nothing that an absent column does not. */
+const SESSION_DIR_FLOOR = 10
+
+/** What a set of cells costs: the drawn cells plus one column of gap between each pair. */
+function sessionRowCost(cells: SessionCells): number {
+  const drawn = [cells.state, cells.harness, cells.name, cells.cwd].filter(n => n > 0)
+  return drawn.reduce((n, w) => n + w, 0) + Math.max(0, drawn.length - 1)
+}
+
+/**
+ * Fits the sessions row: state, harness, name, directory.
+ *
+ * Measured across the WHOLE list, exactly like `serviceCells`, so the columns line up down the pane
+ * rather than each row merely fitting.
+ *
+ * THE ORDER OF GIVING WAY — the same rule as the services row, for the same reason:
+ *
+ *  1. The DIRECTORY is squeezed, then dropped. It is the longest cell and the least identifying:
+ *     the detail pane states it in full, at the full width of the terminal.
+ *  2. Then the NAME, squeezed to `SESSION_NAME_FLOOR` and then dropped.
+ *  3. Then the HARNESS cell, whole.
+ *  4. The state WORD is the LAST thing standing.
+ *
+ * And there is NO glyph rung here, which is the one difference from `serviceCells`. A service has
+ * three states and a glyph vocabulary (`●`/`○`/`?`) that still says running-or-not; a session has
+ * seven, and no glyph distinguishes "needs approval" from "the frame could not be read". A
+ * one-column state cell would therefore be a state announced in colour alone — the exact failure
+ * the services ladder was reordered to prevent. So the word is either whole, or it is the only
+ * thing the row draws and it takes every column the pane has.
+ */
+export function sessionCells(
+  views: readonly SessionView[],
+  width: number,
+  s: ControlStrings,
+): SessionCells {
+  const avail = width - SERVICE_MARKER
+  if (views.length === 0 || avail <= 0) return { state: 0, harness: 0, name: 0, cwd: 0 }
+
+  const widest = (pick: (v: SessionView) => string) =>
+    views.reduce((n, v) => Math.max(n, pick(v).length), 0)
+
+  const state = widest(v => sessionStateWord(v.state, s))
+  const harness = widest(v => v.harness)
+  const name = widest(sessionName)
+  const cwd = widest(v => v.cwd)
+  const nameFloor = Math.min(name, SESSION_NAME_FLOOR)
+  const dirFloor = Math.min(cwd, SESSION_DIR_FLOOR)
+
+  const ladder: SessionCells[] = [
+    { state, harness, name, cwd },
+    { state, harness, name, cwd: dirFloor },
+    { state, harness, name, cwd: 0 },
+    { state, harness, name: nameFloor, cwd: 0 },
+    { state, harness, name: 0, cwd: 0 },
+    { state, harness: 0, name: 0, cwd: 0 },
+    // The last rung: the word alone, cut only by a pane narrower than the word itself. A cut word
+    // is still a word; a coloured square is not.
+    { state: Math.min(state, avail), harness: 0, name: 0, cwd: 0 },
+  ]
+
+  const picked = ladder.find(c => sessionRowCost(c) <= avail) ?? ladder[ladder.length - 1]!
+  const spare = avail - sessionRowCost(picked)
+  if (spare <= 0) return picked
+
+  // Whatever the rung did not spend goes to the cell that has a use for one more column, which is
+  // whichever of the two truncatable ones is still drawn — the directory first, because it is the
+  // one still hiding something at that width. The harness and the state are all-or-nothing (`clau…`
+  // is not a terser harness, and a cut state word has stopped being one), so neither can take it.
+  if (picked.cwd > 0) return { ...picked, cwd: Math.min(cwd, picked.cwd + spare) }
+  if (picked.name > 0) return { ...picked, name: Math.min(name, picked.name + spare) }
+  return picked
+}
+
+// ---------------------------------------------------------------------------
 // the config pane's values
 // ---------------------------------------------------------------------------
 
@@ -1016,6 +1147,142 @@ function blockedReason(service: ControlService): string {
 }
 
 // ---------------------------------------------------------------------------
+// the sessions detail pane
+// ---------------------------------------------------------------------------
+
+/**
+ * The facts about a session that are NOT on `SessionView`.
+ *
+ * `SessionView` is re-declared structurally in `types.ts` and cross-checked against the server's own
+ * declaration at compile time, so it holds exactly what the monitor produces for every row. The
+ * model and the effort come from the registry entry and the frame from a capture — different
+ * sources, present for some rows and absent for others — so they arrive beside the view rather than
+ * widening the contract, the same way `MachineFacts` reaches `detailContent`. Every one of them is
+ * optional and an absent one draws NO row: a session whose model was never recorded says nothing
+ * about a model, never `model unknown`.
+ */
+export interface SessionFacts {
+  model?: string
+  effort?: string
+  /** Newest-last tail of the last captured frame, already sanitised for a pane. */
+  frame?: readonly string[]
+}
+
+/**
+ * What the detail pane draws for the selected session, before any of it is coloured.
+ *
+ * `DetailContent`'s shape minus its `alert`: nothing about ONE session is the two-copies-fighting-
+ * over-one-port fact that field exists for, and a state that needs the user is already the line
+ * this pane leads with. A field that was always empty would be a promise to callers that something
+ * else can fill it.
+ */
+export interface SessionDetail {
+  lines: DetailLine[]
+  /** The label column's width, measured across the `row` lines so the values align. */
+  labelWidth: number
+}
+
+/**
+ * How each state is painted. The tone is emphasis only — every line it lands on already carries the
+ * WORD, so a terminal with a flattened palette loses nothing but emphasis.
+ */
+const SESSION_STATE_TONE: Record<SessionState, DetailTone> = {
+  'working': 'good',
+  'waiting-approval': 'info',
+  'waiting-input': 'info',
+  'idle-unknown': 'muted',
+  'unreadable': 'info',
+  'exited': 'muted',
+  'external': 'muted',
+}
+
+/**
+ * `SessionView.externalReason` in words — a `Record`, so a second reason cannot be added without one.
+ *
+ * It is the second un-localized enum on a row, after the state, and the one that answers "why does
+ * this session offer me nothing".
+ */
+const SESSION_EXTERNAL_WHY: Record<NonNullable<SessionView['externalReason']>, (s: ControlStrings) => string> = {
+  'not-hosted-by-agentop': s => s.sessionExternalWhy,
+}
+
+/** The sentence under the state, for the states that owe the reader one. Empty for the rest. */
+function sessionWhy(view: SessionView, s: ControlStrings): string {
+  if (view.externalReason) return SESSION_EXTERNAL_WHY[view.externalReason](s)
+  switch (view.state) {
+    // A row the monitor typed `external` without naming a reason still says what external means.
+    case 'external': return s.sessionExternalWhy
+    case 'unreadable': return s.sessionUnreadableWhy
+    case 'idle-unknown': return s.sessionUnclearWhy
+    default: return ''
+  }
+}
+
+/**
+ * The facts about one session, composed but not yet laid out — the sibling of `detailContent`.
+ *
+ * WHAT IS ON HERE, in the order a short pane keeps it (`fitDetailLines` cuts from the bottom):
+ *
+ *  - the STATE, first and in a WORD, plus `attached` when this terminal is already inside it;
+ *  - the REASON, for the states that owe one. An `unreadable` row says its frame could not be read
+ *    and an `external` row says agentop does not host it — which is also why it offers no attach.
+ *    Neither may be left to a colour, and neither may read as "idle";
+ *  - the FACTS: harness, the model and effort the session was started with when they were recorded,
+ *    the directory, how long it has been alive and how long since it last did anything;
+ *  - the NOTE the user left on it;
+ *  - the TAIL of the last frame, last, because it is the one part a short pane can afford to lose:
+ *    the picture is a nicety, the reason a row is red is not.
+ *
+ * Every part is dropped when it is absent rather than rendered as a zero — a session with no
+ * recorded model says nothing about a model, and one whose backend gave no timestamps says nothing
+ * about an age rather than claiming it started this instant.
+ */
+export function sessionDetailLines(
+  view: SessionView,
+  s: ControlStrings,
+  now: number,
+  facts: SessionFacts = {},
+): SessionDetail {
+  const lines: DetailLine[] = []
+
+  const summary = [
+    sessionStateWord(view.state, s),
+    ...(view.attached ? [s.sessionAttached] : []),
+  ].join(SEP)
+  lines.push({ kind: 'text', label: '', value: summary, tone: SESSION_STATE_TONE[view.state] ?? 'plain' })
+
+  const why = sessionWhy(view, s)
+  if (why) lines.push({ kind: 'text', label: '', value: why, tone: 'info' })
+
+  const age = view.createdMs === undefined ? '' : formatUptime(now - view.createdMs)
+  const last = view.lastActivityMs === undefined ? '' : formatUptime(now - view.lastActivityMs)
+  const rows: { label: string; value: string }[] = [
+    { label: s.sessionHarnessLabel, value: view.harness },
+    ...(facts.model ? [{ label: s.sessionModelLabel, value: facts.model }] : []),
+    ...(facts.effort ? [{ label: s.sessionEffortLabel, value: facts.effort }] : []),
+    ...(view.cwd ? [{ label: s.sessionDirLabel, value: view.cwd }] : []),
+    ...(age ? [{ label: s.uptimeLabel, value: age }] : []),
+    ...(last ? [{ label: s.sessionLastLabel, value: last }] : []),
+    ...(view.note ? [{ label: s.sessionNoteLabel, value: view.note }] : []),
+  ]
+  if (rows.length > 0) {
+    lines.push({ kind: 'blank', label: '', value: '', tone: 'plain' })
+    lines.push({ kind: 'section', label: s.sectionSession, value: '', tone: 'plain' })
+    for (const row of rows) lines.push({ ...row, kind: 'row', tone: 'plain' })
+  }
+
+  const frame = facts.frame ?? []
+  if (frame.length > 0) {
+    lines.push({ kind: 'blank', label: '', value: '', tone: 'plain' })
+    lines.push({ kind: 'section', label: s.sectionFrame, value: '', tone: 'plain' })
+    for (const line of frame) lines.push({ kind: 'text', label: '', value: line, tone: 'muted' })
+  }
+
+  const labelWidth = lines.reduce((n, l) => (l.kind === 'row' ? Math.max(n, l.label.length) : n), 0)
+  return { lines, labelWidth }
+}
+
+// ---------------------------------------------------------------------------
 // the config pane's own columns
 // ---------------------------------------------------------------------------
 
@@ -1213,6 +1480,67 @@ export function cockpitHints(focus: PaneId, s: ControlStrings, ctx: HintContext)
         s.keyRefresh,
       ]
   }
+}
+
+/** What the selected SESSION currently permits. Same contract as `HintContext`, same reason. */
+export interface SessionHintContext {
+  /** The row can be attached to right now — `SessionView.attachable`. */
+  canAttach: boolean
+  /** The row can be killed — `SessionView.killable`, false for a process agentop does not host. */
+  canKill: boolean
+  /**
+   * The row has a registry entry to patch, so it can be renamed and annotated.
+   *
+   * Separate from `canKill` because they are separate facts: an exited session still has an entry
+   * to rename and a slot to clear, while an external one has neither.
+   */
+  canEdit: boolean
+  /** The fleet has at least one row, so there is something for `↑↓` to move between. */
+  hasRows: boolean
+  /**
+   * The new-session wizard owns the keyboard.
+   *
+   * The same shape as `HintContext.task`, and for the same reason: it is a state of the SCREEN
+   * rather than of the row under the cursor.
+   */
+  wizard?: boolean
+}
+
+/**
+ * The keys that work on the Sessions screen, most-important-first — `cockpitHints`' sibling.
+ *
+ * A hint for a key that does nothing HERE is the bug this function exists to prevent, so every verb
+ * past the navigation keys is gated on the row actually taking it: an external process cannot be
+ * attached, renamed, annotated or killed, and an empty fleet has nothing to move between. `n new` is
+ * the one verb that survives everything — it acts on no row, and on an empty screen it is the only
+ * thing to do.
+ */
+export function sessionsHints(
+  focus: SessionsFocus,
+  s: ControlStrings,
+  ctx: SessionHintContext,
+): string[] {
+  // The wizard answers for the whole screen while it is up: the fleet underneath it is not
+  // selectable, the tab keys stand down with the rest of the global keys, and the only three things
+  // that work are moving through the step, answering it, and backing out.
+  if (ctx.wizard) return [s.keyBack, s.keyMove, s.keySelect]
+
+  if (focus === 'actions') {
+    // `←→` belong to the action row here, exactly as they do in the cockpit, so `←→ screens` would
+    // be the one false hint on this screen — and the way back out leads instead.
+    return [s.keyBack, s.keyActionMove, s.keyRun]
+  }
+
+  return [
+    s.keyQuit,
+    s.keyTabs,
+    ...(ctx.hasRows ? [s.keyMove] : []),
+    ...(ctx.canAttach ? [s.keyAttach] : []),
+    s.keyNewSession,
+    ...(ctx.canEdit ? [s.keyRename, s.keyNote] : []),
+    ...(ctx.canKill ? [s.keyKill] : []),
+    s.keyRefresh,
+  ]
 }
 
 export const HINT_SEP = '  ·  '

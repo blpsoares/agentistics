@@ -83,6 +83,9 @@ export interface ControlStrings {
   sectionRuntimes: string
   sectionAddresses: string
   sectionMachine: string
+  /** The sessions detail pane's two rules: the facts about the row, and the picture of it. */
+  sectionSession: string
+  sectionFrame: string
 
   modeLabel: string
   historyLabel: string
@@ -154,6 +157,106 @@ export interface ControlStrings {
   /** Services tab. */
   killQuestion: string
 
+  /** Sessions tab. */
+  /**
+   * The list's column headers, lowercase like every other row label in this app.
+   *
+   * `name` rather than `label`: the cell holds the user's label when there is one, the id they
+   * would type at `agentop session` when there is not, and an external row's directory — see
+   * `sessionName`. Naming the column after one of the three would misname the other two.
+   */
+  sessionColState: string
+  sessionColHarness: string
+  sessionColName: string
+  sessionColDir: string
+
+  /**
+   * Every `SessionState`, as a WORD.
+   *
+   * The state is the one thing on a row that does not arrive already localized, and it is the cell
+   * the row may never give up — a colour alone is not a state. The three quiet ones are three
+   * DIFFERENT facts and none of them may be worded as "idle": `unclear` is "the frame was read and
+   * nothing in it said anything", `unreadable` is "the frame could not be read at all", and
+   * `external` is a process that never had a pane to read.
+   */
+  sessionStateWorking: string
+  sessionStateApproval: string
+  sessionStateInput: string
+  sessionStateUnclear: string
+  sessionStateUnreadable: string
+  sessionStateExited: string
+  sessionStateExternal: string
+
+  /**
+   * The reasons behind the three quiet states, in words, for the detail pane.
+   *
+   * `sessionExternalWhy` is the rendering of `SessionView.externalReason` — the second un-localized
+   * enum on a row. Without it an external session offers no verbs and never says why, which is the
+   * most confusing thing this pane could do.
+   */
+  sessionUnclearWhy: string
+  sessionUnreadableWhy: string
+  sessionExternalWhy: string
+
+  /** Nothing running here — a real empty fleet, never the answer to "sessions cannot be read". */
+  sessionsEmpty: string
+  /** How many rows are waiting on the user right now. Shown as the screen's own badge. */
+  sessionsAttention: (n: number) => string
+  /** Said on the row you are already inside — it is why this terminal shows what it shows. */
+  sessionAttached: string
+  /**
+   * The refusal `attachCommand()` cannot word.
+   *
+   * It returns `string[] | null` and carries no message, deliberately (see `cli-i18n.ts`), so the
+   * sentence for a `null` is the TUI's. Normally the verb is simply ABSENT for a row that is not
+   * attachable; this is what the screen says when the answer arrives as no anyway — the session
+   * exited, or was killed, between the frame and the keypress.
+   */
+  sessionNotAttachable: string
+
+  /** The sessions detail pane's row labels. `uptimeLabel` is reused for the age. */
+  sessionHarnessLabel: string
+  sessionModelLabel: string
+  sessionEffortLabel: string
+  sessionDirLabel: string
+  sessionLastLabel: string
+  sessionNoteLabel: string
+
+  /** The verbs on a session row. `New session` is the one that acts on no row at all. */
+  actAttach: string
+  actNewSession: string
+  actRename: string
+  actNote: string
+  actKill: string
+
+  /**
+   * The new-session wizard's steps, each named by the question it asks.
+   *
+   * The directory step's placeholder says a path may be TYPED, because the picker answers "where
+   * have I worked", not "what exists on disk" — a directory this machine has never recorded is
+   * still a perfectly good place to start a session, and a search box that looked closed would hide
+   * that.
+   */
+  sessionStepHarness: string
+  sessionStepProject: string
+  sessionStepModel: string
+  sessionStepEffort: string
+  sessionStepPrompt: string
+  sessionStepLabel: string
+  sessionSearchHint: string
+
+  /**
+   * The Sessions screen's key hints.
+   *
+   * The letters avoid every key the shell answers globally (`q`, `r`, `m`) and both vi movement
+   * keys (`j`/`k`) — `k` for "kill" would have been the same keypress as "up".
+   */
+  keyAttach: string
+  keyNewSession: string
+  keyRename: string
+  keyNote: string
+  keyKill: string
+
   /** Setup tab. */
   setupIntro: string
   setupSolo: string
@@ -199,6 +302,7 @@ const EN: ControlStrings = {
 
   tabs: {
     services: 'Services',
+    sessions: 'Sessions',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Cheat sheet',
@@ -208,6 +312,7 @@ const EN: ControlStrings = {
 
   tabsShort: {
     services: 'services',
+    sessions: 'sessions',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'commands',
@@ -243,6 +348,8 @@ const EN: ControlStrings = {
   sectionRuntimes: 'RUNTIMES',
   sectionAddresses: 'ADDRESSES',
   sectionMachine: 'MACHINE',
+  sectionSession: 'SESSION',
+  sectionFrame: 'LAST FRAME',
 
   // Lowercase, and the same case as the pane titles: these are row labels inside a pane, not
   // section headers over one. SETUP stays uppercase because it still heads a section.
@@ -288,6 +395,56 @@ const EN: ControlStrings = {
 
   killQuestion: 'A server is already running here — stop it and start a new one?',
 
+  sessionColState: 'state',
+  sessionColHarness: 'harness',
+  sessionColName: 'name',
+  sessionColDir: 'directory',
+
+  sessionStateWorking: 'working',
+  sessionStateApproval: 'needs approval',
+  sessionStateInput: 'needs input',
+  sessionStateUnclear: 'unclear',
+  sessionStateUnreadable: 'unreadable',
+  sessionStateExited: 'exited',
+  sessionStateExternal: 'external',
+
+  sessionUnclearWhy: 'its last frame was read and nothing in it says what is happening.',
+  sessionUnreadableWhy: 'its last frame could not be read, so what it is doing is unknown.',
+  sessionExternalWhy:
+    'not hosted by agentop — this machine only saw the process, so it cannot be attached, renamed or killed from here.',
+
+  sessionsEmpty: 'no sessions on this machine yet.',
+  sessionsAttention: (n) => `${n} waiting on you`,
+  sessionAttached: 'attached',
+  sessionNotAttachable: 'that session cannot be attached — it is gone, or its command has exited.',
+
+  sessionHarnessLabel: 'harness',
+  sessionModelLabel: 'model',
+  sessionEffortLabel: 'effort',
+  sessionDirLabel: 'dir',
+  sessionLastLabel: 'last',
+  sessionNoteLabel: 'note',
+
+  actAttach: 'Attach',
+  actNewSession: 'New session',
+  actRename: 'Rename',
+  actNote: 'Note',
+  actKill: 'Kill',
+
+  sessionStepHarness: 'Which assistant?',
+  sessionStepProject: 'Where should it run?',
+  sessionStepModel: 'Which model?',
+  sessionStepEffort: 'How much effort?',
+  sessionStepPrompt: 'First prompt (optional)',
+  sessionStepLabel: 'Label it (optional)',
+  sessionSearchHint: 'type to search — or type a path',
+
+  keyAttach: 'enter attach',
+  keyNewSession: 'n new',
+  keyRename: 'R rename',
+  keyNote: 'N note',
+  keyKill: 'x kill',
+
   setupIntro: 'How this machine tracks usage, and what leaves it.',
   setupSolo: 'solo',
   setupSoloHint: 'local only — nothing leaves this machine',
@@ -328,6 +485,7 @@ const PT: ControlStrings = {
 
   tabs: {
     services: 'Serviços',
+    sessions: 'Sessões',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Comandos',
@@ -337,6 +495,7 @@ const PT: ControlStrings = {
 
   tabsShort: {
     services: 'serviços',
+    sessions: 'sessões',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'comandos',
@@ -372,6 +531,8 @@ const PT: ControlStrings = {
   sectionRuntimes: 'RUNTIMES',
   sectionAddresses: 'ENDEREÇOS',
   sectionMachine: 'MÁQUINA',
+  sectionSession: 'SESSÃO',
+  sectionFrame: 'ÚLTIMO FRAME',
 
   modeLabel: 'modo',
   historyLabel: 'histórico',
@@ -414,6 +575,56 @@ const PT: ControlStrings = {
   no: 'Não',
 
   killQuestion: 'Já existe um servidor rodando aqui — parar e iniciar outro?',
+
+  sessionColState: 'estado',
+  sessionColHarness: 'harness',
+  sessionColName: 'nome',
+  sessionColDir: 'diretório',
+
+  sessionStateWorking: 'trabalhando',
+  sessionStateApproval: 'precisa aprovar',
+  sessionStateInput: 'esperando instrução',
+  sessionStateUnclear: 'indefinido',
+  sessionStateUnreadable: 'ilegível',
+  sessionStateExited: 'encerrada',
+  sessionStateExternal: 'externa',
+
+  sessionUnclearWhy: 'o último frame foi lido e nada nele diz o que está acontecendo.',
+  sessionUnreadableWhy: 'não deu para ler o último frame, então não dá para saber o que ela está fazendo.',
+  sessionExternalWhy:
+    'não é hospedada pelo agentop — esta máquina só viu o processo, então não dá para anexar, renomear nem encerrar por aqui.',
+
+  sessionsEmpty: 'nenhuma sessão nesta máquina ainda.',
+  sessionsAttention: (n) => `${n} esperando você`,
+  sessionAttached: 'anexada',
+  sessionNotAttachable: 'não dá para anexar nessa sessão — ela sumiu, ou o comando dela já terminou.',
+
+  sessionHarnessLabel: 'harness',
+  sessionModelLabel: 'modelo',
+  sessionEffortLabel: 'esforço',
+  sessionDirLabel: 'dir',
+  sessionLastLabel: 'última',
+  sessionNoteLabel: 'nota',
+
+  actAttach: 'Anexar',
+  actNewSession: 'Nova sessão',
+  actRename: 'Renomear',
+  actNote: 'Nota',
+  actKill: 'Encerrar',
+
+  sessionStepHarness: 'Qual assistente?',
+  sessionStepProject: 'Onde ela vai rodar?',
+  sessionStepModel: 'Qual modelo?',
+  sessionStepEffort: 'Quanto esforço?',
+  sessionStepPrompt: 'Primeiro prompt (opcional)',
+  sessionStepLabel: 'Dê um nome (opcional)',
+  sessionSearchHint: 'digite para buscar — ou digite um caminho',
+
+  keyAttach: 'enter anexar',
+  keyNewSession: 'n nova',
+  keyRename: 'R renomear',
+  keyNote: 'N nota',
+  keyKill: 'x encerrar',
 
   setupIntro: 'Como esta máquina registra o uso, e o que sai dela.',
   setupSolo: 'solo',
