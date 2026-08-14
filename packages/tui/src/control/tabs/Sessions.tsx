@@ -138,6 +138,15 @@ export function Sessions({
   const [layout, setLayout] = useState<SessionLayout>(
     view?.layout ?? DEFAULT_SESSION_VIEW.layout ?? 'list',
   )
+  /**
+   * The session at the top of the open card page.
+   *
+   * The page itself is DERIVED from the cursor, so there is no second position to keep in sync —
+   * but it still has to survive a restart, and a page NUMBER would name different sessions by the
+   * next poll. Held in state rather than read back off `view`, so switching to the list and back
+   * does not lose the page.
+   */
+  const [cardAnchor, setCardAnchor] = useState<string | undefined>(view?.cardAnchor)
   const [cursor, setCursor] = useState(0)
   const [ask, setAsk] = useState<Ask | null>(null)
   const [query, setQuery] = useState('')
@@ -462,6 +471,13 @@ export function Sessions({
     : null
 
 
+  // Updated only when the PAGE changes, never on every cursor move: `setSessionView` writes
+  // `preferences.json` to disk, and a disk write per arrow key is not a thing this screen may do.
+  const pageAnchor = page ? cards[page.from]?.id : undefined
+  useEffect(() => {
+    if (pageAnchor && pageAnchor !== cardAnchor) setCardAnchor(pageAnchor)
+  }, [pageAnchor, cardAnchor])
+
   /** Run one verb, whether it arrived from a letter, an arrow key or a click. */
   const runAction = useCallback((a: SessionAction) => {
     if (a === 'new') { if (host.spawnSession) setAsk({ kind: 'new' }); return }
@@ -543,6 +559,7 @@ export function Sessions({
     setStates(null)
     setOrder(DEFAULT_ORDER)
     setHideDetail(false)
+    setLayout(DEFAULT_SESSION_VIEW.layout ?? 'list')
     setMarked(new Set())
     setHideEmptyTask(!DEFAULT_SESSION_VIEW.showUnfiled)
     setTaskFilter(null)
@@ -768,8 +785,27 @@ export function Sessions({
     setStates(view.states ? new Set(view.states as SessionState[]) : null)
     setOrder((view.sort as SessionOrder | undefined) ?? DEFAULT_ORDER)
     setHideDetail(view.hideDetail ?? false)
+    // The DEFAULT, never a literal — same rule, same reason as `onlyActive` above.
+    setLayout(view.layout ?? DEFAULT_SESSION_VIEW.layout ?? 'list')
+    setCardAnchor(view.cardAnchor)
     setMarked(new Set(view.marked ?? []))
   }, [view])
+
+  /**
+   * Put the cursor back on the remembered page, ONCE, when the fleet finally arrives.
+   *
+   * Separate from the arrangement restore because it needs a different thing to have loaded: the
+   * arrangement comes from the host's status, the anchor can only be resolved against the sessions.
+   * An anchor no longer in the list — the session ended, a filter changed, the machine is another
+   * one — simply leaves the cursor where it is, which is page 0.
+   */
+  const anchored = useRef(false)
+  useEffect(() => {
+    if (anchored.current || cards.length === 0 || !view?.cardAnchor) return
+    anchored.current = true
+    const index = cards.findIndex(v => v.id === view.cardAnchor)
+    if (index >= 0) setCursor(index)
+  }, [cards, view?.cardAnchor])
 
   // Written whenever any part of the arrangement moves, rather than at each call site: four setters
   // that each had to remember to persist is four places for one to be forgotten. It waits for the
@@ -785,12 +821,14 @@ export function Sessions({
     onView({
       grouping, showClosed, showExited, showUnfiled: !hideEmptyTask, showDone, onlyActive,
       hideDetail,
+      layout,
+      ...(cardAnchor ? { cardAnchor } : {}),
       ...(marked.size > 0 ? { marked: [...marked] } : {}),
       ...(states ? { states: [...states] } : {}),
       sort: order,
     })
   }, [grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
-      states, order, marked, onView, view])
+      layout, cardAnchor, states, order, marked, onView, view])
 
   useEffect(() => {
     if (!isActive) return
@@ -895,6 +933,28 @@ export function Sessions({
       // The summary row states what is being shown; the controls live in the view panel, which a
       // click on that row opens. One place to change these, rather than two that can disagree.
       if (cockpit.summary && y === 0) { setAsk({ kind: 'view' }); return }
+      if (grid && page) {
+        // Resolved against the very grid that drew the cards: the pane's frame and the summary row
+        // are both paid for here rather than assumed, or the click answers with the card above the
+        // one that was pointed at.
+        const gy = y - (cockpit.summary ? 1 : 0)
+        const gx = p.x - listX - PANE_EDGE_X
+        if (pager && gy === grid.rows * grid.cardHeight) {
+          const hit = pagerHit(pager, gx)
+          // Turning a page IS moving the cursor — the page is derived from it, so there is nothing
+          // else to set and nothing that can fall out of step.
+          if (hit) {
+            const step = hit === 'next' ? grid.capacity : -grid.capacity
+            setCursor(c => Math.max(0, Math.min(Math.max(0, c) + step, selectable.length - 1)))
+          }
+          return
+        }
+        const slot = cardAt(grid, gx, gy)
+        if (slot === null) return
+        const index = page.from + slot
+        if (index < selectable.length) setCursor(index)
+        return
+      }
       const row = offset + (y - (cockpit.summary ? 1 : 0))
       if (row < 0 || row >= rows.length) return
       const found = selectable.indexOf(row)
