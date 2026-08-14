@@ -59,7 +59,10 @@ Commands:
   watch         Start the background metrics daemon only
   central       Manage the team central (Docker; runs from anywhere)
   member        Configure this machine as a team member
-  session       Start / list / attach assistant sessions (tmux-backed; --bg detaches)
+  session       Start / list / attach assistant sessions (tmux-backed; --bg detaches);
+                'session ls' prints the cockpit's table of what is running
+  hooks         Teach Claude Code to run work in parallel through agentop
+                (installs a skill + a SessionStart hook; explicit, reversible)
   ci-push       One-shot push of a CI runner's metrics to a central
   upgrade       Upgrade agentop to the latest version
   autostart     Start a mode with the system (systemd user service on Linux)
@@ -155,6 +158,21 @@ CI (GitHub Actions):
     AGENTISTICS_OIDC_AUDIENCE / AGENTISTICS_TEAM_ORG when flags are omitted.
     Never fails the job on a push error.
 
+Claude Code integration:
+  agentop hooks <install|uninstall|status> [--hook-only|--skill-only]
+    Two things, both explicit and both reversible:
+      skill  ~/.claude/skills/agentop-parallel-sessions/SKILL.md — WHAT Claude needs to know
+             to split independent work across several assistants and start them with
+             \`agentop session batch\`. Loaded by Claude only when the task matches it, so it
+             costs nothing on a session that never parallelises.
+      hook   a SessionStart entry in ~/.claude/settings.json — FACTS a static file cannot
+             hold: which agentop sessions are running now, which one is blocked on a
+             permission prompt, which task can be reopened here. Prints nothing when there
+             is nothing running.
+    A hook infers nothing; it is a shell command on an event. The inference is Claude's,
+    reading what the skill teaches and what the hook injected. \`uninstall\` removes exactly
+    what \`install\` wrote, and every other key in settings.json is left untouched.
+
 Updates:
   agentop upgrade
     Download the latest binary and restart whatever services are running. Only installs a
@@ -196,6 +214,8 @@ Examples:
   agentop check-update
   agentop autostart server enable
   agentop autostart status
+  agentop hooks install
+  agentop hooks status
 `.trim()
 
 // ---------------------------------------------------------------------------
@@ -379,6 +399,12 @@ if (command === 'central') {
 if (command === 'session') {
   const { runSession } = await import('../server/sessions/cli-session.ts')
   const code = await runSession(args)
+  process.exit(code)
+}
+
+if (command === 'hooks') {
+  const { runHooks } = await import('../server/cli-hooks.ts')
+  const code = await runHooks(args)
   process.exit(code)
 }
 

@@ -8,14 +8,23 @@
 
 import { resolve } from 'node:path'
 import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
-import { parseSessionArgs, type SessionCommand } from './cli-parse'
+import { sessionRunning } from '@agentistics/tui/control/sessions'
+import { controlStrings } from '@agentistics/tui/control/i18n'
+import { wrapText } from '@agentistics/tui/control/surface'
+import { parseSessionArgs, LS_DEFAULT, type SessionCommand } from './cli-parse'
+import { cliStrings } from '../cli-i18n'
+import { resolveLang } from '../cli-lang'
+import { readPreferences } from '../preferences'
+import { toControlSession } from './control-session'
+import { repoFacts } from './repo-facts'
+import { emptyReason, renderSessionTable, resolveWidth } from './session-table'
 import { SPAWN_SPECS, planSpawn } from './spawn-spec'
 import { reconcileSessions, resolveSessionRef, type ReconciledSession, type RefCandidate } from './session-ref'
 import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './registry'
 import { conversationForProcess, loadConversations } from './conversations'
 import { resolveBackend } from './index'
 import { scanProcesses } from '../live-sessions'
-import { createSessionsPoller } from './sessions-host'
+import { createSessionsPoller, type SessionSnapshot } from './sessions-host'
 import { needsAttention, type SessionView } from './session-view'
 import { planTaskReopen, taskReopenSucceeded } from './task-reopen'
 import type { SessionBackend, SpawnPlanError } from './types'
@@ -25,11 +34,17 @@ const STARTABLE: HarnessId[] = HARNESS_ORDER.filter(h => SPAWN_SPECS[h] !== null
 
 const USAGE = `Usage:
   agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"]
+  agentop session ls     [--all] [--group repo|project|task|harness|model|none] [--json]
   agentop session list
   agentop session attach <id|name>
   agentop session kill   <id|name>
   agentop session rename <id|name> "label"
   agentop session note   <id|name> "text"
+
+  \`ls\` is the table a PERSON reads: aligned columns, one section per project, and only what is
+  running — \`--all\` adds the finished, lost and closed conversations, \`--group\` changes the
+  sections. \`list\` stays the tab-separated dump a script can read line by line; both take
+  \`--json\` and print the same data.
 
 Orchestrating several at once — the form an assistant should use:
 
@@ -88,6 +103,7 @@ export async function runSession(argv: string[]): Promise<number> {
     case 'batch': return batch(cmd, backend)
     case 'open': return openTask(cmd.task, cmd.json ?? false, backend)
     case 'list': return list(backend, cmd.json ?? false)
+    case 'ls': return ls(cmd, backend)
     case 'attach': return attach(cmd.ref, backend)
     case 'kill': return kill(cmd.ref, backend)
     case 'rename': return patch(cmd.ref, { label: cmd.label }, 'renamed', backend)
@@ -281,27 +297,139 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
   return taskReopenSucceeded(plan, started.length) ? 0 : 1
 }
 
-async function list(backend: SessionBackend, json = false): Promise<number> {
-  const poller = createSessionsPoller({ backend, readRegistry, scanProcesses, loadConversations })
-  const snap = await poller.poll()
+/** The fleet as DATA, so an assistant orchestrating sessions reads it rather than parsing a table
+ *  meant for a person. One shape for every command that offers `--json`: `ls` prints exactly what
+ *  `list` prints, because a second machine-readable format is a second thing to keep in step. */
+function fleetJson(snap: SessionSnapshot): unknown {
+  return {
+    sessions: snap.sessions.map(v => ({
+      id: v.id,
+      status: v.status,
+      activity: v.activity ?? null,
+      harness: v.harness ?? null,
+      cwd: v.cwd,
+      label: v.label ?? null,
+      task: v.task ?? null,
+      resumeId: v.resume?.sessionId ?? null,
+    })),
+    attention: snap.attention,
+    unavailable: snap.unavailable ?? null,
+  }
+}
 
-  // Machine-readable on request, so an assistant orchestrating sessions reads its own fleet as data
-  // rather than parsing a table meant for a person.
+/** The whole fleet, from the registry, the backend, `/proc` and the conversation store. */
+async function pollFleet(backend: SessionBackend): Promise<SessionSnapshot> {
+  const poller = createSessionsPoller({ backend, readRegistry, scanProcesses, loadConversations })
+  return await poller.poll()
+}
+
+/**
+ * `agentop session ls` — the cockpit's sessions table, printed once.
+ *
+ * Everything about what a row IS comes from the same modules the Sessions tab uses: `pollFleet`
+ * gathers the fleet, `toControlSession` maps it, `renderSessionTable` draws it. What is decided here
+ * is what a COMMAND LINE has to decide — which rows the question is about (what is running, unless
+ * `--all`), how wide the output may be, and whether anything is going to a terminal at all.
+ */
+async function ls(
+  cmd: Extract<SessionCommand, { kind: 'ls' }>,
+  backend: SessionBackend,
+): Promise<number> {
+  const snap = await pollFleet(backend)
+  if (cmd.json) { console.log(JSON.stringify(fleetJson(snap), null, 2)); return 0 }
+
+  const lang = await resolveLang()
+  const s = cliStrings(lang)
+  // The TABLE's own chrome — its column headings and the words an empty grouping key wears — is the
+  // control center's, because it is the control center's table. Two copies of "usage" and "no task"
+  // are two places for them to disagree about what a column is called.
+  const c = controlStrings(lang)
+
+  // Said BEFORE the table: an unavailable backend has not established that nothing is running, and
+  // the rows below may be a previous poll rather than a fresh one.
+  if (snap.unavailable) console.error(snap.unavailable)
+
+  // Resolved per session and memoized by directory — the same read the cockpit does, and what makes
+  // three worktrees of one repository group under the project rather than under three names.
+  const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd)))
+  // A preferences file that cannot be read costs the "finished" mark on a task heading, never the
+  // table: the fleet is what the command is for.
+  const finishedTasks = await readPreferences().then(p => p.finishedTasks ?? []).catch(() => [])
+  const fleet = snap.sessions.map((v, i) => toControlSession(v, s, facts[i]))
+  // `sessionRunning` rather than a state list of our own: an EXTERNAL row is running — it exists
+  // because `/proc` found a live assistant — and what cannot be read there is its activity, never
+  // whether it is alive.
+  const shown = cmd.all ? fleet : fleet.filter(sessionRunning)
+
+  const tty = process.stdout.isTTY === true
+  // `--width`, then the terminal, then `COLUMNS`, then the natural width — the precedence is
+  // `resolveWidth`'s, so it is stated and tested in one place. `columns` is passed ONLY on a tty:
+  // off one it is undefined anyway, and asking for it would make the fallback depend on a value
+  // that cannot exist.
+  const width = resolveWidth({
+    ...(cmd.width !== undefined ? { explicit: cmd.width } : {}),
+    ...(tty && process.stdout.columns ? { columns: process.stdout.columns } : {}),
+    ...(process.env.COLUMNS !== undefined ? { env: process.env.COLUMNS } : {}),
+  })
+  const color = cmd.color ?? (tty && !process.env.NO_COLOR)
+  // Every SENTENCE this command prints is wrapped, never truncated: they name sessions and flags,
+  // and a cut one hides the very thing it exists to say. Through the app's own `wrapText`, and a
+  // no-op at a pipe's natural width — where one long line is what `grep` wants.
+  const say = (text: string) => { for (const l of wrapText(text, width)) console.log(l) }
+
+  // A mute blank is indistinguishable from a broken command, so an empty list says which of the
+  // three things happened. The decision is pure; only the sentence is chosen here.
+  const empty = emptyReason({
+    fleet: fleet.length,
+    shown: shown.length,
+    ...(snap.unavailable ? { unavailable: snap.unavailable } : {}),
+  })
+  if (empty !== null) {
+    // `unavailable` was already printed above, and it is the whole explanation.
+    if (empty === 'empty') say(s.sessLs.none)
+    else if (empty === 'filtered') say(s.sessLs.noneRunning(fleet.length))
+    return empty === 'unavailable' ? 1 : 0
+  }
+
+  for (const line of renderSessionTable({
+    sessions: shown,
+    width,
+    grouping: cmd.group,
+    color,
+    doneTasks: finishedTasks,
+    strings: {
+      cols: c.sessionsCols,
+      unknown: {
+        harness: c.sessionsUnknownHarness,
+        model: c.sessionsUnknownModel,
+        project: c.sessionsUnknownProject,
+        task: c.sessionsUnknownTask,
+        repo: c.sessionsUnknownRepo,
+      },
+      closed: c.sessionsClosedWord,
+      done: c.sessionsDoneWord,
+    },
+  })) console.log(line)
+
+  const waiting = shown.filter(v => v.state === 'waiting' || v.state === 'waiting-approval')
+  if (waiting.length > 0) {
+    console.log('')
+    say(s.sessLs.waiting(waiting.length, waiting.map(v => v.title).join(', ')))
+  }
+
+  // A harness with no probed rules cannot tell a permission prompt from an ordinary pause. Saying so
+  // is the difference between a gap and a wrong answer — and `approvalBlind` is set only on the rows
+  // that can lack it, so a closed conversation never names a harness that is in fact probed.
+  const blind = [...new Set(shown.filter(v => v.approvalBlind).map(v => v.harness))]
+  if (blind.length > 0) say(s.sessLs.blind(blind.join(', ')))
+  return 0
+}
+
+async function list(backend: SessionBackend, json = false): Promise<number> {
+  const snap = await pollFleet(backend)
+
   if (json) {
-    console.log(JSON.stringify({
-      sessions: snap.sessions.map(v => ({
-        id: v.id,
-        status: v.status,
-        activity: v.activity ?? null,
-        harness: v.harness ?? null,
-        cwd: v.cwd,
-        label: v.label ?? null,
-        task: v.task ?? null,
-        resumeId: v.resume?.sessionId ?? null,
-      })),
-      attention: snap.attention,
-      unavailable: snap.unavailable ?? null,
-    }, null, 2))
+    console.log(JSON.stringify(fleetJson(snap), null, 2))
     return 0
   }
 

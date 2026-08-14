@@ -14,7 +14,19 @@ import { rulesFor } from './attention-rules'
 import type { ReconciledSession } from './session-ref'
 import type { Conversation } from './conversations'
 import { conversationForProcess } from './conversations'
-import type { SessionActivity } from './types'
+import type { ManagedSession, SessionActivity } from './types'
+
+/**
+ * The registry's own record of when a session began, as epoch ms — PURE.
+ *
+ * `''` and anything unparseable yield nothing rather than 1970: a start time nobody can read is an
+ * absence, and an absence rendered as "56 years ago" is worse than a blank.
+ */
+export function registryCreatedMs(iso: string | undefined): { createdMs?: number } {
+  if (!iso) return {}
+  const ms = Date.parse(iso)
+  return Number.isFinite(ms) ? { createdMs: ms } : {}
+}
 
 export interface SessionView {
   id: string
@@ -148,6 +160,36 @@ export function buildSessionViews(o: {
    */
   closedLimit?: number
 }): SessionView[] {
+  /**
+   * Conversations already spoken for, so ONE is never offered to two rows.
+   *
+   * `conversationForProcess` matches on harness and directory, which is all it can do for a process
+   * it did not start — and every managed session in one directory therefore resolved to the SAME
+   * conversation. After a crash left five rows `lost` in this repository, reopening them handed
+   * three of them the same conversation and the fleet came back with one session listed three
+   * times, all wearing the same name. Reported from a real machine.
+   *
+   * A row that RECORDED which conversation it drives is exact and claims that one. The rest fall
+   * back to the directory guess, but only to a conversation nobody has taken.
+   */
+  const claimed = new Set<string>()
+  const claimResume = (
+    managed: ManagedSession | undefined,
+    harness: HarnessId,
+  ): { resume?: { sessionId: string; title: string } } => {
+    const pool = o.conversations ?? []
+    const own = managed?.conversationId
+      ? pool.find(c => c.sessionId === managed.conversationId)
+      : undefined
+    const conv = own ?? pool.find(c =>
+      !claimed.has(c.sessionId)
+      && c.harness === harness
+      && sessionAtCwd({ current_cwd: c.cwd, project_path: c.cwd }, managed?.cwd ?? ''))
+    if (!conv?.resumable) return {}
+    claimed.add(conv.sessionId)
+    return { resume: { sessionId: conv.sessionId, title: conv.title } }
+  }
+
   const managed: SessionView[] = o.reconciled.map(r => {
     const harness = r.managed?.harness
     // A session the user FINISHED reports `exited` whatever the backend still holds: the row exists
@@ -167,7 +209,12 @@ export function buildSessionViews(o: {
       ...(r.managed?.model ? { model: r.managed.model } : {}),
       ...(r.managed?.effort ? { effort: r.managed.effort } : {}),
       ...(r.managed?.task ? { task: r.managed.task } : {}),
-      ...(r.backend ? { createdMs: r.backend.createdMs } : {}),
+      // The backend's clock when there is a backend, the REGISTRY's when there is not. A row the
+      // machine lost has no tmux session left to ask, so it reported no start time at all — and a
+      // session you are deciding whether to reopen is one whose age is most of the decision.
+      ...(r.backend
+        ? { createdMs: r.backend.createdMs }
+        : registryCreatedMs(r.managed?.createdAt)),
       // Reopening a finished session is the whole reason its row is kept. Resolved the same way an
       // external process's conversation is — by harness and directory — and absent when nothing
       // can be resolved, rather than offering a verb with no target.
@@ -178,10 +225,7 @@ export function buildSessionViews(o: {
       // process's conversation is, and absent when nothing resolves rather than offering a verb
       // with no target.
       ...((finished || r.status === 'lost' || r.status === 'exited') && harness
-        ? (() => {
-            const conv = conversationForProcess(o.conversations ?? [], { harness, cwd: r.managed?.cwd ?? '' })
-            return conv?.resumable ? { resume: { sessionId: conv.sessionId, title: conv.title } } : {}
-          })()
+        ? claimResume(r.managed, harness)
         : {}),
       attached: r.backend?.attached ?? false,
       approvalDetection: harness !== undefined && rulesFor(harness) !== undefined,

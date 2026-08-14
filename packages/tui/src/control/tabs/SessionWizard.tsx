@@ -19,7 +19,7 @@ import type {
 import type { ControlStrings } from '../i18n'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import {
-  PROJECT_LEAD, padCell, projectColumns, projectPickRows, type ProjectRow,
+  PROJECT_LEAD, padCell, planSubmit, projectColumns, projectPickRows, type ProjectRow,
 } from '../sessions'
 
 /**
@@ -79,6 +79,9 @@ export function SessionWizard({ host, strings: s, width, height, isActive, onCan
   const [step, setStep] = useState<Step>('harness')
   const [draft, setDraft] = useState<Draft>({})
   const [harnesses, setHarnesses] = useState<SessionHarnessOption[] | null>(null)
+  /** Why the last attempt did not start. Shown in the wizard, which stays put so nothing is lost. */
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     const read = host.startableHarnesses
@@ -101,20 +104,44 @@ export function SessionWizard({ host, strings: s, width, height, isActive, onCan
     return 'how'
   }, [])
 
+  /**
+   * Start it — and on ANY failure, keep the wizard and everything typed into it.
+   *
+   * Two ways this used to lose someone's work. It returned SILENTLY when it had nothing to spawn
+   * with, so the last `enter` of a six-step wizard did nothing at all and there was no way to tell
+   * a dead key from a slow one. And a spawn that came back `ok: false` closed the wizard anyway and
+   * put the reason on the status line — one transient row — taking the prompt with it. A prompt is
+   * the most expensive thing on this screen; it is the one thing a failure must not consume.
+   *
+   * So: a missing answer sends you BACK to the step that takes it, a refusal is shown HERE and the
+   * draft stands, and only success unmounts.
+   */
   const submit = useCallback((attach: boolean) => {
     const spawn = host.spawnSession
-    if (!spawn || !draft.harness || !draft.cwd) return
-    const req: SpawnSessionRequest = {
-      harness: draft.harness.id,
-      cwd: draft.cwd,
-      attach,
-      ...(draft.model ? { model: draft.model } : {}),
-      ...(draft.effort ? { effort: draft.effort } : {}),
-      ...(draft.prompt ? { prompt: draft.prompt } : {}),
-      ...(draft.task ? { task: draft.task } : {}),
+    const plan = planSubmit({ draft, hasSpawn: Boolean(spawn), attach })
+    if (!plan.ok) {
+      setError(plan.reason === 'no-host' ? s.wizNoSpawn
+        : plan.reason === 'no-harness' ? s.wizNeedHarness
+        : s.wizNeedCwd)
+      if (plan.step) setStep(plan.step)
+      return
     }
-    void spawn.call(host, req).then(onDone)
-  }, [host, draft, onDone])
+    const req = plan.req as unknown as SpawnSessionRequest
+    setError('')
+    setBusy(true)
+    void spawn!.call(host, req)
+      .then(r => {
+        setBusy(false)
+        if (r.ok) return onDone(r)
+        setError(r.message)
+      })
+      // A REJECTED promise used to leave the screen exactly as it was, forever: no session, no
+      // message, and an `enter` that had visibly done something and then nothing.
+      .catch((e: unknown) => {
+        setBusy(false)
+        setError(e instanceof Error ? e.message : String(e))
+      })
+  }, [host, draft, onDone, s])
 
   // `esc` steps BACK rather than out, until there is nowhere back to go. A wizard that abandons six
   // answers because the sixth was a typo is a wizard people stop using.
@@ -126,6 +153,7 @@ export function SessionWizard({ host, strings: s, width, height, isActive, onCan
       const prev = order[j]!
       if (prev === 'model' && !draft.harness?.supportsModel) continue
       if (prev === 'effort' && (draft.harness?.efforts.length ?? 0) === 0) continue
+      setError('')
       return setStep(prev)
     }
     onCancel()
@@ -243,18 +271,31 @@ export function SessionWizard({ host, strings: s, width, height, isActive, onCan
   }
 
   return (
-    <Picker
-      label={s.wizHow}
-      options={[
-        { key: 'bg', label: s.wizBackground },
-        { key: 'fg', label: s.wizAttached },
-      ]}
-      empty=""
-      width={width}
-      height={height}
-      isActive={isActive}
-      onPick={key => submit(key === 'fg')}
-    />
+    <Box flexDirection="column" width={width}>
+      <Picker
+        label={s.wizHow}
+        options={[
+          { key: 'bg', label: s.wizBackground },
+          { key: 'fg', label: s.wizAttached },
+        ]}
+        empty=""
+        width={width}
+        // Two rows are spent below on the outcome, and a screen that draws more rows than it was
+        // given is composited over the ones under it by Ink rather than clipped.
+        height={Math.max(1, height - 2)}
+        isActive={isActive && !busy}
+        onPick={key => submit(key === 'fg')}
+      />
+      {/* The outcome, HERE. It used to go to the status line — one transient row — while this
+          screen unmounted and took the prompt with it. */}
+      {busy ? <Text dimColor>{truncate(s.wizStarting, width)}</Text> : null}
+      {error && !busy ? (
+        <>
+          <Text color={COLORS.danger} wrap="truncate">{truncate(error, width)}</Text>
+          <Text dimColor wrap="truncate">{truncate(s.wizKeptDraft, width)}</Text>
+        </>
+      ) : null}
+    </Box>
   )
 }
 

@@ -34,7 +34,8 @@ agentop --version    # print version (and a notice if an update exists)
 | [`watch`](#watch) | OpenTelemetry metrics daemon only (headless) |
 | [`central`](#central) | Manage the Team Mode central (wraps `central.sh`) |
 | [`member`](#member) | Join / leave / inspect a Team Mode central from this machine |
-| [`session`](#session) | Start / list / attach / kill background assistant sessions (tmux-backed) |
+| [`session`](#session) | Start / list / attach / kill background assistant sessions (tmux-backed); `ls` prints the cockpit's table |
+| [`hooks`](#hooks) | Teach Claude Code to fan work out across several assistants through agentop |
 | [`ci-push`](#ci-push) | One-shot push of a GitHub Actions run's metrics to a central (per repo) |
 | [`autostart`](#autostart) | Start a mode with the system (systemd user service) |
 | [`upgrade`](#upgrade) | Upgrade `agentop` to the latest release |
@@ -394,6 +395,7 @@ with your own tmux sessions.
 
 ```bash
 agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"] [--task "<name>"]
+agentop session ls     [--all] [--group repo|project|task|harness|model|none] [--json] [--width <n>] [--no-color]
 agentop session list   [--json]
 agentop session attach <id|name>
 agentop session kill   <id|name>
@@ -404,6 +406,53 @@ agentop session note   <id|name> "text"
 agentop session batch --task "<name>" [--cwd <path>] --session "<harness>: <prompt>" [--session ...] [--json]
 agentop session open  "<task>" [--json]
 ```
+
+### `ls` — the cockpit's table, printed
+
+`agentop session ls` prints the very table the control center's **sessions** tab draws: aligned
+columns, a section per project, and the state word first. By default it answers the question a
+person means by "what have I got open" — **only what is running**, grouped by project:
+
+```
+  id     state         session                     worktree         task                 harness  project
+agentistics  4  ────────────────────────────────────────────────────────────────────────────────────────
+  df831  working       claude hook                 claude-hook      cli: claude hook     claude   agentistics
+  bda77  needs approval  session ls on the cli     session-ls       cli: session ls      claude   agentistics
+
+apresentacao  1  ───────────────────────────────────────────────────────────────────────────────────────
+  b87a4  waiting       drop the invented metrics                                         claude   apresentacao
+```
+
+| Flag | Effect |
+|------|--------|
+| `--all`, `-a` | Also list what is **not** running: finished, lost and closed conversations |
+| `--group`, `-g` | `project` (default), `repo`, `task`, `harness`, `model`, `none` |
+| `--json` | The same JSON `list --json` prints — one machine-readable shape, not two |
+| `--width <n>` | Fit this many columns instead of asking the terminal |
+| `COLUMNS` (env) | Read **only when stdout is not a tty** — how wide the reader is when there is no terminal to ask (`ls \| less -S`) |
+| `--no-color` | Never colour, whatever the terminal says (`NO_COLOR` does the same) |
+
+It is a **separate command from `list`**, not a flag on it: `list` is the tab-separated dump scripts
+already read line by line, and widening it into columns underneath them would break those scripts
+for a cosmetic reason. Both print the same `--json`.
+
+Some particulars, all of them shared with the cockpit rather than re-decided here:
+
+- **A session running outside agentop counts as running.** It is listed as `external` because
+  `/proc` found a live assistant; what cannot be read there is its *activity*, never whether it is
+  alive. It carries no id, because `agentop session attach` cannot resolve one for it.
+- **An absent number is absent.** A conversation that recorded no usage shows no usage — the column
+  does not exist unless something on screen fills it, and a `0` would be a confident wrong figure.
+- **An empty list says why.** "Nothing is running" names the flag that lists the rest; a poll that
+  failed says so and never claims the machine is idle.
+- **Nothing exceeds the width.** Columns are measured across the page and the row is clipped as a
+  last resort, so a narrow terminal loses cells rather than wrapping every row onto the next.
+- **Piped output is plain.** No colour, no escapes, and no invented terminal width — the table comes
+  out as wide as its content, so `agentop session ls | grep` works.
+- **A pipe can still state a width**, and a pager is a reader: with no tty to ask,
+  `COLUMNS=80 agentop session ls | less -S` fits 80 columns, the same lever `git` and `ls` honour.
+  The order is `--width` → the terminal → `COLUMNS` → as wide as the content; a `COLUMNS` that is
+  not a width (`abc`, `0`) is ignored rather than obeyed, and no minimum is imposed on one that is.
 
 `--bg` detaches and returns immediately; without it the session takes over your terminal, and the
 detach keystroke is printed first (read from your own tmux prefix, never assumed to be `Ctrl-b`).
@@ -418,6 +467,46 @@ about what it means.
 Needs **tmux** (Linux, macOS); Windows support arrives with the PTY backend. Full command reference,
 the cockpit, harness support table and where state lives: see
 [docs/session-manager.md](session-manager.md).
+
+To have **Claude Code itself** propose the split, write each session's prompt and drive `batch`, see
+[`hooks`](#hooks) below.
+
+---
+
+## `hooks`
+
+Teach Claude Code to fan work out across several assistants through agentop.
+
+```bash
+agentop hooks install   [--hook-only | --skill-only]
+agentop hooks uninstall [--hook-only | --skill-only]
+agentop hooks status
+```
+
+Two pieces, installed together, each doing what the other cannot:
+
+- **a skill** at `~/.claude/skills/agentop-parallel-sessions/SKILL.md` — the *knowledge*: when a task
+  splits into independent pieces, how to propose the split, how to write a prompt for a session that
+  cannot see your conversation, and the exact `agentop session batch` contract. Claude loads it when
+  the task matches its description, so it costs **nothing** on a session that never parallelises.
+- **a `SessionStart` hook** in `~/.claude/settings.json` — the *facts* a static file cannot hold:
+  which agentop sessions are running right now, which one is blocked on a permission prompt, which
+  task can be reopened in this directory. It prints **nothing** when there is nothing running.
+
+**A hook does not infer anything** — it is a deterministic shell command on an event. The inference
+is Claude's, reading what the skill teaches and what the hook injected. That is why the "activate
+when it is relevant" half is a skill and not a hook that taxes every session.
+
+Guarantees: nothing is written to `~/.claude` unless you run this command (`agentop setup` only
+*suggests* it); every other key in your `settings.json` is preserved; a file that cannot be merged
+into is refused rather than rewritten; installing twice changes nothing; `uninstall` removes exactly
+what `install` wrote; and with no Claude Code present the command creates no directory and no file.
+
+Claude never starts a session on its own — the skill's first rule is to propose, show the prompts,
+and wait for a yes.
+
+Full write-up, including why not `UserPromptSubmit` and why the session verbs are not MCP tools:
+[docs/claude-integration.md](claude-integration.md).
 
 ---
 

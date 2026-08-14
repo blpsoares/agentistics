@@ -129,6 +129,27 @@ export interface CliStrings {
   sessSpawnNoModel: (harness: string) => string
   sessSpawnNoEffort: (harness: string) => string
   sessSpawnBadEffort: (harness: string, value: string, accepted: string[]) => string
+
+  /**
+   * What `agentop session ls` says AROUND the table. The table's own chrome — its column headings
+   * and its group labels — comes from the control center's strings, because it is the same table.
+   */
+  sessLs: {
+    /** The fleet really is empty. Only ever printed when the poll actually succeeded. */
+    none: string
+    /**
+     * Nothing is RUNNING, and the rows the filter withheld are still there.
+     *
+     * It names the flag that lifts it, for the same reason the cockpit's empty list does: a mute
+     * blank is indistinguishable from a broken command, and the sessions a reboot turned into
+     * `lost` rows are still named, still filed and still reopenable.
+     */
+    noneRunning: (hidden: number) => string
+    waiting: (n: number, names: string) => string
+    /** Harnesses whose approval prompts cannot be told from an ordinary pause. */
+    blind: (harnesses: string) => string
+  }
+
   dockerMissing: string
   dockerUnreachable: string
   foregroundLater: string
@@ -331,6 +352,17 @@ const EN: CliStrings = {
   sessSpawnNoEffort: (harness: string) => `${harness} has no effort flag, so an effort cannot be set.`,
   sessSpawnBadEffort: (harness: string, value: string, accepted: string[]) =>
     `${harness} does not accept effort "${value}". Accepted: ${accepted.join(', ')}.`,
+
+  sessLs: {
+    none: 'No sessions.',
+    noneRunning: (hidden: number) =>
+      `Nothing is running — ${hidden} session${hidden === 1 ? '' : 's'} withheld. Run \`agentop session ls --all\` to list them.`,
+    waiting: (n: number, names: string) =>
+      `${n} session${n === 1 ? '' : 's'} waiting on you: ${names}`,
+    blind: (harnesses: string) =>
+      `Approval detection is not available for: ${harnesses} — those sessions show as "waiting" either way.`,
+  },
+
   dockerMissing: 'docker not installed',
   dockerUnreachable: 'docker is installed but not answering',
   foregroundLater: 'foreground starts once this screen closes.',
@@ -507,6 +539,17 @@ const PT: CliStrings = {
   sessSpawnNoEffort: (harness: string) => `${harness} não tem flag de effort, então não dá para definir um.`,
   sessSpawnBadEffort: (harness: string, value: string, accepted: string[]) =>
     `${harness} não aceita o effort "${value}". Aceitos: ${accepted.join(', ')}.`,
+
+  sessLs: {
+    none: 'Nenhuma sessão.',
+    noneRunning: (hidden: number) =>
+      `Nada rodando — ${hidden} ${hidden === 1 ? 'sessão retida' : 'sessões retidas'}. Rode \`agentop session ls --all\` para ver.`,
+    waiting: (n: number, names: string) =>
+      `${n} ${n === 1 ? 'sessão esperando' : 'sessões esperando'} por você: ${names}`,
+    blind: (harnesses: string) =>
+      `Detecção de aprovação não está disponível para: ${harnesses} — essas sessões aparecem como "aguardando" de qualquer jeito.`,
+  },
+
   dockerMissing: 'docker não instalado',
   dockerUnreachable: 'docker instalado, mas não responde',
   foregroundLater: 'o foreground sobe assim que esta tela fechar.',

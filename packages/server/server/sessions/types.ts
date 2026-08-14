@@ -129,6 +129,19 @@ export interface ManagedSession {
    * thing that happened, and reopening it is the ordinary next thing to want.
    */
   endedAt?: string
+  /**
+   * The harness's own conversation id this session drives, when it is known exactly.
+   *
+   * Known for a session that was REOPENED from a conversation — we handed the id to the CLI, so
+   * there is no guessing left. Absent for one started fresh, because the conversation is created by
+   * the harness and is not reported back.
+   *
+   * It exists because the fallback is a guess that cannot tell two sessions apart:
+   * `conversationForProcess` matches on harness and directory, so every session in one repository
+   * resolves to the same conversation. A crash that left five rows `lost` here handed three of them
+   * the same one, and the fleet came back with a single session listed three times under one name.
+   */
+  conversationId?: string
 }
 
 /**

@@ -8,7 +8,10 @@
     ".": "./src/index.tsx",
     "./control": "./src/control/index.ts",
     "./control/altScreen": "./src/control/altScreen.ts",
-    "./control/stream": "./src/control/stream.ts"
+    "./control/stream": "./src/control/stream.ts",
+    "./control/sessions": "./src/control/sessions.ts",
+    "./control/surface": "./src/control/surface.ts",
+    "./control/i18n": "./src/control/i18n.ts"
   },
   "scripts": {
     "dev": "bun run src/index.tsx",
