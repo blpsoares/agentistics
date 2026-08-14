@@ -380,6 +380,8 @@ export interface ControlStrings {
   wizEffort: string
   wizPrompt: string
   wizPromptHint: string
+  wizName: string
+  wizNameHint: string
   wizHow: string
   /** Said while the session is being started, so `enter` is visibly doing something. */
   wizStarting: string
@@ -767,6 +769,8 @@ const EN: ControlStrings = {
   wizEffort: 'Which reasoning effort?',
   wizPrompt: 'First prompt (optional)',
   wizPromptHint: 'leave empty to start with nothing typed',
+  wizName: 'Call it what?',
+  wizNameHint: 'a name of your own — enter alone derives one from the harness and the folder',
   wizHow: 'Start it how?',
   wizStarting: 'starting…',
   wizKeptDraft: 'nothing you typed was lost — esc goes back a step, or try again',
@@ -1140,6 +1144,8 @@ const PT: ControlStrings = {
   wizEffort: 'Qual nível de raciocínio?',
   wizPrompt: 'Primeiro prompt (opcional)',
   wizPromptHint: 'deixe vazio para começar sem nada digitado',
+  wizName: 'Chamar de quê?',
+  wizNameHint: 'um nome seu — enter vazio deriva um do harness e da pasta',
   wizHow: 'Iniciar como?',
   wizStarting: 'iniciando…',
   wizKeptDraft: 'nada do que você digitou foi perdido — esc volta um passo, ou tente de novo',
