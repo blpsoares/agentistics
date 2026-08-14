@@ -1187,7 +1187,13 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   list's columns; the labels are aligned in one column and given up ALL AT ONCE
   (`cardLabelWidth`), because labels that come and go leave the values starting at different
   columns. And a card is never taller than it has content for: `cardGrid` takes the line count the
-  screen measured, or rows of blank inside a frame are a box with a name in it.
+  screen measured and each BAND is then sized to its own tallest card, because one height for the
+  whole grid is the height of the richest card in the fleet — one session carrying a model, a task
+  and a note made every other card two rows taller than it had anything to put in them, and rows of
+  blank inside a frame are a box with a name in it. The band and not the card: cards of one band
+  stand side by side, and giving each its own height leaves the row's bottom edge ragged, which is
+  worse to look at than the one blank line a short card beside a rich one still keeps. The rows a
+  short band gives back become another band on the page, not air under the pager.
 - **`stats-cache.json` stays Claude-only here too.** `selectors.ts` reads Claude totals from the
   cache and every other harness from per-session sums; `applyHarnessFilter` blanks the cache when
   a non-Claude harness is selected, or Claude's numbers would survive the filter.

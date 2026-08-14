@@ -523,14 +523,18 @@ export function Sessions({
    */
   const wantHeadings = layout === 'cards' && rows.some(r => r.kind === 'heading')
   /**
-   * The most lines any card on screen will draw, so the frames are as tall as they have content for
-   * and no taller. Counted off the same `cardLines` the cards are drawn from — and off `badges`,
-   * which name each card's group whether or not the band ends up drawing a heading, so this number
-   * does not depend on the decision it feeds.
+   * How many lines each card will draw, so the frames are as tall as they have content for and no
+   * taller — the MAX sets the grid's ceiling, and `cardPages` sizes each band to its own tallest
+   * card inside it.
+   *
+   * Counted off the same `cardLines` the cards are drawn from, and off `badges`, which name each
+   * card's group whether or not the band ends up drawing a heading — so these numbers do not depend
+   * on the decision they feed.
    */
-  const cardMaxLines = useMemo(() => (layout === 'cards'
-    ? cards.reduce((n, c, i) => Math.max(n, cardLines(c, cardWords, badges[i] ?? '').length), 0)
-    : 0), [layout, cards, badges, cardWords])
+  const cardLineCounts = useMemo(() => (layout === 'cards'
+    ? cards.map((c, i) => cardLines(c, cardWords, badges[i] ?? '').length)
+    : []), [layout, cards, badges, cardWords])
+  const cardMaxLines = cardLineCounts.reduce((n, v) => Math.max(n, v), 0)
   const headedGrid: CardGrid | null = wantHeadings && rows.length > 0
     ? cardGrid({ width: cardsBody, height: band.gridRows - 1, total: cards.length, lines: cardMaxLines })
     : null
@@ -545,11 +549,12 @@ export function Sessions({
         cols: grid.cols,
         gridRows: band.gridRows,
         cardHeight: grid.cardHeight,
+        lines: cardLineCounts,
         capacity: grid.capacity,
         headed,
       })
     : []),
-  [grid?.cols, grid?.cardHeight, grid?.capacity, band.gridRows, headed, rows])
+  [grid?.cols, grid?.cardHeight, grid?.capacity, band.gridRows, headed, rows, cardLineCounts])
   // The page is the one holding the CURSOR — derived, never stored beside it. Turning a page is
   // therefore moving the cursor, and there is no second position that can fall out of step.
   const pageAt = pages.length > 0 ? pageOfCard(pages, Math.max(0, at)) : 0
@@ -1075,7 +1080,7 @@ export function Sessions({
         // Measured off the bands actually on this page, never off `rows * cardHeight`: a heading
         // costs a row and a short group's band still costs a whole one, so the pager does not sit
         // where a uniform grid would have put it.
-        if (pager && gy === cardPageRows(page.bands, grid.cardHeight)) {
+        if (pager && gy === cardPageRows(page.bands)) {
           const hit = pagerHit(pager, gx)
           // Turning a page IS moving the cursor — the page is derived from it, so there is nothing
           // else to set and nothing that can fall out of step.
@@ -1088,7 +1093,6 @@ export function Sessions({
         const index = cardHit({
           bands: page.bands,
           cardWidth: grid.cardWidth,
-          cardHeight: grid.cardHeight,
           gap: grid.gap,
           x: gx,
           y: gy,
@@ -1411,7 +1415,7 @@ export function Sessions({
           {page.bands.map((b, i) => (b.kind === 'heading' ? (
             <GroupHeading key={`h${i}`} band={b} width={cardsBody} />
           ) : (
-            <Box key={`b${i}`} flexDirection="row" height={grid.cardHeight} flexShrink={0}>
+            <Box key={`b${i}`} flexDirection="row" height={b.height} flexShrink={0}>
               {b.items.map((index, c) => {
                 const card = cards[index]
                 if (!card) return null
@@ -1429,7 +1433,7 @@ export function Sessions({
                       selected={selected?.id === card.id}
                       marked={marked.has(card.id)}
                       width={grid.cardWidth}
-                      height={grid.cardHeight}
+                      height={b.height}
                       words={cardWords}
                     />
                   </Box>

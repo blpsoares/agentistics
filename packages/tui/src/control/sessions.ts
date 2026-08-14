@@ -1799,8 +1799,20 @@ export function cardGrid(o: {
 export type CardBand =
   /** `muted` is the list's own reading: an absent key, a finished task, the history section. */
   | { kind: 'heading'; label: string; count: number; muted: boolean }
-  /** Indexes into the flat card sequence — at most `cols` of them, all from one group. */
-  | { kind: 'cards'; items: number[] }
+  /**
+   * Indexes into the flat card sequence — at most `cols` of them, all from one group — and the rows
+   * this band occupies, FRAME INCLUDED.
+   *
+   * The height is the BAND's, not the grid's, and that is the point: a single grid height is the
+   * height of the richest card in the whole fleet, so one session carrying a note and a model made
+   * every card on screen two rows taller than it had anything to put in them. Rows of blank inside a
+   * frame are not a card, they are a box with a name in it.
+   *
+   * It is the band and not the card because the cards of one band stand side by side: giving each
+   * its own height leaves the bottom edge of the row ragged, which is a worse thing to look at than
+   * the one blank line a short card beside a rich one still keeps.
+   */
+  | { kind: 'cards'; items: number[]; height: number }
 
 export interface CardPage {
   bands: CardBand[]
@@ -1808,9 +1820,9 @@ export interface CardPage {
   items: number[]
 }
 
-/** Rows a page's bands occupy: one per heading, `cardHeight` per row of cards — PURE. */
-export function cardPageRows(bands: readonly CardBand[], cardHeight: number): number {
-  return bands.reduce((n, b) => n + (b.kind === 'heading' ? 1 : Math.max(1, cardHeight)), 0)
+/** Rows a page's bands occupy: one per heading, its own height per row of cards — PURE. */
+export function cardPageRows(bands: readonly CardBand[]): number {
+  return bands.reduce((n, b) => n + (b.kind === 'heading' ? 1 : Math.max(1, b.height)), 0)
 }
 
 /**
@@ -1833,6 +1845,9 @@ export function cardPageRows(bands: readonly CardBand[], cardHeight: number): nu
  *
  * `headed: false` — a grouping of `none`, or a band too short to spend a row on a name — packs the
  * whole fleet as one nameless group, which is exactly the dense grid this screen drew before.
+ *
+ * Each band is also SIZED here, to the tallest card in it and no taller, which is why the rows it
+ * gives back turn into more bands on the page rather than into air.
  */
 export function cardPages(o: {
   /** The rows the list would draw, headings and spacers included. */
@@ -1840,7 +1855,14 @@ export function cardPages(o: {
   cols: number
   /** Rows the grid region has, pager already paid for. */
   gridRows: number
+  /** The TALLEST a band may be — the ceiling the region affords, from `cardGrid`. */
   cardHeight: number
+  /**
+   * How many lines each card has to draw, by card index — see `cardLines`.
+   *
+   * Absent, every band takes the ceiling, which is the uniform grid this screen drew before.
+   */
+  lines?: readonly number[]
   /** The most cards one page may hold — see `CARD_PAGE_MAX`. */
   capacity: number
   headed: boolean
@@ -1849,6 +1871,15 @@ export function cardPages(o: {
   const cardHeight = Math.max(1, o.cardHeight)
   const cap = Math.max(1, o.capacity)
   const budget = Math.max(0, o.gridRows)
+  /**
+   * The rows a band of these cards needs: its tallest card's lines plus the frame, never below the
+   * floor that makes a card a card, never above what the region affords.
+   */
+  const heightOf = (chunk: readonly number[]): number => {
+    if (!o.lines) return cardHeight
+    const most = chunk.reduce((n, i) => Math.max(n, o.lines![i] ?? 0), 0)
+    return Math.min(cardHeight, Math.max(PANE_FRAME_Y + CARD_MIN_LINES, PANE_FRAME_Y + most))
+  }
 
   type Head = { label: string; count: number; muted: boolean }
   const sections: Array<{ head: Head | null; items: number[] }> = []
@@ -1884,7 +1915,8 @@ export function cardPages(o: {
     let named = false
     for (let i = 0; i < section.items.length; i += cols) {
       const chunk = section.items.slice(i, i + cols)
-      const cost = () => (section.head && !named ? 1 : 0) + cardHeight
+      const height = heightOf(chunk)
+      const cost = () => (section.head && !named ? 1 : 0) + height
       // A page break is the only way to make room, so it is only ever taken while there is
       // something to break away from — the loop always terminates.
       if (items.length > 0 && (used + cost() > budget || items.length + chunk.length > cap)) {
@@ -1896,9 +1928,9 @@ export function cardPages(o: {
         used += 1
         named = true
       }
-      bands.push({ kind: 'cards', items: chunk })
+      bands.push({ kind: 'cards', items: chunk, height })
       items.push(...chunk)
-      used += cardHeight
+      used += height
     }
   }
   flush()
@@ -2143,13 +2175,11 @@ export function cardBand(o: { listRows: number; header: boolean }): {
 export function cardHit(o: {
   bands: readonly CardBand[]
   cardWidth: number
-  cardHeight: number
   gap: number
   x: number
   y: number
 }): number | null {
   if (o.x < 0 || o.y < 0) return null
-  const cardHeight = Math.max(1, o.cardHeight)
   let top = 0
   for (const band of o.bands) {
     if (band.kind === 'heading') {
@@ -2157,14 +2187,15 @@ export function cardHit(o: {
       top += 1
       continue
     }
-    if (o.y < top + cardHeight) {
+    const height = Math.max(1, band.height)
+    if (o.y < top + height) {
       const stride = o.cardWidth + o.gap
       const col = Math.floor(o.x / stride)
       // The gap AFTER a card belongs to the gutter, not to the card in front of it.
       if (o.x - col * stride >= o.cardWidth) return null
       return band.items[col] ?? null
     }
-    top += cardHeight
+    top += height
   }
   return null
 }

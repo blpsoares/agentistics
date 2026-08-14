@@ -10,10 +10,11 @@ import {
   cardGrid, cardPages, pageOfCard, CARD_PAGE_MAX, CARD_MIN_WIDTH, CARD_GAP, CARD_LINES,
   cardBadges, cardLines, fitCardLines, cardStateCells, cardLabelWidth, CARD_VALUE_MIN,
   cardBand, cardHit, cardStep, cardRows, cardPageRows, pagerCells, pagerHit,
-  askRows, fitApprovalPreview, APPROVAL_PREVIEW_MAX, QUESTION_ROWS,
+  askRows, fitApprovalPreview, APPROVAL_PREVIEW_MAX, QUESTION_ROWS, CARD_MIN_LINES,
   type CardBand, type CardLine, type SessionRow,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
+import { PANE_FRAME_Y } from './chrome.ts'
 import { controlStrings } from './i18n'
 
 /** The layout block every aside fixture carries — it is a required option, like the groupings. */
@@ -1327,9 +1328,9 @@ describe('cardPages', () => {
     expect(pages).toHaveLength(1)
     expect(pages[0]!.bands).toEqual([
       { kind: 'heading', label: 'agentistics', count: 2, muted: false },
-      { kind: 'cards', items: [0, 1] },
+      { kind: 'cards', items: [0, 1], height: 7 },
       { kind: 'heading', label: 'aipe', count: 1, muted: false },
-      { kind: 'cards', items: [2] },
+      { kind: 'cards', items: [2], height: 7 },
     ] satisfies CardBand[])
   })
 
@@ -1382,7 +1383,7 @@ describe('cardPages', () => {
           const pages = pack(grouped(['a', 5], ['b', 1], ['c', 9], ['d', 2]),
             { cols, gridRows, cardHeight, capacity: Math.min(cols * 3, CARD_PAGE_MAX) })
           for (const page of pages) {
-            expect(cardPageRows(page.bands, cardHeight)).toBeLessThanOrEqual(gridRows)
+            expect(cardPageRows(page.bands)).toBeLessThanOrEqual(gridRows)
             expect(page.items.length).toBeLessThanOrEqual(Math.min(cols * 3, CARD_PAGE_MAX))
           }
         }
@@ -1398,8 +1399,8 @@ describe('cardPages', () => {
       headed: false,
     })
     expect(pages[0]!.bands).toEqual([
-      { kind: 'cards', items: [0, 1, 2] },
-      { kind: 'cards', items: [3, 4] },
+      { kind: 'cards', items: [0, 1, 2], height: 7 },
+      { kind: 'cards', items: [3, 4], height: 7 },
     ] as CardBand[])
   })
 
@@ -1414,6 +1415,63 @@ describe('cardPages', () => {
   it('has no pages at all for an empty fleet', () => {
     expect(pack([])).toEqual([])
     expect(pack([{ kind: 'heading', label: 'a', count: 0 }])).toEqual([])
+  })
+
+  // One height for the whole grid is the height of the RICHEST card in the fleet, so a single
+  // session carrying a model, a task and a note made every other card two rows taller than it had
+  // anything to put in them. Rows of blank inside a frame are a box with a name in it.
+  it('sizes each band to its own tallest card', () => {
+    // Six cards: the first band's are rich, the second band's have two facts each.
+    const [page] = cardPages({
+      rows: grouped(['rich', 2], ['plain', 2]),
+      cols: 2, gridRows: 40, cardHeight: 8, capacity: 8, headed: true,
+      lines: [6, 5, 2, 2],
+    })
+    const heights = page!.bands.flatMap(b => (b.kind === 'cards' ? [b.height] : []))
+    // The rich band takes its tallest card; the plain band gives the rows back.
+    expect(heights).toEqual([PANE_FRAME_Y + 6, PANE_FRAME_Y + CARD_MIN_LINES])
+  })
+
+  // A band is never squeezed below what makes a card a card, and never grows past what the region
+  // can afford — the ceiling `cardGrid` measured.
+  it('keeps every band between the card floor and the region’s ceiling', () => {
+    for (let cardHeight = 5; cardHeight <= 8; cardHeight++) {
+      const pages = cardPages({
+        rows: grouped(['a', 3], ['b', 2]),
+        cols: 2, gridRows: 44, cardHeight, capacity: 6, headed: true,
+        lines: [9, 1, 0, 4, 2],
+      })
+      for (const page of pages) {
+        for (const b of page.bands) {
+          if (b.kind !== 'cards') continue
+          expect(b.height).toBeGreaterThanOrEqual(
+            Math.min(cardHeight, PANE_FRAME_Y + CARD_MIN_LINES))
+          expect(b.height).toBeLessThanOrEqual(cardHeight)
+        }
+      }
+    }
+  })
+
+  // The rows a short band gives back become another band on the page, not air under the pager.
+  it('spends the rows a short band gives back on more bands', () => {
+    const rows = grouped(['a', 1], ['b', 1], ['c', 1], ['d', 1])
+    const uniform = cardPages({
+      rows, cols: 2, gridRows: 20, cardHeight: 8, capacity: 8, headed: true,
+    })
+    const measured = cardPages({
+      rows, cols: 2, gridRows: 20, cardHeight: 8, capacity: 8, headed: true,
+      lines: [3, 3, 3, 3],
+    })
+    // Four groups of one, so every band costs a heading plus a card: at the ceiling that is 9 rows
+    // and two fit; measured it is 6 and three do.
+    expect(uniform[0]!.items).toHaveLength(2)
+    expect(measured[0]!.items).toHaveLength(3)
+  })
+
+  // Without the counts every band takes the ceiling — the uniform grid, unchanged.
+  it('is the uniform grid when the caller counted nothing', () => {
+    const [page] = pack(grouped(['a', 2]))
+    expect(page!.bands.flatMap(b => (b.kind === 'cards' ? [b.height] : []))).toEqual([7])
   })
 })
 
@@ -1611,12 +1669,13 @@ describe('cardHit', () => {
   const grid = cardGrid({ width: 100, height: 21, total: 10 })!
   const bands: CardBand[] = [
     { kind: 'heading', label: 'agentistics', count: 3, muted: false },
-    { kind: 'cards', items: [0, 1, 2] },
+    { kind: 'cards', items: [0, 1, 2], height: grid.cardHeight },
     { kind: 'heading', label: 'aipe', count: 1, muted: false },
-    { kind: 'cards', items: [3] },
+    // Shorter than the band above it — the bands of one page do NOT share a height.
+    { kind: 'cards', items: [3], height: grid.cardHeight - 1 },
   ]
   const hit = (x: number, y: number) =>
-    cardHit({ bands, cardWidth: grid.cardWidth, cardHeight: grid.cardHeight, gap: grid.gap, x, y })
+    cardHit({ bands, cardWidth: grid.cardWidth, gap: grid.gap, x, y })
 
   // Resolved against the bands that were DRAWN, never against a uniform grid: a heading costs a row
   // and re-deriving the geometry from `cols` answers with the card one row up.
@@ -1640,7 +1699,7 @@ describe('cardHit', () => {
   })
 
   it('never answers with a card the page does not hold', () => {
-    const height = cardPageRows(bands, grid.cardHeight)
+    const height = cardPageRows(bands)
     for (let y = 0; y < height + 2; y++) {
       for (let x = 0; x < grid.cols * (grid.cardWidth + grid.gap) + 2; x++) {
         const found = hit(x, y)
@@ -1657,13 +1716,13 @@ describe('cardStep', () => {
     {
       bands: [
         { kind: 'heading', label: 'a', count: 1, muted: false },
-        { kind: 'cards', items: [0] },
+        { kind: 'cards', items: [0], height: 7 },
         { kind: 'heading', label: 'b', count: 3, muted: false },
-        { kind: 'cards', items: [1, 2, 3] },
+        { kind: 'cards', items: [1, 2, 3], height: 7 },
       ] as CardBand[],
       items: [0, 1, 2, 3],
     },
-    { bands: [{ kind: 'cards', items: [4, 5] }] as CardBand[], items: [4, 5] },
+    { bands: [{ kind: 'cards', items: [4, 5], height: 7 }] as CardBand[], items: [4, 5] },
   ]
 
   it('steps band to band, keeping the column', () => {
