@@ -99,14 +99,38 @@ que se roda uma vez e se lamenta.
 
 ## 2. Bugs achados na varredura de hoje — todos reproduzidos, nenhum é hipótese
 
-### 2.1 Reabrir cria GÊMEOS (alta)
+### 2.1 Reabrir abre a MESMA CONVERSA duas vezes (crítica)
 
-`91f21d7c9f` e `29ca41da44` são duas sessões vivas com a **mesma** task
-("Fix token rotation and member connect"). `1da098e5cb` e `44d649269a`, idem para o SQLite.
-`planTaskReopen` deveria **aposentar** a linha que substitui — é literalmente o que o CLAUDE.md diz
-que ele faz ("everything reopened RETIRES the row it replaced, or a laptop closed twice leaves the
-task holding dead twins under one name"). Na prática ficaram os dois vivos. Reproduza com a
-frota real antes de mexer no planejador: pode ser o registry, não a aritmética.
+Pior do que "duas linhas com a mesma task". Lendo as duas telas lado a lado, elas mostram **texto
+idêntico** — são a mesma conversa aberta em dois terminais ao mesmo tempo:
+
+| par | conversa |
+|---|---|
+| `1da098e5cb` ≡ `44d649269a` | parse-cache sqlite |
+| `1ec25fc3d1` ≡ `e477d4e628` | cockpit-remount-flash, PR #126 |
+
+E o próprio Claude Code detecta e avisa, nas duas:
+
+```
+Remote Control not started here · another Claude Code on this machine
+(started 16s ago) already has Remote Control for this conversation
+```
+
+Ou seja: o harness sabe que há duas instâncias na mesma conversa, e o agentop não. Duas pessoas (ou
+duas automações) digitando na mesma conversa é corrupção silenciosa de trabalho — e não é teórico
+aqui: a sessão do parse-cache **parou sozinha** ao perceber, e escreveu o porquê:
+
+> "tem alguém escrevendo código nessa pasta neste exato momento […] verificação 1: 2 arquivos
+> sendo editados; verificação 2: 3 arquivos. Por isso parei em vez de despachar a Task 4: se eu
+> mandar meu agente agora, os dois escrevem no mesmo arquivo ao mesmo tempo."
+
+Ela estava certa: o "alguém" era o gêmeo dela.
+
+`planTaskReopen` deveria **aposentar** a linha que substitui — é o que o CLAUDE.md afirma que ele
+faz ("everything reopened RETIRES the row it replaced"). Reproduza com a frota real antes de mexer
+na aritmética: pode ser o registry, e não o planejador. E considere a defesa mais barata que
+existe — **recusar reabrir uma `conversationId` que já tem sessão viva**, dizendo qual é. Uma trava
+na porta vale mais que uma limpeza depois.
 
 ### 2.2 A frota inteira parada numa pergunta de onboarding que ninguém detecta (alta)
 
@@ -236,7 +260,77 @@ respondida pela tela E pelo shell faz duas coisas ao mesmo tempo*, e o rodapé s
 que funciona no foco atual. Atualize `cockpitHints` junto — um rodapé que ainda diz `f` depois
 dessa troca é a única documentação da tela mentindo.
 
-### 2.9 Senha em texto claro num título de sessão (alta, mas é decisão do usuário)
+### 2.9 Agrupar e filtrar por QUALQUER dimensão (alta) — a peça de desenho deste documento
+
+Pedido: agrupar por **status** também, e na verdade **toda propriedade agrupável deve ser
+agrupável**, com **filtro** correspondente.
+
+Hoje `SessionGrouping` é uma união escrita à mão — `'none' | 'harness' | 'model' | 'project' |
+'task' | 'repo'` — e o filtro é outra coisa, separada (`states`, `onlyActive`, `search`). São duas
+listas do mesmo conjunto de fatos, mantidas à mão, em lugares diferentes. É exatamente o padrão que
+o CLAUDE.md proíbe para harness ("**never hardcode a harness list anywhere else** — five places
+used to, and TypeScript accepts an array literal with a member missing"), e falha do mesmo jeito:
+adicionar `status` significa lembrar de dois lugares, e quem esquecer um entrega uma dimensão que
+agrupa mas não filtra.
+
+**Faça disso UMA tabela e derive as duas coisas dela.** Um registro por dimensão, em módulo puro:
+
+```ts
+interface SessionDimension {
+  id: SessionDimensionId
+  /** Já localizado. */
+  label: string
+  /** O balde desta linha, ou undefined quando a linha não tem valor nessa dimensão. */
+  keyOf(s: ControlSession): string | undefined
+  /** Já localizado — o nome do balde na banda e no chip do filtro. */
+  labelOf(key: string): string
+}
+
+const SESSION_DIMENSIONS: Record<SessionDimensionId, SessionDimension>
+```
+
+Regras que decorrem disso, e cada uma já tem precedente no repo:
+
+- **`Record<…>`, nunca array literal**, para o build quebrar quando a dimensão nova aparecer. Mesma
+  razão de `HARNESS_SORT`, `SPAWN_SPECS` e `ATTENTION_RULES`.
+- **Agrupar e filtrar leem a MESMA `keyOf`.** Se as duas derivarem o balde por conta própria, um dia
+  o chip "status: aguardando" mostra um conjunto diferente da banda "aguardando", e nada no build
+  reclama. Um teste cruzado deve afirmar isso para toda dimensão: filtrar por um balde devolve
+  exatamente as linhas que a banda daquele balde contém.
+- **`undefined` é um balde real e precisa de nome.** Sessão sem task, sem repo, sem modelo existe —
+  o `showUnfiled` de hoje é esse caso resolvido para UMA dimensão. Generalize: cada dimensão diz
+  como chama o seu "sem valor", e é filtrável como qualquer outro.
+- **O filtro é multi-seleção por dimensão**, e dimensões diferentes se combinam com E. Vale a pena
+  olhar o `FiltersBar` da web (`＋ Filtro` → escolher dimensão → escolher valores, com os chips numa
+  linha por dimensão): o modelo já existe no produto e as duas superfícies passariam a ler igual.
+- **Dimensões mínimas:** status, harness, modelo, projeto, repo, task, marcadas (2.6), e
+  `limit-blocked` cai fora como valor de status, não como dimensão nova.
+- **O estado gravado não pode ser posicional.** `SessionViewPrefs.grouping` é hoje uma string; passe
+  a gravar id de dimensão e, para os filtros, um `Record<SessionDimensionId, string[]>`. Um índice
+  numérico grava "a terceira dimensão" e vira outra coisa quando alguém reordena a lista.
+- **Isto reescreve `groupSessions`/`sessionRows`,** que é onde a banda de marcadas do 2.6 também
+  entra. Faça 2.6 **em cima** desta tabela, não antes dela, ou serão duas refatorações do mesmo
+  arquivo.
+
+### 2.10 Um QUARTO diálogo do Claude, ainda não catalogado (média)
+
+Visto em `29ca41da44`:
+
+```
+Set up auto mode for your environment?
+  ❯ 1. Set it up
+    2. Not now
+    3. Don't show again
+ Enter to confirm · Esc to cancel
+```
+
+O CLAUDE.md já lista três (startup select, permission prompt, `AskUserQuestion`) e diz para "assumir
+que existe outro até alguém ter olhado". Este é o quarto — e o "Make auto mode your default
+permission mode?" do 2.2 pode ser um quinto. Some ambos ao inventário, com versão e data, e note
+que o rodapé é o mesmo `Enter to confirm · Esc to cancel` já conhecido: o problema do 2.2 **não é
+padrão faltando**, é o padrão conhecido não estar pegando.
+
+### 2.11 Senha em texto claro num título de sessão (alta, mas é decisão do usuário)
 
 O título da sessão `15f8c5f36d` contém um e-mail e uma senha. Título e `first_prompt` **viajam**
 para a central; `redactSecrets` não pega "senha X" em prosa. Duas coisas separadas: a senha precisa
@@ -262,15 +356,44 @@ sumir. **Não confie neles**: não passaram por `tsc` nem pelos testes.
 
 ---
 
+### 3.1 O que cada sessão viva disse quando voltou
+
+Colhido lendo as telas depois de responder o diálogo de onboarding. Isto é o "em que pé parou".
+
+| sessão | onde parou | pendência |
+|---|---|---|
+| `d41dc788ef` services-setup | tinha acabado de remover `Setup.tsx` e trocar as strings do i18n quando **bateu o limite no meio** | é a dona das 684 linhas commitadas como `wip`. **Pergunte a ela antes de refazer** |
+| `44d649269a` / `1da098e5cb` parse-cache | **parou de propósito**: detectou outra sessão editando os mesmos arquivos e recusou despachar a Task 4 | são a MESMA conversa (ver 2.1). Escolha UMA, mate a outra, e só então continue |
+| `1ec25fc3d1` / `e477d4e628` remount-flash | terminou, **PR #126 aberto** | idem — mesma conversa duplicada. Nada a implementar |
+| `9a8ef383ec` dashboard-tab | terminou e mergeou (PR #114 → dev, #116 → main), tudo verificado | só resta apagar o branch `feat/dashboard-tab`. É chamada do usuário |
+| `6b23834c1a` aipe | trabalhando, com subagente rodando testes de `recoveryRecordCommand` | é outro repo (`~/aipe`), fora desta spec |
+| `29ca41da44` member-connect | parada num **quarto diálogo de onboarding** (ver 2.10), com "sobe a central pra mim" digitado e não enviado | o texto é do usuário; não envie por ele |
+| `91f21d7c9f` | estava fazendo **exatamente esta consolidação**, em paralelo | trabalho duplicado. Encerre uma das duas |
+| `7c7f9b2e70` session-approve | terminou a análise do token; concluiu "nada a rotacionar" | nada |
+
+Duas leituras que valem mais que a tabela:
+
+- **Nenhuma sessão perdeu trabalho.** O que parecia frota destruída era uma pergunta de onboarding
+  desenhada por cima de nove conversas intactas.
+- **O desperdício real não foi o limite, foi a duplicação.** Duas conversas abertas em dobro, e
+  duas sessões independentes fazendo a mesma consolidação. O limite só tornou visível.
+
+### 3.2 Specs em worktree
+
+Só um arquivo de spec existe em worktree e não no `dev`:
+`docs/superpowers/specs/2026-08-13-session-cards-design.md`. Todos os outros 18 são iguais aos do
+`dev`. Não há material perdido em disco — o estado das sessões estava nas conversas, não em arquivo.
+
 ## 4. Ordem sugerida
 
-1. `limit.ts` + testes (é o pedido, e é o que evita a frota parar de novo)
-2. 2.5 + 2.6 + 2.7 + 2.8 — o highlight (persistir, agrupar, renomear) e as teclas/glifos. Peças
-   pequenas, mesmo arquivo, atrito diário
-3. 2.2 — reabrir retomando a conversa (é perda de trabalho)
-4. 2.1 — gêmeos
-5. Fechar `services-setup` e `parse-cache-sqlite` (verificar e abrir PR)
-6. 2.3 e 2.4
+1. **2.1 — a mesma conversa aberta duas vezes.** Primeiro porque é o único item que **corrompe
+   trabalho**, e porque toda sessão aberta enquanto ele existe pode ser um gêmeo.
+2. `limit.ts` + testes (o pedido original, e o que evita a frota parar de novo)
+3. **2.9 — a tabela de dimensões.** Vem antes do 2.6 de propósito: a banda de marcadas nasce dela.
+4. 2.5 + 2.6 + 2.7 + 2.8 — highlight (persistir, agrupar, renomear) e teclas/glifos
+5. 2.2 + 2.10 — o diálogo de onboarding que não é detectado, e o inventário de diálogos
+6. Fechar `services-setup` e `parse-cache-sqlite` (verificar e abrir PR)
+7. 2.3 e 2.4
 
 ---
 
