@@ -422,7 +422,90 @@ páginas **não soma exatamente**. O número é bom para "quantas cabem", e não
 implementação puder usar PSS (`/proc/<pid>/smaps_rollup`), melhor; se não, diga no comentário que é
 aproximação por cima.
 
-### 2.11 Um QUARTO diálogo do Claude, ainda não catalogado (média)
+### 2.11 Sessão EXTERNA num worktree é invisível para o agentop (alta)
+
+Reportado: "elas estão fazendo outras coisas, só que externas não estão aparecendo aqui no agentop
+para conseguirmos manipular". Reproduzido e diagnosticado.
+
+Uma sessão Claude aberta pelo usuário no terminal, PID 152979, `cwd = ~/agentistics`,
+conversa `49564c71` ("Fix overlapping filters in conversation view"). O agentop a lista como
+**`closed`** — e `agentop session list --json` não devolve **nenhuma** linha `external`.
+
+A identificação do processo está certa: `comm` é `claude`, e `harnessOf` casa por `comm` antes de
+olhar o exe. (De passagem: o exe agora é
+`~/.local/share/claude/versions/2.1.232`, cujo basename é a **versão**, não `claude` — então o
+fallback por basename já não identifica o Claude. Não quebra hoje porque o `comm` casa primeiro,
+mas é uma perna morta que alguém vai confiar depois.)
+
+**O que falha é o casamento de diretório.** `sessionAtCwd` exige igualdade EXATA com `current_cwd`
+ou `project_path`:
+
+```
+processo 152979   cwd = /home/mithrandir/agentistics
+conversa 49564c71 cwd = /home/mithrandir/agentistics/.claude/worktrees/session-filters
+```
+
+Nenhum dos dois casa. É o caso do worktree que o CLAUDE.md já documenta — "claude é lançado na raiz
+do repo e o cwd do kernel fica lá, enquanto a sessão grava o worktree como `current_cwd`" — mas a
+correção de então (aceitar `project_path` além de `current_cwd`) **não cobre este arranjo**, em que
+os dois valores gravados apontam para o worktree e só o PROCESSO ficou na raiz.
+
+Cuidado ao corrigir, e é o motivo de a regra ser exata hoje: **um teste por prefixo deixaria um
+processo em `$HOME` reivindicar toda sessão da máquina.** O que existe aqui e é seguro é o
+`repo-facts.ts` — a raiz git comum é a mesma para a raiz do repo e para qualquer worktree dele, e é
+uma chave que já existe e já é memoizada. Case por REPOSITÓRIO, não por prefixo de caminho, e
+mantenha a desambiguação por harness.
+
+E, independente do casamento: **uma sessão externa que o agentop não consegue casar com conversa
+nenhuma ainda deve APARECER**, como `external`, sem estado e sem verbos — "não sei o que ela é" é
+diferente de "não existe", e hoje o produto está dizendo a segunda coisa.
+
+#### Trazer uma sessão externa para o agentop
+
+Não dá para mover um processo vivo para dentro do tmux — não sem `reptyr` e não de forma que valha
+o risco. O caminho é a CONVERSA, não o processo, e a **ordem importa**:
+
+1. o usuário sai da sessão no terminal dele (a conversa fica gravada);
+2. só então o agentop reabre `--resume <conversationId>` como sessão gerenciada.
+
+**Nessa ordem, nunca ao contrário.** Abrir a gerenciada com a externa ainda viva é exatamente o
+gêmeo do 2.1 — duas instâncias na mesma conversa. Com o cadeado do 2.1 no lugar, a segunda é
+recusada em vez de aberta; sem ele, é corrupção silenciosa.
+
+### 2.12 Os filtros se sobrepõem em vez de se complementarem (alta)
+
+Reportado com print: "filtrar por ativo quando tá on ou off não muda nada se outros filtros como
+status da conversa estiverem ativos".
+
+É o mesmo defeito estrutural do 2.9, visto pelo lado do usuário. Hoje `onlyActive` e o filtro de
+`states` são **dois mecanismos concorrentes decidindo a mesma coisa** — e o CLAUDE.md até declara
+que `onlyActive` "é o único switch que SOBREPÕE a regra da linha nomeada". Sobrepor é justamente o
+que não pode acontecer entre filtros: dois controles em que um anula o outro fazem o segundo
+parecer quebrado.
+
+Regras, e elas caem naturalmente da tabela de dimensões do 2.9:
+
+- **Todo filtro é uma restrição, e restrições se compõem com E.** Nenhum filtro pode ampliar o
+  conjunto, e nenhum pode ignorar outro.
+- **`onlyActive` deixa de ser um switch próprio** e vira o que sempre foi: uma seleção de valores na
+  dimensão `status` (`working`, `waiting`, `waiting-approval`). Some a sobreposição porque some o
+  segundo mecanismo — não porque alguém acertou a ordem de precedência.
+- **A exceção da linha nomeada tem de ser dita na tela.** Se uma linha nomeada escapa dos filtros de
+  histórico, isso é uma regra que o usuário não consegue deduzir; ou ela vira um filtro visível
+  (`incluir nomeadas`) ou ela deixa de existir.
+- **Padrão de fábrica, pedido explicitamente:** agrupado por **projeto** e mostrando só as
+  **sessões ativas**. Isso muda o `DEFAULT_SESSION_VIEW` (hoje agrupa por `repo`), que é declarado
+  UMA vez e lido pelo host, pelo estado inicial da tela e pelo `ctrl+r` — os três leem a constante,
+  então mude só ela.
+- **Quando os filtros esvaziam a lista, a tela diz QUAL deles esvaziou.** Já existe `emptyReason`
+  para isso; com filtros compostos ele passa a precisar nomear a dimensão, não só dizer "o filtro
+  reteve".
+
+> Já existe worktree e sessão para isto: `.claude/worktrees/session-filters`, conversa `49564c71`,
+> com um commit `docs(sessions): spec for filters that complement instead of overriding`. **Não
+> refaça** — leia o que está lá e concilie com o 2.9, porque as duas coisas mexem no mesmo lugar.
+
+### 2.13 Um QUARTO diálogo do Claude, ainda não catalogado (média)
 
 Visto em `29ca41da44`:
 
