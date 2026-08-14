@@ -206,7 +206,7 @@ export interface ControlStrings {
   sessionsUnknownRepo: string
   sessionsWorktreeTag: string
   /** The sessions list's column headings — an unlabelled column is one you have to learn. */
-  sessionsCols: Record<'id' | 'state' | 'title' | 'task' | 'worktree' | 'metrics' | 'harness' | 'where', string>
+  sessionsCols: Record<'id' | 'state' | 'age' | 'title' | 'task' | 'worktree' | 'metrics' | 'harness' | 'where', string>
   /** Detail-pane field labels. */
   sessionsWhere: string
   sessionsModel: string
@@ -223,6 +223,15 @@ export interface ControlStrings {
   sessionsPaneMenu: string
   sessionsPaneDetail: string
   sessionsPaneAsk: string
+  sessionsPaneKeys: string
+  /** What each key on the sessions screen does — the one list `ctrl+h` prints. */
+  sessionsKeyWhat: {
+    move: string; open: string; attach: string; menu: string; section: string
+    newSession: string; search: string; clear: string; kill: string; rename: string
+    note: string; task: string; mark: string; onlyActive: string; closed: string
+    exited: string; unfiled: string; group: string; detail: string; reset: string
+    tabs: string; help: string; quit: string
+  }
   sessionsFinishConfirm: (task: string, count: number) => string
   sessionsReopenConfirm: (task: string) => string
   asideProjects: string
@@ -329,6 +338,13 @@ export interface ControlStrings {
   wizPrompt: string
   wizPromptHint: string
   wizHow: string
+  /** Said while the session is being started, so `enter` is visibly doing something. */
+  wizStarting: string
+  /** Said under a failure: nothing you typed was thrown away. */
+  wizKeptDraft: string
+  wizNoSpawn: string
+  wizNeedHarness: string
+  wizNeedCwd: string
   wizAttached: string
   wizBackground: string
   wizSkip: string
@@ -511,6 +527,7 @@ const EN: ControlStrings = {
   sessionsCols: {
     id: 'id',
     state: 'state',
+    age: 'started',
     title: 'session',
     task: 'task',
     worktree: 'worktree',
@@ -530,6 +547,32 @@ const EN: ControlStrings = {
   sessionsPaneMenu: 'menu',
   sessionsPaneDetail: 'detail',
   sessionsPaneAsk: 'question',
+  sessionsPaneKeys: 'keys',
+  sessionsKeyWhat: {
+    move: 'move the cursor',
+    open: 'switch between the menu and the list',
+    attach: 'attach — or reopen, when nothing is running',
+    menu: 'open the menu on this row',
+    section: 'jump to a menu section',
+    newSession: 'start a session',
+    search: 'search everything, closed conversations included',
+    clear: 'drop the search, then the project, then the task',
+    kill: 'stop this session',
+    rename: 'rename it',
+    note: 'write a note on it',
+    task: 'file it under a task',
+    mark: 'mark this row, and keep it marked',
+    onlyActive: 'show only what is running',
+    closed: 'show closed conversations',
+    exited: 'show sessions that ended',
+    unfiled: 'show sessions under no task',
+    group: 'change the grouping',
+    detail: 'hide the detail pane',
+    reset: 'back to how the app opens',
+    tabs: 'change screen',
+    help: 'this list',
+    quit: 'leave agentop',
+  },
   sessionsFinishConfirm: (task, count) =>
     `Mark "${task}" finished? Its ${count} session${count === 1 ? '' : 's'} stay listed behind the "finished tasks" switch.`,
   sessionsReopenConfirm: task => `Reopen "${task}"?`,
@@ -637,6 +680,11 @@ const EN: ControlStrings = {
   wizPrompt: 'First prompt (optional)',
   wizPromptHint: 'leave empty to start with nothing typed',
   wizHow: 'Start it how?',
+  wizStarting: 'starting…',
+  wizKeptDraft: 'nothing you typed was lost — esc goes back a step, or try again',
+  wizNoSpawn: 'this build cannot start sessions.',
+  wizNeedHarness: 'pick an assistant first.',
+  wizNeedCwd: 'pick a folder first.',
   wizAttached: 'attached — take this terminal now',
   wizBackground: 'background — keep it running and stay here',
   wizSkip: 'use the default',
@@ -810,6 +858,7 @@ const PT: ControlStrings = {
   sessionsCols: {
     id: 'id',
     state: 'estado',
+    age: 'iniciada',
     title: 'sessão',
     task: 'tarefa',
     worktree: 'worktree',
@@ -829,6 +878,32 @@ const PT: ControlStrings = {
   sessionsPaneMenu: 'menu',
   sessionsPaneDetail: 'detalhe',
   sessionsPaneAsk: 'pergunta',
+  sessionsPaneKeys: 'teclas',
+  sessionsKeyWhat: {
+    move: 'move o cursor',
+    open: 'alterna entre o menu e a lista',
+    attach: 'anexa — ou reabre, quando não há nada rodando',
+    menu: 'abre o menu nessa linha',
+    section: 'pula para uma seção do menu',
+    newSession: 'inicia uma sessão',
+    search: 'busca tudo, inclusive conversas fechadas',
+    clear: 'limpa a busca, depois o projeto, depois a tarefa',
+    kill: 'encerra esta sessão',
+    rename: 'renomeia',
+    note: 'escreve uma nota nela',
+    task: 'arquiva sob uma tarefa',
+    mark: 'marca esta linha, e mantém marcada',
+    onlyActive: 'mostra só o que está rodando',
+    closed: 'mostra conversas fechadas',
+    exited: 'mostra sessões encerradas',
+    unfiled: 'mostra sessões sem tarefa',
+    group: 'muda o agrupamento',
+    detail: 'oculta o painel de detalhe',
+    reset: 'volta para como o app abre',
+    tabs: 'muda de tela',
+    help: 'esta lista',
+    quit: 'sai do agentop',
+  },
   sessionsFinishConfirm: (task, count) =>
     `Finalizar "${task}"? Suas ${count} sessõe${count === 1 ? '' : 's'} continuam listadas atrás do interruptor "tarefas finalizadas".`,
   sessionsReopenConfirm: task => `Reabrir "${task}"?`,
@@ -936,6 +1011,11 @@ const PT: ControlStrings = {
   wizPrompt: 'Primeiro prompt (opcional)',
   wizPromptHint: 'deixe vazio para começar sem nada digitado',
   wizHow: 'Iniciar como?',
+  wizStarting: 'iniciando…',
+  wizKeptDraft: 'nada do que você digitou foi perdido — esc volta um passo, ou tente de novo',
+  wizNoSpawn: 'esta build não consegue iniciar sessões.',
+  wizNeedHarness: 'escolha um assistente primeiro.',
+  wizNeedCwd: 'escolha uma pasta primeiro.',
   wizAttached: 'anexada — assume este terminal agora',
   wizBackground: 'background — deixa rodando e fica aqui',
   wizSkip: 'usar o padrão',

@@ -20,11 +20,46 @@ nothing else changes.
 
     agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>]
                               [--cwd <path>] [--name "label"] [--task "<name>"]
+    agentop session ls     [--all] [--group repo|project|task|harness|model|none]
+                           [--json] [--width <n>] [--no-color]
     agentop session list   [--json]
     agentop session attach <id|name>
     agentop session kill   <id|name>
     agentop session rename <id|name> "label"
     agentop session note   <id|name> "text"
+
+### `ls` — the cockpit's table, printed once
+
+`ls` is the fleet for a PERSON to read: the same table the cockpit's fleet pane draws, printed to
+stdout and gone. Only what is running, grouped by project — `--all` adds the finished, lost and
+closed conversations, `--group` changes the sections.
+
+    agentop session ls                    # what is running, by project
+    agentop session ls --all --group repo # everything, by repository
+    agentop session ls --json             # exactly what `list --json` prints
+
+It draws by CONSUMING the cockpit's own arithmetic (`packages/tui/src/control/sessions.ts`) rather
+than by re-implementing it: `sessionColumns` measures the page so the columns line up, `groupSessions`
+and `sessionRows` decide the sections and the air between them, `sessionRunning` decides what
+"running" means — an `external` row included, since it exists because a live assistant process was
+found. A second copy of any of those would be a second set of rules that agree until the day they do
+not, which this repository has already paid for once. What `agentop session ls` owns is the
+DRAWING: ANSI written to a terminal instead of Ink components, the width taken from
+`process.stdout.columns`, and a final clip so no row can wrap.
+
+`ls` is a new command rather than a flag on `list`, because `list` is the tab-separated dump scripts
+already read line by line. Its output does not change.
+
+Piped output is plain: `process.stdout.isTTY` decides colour (`NO_COLOR` and `--no-color` override
+it), and a pipe gets no invented terminal width — the table comes out as wide as its content, so
+nothing is truncated to fit a terminal nobody is looking at.
+
+A pipe can still SAY how wide it is, though, and a pager is a reader: `resolveWidth` takes `--width`
+first, then the terminal's own columns, then **`COLUMNS`** when there is no tty to ask, and only then
+the natural width. `COLUMNS=80 agentop session ls | less -S` therefore fits 80 columns instead of
+handing `less` a row it has to break. A `COLUMNS` that is not a width falls through rather than
+throwing, and no minimum is imposed on one that is — a caller asking for twenty columns gets twenty,
+and the clip is what keeps the rows inside them.
 
 ## Orchestrating several at once
 
@@ -186,7 +221,7 @@ keystroke is printed before it does. `--cwd` defaults to the directory you are i
 
 ## What a session is doing
 
-`agentop session list` reports a state per session:
+`agentop session ls` / `list` report a state per session:
 
 | State | Meaning |
 |---|---|
@@ -204,7 +239,7 @@ moving is waiting for you; there is no third thing it could be doing. What canno
 Telling a blocking question apart from an ordinary pause needs screen markers captured from the real
 CLI, so it exists only for the harnesses that were probed (claude, codex, kimi). For any other
 harness a blocking question shows as `waiting` — still counted, still surfaced, but the reason
-cannot be named. `list` says so rather than leaving you to assume otherwise.
+cannot be named. `ls` and `list` both say so rather than leaving you to assume otherwise.
 
 The states are also honest about their own timing. When a turn ends, the poll that *observes* it
 ending sees a frame that changed since the last one, which is movement — so the session reads
@@ -227,6 +262,29 @@ one prompt non-interactively and exits — so agentop types the prompt in once t
 
 Codex's reasoning effort is a `-c key=value` configuration override rather than a flag; it is not
 wired up because the key could not be verified from the CLI itself, and agentop does not guess flags.
+
+## Scrolling an attached session
+
+Sessions are hosted on agentop's own tmux socket (`-L agentop`), and agentop sets four options on
+it before the first one exists: `remain-on-exit` (a finished session stays listable with its last
+frame readable), `mouse on`, a `history-limit` of 50000 lines, and `status off`.
+
+The status bar is off because every fact it carries is wrong here: it lists windows and an agentop
+session is one window with one pane, it shows the session name and that name is `agentop-<id>`
+rather than anything a person chose, and the cockpit you came from already shows all of it. It costs
+a row of the assistant's screen to say nothing, in a colour that is hard to ignore.
+
+The mouse is what makes the wheel scroll at all — without it a pane shows the last screenful and
+nothing else, so attaching to a session to read what it did was attaching to a session you cannot
+read. The trade is that dragging to select now goes to tmux rather than to your terminal: **hold
+shift** to select and copy the terminal's own way.
+
+The scrollback is set up front because it does not apply retroactively — a pane created before it
+keeps tmux's default 2000 for as long as it lives. Sessions started by an older agentop therefore
+keep the small buffer until they are reopened; the mouse, being a server option, applies to them
+immediately.
+
+None of this touches your own tmux: different socket, different server, different config.
 
 ## Where state lives
 

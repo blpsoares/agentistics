@@ -10,6 +10,10 @@
  */
 
 import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
+// `GROUPINGS` is the ONE list of the dimensions a fleet can be grouped along — the same rule
+// `HARNESS_SORT` follows: a second hand-written list here would accept a value the table cannot
+// draw, or refuse one it can, and TypeScript would accept both.
+import { GROUPINGS, type SessionGrouping } from '@agentistics/tui/control/sessions'
 
 export type SessionCommand =
   | {
@@ -24,6 +28,26 @@ export type SessionCommand =
       task?: string
     }
   | { kind: 'list'; json?: boolean }
+  /**
+   * The fleet as a TABLE, for a person to read — the cockpit's sessions screen printed once.
+   *
+   * A separate command from `list` rather than a flag on it. `list` is a tab-separated dump that
+   * scripts already read line by line, and widening it into columns under those scripts would break
+   * them for a cosmetic reason. `ls` starts life as the human one, so it can default to what a
+   * person means by the question — what is running, grouped by where I am working — while `list`
+   * keeps meaning everything.
+   */
+  | {
+      kind: 'ls'
+      /** Include what is not running: finished, lost and closed conversations. */
+      all: boolean
+      group: SessionGrouping
+      json?: boolean
+      /** Columns to fit, when the caller states one rather than letting the terminal answer. */
+      width?: number
+      /** Colour, when the caller overrides what the terminal and `NO_COLOR` would decide. */
+      color?: boolean
+    }
   /**
    * Start SEVERAL sessions at once, all filed under one task.
    *
@@ -72,6 +96,8 @@ export function parseSessionArgs(argv: string[]): SessionCommand {
 
   if (head === 'list') return { kind: 'list', ...(jsonFlag ? { json: true } : {}) }
 
+  if (head === 'ls') return parseLs(argv.slice(1), jsonFlag)
+
   if (head === 'batch') return parseBatch(argv.slice(1), jsonFlag)
 
   if (head === 'open') {
@@ -103,7 +129,7 @@ export function parseSessionArgs(argv: string[]): SessionCommand {
   if (!isHarness(head)) {
     return {
       kind: 'error',
-      message: `Unknown harness or action: ${head}. Expected one of ${HARNESS_ORDER.join(', ')} — or list, attach, kill, rename, note.`,
+      message: `Unknown harness or action: ${head}. Expected one of ${HARNESS_ORDER.join(', ')} — or ls, list, attach, kill, rename, note.`,
     }
   }
 
@@ -137,6 +163,66 @@ export function parseSessionArgs(argv: string[]): SessionCommand {
     else if (arg === '--effort') cmd.effort = value
     else if (arg === '--cwd') cmd.cwd = value
     else if (arg === '--name') cmd.label = value
+  }
+
+  return cmd
+}
+
+/**
+ * What `ls` shows when nobody says otherwise: what is RUNNING, grouped by the project it runs in.
+ *
+ * Stated once, here, so the parser, the help text and the docs cannot drift into describing three
+ * different defaults — the same reason the cockpit keeps a `DEFAULT_SESSION_VIEW`.
+ */
+export const LS_DEFAULT: { all: boolean; group: SessionGrouping } = { all: false, group: 'project' }
+
+function isGrouping(v: string): v is SessionGrouping {
+  return (GROUPINGS as readonly string[]).includes(v)
+}
+
+/** `agentop session ls [--all] [--group <dimension>] [--json] [--width <n>] [--no-color]`. */
+function parseLs(argv: string[], json: boolean): SessionCommand {
+  const cmd: Extract<SessionCommand, { kind: 'ls' }> = {
+    kind: 'ls', all: LS_DEFAULT.all, group: LS_DEFAULT.group, ...(json ? { json: true } : {}),
+  }
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!
+    if (arg === '--json') continue
+    if (arg === '--all' || arg === '-a') { cmd.all = true; continue }
+    if (arg === '--no-color' || arg === '--no-colour') { cmd.color = false; continue }
+    if (arg === '--color' || arg === '--colour') { cmd.color = true; continue }
+
+    if (arg === '--group' || arg === '-g') {
+      const value = argv[i + 1]
+      // A flag whose value is missing is an ERROR, never a swallowed neighbour: `--group --json`
+      // must not quietly group by "--json" and then drop the JSON output.
+      if (value === undefined || value.startsWith('-')) {
+        return { kind: 'error', message: `Missing value for ${arg}. Accepted: ${GROUPINGS.join(', ')}.` }
+      }
+      i++
+      if (!isGrouping(value)) {
+        return { kind: 'error', message: `Unknown grouping "${value}". Accepted: ${GROUPINGS.join(', ')}.` }
+      }
+      cmd.group = value
+      continue
+    }
+
+    if (arg === '--width' || arg === '-w') {
+      const value = argv[i + 1]
+      if (value === undefined || value.startsWith('-')) {
+        return { kind: 'error', message: `Missing value for ${arg}` }
+      }
+      i++
+      const n = Number(value)
+      if (!Number.isInteger(n) || n <= 0) {
+        return { kind: 'error', message: `--width takes a positive number of columns, not "${value}".` }
+      }
+      cmd.width = n
+      continue
+    }
+
+    return { kind: 'error', message: `Unknown option: ${arg}` }
   }
 
   return cmd

@@ -30,10 +30,20 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   ├── agentop watch        → server/otel-watcher.ts (daemon only)
   ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull; `up` takes -y/-n and --cache/--no-cache, honored on the standalone path too)
   ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
-  ├── agentop session …    → server/sessions/cli-session.ts (start/list/attach/kill/rename/note;
+  ├── agentop session …    → server/sessions/cli-session.ts (start/ls/list/attach/kill/rename/note;
   │                          `--bg` detaches via tmux, attach prints the REAL detach key; `list`
   │                          reports what each session is DOING and names the harnesses whose
-  │                          approval detection is unavailable)
+  │                          approval detection is unavailable). **`ls` is the COCKPIT'S TABLE
+  │                          printed**: it consumes `packages/tui/src/control/sessions.ts` —
+  │                          `sessionColumns` / `groupSessions` / `sessionRows` / `sessionRunning`
+  │                          — through the pure `session-table.ts`, and owns only the DRAWING (ANSI,
+  │                          `process.stdout.columns`, a final clip so no row can wrap). A second
+  │                          implementation of the table would be a second set of rules, which is
+  │                          the bug `task-reopen.ts` exists to have fixed once. It is a NEW command
+  │                          rather than a flag: `list` is the tab-separated dump scripts already
+  │                          read, so its output is untouched and both print the same `--json`.
+  │                          Without a tty there is no colour and the width comes from `COLUMNS`
+  │                          when there is one — a pager IS a reader — so `session ls | grep` works
   ├── agentop hooks …      → server/cli-hooks.ts (install/uninstall/status/context — the Claude Code
   │                          integration: a SKILL that teaches the `session batch` contract and a
   │                          SessionStart HOOK that injects the live fleet. Explicit, idempotent,
@@ -108,7 +118,12 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          falling back to the COMMON git dir's parent (`--show-toplevel` would
   │                          answer with the worktree, which is the one name that must not become
   │                          the key). Memoized by directory: the poll runs every five seconds.
-  │                          See docs/session-manager.md
+  │                          The pure `control-session.ts` is the ONE `SessionView` -> `ControlSession`
+  │                          mapping (it lived inside `cli-start.ts` while the cockpit was the only
+  │                          thing drawing a row) and `session-table.ts` is the pure renderer behind
+  │                          `agentop session ls` — including `emptyReason`, which keeps "the poll
+  │                          failed", "there is nothing" and "the filter withheld it" three different
+  │                          sentences. See docs/session-manager.md
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)

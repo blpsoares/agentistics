@@ -5,7 +5,7 @@
 
 import {
   attachArgs, capturePaneArgs, isSessionGoneError, killSessionArgs, listSessionsArgs,
-  newSessionArgs, parsePrefix, parseTmuxList, remainOnExitArgs, sendKeysEnterArgs,
+  newSessionArgs, parsePrefix, parseTmuxList, serverOptionsArgs, sendKeysEnterArgs,
   sendKeysLiteralArgs, showPrefixArgs, trimCapture,
 } from './tmux-cli'
 import type { BackendSession, BackendSpawn, SessionBackend } from './types'
@@ -41,9 +41,10 @@ export const tmuxBackend: SessionBackend = {
   },
 
   async spawn(req: BackendSpawn) {
-    // Set BEFORE the session exists, so a command that exits immediately is still held. Setting it
-    // afterwards is a race the fast-failing case always wins.
-    await tmux(remainOnExitArgs())
+    // Set BEFORE the session exists. `remain-on-exit` afterwards is a race the fast-failing case
+    // always wins, and `history-limit` afterwards does not apply to this pane at all — see
+    // `serverOptionsArgs`.
+    for (const args of serverOptionsArgs()) await tmux(args)
     const { code, out } = await tmux(newSessionArgs({ id: req.id, cwd: req.cwd, argv: req.argv }))
     if (code !== 0) throw new Error(out.trim() || `tmux new-session failed (code ${code})`)
     if (req.sendKeys) {

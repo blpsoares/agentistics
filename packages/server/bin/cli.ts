@@ -59,7 +59,8 @@ Commands:
   watch         Start the background metrics daemon only
   central       Manage the team central (Docker; runs from anywhere)
   member        Configure this machine as a team member
-  session       Start / list / attach assistant sessions (tmux-backed; --bg detaches)
+  session       Start / list / attach assistant sessions (tmux-backed; --bg detaches);
+                'session ls' prints the cockpit's table of what is running
   hooks         Teach Claude Code to run work in parallel through agentop
                 (installs a skill + a SessionStart hook; explicit, reversible)
   ci-push       One-shot push of a CI runner's metrics to a central
