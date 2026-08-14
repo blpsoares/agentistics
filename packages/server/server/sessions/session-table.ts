@@ -49,7 +49,14 @@ import type { ControlSession, SessionState } from '@agentistics/tui/control'
  */
 export interface SessionTableStrings {
   cols: Record<keyof SessionColumns, string>
-  unknown: { harness: string; model: string; project: string; task: string; repo: string }
+  unknown: {
+    harness: string
+    model: string
+    project: string
+    task: string
+    repo: string
+    goneProject: string
+  }
   /** Heads the block of conversations that are not running. */
   closed: string
   /** Marks a task the user finished, on its heading. */

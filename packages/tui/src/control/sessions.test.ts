@@ -27,6 +27,7 @@ const LAYOUT = {
 
 const UNKNOWN = {
   harness: 'harness unknown', model: 'no model recorded', project: 'no directory', task: 'no task',
+  goneProject: 'directory no longer exists',
   repo: 'no repository',
 }
 
@@ -87,6 +88,47 @@ describe('groupSessions', () => {
     session('b', { harness: 'codex', project: 'x', state: 'waiting-approval' }),
     session('c', { harness: 'claude', model: 'opus', project: 'y', state: 'working' }),
   ]
+
+  it('does not make a PROJECT out of a directory that no longer exists', () => {
+    // Reported from a real machine: the worktree `.claude/worktrees/member-connect-rotate` was
+    // removed with its session still registered, so every `git -C` failed and the row grouped under
+    // the last segment of a path that names nothing — a project of its own, standing beside
+    // `Agentistics`, which is the project it was a worktree of.
+    const gone = [
+      session('w', { project: 'member-connect-rotate', dirGone: 'gone' }),
+      session('v', { project: 'billing-basis', dirGone: 'gone' }),
+      session('m', { project: 'agentistics' }),
+    ]
+    const g = groupSessions(gone, 'project', UNKNOWN)
+    const labels = g.map(x => x.label).sort()
+    expect(labels).toEqual(['agentistics', 'directory no longer exists'])
+    // Both missing rows are in ONE bucket: what they have in common is that nobody knows where
+    // they were, and that is a single fact rather than two project names.
+    expect(g.find(x => x.label === 'directory no longer exists')!.sessions.map(s => s.id).sort())
+      .toEqual(['v', 'w'])
+  })
+
+  it('still groups a gone directory under the project the registry recorded for it', () => {
+    // The recovery case: `ManagedSession.repo` was written at spawn, so the row keeps the project
+    // it belonged to and never reaches the bucket at all.
+    const g = groupSessions(
+      [session('w', { project: 'member-connect-rotate', projectGroup: 'agentistics', dirGone: 'gone' })],
+      'project',
+      UNKNOWN,
+    )
+    expect(g.map(x => x.label)).toEqual(['agentistics'])
+  })
+
+  it('keeps "gone" and "no directory recorded" as two different headings', () => {
+    // A row with no cwd at all is a different absence from a row whose recorded path is not there,
+    // and one heading for both would read as a category that neither of them is.
+    const g = groupSessions(
+      [session('n', { project: '' }), session('w', { project: 'x', dirGone: 'gone' })],
+      'project',
+      UNKNOWN,
+    )
+    expect(g.map(x => x.label).sort()).toEqual(['directory no longer exists', 'no directory'])
+  })
 
   it('returns one unnamed group when grouping is off', () => {
     const g = groupSessions(list, 'none', UNKNOWN)
@@ -211,7 +253,7 @@ describe('detailLines', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'started outside agentop', closed: 'not running', doing: 'saying', task: 'task', metrics: 'usage',
-    context: 'window',
+    context: 'window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
@@ -312,7 +354,7 @@ describe('detailLines — the two non-actionable rows say different things', () 
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'started outside agentop', closed: 'not running', doing: 'saying',
-    task: 'task', metrics: 'usage', context: 'window',
+    task: 'task', metrics: 'usage', context: 'window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
@@ -2055,7 +2097,7 @@ describe('detailLines — named in two places', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'external', closed: 'closed', doing: 'saying', task: 'task', metrics: 'usage',
-    context: 'window',
+    context: 'window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
@@ -2250,7 +2292,7 @@ describe('detailLines — the gauge spelled out', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'external', closed: 'closed', doing: 'saying', task: 'task', metrics: 'usage',
-    context: 'context window',
+    context: 'context window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
 

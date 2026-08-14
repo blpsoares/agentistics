@@ -289,3 +289,68 @@ describe("what the harness says about its OWN session", () => {
     expect(v!.label).toBe('Principal')
   })
 })
+
+describe('a row that KNOWS which conversation it drives', () => {
+  const conv = (sessionId: string, over: Record<string, unknown> = {}) => ({
+    sessionId,
+    harness: 'claude' as const,
+    cwd: '/repo/a',
+    title: sessionId,
+    lastActivityMs: 1,
+    resumable: true,
+    firstPrompt: '',
+    ...over,
+  })
+
+  it('offers exactly that conversation, never the directory guess', () => {
+    const reconciled = [row('a', {
+      status: 'lost',
+      backend: undefined,
+      managed: managed('a', { conversationId: 'mine' }),
+    })]
+    const [v] = buildSessionViews({
+      reconciled,
+      activity: new Map(),
+      processes: [],
+      // `older` is the one the harness+directory guess would pick — same harness, same directory.
+      conversations: [conv('older'), conv('mine')],
+    })
+    expect(v!.resume?.sessionId).toBe('mine')
+  })
+
+  it('offers NOTHING when the store does not hold that conversation yet', () => {
+    // Ordinary now that the id is recorded at SPAWN rather than only at reopen: a session minutes
+    // old has an id and no transcript written under it. Falling through to the guess would hand it
+    // an unrelated conversation from the same directory — the bug that reopened three rows onto one.
+    const reconciled = [row('a', {
+      status: 'lost',
+      backend: undefined,
+      managed: managed('a', { conversationId: 'not-written-yet' }),
+    })]
+    const [v] = buildSessionViews({
+      reconciled,
+      activity: new Map(),
+      processes: [],
+      conversations: [conv('older')],
+    })
+    expect(v!.resume).toBeUndefined()
+  })
+
+  it('still guesses for a row that recorded nothing — the old behaviour, unchanged', () => {
+    const reconciled = [row('a', { status: 'lost', backend: undefined })]
+    const [v] = buildSessionViews({
+      reconciled,
+      activity: new Map(),
+      processes: [],
+      conversations: [conv('older')],
+    })
+    expect(v!.resume?.sessionId).toBe('older')
+  })
+
+  it('carries the repository the registry recorded, for the caller that resolves the facts', () => {
+    const repo = { repo: 'blpsoares/agentistics', root: 'agentistics', worktree: true }
+    const reconciled = [row('a', { managed: managed('a', { repo }) })]
+    const [v] = buildSessionViews({ reconciled, activity: new Map(), processes: [] })
+    expect(v!.recordedRepo).toEqual(repo)
+  })
+})

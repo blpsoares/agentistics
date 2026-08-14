@@ -351,8 +351,21 @@ export interface ControlSession {
    * and `agentistics`, which files one project as three. It is a SEPARATE field from `project`
    * because the row must still say which directory it is actually in: with several worktrees open
    * at once, the folder cell is the only thing telling them apart.
+   *
+   * It is also where a row whose directory is GONE and whose repository was never recorded is filed:
+   * the host puts an already-localized sentence here rather than a name, because the alternative is
+   * grouping under the last segment of a path that resolves to nothing — which is how a removed
+   * worktree appeared as a project of its own beside the project it was a worktree of.
    */
   projectGroup?: string
+  /**
+   * Already-localized: this row's directory does not exist on this machine any more.
+   *
+   * Present whether or not the repository was recovered from what the registry recorded, because
+   * the two are different facts — one says which project the work belonged to, this one says the
+   * path is not there, which is also the answer to "why can I not reopen it".
+   */
+  dirGone?: string
   /** True only for a LINKED worktree. Said on the row, because it changes what the row IS. */
   worktree?: boolean
   /**
@@ -367,6 +380,22 @@ export interface ControlSession {
   note?: string
   /** The piece of work this session belongs to, when the user said so. Groups the list. */
   task?: string
+  /**
+   * The harness's own conversation id this row is KNOWN to be writing — what `--resume` takes.
+   *
+   * The exact answer to "where does this continue from", and the only one this screen may state:
+   * it is recorded, never inferred. Absent on a row started before the id could be recorded, and on
+   * every row of a harness that cannot report one — see `conversationBlind`.
+   */
+  conversationId?: string
+  /**
+   * Already-localized: this harness can never report which conversation a session it started is
+   * writing, so no link can be recorded for this row and anything offered to reopen is inferred.
+   *
+   * Present only on a hosted row that has no `conversationId`. Same discipline as `approvalBlind`:
+   * a capability that does not exist is said in words rather than left to look like an absence.
+   */
+  conversationBlind?: string
   /**
    * The conversation this row could REOPEN, when there is one.
    *

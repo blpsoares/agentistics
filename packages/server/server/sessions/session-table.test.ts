@@ -12,7 +12,7 @@ const STRINGS: SessionTableStrings = {
   },
   unknown: {
     harness: 'harness unknown', model: 'no model recorded', project: 'no directory recorded',
-    task: 'no task', repo: 'no repository',
+    task: 'no task', repo: 'no repository', goneProject: 'directory no longer exists',
   },
   closed: 'closed',
   done: 'finished',

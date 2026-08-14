@@ -29,6 +29,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
@@ -89,7 +90,7 @@ import { resolveBackend } from './sessions'
 import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
 import { findProjects } from './sessions/project-source'
 import { candidatePath } from './sessions/project-search'
-import { repoFacts } from './sessions/repo-facts'
+import { recordedRepo, repoFacts } from './sessions/repo-facts'
 // The `SessionView` -> `ControlSession` mapping, extracted so `agentop session ls` draws the same
 // rows from the same decision rather than mapping the fleet a second time.
 import { toControlSession } from './sessions/control-session'
@@ -1261,6 +1262,9 @@ async function spawnManaged(req: {
     ...(req.prompt ? { prompt: req.prompt } : {}),
     ...(req.model ? { model: req.model } : {}),
     ...(req.effort ? { effort: req.effort } : {}),
+    // Offered for a FRESH session; `planSpawn` applies it only where the CLI accepts one and reports
+    // back what it actually did. A resume ignores it — that conversation already has an id.
+    conversationId: randomUUID(),
   })
   if (!planned.ok) return { ok: false, message: explainSpawnError(planned.error, s) }
 
@@ -1289,6 +1293,15 @@ async function spawnManaged(req: {
     ...(req.effort ? { effort: req.effort } : {}),
     ...(req.label ? { label: req.label } : {}),
     ...(req.task ? { task: req.task } : {}),
+    // Recorded at the one moment it is certain — the harness was just handed this id, or we asked
+    // it to reopen this conversation. Without it a fresh session's link exists only while the
+    // harness's own record does (`harness-sessions.ts`, claude alone), so a session started with
+    // the cockpit closed had nothing to fall back on but the harness-and-directory guess.
+    ...(planned.plan.conversationId ? { conversationId: planned.plan.conversationId } : {}),
+    // Which repository this directory is in, while the directory is provably there. See
+    // `ManagedSession.repo`: a worktree removed later leaves a path that names nothing, and the
+    // grouping fell through to its last path segment as though it were a project.
+    ...(await recordedRepo(req.cwd)),
   })
 
   const name = req.label ?? id
@@ -1925,8 +1938,10 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const finishedTasks = (await readPreferences()).finishedTasks ?? []
       // Resolved per session and MEMOIZED by directory: a directory does not change repository, and
       // this poll runs every five seconds over the whole fleet — asking git three times per session
-      // per tick would be a hundred processes a minute to learn the same thing.
-      const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd)))
+      // per tick would be a hundred processes a minute to learn the same thing. What the registry
+      // recorded at spawn is handed over with it, so a worktree somebody has since removed keeps
+      // the project it belongs to instead of becoming one.
+      const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd, v.recordedRepo)))
       // What the machine LOST and could start again — named row by row for the offer, from the
       // SAME selection the count below reports. Read off the snapshot the poll already produced
       // rather than recomputed, so the screen cannot be shown two answers to one question while a

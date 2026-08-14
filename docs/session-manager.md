@@ -184,6 +184,33 @@ says which checkout it is. Keying on the directory name filed three checkouts of
 three projects, which is the split the repository dimension exists to avoid — and since this is the
 default grouping, it was the first thing anyone saw.
 
+**A directory that no longer exists** is its own case, and not the same one as a directory outside a
+repository. Removing a worktree leaves the session registered at a path that names nothing: git
+cannot be asked anything about it, so the grouping used to fall back to the last segment of that path
+and a removed `member-connect-rotate` appeared as a project of its own, standing next to
+`Agentistics` — the project it was a worktree of. A folder name is a guess when the path resolves to
+nothing, so two things happen instead. The repository is **recorded when the session starts**, which
+is the one moment the directory is provably there, and a row whose worktree is later removed keeps
+the project it belonged to. Where nothing was recorded — a row from an older build, or a conversation
+the store remembers without a registry entry — the row is filed under **"directory no longer exists"**
+and says so on its detail pane, which is also the answer to why reopening it will fail. The folder
+cell still names the directory, because that *is* where the session was.
+
+### Where a session continues from
+
+A row can name the conversation it is writing, and that is what `--resume` takes. It is **recorded,
+never inferred**: agentop hands the id to the CLI when it starts the session (`claude --session-id`,
+`copilot --session-id`) or when it reopens one, so there is nothing left to guess. Claude also writes
+its own record while the process lives, which is read as well.
+
+For codex, kimi, gemini and antigravity no such link can exist — those CLIs invent an id and never
+report it — so the row says so rather than showing a guess. The fallback everything else uses matches
+by harness and directory, which gives *every* session of one repository the same conversation: good
+enough to offer a reopen you confirm by its title, not good enough to be presented as the conversation
+you are in. A row that does know its conversation never falls back to that guess, even in the minutes
+before the transcript exists: "not written yet" and "some other conversation in this directory" are
+different answers.
+
 ### Tasks
 
 A task is whatever you say it is: a free string, chosen while starting a session or added later, and

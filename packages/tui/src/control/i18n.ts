@@ -229,6 +229,10 @@ export interface ControlStrings {
   sessionsMetrics: string
   /** Detail-pane label for the context gauge spelled out. */
   sessionsContext: string
+  /** Detail-pane label for the conversation id this row continues from. */
+  sessionsConversation: string
+  /** Grouping heading for rows whose recorded directory no longer exists on this machine. */
+  sessionsGoneProject: string
   /** The name that did NOT win, when a session is named in agentop AND inside the harness. */
   sessionsAlsoLabel: string
   sessionsAlsoHarness: string
@@ -639,6 +643,8 @@ const EN: ControlStrings = {
   sessionsTask: 'task',
   sessionsMetrics: 'usage',
   sessionsContext: 'context window',
+  sessionsConversation: 'conversation',
+  sessionsGoneProject: 'directory no longer exists',
   sessionsAlsoLabel: 'named here',
   sessionsAlsoHarness: 'named inside',
   sessionsDetach: 'to detach',
@@ -1035,6 +1041,8 @@ const PT: ControlStrings = {
   sessionsTask: 'tarefa',
   sessionsMetrics: 'uso',
   sessionsContext: 'janela de contexto',
+  sessionsConversation: 'conversa',
+  sessionsGoneProject: 'diretório não existe mais',
   sessionsAlsoLabel: 'nome daqui',
   sessionsAlsoHarness: 'nome de dentro',
   sessionsDetach: 'para sair',

@@ -333,6 +333,7 @@ export function Sessions({
       project: s.sessionsUnknownProject,
       task: s.sessionsUnknownTask,
       repo: s.sessionsUnknownRepo,
+      goneProject: s.sessionsGoneProject,
     },
     fleet?.finishedTasks ?? [],
     order,
@@ -394,6 +395,7 @@ export function Sessions({
     task: s.sessionsTask,
     metrics: s.sessionsMetrics,
     context: s.sessionsContext,
+    conversation: s.sessionsConversation,
     alsoLabel: s.sessionsAlsoLabel,
     alsoHarness: s.sessionsAlsoHarness,
     // Absent when the backend did not report one — an invented keystroke is worse than none, since
