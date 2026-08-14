@@ -101,6 +101,30 @@ describe('openParseCache', () => {
     expect(() => c.close()).not.toThrow()
   })
 
+  test('a pre-existing table with the wrong columns degrades to a no-op, never a throw', async () => {
+    // `CREATE TABLE IF NOT EXISTS` only matches on the table NAME, never the columns —
+    // a `parse_cache` table left over with a different shape (schema drift, an older
+    // on-disk schema, a partially corrupt file) sails through db.exec(SCHEMA) and only
+    // fails once a prepared statement referencing a missing column is compiled.
+    //
+    // The `used` column has to be PRESENT (so `CREATE INDEX IF NOT EXISTS
+    // parse_cache_used ON parse_cache(used)` inside the already-guarded db.exec(SCHEMA)
+    // succeeds as a no-op), with `key`/`value` MISSING — that is what pushes the
+    // failure past exec(SCHEMA) and into the five unguarded `db.query(...)` calls that
+    // follow it, reproducing the reviewer's exact error: "table parse_cache has no
+    // column named used" style failure at prepare time, not at exec(SCHEMA) time.
+    const file = await tempDb()
+    const { Database } = await import('bun:sqlite')
+    const raw = new Database(file, { create: true })
+    raw.exec('CREATE TABLE parse_cache (slot TEXT PRIMARY KEY, used INTEGER NOT NULL)')
+    raw.close()
+
+    const c = await openParseCache(file)
+    expect(c.get('session', stamp())).toBeNull()
+    expect(() => c.set('session', stamp(), { v: 1 })).not.toThrow()
+    expect(() => c.close()).not.toThrow()
+  })
+
   test('gc drops rows untouched since the cutoff and keeps the rest', async () => {
     // The clock is INJECTED: with Date.now() both writes land in the same millisecond
     // on a fast machine, so any cutoff either keeps both rows or drops both, and the
