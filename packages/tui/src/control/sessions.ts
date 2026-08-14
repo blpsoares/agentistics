@@ -1541,6 +1541,8 @@ export interface SessionDraft {
   harness?: { id: string; supportsModel?: boolean }
   cwd?: string
   task?: string
+  /** The name the user typed for this session. Absent means "no name of my own" — the row derives one. */
+  label?: string
   prompt?: string
   model?: string
   effort?: string
@@ -1581,6 +1583,7 @@ export function planSubmit(o: {
       ...(o.draft.effort ? { effort: o.draft.effort } : {}),
       ...(o.draft.prompt ? { prompt: o.draft.prompt } : {}),
       ...(o.draft.task ? { task: o.draft.task } : {}),
+      ...(o.draft.label ? { label: o.draft.label } : {}),
     },
   }
 }

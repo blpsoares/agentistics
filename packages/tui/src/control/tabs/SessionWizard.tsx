@@ -56,12 +56,13 @@ import { COLORS } from '../../theme'
  * such flag: a question whose only answer is "not applicable" is a question that should not have
  * been asked, and `advance` is the single place that decides which ones a harness earns.
  */
-type Step = 'harness' | 'where' | 'task' | 'model' | 'effort' | 'prompt' | 'how'
+type Step = 'harness' | 'where' | 'task' | 'model' | 'effort' | 'prompt' | 'name' | 'how'
 
 interface Draft {
   harness?: SessionHarnessOption
   cwd?: string
   task?: string
+  label?: string
   model?: string
   effort?: string
   prompt?: string
@@ -93,7 +94,7 @@ export function SessionWizard({ host, strings: s, width, height, isActive, onCan
 
   /** The next step this harness actually earns, skipping the questions it has no flag for. */
   const nextAfter = useCallback((from: Step, h: SessionHarnessOption | undefined): Step => {
-    const order: Step[] = ['harness', 'where', 'task', 'model', 'effort', 'prompt', 'how']
+    const order: Step[] = ['harness', 'where', 'task', 'model', 'effort', 'prompt', 'name', 'how']
     let i = order.indexOf(from) + 1
     while (i < order.length) {
       const candidate = order[i]!
@@ -147,7 +148,7 @@ export function SessionWizard({ host, strings: s, width, height, isActive, onCan
   // answers because the sixth was a typo is a wizard people stop using.
   useInput((_input, key) => {
     if (!key.escape) return
-    const order: Step[] = ['harness', 'where', 'task', 'model', 'effort', 'prompt', 'how']
+    const order: Step[] = ['harness', 'where', 'task', 'model', 'effort', 'prompt', 'name', 'how']
     const i = order.indexOf(step)
     for (let j = i - 1; j >= 0; j--) {
       const prev = order[j]!
@@ -265,6 +266,29 @@ export function SessionWizard({ host, strings: s, width, height, isActive, onCan
             setStep(nextAfter('prompt', draft.harness))
           }}
           onCancel={() => setStep('where')}
+        />
+      </Box>
+    )
+  }
+
+  if (step === 'name') {
+    return (
+      <Box flexDirection="column" width={width}>
+        <Text dimColor>{truncate(s.wizNameHint, width)}</Text>
+        <TextPrompt
+          label={s.wizName}
+          // A PLACEHOLDER, never a `defaultValue`: `TextPrompt` treats a default as the answer to an
+          // empty submit, which is right for renaming and wrong here — enter on an untouched field
+          // means "no name of my own", and the row falls back to the derived one.
+          placeholder={draft.task ?? ''}
+          width={width}
+          isActive={isActive}
+          onSubmit={value => {
+            const label = value.trim()
+            setDraft(d => ({ ...d, ...(label ? { label } : {}) }))
+            setStep(nextAfter('name', draft.harness))
+          }}
+          onCancel={() => setStep('prompt')}
         />
       </Box>
     )

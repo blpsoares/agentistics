@@ -1736,3 +1736,22 @@ describe('detailLines — named in two places', () => {
     expect(lines.map(l => l.key).slice(0, 3)).toEqual(['say0', 'also', 'where'])
   })
 })
+
+describe('the wizard name step', () => {
+  const harness = { id: 'claude', supportsModel: true }
+
+  it('carries a name the user typed', () => {
+    const plan = planSubmit({
+      draft: { harness, cwd: '/r', label: 'a refatoração do token' }, hasSpawn: true, attach: false,
+    })
+    expect(plan.ok).toBe(true)
+    if (plan.ok) expect(plan.req.label).toBe('a refatoração do token')
+  })
+
+  it('carries NO name when the step was skipped', () => {
+    // Enter on an untouched field means "no name of my own", and the row derives one from the
+    // harness and the folder. An empty string is not a name called "".
+    const plan = planSubmit({ draft: { harness, cwd: '/r', label: '' }, hasSpawn: true, attach: false })
+    if (plan.ok) expect('label' in plan.req).toBe(false)
+  })
+})
