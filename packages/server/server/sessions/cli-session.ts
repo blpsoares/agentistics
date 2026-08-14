@@ -24,6 +24,7 @@ import { addSession, newSessionId, patchSession, readRegistry, removeSession } f
 import { conversationForProcess, loadConversations } from './conversations'
 import { resolveBackend } from './index'
 import { scanProcesses } from '../live-sessions'
+import { loadHarnessSessions } from './harness-sessions'
 import { createSessionsPoller, type SessionSnapshot } from './sessions-host'
 import { needsAttention, type SessionView } from './session-view'
 import { planTaskReopen, taskReopenSucceeded } from './task-reopen'
@@ -317,9 +318,25 @@ function fleetJson(snap: SessionSnapshot): unknown {
   }
 }
 
-/** The whole fleet, from the registry, the backend, `/proc` and the conversation store. */
+/**
+ * The whole fleet, from the registry, the backend, `/proc`, the conversation store and what each
+ * harness records about its own sessions.
+ *
+ * It reads the SAME sources the cockpit's poller does, and that is the point rather than a detail:
+ * `session ls` is the cockpit's table printed, so a source wired into one and not the other is how
+ * one session ends up wearing two different names depending on where you look at it. It was missing
+ * `loadHarnessSessions` for exactly one commit, and the row a user had renamed inside the session
+ * read correctly in the cockpit and stale on the command line.
+ *
+ * There is deliberately NO heartbeat here: a one-shot command must not stamp `lastSeenMs`. It runs
+ * once and exits, so a run that happened to be the last thing before a reboot would be indistinguish-
+ * able from a fleet that was alive — and `crash-group.ts` would be reading a write nobody made a
+ * claim with.
+ */
 async function pollFleet(backend: SessionBackend): Promise<SessionSnapshot> {
-  const poller = createSessionsPoller({ backend, readRegistry, scanProcesses, loadConversations })
+  const poller = createSessionsPoller({
+    backend, readRegistry, scanProcesses, loadConversations, loadHarnessSessions,
+  })
   return await poller.poll()
 }
 

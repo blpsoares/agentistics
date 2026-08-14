@@ -215,6 +215,9 @@ export interface ControlStrings {
   sessionsDoing: string
   sessionsTask: string
   sessionsMetrics: string
+  /** The name that did NOT win, when a session is named in agentop AND inside the harness. */
+  sessionsAlsoLabel: string
+  sessionsAlsoHarness: string
   /** Label of the detail line stating how to LEAVE an attached session. */
   sessionsDetach: string
   /** Marks a finished task's heading, and the word the toggle uses. */
@@ -231,9 +234,32 @@ export interface ControlStrings {
     note: string; task: string; mark: string; onlyActive: string; closed: string
     exited: string; unfiled: string; group: string; detail: string; reset: string
     tabs: string; help: string; quit: string
+    approve: string; prompt: string; reopenFell: string
   }
-  sessionsFinishConfirm: (task: string, count: number) => string
+  /**
+   * The finish-task confirmation.
+   *
+   * It states what finishing a task ACTUALLY does, which is hide its sessions behind a switch —
+   * nothing is stopped and nothing is deleted, and `running` is called out separately because a
+   * warning that implied otherwise would be worse than no warning at all. See `finishTask` in
+   * `cli-start.ts`.
+   */
+  sessionsFinishConfirm: (task: string, count: number, running: number) => string
   sessionsReopenConfirm: (task: string) => string
+  /** The heading over the sessions the machine took at once. */
+  sessionsFellWord: string
+  /** Said on the summary row and in the empty state: N fell, this long ago, and the key. */
+  sessionsFellNote: (count: number, ago: string) => string
+  /** The confirmation, naming how many and when. */
+  sessionsFellConfirm: (count: number, ago: string) => string
+  /** The prompt field, and the sentence above it saying where the text is going. */
+  sessionsPromptLabel: (title: string) => string
+  sessionsPromptHint: string
+  /** The approval confirmation — and its caveat, which is the whole design. */
+  sessionsApproveConfirm: (title: string) => string
+  sessionsApproveCaveat: string
+  /** Heading over the dialog lines carried into the confirmation. */
+  sessionsApproveWhat: string
   asideProjects: string
   asideAllProjects: string
   toggleDone: string
@@ -279,6 +305,8 @@ export interface ControlStrings {
   keySessionsNew: string
   keySessionsSearch: string
   keySessionsActions: string
+  keySessionsApprove: string
+  keySessionsPrompt: string
   /** The visible action row — the same verbs the letters run, spelled out and clickable. */
   actSessions: {
     attach: string
@@ -286,8 +314,11 @@ export interface ControlStrings {
     rename: string
     note: string
     task: string
+    approve: string
+    prompt: string
     kill: string
     openTask: string
+    reopenFell: string
     finishTask: string
     newSession: string
     search: string
@@ -378,6 +409,10 @@ export interface ControlStrings {
   sessionsKillConfirm: (title: string) => string
   /** Said when a verb is pressed on a row that cannot take it. */
   sessionsNotActionable: string
+  /** Said when the approve key is pressed on a session that is not blocked on anything. */
+  sessionsNotAsking: string
+  /** Said when "reopen what fell" is pressed and nothing did. */
+  sessionsNoFell: string
 
   /** Static tabs. */
   helpIntro: string
@@ -554,6 +589,8 @@ const EN: ControlStrings = {
   sessionsDoing: 'saying',
   sessionsTask: 'task',
   sessionsMetrics: 'usage',
+  sessionsAlsoLabel: 'named here',
+  sessionsAlsoHarness: 'named inside',
   sessionsDetach: 'to detach',
   sessionsDoneWord: 'finished',
   sessionsPaneMenu: 'menu',
@@ -584,10 +621,33 @@ const EN: ControlStrings = {
     tabs: 'change screen',
     help: 'this list',
     quit: 'leave agentop',
+    approve: 'answer the question this session is blocked on',
+    prompt: 'send it a line without attaching',
+    reopenFell: 'reopen everything the machine took at once',
   },
-  sessionsFinishConfirm: (task, count) =>
-    `Mark "${task}" finished? Its ${count} session${count === 1 ? '' : 's'} stay listed behind the "finished tasks" switch.`,
+  // Says what finishing ACTUALLY does. It marks the task and hides its sessions behind a switch —
+  // it stops nothing — so the sentence names the count, calls out the ones still running, and names
+  // the switch that brings them back.
+  sessionsFinishConfirm: (task, count, running) =>
+    `Mark "${task}" finished? Its ${count} session${count === 1 ? '' : 's'}`
+    + `${running > 0 ? ` (${running} still running)` : ''}`
+    + (count === 1
+      ? ' is NOT stopped — it keeps running and stays'
+      : ' are NOT stopped — they keep running and stay')
+    + ' listed behind the "finished tasks" switch.',
   sessionsReopenConfirm: task => `Reopen "${task}"?`,
+  sessionsFellWord: 'fell together',
+  sessionsFellNote: (count, ago) =>
+    `${count} session${count === 1 ? '' : 's'} fell ${ago} — R reopens them`,
+  sessionsFellConfirm: (count, ago) =>
+    `Reopen the ${count} session${count === 1 ? '' : 's'} that fell ${ago}? `
+    + 'Each comes back as a new session resuming its own conversation; anything still running is left alone.',
+  sessionsPromptLabel: (title: string) => `Send to "${title}"`,
+  sessionsPromptHint: 'typed straight into the session — it reads it when it gets there',
+  sessionsApproveConfirm: (title: string) => `Send the confirm key to "${title}"?`,
+  sessionsApproveCaveat:
+    'it takes whichever option the dialog above has highlighted — read it first.',
+  sessionsApproveWhat: 'on its screen right now',
   asideProjects: 'PROJECTS',
   asideAllProjects: 'every project',
   toggleDone: 'finished tasks',
@@ -635,14 +695,21 @@ const EN: ControlStrings = {
   keySessionsNew: 'a new',
   keySessionsSearch: '/ search',
   keySessionsActions: 'tab actions',
+  keySessionsApprove: 'y approve',
+  keySessionsPrompt: 'p send',
   actSessions: {
     attach: 'Attach',
     resume: 'Reopen',
+    // "Answer" rather than "Approve": the key takes whichever option is highlighted, and the verb
+    // must not promise more than the keystroke can deliver.
+    approve: 'Answer its question',
+    prompt: 'Send a prompt',
     rename: 'Rename',
     note: 'Note',
     task: 'Task',
     kill: 'Stop session',
     openTask: 'Open whole task',
+    reopenFell: 'Reopen what fell',
     finishTask: 'Finish task',
     newSession: 'New session',
     search: 'Search',
@@ -723,6 +790,8 @@ const EN: ControlStrings = {
   sessionsNotePrompt: 'Describe this session',
   sessionsKillConfirm: (title: string) => `Stop "${title}"? The assistant running in it is ended.`,
   sessionsNotActionable: 'that session was not started by agentop, so it cannot be driven from here.',
+  sessionsNotAsking: 'that session is not blocked on a question — there is nothing to answer.',
+  sessionsNoFell: 'nothing fell — no session was lost with the machine still on record.',
 
   helpIntro: 'Every command, with the flags that matter. `agentop --help` prints this plain.',
   cheatIntro: 'The commands worth remembering.',
@@ -894,6 +963,8 @@ const PT: ControlStrings = {
   sessionsDoing: 'dizendo',
   sessionsTask: 'tarefa',
   sessionsMetrics: 'uso',
+  sessionsAlsoLabel: 'nome daqui',
+  sessionsAlsoHarness: 'nome de dentro',
   sessionsDetach: 'para sair',
   sessionsDoneWord: 'finalizada',
   sessionsPaneMenu: 'menu',
@@ -924,10 +995,32 @@ const PT: ControlStrings = {
     tabs: 'muda de tela',
     help: 'esta lista',
     quit: 'sai do agentop',
+    approve: 'responde a pergunta que travou a sessão',
+    prompt: 'envia uma linha para ela sem anexar',
+    reopenFell: 'reabre tudo que a máquina levou de uma vez',
   },
-  sessionsFinishConfirm: (task, count) =>
-    `Finalizar "${task}"? Suas ${count} sessõe${count === 1 ? '' : 's'} continuam listadas atrás do interruptor "tarefas finalizadas".`,
+  sessionsFinishConfirm: (task, count, running) =>
+    `Finalizar "${task}"? ${count === 1 ? 'A sessão dela' : `As ${count} sessões dela`}`
+    + `${running > 0 ? ` (${running} ainda rodando)` : ''}`
+    + (count === 1
+      ? ' NÃO é encerrada — continua rodando e fica listada'
+      : ' NÃO são encerradas — continuam rodando e ficam listadas')
+    + ' atrás do interruptor "tarefas finalizadas".',
   sessionsReopenConfirm: task => `Reabrir "${task}"?`,
+  sessionsFellWord: 'caíram juntas',
+  sessionsFellNote: (count, ago) =>
+    (count === 1 ? `1 sessão caiu ${ago} — R reabre` : `${count} sessões caíram ${ago} — R reabre todas`),
+  sessionsFellConfirm: (count, ago) =>
+    (count === 1
+      ? `Reabrir a sessão que caiu ${ago}? `
+      : `Reabrir as ${count} sessões que caíram ${ago}? `)
+    + 'Cada uma volta como uma sessão nova retomando a própria conversa; o que ainda estiver rodando fica como está.',
+  sessionsPromptLabel: (title: string) => `Enviar para "${title}"`,
+  sessionsPromptHint: 'digitado direto na sessão — ela lê quando chegar lá',
+  sessionsApproveConfirm: (title: string) => `Enviar a tecla de confirmação para "${title}"?`,
+  sessionsApproveCaveat:
+    'ela pega a opção que o diálogo acima está destacando — leia antes.',
+  sessionsApproveWhat: 'na tela dela agora',
   asideProjects: 'PROJETOS',
   asideAllProjects: 'todos os projetos',
   toggleDone: 'tarefas finalizadas',
@@ -975,14 +1068,21 @@ const PT: ControlStrings = {
   keySessionsNew: 'a nova',
   keySessionsSearch: '/ buscar',
   keySessionsActions: 'tab ações',
+  keySessionsApprove: 'y aprovar',
+  keySessionsPrompt: 'p enviar',
   actSessions: {
     attach: 'Anexar',
     resume: 'Reabrir',
+    // "Responder", não "Aprovar": a tecla pega a opção destacada, e o verbo não pode prometer mais
+    // do que a tecla entrega.
+    approve: 'Responder a pergunta',
+    prompt: 'Enviar prompt',
     rename: 'Renomear',
     note: 'Nota',
     task: 'Tarefa',
     kill: 'Encerrar sessão',
     openTask: 'Abrir tarefa toda',
+    reopenFell: 'Reabrir o que caiu',
     finishTask: 'Finalizar tarefa',
     newSession: 'Nova sessão',
     search: 'Buscar',
@@ -1063,6 +1163,8 @@ const PT: ControlStrings = {
   sessionsNotePrompt: 'Descreva esta sessão',
   sessionsKillConfirm: (title: string) => `Encerrar "${title}"? O assistente que roda nela é finalizado.`,
   sessionsNotActionable: 'essa sessão não foi iniciada pelo agentop, então não dá para controlá-la daqui.',
+  sessionsNotAsking: 'essa sessão não está travada em uma pergunta — não há o que responder.',
+  sessionsNoFell: 'nada caiu — nenhuma sessão foi perdida com registro de que estava viva.',
 
   helpIntro: 'Todos os comandos, com as flags que importam. `agentop --help` imprime isto puro.',
   cheatIntro: 'Os comandos que vale a pena lembrar.',

@@ -92,13 +92,29 @@ import { repoFacts } from './sessions/repo-facts'
 // The `SessionView` -> `ControlSession` mapping, extracted so `agentop session ls` draws the same
 // rows from the same decision rather than mapping the fleet a second time.
 import { toControlSession } from './sessions/control-session'
-import { planTaskReopen, taskReopenSucceeded } from './sessions/task-reopen'
-import type { SpawnPlanError } from './sessions/types'
-import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './sessions/registry'
+import { planTaskReopen, taskReopenSucceeded, type TaskReopenPlan } from './sessions/task-reopen'
+import { approvalFor } from './sessions/approval-spec'
+import { rulesFor } from './sessions/attention-rules'
+import { planCrashGroup } from './sessions/crash-group'
+import { loadHarnessSessions } from './sessions/harness-sessions'
+import type { ManagedSession, SpawnPlanError } from './sessions/types'
+import {
+  addSession, newSessionId, patchSession, readRegistry, removeSession, touchSessions,
+} from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
 import { conversationForProcess, forgetConversations, loadConversations } from './sessions/conversations'
 
 export type StartResult = number | 'foreground'
+
+/**
+ * How much of the pane to re-read before writing into a session.
+ *
+ * The same depth the poller captures with, and for the same reason: the approval rules are matched
+ * against a frame, and matching them against a shallower one would make a dialog that scrolled its
+ * footer just off the top read as no dialog at all — which on this path means typing a sentence into
+ * an open menu.
+ */
+const SEND_CAPTURE_LINES = 60
 
 // ANSI, for the output this module still writes to the REAL terminal: the suspended commands,
 // the foreground handover and the non-interactive `agentop restart --all`.
@@ -1171,7 +1187,13 @@ let sessionsPoller: SessionsPoller | null = null
 async function ensureSessionsPoller(): Promise<SessionsPoller> {
   if (sessionsPoller) return sessionsPoller
   const backend = await resolveBackend()
-  sessionsPoller = createSessionsPoller({ backend, readRegistry, scanProcesses, loadConversations })
+  sessionsPoller = createSessionsPoller({
+    backend, readRegistry, scanProcesses, loadConversations, touchSessions,
+    loadHarnessSessions,
+    // Written once per session, not once per poll — the poller only calls this when the harness's
+    // own record disagrees with the registry.
+    recordConversation: (id, conversationId) => patchSession(id, { conversationId }),
+  })
   return sessionsPoller
 }
 
@@ -1256,6 +1278,10 @@ async function spawnManaged(req: {
     harness: req.harness,
     cwd: req.cwd,
     createdAt: new Date().toISOString(),
+    // Stamped at birth, not left to the first heartbeat: a session started and lost inside the same
+    // minute would otherwise carry no evidence it was ever alive, and would sit out the very crash
+    // it was part of. See `crash-group.ts`.
+    lastSeenMs: Date.now(),
     ...(req.model ? { model: req.model } : {}),
     ...(req.effort ? { effort: req.effort } : {}),
     ...(req.label ? { label: req.label } : {}),
@@ -1270,6 +1296,71 @@ async function spawnManaged(req: {
     message: s.sessStarted(name),
     ticket: { argv: backend.attachCommand(id), detachHint: await backend.detachHint(), label: name },
   }
+}
+
+/**
+ * Reopen a SET of registry rows in the background — the one implementation behind both "open the
+ * whole task" and "reopen everything that fell".
+ *
+ * The two differ only in how the set is chosen: a task is a name the user filed sessions under, a
+ * fall is a timestamp `crash-group.ts` matched them on. Everything after that — which rows are left
+ * alone, which are not resurrected, which are skipped and counted, and the retiring of every row
+ * that is replaced — is `planTaskReopen`, and writing it twice is exactly the drift that module was
+ * extracted to end.
+ */
+async function reopenEntries(
+  entries: readonly ManagedSession[],
+  s: CliStrings,
+): Promise<{ plan: TaskReopenPlan; opened: number; skipped: number }> {
+  const conversations = await loadConversations()
+  const backend = await resolveBackend()
+  const live = new Set(
+    (await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id),
+  )
+
+  // CLAIMED, one per row: the harness+directory match cannot tell two sessions of one repository
+  // apart, so a set of five rows used to start five copies of one conversation. A row that RECORDED
+  // which conversation it drives is exact and takes that one.
+  const taken = new Set<string>()
+  const plan = planTaskReopen({
+    entries,
+    liveIds: live,
+    conversationFor: entry => {
+      const own = entry.conversationId
+        ? conversations.find(c => c.sessionId === entry.conversationId)
+        : undefined
+      const conv = own ?? conversations.find(c =>
+        !taken.has(c.sessionId) && c.harness === entry.harness && c.cwd === entry.cwd)
+      if (!conv?.resumable) return null
+      taken.add(conv.sessionId)
+      return { sessionId: conv.sessionId, title: conv.title }
+    },
+  })
+
+  let opened = 0
+  let skipped = plan.skipped.length
+  for (const row of plan.reopen) {
+    const m = row.entry
+    const r = await spawnManaged({
+      harness: m.harness,
+      cwd: m.cwd,
+      resumeId: row.resumeId,
+      label: row.label,
+      attach: false,
+      // The task travels with the session, whichever set this reopen was chosen from: a fall does
+      // not un-file the work someone filed.
+      ...(m.task ? { task: m.task } : {}),
+    }, s)
+    if (!r.ok) { skipped++; continue }
+    opened++
+    if (r.id) await patchSession(r.id, { conversationId: row.resumeId })
+    // Retired, so a laptop closed and opened twice does not leave two dead twins and one live
+    // session standing under the same name.
+    await patchSession(m.id, { endedAt: new Date().toISOString() })
+    if (m.note && r.id) await patchSession(r.id, { note: m.note })
+  }
+  forgetConversations()
+  return { plan, opened, skipped }
 }
 
 function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
@@ -1791,6 +1882,11 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         sessions: snap.sessions.map((v, i) => toControlSession(v, s, facts[i])),
         attention: snap.attention,
         rang: snap.rang,
+        // Only the COUNT and the instant travel: the rows themselves are already in `sessions`,
+        // marked `fell`, and shipping the set twice is two things that can disagree about it.
+        ...(snap.fell && snap.fell.entries.length > 0
+          ? { fell: { count: snap.fell.entries.length, atMs: snap.fell.atMs } }
+          : {}),
         ...(finishedTasks.length > 0 ? { finishedTasks } : {}),
         ...(detachHint ? { detachHint } : {}),
         ...(snap.unavailable ? { unavailable: snap.unavailable } : {}),
@@ -1852,7 +1948,10 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
 
     async renameSession(id: string, label: string): Promise<ActionResult> {
       const s = S()
-      const ok = await patchSession(id, { label })
+      // The INSTANT goes down with the name. A session can also be renamed from inside the harness,
+      // and recency is the only non-arbitrary way to settle a disagreement between the two — a
+      // stored name with no timestamp cannot take part in that. See `pickTitle`.
+      const ok = await patchSession(id, { label, labelSince: Date.now() })
       return ok ? { ok: true, message: s.sessRenamed } : { ok: false, message: s.sessNoRegistryEntry }
     },
 
@@ -1931,57 +2030,105 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const wanted = (await readRegistry()).filter(m => m.task === task)
       if (wanted.length === 0) return { ok: false, message: s.sessTaskEmpty(task) }
 
-      const conversations = await loadConversations()
-      const backend = await resolveBackend()
-      const live = new Set(
-        (await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id),
-      )
-      // The DECISION is the pure `planTaskReopen`, shared with `agentop session open` — the two
-      // were separate implementations of one gesture and had already drifted.
-      const plan = planTaskReopen({
-        entries: wanted,
-        liveIds: live,
-        // CLAIMED, one per row: the directory match cannot tell two sessions of one repository
-        // apart, so reopening a task of five rows used to start five copies of one conversation.
-        conversationFor: (m => {
-          const taken = new Set<string>()
-          return (entry: typeof m) => {
-            const own = entry.conversationId
-              ? conversations.find(c => c.sessionId === entry.conversationId)
-              : undefined
-            const conv = own ?? conversations.find(c =>
-              !taken.has(c.sessionId) && c.harness === entry.harness && c.cwd === entry.cwd)
-            if (!conv?.resumable) return null
-            taken.add(conv.sessionId)
-            return { sessionId: conv.sessionId, title: conv.title }
-          }
-        })(wanted[0]!),
-      })
-
-      let opened = 0
-      let skipped = plan.skipped.length
-      for (const row of plan.reopen) {
-        const m = row.entry
-        const r = await spawnManaged({
-          harness: m.harness,
-          cwd: m.cwd,
-          resumeId: row.resumeId,
-          label: row.label,
-          task,
-          attach: false,
-        }, s)
-        if (!r.ok) { skipped++; continue }
-        opened++
-        if (r.id) await patchSession(r.id, { conversationId: row.resumeId })
-        // Retired, so a laptop closed and opened twice does not leave the task holding two dead
-        // twins and one live session, all under the same name.
-        await patchSession(m.id, { endedAt: new Date().toISOString() })
-        if (m.note && r.id) await patchSession(r.id, { note: m.note })
-      }
-      forgetConversations()
+      // The DECISION is the pure `planTaskReopen`, and the PERFORMANCE is `reopenEntries` — shared
+      // with `reopenFell` below, which is the same gesture over a set chosen a different way.
+      const { plan, opened, skipped } = await reopenEntries(wanted, s)
       return taskReopenSucceeded(plan, opened)
         ? { ok: true, message: s.sessTaskOpened(task, opened, skipped) }
         : { ok: false, message: s.sessTaskNoneOpened(task, skipped) }
+    },
+
+    /**
+     * Reopen everything the machine took at once.
+     *
+     * The set is recomputed HERE rather than taken from the snapshot the screen is showing: a
+     * snapshot is up to five seconds old, and this spawns real assistants. Recomputing costs one
+     * registry read and one `tmux list-sessions`, and it is the difference between reopening what
+     * fell and reopening what fell as of a moment ago.
+     */
+    async reopenFell(): Promise<ActionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+
+      const backendIds = new Set((await backend.list().catch(() => [])).map(b => b.id))
+      const group = planCrashGroup({ entries: await readRegistry(), backendIds })
+      if (!group || group.entries.length === 0) return { ok: false, message: s.sessNoFell }
+
+      const { plan, opened, skipped } = await reopenEntries(group.entries, s)
+      return taskReopenSucceeded(plan, opened)
+        ? { ok: true, message: s.sessFellOpened(opened, skipped) }
+        : { ok: false, message: s.sessFellNoneOpened(skipped) }
+    },
+
+    /**
+     * Type one line into a session and submit it, without attaching.
+     *
+     * The screen is RE-READ here rather than trusted from the snapshot, and that is the whole of the
+     * safety: a session that was working five seconds ago may be sitting on a permission prompt now,
+     * where its input line is a menu and a typed sentence is an answer to a question nobody read. A
+     * poll-old belief is not good enough to write into somebody's session on.
+     */
+    async promptSession(id: string, text: string): Promise<ActionResult> {
+      const s = S()
+      const body = text.trim()
+      if (!body) return { ok: false, message: s.sessPromptEmpty }
+
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+
+      const managed = (await readRegistry()).find(m => m.id === id)
+      if (!managed) return { ok: false, message: s.sessNoRegistryEntry }
+
+      const live = (await backend.list().catch(() => [])).find(b => b.id === id)
+      if (!live?.alive) return { ok: false, message: s.sessNotRunning }
+
+      const frame = await backend.capture(id, SEND_CAPTURE_LINES).catch(() => [] as string[])
+      const rules = rulesFor(managed.harness)
+      if (rules && rules.approval.some(re => re.test(frame.join('\n')))) {
+        return { ok: false, message: s.sessPromptBlocked }
+      }
+
+      return (await backend.sendText(id, body))
+        ? { ok: true, message: s.sessPrompted(id) }
+        : { ok: false, message: s.sessSendFailed(id) }
+    },
+
+    /**
+     * Send the key that takes the option this session's dialog is highlighting.
+     *
+     * Three things have to be true at THIS instant, and each is checked rather than assumed: the
+     * harness's dialog has been read (so the key is a recorded fact — `approval-spec.ts`), the
+     * session is still asking (re-read from the screen, not from a snapshot), and the backend
+     * accepted the keystroke. Anything less and an unconditional Enter goes into a session that has
+     * moved on — a blank turn at best, and at worst a menu answered while nobody was looking.
+     */
+    async approveSession(id: string): Promise<ActionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+
+      const managed = (await readRegistry()).find(m => m.id === id)
+      if (!managed) return { ok: false, message: s.sessNoRegistryEntry }
+
+      const spec = approvalFor(managed.harness)
+      if (!spec) return { ok: false, message: s.sessApproveUnknown(managed.harness) }
+
+      const live = (await backend.list().catch(() => [])).find(b => b.id === id)
+      if (!live?.alive) return { ok: false, message: s.sessNotRunning }
+
+      const rules = rulesFor(managed.harness)
+      const frame = await backend.capture(id, SEND_CAPTURE_LINES).catch(() => [] as string[])
+      if (!rules || !rules.approval.some(re => re.test(frame.join('\n')))) {
+        return { ok: false, message: s.sessNotAsking }
+      }
+
+      return (await backend.sendKey(id, spec.key))
+        ? { ok: true, message: s.sessApproved(id) }
+        : { ok: false, message: s.sessSendFailed(id) }
     },
 
     /**

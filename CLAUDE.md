@@ -89,12 +89,53 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          first prompt TYPED IN, because their `-p` exits after answering.
   │                          **What a session is DOING** is the pure `attention.ts` over two
   │                          signals — a probed screen marker and whether the frame moved — with
-  │                          `attention-rules.ts` holding six per-harness patterns **captured
-  │                          from six live dialogs**, each with its CLI version and date. There
+  │                          `attention-rules.ts` holding the per-harness patterns **captured
+  │                          from live dialogs**, each with its CLI version and date. There
   │                          is deliberately no `idle` state: an interactive assistant that is
   │                          alive and still is waiting for you, and the uncertainty that really
   │                          exists is about the REASON, which lives in an absent approval rule
-  │                          the UI states in words. `session-view.ts` merges the managed fleet
+  │                          the UI states in words. **One harness can have SEVERAL dialog
+  │                          components with different footers**: claude's startup select says
+  │                          `Enter to confirm · Esc to cancel` and its PERMISSION prompt says
+  │                          `Esc to cancel · Tab to amend`, and for one release only the first was
+  │                          probed — so a session sitting on "may I run this command" read as
+  │                          `waiting`, and a prompt sent to it went into the dialog's own filter
+  │                          where the submit took the highlighted option. Probe every dialog a
+  │                          harness draws, not the first one it shows you.
+  │                          **ACTING on a session without entering it** is `SessionBackend.sendText`
+  │                          / `sendKey` (they were already implemented, buried inside `spawn`) plus
+  │                          the pure `approval-spec.ts`: `Record<HarnessId, {key, probed} | null>`,
+  │                          where the key CONFIRMS THE HIGHLIGHTED OPTION and is not "approve". No
+  │                          CLI here reports which option is highlighted, so the keystroke is only
+  │                          half the design — the host RE-READS the screen immediately before
+  │                          sending (a poll is 5s old) and the confirmation SHOWS the dialog
+  │                          (`approvalTail`, which is deliberately not `frameTail`: that one cuts at
+  │                          the last rule and so cuts the dialog away). A prompt is refused on a
+  │                          session with a dialog OPEN, in words, for the same reason.
+  │                          **WHICH SESSIONS FELL TOGETHER** is the pure `crash-group.ts`. The hard
+  │                          part is not grouping, it is not admitting garbage: a `lost` row from
+  │                          three days ago never fell, and a group holding everything that ever ran
+  │                          cannot be reopened without reading it first. Membership needs evidence a
+  │                          session was ALIVE, which did not exist — so the registry carries
+  │                          `lastSeenMs`, stamped at birth and refreshed by a 60s HEARTBEAT that
+  │                          writes ONE timestamp for EVERY live session in one write. That is what
+  │                          makes the clustering exact rather than fuzzy. Every rule errs toward
+  │                          EXCLUDING (no `lastSeenMs` = not in the group, ever): a session wrongly
+  │                          left out costs one keypress on its own Reopen verb, one wrongly let in
+  │                          is invisible and makes the whole group untrustworthy.
+  │                          **What a session CALLS ITSELF** is `harness-session-file.ts` (pure) +
+  │                          `harness-sessions.ts`: Claude Code writes `~/.claude/sessions/<pid>.json`
+  │                          holding the name `/rename` set, the conversation id, the pid, and — for
+  │                          a session we started — the TMUX SESSION NAME, which is an EXACT link to
+  │                          one of our rows where everything else here has had to guess by
+  │                          harness-and-directory. `Record<HarnessId, source | null>`, claude only.
+  │                          `nameSource: 'derived'` marks a name the HARNESS invented (24 of 40 on
+  │                          a real machine) and it never competes; `pickTitle` settles the rest by
+  │                          recency where both sides say when, and otherwise gives it to the
+  │                          harness — `nameSince` exists only from claude 2.1.232, and the
+  │                          complaint this answers is a rename made inside the session that agentop
+  │                          went on ignoring. NEITHER name is discarded when they differ: the row
+  │                          says which place the one it is showing came from. `session-view.ts` merges the managed fleet
   │                          with the EXTERNAL assistants `/proc` reports (listed, marked, and
   │                          carrying no activity — nothing about them is capturable), and
   │                          `sessions-host.ts` is the 5s poller, whose failed poll keeps the
@@ -110,8 +151,13 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          row is not resurrected; an unresolvable one is skipped AND counted;
   │                          everything reopened RETIRES the row it replaced, or a laptop closed
   │                          twice leaves the task holding dead twins under one name). It is shared
-  │                          by `agentop session open` and the cockpit's verb, which were two
-  │                          implementations of one gesture and had already drifted.
+  │                          by `agentop session open`, the cockpit's verb and "reopen what fell",
+  │                          which were separate implementations of one gesture and had drifted.
+  │                          **Every poller must be given the same SOURCES** — `session ls` builds its
+  │                          own and went one commit missing `loadHarnessSessions`, so a row renamed
+  │                          inside its session read correctly in the cockpit and stale on the command
+  │                          line. It gets no heartbeat, though: a one-shot command must not stamp
+  │                          `lastSeenMs`.
   │                          `repo-facts.ts` answers which REPOSITORY a directory belongs to,
   │                          keyed on the git REMOTE — the only key a worktree provably shares with
   │                          its main checkout, since their directory names deliberately differ —

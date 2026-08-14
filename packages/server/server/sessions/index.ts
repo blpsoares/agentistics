@@ -47,11 +47,17 @@ export async function resolveBackend(): Promise<SessionBackend> {
 export * from './types'
 export { SPAWN_SPECS, planSpawn } from './spawn-spec'
 export { reconcileSessions, resolveSessionRef } from './session-ref'
-export { addSession, newSessionId, patchSession, readRegistry, removeSession } from './registry'
+export {
+  addSession, newSessionId, patchSession, readRegistry, removeSession, touchSessions,
+} from './registry'
 export { SESSION_POLL_MS, createSessionsPoller, type SessionSnapshot } from './sessions-host'
+export { APPROVAL_SPECS, approvalFor, type ApprovalSpec } from './approval-spec'
+export {
+  CRASH_WINDOW_MS, HEARTBEAT_MS, planCrashGroup, type CrashGroup,
+} from './crash-group'
 export {
   attentionCount, bellTransitions, buildSessionViews, groupSessions, needsAttention,
   type SessionGroup, type SessionGrouping, type SessionView,
 } from './session-view'
 export { ATTENTION_RULES, rulesFor } from './attention-rules'
-export { QUIET_MS, attentionOf, digestFrame } from './attention'
+export { QUIET_MS, approvalTail, attentionOf, digestFrame } from './attention'

@@ -50,8 +50,20 @@ export function sendKeysLiteralArgs(id: string, text: string): string[] {
   return sock(['send-keys', '-t', tmuxName(id), '-l', text])
 }
 
+/**
+ * One NAMED key — `Enter`, `Escape`, `Down` — which is the opposite of `-l` above.
+ *
+ * Without `-l` tmux interprets the argument as a key name, and that is the whole point here: the
+ * approval keystroke is a key, not text. It is a separate builder rather than a flag on the literal
+ * one because getting the two the wrong way round fails SILENTLY — `send-keys -l Enter` types the
+ * five characters `E n t e r` into the assistant's prompt and reports success.
+ */
+export function sendKeysNamedArgs(id: string, key: string): string[] {
+  return sock(['send-keys', '-t', tmuxName(id), key])
+}
+
 export function sendKeysEnterArgs(id: string): string[] {
-  return sock(['send-keys', '-t', tmuxName(id), 'Enter'])
+  return sendKeysNamedArgs(id, 'Enter')
 }
 
 export function listSessionsArgs(): string[] {

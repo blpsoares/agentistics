@@ -89,6 +89,32 @@ export function attentionOf(o: {
   return 'waiting'
 }
 
+/**
+ * The BOTTOM of the frame, verbatim — what a blocked session is asking, PURE.
+ *
+ * Deliberately not `frameTail`, and the difference is the whole point. `frameTail` answers "what is
+ * this session SAYING", so it cuts at the last rule and throws away the input box and the status
+ * strip — which for a session sitting on a dialog throws away the dialog, and leaves whatever the
+ * assistant said before it opened. That text read perfectly plausibly under a heading saying "you
+ * are about to confirm this", which is the worst possible way to be wrong.
+ *
+ * So this takes the last lines AS DRAWN, chrome included. The options, the highlighted one and the
+ * footer naming the key are the answer to "what am I agreeing to", and none of them survive being
+ * tidied. Blank lines at either end are dropped because they are padding rather than content;
+ * everything between is kept exactly as the pane rendered it.
+ *
+ * It is the only thing standing between `approvalFor()`'s keystroke and a confirmation the user
+ * cannot check — see `approval-spec.ts`.
+ */
+export function approvalTail(frame: readonly string[], max = 10): string[] {
+  const lines = frame.slice(Math.max(0, frame.length - Math.max(0, max)))
+  let start = 0
+  let end = lines.length
+  while (start < end && (lines[start] ?? '').trim() === '') start++
+  while (end > start && (lines[end - 1] ?? '').trim() === '') end--
+  return lines.slice(start, end)
+}
+
 /** A line that is only box-drawing or rule characters — a frame's furniture, never its content. */
 const RULE = /^[─━═╌┄┈╭╰╮╯┌└┐┘│|+\-=_~]+$/
 /** An empty input box: the prompt glyph with nothing after it. */

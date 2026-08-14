@@ -11,6 +11,8 @@
 import type { HarnessId } from '@agentistics/core'
 import { type HarnessProcess, sessionAtCwd } from '../live-sessions'
 import { rulesFor } from './attention-rules'
+import { chosenName, type HarnessSessionFile } from './harness-session-file'
+import type { HarnessSessionIndex } from './harness-sessions'
 import type { ReconciledSession } from './session-ref'
 import type { Conversation } from './conversations'
 import { conversationForProcess } from './conversations'
@@ -57,7 +59,37 @@ export interface SessionView {
    * decide the state, so it costs nothing extra, and there is no frame to read for anything else.
    */
   lastLines?: string[]
+  /**
+   * The BOTTOM of the screen verbatim, present only while this session is blocked on a dialog.
+   *
+   * A different reading of the same frame from `lastLines`, and it has to be: `frameTail` cuts the
+   * input box and the status strip off, which for a session sitting on a dialog cuts the dialog off.
+   * This is what the person answering actually needs to read — the options, which one is highlighted
+   * and the footer naming the key — because the keystroke that answers cannot know which option it
+   * is taking. See `approval-spec.ts` and `approvalTail`.
+   */
+  approvalLines?: string[]
+  /**
+   * This session was taken by the machine along with the others, and is offered back with them.
+   *
+   * Decided by `crash-group.ts` over the whole registry, so it cannot be derived from this row: the
+   * question "did these fall together" is about a set, and a per-row rule could only ever guess.
+   */
+  fell?: boolean
   label?: string
+  /** When `label` was written, epoch ms — the recency side of the title contest. */
+  labelSince?: number
+  /**
+   * The name the user gave this session FROM INSIDE IT, and when.
+   *
+   * Read from what the harness records about its own live sessions (`harness-sessions.ts`), matched
+   * EXACTLY — by the tmux session for a row we host, by pid for one we merely observed. A name the
+   * harness invented for itself is not carried here at all: `chosenName` drops it, because a
+   * generated `agentistics-77` replacing a label somebody typed is the "reopen renamed the row back"
+   * bug in a new costume.
+   */
+  harnessName?: string
+  harnessNameSince?: number
   note?: string
   model?: string
   effort?: string
@@ -147,6 +179,19 @@ export function buildSessionViews(o: {
   activity: ReadonlyMap<string, SessionActivity>
   /** The tail of each hosted session's screen, keyed by session id. */
   tails?: ReadonlyMap<string, string[]>
+  /** The DIALOG a blocked session is showing, keyed by session id — see `SessionView.approvalLines`. */
+  approvals?: ReadonlyMap<string, string[]>
+  /** The ids `crash-group.ts` decided fell together. A set, because the question is about a set. */
+  fell?: ReadonlySet<string>
+  /**
+   * What each harness records about its OWN live sessions, indexed by the two exact keys — the tmux
+   * session a managed row runs in, and the pid of a process found on the host.
+   *
+   * It is what makes this the one correlation in this file that is not a guess: a row matched here
+   * knows its conversation id exactly, so `claimResume` never has to fall back to "some conversation
+   * in this directory" — the fallback that once reopened three rows onto one conversation.
+   */
+  harnessSessions?: HarnessSessionIndex
   processes: readonly HarnessProcess[]
   /** Everything this machine has ever recorded, newest first. Used to name what an external process
    *  is driving, and to offer the conversations that are not running at all. */
@@ -176,11 +221,20 @@ export function buildSessionViews(o: {
   const claimResume = (
     managed: ManagedSession | undefined,
     harness: HarnessId,
+    /**
+     * The conversation the HARNESS ITSELF says this row is driving.
+     *
+     * Outranks the registry's own record and the directory guess alike, because it is the only one
+     * of the three that is a fact rather than a recollection or an inference: the harness wrote it
+     * about the session it is running, and the row was matched to it by tmux session or by pid.
+     */
+    exactId?: string,
   ): { resume?: { sessionId: string; title: string } } => {
     const pool = o.conversations ?? []
-    const own = managed?.conversationId
+    const exact = exactId ? pool.find(c => c.sessionId === exactId) : undefined
+    const own = exact ?? (managed?.conversationId
       ? pool.find(c => c.sessionId === managed.conversationId)
-      : undefined
+      : undefined)
     const conv = own ?? pool.find(c =>
       !claimed.has(c.sessionId)
       && c.harness === harness
@@ -192,6 +246,10 @@ export function buildSessionViews(o: {
 
   const managed: SessionView[] = o.reconciled.map(r => {
     const harness = r.managed?.harness
+    // What the harness says about ITSELF, matched by the tmux session it recorded — the one exact
+    // link between its record and this row.
+    const own: HarnessSessionFile | undefined = o.harnessSessions?.byManagedId.get(r.id)
+    const ownName = chosenName(own)
     // A session the user FINISHED reports `exited` whatever the backend still holds: the row exists
     // to be reopened, and calling it `running` because a dead tmux pane lingers would put it back
     // among the things you can talk to.
@@ -204,7 +262,16 @@ export function buildSessionViews(o: {
       status: finished ? ('exited' as const) : r.status,
       ...(activity ? { activity } : {}),
       ...((o.tails?.get(r.id)?.length ?? 0) > 0 ? { lastLines: o.tails!.get(r.id)! } : {}),
+      // Only while it is genuinely asking. A dialog frame carried on a row that has moved on would
+      // be shown under "what you are about to confirm" for a question that is no longer open.
+      ...(activity === 'waiting-approval' && (o.approvals?.get(r.id)?.length ?? 0) > 0
+        ? { approvalLines: o.approvals!.get(r.id)! }
+        : {}),
+      ...(o.fell?.has(r.id) ? { fell: true as const } : {}),
       ...(r.managed?.label ? { label: r.managed.label } : {}),
+      ...(r.managed?.labelSince !== undefined ? { labelSince: r.managed.labelSince } : {}),
+      ...(ownName ? { harnessName: ownName } : {}),
+      ...(ownName && own?.nameSince !== undefined ? { harnessNameSince: own.nameSince } : {}),
       ...(r.managed?.note ? { note: r.managed.note } : {}),
       ...(r.managed?.model ? { model: r.managed.model } : {}),
       ...(r.managed?.effort ? { effort: r.managed.effort } : {}),
@@ -225,11 +292,19 @@ export function buildSessionViews(o: {
       // process's conversation is, and absent when nothing resolves rather than offering a verb
       // with no target.
       ...((finished || r.status === 'lost' || r.status === 'exited') && harness
-        ? claimResume(r.managed, harness)
+        // `own?.sessionId` is only ever present for a row still ALIVE — the harness deletes its
+        // record when the process goes — so on a `lost` row this is `undefined` and the registry's
+        // own `conversationId` decides, exactly as before. That is not a gap: the id was recorded
+        // into the registry while the session was up, by the branch below.
+        ? claimResume(r.managed, harness, own?.sessionId)
         : {}),
       attached: r.backend?.attached ?? false,
       approvalDetection: harness !== undefined && rulesFor(harness) !== undefined,
-      searchText: searchTextOf(harness, r.managed?.cwd, r.managed?.label, r.managed?.note, r.managed?.task),
+      // The harness's own name is searchable too: it is the name the person reading this screen may
+      // well be the only one they remember, having typed it inside the session.
+      searchText: searchTextOf(
+        harness, r.managed?.cwd, r.managed?.label, ownName, r.managed?.note, r.managed?.task,
+      ),
     }
   })
 
@@ -248,25 +323,31 @@ export function buildSessionViews(o: {
   const conversations = o.conversations ?? []
 
   const external: SessionView[] = o.processes.filter(p => !covered(p)).map(p => {
-    // What this process appears to be driving. Offered, never acted on: the confirmation names the
-    // conversation's own title, which is what lets the person judge whether it is the right one.
+    // What the harness says about ITSELF, keyed on the pid `/proc` reported. Exact where every other
+    // reading of an external process is an inference from its directory.
+    const own = p.pid !== undefined ? o.harnessSessions?.byPid.get(p.pid) : undefined
+    const ownName = chosenName(own)
+    // What this process appears to be driving. The harness's own `sessionId` outranks the argv one
+    // and the directory guess alike: it is what the process is writing to, said by the process.
     const conv = conversationForProcess(conversations, {
       harness: p.harness,
       cwd: p.cwd,
-      ...(p.sessionId ? { namedId: p.sessionId } : {}),
+      ...(own?.sessionId ?? p.sessionId ? { namedId: own?.sessionId ?? p.sessionId! } : {}),
     })
     return {
       id: externalId(p),
       harness: p.harness,
       cwd: p.cwd,
       status: 'external' as const,
+      ...(ownName ? { harnessName: ownName } : {}),
+      ...(ownName && own?.nameSince !== undefined ? { harnessNameSince: own.nameSince } : {}),
       ...(p.startedMs !== undefined ? { createdMs: p.startedMs } : {}),
       attached: false,
       approvalDetection: false,
       ...(conv?.resumable ? { resume: { sessionId: conv.sessionId, title: conv.title } } : {}),
       ...(conv?.tokens !== undefined ? { tokens: conv.tokens } : {}),
       ...(conv?.costUSD !== undefined ? { costUSD: conv.costUSD } : {}),
-      searchText: searchTextOf(p.harness, p.cwd, conv?.title, conv?.firstPrompt),
+      searchText: searchTextOf(p.harness, p.cwd, ownName, conv?.title, conv?.firstPrompt),
     }
   })
 

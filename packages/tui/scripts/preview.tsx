@@ -364,6 +364,12 @@ function fakeHost(opts: Options): ControlHost {
     spawnSession: async () => (opts.failSpawn
       ? { ok: false, message: 'tmux recusou: sessão duplicada' }
       : { ok: true, message: 'preview — nothing was performed' }),
+    // Present so the three verbs that write into a session are reachable here at all. They perform
+    // nothing: the questions are what a layout check needs to see, and the preview must never send
+    // a keystroke anywhere.
+    promptSession: done,
+    approveSession: done,
+    reopenFell: done,
   }
 }
 
@@ -389,21 +395,62 @@ const FAKE_FLEET: ControlSessions = {
   rang: [],
   detachHint: 'Ctrl-b then d',
   finishedTasks: ['billing'],
+  // A fall on record, so the summary row's note, the "fell together" section and the reopen
+  // confirmation are all reachable here. Reach the rows with `--keys l` (the default view is only
+  // what is running, and a session that fell is by definition not).
+  fell: { count: 2, atMs: Date.now() - 6 * MINUTES },
   sessions: withSearchText([
     {
       id: 'a1b2c3', title: 'migrate the auth store', harness: 'claude',
-      cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus', task: 'billing',
+      cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus', task: 'auth store',
       repo: 'blpsoares/agentistics',
+      // NOT under `billing`, deliberately: that task is finished in this fixture, so a row filed
+      // under it is hidden by default — and the one row this preview exists to reach is the blocked
+      // one. `f00d01` carries `billing` instead, which keeps the finished-task case covered.
       state: 'waiting-approval', stateLabel: 'needs approval', actionable: true,
       // Usage on SOME rows and not others, deliberately: the column is sized to the widest row that
       // has any, and a fixture where every row carries one would never exercise the padding.
       tokens: '51.7k', cost: '$1.24',
       lastLines: ['applying migration 003_auth_store.sql', 'waiting for your approval'],
+      // The dialog, at the width a real one is drawn at — which is the point: the confirmation has
+      // to fit it into a pane that is often much narrower, and a fixture of short lines would never
+      // show that.
+      canApprove: true,
+      approvalLines: [
+        '│ Bash command                                                    │',
+        '│   bun run db:migrate --env production                           │',
+        '│                                                                 │',
+        '│ Do you want to proceed?                                         │',
+        '│ ❯ 1. Yes                                                        │',
+        '│   2. No, and tell Claude what to do differently                 │',
+        '│ Enter to confirm · Esc to cancel                                │',
+      ],
       startedAt: Date.now() - 22 * 60_000, attached: false,
+    },
+    // The two the machine took together. `lost`, named, and carrying their task — which is what a
+    // reboot leaves behind and what "reopen what fell" puts back.
+    {
+      id: 'f00d01', title: 'ledger reconciliation', harness: 'claude',
+      cwd: '/home/dev/agentistics', project: 'agentistics', repo: 'blpsoares/agentistics',
+      task: 'billing', named: true, fell: true,
+      state: 'lost', stateLabel: 'lost', actionable: true,
+      resume: { sessionId: 'r1', title: 'ledger reconciliation' },
+      startedAt: Date.now() - 3 * 60 * 60_000, attached: false,
+    },
+    {
+      id: 'f00d02', title: 'invoice export', harness: 'codex',
+      cwd: '/home/dev/prontuario', project: 'prontuario', repo: 'org/prontuario',
+      named: true, fell: true,
+      state: 'lost', stateLabel: 'lost', actionable: true,
+      resume: { sessionId: 'r2', title: 'invoice export' },
+      startedAt: Date.now() - 3 * 60 * 60_000, attached: false,
     },
     {
       id: 'd4e5f6', title: 'flaky test hunt', harness: 'codex',
       cwd: '/home/dev/prontuario', project: 'prontuario', task: 'flaky triage', repo: 'org/prontuario',
+      // Named in BOTH places, so the detail pane's "the other name" row is on screen: the title is
+      // the one typed inside the session, and `named here` states the agentop label that lost.
+      titleSource: 'harness', titleOther: 'flaky-triage',
       note: 'reproduces only on CI', state: 'waiting', stateLabel: 'waiting',
       actionable: true, approvalBlind: 'agentop has no verified screen markers for codex, so a blocking question here shows as "waiting" like any other pause.',
       startedAt: Date.now() - 3 * 60_000, attached: false,
