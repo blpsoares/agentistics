@@ -580,6 +580,7 @@ export async function openParseCache(
   now: () => number = Date.now,
 ): Promise<ParseCache> {
   let db: any
+  let selectStmt: any, upsertStmt: any, touchStmt: any, countStmt: any, gcStmt: any
   try {
     await mkdir(dirname(file), { recursive: true })
     // Dynamic import so a non-Bun runtime degrades instead of crashing at import time
@@ -593,19 +594,25 @@ export async function openParseCache(
     // one file reparsed, and FULL would fsync on every transcript we cache.
     db.exec('PRAGMA synchronous = NORMAL')
     db.exec(SCHEMA)
+
+    // Statement preparation MUST stay inside this try. `db.query()` COMPILES the statement
+    // immediately, and `CREATE TABLE IF NOT EXISTS` matches on the table NAME only — it does
+    // not validate columns. So a cache.db whose `parse_cache` exists with a drifted schema
+    // sails through exec(SCHEMA) and then throws here, rejecting the promise (which stops the
+    // build) and leaking the open handle. Found by review, reproduced as
+    // "table parse_cache has no column named used".
+    selectStmt = db.query('SELECT key, value FROM parse_cache WHERE slot = ?')
+    upsertStmt = db.query(
+      'INSERT INTO parse_cache (slot, key, value, used) VALUES (?, ?, ?, ?) ' +
+      'ON CONFLICT(slot) DO UPDATE SET key = excluded.key, value = excluded.value, used = excluded.used'
+    )
+    touchStmt = db.query('UPDATE parse_cache SET used = ? WHERE slot = ?')
+    countStmt = db.query('SELECT COUNT(*) AS n FROM parse_cache')
+    gcStmt = db.query('DELETE FROM parse_cache WHERE used < ?')
   } catch {
     try { db?.close() } catch { /* already gone */ }
     return NOOP_PARSE_CACHE
   }
-
-  const selectStmt = db.query('SELECT key, value FROM parse_cache WHERE slot = ?')
-  const upsertStmt = db.query(
-    'INSERT INTO parse_cache (slot, key, value, used) VALUES (?, ?, ?, ?) ' +
-    'ON CONFLICT(slot) DO UPDATE SET key = excluded.key, value = excluded.value, used = excluded.used'
-  )
-  const touchStmt = db.query('UPDATE parse_cache SET used = ? WHERE slot = ?')
-  const countStmt = db.query('SELECT COUNT(*) AS n FROM parse_cache')
-  const gcStmt = db.query('DELETE FROM parse_cache WHERE used < ?')
 
   const stats: ParseCacheStats = { hits: 0, misses: 0, writes: 0 }
   // Slots READ this build. Touched in one transaction by flush() so a row that is
