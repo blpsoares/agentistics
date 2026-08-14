@@ -147,7 +147,66 @@ Observado em `parse-cache-sqlite` e na sessão do aipe: rodapé com `esc to inte
 velho (a máquina do usuário está em **v1.13.1**, a main em **v1.13.7**) ou se `prevDigest` sendo
 sempre `undefined` numa CLI de tiro único ainda estraga a classificação.
 
-### 2.5 Senha em texto claro num título de sessão (alta, mas é decisão do usuário)
+### 2.5 O highlight não sobrevive à navegação (alta) — e há uma pista forte
+
+Reportado: "quando eu entro ou navego o highlight some e eu preciso ficar caçando novamente a
+sessão em highlight".
+
+A pista, e é forte o bastante para começar por ela: **o `marked` atravessa uma fronteira cujo tipo
+não o carrega.** `packages/server/server/preferences.ts` declara `marked?: string[]` dentro de
+`sessionView`, mas `SessionViewPrefs` em `packages/tui/src/control/types.ts` **não declara
+`marked`** (`grep -n "marked?:"` nesse arquivo devolve zero) — e é esse o tipo de
+`ControlHost.setSessionView(view)` e o de `sessionViewPref()`. Enquanto isso `Sessions.tsx:994` lê
+`view.marked` e `Sessions.tsx:1029` escreve. Qualquer caminho que reconstrua um `SessionViewPrefs`
+tipado **derruba o campo em silêncio**, e o `useEffect` de restore então chama
+`setMarked(new Set([]))` no próximo status — que é exatamente "o highlight some sozinho".
+
+Isso é uma **pista, não uma causa provada**. Reproduza antes: marque uma sessão, force um remount
+(anexar e sair já basta — detach volta numa tela recém-montada) e veja se some.
+
+Ao corrigir:
+
+- `SessionViewPrefs` passa a declarar `marked?: string[]`, e o `DEFAULT_SESSION_VIEW` decide o que
+  ausência significa (lista vazia, não `undefined`).
+- Cuidado com o `...(marked.size > 0 ? { marked: [...marked] } : {})` da linha 1029: com o spread
+  condicional, **desmarcar tudo nunca limpa o que está gravado** — some a chave em vez de gravar
+  uma lista vazia, e o próximo restore ressuscita as marcas antigas. É o mesmo bug pela outra
+  ponta.
+- Teste que falha se o campo não fizer o round-trip: escrever → ler → conjunto igual, inclusive o
+  caso do conjunto **vazio**.
+
+### 2.6 Uma sessão marcada deveria virar seu próprio grupo (média)
+
+Reportado: "o highlight deveria ser movido para um agrupamento assim que é marcado como
+highlight".
+
+Hoje o `▌` é só um glifo na linha, e a linha continua onde o ordenamento a deixou — ou seja, marcar
+uma sessão não ajuda a **achá-la de novo**, que é a única coisa para a qual marcar serve.
+
+Marcadas viram uma **banda própria no topo**, no mesmo formato das outras bandas de
+`sessionRows`/`groupSessions` (a banda de "caiu junto" é o precedente a copiar). Regras:
+
+- vale para os dois layouts, lista **e** cards — `cardPages` caminha sobre as mesmas
+  `SessionRow[]`, então nasce de graça se a decisão ficar em `sessionRows` e não no componente;
+- a banda some quando não há nenhuma marcada (uma banda vazia com título é uma caixa com nome
+  dentro);
+- **vale para qualquer agrupamento**, inclusive `none` — marcar é do usuário e ganha do
+  agrupamento;
+- uma linha marcada aparece **só** na banda de marcadas, nunca também no grupo de origem: a mesma
+  sessão em dois lugares é a razão de estar caçando ela.
+
+### 2.7 Bônus: `waiting` vira "aguardando resposta" (baixa)
+
+`cli-i18n.ts:581` — `waiting: 'aguardando'` → `'aguardando resposta'`. "Aguardando" sozinho não diz
+aguardando o quê, e o estado vizinho é `waitingApproval` (`'precisa aprovação'`), então o par fica
+legível. Só o pt; o `waiting: 'waiting'` do inglês (linha 359) fica como está.
+
+Atenção à largura: `sessionColumns` mede a coluna contra o **conteúdo**, então a palavra mais longa
+empurra a tabela. Rodar o `preview.tsx` a 80 colunas depois de mexer, e conferir as duas frases da
+linha 588 e 661 que citam a palavra "aguardando" entre aspas — elas descrevem o estado e precisam
+continuar dizendo o mesmo nome que a coluna mostra.
+
+### 2.8 Senha em texto claro num título de sessão (alta, mas é decisão do usuário)
 
 O título da sessão `15f8c5f36d` contém um e-mail e uma senha. Título e `first_prompt` **viajam**
 para a central; `redactSecrets` não pega "senha X" em prosa. Duas coisas separadas: a senha precisa
@@ -176,10 +235,12 @@ sumir. **Não confie neles**: não passaram por `tsc` nem pelos testes.
 ## 4. Ordem sugerida
 
 1. `limit.ts` + testes (é o pedido, e é o que evita a frota parar de novo)
-2. 2.2 — reabrir retomando a conversa (é perda de trabalho)
-3. 2.1 — gêmeos
-4. Fechar `services-setup` e `parse-cache-sqlite` (verificar e abrir PR)
-5. 2.3 e 2.4
+2. 2.5 + 2.6 + 2.7 — o highlight (persistir, agrupar, renomear). Peça pequena, mexe no mesmo
+   arquivo, e é atrito diário
+3. 2.2 — reabrir retomando a conversa (é perda de trabalho)
+4. 2.1 — gêmeos
+5. Fechar `services-setup` e `parse-cache-sqlite` (verificar e abrir PR)
+6. 2.3 e 2.4
 
 ---
 
@@ -190,6 +251,8 @@ sumir. **Não confie neles**: não passaram por `tsc` nem pelos testes.
   o padrão for reescrito com espaço comum.
 - `parseResetAt` tem teste para o caso 18:30/18:37 — horário **já passado é hoje**, nunca amanhã.
   Errar isso trava a frota exatamente no instante em que a feature deveria disparar.
+- O highlight faz round-trip escrever → ler, **inclusive vazio**, com teste; e uma sessão marcada
+  aparece na banda de marcadas e **em nenhum outro grupo**.
 - Verificação no **binário compilado** (`bun run build:binary`), não só `bun run` — a TUI tem bug de
   bundle que só aparece compilada.
 - `packages/tui/scripts/preview.tsx` a 80 colunas sem nenhuma linha estourando a largura.
