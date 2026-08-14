@@ -127,7 +127,11 @@ export function DataTable<T>({ columns, rows, keyOf, highlightIndex, width }: {
       <Box flexDirection="row">
         {fitted.map(c => (
           <Box key={c.key} width={c.width} marginRight={1}>
-            <Text dimColor bold>{pad(c.header, c.width - 1, c.align)}</Text>
+            {/* Truncated like every cell under it. A header is not exempt: `participação` in an
+                eight-column share column is fourteen characters that Ink WRAPS, which costs the
+                table a second header row and pushes every result down — and the Portuguese words
+                are the long ones, so it shows up in one language only. */}
+            <Text dimColor bold>{pad(truncate(c.header, c.width - 1), c.width - 1, c.align)}</Text>
           </Box>
         ))}
       </Box>
