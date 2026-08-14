@@ -79,11 +79,19 @@ export function Header({ layout, width }: { layout: HeaderLayout; width: number 
   )
 }
 
-/** The machine's identity: mode, version, and the update dot. Same run in both header branches. */
+/**
+ * The machine's identity: mode, version, the waiting counter and the update dot. Same run in both
+ * header branches.
+ *
+ * The counter carries a GLYPH as well as a number, for the same reason the update dot carries its
+ * version: a bare accent-coloured digit beside a dim one says nothing on a terminal that drops
+ * colour, and this is the piece a user is meant to act on.
+ */
 function HeaderTag({ meta }: { meta: HeaderMeta }) {
   return (
     <Text>
       <Text dimColor>{meta.text}</Text>
+      {meta.alert ? <Text color={COLORS.accent} bold>{` · ${meta.alert}`}</Text> : null}
       {/* Glyph plus version, in accent: the dot alone would carry the whole message in color. */}
       {meta.update ? <Text color={COLORS.accent}>{` · ${meta.update}`}</Text> : null}
     </Text>
@@ -136,7 +144,11 @@ export function TabBar({ layout, width, dim }: {
                 dimColor={!cell.active || dim}
                 color={cell.active && !dim ? COLORS.accent : undefined}
               >
-                {` ${cell.label} `}
+                {/* The active cell is BRACKETED as well as coloured. Colour alone answers "where am
+                    I" only on a terminal that renders it — and the brackets cost nothing, because
+                    they take the very columns the inactive cells spend on padding, so the widths
+                    `fitTabs` measured (and a click is resolved against) are unchanged. */}
+                {cell.active ? `[${cell.label}]` : ` ${cell.label} `}
               </Text>
             </Box>
           ))}

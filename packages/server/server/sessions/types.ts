@@ -36,15 +36,32 @@ export interface SpawnSpec {
   effortFlag?: string
   /** A genuine closed enum, printed by the CLI itself — so this one IS validated. */
   efforts?: string[]
+  /**
+   * The argv (after `bin`) that reopens an existing conversation by ID.
+   *
+   * A function rather than a flag string because the shapes genuinely differ: codex takes a
+   * SUBCOMMAND (`codex resume <id>`), the rest take a flag, and they do not agree on which. Absent
+   * when the CLI cannot reopen a conversation by id at all — gemini's `--resume` takes "latest" or
+   * an index, never an id, so it has none and the verb is simply not offered for it.
+   */
+  resume?: (id: string) => string[]
 }
 
 export interface SpawnRequest {
   harness: HarnessId
   cwd: string
+  /**
+   * Reopen this conversation instead of starting a fresh one.
+   *
+   * Mutually exclusive with `prompt` in practice — the conversation already has its history — but
+   * not refused, because a resumed session accepting an opening line is a reasonable thing to want.
+   */
+  resumeId?: string
   prompt?: string
   model?: string
   effort?: string
   label?: string
+  task?: string
 }
 
 export interface SpawnPlan {
@@ -55,6 +72,7 @@ export interface SpawnPlan {
 
 export type SpawnPlanError =
   | { code: 'unsupported-harness'; harness: HarnessId }
+  | { code: 'resume-unsupported'; harness: HarnessId }
   | { code: 'model-unsupported'; harness: HarnessId }
   | { code: 'effort-unsupported'; harness: HarnessId }
   | { code: 'unknown-effort'; harness: HarnessId; value: string; accepted: string[] }
@@ -94,6 +112,68 @@ export interface ManagedSession {
   effort?: string
   label?: string
   note?: string
+  /**
+   * The piece of work this session belongs to.
+   *
+   * A free string rather than an id: a task is whatever the person says it is, and making them
+   * create one before they can name one is how a grouping feature goes unused. Several sessions
+   * carrying the same task are that task's sessions, and can be reopened together.
+   */
+  task?: string
+  /**
+   * When this session was FINISHED, ISO — set instead of deleting the entry.
+   *
+   * Killing used to remove the registry row outright, so a session you ended vanished from the
+   * screen and took with it the only record of which conversation it was: the store had not caught
+   * up yet, so there was nothing to offer as reopenable either. A session you finish is still a
+   * thing that happened, and reopening it is the ordinary next thing to want.
+   */
+  endedAt?: string
+  /**
+   * The harness's own conversation id this session drives, when it is known exactly.
+   *
+   * Known for a session that was REOPENED from a conversation — we handed the id to the CLI, so
+   * there is no guessing left. Absent for one started fresh, because the conversation is created by
+   * the harness and is not reported back.
+   *
+   * It exists because the fallback is a guess that cannot tell two sessions apart:
+   * `conversationForProcess` matches on harness and directory, so every session in one repository
+   * resolves to the same conversation. A crash that left five rows `lost` here handed three of them
+   * the same one, and the fleet came back with a single session listed three times under one name.
+   */
+  conversationId?: string
+}
+
+/**
+ * What a session is doing right now.
+ *
+ * There is deliberately no `idle`. An interactive assistant whose process is alive and whose screen
+ * has stopped moving is, by construction, waiting for the person in front of it — there is no third
+ * thing it could be doing. What genuinely cannot always be known is WHY it is waiting, and that
+ * uncertainty lives in `AttentionRules.approval` being absent for a harness nobody has probed, which
+ * the UI states in words. A state word is the wrong place to put it: `idle` reads as "nothing to do
+ * here" on exactly the session that is blocked on a permission prompt.
+ */
+export type SessionActivity =
+  | 'working'
+  | 'waiting-approval'
+  | 'waiting'
+  | 'exited'
+
+/** The screen markers of ONE harness, read from real frames. See `attention-rules.ts`. */
+export interface AttentionRules {
+  /** A frame matching one of these is a question the session is blocked on. */
+  approval: RegExp[]
+  /**
+   * Proof the session is working, even if it did not redraw between two polls.
+   *
+   * Optional because it does not always exist: codex draws the same footer and the same ghost
+   * placeholder while streaming output as it does while sitting idle. For such a harness movement
+   * is the only working signal there is, and claiming otherwise would be a guess.
+   */
+  working?: RegExp[]
+  /** Provenance — the exact CLI version the frames came from, and the date. */
+  probed: string
 }
 
 export interface SessionBackend {

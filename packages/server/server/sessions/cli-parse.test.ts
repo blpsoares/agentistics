@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { parseSessionArgs } from './cli-parse'
+import { LS_DEFAULT, parseSessionArgs } from './cli-parse'
 
 describe('parseSessionArgs', () => {
   it('starts a background session on the given harness', () => {
@@ -35,6 +35,60 @@ describe('parseSessionArgs', () => {
     expect(parseSessionArgs(['note', 'a1', 'split the god object'])).toEqual({ kind: 'note', ref: 'a1', text: 'split the god object' })
   })
 
+  it('ls defaults to the running sessions, grouped by project', () => {
+    expect(parseSessionArgs(['ls'])).toEqual({ kind: 'ls', all: false, group: 'project' })
+    expect(LS_DEFAULT).toEqual({ all: false, group: 'project' })
+  })
+
+  it('ls takes --all, --group, --json, --width and the colour override', () => {
+    expect(parseSessionArgs(['ls', '--all', '--group', 'repo', '--json'])).toEqual({
+      kind: 'ls', all: true, group: 'repo', json: true,
+    })
+    expect(parseSessionArgs(['ls', '-a', '-g', 'task'])).toEqual({ kind: 'ls', all: true, group: 'task' })
+    expect(parseSessionArgs(['ls', '--width', '80', '--no-color'])).toEqual({
+      kind: 'ls', all: false, group: 'project', width: 80, color: false,
+    })
+    expect(parseSessionArgs(['ls', '--color'])).toEqual({
+      kind: 'ls', all: false, group: 'project', color: true,
+    })
+  })
+
+  it('ls refuses a grouping the table cannot draw', () => {
+    expect(parseSessionArgs(['ls', '--group', 'nonsense'])).toEqual({
+      kind: 'error', message: expect.stringContaining('nonsense'),
+    })
+  })
+
+  it('ls never swallows the next flag as a value', () => {
+    // `--group --json` used to be the shape that grouped by "--json" and then printed no JSON.
+    expect(parseSessionArgs(['ls', '--group', '--json'])).toEqual({
+      kind: 'error', message: expect.stringContaining('Missing value'),
+    })
+    expect(parseSessionArgs(['ls', '--width', '--all'])).toEqual({
+      kind: 'error', message: expect.stringContaining('Missing value'),
+    })
+  })
+
+  it('ls refuses a width that is not a positive number of columns', () => {
+    expect(parseSessionArgs(['ls', '--width', 'wide'])).toEqual({
+      kind: 'error', message: expect.stringContaining('--width'),
+    })
+    expect(parseSessionArgs(['ls', '--width', '0'])).toEqual({
+      kind: 'error', message: expect.stringContaining('--width'),
+    })
+  })
+
+  it('ls rejects an option it does not know rather than ignoring it', () => {
+    expect(parseSessionArgs(['ls', '--sort'])).toEqual({
+      kind: 'error', message: expect.stringContaining('--sort'),
+    })
+  })
+
+  it('list is untouched by ls — a script reading it keeps its dump', () => {
+    expect(parseSessionArgs(['list'])).toEqual({ kind: 'list' })
+    expect(parseSessionArgs(['list', '--json'])).toEqual({ kind: 'list', json: true })
+  })
+
   it('rejects a harness that is not a harness', () => {
     expect(parseSessionArgs(['nonsense'])).toEqual({ kind: 'error', message: expect.stringContaining('nonsense') })
   })
@@ -62,5 +116,65 @@ describe('parseSessionArgs', () => {
 
   it('asks for help with no arguments', () => {
     expect(parseSessionArgs([])).toEqual({ kind: 'help' })
+  })
+})
+
+describe('batch — the form an assistant drives', () => {
+  it('parses a task and one session per --session', () => {
+    const cmd = parseSessionArgs([
+      'batch', '--task', 'auth', '--session', 'claude: fix the store', '--session', 'codex: port tests',
+    ])
+    expect(cmd).toMatchObject({
+      kind: 'batch',
+      task: 'auth',
+      specs: [
+        { harness: 'claude', prompt: 'fix the store' },
+        { harness: 'codex', prompt: 'port tests' },
+      ],
+    })
+  })
+
+  it('applies a shared --cwd to every session, and lets @ override it', () => {
+    // A batch is usually many assistants on ONE repository, and repeating the path per session is
+    // how a generated command line gets long enough to be got wrong.
+    const cmd = parseSessionArgs([
+      'batch', '--task', 't', '--cwd', '/repo',
+      '--session', 'claude: a', '--session', 'codex@/other: b',
+    ])
+    expect(cmd).toMatchObject({
+      specs: [{ cwd: '/repo' }, { cwd: '/other' }],
+    })
+  })
+
+  it('refuses a batch with no task, because the sessions must belong together', () => {
+    expect(parseSessionArgs(['batch', '--session', 'claude: a'])).toMatchObject({ kind: 'error' })
+  })
+
+  it('refuses a batch with no sessions', () => {
+    expect(parseSessionArgs(['batch', '--task', 't'])).toMatchObject({ kind: 'error' })
+  })
+
+  it('refuses an unknown harness by name rather than starting nothing silently', () => {
+    const cmd = parseSessionArgs(['batch', '--task', 't', '--session', 'gpt5: hi'])
+    expect(cmd).toMatchObject({ kind: 'error' })
+    expect((cmd as { message: string }).message).toContain('gpt5')
+  })
+
+  it('takes a session with no prompt at all', () => {
+    expect(parseSessionArgs(['batch', '--task', 't', '--session', 'claude'])).toMatchObject({
+      specs: [{ harness: 'claude' }],
+    })
+  })
+
+  it('carries --json through', () => {
+    expect(parseSessionArgs(['batch', '--task', 't', '--session', 'claude: a', '--json']))
+      .toMatchObject({ json: true })
+    expect(parseSessionArgs(['list', '--json'])).toMatchObject({ kind: 'list', json: true })
+  })
+
+  it('parses open with a multi-word task name', () => {
+    expect(parseSessionArgs(['open', 'auth', 'refactor'])).toMatchObject({
+      kind: 'open', task: 'auth refactor',
+    })
   })
 })

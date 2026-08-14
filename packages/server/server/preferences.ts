@@ -57,6 +57,33 @@ export interface Preferences {
    *    - 'full'        = mirror raw transcripts too (heavy, lets you re-read chats)
    *    - 'off'         = do nothing, use Claude's default folder */
   archiveMode?: 'off' | 'consolidate' | 'full'
+  /**
+   * How the cockpit's fleet list was last arranged.
+   *
+   * Stored here rather than held in the TUI because the control center owns no persistence — the
+   * same reason the language lives here. Without it the grouping was per-run state, so every restart
+   * threw away the arrangement someone chose, which reads as the screen forgetting on its own.
+   */
+  sessionView?: {
+    grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo'
+    showClosed: boolean
+    showExited: boolean
+    showUnfiled: boolean
+    showDone?: boolean
+    onlyActive?: boolean
+    states?: string[]
+    sort?: { by: string; dir: 'asc' | 'desc' }
+    hideDetail?: boolean
+    marked?: string[]
+  }
+  /**
+   * The session TASKS the user has marked finished.
+   *
+   * A task is a free string on a session, so "finished" cannot live on the sessions — it is a
+   * statement about the work, and the work outlives any one of its sessions. Kept here beside the
+   * arrangement for the same reason: the control center owns no persistence.
+   */
+  finishedTasks?: string[]
   /** @deprecated legacy boolean — read by resolveArchiveMode for migration only */
   archiveSessions?: boolean
   /** Team mode configuration. Absent / mode=solo means solo behavior (no push). */

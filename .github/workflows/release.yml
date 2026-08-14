@@ -3,6 +3,17 @@ name: Build & Release
 on:
   push:
     branches: [main, feat/desktop]
+  # The manual valve. The version is otherwise computed from the tags and the commit subjects, which
+  # is right almost always and has no answer for the case where it got the number WRONG: 1.8.2 went
+  # out carrying a whole cockpit because the bump glob did not match scoped commits, and nothing
+  # short of inventing a commit could correct it. Given a version here, that computation is skipped
+  # entirely and this is the number that ships.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release exactly this version (e.g. 1.9.0). Leave empty to compute it.'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -12,6 +23,21 @@ jobs:
   build:
     name: Build binary (Linux x64)
     runs-on: ubuntu-latest
+    env:
+      # The packages a release stamps its version onto, in ONE place.
+      #
+      # There were two lists: the bump script wrote the files and `git add` staged them, and they
+      # were not the same list. Adding `packages/tui` to the first alone meant the file was written
+      # in the runner's working tree and thrown away — which is why the tui package went out at
+      # 1.7.3 in the 1.9.0 release, reporting a version no release has ever produced. Two hardcoded
+      # lists that must agree is the shape of the bug, not the fix.
+      PKG_FILES: >-
+        package.json
+        packages/core/package.json
+        packages/server/package.json
+        packages/web/package.json
+        packages/mcp/package.json
+        packages/tui/package.json
     outputs:
       skip: ${{ steps.skip_check.outputs.skip }}
       version_skip: ${{ steps.version.outputs.skip }}
@@ -27,8 +53,13 @@ jobs:
       - name: Skip if version bump commit
         id: skip_check
         run: |
+          # A FORCED release is never skipped. This guard exists so the workflow's own bump commit
+          # does not trigger it again; the head of main is always that commit, so honouring it on a
+          # manual dispatch would refuse every corrective release outright.
           MSG=$(git log -1 --pretty=format:"%s")
-          if echo "$MSG" | grep -q "chore: bump version"; then
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+          elif echo "$MSG" | grep -q "chore: bump version"; then
             echo "skip=true" >> $GITHUB_OUTPUT
           else
             echo "skip=false" >> $GITHUB_OUTPUT
@@ -60,6 +91,28 @@ jobs:
         if: steps.skip_check.outputs.skip != 'true'
         id: version
         run: |
+          # An explicitly requested version wins outright: no tag arithmetic, no subject parsing, and
+          # no "no new commits" skip — a corrective release exists precisely because the automatic
+          # answer was wrong, so consulting it again would refuse the correction.
+          FORCED="${{ github.event.inputs.version }}"
+          if [ -n "$FORCED" ]; then
+            FORCED="${FORCED#v}"
+            case "$FORCED" in
+              [0-9]*.[0-9]*.[0-9]*) ;;
+              *) echo "::error::version must look like 1.9.0, got '$FORCED'"; exit 1 ;;
+            esac
+            if git rev-parse -q --verify "refs/tags/v$FORCED" >/dev/null; then
+              echo "::error::v$FORCED already exists"; exit 1
+            fi
+            echo "next=$FORCED"  >> $GITHUB_OUTPUT
+            echo "tag=v$FORCED"  >> $GITHUB_OUTPUT
+            echo "range=HEAD~20..HEAD" >> $GITHUB_OUTPUT
+            echo "bump=forced"   >> $GITHUB_OUTPUT
+            echo "skip=false"    >> $GITHUB_OUTPUT
+            echo "▶ forced release v$FORCED"
+            exit 0
+          fi
+
           # Last semver tag only (ignore 'latest')
           LAST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -1)
 
@@ -87,9 +140,14 @@ jobs:
           # Determine bump type from conventional commits
           BUMP="patch"
           while IFS= read -r subject; do
+            # SCOPES count. `feat:*` does not match `feat(sessions):`, so every scoped feature in
+            # this repository has been shipping as a patch — a whole cockpit went out as 1.8.2.
+            # The bang can sit on either side of the scope (`feat!:` and `feat(x)!:` are both
+            # conventional), so each is matched with and without one.
             case "$subject" in
               feat\!:*|fix\!:*|refactor\!:*|chore\!:*) BUMP="major"; break ;;
-              feat:*) [ "$BUMP" != "major" ] && BUMP="minor" ;;
+              feat\(*\)\!:*|fix\(*\)\!:*|refactor\(*\)\!:*|chore\(*\)\!:*) BUMP="major"; break ;;
+              feat:*|feat\(*\):*) [ "$BUMP" != "major" ] && BUMP="minor" ;;
             esac
             if echo "$subject" | grep -qi "BREAKING CHANGE"; then
               BUMP="major"; break
@@ -118,13 +176,7 @@ jobs:
           VERSION="${{ steps.version.outputs.next }}"
           bun -e "
             const fs = require('fs');
-            const targets = [
-              'package.json',
-              'packages/core/package.json',
-              'packages/server/package.json',
-              'packages/web/package.json',
-              'packages/mcp/package.json',
-            ];
+            const targets = process.env.PKG_FILES.split(' ').filter(Boolean);
             for (const f of targets) {
               const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
               pkg.version = '$VERSION';
@@ -211,7 +263,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json packages/core/package.json packages/server/package.json packages/web/package.json packages/mcp/package.json
+          git add $PKG_FILES
           git commit -m "chore: bump version to ${VERSION} [skip ci]"
           git tag "$TAG"
           git push origin main "$TAG"

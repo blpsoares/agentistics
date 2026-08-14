@@ -38,12 +38,27 @@ export function newSessionId(): string {
   return randomUUID().replace(/-/g, '').slice(0, 10)
 }
 
+/**
+ * The fields a session's registry entry can be amended with after it exists.
+ *
+ * Named rather than inlined because it was written out at every call site and they had already
+ * drifted: adding a field to the store meant finding each copy, and the one that was missed failed
+ * as a type error at best and a silently dropped write at worst.
+ */
+export interface SessionPatch {
+  label?: string
+  note?: string
+  task?: string
+  endedAt?: string
+  conversationId?: string
+}
+
 export interface SessionRegistry {
   read(): Promise<ManagedSession[]>
   add(session: ManagedSession): Promise<void>
   remove(id: string): Promise<void>
   /** False when no session carries that id — never a silent success. */
-  patch(id: string, patch: { label?: string; note?: string }): Promise<boolean>
+  patch(id: string, patch: SessionPatch): Promise<boolean>
 }
 
 /**
@@ -69,6 +84,8 @@ function sanitize(raw: unknown): ManagedSession | null {
     ...(typeof s.effort === 'string' ? { effort: s.effort } : {}),
     ...(typeof s.label === 'string' ? { label: s.label } : {}),
     ...(typeof s.note === 'string' ? { note: s.note } : {}),
+    ...(typeof s.task === 'string' ? { task: s.task } : {}),
+    ...(typeof s.endedAt === 'string' ? { endedAt: s.endedAt } : {}),
   }
 }
 
@@ -178,5 +195,5 @@ export const addSession = (s: ManagedSession): Promise<void> => defaultRegistry.
 export const removeSession = (id: string): Promise<void> => defaultRegistry.remove(id)
 export const patchSession = (
   id: string,
-  patch: { label?: string; note?: string },
+  patch: SessionPatch,
 ): Promise<boolean> => defaultRegistry.patch(id, patch)

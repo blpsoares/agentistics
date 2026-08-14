@@ -69,6 +69,16 @@ test('toTeamDoc redacts the session title too', () => {
   expect(toTeamDoc(s, 'acme', 'm1', 'devA').title).not.toContain(tok)
 })
 
+test('toTeamDoc redacts the name and note the user typed themselves', () => {
+  // These are free text a person typed, and they travel exactly like first_prompt. A field added to
+  // SessionMeta without being added to redactSessionText is the one nobody thinks of.
+  const tok = ['ghp', '_', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '0123456789'].join('')
+  const s = { ...session('s1'), user_label: `fix ${tok}`, user_note: `token is ${tok}` }
+  const doc = toTeamDoc(s, 'acme', 'm1', 'devA')
+  expect(doc.user_label).not.toContain(tok)
+  expect(doc.user_note).not.toContain(tok)
+})
+
 test('toTeamDoc leaves an ordinary prompt exactly as it was', () => {
   const s = { ...session('s1'), first_prompt: 'reduce token usage, input_tokens=123' }
   expect(toTeamDoc(s, 'acme', 'm1', 'devA').first_prompt).toBe('reduce token usage, input_tokens=123')

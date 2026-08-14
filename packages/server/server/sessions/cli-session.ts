@@ -8,11 +8,25 @@
 
 import { resolve } from 'node:path'
 import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
-import { parseSessionArgs, type SessionCommand } from './cli-parse'
+import { sessionRunning } from '@agentistics/tui/control/sessions'
+import { controlStrings } from '@agentistics/tui/control/i18n'
+import { wrapText } from '@agentistics/tui/control/surface'
+import { parseSessionArgs, LS_DEFAULT, type SessionCommand } from './cli-parse'
+import { cliStrings } from '../cli-i18n'
+import { resolveLang } from '../cli-lang'
+import { readPreferences } from '../preferences'
+import { toControlSession } from './control-session'
+import { repoFacts } from './repo-facts'
+import { emptyReason, renderSessionTable, resolveWidth } from './session-table'
 import { SPAWN_SPECS, planSpawn } from './spawn-spec'
 import { reconcileSessions, resolveSessionRef, type ReconciledSession, type RefCandidate } from './session-ref'
 import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './registry'
+import { conversationForProcess, loadConversations } from './conversations'
 import { resolveBackend } from './index'
+import { scanProcesses } from '../live-sessions'
+import { createSessionsPoller, type SessionSnapshot } from './sessions-host'
+import { needsAttention, type SessionView } from './session-view'
+import { planTaskReopen, taskReopenSucceeded } from './task-reopen'
 import type { SessionBackend, SpawnPlanError } from './types'
 
 /** Derived from the specs, never a second hand-written list — the two could not then disagree. */
@@ -20,11 +34,36 @@ const STARTABLE: HarnessId[] = HARNESS_ORDER.filter(h => SPAWN_SPECS[h] !== null
 
 const USAGE = `Usage:
   agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"]
+  agentop session ls     [--all] [--group repo|project|task|harness|model|none] [--json]
   agentop session list
   agentop session attach <id|name>
   agentop session kill   <id|name>
   agentop session rename <id|name> "label"
   agentop session note   <id|name> "text"
+
+  \`ls\` is the table a PERSON reads: aligned columns, one section per project, and only what is
+  running — \`--all\` adds the finished, lost and closed conversations, \`--group\` changes the
+  sections. \`list\` stays the tab-separated dump a script can read line by line; both take
+  \`--json\` and print the same data.
+
+Orchestrating several at once — the form an assistant should use:
+
+  agentop session batch --task "<name>" [--cwd <path>] [--model <id>] [--effort <level>] \\
+                       --session "<harness>[@<cwd>]: <prompt>" [--session "..."] [--json]
+  agentop session open  "<task>" [--json]
+  agentop session list  [--json]
+
+  \`batch\` starts every session detached and files them all under one task, so \`open\` brings the
+  whole task back later and the cockpit groups them together. \`--cwd\`/\`--model\`/\`--effort\` given
+  before the sessions apply to all of them; a \`@<cwd>\` on a session overrides it. \`--json\` prints
+  the started ids as data.
+
+  Example — three assistants on one repository, in parallel:
+
+    agentop session batch --task "auth-refactor" --cwd ~/app --json \\
+      --session "claude: refactor the token store" \\
+      --session "codex: port the tests" \\
+      --session "gemini: review the migration"
 
 Harnesses that can be started: ${STARTABLE.join(', ')}`
 
@@ -39,6 +78,8 @@ function explainPlanError(e: SpawnPlanError): string {
   switch (e.code) {
     case 'unsupported-harness':
       return `${e.harness} cannot be started by agentop yet. Supported: ${STARTABLE.join(', ')}.`
+    case 'resume-unsupported':
+      return `${e.harness} cannot reopen a conversation by id, so it cannot be resumed.`
     case 'model-unsupported':
       return `${e.harness} has no model flag, so --model cannot be applied.`
     case 'effort-unsupported':
@@ -59,7 +100,10 @@ export async function runSession(argv: string[]): Promise<number> {
 
   switch (cmd.kind) {
     case 'start': return start(cmd, backend)
-    case 'list': return list(backend)
+    case 'batch': return batch(cmd, backend)
+    case 'open': return openTask(cmd.task, cmd.json ?? false, backend)
+    case 'list': return list(backend, cmd.json ?? false)
+    case 'ls': return ls(cmd, backend)
     case 'attach': return attach(cmd.ref, backend)
     case 'kill': return kill(cmd.ref, backend)
     case 'rename': return patch(cmd.ref, { label: cmd.label }, 'renamed', backend)
@@ -97,6 +141,7 @@ async function start(
     ...(cmd.model ? { model: cmd.model } : {}),
     ...(cmd.effort ? { effort: cmd.effort } : {}),
     ...(cmd.label ? { label: cmd.label } : {}),
+    ...(cmd.task ? { task: cmd.task } : {}),
   })
 
   if (cmd.background) {
@@ -122,14 +167,304 @@ async function execAttach(
   return await p.exited
 }
 
-async function list(backend: SessionBackend): Promise<number> {
-  const rows = reconcileSessions(await readRegistry(), await backend.list())
-  if (rows.length === 0) { console.log('No sessions.'); return 0 }
-  for (const r of rows) {
-    const harness = r.managed?.harness ?? 'unknown'
-    const name = r.managed?.label ?? ''
-    const cwd = r.managed?.cwd ?? ''
-    console.log(`${r.id}\t${r.status}\t${harness}\t${name}\t${cwd}`)
+/** The word each state wears. `external` says outright that this row is not ours to drive. */
+function stateWord(v: SessionView): string {
+  if (v.status === 'external') return 'external'
+  if (v.status === 'lost') return 'lost'
+  switch (v.activity) {
+    case 'waiting-approval': return 'NEEDS APPROVAL'
+    case 'waiting': return 'waiting'
+    case 'working': return 'working'
+    case 'exited': return 'exited'
+    default: return v.status
+  }
+}
+
+/**
+ * `agentop session batch` — start several sessions at once, all filed under one task.
+ *
+ * The command an ASSISTANT drives. Every session is started detached, because a batch by definition
+ * has no single terminal to hand over, and the result is printed as JSON on request so the caller
+ * gets the ids back as data rather than having to parse prose it did not write.
+ *
+ * A failure does not abort the rest: with five sessions requested, four that started are four that
+ * are running, and pretending otherwise would leave them orphaned. Every outcome is reported.
+ */
+async function batch(
+  cmd: Extract<SessionCommand, { kind: 'batch' }>,
+  backend: SessionBackend,
+): Promise<number> {
+  const started: Array<{ id: string; harness: string; cwd: string }> = []
+  const failed: Array<{ harness: string; reason: string }> = []
+
+  for (const spec of cmd.specs) {
+    const cwd = spec.cwd ? resolve(spec.cwd) : process.cwd()
+    const planned = planSpawn({
+      harness: spec.harness,
+      cwd,
+      ...(spec.prompt ? { prompt: spec.prompt } : {}),
+      ...(spec.model ? { model: spec.model } : {}),
+      ...(spec.effort ? { effort: spec.effort } : {}),
+    })
+    if (!planned.ok) { failed.push({ harness: spec.harness, reason: explainPlanError(planned.error) }); continue }
+
+    const id = newSessionId()
+    try {
+      await backend.spawn({
+        id, cwd, argv: planned.plan.argv,
+        ...(planned.plan.sendKeys ? { sendKeys: planned.plan.sendKeys } : {}),
+      })
+    } catch (e) {
+      failed.push({ harness: spec.harness, reason: e instanceof Error ? e.message : String(e) })
+      continue
+    }
+    await addSession({
+      id,
+      harness: spec.harness,
+      cwd,
+      createdAt: new Date().toISOString(),
+      task: cmd.task,
+      ...(spec.model ? { model: spec.model } : {}),
+      ...(spec.effort ? { effort: spec.effort } : {}),
+      ...(spec.name ? { label: spec.name } : {}),
+    })
+    started.push({ id, harness: spec.harness, cwd })
+  }
+
+  if (cmd.json) {
+    console.log(JSON.stringify({ task: cmd.task, started, failed }, null, 2))
+  } else {
+    for (const st of started) console.log(`${st.id}\t${st.harness}\t${st.cwd}`)
+    for (const f of failed) console.error(`failed\t${f.harness}\t${f.reason}`)
+    console.log(`\n${started.length} started under task "${cmd.task}"${failed.length ? `, ${failed.length} failed` : ''}.`)
+    if (started.length > 0) console.log(`Attach to any with: agentop session attach <id>`)
+  }
+  return failed.length > 0 && started.length === 0 ? 1 : 0
+}
+
+/** `agentop session open "<task>"` — reopen every session of a task, detached. */
+async function openTask(task: string, json: boolean, backend: SessionBackend): Promise<number> {
+  const wanted = (await readRegistry()).filter(m => m.task === task)
+  if (wanted.length === 0) {
+    console.error(`No sessions are filed under "${task}".`)
+    return 1
+  }
+  const conversations = await loadConversations()
+  const live = new Set((await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id))
+  // The DECISION is the pure `planTaskReopen`, shared with the cockpit's verb. The two used to be
+  // separate implementations and had drifted: only one retired the row it replaced, so the same
+  // gesture left a different registry depending on where you pressed it.
+  const plan = planTaskReopen({
+    entries: wanted,
+    liveIds: live,
+    conversationFor: m => {
+      const conv = conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
+      return conv?.resumable ? { sessionId: conv.sessionId, title: conv.title } : null
+    },
+  })
+
+  const started: string[] = []
+  const skipped: string[] = [...plan.skipped]
+
+  for (const row of plan.reopen) {
+    const m = row.entry
+    const planned = planSpawn({ harness: m.harness, cwd: m.cwd, resumeId: row.resumeId })
+    if (!planned.ok) { skipped.push(m.id); continue }
+    const id = newSessionId()
+    try {
+      await backend.spawn({ id, cwd: m.cwd, argv: planned.plan.argv })
+    } catch { skipped.push(m.id); continue }
+    await addSession({
+      id, harness: m.harness, cwd: m.cwd, createdAt: new Date().toISOString(), task,
+      label: row.label,
+      ...(m.note ? { note: m.note } : {}),
+    })
+    // The old row is RETIRED, not deleted: it is still a thing that happened, and it stops standing
+    // beside its own continuation with the same name on it.
+    await patchSession(m.id, { endedAt: new Date().toISOString() })
+    started.push(id)
+  }
+
+  if (json) {
+    console.log(JSON.stringify({ task, started, skipped, already: plan.already }, null, 2))
+  } else {
+    for (const id of started) console.log(id)
+    // Reported, never silent: a partial reopen presented as a success leaves someone believing they
+    // have their whole task back.
+    const alreadyUp = plan.already.length ? `, ${plan.already.length} already running` : ''
+    console.log(`\n${started.length} reopened${skipped.length ? `, ${skipped.length} could not be` : ''}${alreadyUp}.`)
+  }
+  return taskReopenSucceeded(plan, started.length) ? 0 : 1
+}
+
+/** The fleet as DATA, so an assistant orchestrating sessions reads it rather than parsing a table
+ *  meant for a person. One shape for every command that offers `--json`: `ls` prints exactly what
+ *  `list` prints, because a second machine-readable format is a second thing to keep in step. */
+function fleetJson(snap: SessionSnapshot): unknown {
+  return {
+    sessions: snap.sessions.map(v => ({
+      id: v.id,
+      status: v.status,
+      activity: v.activity ?? null,
+      harness: v.harness ?? null,
+      cwd: v.cwd,
+      label: v.label ?? null,
+      task: v.task ?? null,
+      resumeId: v.resume?.sessionId ?? null,
+    })),
+    attention: snap.attention,
+    unavailable: snap.unavailable ?? null,
+  }
+}
+
+/** The whole fleet, from the registry, the backend, `/proc` and the conversation store. */
+async function pollFleet(backend: SessionBackend): Promise<SessionSnapshot> {
+  const poller = createSessionsPoller({ backend, readRegistry, scanProcesses, loadConversations })
+  return await poller.poll()
+}
+
+/**
+ * `agentop session ls` — the cockpit's sessions table, printed once.
+ *
+ * Everything about what a row IS comes from the same modules the Sessions tab uses: `pollFleet`
+ * gathers the fleet, `toControlSession` maps it, `renderSessionTable` draws it. What is decided here
+ * is what a COMMAND LINE has to decide — which rows the question is about (what is running, unless
+ * `--all`), how wide the output may be, and whether anything is going to a terminal at all.
+ */
+async function ls(
+  cmd: Extract<SessionCommand, { kind: 'ls' }>,
+  backend: SessionBackend,
+): Promise<number> {
+  const snap = await pollFleet(backend)
+  if (cmd.json) { console.log(JSON.stringify(fleetJson(snap), null, 2)); return 0 }
+
+  const lang = await resolveLang()
+  const s = cliStrings(lang)
+  // The TABLE's own chrome — its column headings and the words an empty grouping key wears — is the
+  // control center's, because it is the control center's table. Two copies of "usage" and "no task"
+  // are two places for them to disagree about what a column is called.
+  const c = controlStrings(lang)
+
+  // Said BEFORE the table: an unavailable backend has not established that nothing is running, and
+  // the rows below may be a previous poll rather than a fresh one.
+  if (snap.unavailable) console.error(snap.unavailable)
+
+  // Resolved per session and memoized by directory — the same read the cockpit does, and what makes
+  // three worktrees of one repository group under the project rather than under three names.
+  const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd)))
+  // A preferences file that cannot be read costs the "finished" mark on a task heading, never the
+  // table: the fleet is what the command is for.
+  const finishedTasks = await readPreferences().then(p => p.finishedTasks ?? []).catch(() => [])
+  const fleet = snap.sessions.map((v, i) => toControlSession(v, s, facts[i]))
+  // `sessionRunning` rather than a state list of our own: an EXTERNAL row is running — it exists
+  // because `/proc` found a live assistant — and what cannot be read there is its activity, never
+  // whether it is alive.
+  const shown = cmd.all ? fleet : fleet.filter(sessionRunning)
+
+  const tty = process.stdout.isTTY === true
+  // `--width`, then the terminal, then `COLUMNS`, then the natural width — the precedence is
+  // `resolveWidth`'s, so it is stated and tested in one place. `columns` is passed ONLY on a tty:
+  // off one it is undefined anyway, and asking for it would make the fallback depend on a value
+  // that cannot exist.
+  const width = resolveWidth({
+    ...(cmd.width !== undefined ? { explicit: cmd.width } : {}),
+    ...(tty && process.stdout.columns ? { columns: process.stdout.columns } : {}),
+    ...(process.env.COLUMNS !== undefined ? { env: process.env.COLUMNS } : {}),
+  })
+  const color = cmd.color ?? (tty && !process.env.NO_COLOR)
+  // Every SENTENCE this command prints is wrapped, never truncated: they name sessions and flags,
+  // and a cut one hides the very thing it exists to say. Through the app's own `wrapText`, and a
+  // no-op at a pipe's natural width — where one long line is what `grep` wants.
+  const say = (text: string) => { for (const l of wrapText(text, width)) console.log(l) }
+
+  // A mute blank is indistinguishable from a broken command, so an empty list says which of the
+  // three things happened. The decision is pure; only the sentence is chosen here.
+  const empty = emptyReason({
+    fleet: fleet.length,
+    shown: shown.length,
+    ...(snap.unavailable ? { unavailable: snap.unavailable } : {}),
+  })
+  if (empty !== null) {
+    // `unavailable` was already printed above, and it is the whole explanation.
+    if (empty === 'empty') say(s.sessLs.none)
+    else if (empty === 'filtered') say(s.sessLs.noneRunning(fleet.length))
+    return empty === 'unavailable' ? 1 : 0
+  }
+
+  for (const line of renderSessionTable({
+    sessions: shown,
+    width,
+    grouping: cmd.group,
+    color,
+    doneTasks: finishedTasks,
+    strings: {
+      cols: c.sessionsCols,
+      unknown: {
+        harness: c.sessionsUnknownHarness,
+        model: c.sessionsUnknownModel,
+        project: c.sessionsUnknownProject,
+        task: c.sessionsUnknownTask,
+        repo: c.sessionsUnknownRepo,
+      },
+      closed: c.sessionsClosedWord,
+      done: c.sessionsDoneWord,
+    },
+  })) console.log(line)
+
+  const waiting = shown.filter(v => v.state === 'waiting' || v.state === 'waiting-approval')
+  if (waiting.length > 0) {
+    console.log('')
+    say(s.sessLs.waiting(waiting.length, waiting.map(v => v.title).join(', ')))
+  }
+
+  // A harness with no probed rules cannot tell a permission prompt from an ordinary pause. Saying so
+  // is the difference between a gap and a wrong answer — and `approvalBlind` is set only on the rows
+  // that can lack it, so a closed conversation never names a harness that is in fact probed.
+  const blind = [...new Set(shown.filter(v => v.approvalBlind).map(v => v.harness))]
+  if (blind.length > 0) say(s.sessLs.blind(blind.join(', ')))
+  return 0
+}
+
+async function list(backend: SessionBackend, json = false): Promise<number> {
+  const snap = await pollFleet(backend)
+
+  if (json) {
+    console.log(JSON.stringify(fleetJson(snap), null, 2))
+    return 0
+  }
+
+  if (snap.unavailable) console.error(snap.unavailable)
+  if (snap.sessions.length === 0) {
+    // Only claim "nothing is running" when the poll actually succeeded — an unavailable backend has
+    // not established that, and saying so would be a confident zero.
+    if (!snap.unavailable) console.log('No sessions.')
+    return snap.unavailable ? 1 : 0
+  }
+
+  for (const v of snap.sessions) {
+    const id = v.status === 'external' ? '-' : v.id
+    // `?` rather than a guessed harness: an unregistered session's harness is genuinely unrecorded.
+    console.log(`${id}\t${stateWord(v)}\t${v.harness ?? '?'}\t${v.label ?? ''}\t${v.cwd}`)
+  }
+
+  const waiting = snap.sessions.filter(v => needsAttention(v.activity))
+  if (waiting.length > 0) {
+    console.log(`\n${waiting.length} session(s) waiting on you: ${waiting.map(v => v.label ?? v.id).join(', ')}`)
+  }
+
+  // A harness with no probed rules cannot distinguish a permission prompt from an ordinary pause.
+  // Saying so is the difference between a gap and a wrong answer.
+  // Only rows we actually HOST can have their approval detected, so only they can lack it. A closed
+  // conversation and a foreign process have no screen to read at all — including them here named
+  // claude, kimi and codex as undetectable when all three are probed.
+  const blind = [...new Set(
+    snap.sessions
+      .filter(v => v.status !== 'external' && v.status !== 'closed' && !v.approvalDetection)
+      .map(v => v.harness)
+      .filter((h): h is NonNullable<typeof h> => h !== undefined),
+  )]
+  if (blind.length > 0) {
+    console.log(`Approval detection is not available for: ${blind.join(', ')} — those sessions show as "waiting" either way.`)
   }
   return 0
 }

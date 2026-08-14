@@ -150,6 +150,16 @@ export interface SessionMeta {
    *  the transcript; we surface it as the session's display name. Falls back to `first_prompt`
    *  in the UI when absent (older sessions, non-Claude harnesses). */
   title?: string
+  /**
+   * The name the USER gave this session in the session manager, and their own note.
+   *
+   * A third thing, deliberately separate from `title` (which the harness generates from the
+   * transcript) and from `first_prompt`: it is the one label nothing upstream may overwrite, which
+   * is the entire reason to be able to set it. Stamped from `~/.agentistics/managed-sessions.json`
+   * and only ever when the link is UNAMBIGUOUS — see `linkManagedSessions`.
+   */
+  user_label?: string
+  user_note?: string
   user_interruptions: number
   user_response_times: number[]
   tool_errors: number
