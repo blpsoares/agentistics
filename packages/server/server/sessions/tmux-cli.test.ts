@@ -135,3 +135,13 @@ describe('serverOptionsArgs', () => {
     expect(all.some(a => a.includes('remain-on-exit') && a.at(-1) === 'on')).toBe(true)
   })
 })
+
+describe('the status bar', () => {
+  it('is off — it costs a row to say nothing here', () => {
+    // tmux's band lists windows, the session name and a clock. An agentop session is one window
+    // with one pane, its name is `agentop-<id>` rather than anything a person chose, and the
+    // cockpit already shows all of it.
+    const status = serverOptionsArgs().find(a => a.includes('status'))
+    expect(status).toEqual(['-L', 'agentop', 'set-option', '-g', 'status', 'off'])
+  })
+})

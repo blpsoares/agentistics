@@ -257,9 +257,14 @@ wired up because the key could not be verified from the CLI itself, and agentop 
 
 ## Scrolling an attached session
 
-Sessions are hosted on agentop's own tmux socket (`-L agentop`), and agentop sets three options on
+Sessions are hosted on agentop's own tmux socket (`-L agentop`), and agentop sets four options on
 it before the first one exists: `remain-on-exit` (a finished session stays listable with its last
-frame readable), `mouse on`, and a `history-limit` of 50000 lines.
+frame readable), `mouse on`, a `history-limit` of 50000 lines, and `status off`.
+
+The status bar is off because every fact it carries is wrong here: it lists windows and an agentop
+session is one window with one pane, it shows the session name and that name is `agentop-<id>`
+rather than anything a person chose, and the cockpit you came from already shows all of it. It costs
+a row of the assistant's screen to say nothing, in a colour that is hard to ignore.
 
 The mouse is what makes the wheel scroll at all — without it a pane shows the last screenful and
 nothing else, so attaching to a session to read what it did was attaching to a session you cannot

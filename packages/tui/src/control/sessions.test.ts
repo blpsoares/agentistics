@@ -5,7 +5,7 @@ import {
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
   projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
   sessionHandle, worktreeName, sessionRunning, asideRowKey, resolveAsideCursor,
-  DEFAULT_ORDER, usageOf,
+  DEFAULT_ORDER, usageOf, planSubmit,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -1130,5 +1130,51 @@ describe('sortSessions', () => {
     const before = rows.map(s => s.id)
     sortSessions(rows, { by: 'name', dir: 'asc' })
     expect(rows.map(s => s.id)).toEqual(before)
+  })
+})
+
+describe('planSubmit', () => {
+  const harness = { id: 'claude', supportsModel: true }
+
+  it('NAMES every refusal instead of returning silently', () => {
+    // The component's version was `if (!spawn || !draft.harness || !draft.cwd) return`. The final
+    // enter of a six-step wizard did nothing at all, with no way to tell a dead key from a slow
+    // one — and the prompt just typed was still on screen, about to be thrown away.
+    expect(planSubmit({ draft: { harness, cwd: '/r' }, hasSpawn: false, attach: false }))
+      .toEqual({ ok: false, reason: 'no-host' })
+    expect(planSubmit({ draft: { cwd: '/r' }, hasSpawn: true, attach: false }))
+      .toEqual({ ok: false, reason: 'no-harness', step: 'harness' })
+    expect(planSubmit({ draft: { harness }, hasSpawn: true, attach: false }))
+      .toEqual({ ok: false, reason: 'no-cwd', step: 'where' })
+  })
+
+  it('sends a refusal BACK to the step that takes the missing answer', () => {
+    // A refusal with nowhere to go is a dead end; with a step it is a way back.
+    const noCwd = planSubmit({ draft: { harness }, hasSpawn: true, attach: false })
+    expect(noCwd.ok).toBe(false)
+    if (!noCwd.ok) expect(noCwd.step).toBe('where')
+  })
+
+  it('carries only what was actually answered', () => {
+    // An empty model is not a model called "".
+    const plan = planSubmit({
+      draft: { harness, cwd: '/r', prompt: 'do the thing', model: '', task: 'auth' },
+      hasSpawn: true,
+      attach: true,
+    })
+    expect(plan.ok).toBe(true)
+    if (plan.ok) {
+      expect(plan.req).toEqual({
+        harness: 'claude', cwd: '/r', attach: true, prompt: 'do the thing', task: 'auth',
+      })
+      expect('model' in plan.req).toBe(false)
+    }
+  })
+
+  it('keeps the prompt in the request, which is the expensive thing on that screen', () => {
+    const plan = planSubmit({
+      draft: { harness, cwd: '/r', prompt: 'p' }, hasSpawn: true, attach: false,
+    })
+    if (plan.ok) expect(plan.req.prompt).toBe('p')
   })
 })

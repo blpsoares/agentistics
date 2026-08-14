@@ -91,6 +91,13 @@ export function serverOptionsArgs(): string[][] {
     sock(['set-option', '-g', 'remain-on-exit', 'on']),
     sock(['set-option', '-g', 'mouse', 'on']),
     sock(['set-option', '-g', 'history-limit', String(HISTORY_LIMIT)]),
+    // No STATUS BAR. tmux draws a green band across the bottom listing the windows, the session
+    // name and a clock — useful when you are managing windows, and every one of those facts is
+    // wrong here: an agentop session is one window with one pane, its name is `agentop-<id>` rather
+    // than anything a person chose, and the cockpit you came from already shows all of it. So the
+    // band costs a row of the assistant's screen to say nothing, in a colour that is hard to
+    // ignore.
+    sock(['set-option', '-g', 'status', 'off']),
   ]
 }
 
