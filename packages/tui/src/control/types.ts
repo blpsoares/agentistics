@@ -673,6 +673,21 @@ export interface ActionResult {
 export interface ControlHost {
   /** Re-detect config + services. Must never throw; failures come back as `unknown` services. */
   refresh(): Promise<ControlStatus>
+  /**
+   * What the host ALREADY knows, synchronously, or `null` on the very first look.
+   *
+   * `refresh()` shells out to systemd and to docker, so it takes about a second — and attach and
+   * detach are two halves of one gesture, so every detach REMOUNTS this app and starts that second
+   * over. Whatever the screen cannot know during it is drawn from defaults, and for the sessions
+   * list that means the arrangement someone chose is replaced by the shipped one and then swapped
+   * back in front of them: a frame that is not merely incomplete but WRONG about a choice the user
+   * made. This is the same answer as the fleet poll's — the previous truth beats a confident
+   * default — and `refresh()` runs anyway, on the frame after.
+   *
+   * The host is what survives the remount (`runStart` creates it once, outside the loop), so it is
+   * the only place this can live.
+   */
+  lastStatus?(): ControlStatus | null
 
   /**
    * Start one runtime — normally a `StartOption` handed straight back.

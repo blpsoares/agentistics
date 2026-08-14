@@ -1428,6 +1428,16 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       .catch(() => { /* offline — the header simply says nothing */ })
   }
 
+  /**
+   * The last status this host produced, kept so a REMOUNT has something true to open on.
+   *
+   * The host outlives the Ink app — `runStart` creates it once and loops around every attach — which
+   * is what makes this possible at all, and `ControlHost.lastStatus` is where the reason is written
+   * down. Every write to it goes through `remember()`, so there is one place that can go stale.
+   */
+  let lastStatus: ControlStatus | null = null
+  const remember = (next: ControlStatus): ControlStatus => (lastStatus = next)
+
   /** Has the archive consent never been answered? Used only to append a hint, so it fails open. */
   const archivePending = async (): Promise<boolean> => {
     try {
@@ -1570,10 +1580,12 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
   return {
     get lang() { return lang },
 
+    lastStatus: () => lastStatus,
+
     async refresh(): Promise<ControlStatus> {
       const s = S()
       const [{ mode, endpoint, connections, mouse }, services] = await Promise.all([loadState(), serviceRows()])
-      return {
+      return remember({
         mode,
         modeLabel: modeSentence(s, mode, connections.length),
         // Every endpoint, not the mirror's first one: the detail pane is where the user checks
@@ -1589,7 +1601,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         archiveMode: await currentArchiveMode(),
         ...(await sessionViewPref()),
         mouse,
-      }
+      })
     },
 
     /**
@@ -1859,6 +1871,12 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
      * run. Losing it across restarts is not worth failing anything for.
      */
     async setSessionView(view: SessionViewPrefs): Promise<void> {
+      // The remembered status has to move with it. This is the ONE thing a user changes that never
+      // goes through an action — so it never triggers a `refresh()` — and a cache left behind would
+      // hand the next remount the arrangement from before the change, undoing it on screen a moment
+      // after it was made. Written even when the file write fails, for the same reason the failure
+      // is swallowed: the arrangement still holds for this run.
+      if (lastStatus) remember({ ...lastStatus, sessionView: view })
       try {
         await writePreferences({ sessionView: view })
       } catch {
@@ -1875,6 +1893,10 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     // the toggle for this session, because the control center holds the answer itself and only
     // asks us to remember it.
     async setMouse(on: boolean): Promise<void> {
+      // Same reason as `setSessionView`: a preference the user changes with a keypress, answered by
+      // no action and therefore followed by no `refresh()`. Left out, the remembered status would
+      // tell the next remount the mouse is still what it was before the key was pressed.
+      if (lastStatus) remember({ ...lastStatus, mouse: on })
       try { await writePreferences({ mouse: on }) } catch { /* best-effort */ }
     },
 
