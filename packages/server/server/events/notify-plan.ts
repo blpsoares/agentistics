@@ -44,6 +44,20 @@ export interface DesktopProbe {
   hasTty?: boolean
   /** The user turned the desktop step off for this machine. */
   disabled?: boolean
+  /**
+   * Channels that were chosen and then FAILED to deliver, so the cascade skips them.
+   *
+   * **Present on PATH is not evidence a channel can deliver, and this is where that is admitted.**
+   * `notify-send` is installed on essentially every Linux image including WSL, where there is no
+   * `org.freedesktop.Notifications` service behind it — so it is chosen, it exits 1, and it keeps
+   * being chosen every five seconds forever. Measured on this machine from the daemon's log.
+   *
+   * Probing D-Bus up front would answer only that one case, and only at the moment of asking. A
+   * channel that FAILED is the general signal: it also covers one that breaks later, a plugin that
+   * is uninstalled, a display that goes away. So the decision stays pure and the caller carries the
+   * memory of what did not work.
+   */
+  failed?: readonly DesktopChannel[]
 }
 
 export interface DesktopDecision {
@@ -62,27 +76,32 @@ export function planDesktopChannel(p: DesktopProbe): DesktopDecision {
   if (p.disabled) {
     return { channel: 'none', reason: 'desktop notifications are switched off for this machine (AGENTISTICS_EVENTS_DESKTOP=0).' }
   }
-  if (p.ccnScript && p.hasJq && p.hasPowershell) {
-    return { channel: 'ccn', reason: `claude-code-notifications (${p.ccnScript}) — Windows toast with sound, from WSL.` }
+  const dead = new Set(p.failed ?? [])
+  // Named in every reason below, so "why is it not using X" is answerable from `status` alone.
+  const note = dead.size > 0 ? ` Skipped after failing to deliver: ${[...dead].join(', ')}.` : ''
+
+  if (p.ccnScript && p.hasJq && p.hasPowershell && !dead.has('ccn')) {
+    return { channel: 'ccn', reason: `claude-code-notifications (${p.ccnScript}) — Windows toast with sound, from WSL.${note}` }
   }
-  if (p.hasNotifySend) {
+  if (p.hasNotifySend && !dead.has('notify-send')) {
     const ccnNote = p.ccnScript
       ? ' (claude-code-notifications is installed but cannot run here: it needs both jq and powershell.exe)'
       : ''
-    return { channel: 'notify-send', reason: `notify-send${ccnNote}.` }
+    return { channel: 'notify-send', reason: `notify-send${ccnNote}.${note}` }
   }
-  if (p.hasPowershell) {
+  if (p.hasPowershell && !dead.has('powershell')) {
     const ccnNote = p.ccnScript && !p.hasJq
       ? ' claude-code-notifications is installed but jq is missing, so it is skipped.'
       : ''
-    return { channel: 'powershell', reason: `powershell.exe — a plain Windows toast from WSL, no sound and no click target.${ccnNote}` }
+    return { channel: 'powershell', reason: `powershell.exe — a plain Windows toast from WSL, no sound and no click target.${ccnNote}${note}` }
   }
-  if (p.hasTty) {
-    return { channel: 'bell', reason: 'the terminal bell — no notify-send, no powershell.exe, no claude-code-notifications on this machine.' }
+  if (p.hasTty && !dead.has('bell')) {
+    return { channel: 'bell', reason: `the terminal bell — no notify-send, no powershell.exe, no claude-code-notifications on this machine.${note}` }
   }
   return {
     channel: 'none',
-    reason: 'no desktop channel on this machine — none of claude-code-notifications, notify-send or powershell.exe is usable, and there is no terminal to ring. Events are still written to the inbox.',
+    reason: 'no desktop channel on this machine — none of claude-code-notifications, notify-send or powershell.exe is usable, and there is no terminal to ring. Events are still written to the inbox.'
+      + note,
   }
 }
 
