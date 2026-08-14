@@ -45,9 +45,15 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   │                          Without a tty there is no colour and the width comes from `COLUMNS`
   │                          when there is one — a pager IS a reader — so `session ls | grep` works
   ├── agentop hooks …      → server/cli-hooks.ts (install/uninstall/status/context — the Claude Code
-  │                          integration: a SKILL that teaches the `session batch` contract and a
-  │                          SessionStart HOOK that injects the live fleet. Explicit, idempotent,
-  │                          exactly reversible; see docs/claude-integration.md)
+  │                          integration: a SKILL that teaches the `session batch` contract, a
+  │                          SessionStart HOOK that injects the live fleet, and a Stop HOOK that
+  │                          feeds the event channel. Explicit, idempotent, exactly reversible;
+  │                          see docs/claude-integration.md)
+  ├── agentop events …     → server/cli-events.ts (watch/unwatch/status/tail/run/emit/test — the
+  │                          EVENT CHANNEL: a state TRANSITION reaches a person and the assistant
+  │                          orchestrating the fleet. See `events/` below and docs/session-events.md.
+  │                          It is `events`, not `watch`, because `agentop watch` is already the
+  │                          OTel daemon and `agentop restart watch` would become ambiguous)
   ├── agentop ci-push      → server/ci-push.ts (one-shot GitHub Actions runner → central push; env AGENTISTICS_CENTRAL_URL/AGENTISTICS_CI_TOKEN)
   ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc + ~/.zshrc update-check hook)
   ├── agentop upgrade      → server/upgrade.ts
@@ -89,8 +95,16 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          first prompt TYPED IN, because their `-p` exits after answering.
   │                          **What a session is DOING** is the pure `attention.ts` over two
   │                          signals — a probed screen marker and whether the frame moved — with
-  │                          `attention-rules.ts` holding six per-harness patterns **captured
-  │                          from six live dialogs**, each with its CLI version and date. There
+  │                          `attention-rules.ts` holding the per-harness patterns **captured
+  │                          from live dialogs**, each with its CLI version and date. **One dialog
+  │                          per harness is not enough**: claude's rule was captured from the
+  │                          folder-trust prompt, and the TOOL PERMISSION prompt draws a completely
+  │                          different footer (`Esc to cancel · Tab to amend · ctrl+e to explain`,
+  │                          asking `Do you want to proceed?`) — so a session really blocked on `rm`
+  │                          was reported as an ordinary `waiting` for as long as the rule existed.
+  │                          That is the silent failure the file's own header warns about, and it
+  │                          happened anyway: a pattern that never matches does not throw and does
+  │                          not look wrong. There
   │                          is deliberately no `idle` state: an interactive assistant that is
   │                          alive and still is waiting for you, and the uncertainty that really
   │                          exists is about the REASON, which lives in an absent approval rule
@@ -159,7 +173,71 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          else's `~/.claude`; same distinction `mcp-list.ts` makes). The session
   │                          verbs are deliberately NOT MCP tools: `agentop session batch` already
   │                          exists as a CLI and Bash's permission prompt is the consent gate for
-  │                          starting N billable assistants. See docs/claude-integration.md
+  │                          starting N billable assistants. There are TWO hook events, held in one
+  │                          `HOOK_SPECS` table so there is exactly ONE settings merge: `SessionStart
+  │                          → hooks context` (the facts, 10s) and `Stop → events emit` (the exact
+  │                          end-of-turn signal for the event channel, 5s — it runs on EVERY turn, so
+  │                          a budget that is felt is a budget that is wrong). The command matcher is
+  │                          NARROWED by event, or removing one hook would delete a `Stop` entry
+  │                          somebody had moved under `SessionStart`. See docs/claude-integration.md
+  ├── events/              → **the EVENT CHANNEL** behind `agentop events`: a state TRANSITION
+  │                          reaching a person and the assistant orchestrating the fleet.
+  │                          **The producer MUST be long-lived, and that decides its home.**
+  │                          `createSessionsPoller` holds each session's last frame digest in
+  │                          memory, and MOVEMENT is the only universal `working` signal there is
+  │                          (codex draws an identical screen streaming and idle); tmux's own
+  │                          `session_activity` is no substitute — measured: a session working for
+  │                          53 minutes reported its last activity 3185s earlier, because nothing
+  │                          was attached. So a single-invocation poll reports WORKING sessions as
+  │                          FINISHED, and a cron-shaped design would announce five sessions
+  │                          finishing at the moment they all started. The producer therefore rides
+  │                          along with the daemon `agentop server` already runs (`daemon.ts` inside
+  │                          otel-watcher), never as a service the user must remember to start;
+  │                          `events run` is the foreground fallback and `events status` reports the
+  │                          producer as running / stale / ABSENT, because "nothing arrived" must be
+  │                          distinguishable from "nothing was watching". `event-plan.ts` is
+  │                          **pure** and holds the rule the whole feature is judged on: **a state
+  │                          counts only once it has been observed on TWO CONSECUTIVE POLLS.** A
+  │                          repaint (a tmux advisory line, a plugin notice) moves the frame for one
+  │                          poll, is correctly read as `working`, and reported the same session as
+  │                          `waiting` twice ten seconds apart. A TIME WINDOW does not fix it — that
+  │                          was the first attempt, the next flicker landed outside it, and any
+  │                          window wide enough also swallows a genuine follow-up turn. The cost is
+  │                          stated: a turn inside one poll interval is invisible to this source,
+  │                          which is exactly what the `Stop` hook covers. TWO SOURCES, not
+  │                          equivalent: the poll is the FLOOR (all six harnesses, reads the screen,
+  │                          the only thing that can see a permission prompt at all — Claude Code
+  │                          fires no `Stop` for one) and the hook is EXACT (Claude only).
+  │                          `event-dedupe.ts` drops the poll's copy of a turn a hook already
+  │                          reported, one-directionally, and NEVER dedupes `waiting-approval`.
+  │                          **The INBOX (`~/.agentistics/events.jsonl`, 0600) is the heart, not a
+  │                          cache**: a Claude session only exists while invoked, so an event
+  │                          delivered to a parked one happened to nobody — the socket and the toast
+  │                          make the read happen SOONER, never instead. A cursor is `offset:seq`
+  │                          because a byte offset is exactly what rotation invalidates, and a
+  │                          pre-rotation cursor reads from the start and SAYS `rotated` rather than
+  │                          returning nothing. `peer-target.ts` is **pure**: the registry says who
+  │                          EXISTS, the SOCKET says who is UP (measured: 79 records, 5 live
+  │                          sockets), a name matches WHOLE never by prefix, and the message carries
+  │                          the target's own `session_id` so a recycled pid cannot misdeliver a
+  │                          fleet event into an unrelated conversation. `notify-plan.ts` is
+  │                          **pure**: the desktop cascade ccn → notify-send → powershell → bell →
+  │                          none, each step named in a SENTENCE by `status`, because a notification
+  │                          that fails silently is worse than none. **ccn
+  │                          (`claude-code-notifications`) is DETECTED, never embedded** — it ships
+  │                          through the Claude Code plugin system with its own release cycle while
+  │                          agentop is one binary, so a copy would be a second version to drift;
+  │                          agentop shapes its event into the `Notification` hook envelope ccn
+  │                          already accepts and contributes the five harnesses ccn cannot see plus
+  │                          the task grouping neither has alone. Subscriptions are a FILE
+  │                          (`event-subscriptions.json`), not a process: a foreground watcher is
+  │                          one the user forgets to start and is dead when it matters.
+  │                          **THE FRONTIER**: an event carries facts and no instruction, a
+  │                          subscription can ask for DELIVERY and never for an ACTION, and
+  │                          `waiting-approval` is reported as waiting on A PERSON — nothing here
+  │                          may approve anything for anyone. `events-frontier.test.ts` asserts it
+  │                          over the module SOURCE, so a field named `action` or an imperative
+  │                          sentence fails the build. See docs/session-events.md
   ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
   ├── rotate-identity.ts   → **pure**: what a TOKEN ROTATION carries. `memberId = sha256(token)`, so rotating renames the machine in every collection keyed by that id — this module holds the ENUMERATION (`tokens`, `sessions`, `memberStats`, `workflows`, `machineKeys` and a tag's `machine` sources all migrate; `audit.targetId` is left as written, because an audit records what was true then; CI sessions are keyed by `ciMemberId(remote)` = `repo:<remote>` and move nothing; the member side's per-connection state is named by the LOCAL connection id and is reconciled by the sync fingerprint). **Any new collection keyed by a machine id must be added here or a rotation silently strands it — that is the same bug three times already.** `planEnvelopeRotation` is the mailbox decision and has NO re-address option: the routing is the GCM AAD, so mail addressed to the old id yields `recipient_mismatch` for anyone (dropped, and counted in the audit as a LOSS) while mail SENT by it still opens exactly as sealed (kept — re-stamping the sender would destroy it). `retargetMachineSources` matches on the source TYPE as well as the value, so an `account` id that happens to read the same is never dragged along. **Sibling pins are deliberately not carried**: to a sibling the rotated machine is new, is pinned on first sight and is ANNOUNCED — continuity would need a claim the central can forge (a "formerly" field, or "same public key", which a central can copy onto an invented machine), and the announcement is the one control against a fabricated peer
   ├── mongo-dates.ts       → **the date boundary**: BSON `Date` in Mongo, ISO string on the wire. Pure toBsonDate/fromBsonDate(+OrNull)/toBsonDates/fromBsonDates + `DATE_FIELDS` (every stored timestamp, by collection) + `migrateStringDatesToBson()` (idempotent, runs at boot; also `scripts/migrate-mongo-dates.ts`)

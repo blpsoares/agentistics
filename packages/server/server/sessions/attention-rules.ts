@@ -33,10 +33,23 @@ import type { AttentionRules } from './types'
 
 export const ATTENTION_RULES: Record<HarnessId, AttentionRules | null> = {
   claude: {
-    probed: 'claude 2.1.231, 2026-08-13',
-    // The select component every blocking question uses — captured from the folder-trust dialog it
-    // opens with. The permission prompts and `/model` draw the same footer.
-    approval: [/Enter to confirm · Esc to cancel/],
+    probed: 'claude 2.1.231 2026-08-13; permission prompt re-probed on 2.1.232, 2026-08-14',
+    approval: [
+      // Captured from the folder-trust dialog claude opens with, and from `/model`.
+      /Enter to confirm · Esc to cancel/,
+      // THE PERMISSION PROMPT DOES NOT DRAW THAT FOOTER, and the comment here used to claim it did.
+      // Caught by watching a real session sit on `rm -v …` while the monitor reported plain
+      // `waiting`: a tool-permission prompt draws `Esc to cancel · Tab to amend · ctrl+e to
+      // explain` and asks `Do you want to proceed?`. Both are matched, because they fail
+      // independently — the footer varies with what the prompt offers (a plan-mode prompt has no
+      // `Tab to amend`), while the question is the component's own and does not.
+      //
+      // This is exactly the failure mode this file's header warns about, and it is worth recording
+      // that it happened anyway: a pattern that never matches does not throw and does not look
+      // wrong. It reported the ONE state this whole channel exists for as an ordinary wait.
+      /Do you want to proceed\?/,
+      /Esc to cancel · Tab to amend/,
+    ],
     // The footer while a turn runs. `? for shortcuts` takes its place when the turn ends.
     working: [/esc to interrupt/],
   },

@@ -32,6 +32,29 @@ const CLAUDE_APPROVAL = [
   ' Enter to confirm · Esc to cancel',
 ]
 
+/**
+ * claude 2.1.232 — the TOOL PERMISSION prompt, captured 2026-08-14 from a session sitting on
+ * `rm -v /tmp/agentop-e2e/hello.txt`.
+ *
+ * It is here because the rule set had only CLAUDE_APPROVAL, and the two dialogs do NOT share a
+ * footer: this one says `Esc to cancel · Tab to amend · ctrl+e to explain`. A real session blocked
+ * on this prompt was reported as an ordinary `waiting` — the one state the event channel exists
+ * for, read as the one state that means nothing needs you.
+ */
+const CLAUDE_PERMISSION = [
+  ' Bash command',
+  '',
+  '   rm -v /tmp/agentop-e2e/hello.txt',
+  '   Remove o arquivo hello.txt',
+  '',
+  ' Do you want to proceed?',
+  ' ❯ 1. Yes',
+  '   2. Yes, and always allow access to agentop-e2e/ from this project',
+  '   3. No',
+  '',
+  ' Esc to cancel · Tab to amend · ctrl+e to explain',
+]
+
 /** claude 2.1.231 — mid-turn. Note the input box is drawn EXACTLY as it is when idle. */
 const CLAUDE_WORKING = [
   '✢ Orbiting… (5s · ↓ 76 tokens)',
@@ -104,6 +127,17 @@ describe('ATTENTION_RULES', () => {
 describe('claude', () => {
   it('sees the blocking dialog', () => {
     expect(quiet(CLAUDE_APPROVAL, 'claude')).toBe('waiting-approval')
+  })
+
+  it('sees the TOOL PERMISSION prompt, which draws a different footer entirely', () => {
+    expect(quiet(CLAUDE_PERMISSION, 'claude')).toBe('waiting-approval')
+  })
+
+  it('recognises the permission prompt by its question as well as by its footer', () => {
+    // The footer varies with what the prompt offers — a plan-mode prompt has no `Tab to amend` —
+    // so the question has to stand on its own.
+    const noFooter = CLAUDE_PERMISSION.filter(l => !l.includes('Tab to amend'))
+    expect(quiet(noFooter, 'claude')).toBe('waiting-approval')
   })
 
   it('sees a running turn from the footer, not from the input box', () => {
