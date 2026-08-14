@@ -138,9 +138,11 @@ Central:
     e-mail-based reset, so this is how a locked-out last owner gets back in.
 
 Member (a machine may belong to several centrals at once):
-  agentop member connect --endpoint <url> --token <token> [--org <org>] [--label <name>]
+  agentop member connect --token <token> [--endpoint <url>] [--org <org>] [--label <name>]
     Verify the token against the central, then add a new connection or UPDATE an existing
     one keyed by its endpoint (a token rotation on a known central updates in place).
+    A token minted by a central with a public URL configured carries that URL, so the token
+    alone is enough — --endpoint is only needed for a bare token.
   agentop member list
     List every connection this machine has, with its live sync state. ('status' is an alias.)
   agentop member status [--endpoint <url>]
@@ -208,6 +210,7 @@ Examples:
   agentop tui
   agentop watch
   agentop central up
+  agentop member connect --token act1_aHR0cHM6Ly9jZW50cmFsLmV4YW1wbGU.abc123
   agentop member connect --endpoint http://host:48080 --token abc123
   agentop member connect --endpoint http://other:48080 --token def456 --label "Client B"
   agentop member list
@@ -431,15 +434,16 @@ if (command === 'member') {
 
   if (sub === 'connect') {
     const { memberConnect } = await import('../server/cli-member.ts')
-    const endpoint = readFlag('--endpoint')
-    const token = readFlag('--token')
-    const org = readFlag('--org')
-    const label = readFlag('--label')
-    if (!endpoint || !token) {
-      console.error('Usage: agentop member connect --endpoint <url> --token <token> [--org <org>] [--label <name>]\n')
+    const { parseMemberConnectArgs } = await import('../server/member-connect-args.ts')
+    // Only the token is required: a composite `act1_…` token carries the central's URL, and
+    // demanding --endpoint here refused the very command the central prints. See
+    // member-connect-args.ts — resolving the endpoint is memberConnect's job, not the gate's.
+    const parsed = parseMemberConnectArgs(rest)
+    if (!parsed.ok) {
+      console.error(`${parsed.usage}\n`)
       process.exit(1)
     }
-    const code = await memberConnect({ endpoint, token, org, label })
+    const code = await memberConnect(parsed.opts)
     process.exit(code)
   }
   if (sub === 'leave') {

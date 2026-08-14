@@ -522,9 +522,15 @@ export function fitApprovalPreview(lines: readonly string[], rows: number): stri
  * own numbered options, the confirmation under it has two of its own, and without a line saying
  * which is which the pane is two menus stacked on top of each other.
  */
-export function askRows(o: { preview: number; detail: number }): number {
+export function askRows(o: { preview: number; detail: number; choices?: number }): number {
   const preview = Math.max(0, Math.min(o.preview, APPROVAL_PREVIEW_MAX))
-  return Math.max(QUESTION_ROWS + (preview > 0 ? preview + 1 : 0), Math.max(0, o.detail))
+  // A picker draws one row per option instead of the two a yes/no carries, and it is budgeted for
+  // the same reason the evidence is: Ink composites what does not fit, so an unbudgeted list does
+  // not scroll, it draws over whatever is under the pane. `QUESTION_ROWS` stays the floor — a
+  // two-option dialog must not end up with less room than a confirmation would have had.
+  const choices = Math.max(0, o.choices ?? 0)
+  const body = choices > 1 ? Math.max(QUESTION_ROWS, choices) : QUESTION_ROWS
+  return Math.max(body + (preview > 0 ? preview + 1 : 0), Math.max(0, o.detail))
 }
 
 
@@ -595,7 +601,15 @@ export function sessionActions(
     // exists. The host decides `canApprove`, and it is true only when the session is genuinely
     // asking AND somebody has read this harness's dialog — a keystroke sent into a session that is
     // not asking is a blank turn, or an option taken out of a menu nobody was looking at.
-    { action: 'approve', enabled: Boolean(selected?.canApprove) },
+    // Enabled wherever there is something to ANSWER: a plain confirmation, a pickable option list,
+    // or an option list this harness cannot pick from — that last one opens a refusal that names why
+    // and points at attaching, which is information rather than an inert key.
+    {
+      action: 'approve',
+      enabled: Boolean(selected?.canApprove)
+        || Boolean(selected?.canChoose)
+        || (selected?.dialogOptions?.length ?? 0) > 1,
+    },
     // Typing into a session needs it to be RUNNING and nothing more: a session that is working will
     // read what it was handed when it gets there. The one case that must not go through is a
     // session sitting on a dialog, where the prompt is a menu — and that is refused by the HOST,
@@ -1020,11 +1034,13 @@ export function sessionsCockpit(o: {
   asideLabel: number
   /** Rows the detail pane is asking for, `0` when there is nothing selected to describe. */
   detailWanted: number
+  /** Folded away by the user — the list takes the whole width, whatever it would have fitted. */
+  hideAside?: boolean
 }): CockpitLayout {
   const width = Math.max(1, o.width)
   const height = Math.max(1, o.height)
 
-  const aside = width >= ASIDE_NEEDS
+  const aside = o.hideAside ? 0 : width >= ASIDE_NEEDS
     // `+ 4` rather than `+ 2`: the rows carry a cursor, a state dot and — for a task or a project —
     // a trailing count, and sizing to the label alone truncated every long verb in the menu.
     ? Math.min(ASIDE_MAX, Math.max(ASIDE_MIN, o.asideLabel + 4))
@@ -1709,8 +1725,8 @@ export function sessionKeyHelp(w: {
   move: string; open: string; attach: string; menu: string; section: string
   newSession: string; search: string; clear: string; kill: string; rename: string
   note: string; task: string; mark: string; onlyActive: string; closed: string
-  exited: string; unfiled: string; group: string; detail: string; reset: string
-  tabs: string; help: string; quit: string
+  exited: string; unfiled: string; group: string; detail: string; menuFold: string
+  reset: string; tabs: string; help: string; quit: string
   approve: string; prompt: string; reopenFell: string
 }): KeyHelp[] {
   return [
@@ -1737,6 +1753,9 @@ export function sessionKeyHelp(w: {
     { keys: 'u', what: w.unfiled },
     { keys: 'v', what: w.group },
     { keys: 'd', what: w.detail },
+    // `b` leads: `ctrl+b` is tmux's default prefix, so inside a tmux the chord never reaches this
+    // app at all. The plain letter is the one that always works, and the one the footer names.
+    { keys: 'b / ctrl+b', what: w.menuFold },
     { keys: 'ctrl+r', what: w.reset },
     { keys: '[ ]', what: w.tabs },
     { keys: '?', what: w.help },
@@ -1855,10 +1874,23 @@ export function cardGrid(o: {
    * in it. Counted, those rows go back to the region and another band fits on the page.
    */
   lines?: number
+  /**
+   * Whether the grid will draw a group HEADING over its bands.
+   *
+   * A band's real cost is its cards plus the name over them, and sizing as though a band were only
+   * its cards is what made the grouped grid page four times over: the ceiling was measured for a
+   * region that then had to pay a row per band out of the same rows. Counted here, one row per
+   * band, the cards give up a line and the page carries a group more.
+   *
+   * It is the ARITHMETIC of a band, not a rule of thumb — the same `+ PANE_FRAME_Y` this function
+   * already pays for a frame, for the row a heading occupies.
+   */
+  headings?: boolean
 }): CardGrid | null {
   const width = Math.max(0, o.width)
   const height = Math.max(0, o.height)
-  const floorHeight = PANE_FRAME_Y + CARD_MIN_LINES
+  const head = o.headings ? 1 : 0
+  const floorHeight = PANE_FRAME_Y + CARD_MIN_LINES + head
   const fullHeight = PANE_FRAME_Y
     + Math.max(CARD_MIN_LINES, Math.min(CARD_LINES, o.lines ?? CARD_LINES))
   if (width < CARD_MIN_WIDTH || height < floorHeight) return null
@@ -1877,8 +1909,10 @@ export function cardGrid(o: {
     Math.min(CARD_MAX_WIDTH, Math.floor((width - CARD_GAP * (cols - 1)) / cols)),
   )
   // As tall as the band affords, never taller than the card has content for: rows of blank inside
-  // a frame are not a card, they are a box with a name in it.
-  const cardHeight = Math.min(fullHeight, Math.floor(height / rows))
+  // a frame are not a card, they are a box with a name in it. `- head` is the row the name over the
+  // band takes — the cards of a headed grid are shorter by exactly what their headings cost, and
+  // `rows <= maxRows` is what keeps the result at or above the floor.
+  const cardHeight = Math.min(fullHeight, Math.floor(height / rows) - head)
 
   return {
     cols, rows, cardWidth, cardHeight, gap: CARD_GAP,
@@ -2403,4 +2437,38 @@ export function pagerHit(cells: PagerCells, x: number): 'prev' | 'next' | null {
   if (cells.prev !== '' && x === cells.prevAt) return 'prev'
   if (cells.next !== '' && x === cells.nextAt) return 'next'
   return null
+}
+
+// ---------------------------------------------------------------------------
+// closing a session from its own row
+// ---------------------------------------------------------------------------
+
+/** The glyph that closes a session from its own row. */
+export const CLOSE_CELL = '✕'
+
+/**
+ * Columns reserved at the right edge of the list for the per-row close control — PURE.
+ *
+ * Two: a gap and the glyph. Reserved from the width BEFORE the columns are measured, because a
+ * control drawn after a table that already spent the full width is a control drawn on top of the
+ * last cell.
+ *
+ * Zero when nothing on screen can be closed, and zero on a list too narrow to spare it — the
+ * keyboard's `x` still works there, and a table squeezed to make room for a button is a worse
+ * trade than a button that is only on the wider terminal.
+ */
+export function closeCellWidth(rows: readonly ControlSession[], width: number): number {
+  const NEEDS = 40
+  return width >= NEEDS && rows.some(canClose) ? 2 : 0
+}
+
+/**
+ * Can this row be closed at all?
+ *
+ * Only a session agentop HOSTS: an external process is someone else's to stop, and a closed
+ * conversation has nothing running to end. A row that cannot take it draws no glyph — a control
+ * that is visible and refuses is worse than one that is absent.
+ */
+export function canClose(s: ControlSession): boolean {
+  return s.actionable && s.state !== 'closed' && s.state !== 'exited'
 }

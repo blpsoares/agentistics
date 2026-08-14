@@ -5,7 +5,7 @@ import {
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
   projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
   sessionHandle, worktreeName, sessionRunning, asideRowKey, resolveAsideCursor,
-  sessionAge, sessionKeyHelp, keyHelpColumn,
+  sessionAge, sessionKeyHelp, keyHelpColumn, closeCellWidth, canClose,
   DEFAULT_ORDER, usageOf, planSubmit,
   cardGrid, cardPages, pageOfCard, CARD_PAGE_MAX, CARD_MIN_WIDTH, CARD_GAP, CARD_LINES,
   cardBadges, cardLines, fitCardLines, cardStateCells, cardLabelWidth, CARD_VALUE_MIN,
@@ -1235,7 +1235,7 @@ describe('sessionKeyHelp', () => {
   const words = Object.fromEntries(
     ['move', 'open', 'attach', 'menu', 'section', 'newSession', 'search', 'clear', 'kill',
       'rename', 'note', 'task', 'mark', 'onlyActive', 'closed', 'exited', 'unfiled', 'group',
-      'detail', 'reset', 'tabs', 'help', 'quit',
+      'detail', 'menuFold', 'reset', 'tabs', 'help', 'quit',
       'approve', 'prompt', 'reopenFell'].map(k => [k, `does ${k}`]),
   ) as Parameters<typeof sessionKeyHelp>[0]
 
@@ -1302,6 +1302,35 @@ describe('cardGrid', () => {
     const g = cardGrid({ width: 200, height: 40, total: 4 })!
     expect(g.cols).toBeLessThanOrEqual(4)
     expect(g.cardWidth).toBeGreaterThan(CARD_MIN_WIDTH)
+  })
+
+  // A band's real cost is its cards PLUS the name over them. Sizing as though a band were only its
+  // cards is what made the grouped grid page four times over: the ceiling was measured for a region
+  // that then had to pay a row per band out of the very same rows.
+  it('charges a heading row to every band when the grid will draw them', () => {
+    for (let w = CARD_MIN_WIDTH; w <= 200; w += 7) {
+      for (let h = 2; h <= 44; h++) {
+        const g = cardGrid({ width: w, height: h, total: 40, headings: true })
+        if (!g) continue
+        expect(g.rows * (g.cardHeight + 1)).toBeLessThanOrEqual(h)
+        expect(g.cardHeight).toBeGreaterThanOrEqual(PANE_FRAME_Y + CARD_MIN_LINES)
+      }
+    }
+  })
+
+  // Same region, one more group on the page and one line less on each card.
+  it('trades a line of card for another band', () => {
+    const plain = cardGrid({ width: 100, height: 18, total: 9, lines: CARD_LINES })!
+    const headed = cardGrid({ width: 100, height: 18, total: 9, lines: CARD_LINES, headings: true })!
+    expect(headed.cardHeight).toBe(plain.cardHeight - 1)
+  })
+
+  // The degradation ladder is unchanged: a region that cannot carry a headed band is asked again
+  // without headings, and only then does the screen fall back to the list.
+  it('refuses a region too short for a band with a name over it', () => {
+    const floor = PANE_FRAME_Y + CARD_MIN_LINES
+    expect(cardGrid({ width: 120, height: floor, total: 9, headings: true })).toBeNull()
+    expect(cardGrid({ width: 120, height: floor, total: 9 })).not.toBeNull()
   })
 })
 
@@ -2281,5 +2310,31 @@ describe('the wizard name step', () => {
     // harness and the folder. An empty string is not a name called "".
     const plan = planSubmit({ draft: { harness, cwd: '/r', label: '' }, hasSpawn: true, attach: false })
     if (plan.ok) expect('label' in plan.req).toBe(false)
+  })
+})
+
+describe('the per-row close control', () => {
+  const live = session('a', { state: 'waiting' as SessionState })
+  const closed = session('b', { state: 'closed' as SessionState, actionable: false })
+  const gone = session('c', { state: 'exited' as SessionState })
+
+  it('is offered only on a row agentop can actually stop', () => {
+    // An external process is someone else's to stop, and a closed conversation has nothing running
+    // to end. A control that is visible and refuses is worse than one that is absent.
+    expect(canClose(live)).toBe(true)
+    expect(canClose(closed)).toBe(false)
+    expect(canClose(gone)).toBe(false)
+    expect(canClose(session('d', { state: 'unknown' as SessionState, actionable: false }))).toBe(false)
+  })
+
+  it('costs nothing when nothing on screen can be closed', () => {
+    expect(closeCellWidth([closed, gone], 120)).toBe(0)
+    expect(closeCellWidth([live], 120)).toBe(2)
+  })
+
+  it('gives up on a narrow list rather than squeezing the table for a button', () => {
+    // The keyboard's `x` still works there, and a table squeezed to make room is the worse trade.
+    expect(closeCellWidth([live], 30)).toBe(0)
+    expect(closeCellWidth([live], 40)).toBe(2)
   })
 })

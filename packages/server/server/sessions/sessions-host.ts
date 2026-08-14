@@ -15,6 +15,7 @@ import { createLimiter } from '../utils'
 import type { HarnessProcess } from '../live-sessions'
 import { rulesFor } from './attention-rules'
 import { approvalTail, attentionOf, digestFrame, frameTail } from './attention'
+import { parseDialogOptions, type DialogOption } from './dialog-choice'
 import { loadConversations, type Conversation } from './conversations'
 import { HEARTBEAT_MS, planCrashGroup, type CrashGroup } from './crash-group'
 import { emptyHarnessSessionIndex, type HarnessSessionIndex } from './harness-sessions'
@@ -171,6 +172,7 @@ export function createSessionsPoller(o: {
       const activity = new Map<string, SessionActivity>()
       const tails = new Map<string, string[]>()
       const approvals = new Map<string, string[]>()
+      const dialogOptions = new Map<string, DialogOption[]>()
 
       await Promise.all(reconciled.map(r => limit(async () => {
         const b = r.backend
@@ -197,7 +199,14 @@ export function createSessionsPoller(o: {
         activity.set(r.id, state)
         // The dialog is kept from the frame that DECIDED the state, so the two can never describe
         // different moments — and it costs nothing extra, the frame is already here.
-        if (state === 'waiting-approval') approvals.set(r.id, approvalTail(frame, APPROVAL_LINES))
+        if (state === 'waiting-approval') {
+          approvals.set(r.id, approvalTail(frame, APPROVAL_LINES))
+          // Read from the SAME frame that decided the state, so what is offered and what the state
+          // says can never describe different moments. Empty when the screen cannot be parsed with
+          // confidence, which the UI reports rather than papering over.
+          const options = parseDialogOptions(frame)
+          if (options.length > 0) dialogOptions.set(r.id, options)
+        }
       })))
 
       // The heartbeat: one write, one timestamp, every session the backend reports as ALIVE. See
@@ -230,6 +239,7 @@ export function createSessionsPoller(o: {
         activity,
         tails,
         approvals,
+        dialogOptions,
         processes,
         conversations,
         harnessSessions,

@@ -48,6 +48,10 @@ export interface ControlStrings {
   keyEnds: string
   keyRefresh: string
   keyLogSource: string
+  /** The dashboard's own two keys. Its screens are digits and `tab`, never the arrows — see
+   *  `resolveDashboardScreen` for why the shell's `←→ screens` had to survive this tab. */
+  dashView: string
+  dashFilter: string
   /**
    * The mouse's two hints, said only while there IS a mouse.
    *
@@ -237,12 +241,16 @@ export interface ControlStrings {
   sessionsPaneDetail: string
   sessionsPaneAsk: string
   sessionsPaneKeys: string
+  sessionsPaneRestore: string
+  restoreTitle: (n: number) => string
+  restoreAnswer: string
   /** What each key on the sessions screen does — the one list `ctrl+h` prints. */
   sessionsKeyWhat: {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
     note: string; task: string; mark: string; onlyActive: string; closed: string
-    exited: string; unfiled: string; group: string; detail: string; reset: string
+    exited: string; unfiled: string; group: string; detail: string; menuFold: string
+    reset: string
     tabs: string; help: string; quit: string
     approve: string; prompt: string; reopenFell: string
   }
@@ -270,6 +278,12 @@ export interface ControlStrings {
   sessionsApproveCaveat: string
   /** Heading over the dialog lines carried into the confirmation. */
   sessionsApproveWhat: string
+  /** Marks the option the dialog itself is highlighting, inside the picker. */
+  sessionsChoiceHighlighted: string
+  /** Fallback for a harness with no verified way to pick — the host normally supplies its own. */
+  sessionsChooseBlind: string
+  /** What DOES work when the options cannot be picked from here. */
+  sessionsChooseAttach: string
   asideProjects: string
   asideAllProjects: string
   toggleDone: string
@@ -317,6 +331,10 @@ export interface ControlStrings {
   keySessionsActions: string
   keySessionsApprove: string
   keySessionsPrompt: string
+  /** The menu fold — the plain letter, because tmux's default prefix never arrives inside a tmux. */
+  keySessionsFold: string
+  /** The two keys the restore offer answers, and nothing else. */
+  keyRestoreAnswer: string
   /** The visible action row — the same verbs the letters run, spelled out and clickable. */
   actSessions: {
     attach: string
@@ -430,6 +448,16 @@ export interface ControlStrings {
   helpIntro: string
   cheatIntro: string
   contributeIntro: string
+  /**
+   * Why the dashboard is showing no numbers.
+   *
+   * Two sentences rather than one: `dashDown` is actionable and names the screen that starts the
+   * server, while `dashUnknown` is the honest form of a service whose state could not be read at
+   * all. Reporting the second as the first would send someone to press a button for a problem they
+   * do not have — the same N/A-versus-a-confident-0 rule the rest of this app follows.
+   */
+  dashDown: string
+  dashUnknown: string
   copyHint: string
   /** The same reminder while the mouse reports, when a plain drag no longer selects. */
   copyHintShift: string
@@ -441,6 +469,7 @@ const EN: ControlStrings = {
   tabs: {
     services: 'Services',
     sessions: 'Sessions',
+    dashboard: 'Dashboard',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Cheat sheet',
@@ -451,6 +480,7 @@ const EN: ControlStrings = {
   tabsShort: {
     services: 'services',
     sessions: 'sessions',
+    dashboard: 'dashboard',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'commands',
@@ -475,6 +505,8 @@ const EN: ControlStrings = {
   keyEnds: 'g/G ends',
   keyRefresh: 'r refresh',
   keyLogSource: '[ ] source',
+  dashView: '1-5/tab view',
+  dashFilter: 'f harness',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+drag to copy',
 
@@ -615,6 +647,10 @@ const EN: ControlStrings = {
   sessionsPaneDetail: 'detail',
   sessionsPaneAsk: 'question',
   sessionsPaneKeys: 'keys',
+  sessionsPaneRestore: 'last time',
+  restoreTitle: (n: number) =>
+    n === 1 ? 'Your last session was this one:' : `Your last ${n} sessions were these:`,
+  restoreAnswer: 'enter starts them in the background · esc leaves them closed',
   sessionsKeyWhat: {
     move: 'move the cursor',
     open: 'switch between the menu and the list',
@@ -635,6 +671,7 @@ const EN: ControlStrings = {
     unfiled: 'show sessions under no task',
     group: 'change the grouping',
     detail: 'hide the detail pane',
+    menuFold: 'fold the menu away — any digit brings it back',
     reset: 'back to how the app opens',
     tabs: 'change screen',
     help: 'this list',
@@ -666,6 +703,9 @@ const EN: ControlStrings = {
   sessionsApproveCaveat:
     'it takes whichever option the dialog above has highlighted — read it first.',
   sessionsApproveWhat: 'on its screen right now',
+  sessionsChoiceHighlighted: '(its default)',
+  sessionsChooseBlind: 'this dialog is a choice, and agentop cannot pick an option on this harness.',
+  sessionsChooseAttach: 'o attaches to the session, where you can answer it — esc goes back.',
   asideProjects: 'PROJECTS',
   asideAllProjects: 'every project',
   toggleDone: 'finished tasks',
@@ -715,6 +755,8 @@ const EN: ControlStrings = {
   keySessionsActions: 'tab actions',
   keySessionsApprove: 'y approve',
   keySessionsPrompt: 'p send',
+  keySessionsFold: 'b menu',
+  keyRestoreAnswer: 'enter start · esc leave closed',
   actSessions: {
     attach: 'Attach',
     resume: 'Reopen',
@@ -816,6 +858,8 @@ const EN: ControlStrings = {
   helpIntro: 'Every command, with the flags that matter. `agentop --help` prints this plain.',
   cheatIntro: 'The commands worth remembering.',
   contributeIntro: 'Agentistics is open source — issues and pull requests welcome.',
+  dashDown: 'The agentistics server is not running, so there are no metrics to read. Start it on the services screen.',
+  dashUnknown: 'The agentistics server\u2019s state could not be read, so there are no metrics to show. The services screen says why.',
   copyHint: 'select with the mouse to copy',
   copyHintShift: 'hold shift and drag to select and copy',
 }
@@ -826,6 +870,7 @@ const PT: ControlStrings = {
   tabs: {
     services: 'Serviços',
     sessions: 'Sessões',
+    dashboard: 'Dashboard',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Comandos',
@@ -836,6 +881,7 @@ const PT: ControlStrings = {
   tabsShort: {
     services: 'serviços',
     sessions: 'sessões',
+    dashboard: 'dashboard',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'comandos',
@@ -860,6 +906,8 @@ const PT: ControlStrings = {
   keyEnds: 'g/G extremos',
   keyRefresh: 'r atualizar',
   keyLogSource: '[ ] fonte',
+  dashView: '1-5/tab tela',
+  dashFilter: 'f assistente',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+arrastar copia',
 
@@ -995,6 +1043,10 @@ const PT: ControlStrings = {
   sessionsPaneDetail: 'detalhe',
   sessionsPaneAsk: 'pergunta',
   sessionsPaneKeys: 'teclas',
+  sessionsPaneRestore: 'da última vez',
+  restoreTitle: (n: number) =>
+    n === 1 ? 'Sua última sessão foi esta:' : `Suas últimas ${n} sessões foram estas:`,
+  restoreAnswer: 'enter inicia em background · esc deixa fechadas',
   sessionsKeyWhat: {
     move: 'move o cursor',
     open: 'alterna entre o menu e a lista',
@@ -1015,6 +1067,7 @@ const PT: ControlStrings = {
     unfiled: 'mostra sessões sem tarefa',
     group: 'muda o agrupamento',
     detail: 'oculta o painel de detalhe',
+    menuFold: 'recolhe o menu — qualquer dígito traz de volta',
     reset: 'volta para como o app abre',
     tabs: 'muda de tela',
     help: 'esta lista',
@@ -1045,6 +1098,9 @@ const PT: ControlStrings = {
   sessionsApproveCaveat:
     'ela pega a opção que o diálogo acima está destacando — leia antes.',
   sessionsApproveWhat: 'na tela dela agora',
+  sessionsChoiceHighlighted: '(o padrão dela)',
+  sessionsChooseBlind: 'esse diálogo é uma escolha, e o agentop não sabe selecionar uma opção neste harness.',
+  sessionsChooseAttach: 'o anexa na sessão, onde dá para responder — esc volta.',
   asideProjects: 'PROJETOS',
   asideAllProjects: 'todos os projetos',
   toggleDone: 'tarefas finalizadas',
@@ -1094,6 +1150,8 @@ const PT: ControlStrings = {
   keySessionsActions: 'tab ações',
   keySessionsApprove: 'y aprovar',
   keySessionsPrompt: 'p enviar',
+  keySessionsFold: 'b menu',
+  keyRestoreAnswer: 'enter inicia · esc deixa fechadas',
   actSessions: {
     attach: 'Anexar',
     resume: 'Reabrir',
@@ -1195,6 +1253,8 @@ const PT: ControlStrings = {
   helpIntro: 'Todos os comandos, com as flags que importam. `agentop --help` imprime isto puro.',
   cheatIntro: 'Os comandos que vale a pena lembrar.',
   contributeIntro: 'Agentistics é open source — issues e pull requests são bem-vindos.',
+  dashDown: 'O servidor agentistics não está rodando, então não há métricas para ler. Suba-o na tela de serviços.',
+  dashUnknown: 'Não foi possível ler o estado do servidor agentistics, então não há métricas para mostrar. A tela de serviços diz por quê.',
   copyHint: 'selecione com o mouse para copiar',
   copyHintShift: 'segure shift e arraste para selecionar e copiar',
 }

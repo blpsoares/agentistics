@@ -203,9 +203,52 @@ describe('planDesktopChannel', () => {
     expect(d.reason).toContain('inbox')
   })
 
+  test('a channel that FAILED is skipped, and the reason names it', () => {
+    // Measured from the daemon's own log: notify-send is installed on essentially every Linux
+    // image including WSL, where nothing serves org.freedesktop.Notifications. It was chosen, it
+    // exited 1, and it kept being chosen every five seconds.
+    const d = planDesktopChannel({ hasNotifySend: true, hasPowershell: true, failed: ['notify-send'] })
+    expect(d.channel).toBe('powershell')
+    expect(d.reason).toContain('notify-send')
+  })
+
+  test('the cascade keeps falling through as channels fail', () => {
+    const probe = { ccnScript: '/p/notify.sh', hasJq: true, hasPowershell: true, hasNotifySend: true, hasTty: true }
+    expect(planDesktopChannel(probe).channel).toBe('ccn')
+    expect(planDesktopChannel({ ...probe, failed: ['ccn'] }).channel).toBe('notify-send')
+    expect(planDesktopChannel({ ...probe, failed: ['ccn', 'notify-send'] }).channel).toBe('powershell')
+    expect(planDesktopChannel({ ...probe, failed: ['ccn', 'notify-send', 'powershell'] }).channel).toBe('bell')
+    expect(planDesktopChannel({ ...probe, failed: ['ccn', 'notify-send', 'powershell', 'bell'] }).channel).toBe('none')
+  })
+
+  test('every channel having failed still yields a SENTENCE, never a silent nothing', () => {
+    const d = planDesktopChannel({
+      hasNotifySend: true, hasTty: true, failed: ['notify-send', 'bell'],
+    })
+    expect(d.channel).toBe('none')
+    expect(d.reason).toContain('inbox')
+    expect(d.reason).toContain('notify-send')
+  })
+
   test('switched off is its own reason, not confused with unavailable', () => {
     const d = planDesktopChannel({ disabled: true, hasNotifySend: true })
     expect(d.channel).toBe('none')
     expect(d.reason).toContain('switched off')
+  })
+})
+
+describe('findPowershell — a daemon PATH is not a shell PATH', () => {
+  test('what is on PATH is a fact about the CALLER, so the absolute WSL path is checked too', async () => {
+    // The whole desktop channel was lost to this: a systemd user service gets
+    // /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin and nothing else, while an
+    // interactive WSL shell has the Windows directories through interop. `agentop events status`
+    // in a terminal said `ccn` while the daemon doing the notifying could not find powershell.exe,
+    // skipped ccn, and failed on notify-send for hours.
+    const { findPowershell } = await import('./desktop')
+    const found = findPowershell()
+    if (found === undefined) return // not WSL and no powershell on PATH — nothing to assert
+    expect(found.endsWith('powershell.exe')).toBe(true)
+    // Whatever the caller's PATH is, the answer is usable as an argv[0].
+    expect(found.length).toBeGreaterThan(0)
   })
 })

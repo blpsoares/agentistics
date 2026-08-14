@@ -17,6 +17,7 @@ import { contextFraction, fmt, fmtCost } from '@agentistics/core'
 import type { ControlSession, SessionState } from '@agentistics/tui/control'
 import type { CliStrings } from '../cli-i18n'
 import { approvalFor } from './approval-spec'
+import { needsChoice } from './dialog-choice'
 import { pickTitle } from './harness-session-file'
 import type { RepoFacts } from './repo-facts'
 import type { SessionView } from './session-view'
@@ -124,11 +125,24 @@ export function toControlSession(
     ...(v.resume ? { resume: v.resume } : {}),
     ...(v.lastLines?.length ? { lastLines: v.lastLines } : {}),
     ...(v.approvalLines?.length ? { approvalLines: v.approvalLines } : {}),
+    ...(v.dialogOptions?.length ? { dialogOptions: v.dialogOptions } : {}),
+    // Picking one of them needs a VERIFIED way to select by number on this harness. Only claude has
+    // one; everywhere else the options are shown and the answer is a refusal that names why, because
+    // falling back to the confirm key would choose for the user among things that differ.
+    ...(needsChoice(v.dialogOptions ?? []) && approvalFor(v.harness)?.choice
+      ? { canChoose: true as const }
+      : {}),
+    ...(needsChoice(v.dialogOptions ?? []) && !approvalFor(v.harness)?.choice && harness
+      ? { chooseBlind: s.sessChooseBlind(harness) }
+      : {}),
     // The verb exists only where BOTH halves are true: the session is asking, and somebody has read
     // this harness's dialog and recorded the key that answers it. Either missing and the action is
     // absent rather than present and wrong — the same rule the wizard applies to a harness with no
     // spawn spec.
-    ...(state === 'waiting-approval' && approvalFor(v.harness)
+    // A bare confirm is only ever offered where there is NOTHING to choose between — the
+    // codex-shaped `Press enter to continue`. On a numbered dialog it would take whichever row is
+    // highlighted, which on "only my fix / promote everything / stop here" is picking for somebody.
+    ...(state === 'waiting-approval' && approvalFor(v.harness) && !needsChoice(v.dialogOptions ?? [])
       ? { canApprove: true as const }
       : {}),
     // Said only where it is TRUE, which is a narrower place than `approvalBlind`: that one explains

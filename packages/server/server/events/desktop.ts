@@ -14,7 +14,7 @@
  * they have spent a week trusting them.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { HOME_DIR } from '../config'
@@ -48,18 +48,61 @@ async function findCcnScript(): Promise<string | undefined> {
   return undefined
 }
 
-/** What this machine actually has. */
-export async function probeDesktop(): Promise<DesktopProbe> {
+/**
+ * Is this WSL? Only then is it worth looking for Windows programs under `/mnt`.
+ *
+ * Read from `/proc/version`, which carries the kernel's own build string — the same signal
+ * `live-sessions.ts` uses to decide what this machine can be asked about.
+ */
+function isWsl(): boolean {
+  try {
+    return /microsoft/i.test(readFileSync('/proc/version', 'utf8'))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Where `powershell.exe` is, PATH or no PATH.
+ *
+ * **A daemon's PATH is not the shell's, and this cost the whole desktop channel.** WSL puts the
+ * Windows directories on the PATH of an interactive shell through interop; a systemd user service
+ * gets `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:…` and nothing else. So
+ * `Bun.which('powershell.exe')` answered YES to a person typing `agentop events status` and NO to
+ * the daemon that actually does the notifying — the daemon skipped ccn (which needs it), fell
+ * through to `notify-send`, and that failed on every event for hours while `status` in a terminal
+ * cheerfully reported ccn. Measured from the service's own log.
+ *
+ * The absolute path is checked second, exactly as `SCRIPT_HARNESS` in `live-sessions.ts` looks past
+ * a name that does not resolve: what is on PATH is a fact about the caller's environment, not about
+ * the machine.
+ */
+const WSL_POWERSHELL_PATHS = [
+  '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe',
+  '/mnt/c/Windows/system32/WindowsPowerShell/v1.0/powershell.exe',
+]
+
+export function findPowershell(): string | undefined {
+  const onPath = Bun.which('powershell.exe')
+  if (onPath) return onPath
+  if (!isWsl()) return undefined
+  return WSL_POWERSHELL_PATHS.find(p => existsSync(p))
+}
+
+/** What this machine actually has. `failed` is carried in by the caller — see `DesktopProbe`. */
+export async function probeDesktop(failed: readonly DesktopChannel[] = []): Promise<DesktopProbe> {
   const ccnScript = await findCcnScript()
+  const powershell = findPowershell()
   return {
     ...(ccnScript !== undefined ? { ccnScript } : {}),
     hasJq: !!Bun.which('jq'),
-    hasPowershell: !!Bun.which('powershell.exe'),
+    hasPowershell: powershell !== undefined,
     hasNotifySend: !!Bun.which('notify-send'),
     hasTty: process.stdout.isTTY === true,
     // Absent reads as ENABLED here — unlike `chatAllowed`, because this switch turns off a
     // notification rather than opening a door. Only an explicit `0` disables it.
     disabled: process.env.AGENTISTICS_EVENTS_DESKTOP === '0',
+    ...(failed.length > 0 ? { failed } : {}),
   }
 }
 
@@ -68,10 +111,26 @@ export interface DesktopSetup {
   decision: DesktopDecision
 }
 
+/**
+ * Channels that were chosen and then failed, for this process.
+ *
+ * Module-level rather than threaded through every caller because it is a fact about THIS MACHINE's
+ * channels, not about any one notification, and because the producer holds a `DesktopSetup` for its
+ * whole lifetime — a memory it could not see would leave it retrying a dead channel every five
+ * seconds forever, which is exactly what happened.
+ */
+const failedChannels = new Set<DesktopChannel>()
+
+/** For `status` and the tests: what has stopped working since this process started. */
+export function failedDesktopChannels(): DesktopChannel[] {
+  return [...failedChannels]
+}
+
 /** Probe once, decide once. A caller that notifies repeatedly holds this rather than re-reading the
- *  filesystem on every event. */
+ *  filesystem on every event — but see `failedChannels`: a held setup is re-planned when the channel
+ *  it names has since failed. */
 export async function desktopSetup(): Promise<DesktopSetup> {
-  const probe = await probeDesktop()
+  const probe = await probeDesktop([...failedChannels])
   return { probe, decision: planDesktopChannel(probe) }
 }
 
@@ -83,11 +142,16 @@ export type DesktopResult =
   | { ok: true; channel: DesktopChannel }
   | { ok: false; channel: DesktopChannel; message: string }
 
-async function run(cmd: string[], stdin?: string): Promise<{ code: number; err: string }> {
+async function run(
+  cmd: string[],
+  stdin?: string,
+  env?: Record<string, string>,
+): Promise<{ code: number; err: string }> {
   const proc = Bun.spawn(cmd, {
     stdin: stdin === undefined ? 'ignore' : new TextEncoder().encode(stdin),
     stdout: 'pipe',
     stderr: 'pipe',
+    ...(env ? { env: { ...process.env, ...env } } : {}),
   })
   const timer = setTimeout(() => { try { proc.kill() } catch { /* already gone */ } }, NOTIFY_TIMEOUT_MS)
   try {
@@ -100,22 +164,36 @@ async function run(cmd: string[], stdin?: string): Promise<{ code: number; err: 
 }
 
 /**
- * Show one notification through whichever channel this machine has.
+ * The environment `claude-code-notifications` needs to do anything at all.
  *
- * `cwd` is passed because ccn derives its title and its footer from the directory — it is what
- * makes a toast say which project, for the five harnesses that have no Claude transcript to read.
+ * Its script opens with `command -v powershell.exe >/dev/null 2>&1 || exit 0` and calls `reg.exe`
+ * and `wscript.exe` besides. Under a daemon whose PATH holds no Windows directory that guard fires
+ * and the script **exits 0 having done nothing** — which this module would then report as a
+ * delivered notification. A silent success is the one outcome worse than a loud failure here, so
+ * the Windows system directory is put on the child's PATH explicitly rather than inherited and
+ * hoped for.
  */
-export async function notifyDesktop(
+function ccnEnv(): Record<string, string> | undefined {
+  const ps = findPowershell()
+  if (!ps) return undefined
+  const dir = ps.slice(0, ps.lastIndexOf('/'))
+  // System32 as well as PowerShell's own directory: `reg.exe` and `wscript.exe` live there.
+  const system32 = dir.replace(/\/WindowsPowerShell\/v1\.0$/i, '')
+  const extra = [dir, system32].filter((v, i, a) => a.indexOf(v) === i).join(':')
+  return { PATH: `${process.env.PATH ?? ''}:${extra}` }
+}
+
+/** One attempt through one channel. Split out so `notifyDesktop` can fall through on failure. */
+async function deliverVia(
+  chosen: DesktopSetup,
   text: DesktopText,
   cwd: string,
-  setup?: DesktopSetup,
 ): Promise<DesktopResult> {
-  const chosen = setup ?? await desktopSetup()
   const d = chosen.decision
   try {
     switch (d.channel) {
       case 'ccn': {
-        const r = await run(['bash', chosen.probe.ccnScript!], ccnPayload({ ...text, cwd }))
+        const r = await run(['bash', chosen.probe.ccnScript!], ccnPayload({ ...text, cwd }), ccnEnv())
         return r.code === 0
           ? { ok: true, channel: 'ccn' }
           : { ok: false, channel: 'ccn', message: `claude-code-notifications exited ${r.code}${r.err ? `: ${r.err}` : ''}` }
@@ -127,7 +205,7 @@ export async function notifyDesktop(
           : { ok: false, channel: 'notify-send', message: `notify-send exited ${r.code}${r.err ? `: ${r.err}` : ''}` }
       }
       case 'powershell': {
-        const r = await run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', powershellToast(text)])
+        const r = await run([findPowershell() ?? 'powershell.exe', '-NoProfile', '-NonInteractive', '-Command', powershellToast(text)])
         return r.code === 0
           ? { ok: true, channel: 'powershell' }
           : { ok: false, channel: 'powershell', message: `powershell.exe exited ${r.code}${r.err ? `: ${r.err}` : ''}` }
@@ -142,6 +220,37 @@ export async function notifyDesktop(
   } catch (e) {
     return { ok: false, channel: d.channel, message: e instanceof Error ? e.message : String(e) }
   }
+}
+
+/**
+ * Show one notification through whichever channel this machine has, falling through on failure.
+ *
+ * `cwd` is passed because ccn derives its title and its footer from the directory — it is what
+ * makes a toast say which project, for the five harnesses that have no Claude transcript to read.
+ *
+ * A channel that fails is REMEMBERED and the next one down is tried for this same notification, so
+ * a machine whose first choice cannot deliver still gets the event AND stops paying for the dead
+ * channel on every event after it. Bounded by the number of channels: this cannot loop.
+ */
+export async function notifyDesktop(
+  text: DesktopText,
+  cwd: string,
+  setup?: DesktopSetup,
+): Promise<DesktopResult> {
+  // A held setup naming a channel that has since failed is stale, whoever is holding it.
+  let chosen = setup && !failedChannels.has(setup.decision.channel) ? setup : await desktopSetup()
+  let last: DesktopResult = { ok: false, channel: 'none', message: chosen.decision.reason }
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    last = await deliverVia(chosen, text, cwd)
+    if (last.ok || last.channel === 'none') return last
+    failedChannels.add(last.channel)
+    chosen = await desktopSetup()
+    if (chosen.decision.channel === 'none') {
+      return { ok: false, channel: 'none', message: `${last.message} — ${chosen.decision.reason}` }
+    }
+  }
+  return last
 }
 
 /**
