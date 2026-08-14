@@ -422,6 +422,22 @@ export interface SessionViewPrefs {
   /** Whether the detail pane under the list is drawn at all. */
   hideDetail?: boolean
   /**
+   * How the fleet is ARRANGED — a list of rows, or a grid of cards.
+   *
+   * Absent reads as `DEFAULT_SESSION_VIEW.layout`, never as a literal: a fallback written by hand
+   * once turned the strict filter off on every machine that already had a `preferences.json`, and
+   * the persist effect then wrote that off to disk, making it permanent.
+   */
+  layout?: 'list' | 'cards'
+  /**
+   * WHICH PAGE of cards was open, named by the SESSION at the top of it rather than by a number.
+   *
+   * The fleet re-sorts every five seconds, so "page 2" is a position and a position is not an
+   * identity — by the next poll it holds different sessions. The same rule `asideRowKey` follows
+   * for the menu cursor. An anchor that is no longer in the list simply opens page 0.
+   */
+  cardAnchor?: string
+  /**
    * Session ids the user has MARKED, so a row can be found again without searching for it.
    *
    * Persisted for the same reason the arrangement is: detaching from a session remounts this
@@ -455,6 +471,7 @@ export const DEFAULT_SESSION_VIEW: SessionViewPrefs = {
   showUnfiled: true,
   showDone: false,
   onlyActive: true,
+  layout: 'list',
 }
 
 export interface ControlSessions {

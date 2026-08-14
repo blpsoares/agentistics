@@ -7,8 +7,19 @@ import {
   sessionHandle, worktreeName, sessionRunning, asideRowKey, resolveAsideCursor,
   sessionAge, sessionKeyHelp, keyHelpColumn,
   DEFAULT_ORDER, usageOf, planSubmit,
+  cardGrid, cardPage, CARD_PAGE_MAX, CARD_MIN_WIDTH, CARD_GAP,
+  cardBadges, cardLines, fitCardLines, cardStateCells,
+  cardBand, cardAt, pagerCells, pagerHit,
+  type CardLine, type SessionRow,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
+
+/** The layout block every aside fixture carries — it is a required option, like the groupings. */
+const LAYOUT = {
+  heading: 'LAYOUT',
+  words: { list: 'list', cards: 'cards' } as const,
+  value: 'list' as const,
+}
 
 const UNKNOWN = {
   harness: 'harness unknown', model: 'no model recorded', project: 'no directory', task: 'no task',
@@ -527,6 +538,7 @@ describe('asideRows', () => {
     toggles: { closed: false, exited: false, unfiled: false, done: false, active: false, detail: false },
     toggleWords,
     headings,
+    layout: LAYOUT,
     showUnfiled: false,
     ...o,
   })
@@ -1012,6 +1024,7 @@ describe('the only-active toggle', () => {
       repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
       project: 'project',
     },
+    layout: LAYOUT,
     toggles: { closed: false, exited: false, unfiled: false, done: false, active: true, detail: false },
     toggleWords: {
       closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks',
@@ -1234,5 +1247,259 @@ describe('sessionKeyHelp', () => {
     const rows = sessionKeyHelp(words)
     expect(keyHelpColumn(rows)).toBe(Math.max(...rows.map(r => r.keys.length)))
     expect(keyHelpColumn([])).toBe(0)
+  })
+})
+
+describe('cardGrid', () => {
+  // Two columns too wide is not a cosmetic miss: the frame truncates every card it just measured.
+  // Two rows too tall is worse — Ink composites the overflow onto the rows below rather than
+  // clipping it, which reads as a corrupted frame rather than a cramped one.
+  it('never draws a grid wider or taller than the region it was measured against', () => {
+    for (let w = 10; w <= 200; w++) {
+      for (let h = 2; h <= 44; h++) {
+        const g = cardGrid({ width: w, height: h, total: 40 })
+        if (!g) continue
+        expect(g.cols * g.cardWidth + CARD_GAP * (g.cols - 1)).toBeLessThanOrEqual(w)
+        expect(g.rows * g.cardHeight).toBeLessThanOrEqual(h)
+        expect(g.cardWidth).toBeGreaterThanOrEqual(CARD_MIN_WIDTH)
+      }
+    }
+  })
+
+  it('gives up rather than drawing a card that cannot hold one', () => {
+    expect(cardGrid({ width: CARD_MIN_WIDTH - 1, height: 40, total: 9 })).toBeNull()
+    expect(cardGrid({ width: 120, height: 4, total: 9 })).toBeNull()
+  })
+
+  // Ten is the CAP, not the promise: a page holds what the grid can actually show, so there is
+  // never a card on the page that the reader has to scroll to reach.
+  it('never offers a page above the cap', () => {
+    for (let w = 28; w <= 200; w++) {
+      const g = cardGrid({ width: w, height: 44, total: 200 })
+      if (g) expect(g.capacity).toBeLessThanOrEqual(CARD_PAGE_MAX)
+    }
+  })
+
+  // A grid shaped for ten cards while the fleet has three is nine empty holes and three cards.
+  it('shapes itself to the fleet, not to the cap', () => {
+    const g = cardGrid({ width: 180, height: 40, total: 3 })!
+    expect(g.cols * g.rows).toBeLessThanOrEqual(4)
+    expect(g.capacity).toBeLessThanOrEqual(3)
+  })
+
+  it('spends surplus width on wider cards rather than on more columns than the page can use', () => {
+    const g = cardGrid({ width: 200, height: 40, total: 4 })!
+    expect(g.cols).toBeLessThanOrEqual(4)
+    expect(g.cardWidth).toBeGreaterThan(CARD_MIN_WIDTH)
+  })
+})
+
+describe('cardPage', () => {
+  it('reports the pages a total actually needs', () => {
+    expect(cardPage(47, 6, 0)).toEqual({ page: 0, pages: 8, from: 0, to: 6 })
+    expect(cardPage(12, 6, 1)).toEqual({ page: 1, pages: 2, from: 6, to: 12 })
+  })
+
+  // The list re-sorts every five seconds and a filter can empty it between two polls, so a page
+  // index is always one frame away from pointing past the end — and that is the frame someone
+  // presses a key on.
+  it('clamps a page left pointing past the end', () => {
+    expect(cardPage(7, 6, 9)).toEqual({ page: 1, pages: 2, from: 6, to: 7 })
+    expect(cardPage(0, 6, 3)).toEqual({ page: 0, pages: 1, from: 0, to: 0 })
+    expect(cardPage(7, 0, 0).pages).toBe(7)
+  })
+})
+
+describe('cardBadges', () => {
+  it('names each card with the heading the list would have drawn above it', () => {
+    const rows: SessionRow[] = [
+      { kind: 'heading', label: 'agentistics', count: 2 },
+      { kind: 'session', session: session('a') },
+      { kind: 'spacer' },
+      { kind: 'heading', label: 'agentistics · closed', count: 1, muted: true },
+      { kind: 'session', session: session('b') },
+    ]
+    expect(cardBadges(rows)).toEqual(['agentistics', 'agentistics · closed'])
+  })
+
+  // With grouping off there is no heading at all, and a card with a blank badge is a frame with a
+  // gap in it. The project is the fact every session already carries.
+  it('falls back to the project when there is no heading', () => {
+    const rows: SessionRow[] = [
+      { kind: 'session', session: session('a', { project: 'notes', projectGroup: 'agentistics' }) },
+    ]
+    expect(cardBadges(rows)).toEqual(['agentistics'])
+  })
+})
+
+describe('cardLines', () => {
+  const labels = { attached: 'attached', blind: 'approval unknown', ago: () => '22min ago' }
+  const base = session('a1b2c3', { title: 'migrate the auth store', harness: 'claude' })
+
+  it('always carries the name and the state, in that order', () => {
+    const lines = cardLines(base, labels)
+    expect(lines[0]).toMatchObject({ kind: 'title', text: 'migrate the auth store' })
+    // The helper's default state is `waiting` / `waiting`.
+    expect(lines[1]).toMatchObject({ kind: 'state', text: 'waiting' })
+  })
+
+  // A harness that cannot report usage would otherwise show every one of its sessions costing
+  // nothing, which is a confident wrong number in the place a person looks to decide what to close.
+  it('omits the usage line entirely when nothing was recorded', () => {
+    expect(cardLines(base, labels).some(l => l.key === 'usage')).toBe(false)
+    const priced = cardLines({ ...base, tokens: '51.7k', cost: '$1.24' }, labels)
+    expect(priced.find(l => l.key === 'usage')?.text).toBe('51.7k $1.24')
+  })
+
+  it('omits what it is saying when the host reported nothing', () => {
+    expect(cardLines(base, labels).some(l => l.kind === 'say')).toBe(false)
+    const talking = cardLines({ ...base, lastLines: ['running the migration'] }, labels)
+    expect(talking.find(l => l.kind === 'say')?.text).toBe('running the migration')
+  })
+
+  it('marks an attached session and one whose approvals cannot be read', () => {
+    const line = cardLines({ ...base, attached: true, approvalBlind: 'no markers' }, labels)[1]!
+    expect(line.tail).toContain('attached')
+    expect(line.tail).toContain('approval unknown')
+  })
+})
+
+describe('fitCardLines', () => {
+  const line = (key: string, kind: 'title' | 'state' | 'fact'): CardLine => ({ key, kind, text: key })
+
+  it('cuts from the bottom and never gives up the name or the state', () => {
+    const lines = [line('t', 'title'), line('s', 'state'), line('a', 'fact'), line('b', 'fact')]
+    expect(fitCardLines(lines, 2).map(l => l.key)).toEqual(['t', 's'])
+    expect(fitCardLines(lines, 0)).toEqual([])
+    expect(fitCardLines(lines, 9)).toHaveLength(4)
+  })
+})
+
+describe('cardStateCells', () => {
+  // The state is the one cell nothing else on a card repeats — the same rule `sessionCells` keeps
+  // for the row. The tail (harness, markers) is said again by the colour and by the detail pane.
+  it('gives up the tail before the state word', () => {
+    expect(cardStateCells('needs approval', ' · claude', 40))
+      .toEqual({ state: 'needs approval', tail: ' · claude' })
+    expect(cardStateCells('needs approval', ' · claude', 16))
+      .toEqual({ state: 'needs approval', tail: '' })
+    expect(cardStateCells('needs approval', ' · claude', 8).tail).toBe('')
+    expect(cardStateCells('needs approval', ' · claude', 8).state.length).toBeLessThanOrEqual(8)
+  })
+})
+
+describe('cardBand', () => {
+  // The column header names cells that a card does not have, so its row is reclaimed rather than
+  // drawn blank — and the pager is a ROW, which has to be paid for out of the same band or it is
+  // composited onto the frame below it.
+  it('reclaims the header row and pays for the pager', () => {
+    expect(cardBand({ listRows: 18, header: true })).toEqual({ gridRows: 18, pager: true })
+    expect(cardBand({ listRows: 18, header: false })).toEqual({ gridRows: 17, pager: true })
+  })
+
+  it('gives up the pager before it gives up the grid', () => {
+    const tight = cardBand({ listRows: 5, header: false })
+    expect(tight.pager).toBe(false)
+    expect(tight.gridRows).toBe(5)
+  })
+})
+
+describe('cardAt', () => {
+  const grid = cardGrid({ width: 100, height: 21, total: 10 })!
+
+  it('answers with the card whose own cells were clicked', () => {
+    expect(cardAt(grid, 0, 0)).toBe(0)
+    expect(cardAt(grid, grid.cardWidth - 1, grid.cardHeight - 1)).toBe(0)
+    expect(cardAt(grid, grid.cardWidth + grid.gap, 0)).toBe(1)
+    expect(cardAt(grid, 0, grid.cardHeight)).toBe(grid.cols)
+  })
+
+  // The gutter between two cards belongs to neither, and a hit test that rounds it into one of them
+  // answers a click the user did not make.
+  it('answers nothing for the gutter and for the air past the grid', () => {
+    expect(cardAt(grid, grid.cardWidth, 0)).toBeNull()
+    expect(cardAt(grid, grid.cols * (grid.cardWidth + grid.gap), 0)).toBeNull()
+    expect(cardAt(grid, 0, grid.rows * grid.cardHeight)).toBeNull()
+    expect(cardAt(grid, -1, 0)).toBeNull()
+  })
+
+  it('never answers past the page it drew', () => {
+    const small = cardGrid({ width: 200, height: 40, total: 3 })!
+    for (let y = 0; y < small.rows * small.cardHeight; y++) {
+      for (let x = 0; x < small.cols * (small.cardWidth + small.gap); x++) {
+        const hit = cardAt(small, x, y)
+        if (hit !== null) expect(hit).toBeLessThan(small.capacity)
+      }
+    }
+  })
+})
+
+describe('pagerCells', () => {
+  it('keeps the arrows and the page, and gives up the count first', () => {
+    const wide = pagerCells({ label: '2 / 5', note: 'showing 6 of 47', width: 40 })
+    expect(wide.note).toBe('showing 6 of 47')
+    const tight = pagerCells({ label: '2 / 5', note: 'showing 6 of 47', width: 12 })
+    expect(tight.note).toBe('')
+    expect(tight.label).toBe('2 / 5')
+    expect(tight.nextAt).toBeGreaterThan(tight.prevAt)
+  })
+
+  // A row wider than the pane wraps, and a wrapped row takes two of the screen's rows while the
+  // budget counted one — which pushes everything under it off the bottom.
+  it('never draws wider than the row it was measured against', () => {
+    for (let w = 0; w <= 60; w++) {
+      const c = pagerCells({ label: '10 / 10', note: 'showing 10 of 100', width: w })
+      expect(c.width).toBeLessThanOrEqual(w)
+    }
+  })
+
+  it('resolves a click to the arrow that was drawn there', () => {
+    const c = pagerCells({ label: '2 / 5', note: '', width: 20 })
+    expect(pagerHit(c, c.prevAt)).toBe('prev')
+    expect(pagerHit(c, c.nextAt)).toBe('next')
+    expect(pagerHit(c, c.prevAt + 1)).toBeNull()
+  })
+})
+
+describe('asideRows — the layout section', () => {
+  const rowsFor = (value: 'list' | 'cards') => asideRows({
+    actions: sessionActions(session('m')),
+    actionWords: {
+      attach: 'A', resume: 'R', rename: 'N', note: 'O', task: 'T', kill: 'K',
+      openTask: 'OT', finishTask: 'FT', new: 'NW', search: 'S', group: 'G',
+    },
+    grouping: 'project',
+    groupWords: {
+      repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
+      project: 'project',
+    },
+    layout: { ...LAYOUT, value },
+    toggles: { closed: false, exited: false, unfiled: false, done: false, active: true, detail: false },
+    toggleWords: {
+      closed: 'closed', exited: 'exited', unfiled: 'unfiled', done: 'done', active: 'active',
+      detail: 'detail',
+    },
+    headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
+    showUnfiled: false,
+  })
+
+  it('offers both layouts and marks the one in force', () => {
+    const rows = rowsFor('cards').filter(r => r.kind === 'layout')
+    expect(rows).toHaveLength(2)
+    expect(rows.map(r => (r as { value: string }).value)).toEqual(['list', 'cards'])
+    expect(rows.map(r => (r as { on: boolean }).on)).toEqual([false, true])
+  })
+
+  // The cursor is a NAME, not a position: the menu is rebuilt on every poll, and an index would be
+  // pointing at a different row by the next one.
+  it('keys a layout row by what it selects', () => {
+    const row = rowsFor('list').find(r => r.kind === 'layout')!
+    expect(asideRowKey(row)).toBe('layout:list')
+  })
+
+  it('lets the cursor land on a layout row', () => {
+    const rows = rowsFor('list')
+    const index = rows.findIndex(r => r.kind === 'layout')
+    expect(asideSelectable(rows)).toContain(index)
   })
 })
