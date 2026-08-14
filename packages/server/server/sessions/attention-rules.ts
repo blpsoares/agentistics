@@ -33,10 +33,26 @@ import type { AttentionRules } from './types'
 
 export const ATTENTION_RULES: Record<HarnessId, AttentionRules | null> = {
   claude: {
-    probed: 'claude 2.1.231, 2026-08-13',
-    // The select component every blocking question uses — captured from the folder-trust dialog it
-    // opens with. The permission prompts and `/model` draw the same footer.
-    approval: [/Enter to confirm · Esc to cancel/],
+    probed: 'claude 2.1.231 + 2.1.232, 2026-08-13 and 2026-08-14',
+    approval: [
+      // The startup/select component: the folder-trust dialog it opens with, and `/model`.
+      /Enter to confirm · Esc to cancel/,
+      // **The PERMISSION prompt, and it is a DIFFERENT component with a different footer.** The
+      // line above does not match it, which was measured the hard way on 2026-08-14: a live claude
+      // 2.1.232 sitting on "Do you want to proceed?" reported `waiting`, and the prompt that was
+      // then typed into it went into the dialog's own filter — where the submit selected the
+      // highlighted option and approved a shell command nobody had read. That is the exact accident
+      // this whole feature exists to prevent, and it was one rule away.
+      //
+      // Captured from TWO distinct permission dialogs, which is what makes this the component's
+      // footer rather than one dialog's wording — the same standard the gemini entry below holds
+      // itself to:
+      //   Bash   `Esc to cancel · Tab to amend · ctrl+e to explain`
+      //   Write  `Esc to cancel · Tab to amend`
+      // The shared part is what is matched. `ctrl+e to explain` is offered only where there is a
+      // command to explain, so keying on it would have missed every file edit.
+      /Esc to cancel · Tab to amend/,
+    ],
     // The footer while a turn runs. `? for shortcuts` takes its place when the turn ends.
     working: [/esc to interrupt/],
   },

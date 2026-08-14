@@ -32,6 +32,50 @@ const CLAUDE_APPROVAL = [
   ' Enter to confirm · Esc to cancel',
 ]
 
+/**
+ * claude 2.1.232, 2026-08-14 — the PERMISSION prompt, verbatim from a live session.
+ *
+ * A DIFFERENT component from the folder-trust dialog above, with a different footer, and the rule
+ * probed from that one does not match it. Measured the hard way: this exact frame reported
+ * `waiting`, and the prompt then typed into the session went into the dialog's own filter, where
+ * the submit took the highlighted option and approved a shell command nobody had read.
+ */
+const CLAUDE_BASH_PERMISSION = [
+  ' Bash command',
+  '',
+  '   env | head -3',
+  '   Show first 3 environment variables',
+  '',
+  ' This command requires approval',
+  '',
+  ' Do you want to proceed?',
+  ' ❯ 1. Yes',
+  '   2. Yes, and don’t ask again for: env',
+  '   3. No',
+  '',
+  ' Esc to cancel · Tab to amend · ctrl+e to explain',
+]
+
+/**
+ * claude 2.1.232, 2026-08-14 — the same component asking about a FILE, verbatim.
+ *
+ * The second capture is what makes the matched text the component's footer rather than one dialog's
+ * wording: this one offers no `ctrl+e to explain`, because there is no command to explain.
+ */
+const CLAUDE_WRITE_PERMISSION = [
+  ' Create file',
+  ' agentop-write-probe.txt',
+  '╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌',
+  '  1 hello',
+  '╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌',
+  ' Do you want to create agentop-write-probe.txt?',
+  ' ❯ 1. Yes',
+  '   2. Yes, allow all edits during this session (shift+tab)',
+  '   3. No',
+  '',
+  ' Esc to cancel · Tab to amend',
+]
+
 /** claude 2.1.231 — mid-turn. Note the input box is drawn EXACTLY as it is when idle. */
 const CLAUDE_WORKING = [
   '✢ Orbiting… (5s · ↓ 76 tokens)',
@@ -104,6 +148,31 @@ describe('ATTENTION_RULES', () => {
 describe('claude', () => {
   it('sees the blocking dialog', () => {
     expect(quiet(CLAUDE_APPROVAL, 'claude')).toBe('waiting-approval')
+  })
+
+  it('sees the PERMISSION prompt, which is a different component with a different footer', () => {
+    // The bug this replaced: the rule was probed from the folder-trust dialog alone, so the one
+    // dialog people actually meet — "may I run this command" — read as `waiting`. It was not merely
+    // a wrong label: with the block invisible, typing a prompt into that session put the text into
+    // the dialog's filter and submitted it, taking the highlighted option.
+    expect(quiet(CLAUDE_BASH_PERMISSION, 'claude')).toBe('waiting-approval')
+    expect(quiet(CLAUDE_WRITE_PERMISSION, 'claude')).toBe('waiting-approval')
+  })
+
+  it('keys on the part BOTH permission dialogs share', () => {
+    // `ctrl+e to explain` is offered only where there is a command to explain, so a rule keyed on it
+    // would have gone on missing every file edit — the same class of miss all over again.
+    const rules = rulesFor('claude')!
+    const hits = (frame: string[]) =>
+      rules.approval.filter(re => re.test(frame.join('\n'))).length
+    expect(hits(CLAUDE_BASH_PERMISSION)).toBe(1)
+    expect(hits(CLAUDE_WRITE_PERMISSION)).toBe(1)
+  })
+
+  it('does not call a working turn blocked, now that there are two approval patterns', () => {
+    // A second pattern is a second chance to match something that is not a dialog.
+    expect(quiet(CLAUDE_WORKING, 'claude')).toBe('working')
+    expect(quiet(CLAUDE_IDLE, 'claude')).toBe('waiting')
   })
 
   it('sees a running turn from the footer, not from the input box', () => {
