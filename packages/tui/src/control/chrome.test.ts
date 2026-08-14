@@ -25,6 +25,7 @@ import {
   LEFT_MAX_SHARE,
   LEFT_MIN,
   paneTop,
+  paneBadgeRoom,
   PANE_FRAME_X,
   PANE_FRAME_Y,
   PANE_MIN_ROWS,
@@ -1238,5 +1239,24 @@ describe('actionAtColumn', () => {
 
   test('says nothing about an empty row', () => {
     expect(actionAtColumn(fitActionRow([], 0, 40), 2)).toBeNull()
+  })
+})
+
+describe('paneBadgeRoom', () => {
+  // The contract is exact: a badge cut to this length must actually be DRAWN, and one character
+  // longer must be the case `paneTop` drops. A room that is merely "about right" is a badge that
+  // vanishes on some widths and not others.
+  test('is exactly the length paneTop will draw', () => {
+    for (let w = 0; w <= 80; w++) {
+      const room = paneBadgeRoom('3f5f', w)
+      if (room === 0) continue
+      expect(paneTop('3f5f', 'x'.repeat(room), w).badge).toBe('x'.repeat(room))
+      expect(paneTop('3f5f', 'x'.repeat(room + 1), w).badge).toBe('')
+    }
+  })
+
+  test('answers zero on a pane with no room for one', () => {
+    expect(paneBadgeRoom('3f5f', 6)).toBe(0)
+    expect(paneBadgeRoom('3f5f', 0)).toBe(0)
   })
 })

@@ -1642,3 +1642,115 @@ export function cardPage(total: number, capacity: number, page: number): CardPag
   const from = at * size
   return { page: at, pages, from, to: Math.min(count, from + size) }
 }
+
+// ---------------------------------------------------------------------------
+// what a card says
+// ---------------------------------------------------------------------------
+
+/**
+ * The group each card belongs to, in the order the cards are drawn — PURE.
+ *
+ * Taken from the HEADING the list would have drawn above that row, never re-derived from the
+ * session: `sessionRows` already decides what a group is called, including the history section, a
+ * finished task's suffix and the localized word for an absent key. Working it out a second way is a
+ * second implementation of the grouping, and the two would disagree the first time either changed.
+ *
+ * With grouping off there is no heading, and the card falls back to the project — the fact every
+ * session already carries. A blank badge is a frame with a gap in it.
+ */
+export function cardBadges(rows: readonly SessionRow[]): string[] {
+  const out: string[] = []
+  let heading = ''
+  for (const row of rows) {
+    if (row.kind === 'heading') { heading = row.label; continue }
+    if (row.kind !== 'session') continue
+    out.push(heading || row.session.projectGroup || row.session.project)
+  }
+  return out
+}
+
+/** What a card line IS, so the component can colour it without parsing it back. */
+export type CardLineKind = 'title' | 'state' | 'fact' | 'say'
+
+export interface CardLine {
+  key: string
+  kind: CardLineKind
+  text: string
+  /** Drawn dim on the same row, after `text`. Given up first when the card is narrow. */
+  tail?: string
+}
+
+/** The already-localized words a card needs. This module owns no strings. */
+export interface CardLabels {
+  /** Said on a session whose terminal is currently handed over. */
+  attached: string
+  /** Short caveat for a harness with no probed approval markers. */
+  blind: string
+  ago: (startedAt: number) => string
+}
+
+/**
+ * Everything a card can say about one session, most identifying first — PURE.
+ *
+ * The order IS the give-up order: `fitCardLines` cuts from the bottom, so the name and the state
+ * are the two a card can never lose — the name because a card you cannot identify is not one you
+ * can act on, the state because nothing else on the frame says whether this session is waiting for
+ * you.
+ *
+ * A fact that was never recorded is an ABSENT line, never a zero: a harness that cannot report
+ * usage would otherwise show every one of its sessions costing nothing, in the very place a person
+ * looks to decide what to close. Same rule the detail pane and `sessionMetric` already follow.
+ */
+export function cardLines(s: ControlSession, labels: CardLabels): CardLine[] {
+  const marks = [
+    s.attached ? labels.attached : '',
+    s.approvalBlind ? labels.blind : '',
+  ].filter(Boolean)
+  const tail = [s.harness, ...marks].filter(Boolean).join(' · ')
+
+  const out: CardLine[] = [
+    { key: 'title', kind: 'title', text: s.title },
+    { key: 'state', kind: 'state', text: s.stateLabel, ...(tail ? { tail: ` · ${tail}` } : {}) },
+  ]
+
+  const usage = [sessionMetric(s), s.startedAt !== undefined ? labels.ago(s.startedAt) : '']
+    .filter(Boolean).join(' · ')
+  if (usage) out.push({ key: 'usage', kind: 'fact', text: usage })
+
+  // WHERE, and which checkout of it: with several worktrees of one repository open at once, the
+  // folder name is the only thing telling them apart.
+  const where = [worktreeName(s) || s.projectGroup || s.project, s.model].filter(Boolean).join(' · ')
+  if (where) out.push({ key: 'where', kind: 'fact', text: where })
+
+  if (s.task) out.push({ key: 'task', kind: 'fact', text: s.task })
+  if (s.note) out.push({ key: 'note', kind: 'fact', text: s.note })
+
+  // What it is SAYING, last, because it is the line a short card gives up first — and the only one
+  // that would be invented if it were not there. Present only for a session agentop hosts.
+  const say = s.lastLines?.[0]
+  if (say) out.push({ key: 'say', kind: 'say', text: say })
+
+  return out
+}
+
+/** The lines that fit, cut from the BOTTOM — so the name and the state are the two that survive. */
+export function fitCardLines(lines: readonly CardLine[], rows: number): CardLine[] {
+  return lines.slice(0, Math.max(0, rows))
+}
+
+/**
+ * The state row's two halves, fitted — PURE.
+ *
+ * The state WORD is what a card may never give up, exactly as `sessionCells` keeps it for a row:
+ * the harness is said again by the card's colour, the markers are said again by the detail pane,
+ * but nothing else on the card says whether this session is waiting for you.
+ */
+export function cardStateCells(state: string, tail: string, width: number): {
+  state: string
+  tail: string
+} {
+  const room = Math.max(0, width)
+  if (state.length + tail.length <= room) return { state, tail }
+  if (state.length <= room) return { state, tail: '' }
+  return { state: truncateCell(state, room), tail: '' }
+}

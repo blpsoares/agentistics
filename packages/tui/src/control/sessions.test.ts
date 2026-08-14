@@ -8,6 +8,8 @@ import {
   sessionAge, sessionKeyHelp, keyHelpColumn,
   DEFAULT_ORDER, usageOf, planSubmit,
   cardGrid, cardPage, CARD_PAGE_MAX, CARD_MIN_WIDTH, CARD_GAP,
+  cardBadges, cardLines, fitCardLines, cardStateCells,
+  type CardLine, type SessionRow,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -1295,5 +1297,83 @@ describe('cardPage', () => {
     expect(cardPage(7, 6, 9)).toEqual({ page: 1, pages: 2, from: 6, to: 7 })
     expect(cardPage(0, 6, 3)).toEqual({ page: 0, pages: 1, from: 0, to: 0 })
     expect(cardPage(7, 0, 0).pages).toBe(7)
+  })
+})
+
+describe('cardBadges', () => {
+  it('names each card with the heading the list would have drawn above it', () => {
+    const rows: SessionRow[] = [
+      { kind: 'heading', label: 'agentistics', count: 2 },
+      { kind: 'session', session: session('a') },
+      { kind: 'spacer' },
+      { kind: 'heading', label: 'agentistics · closed', count: 1, muted: true },
+      { kind: 'session', session: session('b') },
+    ]
+    expect(cardBadges(rows)).toEqual(['agentistics', 'agentistics · closed'])
+  })
+
+  // With grouping off there is no heading at all, and a card with a blank badge is a frame with a
+  // gap in it. The project is the fact every session already carries.
+  it('falls back to the project when there is no heading', () => {
+    const rows: SessionRow[] = [
+      { kind: 'session', session: session('a', { project: 'notes', projectGroup: 'agentistics' }) },
+    ]
+    expect(cardBadges(rows)).toEqual(['agentistics'])
+  })
+})
+
+describe('cardLines', () => {
+  const labels = { attached: 'attached', blind: 'approval unknown', ago: () => '22min ago' }
+  const base = session('a1b2c3', { title: 'migrate the auth store', harness: 'claude' })
+
+  it('always carries the name and the state, in that order', () => {
+    const lines = cardLines(base, labels)
+    expect(lines[0]).toMatchObject({ kind: 'title', text: 'migrate the auth store' })
+    // The helper's default state is `waiting` / `waiting`.
+    expect(lines[1]).toMatchObject({ kind: 'state', text: 'waiting' })
+  })
+
+  // A harness that cannot report usage would otherwise show every one of its sessions costing
+  // nothing, which is a confident wrong number in the place a person looks to decide what to close.
+  it('omits the usage line entirely when nothing was recorded', () => {
+    expect(cardLines(base, labels).some(l => l.key === 'usage')).toBe(false)
+    const priced = cardLines({ ...base, tokens: '51.7k', cost: '$1.24' }, labels)
+    expect(priced.find(l => l.key === 'usage')?.text).toBe('51.7k $1.24')
+  })
+
+  it('omits what it is saying when the host reported nothing', () => {
+    expect(cardLines(base, labels).some(l => l.kind === 'say')).toBe(false)
+    const talking = cardLines({ ...base, lastLines: ['running the migration'] }, labels)
+    expect(talking.find(l => l.kind === 'say')?.text).toBe('running the migration')
+  })
+
+  it('marks an attached session and one whose approvals cannot be read', () => {
+    const line = cardLines({ ...base, attached: true, approvalBlind: 'no markers' }, labels)[1]!
+    expect(line.tail).toContain('attached')
+    expect(line.tail).toContain('approval unknown')
+  })
+})
+
+describe('fitCardLines', () => {
+  const line = (key: string, kind: 'title' | 'state' | 'fact'): CardLine => ({ key, kind, text: key })
+
+  it('cuts from the bottom and never gives up the name or the state', () => {
+    const lines = [line('t', 'title'), line('s', 'state'), line('a', 'fact'), line('b', 'fact')]
+    expect(fitCardLines(lines, 2).map(l => l.key)).toEqual(['t', 's'])
+    expect(fitCardLines(lines, 0)).toEqual([])
+    expect(fitCardLines(lines, 9)).toHaveLength(4)
+  })
+})
+
+describe('cardStateCells', () => {
+  // The state is the one cell nothing else on a card repeats — the same rule `sessionCells` keeps
+  // for the row. The tail (harness, markers) is said again by the colour and by the detail pane.
+  it('gives up the tail before the state word', () => {
+    expect(cardStateCells('needs approval', ' · claude', 40))
+      .toEqual({ state: 'needs approval', tail: ' · claude' })
+    expect(cardStateCells('needs approval', ' · claude', 16))
+      .toEqual({ state: 'needs approval', tail: '' })
+    expect(cardStateCells('needs approval', ' · claude', 8).tail).toBe('')
+    expect(cardStateCells('needs approval', ' · claude', 8).state.length).toBeLessThanOrEqual(8)
   })
 })

@@ -375,6 +375,21 @@ export function paneTop(title: string, badge: string, width: number): PaneTop {
   }
 }
 
+/**
+ * The widest badge `paneTop` will actually DRAW beside this title — PURE.
+ *
+ * Its rule is whole-or-nothing, which is right for a badge the pane's rows repeat and wrong for one
+ * that is the only place a fact appears: a card's group would simply disappear on a narrow card,
+ * and a card that does not say which project it belongs to is the feature not working. A caller
+ * with such a badge truncates it against this rather than guessing at the frame's overhead.
+ */
+export function paneBadgeRoom(title: string, width: number): number {
+  if (width < TOP_MIN) return 0
+  const budget = width - TOP_OVERHEAD
+  const shownTitle = truncate(title, Math.max(1, budget - 1))
+  return Math.max(0, budget - shownTitle.length - 3)
+}
+
 // ---------------------------------------------------------------------------
 // row cells shared by the two band panes
 //
