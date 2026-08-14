@@ -7,6 +7,7 @@ import {
   sessionHandle, worktreeName, sessionRunning, asideRowKey, resolveAsideCursor,
   sessionAge, sessionKeyHelp, keyHelpColumn,
   DEFAULT_ORDER, usageOf, planSubmit,
+  cardGrid, cardPage, CARD_PAGE_MAX, CARD_MIN_WIDTH, CARD_GAP,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
@@ -1234,5 +1235,65 @@ describe('sessionKeyHelp', () => {
     const rows = sessionKeyHelp(words)
     expect(keyHelpColumn(rows)).toBe(Math.max(...rows.map(r => r.keys.length)))
     expect(keyHelpColumn([])).toBe(0)
+  })
+})
+
+describe('cardGrid', () => {
+  // Two columns too wide is not a cosmetic miss: the frame truncates every card it just measured.
+  // Two rows too tall is worse — Ink composites the overflow onto the rows below rather than
+  // clipping it, which reads as a corrupted frame rather than a cramped one.
+  it('never draws a grid wider or taller than the region it was measured against', () => {
+    for (let w = 10; w <= 200; w++) {
+      for (let h = 2; h <= 44; h++) {
+        const g = cardGrid({ width: w, height: h, total: 40 })
+        if (!g) continue
+        expect(g.cols * g.cardWidth + CARD_GAP * (g.cols - 1)).toBeLessThanOrEqual(w)
+        expect(g.rows * g.cardHeight).toBeLessThanOrEqual(h)
+        expect(g.cardWidth).toBeGreaterThanOrEqual(CARD_MIN_WIDTH)
+      }
+    }
+  })
+
+  it('gives up rather than drawing a card that cannot hold one', () => {
+    expect(cardGrid({ width: CARD_MIN_WIDTH - 1, height: 40, total: 9 })).toBeNull()
+    expect(cardGrid({ width: 120, height: 4, total: 9 })).toBeNull()
+  })
+
+  // Ten is the CAP, not the promise: a page holds what the grid can actually show, so there is
+  // never a card on the page that the reader has to scroll to reach.
+  it('never offers a page above the cap', () => {
+    for (let w = 28; w <= 200; w++) {
+      const g = cardGrid({ width: w, height: 44, total: 200 })
+      if (g) expect(g.capacity).toBeLessThanOrEqual(CARD_PAGE_MAX)
+    }
+  })
+
+  // A grid shaped for ten cards while the fleet has three is nine empty holes and three cards.
+  it('shapes itself to the fleet, not to the cap', () => {
+    const g = cardGrid({ width: 180, height: 40, total: 3 })!
+    expect(g.cols * g.rows).toBeLessThanOrEqual(4)
+    expect(g.capacity).toBeLessThanOrEqual(3)
+  })
+
+  it('spends surplus width on wider cards rather than on more columns than the page can use', () => {
+    const g = cardGrid({ width: 200, height: 40, total: 4 })!
+    expect(g.cols).toBeLessThanOrEqual(4)
+    expect(g.cardWidth).toBeGreaterThan(CARD_MIN_WIDTH)
+  })
+})
+
+describe('cardPage', () => {
+  it('reports the pages a total actually needs', () => {
+    expect(cardPage(47, 6, 0)).toEqual({ page: 0, pages: 8, from: 0, to: 6 })
+    expect(cardPage(12, 6, 1)).toEqual({ page: 1, pages: 2, from: 6, to: 12 })
+  })
+
+  // The list re-sorts every five seconds and a filter can empty it between two polls, so a page
+  // index is always one frame away from pointing past the end — and that is the frame someone
+  // presses a key on.
+  it('clamps a page left pointing past the end', () => {
+    expect(cardPage(7, 6, 9)).toEqual({ page: 1, pages: 2, from: 6, to: 7 })
+    expect(cardPage(0, 6, 3)).toEqual({ page: 0, pages: 1, from: 0, to: 0 })
+    expect(cardPage(7, 0, 0).pages).toBe(7)
   })
 })

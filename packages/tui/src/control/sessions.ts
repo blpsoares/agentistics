@@ -1516,3 +1516,129 @@ export function sessionKeyHelp(w: {
 export function keyHelpColumn(rows: readonly KeyHelp[]): number {
   return rows.reduce((n, r) => Math.max(n, r.keys.length), 0)
 }
+
+// the card grid
+// ---------------------------------------------------------------------------
+
+/**
+ * How the fleet is ARRANGED — the same rows, two shapes.
+ *
+ * The list is the right shape for scanning forty sessions and the wrong shape for reading one:
+ * what a session is saying, which model it runs, the note left on it and how long it has been
+ * going exist only in the detail pane, one selection at a time. A card carries them all at once.
+ */
+export type SessionLayout = 'list' | 'cards'
+
+/**
+ * The most cards one page may hold.
+ *
+ * A CAP rather than a page size: ten cards rarely fit — at 130x30 the pane carries six — and a
+ * fixed ten would have to SCROLL inside the page, which is two mechanisms for reaching one card.
+ * The page is what the grid can actually show, and on a terminal that can carry ten it is ten.
+ */
+export const CARD_PAGE_MAX = 10
+
+/** One column between two cards. The frames already separate them; a wider gutter is spent air. */
+export const CARD_GAP = 1
+
+/**
+ * The narrowest card worth drawing, frame included.
+ *
+ * `PANE_FRAME_X` of that is border and padding, so the floor leaves 24 columns for a name — below
+ * which every card is an ellipsis and the grid says less than the list it replaced.
+ */
+export const CARD_MIN_WIDTH = 28
+
+/**
+ * The widest a card is allowed to grow, so a fleet of three on a 200-column terminal draws three
+ * readable cards rather than three billboards. The same bounded-growth rule the aside menu follows.
+ */
+export const CARD_MAX_WIDTH = 46
+
+/** Content lines a full card carries: name, state, usage, where, and what it is saying. */
+export const CARD_LINES = 5
+
+/** The fewest a card is worth: the name, the state, and one fact. Below that it is a list row. */
+export const CARD_MIN_LINES = 3
+
+export interface CardGrid {
+  /** Cards across. */
+  cols: number
+  /** Rows of cards. */
+  rows: number
+  /** Columns per card, FRAME INCLUDED. */
+  cardWidth: number
+  /** Rows per card, FRAME INCLUDED. */
+  cardHeight: number
+  /** Columns between two cards. */
+  gap: number
+  /** How many cards one page holds — `cols * rows`, never above `CARD_PAGE_MAX`. */
+  capacity: number
+}
+
+/**
+ * The grid a region can carry — PURE, and `null` when it cannot carry one whole card.
+ *
+ * `null` is a real answer, not a failure: on a short or narrow terminal the screen falls back to
+ * the list, which is the same degradation the aside menu makes when it is dropped rather than
+ * squeezed. A grid drawn into a region too small for it is composited over the rows below.
+ *
+ * The shape is decided by the FLEET rather than by the cap: a 6x2 grid holding three sessions is
+ * three cards and nine holes. So the rows are the fewest that can carry what will be shown, the
+ * columns are the fewest that can place them in those rows, and every column left over is spent
+ * making the cards WIDER rather than making more of them.
+ */
+export function cardGrid(o: { width: number; height: number; total: number }): CardGrid | null {
+  const width = Math.max(0, o.width)
+  const height = Math.max(0, o.height)
+  const floorHeight = PANE_FRAME_Y + CARD_MIN_LINES
+  const fullHeight = PANE_FRAME_Y + CARD_LINES
+  if (width < CARD_MIN_WIDTH || height < floorHeight) return null
+
+  // How many the region could carry at the floor — the ceiling on everything below.
+  const maxCols = Math.max(1, Math.floor((width + CARD_GAP) / (CARD_MIN_WIDTH + CARD_GAP)))
+  const maxRows = Math.max(1, Math.floor(height / floorHeight))
+  const want = Math.max(1, Math.min(Math.max(0, o.total), CARD_PAGE_MAX))
+
+  const rows = Math.max(1, Math.min(maxRows, Math.ceil(want / maxCols)))
+  const cols = Math.max(1, Math.min(maxCols, Math.ceil(want / rows)))
+  // The floor is unreachable — `cols <= maxCols` guarantees it — and stated anyway, because this is
+  // the one line whose being wrong truncates every card by the frame it was measured against.
+  const cardWidth = Math.max(
+    CARD_MIN_WIDTH,
+    Math.min(CARD_MAX_WIDTH, Math.floor((width - CARD_GAP * (cols - 1)) / cols)),
+  )
+  // As tall as the band affords, never taller than the card has content for: rows of blank inside
+  // a frame are not a card, they are a box with a name in it.
+  const cardHeight = Math.min(fullHeight, Math.floor(height / rows))
+
+  return {
+    cols, rows, cardWidth, cardHeight, gap: CARD_GAP,
+    capacity: Math.min(cols * rows, CARD_PAGE_MAX),
+  }
+}
+
+export interface CardPage {
+  /** The page actually in force, clamped into range. */
+  page: number
+  pages: number
+  /** Index of the first card of this page, and one past its last. */
+  from: number
+  to: number
+}
+
+/**
+ * Which slice of the fleet a page names — PURE, and CLAMPED on every call.
+ *
+ * Clamped rather than corrected in an effect, for the same reason the list's cursor is: a session
+ * that ends between two polls shortens the list under the page, and a stored index would point past
+ * the end for exactly one frame — which is the frame the user presses a key on.
+ */
+export function cardPage(total: number, capacity: number, page: number): CardPage {
+  const size = Math.max(1, capacity)
+  const count = Math.max(0, total)
+  const pages = Math.max(1, Math.ceil(count / size))
+  const at = Math.max(0, Math.min(Math.floor(page), pages - 1))
+  const from = at * size
+  return { page: at, pages, from, to: Math.min(count, from + size) }
+}
