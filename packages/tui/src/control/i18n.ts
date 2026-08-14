@@ -195,7 +195,15 @@ export interface ControlStrings {
   /** Said when the host does not implement the fleet at all — not the same as an empty fleet. */
   sessionsUnsupported: string
   /** The summary row: "3 sessions · 1 waiting on you". */
-  sessionsCount: (n: number) => string
+  /**
+   * How many rows are ON SCREEN, and out of how many the machine has.
+   *
+   * Two numbers, always, because one of them alone lies: with `only active` on, a fleet of 44 shows
+   * ten rows, and a header reading "44 sessions" over ten of them describes a screen nobody is
+   * looking at. `shown === total` is the case where the second number says nothing new, and that is
+   * the only case where it is dropped.
+   */
+  sessionsCount: (shown: number, total: number) => string
   sessionsWaitingCount: (n: number) => string
   sessionsGroupBy: string
   sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project' | 'task' | 'repo', string>
@@ -555,7 +563,9 @@ const EN: ControlStrings = {
   sessionsEmptyFiltered: 'nothing matches · esc clears the filter',
   sessionsLoading: 'reading…',
   sessionsUnsupported: 'session management is not available on this machine.',
-  sessionsCount: (n: number) => (n === 1 ? '1 session' : `${n} sessions`),
+  sessionsCount: (shown: number, total: number) => (shown === total
+    ? (total === 1 ? '1 session' : `${total} sessions`)
+    : `${shown} of ${total} sessions`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
   sessionsGroupBy: 'GROUP',
   sessionsGroupings: {
@@ -932,7 +942,9 @@ const PT: ControlStrings = {
   sessionsEmptyFiltered: 'nada corresponde · esc limpa o filtro',
   sessionsLoading: 'lendo…',
   sessionsUnsupported: 'gerenciamento de sessões não está disponível nesta máquina.',
-  sessionsCount: (n: number) => (n === 1 ? '1 sessão' : `${n} sessões`),
+  sessionsCount: (shown: number, total: number) => (shown === total
+    ? (total === 1 ? '1 sessão' : `${total} sessões`)
+    : `${shown} de ${total} sessões`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
   sessionsGroupBy: 'AGRUPAR',
   sessionsGroupings: {
