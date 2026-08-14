@@ -1193,7 +1193,11 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   blank inside a frame are a box with a name in it. The band and not the card: cards of one band
   stand side by side, and giving each its own height leaves the row's bottom edge ragged, which is
   worse to look at than the one blank line a short card beside a rich one still keeps. The rows a
-  short band gives back become another band on the page, not air under the pager.
+  short band gives back become another band on the page, not air under the pager. And a band's cost
+  is its cards PLUS the name over them, so `cardGrid` is told whether headings will be drawn and
+  charges that row to EVERY band — sizing as though a band were only its cards measured the ceiling
+  for a region that then had to pay a row per band out of the very same rows, and the grouped grid
+  paged four times over. The trade it makes is one line of card for another group on the page.
 - **`stats-cache.json` stays Claude-only here too.** `selectors.ts` reads Claude totals from the
   cache and every other harness from per-session sums; `applyHarnessFilter` blanks the cache when
   a non-Claude harness is selected, or Claude's numbers would survive the filter.
