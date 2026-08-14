@@ -206,7 +206,27 @@ empurra a tabela. Rodar o `preview.tsx` a 80 colunas depois de mexer, e conferir
 linha 588 e 661 que citam a palavra "aguardando" entre aspas — elas descrevem o estado e precisam
 continuar dizendo o mesmo nome que a coluna mostra.
 
-### 2.8 Senha em texto claro num título de sessão (alta, mas é decisão do usuário)
+### 2.8 Teclas e glifos da lista (baixa, mas é atrito de todo dia)
+
+Três mudanças pedidas, e a segunda tem uma armadilha:
+
+**a) O `x` no fim da linha vira uma lixeira.** É o botão de fechar a sessão daquela linha. Um `x`
+solto no fim de uma tabela lê como "coluna truncada", não como verbo. Use `🗑` — e verifique a
+largura: **é um glifo de largura dupla na maioria dos terminais**, então `sessionColumns` tem de
+cobrar 2 colunas por ele, não 1, ou a última coluna estoura e a linha inteira quebra. Se a medição
+de largura dupla não for confiável no `fitColumns` atual, use `[x]` emoldurado em vez de inventar
+uma medida — um glifo bonito que shearia a tabela é pior que o `x` feio.
+
+**b) A busca passa a ser `ctrl+f`.** É o que todo mundo já digita.
+
+**c) O layout em grid sai do `f`.** Sugestão: `g` (de grid), desde que `g` não esteja tomado —
+`resolveScrollKey` usa `g`/`G` para topo/fim nas superfícies roláveis, então **confira antes de
+escolher**; se colidir, use `v` (de view). A regra do CLAUDE.md vale aqui inteira: *uma tecla que é
+respondida pela tela E pelo shell faz duas coisas ao mesmo tempo*, e o rodapé só pode citar tecla
+que funciona no foco atual. Atualize `cockpitHints` junto — um rodapé que ainda diz `f` depois
+dessa troca é a única documentação da tela mentindo.
+
+### 2.9 Senha em texto claro num título de sessão (alta, mas é decisão do usuário)
 
 O título da sessão `15f8c5f36d` contém um e-mail e uma senha. Título e `first_prompt` **viajam**
 para a central; `redactSecrets` não pega "senha X" em prosa. Duas coisas separadas: a senha precisa
@@ -235,8 +255,8 @@ sumir. **Não confie neles**: não passaram por `tsc` nem pelos testes.
 ## 4. Ordem sugerida
 
 1. `limit.ts` + testes (é o pedido, e é o que evita a frota parar de novo)
-2. 2.5 + 2.6 + 2.7 — o highlight (persistir, agrupar, renomear). Peça pequena, mexe no mesmo
-   arquivo, e é atrito diário
+2. 2.5 + 2.6 + 2.7 + 2.8 — o highlight (persistir, agrupar, renomear) e as teclas/glifos. Peças
+   pequenas, mesmo arquivo, atrito diário
 3. 2.2 — reabrir retomando a conversa (é perda de trabalho)
 4. 2.1 — gêmeos
 5. Fechar `services-setup` e `parse-cache-sqlite` (verificar e abrir PR)
