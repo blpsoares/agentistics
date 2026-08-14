@@ -26,6 +26,7 @@ import {
   LEFT_MIN,
   paneTop,
   paneBadgeRoom,
+  paneTitleRoom,
   PANE_FRAME_X,
   PANE_FRAME_Y,
   PANE_MIN_ROWS,
@@ -40,6 +41,7 @@ import {
   type TabSpec,
 } from './chrome.ts'
 import { TAB_ORDER, type ControlService, type ServiceRuntimeState } from './types'
+import { truncate } from '../components/Primitives'
 import { PANE_ORDER } from './nav'
 import { brandMark, brandWidth, WORDMARK_ART } from '../components/Wordmark'
 import { controlStrings } from './i18n'
@@ -341,6 +343,32 @@ describe('paneTop', () => {
     expect(top.title).toBe('')
     expect(top.head.startsWith('╭')).toBe(true)
     expect(top.tail).toBe('╮')
+  })
+})
+
+describe('paneTitleRoom', () => {
+  // The inverse of `paneBadgeRoom`, for the caller whose BADGE is the thing that may not disappear:
+  // a card puts the session handle there, and `paneTop` would drop it whole rather than cut the
+  // project name in the title. Cutting the title first is what keeps the handle on the frame.
+  test('a title cut to this width never costs a badge the frame could have drawn', () => {
+    const long = 'a-very-long-project-name-indeed'
+    for (const badge of ['a1b2c', 'following']) {
+      for (let w = 0; w <= 120; w++) {
+        // What the frame can do at ALL at this width: the shortest possible title, which is the
+        // most room a badge can ever be given.
+        const best = paneTop('x', badge, w).badge
+        const cut = paneTop(truncate(long, paneTitleRoom(badge, w)), badge, w).badge
+        expect(cut).toBe(best)
+      }
+      // And the cut is only ever as deep as the badge needs: with the badge gone, the title takes
+      // everything the frame has.
+      expect(paneTitleRoom('', 40)).toBeGreaterThan(paneTitleRoom(badge, 40))
+    }
+  })
+
+  test('a pane with no badge gives the whole budget to the title', () => {
+    expect(paneTitleRoom('', 40)).toBeGreaterThan(paneTitleRoom('a1b2c', 40))
+    expect(paneTitleRoom('a1b2c', 0)).toBe(0)
   })
 })
 

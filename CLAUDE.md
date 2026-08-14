@@ -1170,6 +1170,24 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   A cell nothing on screen carries is ZERO and costs no gap. Measuring against the pane rather than
   its body made every column four characters too wide, and the table survived only because Ink
   truncated it.
+- **The CARD layout is the same rows in another shape, and a card names every fact it carries.**
+  `cardPages` walks the very `SessionRow[]` the list draws, so what a group is called, which ones
+  are muted and where the history section begins are decided ONCE, in `sessionRows`. A band belongs
+  to one GROUP — the air to the right of a one-card group is what separates it from the next, not
+  waste, and filling it with the following group's cards is how the grid used to ignore the
+  grouping it was drawn under. A heading is never placed without a row of cards under it, and a
+  group crossing a page break REPEATS its name (within a page it is said once — it is a band or two
+  above and plainly governs what follows). Each group is named exactly ONCE per card: by the band's
+  heading when there is one, and otherwise by the card's own frame title, with the session HANDLE
+  moving to the badge — cut to `paneTitleRoom`, because `paneTop` drops a badge whole rather than
+  truncate a title and the handle is the prefix `agentop session attach 3f5f` resolves. A fact whose
+  value IS that name is dropped from the card, the same rule `sessionColumns` applies to its `task`
+  cell while grouping by task. The facts a reader cannot name from the value alone — the folder, the
+  model, the task, the note — carry a LABEL, in the words `sessionsCols` already prints over the
+  list's columns; the labels are aligned in one column and given up ALL AT ONCE
+  (`cardLabelWidth`), because labels that come and go leave the values starting at different
+  columns. And a card is never taller than it has content for: `cardGrid` takes the line count the
+  screen measured, or rows of blank inside a frame are a box with a name in it.
 - **`stats-cache.json` stays Claude-only here too.** `selectors.ts` reads Claude totals from the
   cache and every other harness from per-session sums; `applyHarnessFilter` blanks the cache when
   a non-Claude harness is selected, or Claude's numbers would survive the filter.

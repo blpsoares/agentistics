@@ -24,7 +24,7 @@ import { DEFAULT_SESSION_VIEW } from '../types'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import { ACTION_SEP, actionAtColumn, fitActionRow } from '../chrome.ts'
 import { Divider } from '../Surface'
-import { PANE_MIN_ROWS, paneBadgeRoom } from '../chrome.ts'
+import { PANE_MIN_ROWS, paneBadgeRoom, paneTitleRoom } from '../chrome.ts'
 import { Pane, paneBody, paneRows } from '../Pane'
 
 /** Columns a pane spends on its left edge: one of border, one of padding. */
@@ -59,9 +59,9 @@ import {
   taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
   sessionAge, sessionKeyHelp, keyHelpColumn,
   DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder, type SessionLayout,
-  cardGrid, cardPage, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
-  cardAt, pagerCells, pagerHit,
-  type CardGrid, type CardLine, type PagerCells,
+  cardGrid, cardPages, pageOfCard, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
+  cardHit, cardStep, cardPageRows, cardLabelWidth, CARD_LABEL_GAP, pagerCells, pagerHit,
+  type CardBand, type CardGrid, type CardLabels, type CardLine, type CardPage, type PagerCells,
   asideSections, asideFold, scrollBar, THUMB,
   sessionNamed,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
@@ -493,18 +493,71 @@ export function Sessions({
   // instead: the same degradation the aside menu makes when it is dropped rather than squeezed.
   const cardsBody = paneBody(cockpit.list)
   const band = cardBand({ listRows: cockpit.listRows, header: cockpit.header })
-  const grid: CardGrid | null = layout === 'cards' && rows.length > 0
-    ? cardGrid({ width: cardsBody, height: band.gridRows, total: cards.length })
+  /**
+   * The words a card names its facts with — the very ones the list's column header prints, so the
+   * two layouts call one fact one thing.
+   *
+   * Composed once here rather than inside each card: the layout has to COUNT the lines before any
+   * card is drawn, and a second copy of this table is a second answer to what a card says.
+   */
+  const cardWords = useMemo(() => ({
+    attached: s.sessionsCardAttached,
+    blind: s.sessionsCardBlind,
+    worktree: s.sessionsCols.worktree,
+    project: s.sessionsCols.where,
+    task: s.sessionsCols.task,
+    note: s.sessionsNote,
+    model: s.sessionsModel,
+    // The clock arithmetic happens HERE, not in the pure module: a card repaints far more often
+    // than the poll runs, so a duration computed upstream would freeze at whatever it was.
+    ago: (startedAt: number) =>
+      s.sessionsAgo(Math.max(0, Math.round((Date.now() - startedAt) / 1000))),
+  }), [s])
+  /**
+   * Whether the grid draws the group HEADINGS the list draws.
+   *
+   * It costs a row of the band, so it is asked as a question the geometry can answer: measure the
+   * grid one row shorter, and take the headings only if a whole card still fits. A band too short
+   * for both keeps the cards and gives them their group BADGE back — one of the two always says
+   * which group a card belongs to, and the fallback to the list is unchanged.
+   */
+  const wantHeadings = layout === 'cards' && rows.some(r => r.kind === 'heading')
+  /**
+   * The most lines any card on screen will draw, so the frames are as tall as they have content for
+   * and no taller. Counted off the same `cardLines` the cards are drawn from — and off `badges`,
+   * which name each card's group whether or not the band ends up drawing a heading, so this number
+   * does not depend on the decision it feeds.
+   */
+  const cardMaxLines = useMemo(() => (layout === 'cards'
+    ? cards.reduce((n, c, i) => Math.max(n, cardLines(c, cardWords, badges[i] ?? '').length), 0)
+    : 0), [layout, cards, badges, cardWords])
+  const headedGrid: CardGrid | null = wantHeadings && rows.length > 0
+    ? cardGrid({ width: cardsBody, height: band.gridRows - 1, total: cards.length, lines: cardMaxLines })
     : null
+  const headed = headedGrid !== null
+  const grid: CardGrid | null = layout === 'cards' && rows.length > 0
+    ? headedGrid
+      ?? cardGrid({ width: cardsBody, height: band.gridRows, total: cards.length, lines: cardMaxLines })
+    : null
+  const pages = useMemo(() => (grid
+    ? cardPages({
+        rows,
+        cols: grid.cols,
+        gridRows: band.gridRows,
+        cardHeight: grid.cardHeight,
+        capacity: grid.capacity,
+        headed,
+      })
+    : []),
+  [grid?.cols, grid?.cardHeight, grid?.capacity, band.gridRows, headed, rows])
   // The page is the one holding the CURSOR — derived, never stored beside it. Turning a page is
   // therefore moving the cursor, and there is no second position that can fall out of step.
-  const page = grid
-    ? cardPage(cards.length, grid.capacity, Math.floor(Math.max(0, at) / grid.capacity))
-    : null
+  const pageAt = pages.length > 0 ? pageOfCard(pages, Math.max(0, at)) : 0
+  const page: CardPage | null = pages[pageAt] ?? null
   const pager = grid && page && band.pager
     ? pagerCells({
-        label: s.sessionsPage(page.page + 1, page.pages),
-        note: s.sessionsShowing(page.to - page.from, cards.length),
+        label: s.sessionsPage(pageAt + 1, pages.length),
+        note: s.sessionsShowing(page.items.length, cards.length),
         width: cardsBody,
       })
     : null
@@ -512,7 +565,7 @@ export function Sessions({
 
   // Updated only when the PAGE changes, never on every cursor move: `setSessionView` writes
   // `preferences.json` to disk, and a disk write per arrow key is not a thing this screen may do.
-  const pageAnchor = page ? cards[page.from]?.id : undefined
+  const pageAnchor = page ? cards[page.items[0] ?? 0]?.id : undefined
   useEffect(() => {
     if (pageAnchor && pageAnchor !== cardAnchor) setCardAnchor(pageAnchor)
   }, [pageAnchor, cardAnchor])
@@ -804,19 +857,23 @@ export function Sessions({
     if (input === 'R') return runAction('reopenFell')
 
     // A grid has two axes, so the arrows mean what they mean in a grid: `←`/`→` step one card,
-    // `↑`/`↓` step a whole row of them. The list's own reducer wraps a single column, which in a
+    // `↑`/`↓` step a whole BAND of them. The list's own reducer wraps a single column, which in a
     // grid would send the cursor from the top-left card to the bottom-RIGHT one.
     if (grid && selectable.length > 0) {
       const here = Math.max(0, at)
       const to = (n: number) => setCursor(Math.max(0, Math.min(n, selectable.length - 1)))
+      // Band to band rather than by `cols`: with grouping on, a band holding a one-card group is
+      // shorter than the grid is wide, and stepping by `cols` jumped clean over the band below it.
+      const step = (dy: number) => to(cardStep(pages, here, dy))
       if (key.leftArrow) return to(here - 1)
       if (key.rightArrow) return to(here + 1)
-      if (key.upArrow || input === 'k') return to(here - grid.cols)
-      if (key.downArrow || input === 'j') return to(here + grid.cols)
+      if (key.upArrow || input === 'k') return step(-1)
+      if (key.downArrow || input === 'j') return step(1)
       // The page is always the one holding the cursor, so turning a page IS moving the cursor —
-      // there is no second position to keep in sync with the first.
-      if (key.pageUp) return to(here - grid.capacity)
-      if (key.pageDown) return to(here + grid.capacity)
+      // there is no second position to keep in sync with the first. Onto the page's FIRST card
+      // rather than a fixed number of cards along: with headings the pages hold different amounts.
+      if (key.pageUp) return to(pages[Math.max(0, pageAt - 1)]?.items[0] ?? 0)
+      if (key.pageDown) return to(pages[Math.min(pages.length - 1, pageAt + 1)]?.items[0] ?? here)
       if (key.home || input === 'g') return to(0)
       if (key.end || input === 'G') return to(selectable.length - 1)
       return
@@ -1015,20 +1072,28 @@ export function Sessions({
         // one that was pointed at.
         const gy = y - (cockpit.summary ? 1 : 0)
         const gx = p.x - listX - PANE_EDGE_X
-        if (pager && gy === grid.rows * grid.cardHeight) {
+        // Measured off the bands actually on this page, never off `rows * cardHeight`: a heading
+        // costs a row and a short group's band still costs a whole one, so the pager does not sit
+        // where a uniform grid would have put it.
+        if (pager && gy === cardPageRows(page.bands, grid.cardHeight)) {
           const hit = pagerHit(pager, gx)
           // Turning a page IS moving the cursor — the page is derived from it, so there is nothing
           // else to set and nothing that can fall out of step.
           if (hit) {
-            const step = hit === 'next' ? grid.capacity : -grid.capacity
-            setCursor(c => Math.max(0, Math.min(Math.max(0, c) + step, selectable.length - 1)))
+            const next = pages[hit === 'next' ? pageAt + 1 : pageAt - 1]
+            if (next) setCursor(Math.min(next.items[0] ?? 0, selectable.length - 1))
           }
           return
         }
-        const slot = cardAt(grid, gx, gy)
-        if (slot === null) return
-        const index = page.from + slot
-        if (index < selectable.length) setCursor(index)
+        const index = cardHit({
+          bands: page.bands,
+          cardWidth: grid.cardWidth,
+          cardHeight: grid.cardHeight,
+          gap: grid.gap,
+          x: gx,
+          y: gy,
+        })
+        if (index !== null && index < selectable.length) setCursor(index)
         return
       }
       const row = offset + (y - (cockpit.summary ? 1 : 0))
@@ -1340,35 +1405,38 @@ export function Sessions({
         </Text>
       ) : grid && page ? (
         <Box flexDirection="column" width={cardsBody} flexShrink={0}>
-          {Array.from({ length: grid.rows }, (_, r) => (
-            <Box key={`row${r}`} flexDirection="row" height={grid.cardHeight} flexShrink={0}>
-              {Array.from({ length: grid.cols }, (_, c) => {
-                const slot = r * grid.cols + c
-                const index = page.from + slot
-                const card = slot < grid.capacity ? cards[index] : undefined
+          {/* One band per group, and the air to the right of a short group is DELIBERATE: it is
+              what separates one group from the next, and filling it with the following group's
+              cards is exactly how this grid used to ignore the grouping it was drawn under. */}
+          {page.bands.map((b, i) => (b.kind === 'heading' ? (
+            <GroupHeading key={`h${i}`} band={b} width={cardsBody} />
+          ) : (
+            <Box key={`b${i}`} flexDirection="row" height={grid.cardHeight} flexShrink={0}>
+              {b.items.map((index, c) => {
+                const card = cards[index]
+                if (!card) return null
                 return (
-                  <Box key={`col${c}`} flexDirection="row" flexShrink={0}>
+                  <Box key={card.id} flexDirection="row" flexShrink={0}>
                     {c > 0 ? <Box width={grid.gap} flexShrink={0} /> : null}
-                    {card ? (
-                      <SessionCard
-                        session={card}
-                        badge={badges[index] ?? ''}
-                        selected={selected?.id === card.id}
-                        marked={marked.has(card.id)}
-                        width={grid.cardWidth}
-                        height={grid.cardHeight}
-                        strings={s}
-                      />
-                    ) : (
-                      // An empty cell keeps the grid's shape without drawing a frame around
-                      // nothing — a card with no session in it is a box claiming to be one.
-                      <Box width={grid.cardWidth} height={grid.cardHeight} flexShrink={0} />
-                    )}
+                    <SessionCard
+                      session={card}
+                      // The group is named ONCE: by the heading over the band when there is one,
+                      // and by the card's own title when there is not. The card is told both which
+                      // group it is in and whether the band already said so — the same rule that
+                      // drops the list's `task` cell while grouping by task.
+                      group={badges[index] ?? ''}
+                      headed={headed}
+                      selected={selected?.id === card.id}
+                      marked={marked.has(card.id)}
+                      width={grid.cardWidth}
+                      height={grid.cardHeight}
+                      words={cardWords}
+                    />
                   </Box>
                 )
               })}
             </Box>
-          ))}
+          )))}
           {pager ? <Pager cells={pager} /> : null}
         </Box>
       ) : (
@@ -1690,44 +1758,75 @@ function KeyHelpScreen({ strings: s, width, height, onClose }: {
 }
 
 /**
+ * The name of a group, over the band holding its cards.
+ *
+ * Drawn exactly as the LIST draws its headings — accented and bold, with a dim rule running to the
+ * edge — because it is the same heading: both layouts read it off the same `sessionRows`, and a
+ * grouping that looked like two different things in two layouts would be two features.
+ */
+function GroupHeading({ band, width }: {
+  band: Extract<CardBand, { kind: 'heading' }>
+  width: number
+}) {
+  const head = `${band.label}  ${band.count}`
+  const rule = Math.max(0, width - head.length - 3)
+  return (
+    <Text wrap="truncate">
+      <Text color={band.muted ? COLORS.muted : COLORS.secondary} bold={!band.muted}>
+        {truncate(head, width)}
+      </Text>
+      <Text dimColor>{rule > 0 ? `  ${'─'.repeat(rule)}` : ''}</Text>
+    </Text>
+  )
+}
+
+/**
  * One session as a card — the same `Pane` every other framed region of this app uses.
  *
- * The frame's title is the HANDLE, because `agentop session attach 3f5f` takes a prefix and that is
- * the one thing on the card naming this session to anything but this screen; the badge is the GROUP,
- * so a card read on its own is never ambiguous about which project or task it belongs to.
+ * The frame names the card with what identifies it HERE and badges it with what identifies it
+ * elsewhere. Which is which depends on whether the band above already says the group:
+ *
+ *  - **Grouped**: the heading names the project, so the title is the HANDLE and there is no badge.
+ *  - **Ungrouped**: the title is the PROJECT — the thing a person scans a wall of cards for — and
+ *    the handle moves to the badge. It never simply disappears: it is the prefix
+ *    `agentop session attach 3f5f` resolves, and the only thing on the card naming this session to
+ *    anything outside this screen. So the project is cut to `paneTitleRoom` to leave space for it,
+ *    rather than taking the space and letting `paneTop`'s whole-or-nothing badge rule drop it.
+ *
+ * A conversation agentop did not start has no handle at all, and gets no badge rather than a
+ * stand-in: the harness is already on its state line, and five characters of a synthetic id would
+ * offer a handle the CLI cannot resolve.
  *
  * The lines come from the pure `cardLines`, cut from the bottom by `fitCardLines`, so what the card
  * gives up on a short terminal is decided in one place and tested there.
  */
-function SessionCard({ session, badge, selected, marked, width, height, strings: s }: {
+function SessionCard({ session, group, headed, selected, marked, width, height, words }: {
   session: ControlSession
-  badge: string
+  /** The group this card belongs to — the heading's own words, or the project when there is none. */
+  group: string
+  /** True while the band above already names that group, so the card must not repeat it. */
+  headed: boolean
   selected: boolean
   marked: boolean
   width: number
   height: number
-  strings: ControlStrings
+  /** The already-localized words, composed once by the screen — see `cardWords`. */
+  words: CardLabels
 }) {
   const inner = paneBody(width)
-  const lines = fitCardLines(
-    cardLines(session, {
-      attached: s.sessionsCardAttached,
-      blind: s.sessionsCardBlind,
-      // The clock arithmetic happens HERE, not in the pure module: the card repaints far more often
-      // than the poll runs, so a duration computed upstream would freeze at whatever it was.
-      ago: startedAt => s.sessionsAgo(Math.max(0, Math.round((Date.now() - startedAt) / 1000))),
-    }),
-    paneRows(height),
-  )
-  const handle = sessionHandle(session) || session.harness
+  const lines = fitCardLines(cardLines(session, words, group), paneRows(height))
+  const handle = sessionHandle(session)
+  // Grouped: the handle IS the title. Ungrouped: the project leads and the handle badges it.
+  const title = headed ? handle || session.harness : group || handle || session.harness
+  const badge = headed ? '' : handle
 
   return (
     <Pane
-      title={handle}
-      // Fitted HERE rather than left to `paneTop`, whose badge rule is whole-or-nothing: the group
-      // is the only place a card says which project or task it belongs to, so it is truncated
-      // rather than dropped. `paneBadgeRoom` is that frame's own arithmetic.
-      badge={truncate(badge, paneBadgeRoom(handle, width))}
+      title={truncate(title, paneTitleRoom(badge, width))}
+      // Fitted HERE rather than left to `paneTop`, whose badge rule is whole-or-nothing: the handle
+      // is the only place a card carries the name the CLI resolves, so it is truncated rather than
+      // dropped. `paneBadgeRoom` is that frame's own arithmetic.
+      badge={truncate(badge, paneBadgeRoom(title, width))}
       focused={selected}
       width={width}
       height={height}
@@ -1737,6 +1836,7 @@ function SessionCard({ session, badge, selected, marked, width, height, strings:
           key={line.key}
           line={line}
           width={inner}
+          labelWidth={cardLabelWidth(lines, inner)}
           marked={marked}
           selected={selected}
           stateColor={STATE_COLOR[session.state]}
@@ -1747,10 +1847,20 @@ function SessionCard({ session, badge, selected, marked, width, height, strings:
   )
 }
 
-/** One line of a card. The state keeps its colour and its WORD, exactly as the row does. */
-function CardLineView({ line, width, marked, selected, stateColor, bold }: {
+/**
+ * One line of a card. The state keeps its colour and its WORD, exactly as the row does.
+ *
+ * A labelled line pads its label to `labelWidth` so every value on the card starts at one column —
+ * `labelWidth` is `0` when the card is too narrow to name its facts and keep them readable, and then
+ * every line draws bare. The lines that name themselves (the title, the state, the usage, what the
+ * assistant is saying) take no indent: they are the card's headline, and pushing them right to line
+ * up with a label they do not have would spend the width for nothing.
+ */
+function CardLineView({ line, width, labelWidth, marked, selected, stateColor, bold }: {
   line: CardLine
   width: number
+  /** Columns the label column takes, or `0` to draw no labels at all. */
+  labelWidth: number
   marked: boolean
   selected: boolean
   stateColor: string | undefined
@@ -1772,11 +1882,18 @@ function CardLineView({ line, width, marked, selected, stateColor, bold }: {
       </Text>
     )
   }
+  const label = labelWidth > 0 && line.label ? line.label : ''
+  const room = label === '' ? width : Math.max(1, width - labelWidth - CARD_LABEL_GAP)
   // What the assistant said is drawn in the text colour: it is the content, and every other line is
   // a label for it.
   return (
-    <Text wrap="truncate" color={line.kind === 'say' ? COLORS.text : COLORS.secondary}>
-      {truncate(line.text, width)}
+    <Text wrap="truncate">
+      {label === '' ? null : (
+        <Text dimColor>{padCell(label, labelWidth) + ' '.repeat(CARD_LABEL_GAP)}</Text>
+      )}
+      <Text color={line.kind === 'say' ? COLORS.text : COLORS.secondary}>
+        {truncate(line.text, room)}
+      </Text>
     </Text>
   )
 }

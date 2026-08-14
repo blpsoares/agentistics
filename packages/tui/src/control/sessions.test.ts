@@ -7,11 +7,11 @@ import {
   sessionHandle, worktreeName, sessionRunning, asideRowKey, resolveAsideCursor,
   sessionAge, sessionKeyHelp, keyHelpColumn,
   DEFAULT_ORDER, usageOf, planSubmit,
-  cardGrid, cardPage, CARD_PAGE_MAX, CARD_MIN_WIDTH, CARD_GAP,
-  cardBadges, cardLines, fitCardLines, cardStateCells,
-  cardBand, cardAt, pagerCells, pagerHit,
+  cardGrid, cardPages, pageOfCard, CARD_PAGE_MAX, CARD_MIN_WIDTH, CARD_GAP, CARD_LINES,
+  cardBadges, cardLines, fitCardLines, cardStateCells, cardLabelWidth, CARD_VALUE_MIN,
+  cardBand, cardHit, cardStep, cardRows, cardPageRows, pagerCells, pagerHit,
   askRows, fitApprovalPreview, APPROVAL_PREVIEW_MAX, QUESTION_ROWS,
-  type CardLine, type SessionRow,
+  type CardBand, type CardLine, type SessionRow,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 import { controlStrings } from './i18n'
@@ -1302,19 +1302,133 @@ describe('cardGrid', () => {
   })
 })
 
-describe('cardPage', () => {
-  it('reports the pages a total actually needs', () => {
-    expect(cardPage(47, 6, 0)).toEqual({ page: 0, pages: 8, from: 0, to: 6 })
-    expect(cardPage(12, 6, 1)).toEqual({ page: 1, pages: 2, from: 6, to: 12 })
+describe('cardPages', () => {
+  /** `n` sessions under one heading, in the shape `sessionRows` hands over. */
+  const grouped = (...groups: Array<[string, number]>): SessionRow[] => {
+    const out: SessionRow[] = []
+    let n = 0
+    for (const [label, count] of groups) {
+      if (out.length > 0) out.push({ kind: 'spacer' })
+      out.push({ kind: 'heading', label, count })
+      for (let i = 0; i < count; i++) out.push({ kind: 'session', session: session(`s${n++}`) })
+    }
+    return out
+  }
+  const flat = (n: number): SessionRow[] =>
+    Array.from({ length: n }, (_, i) => ({ kind: 'session', session: session(`s${i}`) }))
+
+  const pack = (rows: SessionRow[], o: Partial<Parameters<typeof cardPages>[0]> = {}) =>
+    cardPages({ rows, cols: 3, gridRows: 24, cardHeight: 7, capacity: 9, headed: true, ...o })
+
+  // The whole point of the change: a band belongs to ONE group, so a short group leaves the rest of
+  // its band empty rather than being padded out with the next group's cards.
+  it('gives every group its own bands', () => {
+    const pages = pack(grouped(['agentistics', 2], ['aipe', 1]))
+    expect(pages).toHaveLength(1)
+    expect(pages[0]!.bands).toEqual([
+      { kind: 'heading', label: 'agentistics', count: 2, muted: false },
+      { kind: 'cards', items: [0, 1] },
+      { kind: 'heading', label: 'aipe', count: 1, muted: false },
+      { kind: 'cards', items: [2] },
+    ] satisfies CardBand[])
   })
 
-  // The list re-sorts every five seconds and a filter can empty it between two polls, so a page
-  // index is always one frame away from pointing past the end — and that is the frame someone
-  // presses a key on.
-  it('clamps a page left pointing past the end', () => {
-    expect(cardPage(7, 6, 9)).toEqual({ page: 1, pages: 2, from: 6, to: 7 })
-    expect(cardPage(0, 6, 3)).toEqual({ page: 0, pages: 1, from: 0, to: 0 })
-    expect(cardPage(7, 0, 0).pages).toBe(7)
+  // A group wider than the grid wraps into more bands of its OWN — never into the next group's.
+  it('wraps a long group into further bands under one name', () => {
+    const [page] = pack(grouped(['agentistics', 7]), { gridRows: 40, capacity: 9 })
+    expect(page!.bands.filter(b => b.kind === 'heading')).toHaveLength(1)
+    expect(page!.bands.filter(b => b.kind === 'cards').map(b => b.items))
+      .toEqual([[0, 1, 2], [3, 4, 5], [6]])
+  })
+
+  // A name with nothing named under it is a row spent saying nothing, and it is the row the page
+  // needed for the card that would have answered it.
+  it('never ends a page with a heading and no cards', () => {
+    for (let gridRows = 8; gridRows <= 40; gridRows++) {
+      for (const pages of [pack(grouped(['a', 3], ['b', 2], ['c', 4]), { gridRows })]) {
+        for (const page of pages) {
+          expect(page.bands.at(-1)?.kind).toBe('cards')
+          expect(page.items.length).toBeGreaterThan(0)
+        }
+      }
+    }
+  })
+
+  // A card under no name does not say what it belongs to — the same orphan the grouping exists to
+  // prevent, wearing a page break instead of a band break.
+  it('repeats a split group name at the top of the next page', () => {
+    const pages = pack(grouped(['agentistics', 6]), { gridRows: 14, cardHeight: 7 })
+    expect(pages.length).toBeGreaterThan(1)
+    for (const page of pages) expect(page.bands[0]).toMatchObject({ kind: 'heading', label: 'agentistics' })
+  })
+
+  // Every card is on exactly one page, in order — a packer that drops one loses a session from a
+  // screen whose whole job is showing them all.
+  it('places every card exactly once, in order', () => {
+    for (let cols = 1; cols <= 5; cols++) {
+      for (let gridRows = 9; gridRows <= 40; gridRows += 3) {
+        const pages = pack(grouped(['a', 4], ['b', 1], ['c', 7]), { cols, gridRows })
+        expect(pages.flatMap(p => p.items)).toEqual(Array.from({ length: 12 }, (_, i) => i))
+      }
+    }
+  })
+
+  // Every page must fit the band it was measured against: Ink composites the overflow onto the rows
+  // below rather than clipping it, which reads as a corrupted frame rather than a cramped one.
+  it('never packs a page taller than the region or wider than the cap', () => {
+    for (let cols = 1; cols <= 5; cols++) {
+      for (let cardHeight = 5; cardHeight <= 8; cardHeight++) {
+        for (let gridRows = cardHeight + 1; gridRows <= 44; gridRows++) {
+          const pages = pack(grouped(['a', 5], ['b', 1], ['c', 9], ['d', 2]),
+            { cols, gridRows, cardHeight, capacity: Math.min(cols * 3, CARD_PAGE_MAX) })
+          for (const page of pages) {
+            expect(cardPageRows(page.bands, cardHeight)).toBeLessThanOrEqual(gridRows)
+            expect(page.items.length).toBeLessThanOrEqual(Math.min(cols * 3, CARD_PAGE_MAX))
+          }
+        }
+      }
+    }
+  })
+
+  // With no grouping the screen must draw exactly what it drew before groups reached it: one dense
+  // run of cards, `cols` at a time, and no row spent on a name.
+  it('packs one dense nameless run when it is not drawing headings', () => {
+    const pages = cardPages({
+      rows: grouped(['a', 2], ['b', 3]), cols: 3, gridRows: 24, cardHeight: 7, capacity: 9,
+      headed: false,
+    })
+    expect(pages[0]!.bands).toEqual([
+      { kind: 'cards', items: [0, 1, 2] },
+      { kind: 'cards', items: [3, 4] },
+    ] as CardBand[])
+  })
+
+  it('is the plain grid when the rows carry no heading at all', () => {
+    const pages = cardPages({
+      rows: flat(5), cols: 2, gridRows: 21, cardHeight: 7, capacity: 6, headed: true,
+    })
+    expect(pages[0]!.bands.every(b => b.kind === 'cards')).toBe(true)
+    expect(pages[0]!.items).toEqual([0, 1, 2, 3, 4])
+  })
+
+  it('has no pages at all for an empty fleet', () => {
+    expect(pack([])).toEqual([])
+    expect(pack([{ kind: 'heading', label: 'a', count: 0 }])).toEqual([])
+  })
+})
+
+describe('pageOfCard', () => {
+  const pages = [
+    { bands: [], items: [0, 1] },
+    { bands: [], items: [2, 3] },
+  ]
+
+  it('finds the page holding a card, and opens the first for one no page holds', () => {
+    expect(pageOfCard(pages, 3)).toBe(1)
+    expect(pageOfCard(pages, 0)).toBe(0)
+    // A cursor past the end for one frame — which is the frame someone presses a key on.
+    expect(pageOfCard(pages, 99)).toBe(0)
+    expect(pageOfCard([], 0)).toBe(0)
   })
 })
 
@@ -1341,8 +1455,63 @@ describe('cardBadges', () => {
 })
 
 describe('cardLines', () => {
-  const labels = { attached: 'attached', blind: 'approval unknown', ago: () => '22min ago' }
+  const labels = {
+    attached: 'attached', blind: 'approval unknown', ago: () => '22min ago',
+    worktree: 'worktree', project: 'project', task: 'task', note: 'note', model: 'model',
+  }
   const base = session('a1b2c3', { title: 'migrate the auth store', harness: 'claude' })
+
+  // The complaint this whole change answers: `session-monitor` is a folder and
+  // `cockpit: event channel` is a task, drawn identically, with nothing on the card saying which is
+  // which. The list solves it with a column header the grid has no room for.
+  it('names every fact a reader cannot name from its value', () => {
+    const lines = cardLines({
+      ...base, project: 'session-monitor', projectGroup: 'agentistics', worktree: true,
+      model: 'opus', task: 'billing', note: 'blocked on the CSV encoding',
+    }, labels)
+    const label = (key: string) => lines.find(l => l.key === key)?.label
+    expect(label('where')).toBe('worktree')
+    expect(label('model')).toBe('model')
+    expect(label('task')).toBe('task')
+    expect(label('note')).toBe('note')
+    // And leaves alone the ones that say what they are.
+    expect(label('title')).toBeUndefined()
+    expect(label('state')).toBeUndefined()
+    expect(label('usage')).toBeUndefined()
+  })
+
+  // A worktree and a project are the same shape of word, so the label is what tells them apart.
+  it('says which KIND of place the folder is', () => {
+    expect(cardLines({ ...base, project: 'notes' }, labels).find(l => l.key === 'where'))
+      .toMatchObject({ text: 'notes', label: 'project' })
+    expect(cardLines(
+      { ...base, project: 'notes', projectGroup: 'agentistics', worktree: true }, labels,
+    ).find(l => l.key === 'where')).toMatchObject({ text: 'notes', label: 'worktree' })
+  })
+
+  // Appended to the folder it was a bare word after a path, which reads as another path.
+  it('gives the model a line of its own, and none when there is no model', () => {
+    expect(cardLines({ ...base, model: 'opus' }, labels).find(l => l.key === 'model')?.text)
+      .toBe('opus')
+    expect(cardLines(base, labels).some(l => l.key === 'model')).toBe(false)
+    expect(cardLines({ ...base, model: 'opus' }, labels).find(l => l.key === 'where')?.text)
+      .not.toContain('opus')
+  })
+
+  // The ORDER is the give-up order — `fitCardLines` cuts from the bottom — so it is the thing worth
+  // pinning: the name and the state can never be lost, and a card as tall as `CARD_LINES` reaches
+  // the task. The note and what the assistant is saying are below that and are the two a full card
+  // gives up, exactly as they were before the model took a line of its own.
+  it('composes its facts in the order a short card gives them up', () => {
+    const full = cardLines({
+      ...base, tokens: '51.7k', cost: '$1.24', model: 'opus', task: 'billing', note: 'a note',
+      lastLines: ['running the migration'],
+    }, labels)
+    expect(full.map(l => l.key))
+      .toEqual(['title', 'state', 'usage', 'where', 'model', 'task', 'note', 'say'])
+    expect(fitCardLines(full, CARD_LINES).map(l => l.key))
+      .toEqual(['title', 'state', 'usage', 'where', 'model', 'task'])
+  })
 
   it('always carries the name and the state, in that order', () => {
     const lines = cardLines(base, labels)
@@ -1412,33 +1581,109 @@ describe('cardBand', () => {
   })
 })
 
-describe('cardAt', () => {
+describe('cardLabelWidth', () => {
+  const lines: CardLine[] = [
+    { key: 'title', kind: 'title', text: 'migrate the auth store' },
+    { key: 'where', kind: 'fact', text: 'session-monitor', label: 'worktree' },
+    { key: 'task', kind: 'fact', text: 'billing', label: 'task' },
+  ]
+
+  // One column for every label on the card, so the values all start in the same place — the jumble
+  // `sessionColumns` prevents on the list, prevented on the card.
+  it('sizes the column to the widest label the card actually carries', () => {
+    expect(cardLabelWidth(lines, 40)).toBe('worktree'.length)
+  })
+
+  // `worktree  sess…` names the field and stops answering which one, which is the trade the labels
+  // exist to avoid. All-or-nothing per card: labels that come and go leave a ragged column.
+  it('gives up the labels rather than squeeze the values below what they need', () => {
+    expect(cardLabelWidth(lines, 'worktree'.length + 2 + CARD_VALUE_MIN)).toBe(8)
+    expect(cardLabelWidth(lines, 'worktree'.length + 2 + CARD_VALUE_MIN - 1)).toBe(0)
+  })
+
+  it('spends nothing on a card with no labelled line', () => {
+    expect(cardLabelWidth([lines[0]!], 40)).toBe(0)
+    expect(cardLabelWidth([], 40)).toBe(0)
+  })
+})
+
+describe('cardHit', () => {
   const grid = cardGrid({ width: 100, height: 21, total: 10 })!
+  const bands: CardBand[] = [
+    { kind: 'heading', label: 'agentistics', count: 3, muted: false },
+    { kind: 'cards', items: [0, 1, 2] },
+    { kind: 'heading', label: 'aipe', count: 1, muted: false },
+    { kind: 'cards', items: [3] },
+  ]
+  const hit = (x: number, y: number) =>
+    cardHit({ bands, cardWidth: grid.cardWidth, cardHeight: grid.cardHeight, gap: grid.gap, x, y })
 
-  it('answers with the card whose own cells were clicked', () => {
-    expect(cardAt(grid, 0, 0)).toBe(0)
-    expect(cardAt(grid, grid.cardWidth - 1, grid.cardHeight - 1)).toBe(0)
-    expect(cardAt(grid, grid.cardWidth + grid.gap, 0)).toBe(1)
-    expect(cardAt(grid, 0, grid.cardHeight)).toBe(grid.cols)
+  // Resolved against the bands that were DRAWN, never against a uniform grid: a heading costs a row
+  // and re-deriving the geometry from `cols` answers with the card one row up.
+  it('answers with the card whose own cells were clicked, headings paid for', () => {
+    expect(hit(0, 1)).toBe(0)
+    expect(hit(grid.cardWidth - 1, grid.cardHeight)).toBe(0)
+    expect(hit(grid.cardWidth + grid.gap, 1)).toBe(1)
+    // The second group's band starts after the first band AND its own heading row.
+    expect(hit(0, 1 + grid.cardHeight + 1)).toBe(3)
   })
 
-  // The gutter between two cards belongs to neither, and a hit test that rounds it into one of them
-  // answers a click the user did not make.
-  it('answers nothing for the gutter and for the air past the grid', () => {
-    expect(cardAt(grid, grid.cardWidth, 0)).toBeNull()
-    expect(cardAt(grid, grid.cols * (grid.cardWidth + grid.gap), 0)).toBeNull()
-    expect(cardAt(grid, 0, grid.rows * grid.cardHeight)).toBeNull()
-    expect(cardAt(grid, -1, 0)).toBeNull()
+  // The gutter belongs to neither card, a heading belongs to no card, and the empty right-hand end
+  // of a short group's band is not a card either — each is a click the user did not make.
+  it('answers nothing for the gutter, the headings and a short band’s empty end', () => {
+    expect(hit(grid.cardWidth, 1)).toBeNull()
+    expect(hit(0, 0)).toBeNull()
+    expect(hit(0, 1 + grid.cardHeight)).toBeNull()
+    expect(hit(grid.cardWidth + grid.gap, 1 + grid.cardHeight + 1)).toBeNull()
+    expect(hit(0, 99)).toBeNull()
+    expect(hit(-1, 1)).toBeNull()
   })
 
-  it('never answers past the page it drew', () => {
-    const small = cardGrid({ width: 200, height: 40, total: 3 })!
-    for (let y = 0; y < small.rows * small.cardHeight; y++) {
-      for (let x = 0; x < small.cols * (small.cardWidth + small.gap); x++) {
-        const hit = cardAt(small, x, y)
-        if (hit !== null) expect(hit).toBeLessThan(small.capacity)
+  it('never answers with a card the page does not hold', () => {
+    const height = cardPageRows(bands, grid.cardHeight)
+    for (let y = 0; y < height + 2; y++) {
+      for (let x = 0; x < grid.cols * (grid.cardWidth + grid.gap) + 2; x++) {
+        const found = hit(x, y)
+        if (found !== null) expect([0, 1, 2, 3]).toContain(found)
       }
     }
+  })
+})
+
+describe('cardStep', () => {
+  // Stepping by `cols` was right while every band was full, and jumped clean over the band below a
+  // one-card group the moment grouping arrived.
+  const pages = [
+    {
+      bands: [
+        { kind: 'heading', label: 'a', count: 1, muted: false },
+        { kind: 'cards', items: [0] },
+        { kind: 'heading', label: 'b', count: 3, muted: false },
+        { kind: 'cards', items: [1, 2, 3] },
+      ] as CardBand[],
+      items: [0, 1, 2, 3],
+    },
+    { bands: [{ kind: 'cards', items: [4, 5] }] as CardBand[], items: [4, 5] },
+  ]
+
+  it('steps band to band, keeping the column', () => {
+    expect(cardStep(pages, 0, 1)).toBe(1)
+    expect(cardStep(pages, 2, -1)).toBe(0)
+    expect(cardStep(pages, 2, 1)).toBe(5)
+  })
+
+  // The page FOLLOWS the cursor, so stepping off the bottom band is how the next page is reached.
+  it('walks across the page boundary and clamps at the ends', () => {
+    expect(cardStep(pages, 1, 1)).toBe(4)
+    expect(cardStep(pages, 0, -1)).toBe(0)
+    expect(cardStep(pages, 5, 1)).toBe(5)
+    // A shorter band takes the cursor at its last card rather than dropping it.
+    expect(cardStep(pages, 3, 1)).toBe(5)
+    expect(cardStep(pages, 99, 1)).toBe(99)
+  })
+
+  it('lists the bands of cards across every page, in drawing order', () => {
+    expect(cardRows(pages)).toEqual([[0], [1, 2, 3], [4, 5]])
   })
 })
 
