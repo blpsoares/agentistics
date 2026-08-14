@@ -48,6 +48,10 @@ export interface ControlStrings {
   keyEnds: string
   keyRefresh: string
   keyLogSource: string
+  /** The dashboard's own two keys. Its screens are digits and `tab`, never the arrows — see
+   *  `resolveDashboardScreen` for why the shell's `←→ screens` had to survive this tab. */
+  dashView: string
+  dashFilter: string
   /**
    * The mouse's two hints, said only while there IS a mouse.
    *
@@ -418,6 +422,16 @@ export interface ControlStrings {
   helpIntro: string
   cheatIntro: string
   contributeIntro: string
+  /**
+   * Why the dashboard is showing no numbers.
+   *
+   * Two sentences rather than one: `dashDown` is actionable and names the screen that starts the
+   * server, while `dashUnknown` is the honest form of a service whose state could not be read at
+   * all. Reporting the second as the first would send someone to press a button for a problem they
+   * do not have — the same N/A-versus-a-confident-0 rule the rest of this app follows.
+   */
+  dashDown: string
+  dashUnknown: string
   copyHint: string
   /** The same reminder while the mouse reports, when a plain drag no longer selects. */
   copyHintShift: string
@@ -429,6 +443,7 @@ const EN: ControlStrings = {
   tabs: {
     services: 'Services',
     sessions: 'Sessions',
+    dashboard: 'Dashboard',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Cheat sheet',
@@ -439,6 +454,7 @@ const EN: ControlStrings = {
   tabsShort: {
     services: 'services',
     sessions: 'sessions',
+    dashboard: 'dashboard',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'commands',
@@ -463,6 +479,8 @@ const EN: ControlStrings = {
   keyEnds: 'g/G ends',
   keyRefresh: 'r refresh',
   keyLogSource: '[ ] source',
+  dashView: '1-5/tab view',
+  dashFilter: 'f harness',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+drag to copy',
 
@@ -796,6 +814,8 @@ const EN: ControlStrings = {
   helpIntro: 'Every command, with the flags that matter. `agentop --help` prints this plain.',
   cheatIntro: 'The commands worth remembering.',
   contributeIntro: 'Agentistics is open source — issues and pull requests welcome.',
+  dashDown: 'The agentistics server is not running, so there are no metrics to read. Start it on the services screen.',
+  dashUnknown: 'The agentistics server\u2019s state could not be read, so there are no metrics to show. The services screen says why.',
   copyHint: 'select with the mouse to copy',
   copyHintShift: 'hold shift and drag to select and copy',
 }
@@ -806,6 +826,7 @@ const PT: ControlStrings = {
   tabs: {
     services: 'Serviços',
     sessions: 'Sessões',
+    dashboard: 'Dashboard',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Comandos',
@@ -816,6 +837,7 @@ const PT: ControlStrings = {
   tabsShort: {
     services: 'serviços',
     sessions: 'sessões',
+    dashboard: 'dashboard',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'comandos',
@@ -840,6 +862,8 @@ const PT: ControlStrings = {
   keyEnds: 'g/G extremos',
   keyRefresh: 'r atualizar',
   keyLogSource: '[ ] fonte',
+  dashView: '1-5/tab tela',
+  dashFilter: 'f assistente',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+arrastar copia',
 
@@ -1169,6 +1193,8 @@ const PT: ControlStrings = {
   helpIntro: 'Todos os comandos, com as flags que importam. `agentop --help` imprime isto puro.',
   cheatIntro: 'Os comandos que vale a pena lembrar.',
   contributeIntro: 'Agentistics é open source — issues e pull requests são bem-vindos.',
+  dashDown: 'O servidor agentistics não está rodando, então não há métricas para ler. Suba-o na tela de serviços.',
+  dashUnknown: 'Não foi possível ler o estado do servidor agentistics, então não há métricas para mostrar. A tela de serviços diz por quê.',
   copyHint: 'selecione com o mouse para copiar',
   copyHintShift: 'segure shift e arraste para selecionar e copiar',
 }

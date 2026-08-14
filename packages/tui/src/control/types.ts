@@ -9,11 +9,24 @@
 
 import type { CliLang } from './lang'
 
-export type TabId = 'services' | 'sessions' | 'setup' | 'logs' | 'cheatsheet' | 'help' | 'contribute'
+export type TabId =
+  | 'services'
+  | 'sessions'
+  /** The metrics dashboard — the whole of what `agentop tui` shows, as a screen of this app. */
+  | 'dashboard'
+  | 'setup'
+  | 'logs'
+  | 'cheatsheet'
+  | 'help'
+  | 'contribute'
 
+// Operations first (what is running, and what you can do to it), then the numbers, then the
+// machine's own configuration, then the documentation. The dashboard sits where it does because it
+// answers a question about the same work the two screens before it are managing.
 export const TAB_ORDER: readonly TabId[] = [
   'services',
   'sessions',
+  'dashboard',
   'setup',
   'logs',
   'cheatsheet',

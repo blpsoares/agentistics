@@ -111,7 +111,11 @@ const USAGE = `
                             which fake machine to show (default solo)
                             conflict = native AND docker up; nodocker = no docker installed;
                             norepo = no checkout here, so no rebuild is offered
+                            --screen dashboard serves a fixture AppData over a real
+                            throwaway HTTP port, so the metrics screens are drawn
+                            through the same fetch the shipped tab uses
     --keys   k,k,…          press these first, e.g. enter,down,enter
+                            on the dashboard: 1-5 pick a screen, f opens the filter
                             names: enter esc tab shift-tab up down left right
                             pgup pgdn space, and ctrl-<letter>; anything else is
                             typed literally
@@ -191,17 +195,22 @@ const LOCAL_URLS = { webUrl: 'http://localhost:47292', apiUrl: 'http://localhost
  * stopped service offers, the conflict sentence, the empty option list of a running one — falls out
  * of the model rather than being written down here.
  */
-function services(mode: Case, s: CliStrings): ControlService[] {
+function services(mode: Case, s: CliStrings, apiUrl?: string): ControlService[] {
   const nativeUp = mode !== 'central'
   const machineUp = mode === 'conflict'
   const noDocker = mode === 'nodocker'
+
+  // The dashboard screen reads `/api/data` off the api URL the host reported, so when the preview is
+  // drawing that screen it points this at its own fixture server — the SAME path the real tab takes,
+  // rather than a hand-drawn frame the model could never produce.
+  const urls = apiUrl ? { ...LOCAL_URLS, apiUrl } : LOCAL_URLS
 
   const native: ServiceRuntimeState = {
     id: 'local',
     kind: 'native',
     state: nativeUp ? 'up' : 'down',
     available: true,
-    ...(nativeUp ? { ...LOCAL_URLS, pid: 48213, startedAt: Date.now() - 134 * MINUTES } : {}),
+    ...(nativeUp ? { ...urls, pid: 48213, startedAt: Date.now() - 134 * MINUTES } : {}),
   }
   const machine: ServiceRuntimeState = {
     id: 'machine',
@@ -242,14 +251,14 @@ function services(mode: Case, s: CliStrings): ControlService[] {
   ]
 }
 
-function fakeStatus(opts: Options): ControlStatus {
+function fakeStatus(opts: Options, apiUrl?: string): ControlStatus {
   const s = cliStrings(opts.lang)
   return {
     // The two extra cases are arrangements of SERVICES, not team modes; they show a solo machine.
     mode: opts.mode === 'central' || opts.mode === 'member' ? opts.mode : 'solo',
     modeLabel: opts.mode === 'member' ? s.configMemberBare : opts.mode === 'central' ? s.configCentral : s.configSolo,
     endpoint: opts.mode === 'member' ? LONG_ENDPOINT : undefined,
-    services: services(opts.mode, s),
+    services: services(opts.mode, s, apiUrl),
     version: '1.7.3',
     latestVersion: '1.7.4',
     archiveMode: 'consolidate',
@@ -302,7 +311,7 @@ const BUILD_CHUNKS: string[] = [
   `  compiled ./release/agentop\n#5 DONE 41.3s\n\n#6 exporting to image\n#6 DONE 3.1s\n${ESC}[?25h`,
 ]
 
-function fakeHost(opts: Options): ControlHost {
+function fakeHost(opts: Options, apiUrl?: string): ControlHost {
   const done = async () => ({ ok: true, message: 'preview — nothing was performed' })
 
   // The output channel, in the shape `cli-stream.ts` implements for real.
@@ -326,7 +335,7 @@ function fakeHost(opts: Options): ControlHost {
   const act = opts.task === 'off' ? done : streamed
 
   return {
-    refresh: async () => fakeStatus(opts),
+    refresh: async () => fakeStatus(opts, apiUrl),
     start: act,
     connect: done,
     disconnect: done,
@@ -504,6 +513,104 @@ function withSearchText(rows: Array<Omit<ControlSession, 'searchText'>>): Contro
 }
 
 // ---------------------------------------------------------------------------
+// the dashboard's data
+// ---------------------------------------------------------------------------
+
+/**
+ * A day key `n` days back, so the sparkline has something to draw whenever this is run.
+ *
+ * Dates in the fixture are relative for the same reason the fleet's timestamps are: a hardcoded
+ * month would render an empty activity chart the moment it fell out of the 30-day window, and the
+ * preview would be reporting a layout problem the screen does not have.
+ */
+function dayKey(back: number): string {
+  const d = new Date(Date.now() - back * 24 * 60 * MINUTES)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function fakeSession(over: Record<string, unknown>): Record<string, unknown> {
+  return {
+    project_path: '/home/dev/agentistics', start_time: new Date(Date.now() - 3 * 60 * MINUTES).toISOString(),
+    duration_minutes: 24, user_message_count: 12, assistant_message_count: 14,
+    tool_counts: {}, tool_output_tokens: {}, agent_file_reads: {}, languages: [],
+    git_commits: 0, git_pushes: 0, input_tokens: 0, output_tokens: 0, first_prompt: '',
+    user_interruptions: 0, user_response_times: [], tool_errors: 0, tool_error_categories: {},
+    uses_task_agent: false, uses_mcp: false, uses_web_search: false, uses_web_fetch: false,
+    lines_added: 0, lines_removed: 0, files_modified: 0, message_hours: [], user_message_timestamps: [],
+    ...over,
+  }
+}
+
+/**
+ * An `AppData` shaped like a real machine's, and awkward on purpose.
+ *
+ * Claude's totals come from the statsCache and everything else from per-session sums — the rule
+ * `selectors.ts` exists to enforce — so the fixture carries BOTH, or the preview would never show a
+ * screen where the two sources meet. The long project path and the eleven-digit token counts are the
+ * two things that actually break a column.
+ */
+function dashboardData(): unknown {
+  return {
+    harnesses: ['claude', 'codex', 'gemini', 'kimi'],
+    liveSessionIds: ['s-live'],
+    projects: [],
+    allSessions: [],
+    statsCache: {
+      totalSessions: 1284, totalMessages: 41902,
+      lastComputedDate: dayKey(1),
+      dailyActivity: Array.from({ length: 30 }, (_, i) => ({
+        date: dayKey(29 - i),
+        messageCount: [0, 12, 340, 88, 512, 1204, 90][i % 7]!,
+        sessionCount: 3,
+      })),
+      dailyTokens: {},
+      dailyModelTokens: {},
+      modelUsage: {
+        'claude-opus-4-6': { inputTokens: 4_120_000, outputTokens: 812_000, cacheReadInputTokens: 903_400_000, cacheCreationInputTokens: 41_000_000 },
+        'claude-sonnet-4-6': { inputTokens: 2_004_000, outputTokens: 410_000, cacheReadInputTokens: 210_000_000, cacheCreationInputTokens: 9_800_000 },
+      },
+    },
+    sessions: [
+      fakeSession({ session_id: 's-live', harness: 'claude', model: 'claude-opus-4-6', title: 'wire the dashboard tab into the cockpit', input_tokens: 91_000, output_tokens: 12_400, cache_read_input_tokens: 8_100_000 }),
+      fakeSession({ session_id: 's-2', harness: 'codex', model: 'gpt-5.4', title: 'flaky test hunt', project_path: '/home/dev/prontuario/packages/front', input_tokens: 410_000, output_tokens: 61_000 }),
+      fakeSession({ session_id: 's-3', harness: 'kimi', model: 'gemini-3.5-flash-lite', title: 'rewrite the importer', project_path: '/home/dev/orgs/opvibes/embark', input_tokens: 1_200_000, output_tokens: 88_000 }),
+      fakeSession({ session_id: 's-4', harness: 'gemini', title: 'read the migration plan', project_path: '/home/dev/agentistics/.claude/worktrees/dashboard-tab', start_time: new Date(Date.now() - 26 * 60 * MINUTES).toISOString() }),
+      fakeSession({ session_id: 's-5', harness: 'claude', model: 'claude-sonnet-4-6', title: 'ledger reconciliation', project_path: '/home/dev/agentistics', start_time: new Date(Date.now() - 50 * 60 * MINUTES).toISOString(), input_tokens: 44_000, output_tokens: 9_100 }),
+    ],
+  }
+}
+
+/**
+ * A throwaway server answering the two endpoints the dashboard reads.
+ *
+ * The alternative was a `data` prop the tab accepts only for previews, which is a hole in the
+ * component's contract kept open for a dev script — and it would prove nothing about the path that
+ * actually ships. This exercises the real fetch, the real SSE handshake and the real "the server is
+ * up, here is its api URL" resolution.
+ */
+function serveFixture(): { apiBase: string; stop: () => void } {
+  const server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const { pathname } = new URL(req.url)
+      if (pathname === '/api/data') return Response.json(dashboardData())
+      if (pathname === '/api/events') {
+        // One SSE COMMENT and then silence. The comment is not politeness: a stream that enqueues
+        // nothing never flushes its headers, so `fetch` does not resolve and the screen is captured
+        // still saying `connecting` — a preview reporting a state the real server never shows. A
+        // single `\n` rather than the blank line an event ends with, so it is not read as one.
+        return new Response(
+          new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(': preview\n')) } }),
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      }
+      return new Response('not found', { status: 404 })
+    },
+  })
+  return { apiBase: `http://localhost:${server.port}`, stop: () => { void server.stop(true) } }
+}
+
+// ---------------------------------------------------------------------------
 // framing
 // ---------------------------------------------------------------------------
 
@@ -579,9 +686,13 @@ async function main(): Promise<void> {
   Object.defineProperty(process.stdout, 'columns', { value: opts.cols, configurable: true })
   Object.defineProperty(process.stdout, 'rows', { value: opts.rows, configurable: true })
 
+  // Only the dashboard reads over HTTP, so only it opens a port — every other screen is drawn from
+  // values the fake host returns directly, and a listener nobody uses is a listener that can fail.
+  const fixture = opts.screen === 'dashboard' ? serveFixture() : null
+
   const element = (
     <ControlCenter
-      host={fakeHost(opts)}
+      host={fakeHost(opts, fixture?.apiBase)}
       lang={opts.lang}
       initial={{ tab: opts.screen }}
       onExit={() => {}}
@@ -596,8 +707,10 @@ async function main(): Promise<void> {
   app.rerender(element)
 
   // The first frame is drawn before `refresh()` resolves, so it is the spinner. Waiting a beat is
-  // what makes the preview show the screen rather than its loading state.
-  await sleep(200)
+  // what makes the preview show the screen rather than its loading state. The dashboard waits
+  // longer: its status has to land BEFORE it knows which address to read, so it is two round trips
+  // rather than one.
+  await sleep(fixture ? 700 : 200)
 
   // One key per tick, with the app given time to settle between them: a question opens on a state
   // change, and a burst written in one chunk would be parsed as a single garbled sequence.
@@ -624,6 +737,7 @@ async function main(): Promise<void> {
   ].join('\n')
 
   app.unmount()
+  fixture?.stop()
   process.stdout.write(`${out}\n`)
   // Ink's spinner keeps an interval alive past the unmount; the frame is printed, so the only thing
   // left to do is leave rather than idle on a timer nobody is watching.
