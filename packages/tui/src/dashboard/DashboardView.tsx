@@ -1,0 +1,187 @@
+/**
+ * DashboardView — the metrics dashboard itself, drawn wherever it is asked for.
+ *
+ * ONE implementation, two entry points: `agentop tui` mounts it under its own full-screen chrome,
+ * and the control center's `dashboard` tab mounts it inside a `Pane`. Neither owns a screen, a
+ * column, a key or a budget of its own — a second copy of these five screens is the bug this repo
+ * has already paid for once (see `task-reopen.ts`), and it would show up here as the two surfaces
+ * quietly disagreeing about what a session cost.
+ *
+ * What it does NOT do is fetch. The data arrives as a prop, because the two callers get it from
+ * genuinely different places: full-screen, `agentop tui` starts a server if none is listening; inside
+ * the control center, the server is the thing the screen next door starts and stops, so the tab reads
+ * the address the host already reported and says so in words when there is nothing to read. Absence
+ * is stated, never rendered as a zero.
+ */
+
+import React from 'react'
+import { Box, Text } from 'ink'
+import type { AppData, HarnessId } from '@agentistics/core'
+import { calcStreak } from '@agentistics/core'
+import { Overview } from '../screens/Overview'
+import { Projects } from '../screens/Projects'
+import { History } from '../screens/History'
+import { Costs } from '../screens/Costs'
+import { Harnesses } from '../screens/Harnesses'
+import { FilterOverlay } from '../overlays/Overlays'
+import { sessionHarness } from '../selectors'
+import { Divider } from '../control/Surface'
+import { fitsBeside, sourceRowText } from '../control/surface.ts'
+import { ACTION_SEP } from '../control/chrome.ts'
+import { COLORS } from '../theme'
+import type { TuiStrings } from '../i18n'
+import type { ConnectionState } from '../data/useAppData'
+import { DASHBOARD_SCREENS, dashboardRows, stripFit } from './view'
+import type { DashboardNav } from './useDashboardNav'
+
+/**
+ * Restricts an AppData to one harness, so every screen can stay filter-unaware.
+ *
+ * Claude's totals live in the statsCache and every other harness's live in the session list, so
+ * filtering has to act on BOTH: selecting a non-Claude harness must blank the cache, or the
+ * Claude numbers would survive the filter and be attributed to the selection.
+ */
+export function applyHarnessFilter(data: AppData, harness: HarnessId | null): AppData {
+  if (!harness) return data
+  return {
+    ...data,
+    harnesses: (data.harnesses ?? []).filter(h => h === harness),
+    sessions: (data.sessions ?? []).filter(s => sessionHarness(s) === harness),
+  }
+}
+
+export interface DashboardViewProps {
+  /** `null` while nothing has been read yet — a different sentence from "there is nothing". */
+  data: AppData | null
+  s: TuiStrings
+  width: number
+  height: number
+  nav: DashboardNav
+  connection: ConnectionState
+  /**
+   * Already-localized sentence to show INSTEAD of the screens.
+   *
+   * Its presence is the statement: the server is not running, or its state could not be read. A
+   * dashboard that drew zeros in that situation would be answering a question it cannot answer.
+   */
+  notice?: string
+}
+
+export function DashboardView({ data, s, width, height, nav, connection, notice }: DashboardViewProps) {
+  const rows = dashboardRows(height)
+  const fit = stripFit(s, nav.screen, width)
+
+  const view = data ? applyHarnessFilter(data, nav.harness) : null
+  const activeDates = new Set((data?.statsCache?.dailyActivity ?? []).map(d => d.date))
+  const streak = calcStreak(activeDates)
+
+  // The filter is a panel over the body rather than a screen of its own, so it takes the body's rows
+  // and the strip above it keeps saying where you are.
+  const body = nav.filter
+    ? <FilterOverlay s={s} options={nav.filter.options} selected={nav.filter.index} max={rows.body - FILTER_CHROME} />
+    : notice
+      ? <Box marginTop={1}><Text color={COLORS.muted}>{notice}</Text></Box>
+      : !view
+        ? <Box marginTop={1}><Text color={COLORS.accent}>{s.loading}…</Text></Box>
+        : <Screen id={nav.screen} data={view} s={s} width={width} height={rows.body} streak={streak} />
+
+  return (
+    // `flexShrink={0}`: the budget above is this view's contract with whatever frames it, and a Box
+    // that shrinks would spend the same rows again on Yoga's terms — which Ink composites rather
+    // than clips.
+    <Box flexDirection="column" width={width} flexShrink={0}>
+      {rows.strip ? (
+        <StripRow
+          fit={fit}
+          screen={nav.screen}
+          // A notice means there is no address to read from, so there is no connection to describe.
+          // `connecting` under a sentence saying the server is not running would be the frame
+          // contradicting itself — and it is the half a reader would believe.
+          connection={notice ? null : connection}
+          s={s}
+          width={width}
+        />
+      ) : null}
+      {rows.divider ? <Divider width={width} /> : null}
+      {body}
+    </Box>
+  )
+}
+
+function Screen({ id, data, s, width, height, streak }: {
+  id: DashboardNav['screen']
+  data: AppData
+  s: TuiStrings
+  width: number
+  height: number
+  streak: number
+}) {
+  switch (id) {
+    case 'overview': return <Overview data={data} s={s} width={width} height={height} streak={streak} />
+    case 'projects': return <Projects data={data} s={s} width={width} height={height} />
+    case 'history': return <History data={data} s={s} width={width} height={height} />
+    case 'costs': return <Costs data={data} s={s} width={width} height={height} />
+    case 'harnesses': return <Harnesses data={data} s={s} width={width} height={height} />
+  }
+}
+
+/**
+ * The screen strip, with the connection state on the right — the log viewer's source row, applied to
+ * the one other screen in this app that is a selector over a viewport.
+ *
+ * The connection is here rather than in the frame's badge for a reason: full-screen and inside a
+ * pane, this row is the only chrome the dashboard reliably has, and "is this live" is the fact that
+ * decides whether the numbers under it can be trusted. It is said with a GLYPH as well as a word, so
+ * a terminal that flattens the palette loses only the emphasis.
+ */
+function StripRow({ fit, screen, connection, s, width }: {
+  fit: ReturnType<typeof stripFit>
+  screen: DashboardNav['screen']
+  /** `null` when there is nothing to be connected TO — the row then says nothing about it. */
+  connection: ConnectionState | null
+  s: TuiStrings
+  width: number
+}) {
+  const at = DASHBOARD_SCREENS.indexOf(screen)
+  const dot = connection ? CONNECTION[connection] : null
+  const right = dot ? `● ${s[dot.label]}` : ''
+
+  return (
+    <Box flexDirection="row" width={width} justifyContent="space-between">
+      <Box flexDirection="row" flexShrink={0}>
+        <Text dimColor bold>{fit.label ? fit.label + '  ' : ''}</Text>
+        <Text>{'  '}</Text>
+        {fit.labels.map((cell, i) => {
+          const active = fit.from + i === at
+          return (
+            <Text key={cell} color={active ? COLORS.accent : undefined} dimColor={!active}>
+              {i > 0 ? ACTION_SEP : ''}
+              {/* Underlined as well as accented, the same way the cockpit's action row marks the
+                  verb it would run: which cell is selected must survive a flattened palette. */}
+              <Text bold={active} underline={active}>{cell}</Text>
+            </Text>
+          )
+        })}
+      </Box>
+      {dot && fitsBeside(sourceRowText(fit), right, width) && (
+        <Text color={dot.color}>{dot.glyph} <Text dimColor>{s[dot.label]}</Text></Text>
+      )}
+    </Box>
+  )
+}
+
+/**
+ * The filter panel's own rows: the blank above it, its two borders, its title, and the blank plus
+ * the hint under the list. Counted rather than guessed — every one of them is a row the list does
+ * not have, and the last one is the line naming the keys that close it.
+ */
+const FILTER_CHROME = 6
+
+/** Glyph, colour and word per connection state — never colour alone. */
+const CONNECTION: Record<ConnectionState, { glyph: string; color: string; label: 'live' | 'connecting' | 'offline' }> = {
+  live: { glyph: '●', color: COLORS.success, label: 'live' },
+  // Polling IS live data, just slower; saying "polling" would name an implementation detail.
+  polling: { glyph: '●', color: COLORS.accent, label: 'live' },
+  connecting: { glyph: '○', color: COLORS.muted, label: 'connecting' },
+  offline: { glyph: '○', color: COLORS.danger, label: 'offline' },
+}
