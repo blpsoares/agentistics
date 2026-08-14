@@ -1380,3 +1380,56 @@ export function scrollBar(o: { offset: number; total: number; rows: number }): s
   // legible without competing with the frame it sits inside.
   return Array.from({ length: rows }, (_, i) => (i >= top && i < top + thumb ? THUMB : TRACK))
 }
+
+// ---------------------------------------------------------------------------
+// the new-session wizard's last step
+// ---------------------------------------------------------------------------
+
+/** What the wizard has collected so far. Only two of them are required to start anything. */
+export interface SessionDraft {
+  harness?: { id: string; supportsModel?: boolean }
+  cwd?: string
+  task?: string
+  prompt?: string
+  model?: string
+  effort?: string
+}
+
+export type SubmitPlan =
+  | { ok: true; req: { harness: string; cwd: string; attach: boolean } & Record<string, unknown> }
+  /** `step` is where the missing answer is given, so a refusal is a way BACK rather than a dead end. */
+  | { ok: false; reason: 'no-host' | 'no-harness' | 'no-cwd'; step?: 'harness' | 'where' }
+
+/**
+ * What pressing the last `enter` of the wizard should do — PURE.
+ *
+ * It exists because the component's version returned SILENTLY when it had nothing to spawn with:
+ * `if (!spawn || !draft.harness || !draft.cwd) return`. The final keystroke of a six-step wizard
+ * did nothing at all, with no way to tell a dead key from a slow one — and the prompt someone had
+ * just typed was still on screen, about to be thrown away by whatever they pressed next.
+ *
+ * Every refusal now NAMES itself and, where there is one, names the step that takes the missing
+ * answer. The caller reports it and stays put; nothing typed is discarded.
+ */
+export function planSubmit(o: {
+  draft: SessionDraft
+  hasSpawn: boolean
+  attach: boolean
+}): SubmitPlan {
+  if (!o.hasSpawn) return { ok: false, reason: 'no-host' }
+  if (!o.draft.harness) return { ok: false, reason: 'no-harness', step: 'harness' }
+  if (!o.draft.cwd) return { ok: false, reason: 'no-cwd', step: 'where' }
+  return {
+    ok: true,
+    req: {
+      harness: o.draft.harness.id,
+      cwd: o.draft.cwd,
+      attach: o.attach,
+      // Only what was actually answered travels: an empty model is not a model called "".
+      ...(o.draft.model ? { model: o.draft.model } : {}),
+      ...(o.draft.effort ? { effort: o.draft.effort } : {}),
+      ...(o.draft.prompt ? { prompt: o.draft.prompt } : {}),
+      ...(o.draft.task ? { task: o.draft.task } : {}),
+    },
+  }
+}

@@ -96,6 +96,8 @@ interface Options {
    * so it takes a start to reach it (`--keys enter,right,enter` on a stopped service).
    */
   pending: boolean
+  /** Make the fake host REFUSE to spawn, which is the wizard's failure path. */
+  failSpawn: boolean
 }
 
 const USAGE = `
@@ -117,11 +119,14 @@ const USAGE = `
                             reach it with --keys enter,enter
     --pending               history consent still unanswered, so a start opens the
                             gate: --pending --keys enter,right,enter
+    --fail-spawn            the new-session wizard's spawn is refused, so its failure
+                            path is drawn: --fail-spawn --keys a,enter,enter,enter,enter,enter,enter
 `
 
 function parseArgs(argv: string[]): Options {
   const opts: Options = {
-    cols: 100, rows: 34, lang: 'en', screen: 'services', mode: 'solo', keys: [], task: 'off', pending: false,
+    cols: 100, rows: 34, lang: 'en', screen: 'services', mode: 'solo', keys: [], task: 'off',
+    pending: false, failSpawn: false,
   }
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]
@@ -132,6 +137,7 @@ function parseArgs(argv: string[]): Options {
       case '--lang': opts.lang = value === 'pt' ? 'pt' : 'en'; i++; break
       case '--keys': opts.keys = value.split(',').filter(Boolean); i++; break
       case '--pending': opts.pending = true; break
+      case '--fail-spawn': opts.failSpawn = true; break
       case '--task':
         opts.task = value === 'done' ? 'done' : 'running'
         i++
@@ -352,7 +358,11 @@ function fakeHost(opts: Options): ControlHost {
     ],
     searchProjects: async (query: string) => FAKE_PROJECTS
       .filter(p => p.label.toLowerCase().includes(query.trim().toLowerCase())),
-    spawnSession: async () => ({ ok: true, message: 'preview — nothing was performed' }),
+    // `--fail-spawn` drives the wizard's REFUSAL path, which is the one that used to eat the
+    // prompt: it closed the wizard and put the reason on a status line one row tall.
+    spawnSession: async () => (opts.failSpawn
+      ? { ok: false, message: 'tmux recusou: sessão duplicada' }
+      : { ok: true, message: 'preview — nothing was performed' }),
   }
 }
 

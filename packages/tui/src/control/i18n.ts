@@ -329,6 +329,13 @@ export interface ControlStrings {
   wizPrompt: string
   wizPromptHint: string
   wizHow: string
+  /** Said while the session is being started, so `enter` is visibly doing something. */
+  wizStarting: string
+  /** Said under a failure: nothing you typed was thrown away. */
+  wizKeptDraft: string
+  wizNoSpawn: string
+  wizNeedHarness: string
+  wizNeedCwd: string
   wizAttached: string
   wizBackground: string
   wizSkip: string
@@ -637,6 +644,11 @@ const EN: ControlStrings = {
   wizPrompt: 'First prompt (optional)',
   wizPromptHint: 'leave empty to start with nothing typed',
   wizHow: 'Start it how?',
+  wizStarting: 'starting…',
+  wizKeptDraft: 'nothing you typed was lost — esc goes back a step, or try again',
+  wizNoSpawn: 'this build cannot start sessions.',
+  wizNeedHarness: 'pick an assistant first.',
+  wizNeedCwd: 'pick a folder first.',
   wizAttached: 'attached — take this terminal now',
   wizBackground: 'background — keep it running and stay here',
   wizSkip: 'use the default',
@@ -936,6 +948,11 @@ const PT: ControlStrings = {
   wizPrompt: 'Primeiro prompt (opcional)',
   wizPromptHint: 'deixe vazio para começar sem nada digitado',
   wizHow: 'Iniciar como?',
+  wizStarting: 'iniciando…',
+  wizKeptDraft: 'nada do que você digitou foi perdido — esc volta um passo, ou tente de novo',
+  wizNoSpawn: 'esta build não consegue iniciar sessões.',
+  wizNeedHarness: 'escolha um assistente primeiro.',
+  wizNeedCwd: 'escolha uma pasta primeiro.',
   wizAttached: 'anexada — assume este terminal agora',
   wizBackground: 'background — deixa rodando e fica aqui',
   wizSkip: 'usar o padrão',
