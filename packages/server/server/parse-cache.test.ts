@@ -177,6 +177,32 @@ describe('openParseCache', () => {
     c.close()
   })
 
+  test('getAny serves the last cached value regardless of version', async () => {
+    // The source file may be GONE by the time a caller comes back for it — Claude's
+    // 30-day transcript cleanup can delete it between the build that cached the
+    // parse and the one reading it now. There is nothing left to check freshness
+    // against, so getAny answers from whatever was last stored, ignoring the key.
+    const c = await openParseCache(await tempDb())
+    c.set('session', stamp({ size: 100 }), { v: 1 })
+    expect(c.getAny<{ v: number }>('session', stamp().path)).toEqual({ v: 1 })
+    c.close()
+  })
+
+  test('getAny on a slot never written is a miss', async () => {
+    const c = await openParseCache(await tempDb())
+    expect(c.getAny('session', '/never/written.jsonl')).toBeNull()
+    c.close()
+  })
+
+  test('getAny does not cross kind or variant', async () => {
+    const c = await openParseCache(await tempDb())
+    c.set('session', stamp(), { which: 'session' })
+    c.set('enrich', stamp(), { which: 'enrich' }, 'claude-opus-4-6')
+    expect(c.getAny('enrich', stamp().path)).toBeNull()
+    expect(c.getAny<{ which: string }>('enrich', stamp().path, 'claude-opus-4-6')).toEqual({ which: 'enrich' })
+    c.close()
+  })
+
   test('a corrupt value is a miss, not a crash', async () => {
     // The blob is JSON written by an older build. A shape change or a truncated
     // write must degrade to "recompute it", exactly like an absent row.
@@ -205,6 +231,7 @@ describe('NOOP_PARSE_CACHE', () => {
     const c: ParseCache = NOOP_PARSE_CACHE
     c.set('session', stamp(), { v: 1 })
     expect(c.get('session', stamp())).toBeNull()
+    expect(c.getAny('session', stamp().path)).toBeNull()
     expect(() => { c.flush(); c.close() }).not.toThrow()
   })
 })

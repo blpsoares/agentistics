@@ -2,7 +2,7 @@ import { join } from 'path'
 import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId, WorkflowRun } from '@agentistics/core'
 import { mergeStatsCaches, sessionDay, sanitizeStatsCache, normalizeSessionTimes } from '@agentistics/core'
-import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER } from './config'
+import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER, PARSE_CACHE_ENABLED } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
 import { planProjectFacts, applyProjectFacts, type ResolvedFacts } from './project-facts'
@@ -14,6 +14,8 @@ import { activeMinutesFromClaudeJsonl, parseSessionJsonl } from './jsonl'
 import type { MachineInfo } from './team-tokens'
 import { runHealthChecks, analyzeToolHealthIssues, analyzeCacheStaleness } from './health'
 import { extractAgentMetricsFromFile } from './agent-metrics'
+import { openParseCache, NOOP_PARSE_CACHE, type ParseCache } from './parse-cache'
+import { cachedParseSession } from './parse-cache-jsonl'
 
 /** Extract the model ID from a JSONL file by reading only the first assistant message.
  *  Skips `<synthetic>` — Claude Code sentinel for system-generated turns, not a real model. */
@@ -159,7 +161,8 @@ async function scanProjectDir(
   rootDirPaths: string[],
   knownIds: Set<string>,
   metaMap: Map<string, SessionMeta>,
-  fileLimit: ReturnType<typeof createLimiter>
+  fileLimit: ReturnType<typeof createLimiter>,
+  cache: ParseCache
 ): Promise<{ project: ServerProject; extraSessions: SessionMeta[]; workflowRuns: WorkflowRun[] } | null> {
   // Fallback path (ambiguous for dir names that contain dashes)
   const fallbackPath = decodeProjectDir(projDir)
@@ -204,7 +207,7 @@ async function scanProjectDir(
       }
 
       if (!knownIds.has(sessionId)) {
-        const session = await fileLimit(() => parseSessionJsonl(filePath, sessionId, fallbackPath, 'jsonl'))
+        const session = await fileLimit(() => cachedParseSession(cache, filePath, sessionId, fallbackPath, 'jsonl'))
         cwdCounts[session.project_path] = (cwdCounts[session.project_path] ?? 0) + 1
         extraSessions.push(session)
       } else if (metaEntry && (!metaEntry.model || metaEntry.active_minutes === undefined
@@ -302,7 +305,7 @@ async function scanProjectDir(
     if (agentFiles.length > 0) {
       const agentFilePath = join(subagentsDir, agentFiles[0]!)
       if (!knownIds.has(sessionId)) {
-        const session = await fileLimit(() => parseSessionJsonl(agentFilePath, sessionId, fallbackPath, 'subdir'))
+        const session = await fileLimit(() => cachedParseSession(cache, agentFilePath, sessionId, fallbackPath, 'subdir'))
         created = session.start_time
         cwdCounts[session.project_path] = (cwdCounts[session.project_path] ?? 0) + 1
         extraSessions.push(session)
@@ -397,6 +400,7 @@ export async function scanProjects(
   metaMap: Map<string, SessionMeta>,
   roots: string[] = [PROJECTS_DIR],
   onProjectComplete?: (completed: number, total: number) => void,
+  cache: ParseCache = NOOP_PARSE_CACHE,
 ): Promise<ScanResult> {
   // Separate limiter just for file reads (not project dir traversal)
   const fileLimit = createLimiter(30)
@@ -418,7 +422,7 @@ export async function scanProjects(
   // Process project dirs in parallel (they mostly do readdirs + parallel file reads)
   const results = await Promise.all(
     dirEntries.map(([projDir, rootDirPaths]) =>
-      scanProjectDir(projDir, rootDirPaths, knownIds, metaMap, fileLimit).then(r => {
+      scanProjectDir(projDir, rootDirPaths, knownIds, metaMap, fileLimit, cache).then(r => {
         completed++
         onProjectComplete?.(completed, total)
         return r
@@ -713,12 +717,21 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
 
     onProgress('projects', 0)
     const knownIds = new Set(metaMap.keys())
+    const parseCache = PARSE_CACHE_ENABLED ? await openParseCache() : NOOP_PARSE_CACHE
     const { projects, extraSessions, workflowRuns: collectedWorkflowRuns } = await scanProjects(
       knownIds,
       metaMap,
       projectRoots,
       (done, total) => onProgress('projects', total > 0 ? done / total : 1),
+      parseCache,
     )
+    // Mark everything read this build as live, then drop rows for files not seen in 30
+    // days — Claude deletes transcripts at 30 days by default, so their rows are dead
+    // weight after that. The cache is derived state: dropping too much costs one
+    // reparse, dropping too little costs disk. Neither can cost a wrong number.
+    parseCache.flush()
+    parseCache.gc(Date.now() - 30 * 24 * 60 * 60 * 1000)
+    parseCache.close()
     onProgress('projects', 1, String(projects.length))
     // Every path the Claude walk has already asked git about — including the ones that turned out
     // not to be repositories. `resolveProjectFacts` below skips these rather than re-reading them.
