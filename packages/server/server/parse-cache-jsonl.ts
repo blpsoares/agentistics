@@ -1,6 +1,6 @@
 import { readFile } from 'fs/promises'
 import type { SessionMeta, SessionAgentMetrics } from '@agentistics/core'
-import { parseSessionJsonl, activeMinutesFromClaudeJsonl } from './jsonl'
+import { parseSessionJsonl, activeMinutesFromClaudeJsonl, contextTokensFromClaudeJsonl } from './jsonl'
 import { extractAgentMetrics } from './agent-metrics'
 import { safeStat } from './utils'
 import type { ParseCache } from './parse-cache'
@@ -54,15 +54,34 @@ export async function cachedParseSession(
 }
 
 /** Everything `scanProjectDir` needs from a transcript whose session already exists in
- *  Claude's own session-meta — which carries none of the three. */
+ *  Claude's own session-meta — which carries none of it. */
 export interface EnrichResult {
   /** The first assistant model id in the transcript, or null when there is none. */
   model: string | null
   /** Per-turn active time; null when the transcript has no usable timing. */
   activeMinutes: number | null
+  /** Context-window gauge at the last turn; null when the transcript has none. */
+  contextTokens: number | null
   /** Agent metrics, or null when the session invoked no agent. */
   agentMetrics: SessionAgentMetrics | null
 }
+
+/**
+ * The SHAPE of `EnrichResult`, folded into the cache variant.
+ *
+ * A stored row is a JSON blob of whatever `EnrichResult` looked like when it was
+ * written. Adding a field — `contextTokens` was added exactly this way, when
+ * `contextTokensFromClaudeJsonl` landed on dev — leaves every existing row missing it,
+ * and those rows keep HITTING because the file they name has not changed. For a
+ * finished session the transcript never changes again, so the new metric would read as
+ * blank forever on precisely the sessions that already have data.
+ *
+ * Bumping this retires every old row at once: they stop matching, get recomputed, and
+ * `gc()` drops the originals. **Bump it whenever a field is added to, removed from, or
+ * changed in `EnrichResult`.** Costs one slow build; the alternative is a metric that
+ * is silently blank and looks like missing data rather than a stale cache.
+ */
+const ENRICH_SHAPE = 'v2'
 
 /** The first `claude-*` model in the transcript's opening 200 lines — the same scan
  *  `scanProjectDir` did inline, kept identical on purpose. */
@@ -82,15 +101,17 @@ function deriveModel(lines: string[]): string | null {
 /**
  * The whole enrichment of one transcript, cached as a unit.
  *
- * All three values are computed on a miss even when the caller needs only one. That is
+ * Every value is computed on a miss even when the caller needs only one. That is
  * deliberate: the read and the `split('\n')` dominate, they happen once per file
- * VERSION rather than once per build, and computing the triple removes the three
- * separate cache identities the conditional version would need.
+ * VERSION rather than once per build, and computing them together removes the separate
+ * cache identities the conditional version would need.
  *
- * `metaModel` is the VARIANT because `extractAgentMetrics` prices against it, so it
- * changes the result without being in the file. The effective id is `metaModel ||
- * derived`, preserving the inline order exactly: the old code set `metaEntry.model`
- * from the transcript BEFORE passing `metaEntry.model` to extractAgentMetrics.
+ * The VARIANT is `ENRICH_SHAPE` plus `metaModel`. `metaModel` belongs there because
+ * `extractAgentMetrics` prices against it, so it changes the result without being in
+ * the file; the effective id is `metaModel || derived`, preserving the inline order
+ * exactly (the old code set `metaEntry.model` from the transcript BEFORE passing
+ * `metaEntry.model` to extractAgentMetrics). `ENRICH_SHAPE` belongs there because a
+ * stored row is only readable by the code that wrote it — see its comment.
  *
  * Returns null when the file is gone or empty — the same "nothing to say" the inline
  * block expressed by returning early, never a zeroed result that would read as a
@@ -104,7 +125,8 @@ export async function cachedEnrich(
   const stamp = await stampOf(filePath)
   if (!stamp) return null
 
-  const hit = cache.get<EnrichResult>('enrich', stamp, metaModel)
+  const variant = `${ENRICH_SHAPE}:${metaModel}`
+  const hit = cache.get<EnrichResult>('enrich', stamp, variant)
   if (hit) return hit
 
   const content = await readFile(filePath, 'utf-8').catch(() => '')
@@ -116,8 +138,9 @@ export async function cachedEnrich(
   const result: EnrichResult = {
     model,
     activeMinutes: activeMinutesFromClaudeJsonl(lines) ?? null,
+    contextTokens: contextTokensFromClaudeJsonl(lines) ?? null,
     agentMetrics: metrics.totalInvocations > 0 ? metrics : null,
   }
-  cache.set('enrich', stamp, result, metaModel)
+  cache.set('enrich', stamp, result, variant)
   return result
 }

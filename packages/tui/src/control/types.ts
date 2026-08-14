@@ -9,11 +9,24 @@
 
 import type { CliLang } from './lang'
 
-export type TabId = 'services' | 'sessions' | 'setup' | 'logs' | 'cheatsheet' | 'help' | 'contribute'
+export type TabId =
+  | 'services'
+  | 'sessions'
+  /** The metrics dashboard — the whole of what `agentop tui` shows, as a screen of this app. */
+  | 'dashboard'
+  | 'setup'
+  | 'logs'
+  | 'cheatsheet'
+  | 'help'
+  | 'contribute'
 
+// Operations first (what is running, and what you can do to it), then the numbers, then the
+// machine's own configuration, then the documentation. The dashboard sits where it does because it
+// answers a question about the same work the two screens before it are managing.
 export const TAB_ORDER: readonly TabId[] = [
   'services',
   'sessions',
+  'dashboard',
   'setup',
   'logs',
   'cheatsheet',
@@ -338,8 +351,21 @@ export interface ControlSession {
    * and `agentistics`, which files one project as three. It is a SEPARATE field from `project`
    * because the row must still say which directory it is actually in: with several worktrees open
    * at once, the folder cell is the only thing telling them apart.
+   *
+   * It is also where a row whose directory is GONE and whose repository was never recorded is filed:
+   * the host puts an already-localized sentence here rather than a name, because the alternative is
+   * grouping under the last segment of a path that resolves to nothing — which is how a removed
+   * worktree appeared as a project of its own beside the project it was a worktree of.
    */
   projectGroup?: string
+  /**
+   * Already-localized: this row's directory does not exist on this machine any more.
+   *
+   * Present whether or not the repository was recovered from what the registry recorded, because
+   * the two are different facts — one says which project the work belonged to, this one says the
+   * path is not there, which is also the answer to "why can I not reopen it".
+   */
+  dirGone?: string
   /** True only for a LINKED worktree. Said on the row, because it changes what the row IS. */
   worktree?: boolean
   /**
@@ -354,6 +380,22 @@ export interface ControlSession {
   note?: string
   /** The piece of work this session belongs to, when the user said so. Groups the list. */
   task?: string
+  /**
+   * The harness's own conversation id this row is KNOWN to be writing — what `--resume` takes.
+   *
+   * The exact answer to "where does this continue from", and the only one this screen may state:
+   * it is recorded, never inferred. Absent on a row started before the id could be recorded, and on
+   * every row of a harness that cannot report one — see `conversationBlind`.
+   */
+  conversationId?: string
+  /**
+   * Already-localized: this harness can never report which conversation a session it started is
+   * writing, so no link can be recorded for this row and anything offered to reopen is inferred.
+   *
+   * Present only on a hosted row that has no `conversationId`. Same discipline as `approvalBlind`:
+   * a capability that does not exist is said in words rather than left to look like an absence.
+   */
+  conversationBlind?: string
   /**
    * The conversation this row could REOPEN, when there is one.
    *
@@ -388,6 +430,26 @@ export interface ControlSession {
    */
   canApprove?: boolean
   /**
+   * The OPTIONS the dialog is offering, when its screen could be read with confidence.
+   *
+   * Present only on a blocked row, and ABSENT rather than invented when the screen cannot be
+   * parsed. Its presence changes what "answering" means: with options there is no such thing as
+   * approving, only choosing one of them, and the UI must show them and send the one picked.
+   *
+   * The case this exists for is real and was reported: a session asking "how should I promote to
+   * prod?" with four different answers, in front of a key called `approve` that would have silently
+   * taken whichever was highlighted.
+   */
+  dialogOptions?: Array<{ number: number; label: string; selected: boolean }>
+  /**
+   * Whether the user may pick one of `dialogOptions` from here.
+   *
+   * False when this harness has no verified way to select an option by number (`approval-spec.ts`).
+   * There is deliberately NO fallback to the confirm key in that case: confirming the highlighted
+   * row on a dialog somebody is being shown four answers to is choosing for them.
+   */
+  canChoose?: boolean
+  /**
    * Why approving is unavailable HERE, already localized — present only when the session is blocked
    * and nobody has read this harness's dialog.
    *
@@ -395,6 +457,14 @@ export interface ControlSession {
    * and a verb that vanished without a word reads as the feature being broken.
    */
   approveBlind?: string
+  /**
+   * Why the options on screen cannot be answered from here, already localized — present only when
+   * there ARE options and this harness has no verified way to pick one.
+   *
+   * A refusal that names its reason is usable: it tells someone to attach, which works. A verb that
+   * quietly picks for them is not.
+   */
+  chooseBlind?: string
   /**
    * This session was taken by the machine along with the others, and comes back with them.
    *
@@ -406,6 +476,28 @@ export interface ControlSession {
   tokens?: string
   /** Already-formatted cost, same. */
   cost?: string
+  /**
+   * How full this session's context window was on its last turn — ABSENT when it cannot be known.
+   *
+   * Absent covers three different situations that the screen deliberately does not distinguish,
+   * because the honest rendering of all three is the same nothing: the harness reports no per-turn
+   * context size (`HARNESS_CAPABILITIES.contextWindow`), the model's window is not in the verified
+   * table, or the row has no conversation behind it at all. A `0%` in any of those places is a
+   * confident answer to a question nobody could answer — the same rule the metrics cell follows.
+   *
+   * `fraction` can exceed 1: a session really can send more than the window this table names (see
+   * `contextWindows.ts` on Claude Code's smaller session cap), and the bar saturates while the
+   * label keeps saying the true number rather than pinning it at 100%.
+   */
+  context?: {
+    /** Used / window. Unclamped — see above. */
+    fraction: number
+    /** The percentage as a word, e.g. `45%`. Already localized-agnostic (digits + `%`). */
+    label: string
+    /** Both halves, already formatted, for the detail pane: `455.4k` and `1M`. */
+    used: string
+    window: string
+  }
   /** Everything this row can be found by, already lowercased — including a closed conversation's
    *  opening prompt, which is what a person remembers about work they put down. */
   searchText: string
@@ -527,6 +619,30 @@ export const DEFAULT_SESSION_VIEW: SessionViewPrefs = {
   layout: 'list',
 }
 
+/**
+ * A session the machine lost that could be started again — see `planRestore`.
+ *
+ * Offered ONCE, on the run after everything went down, and never while anything is still running:
+ * a machine with live sessions did not lose everything, and a modal that greets an ordinary restart
+ * is a modal people learn to dismiss without reading.
+ */
+export interface RestoreCandidate {
+  id: string
+  /** Already-composed name: the user's own when there is one, else the conversation's. */
+  label: string
+  harness: string
+  /** The last path segment, for a list that has to stay narrow. */
+  project: string
+  /**
+   * When it started, epoch ms — absent when the registry's timestamp is unreadable.
+   *
+   * An instant rather than a duration, like every other time this contract carries: the screen
+   * repaints far more often than the poll runs, so a duration computed here would freeze at
+   * whatever it was when the host last looked.
+   */
+  startedAt?: number
+}
+
 export interface ControlSessions {
   sessions: ControlSession[]
   /** How many are waiting on a person. Drives the header counter, from every tab. */
@@ -564,6 +680,24 @@ export interface ControlSessions {
    * legitimate thing to offer, and an offer that does not say when reads as one that just happened.
    */
   fell?: { count: number; atMs: number }
+  /**
+   * The SAME fall, named row by row, for the offer made on the way in.
+   *
+   * `fell` is the count and the instant — enough for the summary row, the section heading and the
+   * menu verb. This is the list a person reads to DECIDE, and a count cannot be decided on: three
+   * sessions in a repository you have finished with and one you were in the middle of are the same
+   * "4" on screen.
+   *
+   * Both come from ONE selection (`planCrashGroup`), and that is the point of them being two fields
+   * rather than two questions: a second answer to "what fell" is a second set of rules, which is
+   * the bug `task-reopen.ts` exists to have fixed once.
+   *
+   * Narrower than `fell` by exactly one rule: a row whose conversation does not resolve is dropped
+   * here, because this list is CLICKABLE and a row that cannot be reopened is a button that fails.
+   * It stays inside `fell`, where the reopen counts it as skipped rather than pretending it never
+   * fell.
+   */
+  restorable?: RestoreCandidate[]
 }
 
 export type TeamMode = 'solo' | 'central' | 'member'
@@ -603,6 +737,21 @@ export interface ActionResult {
 export interface ControlHost {
   /** Re-detect config + services. Must never throw; failures come back as `unknown` services. */
   refresh(): Promise<ControlStatus>
+  /**
+   * What the host ALREADY knows, synchronously, or `null` on the very first look.
+   *
+   * `refresh()` shells out to systemd and to docker, so it takes about a second — and attach and
+   * detach are two halves of one gesture, so every detach REMOUNTS this app and starts that second
+   * over. Whatever the screen cannot know during it is drawn from defaults, and for the sessions
+   * list that means the arrangement someone chose is replaced by the shipped one and then swapped
+   * back in front of them: a frame that is not merely incomplete but WRONG about a choice the user
+   * made. This is the same answer as the fleet poll's — the previous truth beats a confident
+   * default — and `refresh()` runs anyway, on the frame after.
+   *
+   * The host is what survives the remount (`runStart` creates it once, outside the loop), so it is
+   * the only place this can live.
+   */
+  lastStatus?(): ControlStatus | null
 
   /**
    * Start one runtime — normally a `StartOption` handed straight back.
@@ -746,17 +895,20 @@ export interface ControlHost {
   promptSession?(id: string, text: string): Promise<ActionResult>
 
   /**
-   * Press the key that takes the option this session's dialog is HIGHLIGHTING.
+   * Answer the dialog this session is blocked on.
    *
-   * Not "approve", and the contract says so on purpose: no CLI here reports which option is
-   * selected, so what this sends is a keystroke and what it confirms is whatever is on the screen.
-   * That is why `ControlSession.approvalLines` exists and why the confirmation must show it.
+   * `choice` is the option NUMBER to pick, and it is the whole point of this signature: a dialog
+   * offering "only my fix / promote everything / stop here / type something" has no approval, and a
+   * verb that took the highlighted row would be choosing between four different outcomes on the
+   * user's behalf. Omitted only for a dialog with no readable options — the codex-shaped
+   * `Press enter to continue`, where there genuinely is nothing to choose between — and the host
+   * then sends the confirm key.
    *
    * The host re-reads the frame immediately before sending and refuses when the session is no longer
-   * asking — a snapshot is up to five seconds old, and an unconditional Enter into a session that
-   * has moved on is a blank turn at best.
+   * asking, or when the options on screen no longer match what the user was shown. A snapshot is up
+   * to five seconds old, and an answer to a question that has changed is worse than no answer.
    */
-  approveSession?(id: string): Promise<ActionResult>
+  answerSession?(id: string, choice?: number): Promise<ActionResult>
 
   /**
    * Reopen every session of the last fall, in the background.
@@ -808,6 +960,16 @@ export interface ControlHost {
    * way the moment two things happen between polls.
    */
   finishTask?(task: string, done: boolean): Promise<ActionResult>
+
+  /**
+   * Start the offered sessions again, detached, or decline them.
+   *
+   * DECLINING is not a no-op: it retires the rows it was offered (`endedAt`), because "no" here
+   * means the work is over. Without that the same modal greets you on the next run and the run
+   * after, which is how a prompt becomes something people clear without reading — and the rows
+   * stay listed and individually reopenable either way, so nothing is destroyed by saying no.
+   */
+  restoreSessions?(ids: string[], accept: boolean): Promise<ActionResult>
 
   /**
    * The harnesses this machine can actually START, with what each of them accepts.

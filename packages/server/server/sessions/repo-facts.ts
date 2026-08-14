@@ -11,11 +11,36 @@
  * toplevel of a linked worktree is the worktree itself. With no remote it falls back to the
  * COMMON git dir's parent, which is the main checkout even when asked from inside a worktree.
  *
- * Every answer is CACHED for the life of the process. A directory does not change repository, and
- * the fleet poller runs every five seconds over every session — asking git four times per session
- * per tick is a hundred processes a minute to learn the same thing.
+ * ## A directory that is GONE is not a directory that is not in a repository
+ *
+ * `ExitWorktree --remove`, `git worktree remove` and an ordinary `rm -rf` all leave the session
+ * registered at a path that no longer names anything. Every `git -C <gone>` then fails, the facts
+ * come back empty, and the grouping falls through to the last path segment — so the deleted
+ * worktree `.claude/worktrees/member-connect-rotate` appeared on screen as a PROJECT of its own,
+ * standing beside `Agentistics`, which is the project it was a worktree of. A folder name is a
+ * guess, and inventing a project from a path that resolves to nothing is the same error as
+ * reporting a confident `0` for a metric a harness cannot produce.
+ *
+ * So the discriminator is whether the DIRECTORY EXISTS, not whether git answered:
+ *  - it exists and git named a repo  → that, live;
+ *  - the session RECORDED its repo when it started → that, and it is the only fact left;
+ *  - it exists and nothing names a repo → not in a repository, and its own folder name is real;
+ *  - it is gone and nothing was recorded → `missing`, said in WORDS by the UI and never grouped
+ *    under a name derived from the path.
+ *
+ * ## What may be memoized, and what may not
+ *
+ * A POSITIVE answer is permanent: a directory does not change repository, and the fleet poller runs
+ * every five seconds over every session, so asking git three times per session per tick is a hundred
+ * processes a minute to learn the same thing. A NEGATIVE one is not a fact about the directory, it
+ * is a fact about this MOMENT — the worktree had been removed, or git was briefly unavailable — and
+ * caching it for the life of the process meant a cwd probed once while absent stayed repo-less
+ * forever, even after `agentop session open` or `git worktree add` put it back. Negatives therefore
+ * expire (`NEGATIVE_TTL_MS`), which costs one re-probe a minute for a directory genuinely outside a
+ * repository, and nothing at all for one that is missing — that case never spawns git.
  */
 
+import { stat } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { repoShortName, normalizeGitRemote } from '@agentistics/core'
 
@@ -37,11 +62,90 @@ export interface RepoFacts {
   worktree: boolean
 }
 
+/**
+ * The same facts, plus what could not be learned live — what every CALLER should be reading.
+ *
+ * `RepoFacts` alone cannot distinguish "this directory is not in a repository" from "this directory
+ * is not there any more", and the two must be rendered differently: the first has a real folder
+ * name to group under, the second has only a path that names nothing.
+ */
+export interface ResolvedRepoFacts extends RepoFacts {
+  /** True when the directory itself no longer exists on this machine. */
+  missing: boolean
+  /**
+   * Where the repository above came from.
+   *
+   * `live` — git answered just now. `recorded` — the session wrote it down when it started, which
+   * is the only fact that survives the directory being deleted. `none` — nothing names a repository,
+   * and `repo`/`root` are absent.
+   */
+  source: 'live' | 'recorded' | 'none'
+}
+
 const NONE: RepoFacts = { worktree: false }
 
-const cache = new Map<string, RepoFacts>()
+/**
+ * How long a NEGATIVE answer stands before git is asked again.
+ *
+ * A minute: long enough that a directory genuinely outside a repository is not re-probed on every
+ * five-second poll (12 ticks, not 1), short enough that a worktree recreated by `agentop session
+ * open` is recognised while the person who recreated it is still looking at the screen.
+ */
+export const NEGATIVE_TTL_MS = 60_000
 
-/** Reset the memo. Tests only — a directory's repository does not change while agentop runs. */
+interface CacheEntry {
+  facts: RepoFacts
+  /** When git was asked, epoch ms. */
+  atMs: number
+}
+
+const cache = new Map<string, CacheEntry>()
+
+/**
+ * May a cached answer be reused? — PURE.
+ *
+ * A POSITIVE one always: a directory does not change repository. A NEGATIVE one only inside the
+ * TTL, because it is a statement about a moment rather than about the directory — the whole reason
+ * a cwd first seen while its worktree was deleted no longer stays repo-less for the life of the
+ * process.
+ */
+export function repoFactsFresh(entry: CacheEntry, nowMs: number, ttlMs = NEGATIVE_TTL_MS): boolean {
+  if (entry.facts.repo !== undefined) return true
+  return nowMs - entry.atMs < ttlMs
+}
+
+/**
+ * The answer a caller should render, from the three things that can be known — PURE.
+ *
+ * Order matters and is the whole content of this function:
+ *  1. what git says NOW outranks everything, because it is the only one measured against the
+ *     directory as it is;
+ *  2. what the session RECORDED when it started is next — it was measured the same way, once, and
+ *     it is all that is left of a worktree somebody has since removed;
+ *  3. otherwise there is no repository, and `missing` says which of the two silences this is.
+ *
+ * Step 2 runs even when the directory still EXISTS: git can fail for reasons that are not "no
+ * repository here" (it is not installed in this container, the index is locked, a filesystem is
+ * unmounted mid-poll), and preferring a fact recorded at spawn over a momentary silence is strictly
+ * better than falling back to the folder name. `missing` is reported independently of it, because
+ * the directory being gone is worth saying whether or not the repository could be recovered.
+ */
+export function resolveRepoFacts(o: {
+  /** What git answered just now — `NONE` when it could not be asked or said nothing. */
+  live: RepoFacts
+  /** What the session recorded when it started, if it recorded anything. */
+  recorded?: RepoFacts | undefined
+  /** Whether the directory exists right now. */
+  exists: boolean
+}): ResolvedRepoFacts {
+  if (o.live.repo !== undefined) return { ...o.live, missing: false, source: 'live' }
+  if (o.recorded?.repo !== undefined) {
+    return { ...o.recorded, missing: !o.exists, source: 'recorded' }
+  }
+  return { ...NONE, missing: !o.exists, source: 'none' }
+}
+
+/** Reset the memo. Tests only. */
 export function forgetRepoFacts(): void {
   cache.clear()
 }
@@ -86,17 +190,65 @@ async function git(cwd: string, args: string[]): Promise<string> {
   }
 }
 
-/** The repository a directory belongs to. Memoized; never throws. */
-export async function repoFacts(cwd: string): Promise<RepoFacts> {
-  if (!cwd) return NONE
+/** Does this directory exist right now? Never throws — anything unreadable answers "no". */
+async function dirExists(cwd: string): Promise<boolean> {
+  try {
+    return (await stat(cwd)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The repository a directory belongs to, as a caller should render it. Never throws.
+ *
+ * `recorded` is what the session wrote down when it started — pass it and a removed worktree keeps
+ * its project, omit it and the answer is the live one plus whether the directory is still there.
+ *
+ * A MISSING directory never spawns git: three processes to be told a path does not exist is three
+ * processes wasted on every poll, and the `stat` has already answered the question.
+ */
+export async function repoFacts(cwd: string, recorded?: RepoFacts): Promise<ResolvedRepoFacts> {
+  if (!cwd) return { ...NONE, missing: false, source: 'none' }
+
+  const exists = await dirExists(cwd)
+  if (!exists) return resolveRepoFacts({ live: NONE, recorded, exists: false })
+
+  const nowMs = Date.now()
   const hit = cache.get(cwd)
-  if (hit) return hit
+  if (hit && repoFactsFresh(hit, nowMs)) {
+    return resolveRepoFacts({ live: hit.facts, recorded, exists: true })
+  }
+
   const [commonDir, gitDir, remote] = await Promise.all([
     git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
     git(cwd, ['rev-parse', '--path-format=absolute', '--git-dir']),
     git(cwd, ['config', '--get', 'remote.origin.url']),
   ])
-  const facts = decideRepoFacts({ remote, gitDir, commonDir })
-  cache.set(cwd, facts)
-  return facts
+  const live = decideRepoFacts({ remote, gitDir, commonDir })
+  cache.set(cwd, { facts: live, atMs: nowMs })
+  return resolveRepoFacts({ live, recorded, exists: true })
+}
+
+/**
+ * What to RECORD on a session being started — shaped to spread straight into `addSession`.
+ *
+ * Only ever the LIVE answer, and only when it names a repository. An empty record would be
+ * indistinguishable from an older build that recorded nothing, while being preferred over a
+ * repository the directory acquires later; and a recorded value copied from another recorded value
+ * would let one stale answer propagate through every session ever reopened from it.
+ *
+ * Never throws — a session must start even when git does not answer. It simply records nothing,
+ * which is what every row written before this existed already does.
+ */
+export async function recordedRepo(cwd: string): Promise<{ repo?: RepoFacts }> {
+  const facts = await repoFacts(cwd).catch(() => undefined)
+  if (facts?.source !== 'live' || facts.repo === undefined) return {}
+  return {
+    repo: {
+      repo: facts.repo,
+      ...(facts.root ? { root: facts.root } : {}),
+      worktree: facts.worktree,
+    },
+  }
 }

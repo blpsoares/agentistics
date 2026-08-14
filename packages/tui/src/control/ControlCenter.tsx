@@ -37,6 +37,7 @@ import { Logs } from './tabs/Logs'
 import { Services } from './tabs/Services'
 import { Setup } from './tabs/Setup'
 import { Sessions } from './tabs/Sessions'
+import { Dashboard } from './tabs/Dashboard'
 import { writeFrame } from './altScreen'
 
 /**
@@ -134,7 +135,12 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   const s = controlStrings(lang)
 
   const [tab, setTab] = useState<TabId>(initial?.tab ?? 'services')
-  const [status, setStatus] = useState<ControlStatus | null>(null)
+  // Seeded from what the host already knows, so a REMOUNT does not open on the defaults. Detaching
+  // from a session remounts this app, `refresh()` takes about a second to probe systemd and docker,
+  // and for that second the sessions list was drawn with the shipped arrangement instead of the
+  // user's — the screen visibly rearranged itself under them. `null` stays the first-ever launch,
+  // where there is genuinely nothing to know yet.
+  const [status, setStatus] = useState<ControlStatus | null>(host.lastStatus?.() ?? null)
   const [busy, setBusy] = useState(true)
   const [result, setResult] = useState<ActionResult | null>(null)
   const [chrome, setChrome] = useState<ScreenChrome>({ capture: false, hints: [] })
@@ -150,8 +156,19 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   // row of it shears.
   const width = Math.max(1, columns - 2)
 
+  /**
+   * How many times `r` has been pressed.
+   *
+   * The screens that hold a snapshot of their own — the dashboard reads `/api/data` — cannot be
+   * refreshed by `host.refresh()`, which re-detects services and nothing else. Rather than give them
+   * a second key, the one key that already means "re-read what is on screen" is broadcast: a counter
+   * a screen can depend on, so `r` means exactly one thing everywhere in this application.
+   */
+  const [nonce, setNonce] = useState(0)
+
   const refresh = useCallback(async () => {
     setBusy(true)
+    setNonce(n => n + 1)
     try {
       setStatus(await host.refresh())
     } finally {
@@ -353,7 +370,8 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   // Only the three interactive screens report, and only they clear their own flags again. Scoping
   // every claim to them means a screen that never reports cannot inherit a stale `true` and lock
   // the global keys with no owner left to release them.
-  const reports = tab === 'services' || tab === 'sessions' || tab === 'setup' || tab === 'logs'
+  const reports = tab === 'services' || tab === 'sessions' || tab === 'dashboard'
+    || tab === 'setup' || tab === 'logs'
   const capturing = chrome.capture && reports
   const arrowsClaimed = Boolean(chrome.claimArrows) && reports
 
@@ -573,6 +591,25 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
               view={status?.sessionView}
               onView={v => { void host.setSessionView?.(v) }}
             />
+        </Screen>
+
+        {/* Framed by the shell like Logs and Setup, and for the same reason: it is a viewport with a
+            selector over it, not a cockpit of related panes. The connection state that used to sit
+            in the standalone app's header rides on its screen strip instead of on a pane badge, so
+            the same row says where you are and whether the numbers under it are live. */}
+        <Screen visible={tab === 'dashboard'}>
+          <Pane title={s.tabsShort.dashboard} width={width} height={height}>
+            <Dashboard
+              status={status}
+              strings={s}
+              lang={lang}
+              width={bodyWidth}
+              height={bodyRows}
+              isActive={tab === 'dashboard'}
+              nonce={nonce}
+              onChrome={reportChrome}
+            />
+          </Pane>
         </Screen>
 
         <Screen visible={tab === 'setup'}>

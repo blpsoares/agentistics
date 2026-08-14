@@ -105,6 +105,22 @@ export interface CliStrings {
   /** Said on a session whose harness has no probed approval markers. */
   sessApprovalBlind: (harness: string) => string
   /**
+   * Said on a row whose recorded DIRECTORY no longer exists on this machine.
+   *
+   * A removed worktree is the ordinary way to get here, and the row is still worth having — it
+   * carries the name, the note and the task. What it cannot carry is a project derived from a path
+   * that resolves to nothing, and this is the sentence that says so instead.
+   */
+  sessDirGone: string
+  /**
+   * Said on a hosted row whose harness can never report which conversation it is writing.
+   *
+   * Not "no conversation was found": the point is that none can be, so what the reopen verb offers
+   * for this harness is inferred from the directory rather than recorded. See
+   * `conversationLinkable`.
+   */
+  sessConversationBlind: (harness: string) => string
+  /**
    * Said on a session that IS visibly blocked, but whose dialog nobody has read.
    *
    * A different fact from `sessApprovalBlind`, which is about not being able to SEE the block. This
@@ -127,13 +143,34 @@ export interface CliStrings {
   sessNotAsking: string
   /** Refused: this harness's dialog has never been read, so there is no key to send. */
   sessApproveUnknown: (harness: string) => string
+  /** Said on a row whose dialog offers OPTIONS and whose harness has no verified way to pick one. */
+  sessChooseBlind: (harness: string) => string
+  /** Refused: the dialog offers N options, so there is nothing to merely "approve". */
+  sessNeedsChoice: (n: number) => string
+  /** Refused: the question changed between being shown and being answered. */
+  sessChoiceGone: string
+  /** Refused: no verified way to select an option by number on this harness. */
+  sessChooseUnknown: (harness: string) => string
+  /** The chosen option went in — and the sentence names WHICH, because that is the whole point. */
+  sessAnswered: (label: string) => string
   /** Nothing fell, or everything that did has already been picked back up. */
   sessNoFell: string
-  sessFellOpened: (opened: number, skipped: number) => string
+  sessFellOpened: (opened: number, skipped: number, held: number) => string
   sessFellNoneOpened: (skipped: number) => string
+  /**
+   * Refusing to open a conversation a live session already has, and NAMING that session.
+   *
+   * The name is the whole message. "Already open" leaves someone hunting for it; the twins this
+   * prevents were only found by reading two screens side by side and noticing identical text.
+   */
+  sessResumeInUse: (holder: string) => string
   /** The fallback title for a session the user never named. */
   sessUntitled: (harness: string, project: string) => string
   sessKilled: (id: string) => string
+  sessRestoreNone: string
+  sessRestoreDeclined: (n: number) => string
+  sessRestored: (opened: number, skipped: number) => string
+  sessRestoreFailed: (skipped: number) => string
   sessNoTask: string
   sessTaskFinished: (task: string) => string
   sessTaskReopened: (task: string) => string
@@ -144,7 +181,7 @@ export interface CliStrings {
   sessNoted: string
   sessTasked: string
   sessTaskEmpty: (task: string) => string
-  sessTaskOpened: (task: string, opened: number, skipped: number) => string
+  sessTaskOpened: (task: string, opened: number, skipped: number, held: number) => string
   sessTaskNoneOpened: (task: string, skipped: number) => string
   /** A session the backend hosts but the registry never recorded has no metadata to patch. */
   sessNoRegistryEntry: string
@@ -350,6 +387,9 @@ const EN: CliStrings = {
   },
   sessApprovalBlind: (harness: string) =>
     `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
+  sessDirGone: 'this directory no longer exists — a removed worktree, most likely. Reopening will not work until it is back.',
+  sessConversationBlind: (harness: string) =>
+    `${harness} never reports which conversation a session it started is writing, so agentop cannot record the link — anything offered to reopen here is inferred from the directory.`,
   sessApproveBlind: (harness: string) =>
     `nobody has read ${harness}'s dialog, so agentop does not know which key answers it — attach to this session to answer it there.`,
   sessPrompted: (id: string) => `sent to ${id}.`,
@@ -362,15 +402,33 @@ const EN: CliStrings = {
   sessNotAsking: 'that session is not asking anything right now — nothing was sent.',
   sessApproveUnknown: (harness: string) =>
     `agentop has not read ${harness}'s dialog, so it will not guess which key answers it.`,
+  sessChooseBlind: (harness: string) =>
+    `this dialog is a choice, and nobody has verified how to pick an option on ${harness} — attach to answer it there.`,
+  sessNeedsChoice: (n: number) =>
+    `that dialog offers ${n} options, so there is nothing to simply approve — pick one.`,
+  sessChoiceGone:
+    'the session is asking something else now — nothing was sent. Look again before answering.',
+  sessChooseUnknown: (harness: string) =>
+    `agentop has no verified way to pick an option on ${harness}, and will not confirm the highlighted one for you — attach to answer it there.`,
+  sessAnswered: (label: string) => `answered: ${label}`,
   sessNoFell: 'nothing fell — no session was lost with the machine still on record.',
-  sessFellOpened: (opened: number, skipped: number) =>
-    skipped > 0
-      ? `reopened ${opened} of the session(s) that fell — ${skipped} could not be reopened.`
-      : `reopened ${opened} session(s) that fell.`,
+  sessFellOpened: (opened: number, skipped: number, held: number) =>
+    `reopened ${opened} session(s) that fell.`
+    + (held > 0 ? ` ${held} already open in another session.` : '')
+    + (skipped > 0 ? ` ${skipped} could not be reopened.` : ''),
   sessFellNoneOpened: (skipped: number) =>
     `none of the ${skipped} session(s) that fell could be reopened.`,
+  sessResumeInUse: (holder: string) =>
+    `that conversation is already open in ${holder} — open it there instead of starting a second assistant in it.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
   sessKilled: (id: string) => `stopped ${id}.`,
+  sessRestoreNone: 'those sessions are no longer in the registry.',
+  sessRestoreDeclined: (n: number) =>
+    `left ${n} session${n === 1 ? '' : 's'} closed — still listed, still reopenable.`,
+  sessRestored: (opened: number, skipped: number) =>
+    `restored ${opened}${skipped ? `, ${skipped} could not be` : ''}.`,
+  sessRestoreFailed: (skipped: number) =>
+    `nothing could be restored${skipped ? ` — ${skipped} had no conversation to reopen` : ''}.`,
   sessNoTask: 'that session has no task.',
   sessTaskFinished: (task: string) => `"${task}" marked finished.`,
   sessTaskReopened: (task: string) => `"${task}" reopened.`,
@@ -382,10 +440,10 @@ const EN: CliStrings = {
   sessNoted: 'note saved.',
   sessTasked: 'task set.',
   sessTaskEmpty: (task: string) => `no sessions are filed under "${task}".`,
-  sessTaskOpened: (task: string, opened: number, skipped: number) =>
-    skipped > 0
-      ? `reopened ${opened} session(s) of "${task}" — ${skipped} could not be reopened.`
-      : `reopened ${opened} session(s) of "${task}".`,
+  sessTaskOpened: (task: string, opened: number, skipped: number, held: number) =>
+    `reopened ${opened} session(s) of "${task}".`
+    + (held > 0 ? ` ${held} already open in another session.` : '')
+    + (skipped > 0 ? ` ${skipped} could not be reopened.` : ''),
   sessTaskNoneOpened: (task: string, skipped: number) =>
     `none of the ${skipped} session(s) of "${task}" could be reopened.`,
   sessNoRegistryEntry: 'that session has no record to update — it was not started by agentop.',
@@ -556,6 +614,9 @@ const PT: CliStrings = {
   },
   sessApprovalBlind: (harness: string) =>
     `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando", como qualquer outra pausa.`,
+  sessDirGone: 'este diretório não existe mais — provavelmente uma worktree removida. Reabrir não vai funcionar enquanto ele não voltar.',
+  sessConversationBlind: (harness: string) =>
+    `o ${harness} nunca informa qual conversa uma sessão iniciada por ele está escrevendo, então o agentop não consegue registrar o vínculo — o que for oferecido para reabrir aqui é inferido pelo diretório.`,
   sessApproveBlind: (harness: string) =>
     `ninguém leu o diálogo do ${harness}, então o agentop não sabe qual tecla responde — anexe na sessão para responder lá.`,
   sessPrompted: (id: string) => `enviado para ${id}.`,
@@ -568,15 +629,33 @@ const PT: CliStrings = {
   sessNotAsking: 'essa sessão não está perguntando nada agora — nada foi enviado.',
   sessApproveUnknown: (harness: string) =>
     `o agentop não leu o diálogo do ${harness}, e não vai chutar qual tecla responde.`,
+  sessChooseBlind: (harness: string) =>
+    `esse diálogo é uma escolha, e ninguém verificou como selecionar uma opção no ${harness} — anexe para responder lá.`,
+  sessNeedsChoice: (n: number) =>
+    `esse diálogo tem ${n} opções, então não há o que simplesmente aprovar — escolha uma.`,
+  sessChoiceGone:
+    'a sessão está perguntando outra coisa agora — nada foi enviado. Olhe de novo antes de responder.',
+  sessChooseUnknown: (harness: string) =>
+    `o agentop não tem forma verificada de escolher uma opção no ${harness}, e não vai confirmar a destacada por você — anexe para responder lá.`,
+  sessAnswered: (label: string) => `respondido: ${label}`,
   sessNoFell: 'nada caiu — nenhuma sessão foi perdida com registro de que estava viva.',
-  sessFellOpened: (opened: number, skipped: number) =>
-    skipped > 0
-      ? `${opened} sessão(ões) que caíram reabertas — ${skipped} não puderam ser reabertas.`
-      : `${opened} sessão(ões) que caíram reabertas.`,
+  sessFellOpened: (opened: number, skipped: number, held: number) =>
+    `${opened} sessão(ões) que caíram reabertas.`
+    + (held > 0 ? ` ${held} já estava(m) aberta(s) em outra sessão.` : '')
+    + (skipped > 0 ? ` ${skipped} não puderam ser reabertas.` : ''),
   sessFellNoneOpened: (skipped: number) =>
     `nenhuma das ${skipped} sessão(ões) que caíram pôde ser reaberta.`,
+  sessResumeInUse: (holder: string) =>
+    `essa conversa já está aberta em ${holder} — abra ela por lá, em vez de colocar um segundo assistente dentro dela.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
   sessKilled: (id: string) => `${id} encerrada.`,
+  sessRestoreNone: 'essas sessões não estão mais no registro.',
+  sessRestoreDeclined: (n: number) =>
+    `${n} ${n === 1 ? 'sessão deixada fechada' : 'sessões deixadas fechadas'} — continuam listadas e reabríveis.`,
+  sessRestored: (opened: number, skipped: number) =>
+    `${opened} restaurada${opened === 1 ? '' : 's'}${skipped ? `, ${skipped} não deu` : ''}.`,
+  sessRestoreFailed: (skipped: number) =>
+    `nada pôde ser restaurado${skipped ? ` — ${skipped} sem conversa para reabrir` : ''}.`,
   sessNoTask: 'essa sessão não tem tarefa.',
   sessTaskFinished: (task: string) => `"${task}" marcada como finalizada.`,
   sessTaskReopened: (task: string) => `"${task}" reaberta.`,
@@ -588,10 +667,10 @@ const PT: CliStrings = {
   sessNoted: 'nota salva.',
   sessTasked: 'tarefa definida.',
   sessTaskEmpty: (task: string) => `nenhuma sessão está na tarefa "${task}".`,
-  sessTaskOpened: (task: string, opened: number, skipped: number) =>
-    skipped > 0
-      ? `${opened} sessão(ões) de "${task}" reabertas — ${skipped} não puderam ser reabertas.`
-      : `${opened} sessão(ões) de "${task}" reabertas.`,
+  sessTaskOpened: (task: string, opened: number, skipped: number, held: number) =>
+    `${opened} sessão(ões) de "${task}" reabertas.`
+    + (held > 0 ? ` ${held} já estava(m) aberta(s) em outra sessão.` : '')
+    + (skipped > 0 ? ` ${skipped} não puderam ser reabertas.` : ''),
   sessTaskNoneOpened: (task: string, skipped: number) =>
     `nenhuma das ${skipped} sessão(ões) de "${task}" pôde ser reaberta.`,
   sessNoRegistryEntry: 'essa sessão não tem registro para atualizar — não foi o agentop que iniciou ela.',

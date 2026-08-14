@@ -345,7 +345,7 @@ machine's display name is assigned by the central (baked into the minted token)
 and resolved via `/api/team/whoami`; there is no name field on the machine.
 
 ```bash
-agentop member connect --endpoint <url> --token <token> [--org <org>]
+agentop member connect --token <token> [--endpoint <url>] [--org <org>]
 agentop member leave
 agentop member status
 ```
@@ -356,13 +356,22 @@ Verifies the token against the central's `whoami` endpoint, then saves the membe
 config. On a bad token it prints an actionable error and writes **nothing** (no
 half-configured state).
 
+**The token usually carries the URL.** A central with a public URL configured mints a
+composite token (`act1_<base64 url>.<secret>`), which is what the Machines panel copies
+into a ready-to-paste command — so pasting that one command connects the machine.
+`--endpoint` is needed only for a bare token, or to override the embedded URL.
+
 | Flag | Required | Description |
 |------|----------|-------------|
-| `--endpoint <url>` | yes | Central base url, e.g. `http://host:48080` |
-| `--token <token>` | yes | Token minted for this machine in the central's Team Manager |
+| `--token <token>` | yes | Token minted for this machine in the central's Machines panel |
+| `--endpoint <url>` | only for a bare token | Central base url, e.g. `http://host:48080` |
 | `--org <org>` | no | Org override; defaults to the org on the token |
 
 ```bash
+# the copy-paste form: the token carries the central's URL
+agentop member connect --token act1_aHR0cHM6Ly9jZW50cmFsLmV4YW1wbGU.abc123
+
+# a bare token needs the URL beside it
 agentop member connect --endpoint http://100.64.0.2:48080 --token abc123
 ```
 

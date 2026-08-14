@@ -7,6 +7,7 @@
  */
 
 import type { HarnessId } from '@agentistics/core'
+import type { RepoFacts } from './repo-facts'
 
 /**
  * How a harness accepts an initial prompt while starting an INTERACTIVE session.
@@ -45,6 +46,18 @@ export interface SpawnSpec {
    * an index, never an id, so it has none and the verb is simply not offered for it.
    */
   resume?: (id: string) => string[]
+  /**
+   * The argv (after `bin`) that tells a FRESH session which conversation id to write under.
+   *
+   * Absent for every CLI that invents its own and never reports it back, which is most of them —
+   * and absence is load-bearing: it is what makes the cockpit say the link cannot be recorded for
+   * this harness rather than showing the harness-and-directory guess as though it were a fact.
+   *
+   * Only ever set where the id the CLI accepts is EXACTLY the id the adapter reads sessions back
+   * by, verified by running it. Gemini accepts a UUID and is deliberately absent for that reason —
+   * see its entry in `SPAWN_SPECS`.
+   */
+  assignId?: (id: string) => string[]
 }
 
 export interface SpawnRequest {
@@ -57,6 +70,15 @@ export interface SpawnRequest {
    * not refused, because a resumed session accepting an opening line is a reasonable thing to want.
    */
   resumeId?: string
+  /**
+   * A conversation id to ASSIGN to a fresh session — a UUID the caller minted.
+   *
+   * Offered, never imposed: it is used only where `SpawnSpec.assignId` says the CLI accepts one,
+   * and ignored beside `resumeId`, whose conversation already has an id. The caller reads back
+   * `SpawnPlan.conversationId` to learn whether it was actually applied, so nothing is ever
+   * recorded that was not passed to the CLI.
+   */
+  conversationId?: string
   prompt?: string
   model?: string
   effort?: string
@@ -68,6 +90,16 @@ export interface SpawnPlan {
   argv: string[]
   /** Typed into the session once it is up, for a `send-keys` harness. */
   sendKeys?: string
+  /**
+   * The conversation this spawn is KNOWN to drive — the id reopened, or the id assigned.
+   *
+   * This is the whole of what a caller may record. Absent means the harness will invent its own and
+   * never say what it was, and the registry must then hold nothing rather than a plausible guess:
+   * `conversationForProcess` matches by harness and directory, so a guess files every session of
+   * one repository under the same conversation, which is how a crash left one conversation listed
+   * three times under three names.
+   */
+  conversationId?: string
 }
 
 export type SpawnPlanError =
@@ -166,6 +198,22 @@ export interface ManagedSession {
    * the same one, and the fleet came back with a single session listed three times under one name.
    */
   conversationId?: string
+  /**
+   * The repository this session's directory belonged to WHEN IT STARTED.
+   *
+   * Recorded because `repo-facts.ts` can only answer by running git in the directory, and the
+   * directory does not always survive the session: `ExitWorktree --remove` and `git worktree
+   * remove` leave the row registered at a path that names nothing. Every probe then fails, the
+   * grouping falls through to the last path segment, and a removed worktree appears as a PROJECT
+   * of its own beside the project it was a worktree of — a name invented from a path that resolves
+   * to nothing, which is the same error as a confident `0` for a metric nobody can produce.
+   *
+   * Spawn is the one moment the answer is certain, because the directory is provably there — the
+   * session is being started in it. Absent on a row written by a build that predates this, and on
+   * one started outside a repository; `resolveRepoFacts` treats absence as "nothing recorded",
+   * never as "no repository", so an older row simply behaves as it always did.
+   */
+  repo?: RepoFacts
 }
 
 /**

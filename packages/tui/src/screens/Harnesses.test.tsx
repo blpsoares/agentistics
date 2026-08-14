@@ -43,6 +43,7 @@ describe('Harnesses screen', () => {
         })}
         s={s}
         width={100}
+        height={20}
       />,
     )
 
@@ -64,6 +65,7 @@ describe('Harnesses screen', () => {
         })}
         s={s}
         width={100}
+        height={20}
       />,
     )
 
@@ -74,7 +76,7 @@ describe('Harnesses screen', () => {
   })
 
   test('shows an empty state rather than a bare table when nothing is tracked', () => {
-    const { lastFrame } = render(<Harnesses data={data({ harnesses: [] })} s={s} width={100} />)
+    const { lastFrame } = render(<Harnesses data={data({ harnesses: [] })} s={s} width={100} height={20} />)
     expect(plain(lastFrame())).toContain(s.empty)
   })
 })

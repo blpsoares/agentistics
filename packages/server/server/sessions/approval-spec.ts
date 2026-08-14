@@ -54,17 +54,53 @@ export interface ApprovalSpec {
    * it. NOT "the key that approves" — see the header.
    */
   key: string
+  /**
+   * How to pick option N of a numbered dialog, when that is known for this harness.
+   *
+   * `digit` means typing the option's own number selects it outright. ABSENT means nobody has
+   * verified how to choose on this harness — and a caller must then REFUSE a multi-option dialog in
+   * words rather than falling back to `key`, which would confirm whichever row happened to be
+   * highlighted. That fallback is precisely the defect this field exists to close: a person pressing
+   * a key called "approve" and unknowingly picking one of four different courses of action.
+   *
+   * Only `claude` has one, and it was verified by driving a live session twice on 2026-08-14 —
+   * sending `3` at a Write permission prompt produced `User rejected write` (option 3 = No), and
+   * sending `3` at an `AskUserQuestion` selected that question's third answer. Nothing here is
+   * inferred from the other harnesses' footers, which say `Enter select` and nothing about digits.
+   */
+  choice?: { kind: 'digit'; probed: string }
   /** Provenance — the exact CLI version the dialog came from, and the date. */
   probed: string
 }
 
 export const APPROVAL_SPECS: Record<HarnessId, ApprovalSpec | null> = {
-  claude: { key: 'Enter', probed: 'claude 2.1.231, 2026-08-13' },
+  claude: {
+    key: 'Enter',
+    probed: 'claude 2.1.231, 2026-08-13',
+    choice: { kind: 'digit', probed: 'claude 2.1.232, 2026-08-14 (permission prompt + AskUserQuestion)' },
+  },
+  // No `choice` below this line, and that is a statement rather than a gap: each of these footers
+  // says `Enter` selects, and none of them says anything about typing a number. Nobody has driven
+  // one to find out, so a numbered dialog on these harnesses is refused with the reason.
   codex: { key: 'Enter', probed: 'codex 0.113.0, 2026-08-13' },
   kimi: { key: 'Enter', probed: 'kimi 0.35.0, 2026-08-13' },
   gemini: { key: 'Enter', probed: 'gemini 0.55.1, 2026-08-13' },
   copilot: { key: 'Enter', probed: 'GitHub Copilot CLI 1.0.79, 2026-08-13' },
   antigravity: { key: 'Enter', probed: 'agy 1.1.12, 2026-08-13' },
+}
+
+/**
+ * The keystroke that picks option `n`, or `null` when this harness has no verified way to choose.
+ *
+ * `null` is the refusal, and it must be honoured: there is no safe fallback to the confirm key,
+ * because confirming the highlighted row on a dialog the user is being shown four answers to is
+ * choosing for them.
+ */
+export function choiceKey(spec: ApprovalSpec | undefined, n: number): string | null {
+  if (!spec?.choice || !Number.isInteger(n) || n < 1) return null
+  // Only single digits are typeable as one key. A dialog with more than nine options would need a
+  // different mechanism, and inventing one for a case nobody has seen is how a guess ships.
+  return spec.choice.kind === 'digit' && n <= 9 ? String(n) : null
 }
 
 /** The spec for a harness, or `undefined` when its dialog was never read. */

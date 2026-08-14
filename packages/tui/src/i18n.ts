@@ -20,9 +20,18 @@ export interface TuiStrings {
   // screens
   overview: string
   projects: string
-  sessions: string
+  /**
+   * The RECORDED sessions and what they cost.
+   *
+   * Not `sessions`: inside the control center that word already names the fleet running right now,
+   * and one application may not call two different things by one name. `history` is also what this
+   * material is called everywhere else on the machine — it is what the archive setting preserves.
+   */
+  history: string
   costs: string
   harnesses: string
+  /** The word naming the screen strip, like the log viewer's `SOURCE`. */
+  viewLabel: string
 
   // KPIs / columns
   cost: string
@@ -74,9 +83,10 @@ const en: TuiStrings = {
 
   overview: 'Overview',
   projects: 'Projects',
-  sessions: 'Sessions',
+  history: 'History',
   costs: 'Costs',
   harnesses: 'Harnesses',
+  viewLabel: 'VIEW',
 
   cost: 'cost',
   tokens: 'tokens',
@@ -125,9 +135,10 @@ const pt: TuiStrings = {
 
   overview: 'Visão geral',
   projects: 'Projetos',
-  sessions: 'Sessões',
+  history: 'Histórico',
   costs: 'Custos',
   harnesses: 'Assistentes',
+  viewLabel: 'TELA',
 
   cost: 'custo',
   tokens: 'tokens',

@@ -23,13 +23,38 @@ export interface AppDataResult {
   refresh: () => void
 }
 
-export function useAppData(apiBase: string): AppDataResult {
+export interface AppDataOptions {
+  /**
+   * Read at all.
+   *
+   * `false` closes the stream and stops the poll while keeping whatever was last read, which is what
+   * makes this usable from a TAB: the control center keeps every screen mounted (`display: none`),
+   * so a dashboard that fetched regardless would hold an SSE connection open and re-read the whole
+   * payload every few seconds while nobody was looking at it — battery and network spent in silence.
+   * The stale snapshot is kept deliberately: coming back to the tab redraws instantly and refetches
+   * behind it, rather than flashing a loading state at a reader who was here ten seconds ago.
+   */
+  enabled?: boolean
+  /**
+   * Bumped to force a re-read — the shell's `r` key, arriving from outside this hook.
+   *
+   * A nonce rather than an exposed imperative call because `refresh` is recreated on every render,
+   * so a caller wiring it into an effect would re-fetch on every keystroke instead of on the key
+   * that asked for it.
+   */
+  nonce?: number
+}
+
+/** `apiBase` is nullable: there is no address to read from until the host says the server is up. */
+export function useAppData(apiBase: string | null, opts: AppDataOptions = {}): AppDataResult {
+  const { enabled = true, nonce = 0 } = opts
   const [data, setData] = useState<AppData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [connection, setConnection] = useState<ConnectionState>('connecting')
   const alive = useRef(true)
 
   const fetchOnce = useCallback(async () => {
+    if (!apiBase) return
     try {
       const res = await fetch(`${apiBase}/api/data`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -46,12 +71,13 @@ export function useAppData(apiBase: string): AppDataResult {
 
   useEffect(() => {
     alive.current = true
-    void fetchOnce()
+    if (enabled && apiBase) void fetchOnce()
     return () => { alive.current = false }
-  }, [fetchOnce])
+  }, [fetchOnce, enabled, apiBase, nonce])
 
   // SSE subscription, with a poll fallback if the stream never opens.
   useEffect(() => {
+    if (!enabled || !apiBase) return
     let poll: ReturnType<typeof setInterval> | undefined
     const controller = new AbortController()
 
@@ -94,7 +120,7 @@ export function useAppData(apiBase: string): AppDataResult {
       controller.abort()
       if (poll) clearInterval(poll)
     }
-  }, [apiBase, fetchOnce])
+  }, [apiBase, fetchOnce, enabled])
 
   return { data, error, connection, refresh: () => { void fetchOnce() } }
 }

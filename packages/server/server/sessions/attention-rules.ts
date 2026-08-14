@@ -52,6 +52,17 @@ export const ATTENTION_RULES: Record<HarnessId, AttentionRules | null> = {
       // The shared part is what is matched. `ctrl+e to explain` is offered only where there is a
       // command to explain, so keying on it would have missed every file edit.
       /Esc to cancel · Tab to amend/,
+      // **A THIRD component, with a third footer**, captured from a live `AskUserQuestion` on
+      // 2026-08-14 (claude 2.1.232):
+      //   `Enter to select · ↑/↓ to navigate · Esc to cancel`
+      // Neither line above matches it, so a session waiting on a question with four answers read as
+      // plain `waiting` — which is how a user came to be looking at "how do I promote this to prod?"
+      // with no way to answer it from here.
+      //
+      // Three claude dialogs, three footers. The lesson from the second one — probe every dialog a
+      // harness draws, not the first one it shows you — is now a measured pattern rather than an
+      // inference: assume there is another until somebody has looked.
+      /Enter to select · ↑\/↓ to navigate/,
     ],
     // The footer while a turn runs. `? for shortcuts` takes its place when the turn ends.
     working: [/esc to interrupt/],

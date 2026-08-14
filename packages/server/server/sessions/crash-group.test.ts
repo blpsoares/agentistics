@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test'
-import { CRASH_WINDOW_MS, HEARTBEAT_MS, planCrashGroup } from './crash-group'
+import {
+  CRASH_WINDOW_MS, HEARTBEAT_MS, OFFER_LIMIT, planCrashGroup, planFellOffer,
+} from './crash-group'
 import type { ManagedSession } from './types'
 
 const NOW = 1_786_700_000_000
@@ -135,5 +137,69 @@ describe('planCrashGroup', () => {
       backendIds: new Set(),
     })
     expect(ids(group)).toEqual(['a'])
+  })
+})
+
+describe('planFellOffer', () => {
+  const conv = (sessionId: string, title = sessionId) => ({ sessionId, title })
+  const all = (e: ManagedSession) => conv(`c-${e.id}`)
+
+  it('names each row with the user own label, falling back to the conversation title', () => {
+    const out = planFellOffer({
+      entries: [row('a', { label: 'my work' }), row('b')],
+      conversationFor: e => conv(`c-${e.id}`, `titled ${e.id}`),
+    })
+    expect(out.map(o => o.label)).toEqual(['my work', 'titled b'])
+  })
+
+  it('drops a row whose conversation does not resolve — a button that fails is not an offer', () => {
+    const out = planFellOffer({
+      entries: [row('a'), row('b')],
+      conversationFor: e => (e.id === 'a' ? conv('c-a') : null),
+    })
+    expect(out.map(o => o.entry.id)).toEqual(['a'])
+  })
+
+  it('is NARROWER than the fall, and only here — the count must not shrink with it', () => {
+    // A row that cannot be reopened still fell. `planCrashGroup` keeps it so the summary row and the
+    // heading describe the event, and `reopenEntries` reports it as skipped rather than pretending
+    // it was never there.
+    const entries = [row('a'), row('cannot')]
+    const group = planCrashGroup({ entries, backendIds: new Set() })
+    expect(group?.entries).toHaveLength(2)
+    expect(planFellOffer({
+      entries: group!.entries,
+      conversationFor: e => (e.id === 'a' ? conv('c-a') : null),
+    })).toHaveLength(1)
+  })
+
+  it('is newest first — what someone was in the middle of is the recent work', () => {
+    const out = planFellOffer({
+      entries: [
+        row('old', { createdAt: '2026-08-01T10:00:00.000Z' }),
+        row('new', { createdAt: '2026-08-14T10:00:00.000Z' }),
+      ],
+      conversationFor: all,
+    })
+    expect(out.map(o => o.entry.id)).toEqual(['new', 'old'])
+  })
+
+  it('survives a start time nobody can read, rather than sorting it as 1970', () => {
+    const out = planFellOffer({
+      entries: [row('bad', { createdAt: 'not a date' }), row('good')],
+      conversationFor: all,
+    })
+    expect(out.map(o => o.entry.id)).toEqual(['good', 'bad'])
+    expect(out.find(o => o.entry.id === 'bad')?.startedMs).toBeUndefined()
+  })
+
+  it('is BOUNDED — a modal listing forty rows is a wall, not an offer', () => {
+    const many = Array.from({ length: 40 }, (_, i) => row(`s${i}`))
+    expect(planFellOffer({ entries: many, conversationFor: all })).toHaveLength(OFFER_LIMIT)
+    expect(planFellOffer({ entries: many, conversationFor: all, limit: 3 })).toHaveLength(3)
+  })
+
+  it('is empty for an empty fall, without inventing a row', () => {
+    expect(planFellOffer({ entries: [], conversationFor: all })).toEqual([])
   })
 })

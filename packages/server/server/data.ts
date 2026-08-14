@@ -10,6 +10,9 @@ import { mergeLocalAndIngestedSessions, sessionKey } from './session-merge'
 import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
 import { UUID_RE, decodeProjectDir, getProjectGitStats, getGitRemote } from './git'
+// `activeMinutesFromClaudeJsonl` / `contextTokensFromClaudeJsonl` are no longer called
+// here — the meta-session enrichment they served now runs inside `cachedEnrich`, which
+// reads the transcript once per file VERSION instead of once per build.
 import { parseSessionJsonl } from './jsonl'
 import type { MachineInfo } from './team-tokens'
 import { runHealthChecks, analyzeToolHealthIssues, analyzeCacheStaleness } from './health'
@@ -211,6 +214,7 @@ async function scanProjectDir(
         cwdCounts[session.project_path] = (cwdCounts[session.project_path] ?? 0) + 1
         extraSessions.push(session)
       } else if (metaEntry && (!metaEntry.model || metaEntry.active_minutes === undefined
+        || metaEntry.context_tokens === undefined
         || (metaEntry.uses_task_agent && !metaEntry.agentMetrics))) {
         // Meta session — model, active time and agent metrics all come from the
         // transcript (Claude's own session-meta files carry none of the three), and all
@@ -221,13 +225,21 @@ async function scanProjectDir(
           const needsModel = !metaEntry.model
           const needsAgentMetrics = metaEntry.uses_task_agent && !metaEntry.agentMetrics
           const needsActive = metaEntry.active_minutes === undefined
-          if (!needsModel && !needsAgentMetrics && !needsActive) return
+          // Same reason as active time, one metric later: Claude's session-meta files carry no
+          // context reading, and this path serves MOST Claude sessions — a gauge computed only
+          // inside `parseSessionJsonl` would be blank on nearly every row it exists for.
+          const needsContext = metaEntry.context_tokens === undefined
+          if (!needsModel && !needsAgentMetrics && !needsActive && !needsContext) return
 
           const enriched = await cachedEnrich(cache, filePath, metaEntry.model ?? '')
           if (!enriched) return
 
           if (needsModel && enriched.model) metaEntry.model = enriched.model
           if (needsActive) metaEntry.active_minutes = enriched.activeMinutes ?? undefined
+          // `?? undefined` would be wrong here: the pre-cache code left `context_tokens`
+          // ALONE when the transcript had no gauge, and writing `undefined` over an
+          // existing meta value is not the same as not writing.
+          if (needsContext && enriched.contextTokens !== null) metaEntry.context_tokens = enriched.contextTokens
           if (needsAgentMetrics && enriched.agentMetrics) metaEntry.agentMetrics = enriched.agentMetrics
         })
       }

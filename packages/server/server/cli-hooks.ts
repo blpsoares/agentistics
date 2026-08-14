@@ -26,7 +26,7 @@ import { dirname, join } from 'node:path'
 import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
 import { HOME_DIR } from './config'
 import {
-  HOOK_EVENT,
+  HOOK_SPECS,
   HOOK_VERSION,
   explainHookPlanError,
   hookCommand,
@@ -50,7 +50,7 @@ const USAGE = `Usage:
   agentop hooks uninstall  [--hook-only | --skill-only]
   agentop hooks status
 
-Teach Claude Code to run work in parallel through agentop.
+Teach Claude Code to run work in parallel through agentop, and to report when it stops.
 
   skill  ~/.claude/skills/${SKILL_NAME}/SKILL.md
          WHAT Claude needs to know: when a task splits into independent pieces, how to propose
@@ -58,10 +58,14 @@ Teach Claude Code to run work in parallel through agentop.
          \`agentop session batch\`. Claude loads it when the task matches its description and
          ignores it otherwise, so it costs nothing on a session that never parallelises.
 
-  hook   a SessionStart entry in ~/.claude/settings.json
-         FACTS a static file cannot hold: which agentop sessions are running right now, which
-         one is blocked on a permission prompt, which task can be reopened in this directory.
-         It prints NOTHING when there is nothing running, so a quiet machine pays no tokens.
+  hooks  two entries in ~/.claude/settings.json
+         SessionStart → FACTS a static file cannot hold: which agentop sessions are running
+         right now, which one is blocked on a permission prompt, which task can be reopened in
+         this directory. It prints NOTHING when there is nothing running, so a quiet machine
+         pays no tokens.
+         Stop → records that this session finished a turn, into agentop's event inbox. It is
+         the exact half of \`agentop events\`: Claude saying it stopped, rather than the fleet
+         monitor inferring it from the screen five seconds later. It prints nothing at all.
 
 A hook does not infer anything — it is a shell command on an event. The inference is Claude's,
 reading what the skill teaches and what the hook injected. See docs/claude-integration.md.
@@ -192,7 +196,6 @@ async function install(what: { hook: boolean; skill: boolean }): Promise<number>
 
   if (what.hook) {
     const file = settingsFile()
-    const command = hookCommand(invocation())
     let current: unknown
     try {
       current = await readSettings(file)
@@ -203,15 +206,27 @@ async function install(what: { hook: boolean; skill: boolean }): Promise<number>
       current = undefined
     }
     if (!failed) {
-      const plan = planHookInstall(current, command)
-      if (!plan.ok) {
-        console.error(explainHookPlanError(plan.error, tilde(file)))
-        failed = true
-      } else if (!plan.changed) {
-        console.log(`hook   already installed in ${tilde(file)} (v${HOOK_VERSION}) — unchanged.`)
-      } else {
-        await writeAtomic(file, `${JSON.stringify(plan.settings, null, 2)}\n`)
-        console.log(`hook   ${HOOK_EVENT} → ${command}`)
+      // Both hooks are planned against the SAME document, one after the other, and the file is
+      // written ONCE at the end. Writing per hook would leave a settings.json holding one of the
+      // two if the second plan refused — a half-installed integration that `status` would then
+      // report as partly stale forever.
+      let settings = current
+      const written: string[] = []
+      for (const spec of HOOK_SPECS) {
+        const command = hookCommand(invocation(), HOOK_VERSION, spec.event)
+        const plan = planHookInstall(settings, command, spec.event)
+        if (!plan.ok) {
+          console.error(explainHookPlanError(plan.error, tilde(file)))
+          failed = true
+          break
+        }
+        settings = plan.settings
+        if (plan.changed) written.push(`hook   ${spec.event} → ${command}`)
+        else console.log(`hook   ${spec.event} already installed in ${tilde(file)} (v${HOOK_VERSION}) — unchanged.`)
+      }
+      if (!failed && written.length > 0) {
+        await writeAtomic(file, `${JSON.stringify(settings, null, 2)}\n`)
+        for (const line of written) console.log(line)
         console.log(`       written to ${tilde(file)}`)
       }
     }
@@ -260,15 +275,23 @@ async function uninstall(what: { hook: boolean; skill: boolean }): Promise<numbe
       failed = true
     }
     if (!failed) {
-      const plan = planHookRemoval(current)
-      if (!plan.ok) {
-        console.error(explainHookPlanError(plan.error, tilde(file)))
-        failed = true
-      } else if (!plan.changed) {
+      let settings = current
+      const removed: string[] = []
+      for (const spec of HOOK_SPECS) {
+        const plan = planHookRemoval(settings, spec.event)
+        if (!plan.ok) {
+          console.error(explainHookPlanError(plan.error, tilde(file)))
+          failed = true
+          break
+        }
+        settings = plan.settings
+        if (plan.changed) removed.push(spec.event)
+      }
+      if (!failed && removed.length === 0) {
         console.log(`hook   not installed in ${tilde(file)} — nothing to remove.`)
-      } else {
-        await writeAtomic(file, `${JSON.stringify(plan.settings, null, 2)}\n`)
-        console.log(`hook   removed from ${tilde(file)}`)
+      } else if (!failed) {
+        await writeAtomic(file, `${JSON.stringify(settings, null, 2)}\n`)
+        console.log(`hook   removed ${removed.join(' + ')} from ${tilde(file)}`)
       }
     }
   }
@@ -303,20 +326,23 @@ async function status(): Promise<number> {
   const file = settingsFile()
   console.log(`claude   ${claudeCodePresent() ? tilde(claudeHome()) : 'not found (no ~/.claude, no `claude` on PATH)'}`)
 
-  let hookLine: string
   try {
-    const st = readHookStatus(await readSettings(file))
-    if (!st.installed) hookLine = `not installed  (${tilde(file)})`
-    else {
+    const settings = await readSettings(file)
+    for (const spec of HOOK_SPECS) {
+      const st = readHookStatus(settings, HOOK_VERSION, spec.event)
+      if (!st.installed) {
+        console.log(`hook     ${spec.event}: not installed  (${tilde(file)})`)
+        continue
+      }
       const version = st.version === null ? 'no version' : `v${st.version}`
       const stale = st.stale ? `  STALE — this agentop writes v${HOOK_VERSION}; run \`agentop hooks install\`` : ''
       const dupes = st.commands.length > 1 ? `  (${st.commands.length} copies)` : ''
-      hookLine = `installed ${version}${dupes}${stale}\n         ${tilde(file)}\n         ${st.commands[0]}`
+      console.log(`hook     ${spec.event}: installed ${version}${dupes}${stale}\n         ${st.commands[0]}`)
     }
+    console.log(`         ${tilde(file)}`)
   } catch (e) {
-    hookLine = `cannot read ${tilde(file)}: ${e instanceof Error ? e.message : String(e)}`
+    console.log(`hook     cannot read ${tilde(file)}: ${e instanceof Error ? e.message : String(e)}`)
   }
-  console.log(`hook     ${hookLine}`)
 
   const sf = skillFile()
   if (!existsSync(sf)) {
@@ -360,7 +386,7 @@ async function context(): Promise<number> {
     if (!text) return 0
 
     console.log(JSON.stringify({
-      hookSpecificOutput: { hookEventName: HOOK_EVENT, additionalContext: text },
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text },
     }))
   } catch {
     // Deliberately silent — see above.

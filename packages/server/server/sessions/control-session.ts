@@ -13,13 +13,15 @@
  * `CliStrings`, so this module owns no copy of any sentence.
  */
 
-import { fmt, fmtCost } from '@agentistics/core'
+import { contextFraction, fmt, fmtCost } from '@agentistics/core'
 import type { ControlSession, SessionState } from '@agentistics/tui/control'
 import type { CliStrings } from '../cli-i18n'
 import { approvalFor } from './approval-spec'
+import { needsChoice } from './dialog-choice'
 import { pickTitle } from './harness-session-file'
-import type { RepoFacts } from './repo-facts'
+import type { ResolvedRepoFacts } from './repo-facts'
 import type { SessionView } from './session-view'
+import { conversationLinkable } from './spawn-spec'
 
 /** The state word each session wears, and the machine-readable state beside it. */
 export function sessionState(v: SessionView): SessionState {
@@ -61,11 +63,15 @@ export function toControlSession(
   v: SessionView,
   s: CliStrings,
   /** What repository this session's directory belongs to, already resolved and memoized. */
-  facts: RepoFacts = { worktree: false },
+  facts: ResolvedRepoFacts = { worktree: false, missing: false, source: 'none' },
 ): ControlSession {
   const state = sessionState(v)
   const project = projectName(v.cwd)
   const harness = v.harness ?? ''
+  // `null` whenever either half is missing or unusable, which is the only thing that decides
+  // whether the row draws a gauge at all. Rounded to a whole percent here rather than in the
+  // renderer: the width of the cell depends on the text, so the text has to exist before layout.
+  const fraction = contextFraction(v.contextTokens, v.contextWindow)
   // A session can be named in TWO places — here, and inside the harness with its own `/rename` — and
   // the precedence between them is the pure `pickTitle`. It is not a one-liner and it is not
   // obvious: a name the harness INVENTED for itself must never win, and neither name may be thrown
@@ -116,15 +122,43 @@ export function toControlSession(
     // Only when it differs: a session in the main checkout groups under its own folder already, and
     // a field repeating what is beside it is one more thing that can disagree.
     ...(facts.root && facts.root !== project ? { projectGroup: facts.root } : {}),
+    // Said wherever it is true, recovered repository or not: the row still names a path, and that
+    // path resolves to nothing on this machine. It is also the answer to "why did reopening fail",
+    // and — when no repository was recorded — it is what `groupSessions` keys the bucket on instead
+    // of `project`, which is then the last segment of a path that names nothing.
+    ...(facts.missing ? { dirGone: s.sessDirGone } : {}),
     ...(facts.worktree ? { worktree: true } : {}),
+    // The conversation this row is KNOWN to be writing — what `--resume` takes, and the only exact
+    // answer to "where does it continue from". Never filled from the harness+directory guess.
+    ...(v.conversationId ? { conversationId: v.conversationId } : {}),
+    // …and where no answer can ever exist, that is stated instead. Only on a row we HOST and only
+    // while it has no id: an `external` or `closed` row was never ours to record, and a claude row
+    // that has not been polled yet is about to have one. Same shape as `approvalBlind`.
+    ...(v.status !== 'external' && v.status !== 'closed' && !v.conversationId && harness
+      && !conversationLinkable(v.harness!)
+      ? { conversationBlind: s.sessConversationBlind(harness) }
+      : {}),
     ...(v.resume ? { resume: v.resume } : {}),
     ...(v.lastLines?.length ? { lastLines: v.lastLines } : {}),
     ...(v.approvalLines?.length ? { approvalLines: v.approvalLines } : {}),
+    ...(v.dialogOptions?.length ? { dialogOptions: v.dialogOptions } : {}),
+    // Picking one of them needs a VERIFIED way to select by number on this harness. Only claude has
+    // one; everywhere else the options are shown and the answer is a refusal that names why, because
+    // falling back to the confirm key would choose for the user among things that differ.
+    ...(needsChoice(v.dialogOptions ?? []) && approvalFor(v.harness)?.choice
+      ? { canChoose: true as const }
+      : {}),
+    ...(needsChoice(v.dialogOptions ?? []) && !approvalFor(v.harness)?.choice && harness
+      ? { chooseBlind: s.sessChooseBlind(harness) }
+      : {}),
     // The verb exists only where BOTH halves are true: the session is asking, and somebody has read
     // this harness's dialog and recorded the key that answers it. Either missing and the action is
     // absent rather than present and wrong — the same rule the wizard applies to a harness with no
     // spawn spec.
-    ...(state === 'waiting-approval' && approvalFor(v.harness)
+    // A bare confirm is only ever offered where there is NOTHING to choose between — the
+    // codex-shaped `Press enter to continue`. On a numbered dialog it would take whichever row is
+    // highlighted, which on "only my fix / promote everything / stop here" is picking for somebody.
+    ...(state === 'waiting-approval' && approvalFor(v.harness) && !needsChoice(v.dialogOptions ?? [])
       ? { canApprove: true as const }
       : {}),
     // Said only where it is TRUE, which is a narrower place than `approvalBlind`: that one explains
@@ -138,6 +172,19 @@ export function toControlSession(
     // else it hands over — and `fmt`/`fmtCost` are the shared helpers the dashboard uses.
     ...(v.tokens !== undefined ? { tokens: fmt(v.tokens) } : {}),
     ...(v.costUSD !== undefined ? { cost: fmtCost(v.costUSD) } : {}),
+    ...(fraction !== null
+      ? {
+          context: {
+            fraction,
+            // ROUNDED DOWN, so a bar can never read `100%` on a window with room left in it. The
+            // one number on this row people will act on is "is it nearly full", and rounding 99.6%
+            // up to 100% answers that question wrongly in the direction that costs work.
+            label: `${Math.floor(fraction * 100)}%`,
+            used: fmt(v.contextTokens!),
+            window: fmt(v.contextWindow!),
+          },
+        }
+      : {}),
     searchText: v.searchText,
     attached: v.attached,
   }

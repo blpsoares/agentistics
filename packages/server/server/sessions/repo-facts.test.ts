@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test'
-import { decideRepoFacts } from './repo-facts'
+import {
+  NEGATIVE_TTL_MS, decideRepoFacts, repoFactsFresh, resolveRepoFacts,
+} from './repo-facts'
 
 describe('decideRepoFacts', () => {
   it('reports nothing at all outside a repository', () => {
@@ -51,5 +53,66 @@ describe('decideRepoFacts', () => {
     expect(decideRepoFacts({
       remote: '/some/local/path', gitDir: '/r/.git', commonDir: '/r/.git',
     }).repo).toBe('r')
+  })
+})
+
+describe('resolveRepoFacts', () => {
+  const WT = { repo: 'blpsoares/agentistics', root: 'agentistics', worktree: true }
+
+  it('prefers what git says NOW over anything recorded', () => {
+    const moved = { repo: 'blpsoares/other', root: 'other', worktree: false }
+    expect(resolveRepoFacts({ live: moved, recorded: WT, exists: true }))
+      .toEqual({ ...moved, missing: false, source: 'live' })
+  })
+
+  it('keeps a DELETED worktree filed under the project it was a worktree of', () => {
+    // The bug this exists for: `.claude/worktrees/member-connect-rotate` is removed with the
+    // session still registered, every `git -C` fails, and the last path segment became a project
+    // of its own standing beside the one it belongs to.
+    expect(resolveRepoFacts({ live: { worktree: false }, recorded: WT, exists: false }))
+      .toEqual({ ...WT, missing: true, source: 'recorded' })
+  })
+
+  it('says MISSING rather than naming a repository it cannot name', () => {
+    // No recorded facts (a row written by an older build, or a directory that never was a repo).
+    // The path names nothing, so the folder name at the end of it is a guess — and the caller is
+    // told to say so in words instead of grouping under it.
+    expect(resolveRepoFacts({ live: { worktree: false }, exists: false }))
+      .toEqual({ worktree: false, missing: true, source: 'none' })
+  })
+
+  it('does not call a directory that merely is not a repository missing', () => {
+    // `~/aipe` is a real folder outside git. Its own name IS a real name for it, and grouping by it
+    // is correct — this must not land in the same bucket as a path that resolves to nothing.
+    expect(resolveRepoFacts({ live: { worktree: false }, exists: true }))
+      .toEqual({ worktree: false, missing: false, source: 'none' })
+  })
+
+  it('falls back to the recorded repo when git goes quiet on a directory that is still there', () => {
+    // git not installed in this container, an index lock, a filesystem unmounted mid-poll: none of
+    // those are evidence that the repository recorded at spawn was wrong.
+    expect(resolveRepoFacts({ live: { worktree: false }, recorded: WT, exists: true }))
+      .toEqual({ ...WT, missing: false, source: 'recorded' })
+  })
+
+  it('ignores a recorded entry that names no repository', () => {
+    expect(resolveRepoFacts({ live: { worktree: false }, recorded: { worktree: false }, exists: false }))
+      .toEqual({ worktree: false, missing: true, source: 'none' })
+  })
+})
+
+describe('repoFactsFresh', () => {
+  const positive = { facts: { repo: 'a/b', root: 'b', worktree: false }, atMs: 0 }
+  const negative = { facts: { worktree: false }, atMs: 0 }
+
+  it('reuses a POSITIVE answer forever — a directory does not change repository', () => {
+    expect(repoFactsFresh(positive, NEGATIVE_TTL_MS * 1000)).toBe(true)
+  })
+
+  it('lets a NEGATIVE answer expire, so a recreated worktree is recognised', () => {
+    // The defect: the first poll of a cwd whose worktree was deleted cached "no repository", and
+    // that cwd stayed repo-less for the life of the process even after the worktree came back.
+    expect(repoFactsFresh(negative, NEGATIVE_TTL_MS - 1)).toBe(true)
+    expect(repoFactsFresh(negative, NEGATIVE_TTL_MS)).toBe(false)
   })
 })

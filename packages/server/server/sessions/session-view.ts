@@ -11,8 +11,10 @@
 import type { HarnessId } from '@agentistics/core'
 import { type HarnessProcess, sessionAtCwd } from '../live-sessions'
 import { rulesFor } from './attention-rules'
+import type { DialogOption } from './dialog-choice'
 import { chosenName, type HarnessSessionFile } from './harness-session-file'
 import type { HarnessSessionIndex } from './harness-sessions'
+import type { RepoFacts } from './repo-facts'
 import type { ReconciledSession } from './session-ref'
 import type { Conversation } from './conversations'
 import { conversationForProcess } from './conversations'
@@ -70,6 +72,14 @@ export interface SessionView {
    */
   approvalLines?: string[]
   /**
+   * The OPTIONS that dialog is offering, when they could be read with confidence.
+   *
+   * Present only alongside `approvalLines`, and empty rather than invented when the screen cannot be
+   * parsed — see `dialog-choice.ts`. It is what makes answering a four-way question possible at all:
+   * a keystroke that confirms the highlighted row is choosing on the user's behalf.
+   */
+  dialogOptions?: DialogOption[]
+  /**
    * This session was taken by the machine along with the others, and is offered back with them.
    *
    * Decided by `crash-group.ts` over the whole registry, so it cannot be derived from this row: the
@@ -95,6 +105,25 @@ export interface SessionView {
   effort?: string
   /** The piece of work this session belongs to, when the user said. Groups the list. */
   task?: string
+  /**
+   * The harness's own conversation id this row drives, when it is known EXACTLY.
+   *
+   * Carried from `ManagedSession.conversationId`, so it is present only for a session that was
+   * reopened from a conversation — we handed the id to the CLI, so there is nothing to guess. It is
+   * deliberately NOT filled from the harness+directory inference behind `resume`: that guess is
+   * good enough to offer a verb the user confirms by title, and not good enough to be the key the
+   * event channel deduplicates on. Absent is absent.
+   */
+  conversationId?: string
+  /**
+   * The repository this row's directory was in when the session STARTED, as the registry recorded
+   * it — carried so the caller that resolves `repo-facts.ts` can hand it over.
+   *
+   * It is here rather than resolved here because resolving means running git, and this module is
+   * pure. Present only on a managed row written by a build that records it; `resolveRepoFacts`
+   * treats absence as "nothing recorded", never as "no repository".
+   */
+  recordedRepo?: RepoFacts
   createdMs?: number
   attached: boolean
   /**
@@ -108,6 +137,9 @@ export interface SessionView {
   /** Metrics of the conversation behind this row, when it has any. Absent is never zero. */
   tokens?: number
   costUSD?: number
+  /** How full the context window was on the last turn, and out of how much. Both or neither. */
+  contextTokens?: number
+  contextWindow?: number
   /**
    * Whether this harness has probed approval rules at all.
    *
@@ -153,7 +185,7 @@ function rankOf(v: SessionView): number {
  * in one directory (harness + cwd alone would collapse them into a single row), and unlike a list
  * index it does not change when an unrelated process appears or exits.
  */
-function externalId(p: HarnessProcess): string {
+export function externalId(p: HarnessProcess): string {
   return `external:${p.harness}:${p.cwd}:${p.startedMs ?? 0}`
 }
 
@@ -181,6 +213,8 @@ export function buildSessionViews(o: {
   tails?: ReadonlyMap<string, string[]>
   /** The DIALOG a blocked session is showing, keyed by session id — see `SessionView.approvalLines`. */
   approvals?: ReadonlyMap<string, string[]>
+  /** The options that dialog offers, keyed by session id. Absent where they could not be read. */
+  dialogOptions?: ReadonlyMap<string, DialogOption[]>
   /** The ids `crash-group.ts` decided fell together. A set, because the question is about a set. */
   fell?: ReadonlySet<string>
   /**
@@ -231,17 +265,50 @@ export function buildSessionViews(o: {
     exactId?: string,
   ): { resume?: { sessionId: string; title: string } } => {
     const pool = o.conversations ?? []
-    const exact = exactId ? pool.find(c => c.sessionId === exactId) : undefined
-    const own = exact ?? (managed?.conversationId
-      ? pool.find(c => c.sessionId === managed.conversationId)
-      : undefined)
-    const conv = own ?? pool.find(c =>
+    const knownId = exactId ?? managed?.conversationId
+    const own = knownId ? pool.find(c => c.sessionId === knownId) : undefined
+    // A row that KNOWS which conversation it drives never falls back to the guess — not even when
+    // the store does not hold that conversation yet. Since the id is recorded at SPAWN (not only at
+    // reopen), that gap is now ordinary: a session minutes old has an id and no transcript written
+    // under it. "Not yet" and "some other conversation in this directory" are not the same answer,
+    // and taking the second is the guess that handed three rows one conversation after a crash.
+    if (knownId) {
+      if (!own?.resumable) return {}
+      claimed.add(own.sessionId)
+      return { resume: { sessionId: own.sessionId, title: own.title } }
+    }
+    const conv = pool.find(c =>
       !claimed.has(c.sessionId)
       && c.harness === harness
       && sessionAtCwd({ current_cwd: c.cwd, project_path: c.cwd }, managed?.cwd ?? ''))
     if (!conv?.resumable) return {}
     claimed.add(conv.sessionId)
     return { resume: { sessionId: conv.sessionId, title: conv.title } }
+  }
+
+  /**
+   * The conversation a RUNNING managed row is driving, for its metrics — a read, never a claim.
+   *
+   * Separate from `claimResume` on purpose. That one hands out a REOPEN target and must give each
+   * conversation to at most one row, or a crash that left five rows in one directory offers the
+   * same conversation five times. This one only wants numbers, and numbers are not scarce: two rows
+   * reading the same conversation is a display question, while a row silently losing its metrics to
+   * whichever row was mapped first is a wrong answer.
+   *
+   * Only the EXACT links are used — the harness's own record (`~/.claude/sessions/<pid>.json`,
+   * matched by tmux session name) and the id the registry stored while the session was up. The
+   * harness-and-directory inference `claimResume` falls back to is deliberately not accepted here:
+   * for a reopen it is offered to a person who can recognise the title and decline, whereas a
+   * context gauge is read at a glance and believed. Two sessions in one worktree would otherwise
+   * both wear the older one's fill level with nothing on screen saying so.
+   */
+  const metricsOf = (
+    managed: ManagedSession | undefined,
+    exactId?: string,
+  ): Conversation | undefined => {
+    const pool = o.conversations ?? []
+    const id = exactId ?? managed?.conversationId
+    return id ? pool.find(c => c.sessionId === id) : undefined
   }
 
   const managed: SessionView[] = o.reconciled.map(r => {
@@ -255,6 +322,10 @@ export function buildSessionViews(o: {
     // among the things you can talk to.
     const finished = Boolean(r.managed?.endedAt)
     const activity = finished ? ('exited' as const) : o.activity.get(r.id)
+    // A managed row carried no metrics at all until now — `external` and `closed` rows read them
+    // from the store and this one did not, so on a machine whose whole fleet is agentop-started
+    // (the normal case once the session manager is in use) the usage column was empty everywhere.
+    const conv = metricsOf(r.managed, own?.sessionId)
     return {
       id: r.id,
       ...(harness ? { harness } : {}),
@@ -267,6 +338,9 @@ export function buildSessionViews(o: {
       ...(activity === 'waiting-approval' && (o.approvals?.get(r.id)?.length ?? 0) > 0
         ? { approvalLines: o.approvals!.get(r.id)! }
         : {}),
+      ...(activity === 'waiting-approval' && (o.dialogOptions?.get(r.id)?.length ?? 0) > 0
+        ? { dialogOptions: o.dialogOptions!.get(r.id)! }
+        : {}),
       ...(o.fell?.has(r.id) ? { fell: true as const } : {}),
       ...(r.managed?.label ? { label: r.managed.label } : {}),
       ...(r.managed?.labelSince !== undefined ? { labelSince: r.managed.labelSince } : {}),
@@ -276,6 +350,8 @@ export function buildSessionViews(o: {
       ...(r.managed?.model ? { model: r.managed.model } : {}),
       ...(r.managed?.effort ? { effort: r.managed.effort } : {}),
       ...(r.managed?.task ? { task: r.managed.task } : {}),
+      ...(r.managed?.conversationId ? { conversationId: r.managed.conversationId } : {}),
+      ...(r.managed?.repo ? { recordedRepo: r.managed.repo } : {}),
       // The backend's clock when there is a backend, the REGISTRY's when there is not. A row the
       // machine lost has no tmux session left to ask, so it reported no start time at all — and a
       // session you are deciding whether to reopen is one whose age is most of the decision.
@@ -297,6 +373,11 @@ export function buildSessionViews(o: {
         // own `conversationId` decides, exactly as before. That is not a gap: the id was recorded
         // into the registry while the session was up, by the branch below.
         ? claimResume(r.managed, harness, own?.sessionId)
+        : {}),
+      ...(conv?.tokens !== undefined ? { tokens: conv.tokens } : {}),
+      ...(conv?.costUSD !== undefined ? { costUSD: conv.costUSD } : {}),
+      ...(conv?.contextTokens !== undefined && conv.contextWindow !== undefined
+        ? { contextTokens: conv.contextTokens, contextWindow: conv.contextWindow }
         : {}),
       attached: r.backend?.attached ?? false,
       approvalDetection: harness !== undefined && rulesFor(harness) !== undefined,
@@ -347,6 +428,9 @@ export function buildSessionViews(o: {
       ...(conv?.resumable ? { resume: { sessionId: conv.sessionId, title: conv.title } } : {}),
       ...(conv?.tokens !== undefined ? { tokens: conv.tokens } : {}),
       ...(conv?.costUSD !== undefined ? { costUSD: conv.costUSD } : {}),
+      ...(conv?.contextTokens !== undefined && conv.contextWindow !== undefined
+        ? { contextTokens: conv.contextTokens, contextWindow: conv.contextWindow }
+        : {}),
       searchText: searchTextOf(p.harness, p.cwd, ownName, conv?.title, conv?.firstPrompt),
     }
   })
@@ -360,15 +444,28 @@ export function buildSessionViews(o: {
   // covers its conversation, whether that row is one we host or one we merely observed.
   const shown = new Set<string>()
   for (const v of external) if (v.resume) shown.add(v.resume.sessionId)
-  for (const m of managed) {
-    // A managed row does not carry a conversation id, so it covers by the same harness+directory
-    // inference used for a foreign process. `exited` and `lost` rows cover nothing: their work IS
-    // over, and the conversation belongs in history where it can be reopened.
-    if (m.status !== 'running' && m.status !== 'unregistered') continue
-    const conv = m.harness
-      ? conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
-      : undefined
-    if (conv) shown.add(conv.sessionId)
+  //
+  // A row that RECORDED its conversation covers exactly that one. The rest fall back to the
+  // harness+directory inference, and it is CLAIMED — because that inference answers with the FIRST
+  // conversation in the directory, so four live sessions in one repository all covered the same
+  // one. The other three stayed in history as `closed` rows for conversations that were open, and
+  // whichever conversation happened to be first vanished from history while it was the one nobody
+  // was running. "Some sessions do not appear" and "some appear twice" were the same bug, seen
+  // from its two ends.
+  const coveredConv = new Set<string>()
+  for (const r of o.reconciled) {
+    const m = managed.find(v => v.id === r.id)
+    // `exited` and `lost` rows cover nothing: their work IS over, and the conversation belongs in
+    // history where it can be reopened.
+    if (!m || (m.status !== 'running' && m.status !== 'unregistered')) continue
+    const own = r.managed?.conversationId
+    if (own) { shown.add(own); coveredConv.add(own); continue }
+    if (!m.harness) continue
+    const conv = conversations.find(c =>
+      !coveredConv.has(c.sessionId)
+      && c.harness === m.harness
+      && sessionAtCwd({ current_cwd: c.cwd, project_path: c.cwd }, m.cwd))
+    if (conv) { shown.add(conv.sessionId); coveredConv.add(conv.sessionId) }
   }
 
   const closed: SessionView[] = conversations
@@ -386,6 +483,9 @@ export function buildSessionViews(o: {
       ...(c.resumable ? { resume: { sessionId: c.sessionId, title: c.title } } : {}),
       ...(c.tokens !== undefined ? { tokens: c.tokens } : {}),
       ...(c.costUSD !== undefined ? { costUSD: c.costUSD } : {}),
+      ...(c.contextTokens !== undefined && c.contextWindow !== undefined
+        ? { contextTokens: c.contextTokens, contextWindow: c.contextWindow }
+        : {}),
       searchText: searchTextOf(c.harness, c.cwd, c.title, c.firstPrompt),
     }))
 

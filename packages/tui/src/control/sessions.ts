@@ -160,10 +160,35 @@ export interface SessionGroup {
  * blank heading across dimensions: "harness unknown" and "no model recorded" are different facts,
  * and a heading that reads as a category when it is really an absence is how a list starts lying.
  */
+/**
+ * The key rows whose DIRECTORY is gone are filed under, when nothing else names them.
+ *
+ * Unreachable as a real key by construction: every project key is `projectGroup || project`, and
+ * both are single path SEGMENTS — `projectName` splits on the separator, so no value either can
+ * take contains one. A sentinel that a folder could be named would silently merge that folder's
+ * sessions into this bucket.
+ */
+const GONE_PROJECT_KEY = '/gone'
+
 export function groupSessions(
   list: readonly ControlSession[],
   by: SessionGrouping,
-  unknownLabels: { harness: string; model: string; project: string; task: string; repo: string },
+  unknownLabels: {
+    harness: string
+    model: string
+    project: string
+    task: string
+    repo: string
+    /**
+     * Rows whose recorded directory no longer exists AND whose repository was never recorded.
+     *
+     * Its own heading rather than sharing `project`'s: "no directory recorded" and "the directory
+     * is not there any more" are different facts, and the second is the one that must not be
+     * grouped under the last segment of the path — that is how the removed worktree
+     * `member-connect-rotate` became a project standing beside `Agentistics`.
+     */
+    goneProject: string
+  },
   /** The tasks the user marked finished — a statement about the WORK, not about any session. */
   doneTasks: readonly string[] = [],
   order: SessionOrder = DEFAULT_ORDER,
@@ -177,9 +202,13 @@ export function groupSessions(
       : by === 'task' ? (s.task ?? '')
       : by === 'repo' ? (s.repo ?? '')
       // The PROJECT is what the work is called, which for anything in a repository is the main
-      // checkout — never the worktree's own directory, or one project files as three.
-      : (s.projectGroup || s.project)
-    const label = key !== '' ? key : unknownLabels[by]
+      // checkout — never the worktree's own directory, or one project files as three. And never
+      // the folder name of a directory that is GONE: that path resolves to nothing, so its last
+      // segment is a guess, and a group made out of a guess reads exactly like a real project.
+      : (s.projectGroup || (s.dirGone ? GONE_PROJECT_KEY : s.project))
+    const label = key === GONE_PROJECT_KEY ? unknownLabels.goneProject
+      : key !== '' ? key
+      : unknownLabels[by]
     const found = groups.get(key)
     if (found) found.sessions.push(s)
     else {
@@ -391,6 +420,16 @@ export function detailLines(s: ControlSession, labels: {
   doing: string
   task: string
   metrics: string
+  /** Heads the spelled-out gauge: `45%  ·  455.4k / 1M`. */
+  context: string
+  /**
+   * Heads the conversation this row continues from — the id `--resume` takes.
+   *
+   * Worth a row of its own because it is the one fact that turns "this session is somewhere" into
+   * something a person can act on outside agentop, and because it is only ever shown when it was
+   * RECORDED: a row without it is a row where nobody knows, and `conversationBlind` says so.
+   */
+  conversation: string
   /**
    * Labels for the OTHER name, when a session is named in both places.
    *
@@ -445,6 +484,21 @@ export function detailLines(s: ControlSession, labels: {
       value: [s.tokens, s.cost].filter(Boolean).join('  ·  '),
     })
   }
+  // The gauge SPELLED OUT: the bar on the row is a glance, and this is the only place the two
+  // numbers behind it are legible. Without them a percentage is unauditable — you cannot tell a
+  // reading against the right window from one against the wrong one, which is the single most
+  // useful thing to be able to check about this feature.
+  if (s.context) {
+    out.push({
+      key: 'context',
+      label: labels.context,
+      value: `${s.context.label}  ·  ${s.context.used} / ${s.context.window}`,
+    })
+  }
+  // Where it continues from. Under the metrics because it is the fact you copy rather than read.
+  if (s.conversationId) {
+    out.push({ key: 'conv', label: labels.conversation, value: s.conversationId })
+  }
   if (s.note) out.push({ key: 'note', label: labels.note, value: s.note })
   if (s.startedAt !== undefined) {
     out.push({ key: 'started', label: labels.started, value: ago(s.startedAt) })
@@ -461,7 +515,13 @@ export function detailLines(s: ControlSession, labels: {
   }
   if (s.state === 'closed') out.push({ key: 'closed', label: '', value: labels.closed, note: true })
   else if (!s.actionable) out.push({ key: 'external', label: '', value: labels.external, note: true })
+  // The directory first: it is the caveat that explains the others — a path that resolves to
+  // nothing is why the project may be a bucket and why reopening will fail.
+  if (s.dirGone) out.push({ key: 'gone', label: '', value: s.dirGone, note: true })
   if (s.approvalBlind) out.push({ key: 'blind', label: '', value: s.approvalBlind, note: true })
+  if (s.conversationBlind) {
+    out.push({ key: 'convblind', label: '', value: s.conversationBlind, note: true })
+  }
   return out
 }
 
@@ -509,9 +569,15 @@ export function fitApprovalPreview(lines: readonly string[], rows: number): stri
  * own numbered options, the confirmation under it has two of its own, and without a line saying
  * which is which the pane is two menus stacked on top of each other.
  */
-export function askRows(o: { preview: number; detail: number }): number {
+export function askRows(o: { preview: number; detail: number; choices?: number }): number {
   const preview = Math.max(0, Math.min(o.preview, APPROVAL_PREVIEW_MAX))
-  return Math.max(QUESTION_ROWS + (preview > 0 ? preview + 1 : 0), Math.max(0, o.detail))
+  // A picker draws one row per option instead of the two a yes/no carries, and it is budgeted for
+  // the same reason the evidence is: Ink composites what does not fit, so an unbudgeted list does
+  // not scroll, it draws over whatever is under the pane. `QUESTION_ROWS` stays the floor — a
+  // two-option dialog must not end up with less room than a confirmation would have had.
+  const choices = Math.max(0, o.choices ?? 0)
+  const body = choices > 1 ? Math.max(QUESTION_ROWS, choices) : QUESTION_ROWS
+  return Math.max(body + (preview > 0 ? preview + 1 : 0), Math.max(0, o.detail))
 }
 
 
@@ -582,7 +648,15 @@ export function sessionActions(
     // exists. The host decides `canApprove`, and it is true only when the session is genuinely
     // asking AND somebody has read this harness's dialog — a keystroke sent into a session that is
     // not asking is a blank turn, or an option taken out of a menu nobody was looking at.
-    { action: 'approve', enabled: Boolean(selected?.canApprove) },
+    // Enabled wherever there is something to ANSWER: a plain confirmation, a pickable option list,
+    // or an option list this harness cannot pick from — that last one opens a refusal that names why
+    // and points at attaching, which is information rather than an inert key.
+    {
+      action: 'approve',
+      enabled: Boolean(selected?.canApprove)
+        || Boolean(selected?.canChoose)
+        || (selected?.dialogOptions?.length ?? 0) > 1,
+    },
     // Typing into a session needs it to be RUNNING and nothing more: a session that is working will
     // read what it was handed when it gets there. The one case that must not go through is a
     // session sitting on a dialog, where the prompt is a menu — and that is refused by the HOST,
@@ -718,6 +792,16 @@ export interface SessionColumns {
   worktree: number
   /** Tokens + cost. `0` when nothing on screen has any — never a column of blanks. */
   metrics: number
+  /**
+   * The context gauge — bar plus percentage. `0` when no row on screen has a reading.
+   *
+   * It outlives `metrics` under width pressure, which is the one ordering decision here worth
+   * stating: tokens and cost are a record of what a session HAS spent, while this is the only cell
+   * that says what it can still do. On a narrow terminal the question people are answering is
+   * "which of these do I need to deal with", and a session about to run out of window is the
+   * answer to it.
+   */
+  context: number
   harness: number
   where: number
 }
@@ -770,6 +854,61 @@ export function sessionMetric(s: ControlSession): string {
   return [s.tokens, s.cost].filter(Boolean).join(' ')
 }
 
+// ---------------------------------------------------------------------------
+// the context gauge
+// ---------------------------------------------------------------------------
+
+/**
+ * Columns the bar itself takes, label excluded.
+ *
+ * Six, because the bar's job on a row is a GLANCE — nearly empty, half, nearly full — and six cells
+ * resolve that to within a sixth. Anything finer is a number, and the number is already printed
+ * beside it. Anything coarser stops being a shape.
+ */
+export const CONTEXT_BAR = 6
+
+/** The filled/empty bar for a fraction — PURE, and SATURATED at both ends.
+ *
+ *  Saturation is the whole point of drawing this separately from the label: a session really can
+ *  exceed the window this reading was computed against, and a bar allowed to overflow would draw
+ *  past its own cell and shear every row under it — the exact failure the pure-layout rule exists
+ *  to prevent. So the BAR pins at full and the LABEL keeps telling the truth (`106%`), which is the
+ *  only division of labour where neither half lies. */
+export function contextBar(fraction: number, width: number = CONTEXT_BAR): string {
+  const w = Math.max(0, Math.floor(width))
+  if (w === 0) return ''
+  const safe = Number.isFinite(fraction) ? Math.max(0, Math.min(1, fraction)) : 0
+  // Rounded DOWN, mirroring the label: a bar showing full while the label says 99% is one of them
+  // being wrong, and it would be the bar — the shape is what gets believed at a glance.
+  const filled = Math.min(w, Math.floor(safe * w))
+  return '█'.repeat(filled) + '░'.repeat(w - filled)
+}
+
+/** The whole cell — bar, a space, then the percentage. `''` when this row has no reading. */
+export function sessionContext(s: ControlSession, width: number = CONTEXT_BAR): string {
+  if (!s.context) return ''
+  return `${contextBar(s.context.fraction, width)} ${s.context.label}`
+}
+
+/**
+ * How full is "too full" — the threshold the row changes colour at.
+ *
+ * Two of them rather than one, because they answer different questions: `warn` is "start thinking
+ * about wrapping this up", `full` is "the window this was measured against is exceeded and the
+ * reading past it is no longer a proportion of anything". `full` is deliberately 1 exactly, not
+ * 0.95: past it the number is not a warning, it is a different kind of statement.
+ */
+export const CONTEXT_WARN = 0.8
+export const CONTEXT_FULL = 1
+
+export type ContextLevel = 'ok' | 'warn' | 'full'
+
+export function contextLevel(fraction: number): ContextLevel {
+  if (fraction >= CONTEXT_FULL) return 'full'
+  if (fraction >= CONTEXT_WARN) return 'warn'
+  return 'ok'
+}
+
 /**
  * The column widths for a screenful of rows — PURE.
  *
@@ -812,15 +951,33 @@ export function sessionColumns(
 
   const id = widest('id', sessionHandle)
   const state = widest('state', s => s.stateLabel)
-  const task = o.groupedByTask ? 0 : widest('task', s => s.task ?? '')
-  const worktree = widest('worktree', worktreeName)
-  const age = widest('age', s => o.ages?.get(s.id) ?? '')
-  const metrics = widest('metrics', sessionMetric)
-  const harness = widest('harness', s => s.harness)
-  // The PROJECT, not the directory: once the grouping keys on the main checkout, a folder cell
-  // showing the worktree's own name says something the worktree cell already says better.
-  const where = widest('where', s => s.projectGroup || s.project)
   const title = widest('title', s => s.title)
+
+  /**
+   * The droppable cells, in the order the screen gives them up — least important FIRST.
+   *
+   * Named rather than positional. This used to be a list of six-number tuples fed to a six-argument
+   * `overhead(a, wt, k, m, h, w)`, which was already at the limit of what can be read; the context
+   * gauge would have made it seven, where a transposed pair is invisible in review and shows up as
+   * a column of the wrong width on somebody's terminal.
+   *
+   * The order itself: the directory first (the heading usually says it), then the harness (the
+   * row's colour says it), then tokens and cost, then the gauge, then the task, the worktree, and
+   * finally the age. The STATE and the NAME are not in this list at all — they are what a row
+   * cannot lose, the state because nothing else on the frame says whether this session is waiting
+   * for you, the name because a row you cannot identify is not a row you can act on.
+   */
+  const droppable = [
+    // The PROJECT, not the directory: once the grouping keys on the main checkout, a folder cell
+    // showing the worktree's own name says something the worktree cell already says better.
+    ['where', widest('where', s => s.projectGroup || s.project)],
+    ['harness', widest('harness', s => s.harness)],
+    ['metrics', widest('metrics', sessionMetric)],
+    ['context', widest('context', s => sessionContext(s))],
+    ['task', o.groupedByTask ? 0 : widest('task', s => s.task ?? '')],
+    ['worktree', widest('worktree', worktreeName)],
+    ['age', widest('age', s => o.ages?.get(s.id) ?? '')],
+  ] as const satisfies ReadonlyArray<readonly [keyof SessionColumns, number]>
 
   /**
    * Columns everything BUT the title costs: two for the cursor, the cells, and a gap between each
@@ -830,42 +987,41 @@ export function sessionColumns(
    * no session reports usage draws no metrics column, and paying its gap anyway would narrow every
    * title on the screen to reserve a space nothing occupies.
    */
-  const overhead = (a: number, wt: number, k: number, m: number, h: number, w: number) => {
-    const drawn = [id, state, 1, a, wt, k, m, h, w].filter(n => n > 0).length
-    return 2 + id + state + a + wt + k + m + h + w + GAP * (drawn - 1)
+  const overhead = (cells: Partial<Record<keyof SessionColumns, number>>) => {
+    const values = Object.values(cells).filter((n): n is number => n !== undefined)
+    const sum = values.reduce((n, v) => n + v, 0)
+    // `1` stands in for the title, which is always drawn and so always pays its own gap.
+    const drawn = [id, state, 1, ...values].filter(n => n > 0).length
+    return 2 + id + state + sum + GAP * (drawn - 1)
   }
 
   // The fewest columns a title is worth. Below it the row has a state word and an ellipsis, which
   // names nothing — so the screen gives up a whole cell instead.
   const MIN_TITLE = 8
 
-  // The give-up order, least important first: the directory, then the harness, then the usage. The
-  // STATE and the NAME are what a row cannot lose — the state because nothing else on the frame
-  // says whether this session is waiting for you, the name because a row you cannot identify is not
-  // a row you can act on.
-  const ladder: Array<[number, number, number, number, number, number]> = [
-    [age, worktree, task, metrics, harness, where],
-    [age, worktree, task, metrics, harness, 0],
-    [age, worktree, task, metrics, 0, 0],
-    [age, worktree, task, 0, 0, 0],
-    [age, worktree, 0, 0, 0, 0],
-    [age, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0],
-  ]
-  for (const [a, wt, k, m, h, w] of ladder) {
-    const room = width - overhead(a, wt, k, m, h, w)
+  const kept = new Map<keyof SessionColumns, number>(droppable)
+  const finish = (room: number): SessionColumns => ({
+    id, state, title: Math.max(1, Math.min(title, room)),
+    where: kept.get('where') ?? 0,
+    harness: kept.get('harness') ?? 0,
+    metrics: kept.get('metrics') ?? 0,
+    context: kept.get('context') ?? 0,
+    task: kept.get('task') ?? 0,
+    worktree: kept.get('worktree') ?? 0,
+    age: kept.get('age') ?? 0,
+  })
+
+  // One pass more than there are droppable cells: the first tries them all, the last tries none.
+  for (let i = 0; i <= droppable.length; i++) {
+    const room = width - overhead(Object.fromEntries(kept))
     // The title takes what it NEEDS, not what is left: stretching it to the full remainder pushed
     // the trailing cells to the far edge with a field of blank between, which is the old
     // misalignment wearing a different shape.
-    if (room >= MIN_TITLE || (a === 0 && wt === 0 && k === 0 && m === 0 && h === 0 && w === 0)) {
-      return {
-        id, state, title: Math.max(1, Math.min(title, room)),
-        age: a, worktree: wt, task: k, metrics: m, harness: h, where: w,
-      }
-    }
+    if (room >= MIN_TITLE || kept.size === 0) return finish(room)
+    kept.delete(droppable[i]![0])
   }
-  /* c8 ignore next */
-  return { id: 0, state: 1, title: 1, age: 0, worktree: 0, task: 0, metrics: 0, harness: 0, where: 0 }
+  /* c8 ignore next 2 */
+  return finish(width - overhead({}))
 }
 
 /** Pad or truncate a cell to exactly `w` columns. `0` means the column is not drawn. */
@@ -925,11 +1081,13 @@ export function sessionsCockpit(o: {
   asideLabel: number
   /** Rows the detail pane is asking for, `0` when there is nothing selected to describe. */
   detailWanted: number
+  /** Folded away by the user — the list takes the whole width, whatever it would have fitted. */
+  hideAside?: boolean
 }): CockpitLayout {
   const width = Math.max(1, o.width)
   const height = Math.max(1, o.height)
 
-  const aside = width >= ASIDE_NEEDS
+  const aside = o.hideAside ? 0 : width >= ASIDE_NEEDS
     // `+ 4` rather than `+ 2`: the rows carry a cursor, a state dot and — for a task or a project —
     // a trailing count, and sizing to the label alone truncated every long verb in the menu.
     ? Math.min(ASIDE_MAX, Math.max(ASIDE_MIN, o.asideLabel + 4))
@@ -1541,6 +1699,8 @@ export interface SessionDraft {
   harness?: { id: string; supportsModel?: boolean }
   cwd?: string
   task?: string
+  /** The name the user typed for this session. Absent means "no name of my own" — the row derives one. */
+  label?: string
   prompt?: string
   model?: string
   effort?: string
@@ -1581,6 +1741,7 @@ export function planSubmit(o: {
       ...(o.draft.effort ? { effort: o.draft.effort } : {}),
       ...(o.draft.prompt ? { prompt: o.draft.prompt } : {}),
       ...(o.draft.task ? { task: o.draft.task } : {}),
+      ...(o.draft.label ? { label: o.draft.label } : {}),
     },
   }
 }
@@ -1611,8 +1772,8 @@ export function sessionKeyHelp(w: {
   move: string; open: string; attach: string; menu: string; section: string
   newSession: string; search: string; clear: string; kill: string; rename: string
   note: string; task: string; mark: string; onlyActive: string; closed: string
-  exited: string; unfiled: string; group: string; detail: string; reset: string
-  tabs: string; help: string; quit: string
+  exited: string; unfiled: string; group: string; detail: string; menuFold: string
+  reset: string; tabs: string; help: string; quit: string
   approve: string; prompt: string; reopenFell: string
 }): KeyHelp[] {
   return [
@@ -1639,6 +1800,9 @@ export function sessionKeyHelp(w: {
     { keys: 'u', what: w.unfiled },
     { keys: 'v', what: w.group },
     { keys: 'd', what: w.detail },
+    // `b` leads: `ctrl+b` is tmux's default prefix, so inside a tmux the chord never reaches this
+    // app at all. The plain letter is the one that always works, and the one the footer names.
+    { keys: 'b / ctrl+b', what: w.menuFold },
     { keys: 'ctrl+r', what: w.reset },
     { keys: '[ ]', what: w.tabs },
     { keys: '?', what: w.help },
@@ -1698,8 +1862,20 @@ export const CARD_MIN_WIDTH = 28
  */
 export const CARD_MAX_WIDTH = 46
 
-/** Content lines a full card carries: name, state, usage, where, and what it is saying. */
-export const CARD_LINES = 5
+/**
+ * Content lines a full card carries: name, state, usage, the context gauge, where, model, and what
+ * it is filed under.
+ *
+ * SEVEN, and it got there twice for different reasons — the MODEL took a line of its own (it used
+ * to ride the `where` line as ` · opus`, where a bare word after a folder name reads as another
+ * folder), and the context GAUGE took one because it is a shape rather than a word and sharing a
+ * row with `12.4k $0.83` made it read as one more figure in a run of figures.
+ *
+ * It is a CEILING, not a demand: `cardGrid` takes `min(fullHeight, what the band affords)` and
+ * `fitCardLines` cuts from the bottom, so a short terminal draws exactly the cards it drew before
+ * and loses the same trailing lines. What changes is only that a tall one may say more.
+ */
+export const CARD_LINES = 7
 
 /** The fewest a card is worth: the name, the state, and one fact. Below that it is a list row. */
 export const CARD_MIN_LINES = 3
@@ -1731,11 +1907,39 @@ export interface CardGrid {
  * columns are the fewest that can place them in those rows, and every column left over is spent
  * making the cards WIDER rather than making more of them.
  */
-export function cardGrid(o: { width: number; height: number; total: number }): CardGrid | null {
+export function cardGrid(o: {
+  width: number
+  height: number
+  total: number
+  /**
+   * The most lines any card on screen will actually draw, when the caller has counted them.
+   *
+   * A card is as tall as the band affords and never taller than it has content for — the rule this
+   * function already followed against the CONSTANT, and which the constant alone cannot keep: a
+   * fleet whose richest session records no model, no task and no note draws four lines into a
+   * six-line frame, and two rows of blank inside a frame are not a card, they are a box with a name
+   * in it. Counted, those rows go back to the region and another band fits on the page.
+   */
+  lines?: number
+  /**
+   * Whether the grid will draw a group HEADING over its bands.
+   *
+   * A band's real cost is its cards plus the name over them, and sizing as though a band were only
+   * its cards is what made the grouped grid page four times over: the ceiling was measured for a
+   * region that then had to pay a row per band out of the same rows. Counted here, one row per
+   * band, the cards give up a line and the page carries a group more.
+   *
+   * It is the ARITHMETIC of a band, not a rule of thumb — the same `+ PANE_FRAME_Y` this function
+   * already pays for a frame, for the row a heading occupies.
+   */
+  headings?: boolean
+}): CardGrid | null {
   const width = Math.max(0, o.width)
   const height = Math.max(0, o.height)
-  const floorHeight = PANE_FRAME_Y + CARD_MIN_LINES
-  const fullHeight = PANE_FRAME_Y + CARD_LINES
+  const head = o.headings ? 1 : 0
+  const floorHeight = PANE_FRAME_Y + CARD_MIN_LINES + head
+  const fullHeight = PANE_FRAME_Y
+    + Math.max(CARD_MIN_LINES, Math.min(CARD_LINES, o.lines ?? CARD_LINES))
   if (width < CARD_MIN_WIDTH || height < floorHeight) return null
 
   // How many the region could carry at the floor — the ceiling on everything below.
@@ -1752,8 +1956,10 @@ export function cardGrid(o: { width: number; height: number; total: number }): C
     Math.min(CARD_MAX_WIDTH, Math.floor((width - CARD_GAP * (cols - 1)) / cols)),
   )
   // As tall as the band affords, never taller than the card has content for: rows of blank inside
-  // a frame are not a card, they are a box with a name in it.
-  const cardHeight = Math.min(fullHeight, Math.floor(height / rows))
+  // a frame are not a card, they are a box with a name in it. `- head` is the row the name over the
+  // band takes — the cards of a headed grid are shorter by exactly what their headings cost, and
+  // `rows <= maxRows` is what keeps the result at or above the floor.
+  const cardHeight = Math.min(fullHeight, Math.floor(height / rows) - head)
 
   return {
     cols, rows, cardWidth, cardHeight, gap: CARD_GAP,
@@ -1761,29 +1967,161 @@ export function cardGrid(o: { width: number; height: number; total: number }): C
   }
 }
 
+/**
+ * One horizontal BAND of a card page: a group's name, or a row of that group's cards.
+ *
+ * A band belongs to exactly ONE group. That is the whole model: a group opens a band with its name
+ * and its cards fill the bands under it, and a group with one card leaves the rest of its band
+ * EMPTY. The air to the right of a short group is not waste — it is what separates one group from
+ * the next, and filling it with the following group's cards is precisely how the grid used to
+ * ignore the grouping it was drawn under. (The control center's "air under a pane is a fault" rule
+ * is about air OUTSIDE a region; this air is inside the band and is doing work.)
+ */
+export type CardBand =
+  /** `muted` is the list's own reading: an absent key, a finished task, the history section. */
+  | { kind: 'heading'; label: string; count: number; muted: boolean }
+  /**
+   * Indexes into the flat card sequence — at most `cols` of them, all from one group — and the rows
+   * this band occupies, FRAME INCLUDED.
+   *
+   * The height is the BAND's, not the grid's, and that is the point: a single grid height is the
+   * height of the richest card in the whole fleet, so one session carrying a note and a model made
+   * every card on screen two rows taller than it had anything to put in them. Rows of blank inside a
+   * frame are not a card, they are a box with a name in it.
+   *
+   * It is the band and not the card because the cards of one band stand side by side: giving each
+   * its own height leaves the bottom edge of the row ragged, which is a worse thing to look at than
+   * the one blank line a short card beside a rich one still keeps.
+   */
+  | { kind: 'cards'; items: number[]; height: number }
+
 export interface CardPage {
-  /** The page actually in force, clamped into range. */
-  page: number
-  pages: number
-  /** Index of the first card of this page, and one past its last. */
-  from: number
-  to: number
+  bands: CardBand[]
+  /** Every card index on this page, in order — what the pager counts. */
+  items: number[]
+}
+
+/** Rows a page's bands occupy: one per heading, its own height per row of cards — PURE. */
+export function cardPageRows(bands: readonly CardBand[]): number {
+  return bands.reduce((n, b) => n + (b.kind === 'heading' ? 1 : Math.max(1, b.height)), 0)
 }
 
 /**
- * Which slice of the fleet a page names — PURE, and CLAMPED on every call.
+ * The fleet split into pages of bands — PURE, and the ONE arithmetic the grid is drawn from.
  *
- * Clamped rather than corrected in an effect, for the same reason the list's cursor is: a session
- * that ends between two polls shortens the list under the page, and a stored index would point past
- * the end for exactly one frame — which is the frame the user presses a key on.
+ * It walks the very `SessionRow[]` the LIST draws, so what a group is called, which ones are muted
+ * and where the history section begins are decided once, in `sessionRows`, for both layouts. Working
+ * the grouping out a second way here is a second implementation of it, and the two would disagree
+ * the first time either changed.
+ *
+ * Two rules paying for themselves:
+ *
+ *  - **A heading is never placed without a row of cards under it.** They go onto a page together or
+ *    neither does, so no page ever ends with a name and nothing named.
+ *  - **A group that crosses a page boundary REPEATS its name at the top of the next page.** Within
+ *    one page the name sits a band or two above and plainly governs the bands under it, so it is
+ *    said once; across a break it is gone, and a card under no name does not say what it belongs
+ *    to. The repeated heading carries the group's own count, not the count on this page — it is the
+ *    same statement the list makes, and the pager already says how much of the fleet is on screen.
+ *
+ * `headed: false` — a grouping of `none`, or a band too short to spend a row on a name — packs the
+ * whole fleet as one nameless group, which is exactly the dense grid this screen drew before.
+ *
+ * Each band is also SIZED here, to the tallest card in it and no taller, which is why the rows it
+ * gives back turn into more bands on the page rather than into air.
  */
-export function cardPage(total: number, capacity: number, page: number): CardPage {
-  const size = Math.max(1, capacity)
-  const count = Math.max(0, total)
-  const pages = Math.max(1, Math.ceil(count / size))
-  const at = Math.max(0, Math.min(Math.floor(page), pages - 1))
-  const from = at * size
-  return { page: at, pages, from, to: Math.min(count, from + size) }
+export function cardPages(o: {
+  /** The rows the list would draw, headings and spacers included. */
+  rows: readonly SessionRow[]
+  cols: number
+  /** Rows the grid region has, pager already paid for. */
+  gridRows: number
+  /** The TALLEST a band may be — the ceiling the region affords, from `cardGrid`. */
+  cardHeight: number
+  /**
+   * How many lines each card has to draw, by card index — see `cardLines`.
+   *
+   * Absent, every band takes the ceiling, which is the uniform grid this screen drew before.
+   */
+  lines?: readonly number[]
+  /** The most cards one page may hold — see `CARD_PAGE_MAX`. */
+  capacity: number
+  headed: boolean
+}): CardPage[] {
+  const cols = Math.max(1, o.cols)
+  const cardHeight = Math.max(1, o.cardHeight)
+  const cap = Math.max(1, o.capacity)
+  const budget = Math.max(0, o.gridRows)
+  /**
+   * The rows a band of these cards needs: its tallest card's lines plus the frame, never below the
+   * floor that makes a card a card, never above what the region affords.
+   */
+  const heightOf = (chunk: readonly number[]): number => {
+    if (!o.lines) return cardHeight
+    const most = chunk.reduce((n, i) => Math.max(n, o.lines![i] ?? 0), 0)
+    return Math.min(cardHeight, Math.max(PANE_FRAME_Y + CARD_MIN_LINES, PANE_FRAME_Y + most))
+  }
+
+  type Head = { label: string; count: number; muted: boolean }
+  const sections: Array<{ head: Head | null; items: number[] }> = []
+  let index = 0
+  for (const row of o.rows) {
+    if (row.kind === 'spacer') continue
+    if (row.kind === 'heading') {
+      // Unheaded, every row joins ONE nameless section, so nothing wraps early and the layout is
+      // byte-for-byte the one this screen drew before groups reached it.
+      if (o.headed) sections.push({ head: { label: row.label, count: row.count, muted: row.muted === true }, items: [] })
+      continue
+    }
+    const last = sections[sections.length - 1]
+    if (last && (o.headed || last.head === null)) last.items.push(index)
+    else sections.push({ head: null, items: [index] })
+    index++
+  }
+
+  const pages: CardPage[] = []
+  let bands: CardBand[] = []
+  let items: number[] = []
+  let used = 0
+  const flush = () => {
+    if (items.length > 0) pages.push({ bands, items })
+    bands = []
+    items = []
+    used = 0
+  }
+
+  for (const section of sections) {
+    // Whether THIS page already carries this section's name. Reset by every page break, which is
+    // what makes a split group say its name again.
+    let named = false
+    for (let i = 0; i < section.items.length; i += cols) {
+      const chunk = section.items.slice(i, i + cols)
+      const height = heightOf(chunk)
+      const cost = () => (section.head && !named ? 1 : 0) + height
+      // A page break is the only way to make room, so it is only ever taken while there is
+      // something to break away from — the loop always terminates.
+      if (items.length > 0 && (used + cost() > budget || items.length + chunk.length > cap)) {
+        flush()
+        named = false
+      }
+      if (section.head && !named) {
+        bands.push({ kind: 'heading', ...section.head })
+        used += 1
+        named = true
+      }
+      bands.push({ kind: 'cards', items: chunk, height })
+      items.push(...chunk)
+      used += height
+    }
+  }
+  flush()
+  return pages
+}
+
+/** Which page holds a card — PURE. `0` for an index no page carries, which is the first frame. */
+export function pageOfCard(pages: readonly CardPage[], index: number): number {
+  const at = pages.findIndex(p => p.items.includes(index))
+  return at < 0 ? 0 : at
 }
 
 // ---------------------------------------------------------------------------
@@ -1800,6 +2138,10 @@ export function cardPage(total: number, capacity: number, page: number): CardPag
  *
  * With grouping off there is no heading, and the card falls back to the project — the fact every
  * session already carries. A blank badge is a frame with a gap in it.
+ *
+ * Read ONLY where the grid draws no group headings: with a heading over the band, the same name on
+ * every card under it is a column of one word, which is why the list drops its `task` cell while
+ * grouping by task. One of the two says it, never both and never neither.
  */
 export function cardBadges(rows: readonly SessionRow[]): string[] {
   const out: string[] = []
@@ -1812,15 +2154,34 @@ export function cardBadges(rows: readonly SessionRow[]): string[] {
   return out
 }
 
-/** What a card line IS, so the component can colour it without parsing it back. */
-export type CardLineKind = 'title' | 'state' | 'fact' | 'say'
+/** What a card line IS, so the component can colour it without parsing it back.
+ *
+ *  `gauge` is its own kind rather than a `fact` for exactly that reason: its colour depends on the
+ *  LEVEL it is showing, which no other line's does, and the component must not have to re-derive
+ *  that by parsing the text back out of the line. */
+export type CardLineKind = 'title' | 'state' | 'fact' | 'say' | 'gauge'
 
 export interface CardLine {
   key: string
   kind: CardLineKind
   text: string
+  /**
+   * What this line IS, already localized — drawn dim in front of the value.
+   *
+   * Only on the lines a reader cannot name from the value alone. A card is narrow and the list
+   * solves this with a column HEADER the grid has no room for, so the naming moves onto the row:
+   * `session-monitor` and `cockpit: canal de eventos` are a folder and a task, drawn identically,
+   * and nothing on the card said which was which.
+   *
+   * Absent on the lines that say what they are: the name is the card's first line and its only bold
+   * one, the state word is coloured and unique, and `51.7k $1.24 · há 10h` names its own units.
+   * Rotulating those would spend the width that makes the ambiguous ones readable.
+   */
+  label?: string
   /** Drawn dim on the same row, after `text`. Given up first when the card is narrow. */
   tail?: string
+  /** Only on a `gauge` line: how full, so the component colours it without parsing `text` back. */
+  level?: ContextLevel
 }
 
 /** The already-localized words a card needs. This module owns no strings. */
@@ -1829,7 +2190,44 @@ export interface CardLabels {
   attached: string
   /** Short caveat for a harness with no probed approval markers. */
   blind: string
+  /**
+   * The names of the facts, from the very table the list's column header prints (`sessionsCols`).
+   *
+   * The same words on purpose: the two layouts are one screen in two shapes, and a card that called
+   * the folder something the header does not would be a second vocabulary to learn.
+   */
+  worktree: string
+  project: string
+  task: string
+  note: string
+  model: string
   ago: (startedAt: number) => string
+}
+
+/** Columns between a card's label and its value. */
+export const CARD_LABEL_GAP = 2
+
+/**
+ * Below this a labelled card says LESS than an unlabelled one: `worktree  sess…` names the field and
+ * stops answering which one, which is the trade the labels exist to avoid.
+ */
+export const CARD_VALUE_MIN = 10
+
+/**
+ * The column the labels are drawn in, or `0` to draw none — PURE.
+ *
+ * All-or-nothing per CARD rather than per line, and that is the whole point: labels that come and go
+ * down a card leave the values starting at different columns, which is the jumble `sessionColumns`
+ * exists to prevent on the list. So either every fact is named and aligned, or none is.
+ *
+ * Dropping them is the right degradation because a label never removes a line — it only narrows the
+ * value. A card too narrow to carry both keeps the values whole and gives up the naming, which is
+ * exactly what the list does when it drops its header row.
+ */
+export function cardLabelWidth(lines: readonly CardLine[], width: number): number {
+  const widest = lines.reduce((n, l) => Math.max(n, (l.label ?? '').length), 0)
+  if (widest === 0) return 0
+  return width - widest - CARD_LABEL_GAP >= CARD_VALUE_MIN ? widest : 0
 }
 
 /**
@@ -1844,7 +2242,23 @@ export interface CardLabels {
  * usage would otherwise show every one of its sessions costing nothing, in the very place a person
  * looks to decide what to close. Same rule the detail pane and `sessionMetric` already follow.
  */
-export function cardLines(s: ControlSession, labels: CardLabels): CardLine[] {
+export function cardLines(
+  s: ControlSession,
+  labels: CardLabels,
+  /**
+   * The name of the band this card sits under, when there is one.
+   *
+   * A fact whose value IS that name is dropped: under a heading reading `agentistics`, a line
+   * reading `project  agentistics` spends one of four rows saying what the row above already said,
+   * and the row it costs is the one that would have carried the model or the task. The same rule
+   * `sessionColumns` applies to its `task` cell while grouping by task, one line lower down.
+   *
+   * Matched on the drawn LABEL, so a composite heading (`agentistics · closed`) keeps the line: it
+   * is not the same word, and dropping a fact because a heading merely contains it would be a card
+   * withholding something nothing on screen says.
+   */
+  group = '',
+): CardLine[] {
   const marks = [
     s.attached ? labels.attached : '',
     s.approvalBlind ? labels.blind : '',
@@ -1860,13 +2274,38 @@ export function cardLines(s: ControlSession, labels: CardLabels): CardLine[] {
     .filter(Boolean).join(' · ')
   if (usage) out.push({ key: 'usage', kind: 'fact', text: usage })
 
-  // WHERE, and which checkout of it: with several worktrees of one repository open at once, the
-  // folder name is the only thing telling them apart.
-  const where = [worktreeName(s) || s.projectGroup || s.project, s.model].filter(Boolean).join(' · ')
-  if (where) out.push({ key: 'where', kind: 'fact', text: where })
+  // The gauge gets its OWN line rather than joining the usage one. A card is read one line at a
+  // time and the bar is the only thing on it that is a shape rather than a word — sharing a line
+  // with `12.4k $0.83` would make it read as one more figure in a run of figures, which is exactly
+  // the glance it exists to shortcut. It sits directly under the usage because it is the same
+  // subject, and above `where` because it is a fact about the session rather than its address.
+  if (s.context) {
+    out.push({
+      key: 'context',
+      kind: 'gauge',
+      text: sessionContext(s),
+      level: contextLevel(s.context.fraction),
+    })
+  }
 
-  if (s.task) out.push({ key: 'task', kind: 'fact', text: s.task })
-  if (s.note) out.push({ key: 'note', kind: 'fact', text: s.note })
+  // WHERE, and which checkout of it: with several worktrees of one repository open at once, the
+  // folder name is the only thing telling them apart — and the label says WHICH of the two kinds of
+  // place this is, since a worktree's name and a project's name are the same shape of word.
+  const said = (text: string) => text !== '' && text !== group
+  const worktree = worktreeName(s)
+  const where = worktree || s.projectGroup || s.project
+  if (said(where)) {
+    out.push({
+      key: 'where', kind: 'fact', text: where,
+      label: worktree ? labels.worktree : labels.project,
+    })
+  }
+  // The MODEL on its own line rather than trailing the folder: appended there it was a bare word
+  // after a path, which reads as another path.
+  if (said(s.model ?? '')) out.push({ key: 'model', kind: 'fact', text: s.model!, label: labels.model })
+
+  if (said(s.task ?? '')) out.push({ key: 'task', kind: 'fact', text: s.task!, label: labels.task })
+  if (s.note) out.push({ key: 'note', kind: 'fact', text: s.note, label: labels.note })
 
   // What it is SAYING, last, because it is the line a short card gives up first — and the only one
   // that would be invented if it were not there. Present only for a session agentop hosts.
@@ -1923,21 +2362,73 @@ export function cardBand(o: { listRows: number; header: boolean }): {
 }
 
 /**
- * Which card a click landed on, in grid coordinates — PURE, and the SAME arithmetic that drew it.
+ * Which card a click landed on — PURE, and resolved against the very BANDS that were drawn.
  *
- * The gutter between two cards belongs to neither: rounding it into one of them answers a click
- * the user did not make, which is worse than not answering at all.
+ * Against the bands rather than against a uniform `cols × cardHeight` grid, because with grouping on
+ * the page is no longer uniform: a heading costs one row and a short group leaves the right of its
+ * band empty. Re-deriving the geometry from `cols` alone answers with the card one row up, or with a
+ * card that is not there.
+ *
+ * The gutter between two cards belongs to neither, a heading row belongs to no card, and the empty
+ * right-hand end of a short group's band is not a card either: each returns `null`, because
+ * answering a click the user did not make is worse than not answering at all.
  */
-export function cardAt(grid: CardGrid, x: number, y: number): number | null {
-  if (x < 0 || y < 0) return null
-  const stride = grid.cardWidth + grid.gap
-  const col = Math.floor(x / stride)
-  if (col >= grid.cols) return null
-  if (x - col * stride >= grid.cardWidth) return null
-  const row = Math.floor(y / grid.cardHeight)
-  if (row >= grid.rows) return null
-  const index = row * grid.cols + col
-  return index >= grid.capacity ? null : index
+export function cardHit(o: {
+  bands: readonly CardBand[]
+  cardWidth: number
+  gap: number
+  x: number
+  y: number
+}): number | null {
+  if (o.x < 0 || o.y < 0) return null
+  let top = 0
+  for (const band of o.bands) {
+    if (band.kind === 'heading') {
+      if (o.y === top) return null
+      top += 1
+      continue
+    }
+    const height = Math.max(1, band.height)
+    if (o.y < top + height) {
+      const stride = o.cardWidth + o.gap
+      const col = Math.floor(o.x / stride)
+      // The gap AFTER a card belongs to the gutter, not to the card in front of it.
+      if (o.x - col * stride >= o.cardWidth) return null
+      return band.items[col] ?? null
+    }
+    top += height
+  }
+  return null
+}
+
+/** Every band of cards, across every page, in drawing order — the sequence `↑`/`↓` walk. */
+export function cardRows(pages: readonly CardPage[]): number[][] {
+  return pages.flatMap(p => p.bands.flatMap(b => (b.kind === 'cards' ? [b.items] : [])))
+}
+
+/**
+ * Where `↑`/`↓` land from a card — PURE.
+ *
+ * Stepping by `cols` was right while every band was full and is wrong the moment a group is shorter
+ * than the grid is wide: `↓` from the only card of a one-card group jumped over the whole band
+ * underneath it. So the move is band to band, keeping the COLUMN — and clamped to the last card of a
+ * shorter band rather than falling off it.
+ *
+ * It walks every page, not just the open one, because the page FOLLOWS the cursor: stepping off the
+ * bottom band is how you reach the next page, and there is no second position to keep in step.
+ */
+export function cardStep(pages: readonly CardPage[], index: number, dy: number): number {
+  const rows = cardRows(pages)
+  let at = -1
+  let col = 0
+  rows.forEach((row, i) => {
+    const found = row.indexOf(index)
+    if (found >= 0) { at = i; col = found }
+  })
+  if (at < 0) return index
+  const target = rows[Math.max(0, Math.min(at + dy, rows.length - 1))]
+  if (!target || target.length === 0) return index
+  return target[Math.min(col, target.length - 1)] ?? index
 }
 
 export interface PagerCells {
@@ -1993,4 +2484,38 @@ export function pagerHit(cells: PagerCells, x: number): 'prev' | 'next' | null {
   if (cells.prev !== '' && x === cells.prevAt) return 'prev'
   if (cells.next !== '' && x === cells.nextAt) return 'next'
   return null
+}
+
+// ---------------------------------------------------------------------------
+// closing a session from its own row
+// ---------------------------------------------------------------------------
+
+/** The glyph that closes a session from its own row. */
+export const CLOSE_CELL = '✕'
+
+/**
+ * Columns reserved at the right edge of the list for the per-row close control — PURE.
+ *
+ * Two: a gap and the glyph. Reserved from the width BEFORE the columns are measured, because a
+ * control drawn after a table that already spent the full width is a control drawn on top of the
+ * last cell.
+ *
+ * Zero when nothing on screen can be closed, and zero on a list too narrow to spare it — the
+ * keyboard's `x` still works there, and a table squeezed to make room for a button is a worse
+ * trade than a button that is only on the wider terminal.
+ */
+export function closeCellWidth(rows: readonly ControlSession[], width: number): number {
+  const NEEDS = 40
+  return width >= NEEDS && rows.some(canClose) ? 2 : 0
+}
+
+/**
+ * Can this row be closed at all?
+ *
+ * Only a session agentop HOSTS: an external process is someone else's to stop, and a closed
+ * conversation has nothing running to end. A row that cannot take it draws no glyph — a control
+ * that is visible and refuses is worse than one that is absent.
+ */
+export function canClose(s: ControlSession): boolean {
+  return s.actionable && s.state !== 'closed' && s.state !== 'exited'
 }

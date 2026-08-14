@@ -5,6 +5,7 @@ import { fmt, fmtCost, HARNESS_CAPABILITIES } from '@agentistics/core'
 import { harnessRows, type HarnessRow } from '../selectors'
 import { DataTable, Empty, type Column } from '../components/Primitives'
 import { COLORS, HARNESS_COLOR, HARNESS_LABEL } from '../theme'
+import { listRows } from '../dashboard/view'
 import type { TuiStrings } from '../i18n'
 
 /**
@@ -17,10 +18,12 @@ function capable(harness: HarnessId, metric: 'tokens' | 'cost' | 'agents'): bool
   return HARNESS_CAPABILITIES[harness]?.[metric] ?? false
 }
 
-export function Harnesses({ data, s, width }: {
+export function Harnesses({ data, s, width, height }: {
   data: AppData
   s: TuiStrings
   width: number
+  /** Rows this screen may use — its table draws a header before the first harness. */
+  height: number
 }) {
   const rows = harnessRows(data)
   if (rows.length === 0) return <Empty message={s.empty} />
@@ -48,7 +51,7 @@ export function Harnesses({ data, s, width }: {
 
   return (
     <Box flexDirection="column">
-      <DataTable columns={columns} rows={rows} keyOf={r => r.harness} width={width} />
+      <DataTable columns={columns} rows={rows.slice(0, listRows(height))} keyOf={r => r.harness} width={width} />
     </Box>
   )
 }

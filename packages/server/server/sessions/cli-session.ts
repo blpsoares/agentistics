@@ -6,6 +6,7 @@
  * `reconcileSessions` says what exists. This file does I/O and prints.
  */
 
+import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
 import { sessionRunning } from '@agentistics/tui/control/sessions'
@@ -16,7 +17,7 @@ import { cliStrings } from '../cli-i18n'
 import { resolveLang } from '../cli-lang'
 import { readPreferences } from '../preferences'
 import { toControlSession } from './control-session'
-import { repoFacts } from './repo-facts'
+import { recordedRepo, repoFacts } from './repo-facts'
 import { emptyReason, renderSessionTable, resolveWidth } from './session-table'
 import { SPAWN_SPECS, planSpawn } from './spawn-spec'
 import { reconcileSessions, resolveSessionRef, type ReconciledSession, type RefCandidate } from './session-ref'
@@ -28,6 +29,7 @@ import { loadHarnessSessions } from './harness-sessions'
 import { createSessionsPoller, type SessionSnapshot } from './sessions-host'
 import { needsAttention, type SessionView } from './session-view'
 import { planTaskReopen, taskReopenSucceeded } from './task-reopen'
+import { liveConversationHolders } from './live-claims'
 import type { SessionBackend, SpawnPlanError } from './types'
 
 /** Derived from the specs, never a second hand-written list — the two could not then disagree. */
@@ -123,6 +125,7 @@ async function start(
   const cwd = cmd.cwd ? resolve(cmd.cwd) : process.cwd()
   const planned = planSpawn({
     harness: cmd.harness, cwd, prompt: cmd.prompt, model: cmd.model, effort: cmd.effort,
+    conversationId: randomUUID(),
   })
   if (!planned.ok) { console.error(explainPlanError(planned.error)); return 1 }
 
@@ -143,6 +146,8 @@ async function start(
     ...(cmd.effort ? { effort: cmd.effort } : {}),
     ...(cmd.label ? { label: cmd.label } : {}),
     ...(cmd.task ? { task: cmd.task } : {}),
+    ...(planned.plan.conversationId ? { conversationId: planned.plan.conversationId } : {}),
+    ...(await recordedRepo(cwd)),
   })
 
   if (cmd.background) {
@@ -206,6 +211,7 @@ async function batch(
       ...(spec.prompt ? { prompt: spec.prompt } : {}),
       ...(spec.model ? { model: spec.model } : {}),
       ...(spec.effort ? { effort: spec.effort } : {}),
+      conversationId: randomUUID(),
     })
     if (!planned.ok) { failed.push({ harness: spec.harness, reason: explainPlanError(planned.error) }); continue }
 
@@ -228,6 +234,8 @@ async function batch(
       ...(spec.model ? { model: spec.model } : {}),
       ...(spec.effort ? { effort: spec.effort } : {}),
       ...(spec.name ? { label: spec.name } : {}),
+      ...(planned.plan.conversationId ? { conversationId: planned.plan.conversationId } : {}),
+      ...(await recordedRepo(cwd)),
     })
     started.push({ id, harness: spec.harness, cwd })
   }
@@ -252,15 +260,34 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
   }
   const conversations = await loadConversations()
   const live = new Set((await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id))
+  // What is already being driven, so this cannot put a second assistant into a conversation that has
+  // one. `live` above cannot answer it: it is keyed by ROW, and the twin case is a row that is down
+  // while a DIFFERENT row drives its conversation. Same collector the cockpit's verb uses.
+  const inUse = await liveConversationHolders(backend)
+  // Claimed within this batch too. The cockpit's copy of this loop has had this set for a while and
+  // this one never did, so `conversationForProcess` — which matches on harness and directory, and
+  // therefore answers with the FIRST conversation of a repository — handed the same one to every row
+  // of a task filed in that repository. The drift `planTaskReopen` was extracted to end, met again
+  // one layer out.
+  const taken = new Set<string>()
   // The DECISION is the pure `planTaskReopen`, shared with the cockpit's verb. The two used to be
   // separate implementations and had drifted: only one retired the row it replaced, so the same
   // gesture left a different registry depending on where you pressed it.
   const plan = planTaskReopen({
     entries: wanted,
     liveIds: live,
+    inUse,
     conversationFor: m => {
-      const conv = conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
-      return conv?.resumable ? { sessionId: conv.sessionId, title: conv.title } : null
+      const own = m.conversationId
+        ? conversations.find(c => c.sessionId === m.conversationId)
+        : undefined
+      const conv = own ?? conversationForProcess(
+        conversations.filter(c => !taken.has(c.sessionId)),
+        { harness: m.harness, cwd: m.cwd },
+      )
+      if (!conv?.resumable) return null
+      taken.add(conv.sessionId)
+      return { sessionId: conv.sessionId, title: conv.title }
     },
   })
 
@@ -279,6 +306,15 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
       id, harness: m.harness, cwd: m.cwd, createdAt: new Date().toISOString(), task,
       label: row.label,
       ...(m.note ? { note: m.note } : {}),
+      // The conversation is known EXACTLY here — we just handed its id to the CLI. The cockpit's
+      // reopen verb has recorded it since it was written; this path had not, so the same gesture
+      // left a row that knew which conversation it drove or one that did not, depending on where it
+      // was pressed. `planTaskReopen` exists to stop precisely that kind of drift.
+      ...(planned.plan.conversationId ? { conversationId: planned.plan.conversationId } : {}),
+      // The REPLACEMENT re-measures rather than copying `m.repo`: a reopen is the moment to notice
+      // that the worktree came back, and copying a recorded value would carry one stale answer
+      // through every session ever reopened from it.
+      ...(await recordedRepo(m.cwd)),
     })
     // The old row is RETIRED, not deleted: it is still a thing that happened, and it stops standing
     // beside its own continuation with the same name on it.
@@ -287,13 +323,22 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
   }
 
   if (json) {
-    console.log(JSON.stringify({ task, started, skipped, already: plan.already }, null, 2))
+    console.log(JSON.stringify({
+      task, started, skipped, already: plan.already,
+      // Each one NAMES the session that already has the conversation, because a machine reader is
+      // exactly who needs to be told where the work is rather than that something did not happen.
+      heldElsewhere: plan.heldElsewhere.map(h => ({ id: h.id, heldBy: h.holder.id, label: h.holder.label })),
+    }, null, 2))
   } else {
     for (const id of started) console.log(id)
     // Reported, never silent: a partial reopen presented as a success leaves someone believing they
     // have their whole task back.
+    for (const h of plan.heldElsewhere) {
+      console.log(`${h.id}\talready open in ${h.holder.label}`)
+    }
     const alreadyUp = plan.already.length ? `, ${plan.already.length} already running` : ''
-    console.log(`\n${started.length} reopened${skipped.length ? `, ${skipped.length} could not be` : ''}${alreadyUp}.`)
+    const held = plan.heldElsewhere.length ? `, ${plan.heldElsewhere.length} already open elsewhere` : ''
+    console.log(`\n${started.length} reopened${skipped.length ? `, ${skipped.length} could not be` : ''}${alreadyUp}${held}.`)
   }
   return taskReopenSucceeded(plan, started.length) ? 0 : 1
 }
@@ -312,6 +357,11 @@ function fleetJson(snap: SessionSnapshot): unknown {
       label: v.label ?? null,
       task: v.task ?? null,
       resumeId: v.resume?.sessionId ?? null,
+      // The RECORDED conversation, kept apart from `resumeId` above rather than folded into it.
+      // They answer different questions: this one is what the row provably drives, that one is a
+      // target the reopen verb OFFERS and will fall back to a harness-and-directory guess for. A
+      // caller reading one field could not tell which of the two it had been given.
+      conversationId: v.conversationId ?? null,
     })),
     attention: snap.attention,
     unavailable: snap.unavailable ?? null,
@@ -368,7 +418,7 @@ async function ls(
 
   // Resolved per session and memoized by directory — the same read the cockpit does, and what makes
   // three worktrees of one repository group under the project rather than under three names.
-  const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd)))
+  const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd, v.recordedRepo)))
   // A preferences file that cannot be read costs the "finished" mark on a task heading, never the
   // table: the fleet is what the command is for.
   const finishedTasks = await readPreferences().then(p => p.finishedTasks ?? []).catch(() => [])
@@ -422,6 +472,7 @@ async function ls(
         project: c.sessionsUnknownProject,
         task: c.sessionsUnknownTask,
         repo: c.sessionsUnknownRepo,
+        goneProject: c.sessionsGoneProject,
       },
       closed: c.sessionsClosedWord,
       done: c.sessionsDoneWord,

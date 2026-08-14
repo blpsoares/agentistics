@@ -243,6 +243,19 @@ describe('the harnesses probed alongside their spawn specs', () => {
     // a pattern loose enough to match both would fire on any list with arrow-key help on it.
     expect(quiet(AGY_APPROVAL, 'copilot')).toBe('waiting')
     expect(quiet(COPILOT_APPROVAL, 'antigravity')).toBe('waiting')
-    expect(quiet(GEMINI_APPROVAL, 'claude')).toBe('waiting')
+  })
+
+  it('lets claude and gemini overlap, because they MEASURABLY share that footer', () => {
+    // `GEMINI_APPROVAL` used to be asserted alongside the two above, and that was right until
+    // claude's THIRD dialog was probed on 2026-08-14: its `AskUserQuestion` footer really does read
+    // `Enter to select · ↑/↓ to navigate · Esc to cancel`, which is gemini's line exactly.
+    //
+    // So the overlap is a FACT about the two CLIs rather than a pattern written too loosely, and it
+    // costs nothing: `rulesFor(harness)` only ever tests a harness's own rules against its own
+    // frames, so neither is ever asked about the other outside this test. What the rule above still
+    // protects is the thing that mattered — nobody writing ONE pattern to cover several harnesses
+    // in place of probing each of them.
+    expect(quiet(GEMINI_APPROVAL, 'claude')).toBe('waiting-approval')
+    expect(quiet(GEMINI_APPROVAL, 'gemini')).toBe('waiting-approval')
   })
 })

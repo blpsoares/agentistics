@@ -178,22 +178,28 @@ export function RecordCard({ title, subtitle, badge, fields, actions, onClick, l
 // RecordCardAction
 // A footer button for RecordCard: equal share of the row, 44px tall, flat against its neighbours
 // (the 1px gaps in the parent's background show through as hairline dividers).
-export function RecordCardAction({ onClick, children, danger, label }: {
+export function RecordCardAction({ onClick, children, danger, label, disabled }: {
   onClick: () => void
   children: React.ReactNode
   danger?: boolean
   label: string
+  /** An action that is already running, or that must wait for one. A disabled control that still
+   *  LOOKS pressable is how an unanswered click becomes a second request. */
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-label={label}
+      aria-busy={disabled || undefined}
       style={{
         flex: 1, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7,
         border: 'none', background: 'var(--bg-card)',
         color: danger ? '#ef4444' : 'var(--text-secondary)',
-        fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+        fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit',
+        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1,
       }}
     >
       {children}
