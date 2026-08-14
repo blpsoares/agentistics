@@ -14,6 +14,22 @@ export const CLAUDE_DIR = process.env.CLAUDE_DIR ?? (_selfContributingCentral ? 
 export const PROJECTS_DIR = join(CLAUDE_DIR, 'projects')
 export const SESSION_META_DIR = join(CLAUDE_DIR, 'usage-data', 'session-meta')
 export const STATS_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json')
+// Billing-signal sources, read by `billing-detect.ts` to PROPOSE how this machine is billed.
+// That module extracts a fixed whitelist of non-secret fields and never touches the tokens,
+// email address or account uuids these same files also hold — see its header.
+//
+// Note these are NOT shared with `mcp-list.ts`, which reads the literal `HOME_DIR` copies of
+// `settings.json` / `.claude.json` rather than the (overridable, possibly container-mounted)
+// CLAUDE_DIR ones. That difference is real, not an oversight: MCP administration acts on the
+// user's own home config, while billing detection describes whichever Claude install this server
+// is actually reporting on. Collapsing the two would silently retarget one of them.
+export const CLAUDE_SETTINGS_FILE = process.env.CLAUDE_SETTINGS_FILE ?? join(CLAUDE_DIR, 'settings.json')
+export const CLAUDE_SETTINGS_LOCAL_FILE = process.env.CLAUDE_SETTINGS_LOCAL_FILE ?? join(CLAUDE_DIR, 'settings.local.json')
+export const CLAUDE_CREDENTIALS_FILE = process.env.CLAUDE_CREDENTIALS_FILE ?? join(CLAUDE_DIR, '.credentials.json')
+// `~/.claude.json` is a SIBLING of the .claude directory, not a child, so it cannot be derived
+// from CLAUDE_DIR — a container mounting the host dir at /host-claude would resolve it to
+// `/.claude.json`. Defaults to the home copy and takes an explicit override instead.
+export const CLAUDE_JSON_FILE =process.env.CLAUDE_JSON_FILE ?? join(HOME_DIR, '.claude.json')
 export const PORT = parseInt(process.env.PORT ?? '47291', 10)
 // The web dashboard is served on WEB_PORT (PORT + 1 by default → 47292). In binary mode the
 // server binds BOTH: PORT (47291) is always the api + mcp endpoint, WEB_PORT (47292) is what you
@@ -48,6 +64,10 @@ export const ARCHIVE_STATS_DIR = join(ARCHIVE_DIR, 'stats-cache')
 export const CONSOLIDATED_DIR = join(AGENTISTICS_DATA_DIR, 'sessions')
 // Persisted workflow runs (survive Claude's transcript cleanup): <data dir>/workflows/<runId>.json
 export const WORKFLOWS_STORE_DIR = join(AGENTISTICS_DATA_DIR, 'workflows')
+// Session-manager registry: the sessions `agentop session` started, with their labels and notes.
+// Deliberately NOT inside CONSOLIDATED_DIR — `loadConsolidated` reads every flat *.json at that
+// root as a legacy Claude session, so a registry file there would be parsed as session metrics.
+export const MANAGED_SESSIONS_FILE = join(AGENTISTICS_DATA_DIR, 'managed-sessions.json')
 
 // ---------------------------------------------------------------------------
 // Team mode (Phase 1: folder union). When AGENTISTICS_TEAM=1 the server unions
@@ -146,6 +166,9 @@ export const TEAM_SYNC_FILE = process.env.AGENTISTICS_TEAM_SYNC_FILE ?? join(AGE
 // ---------------------------------------------------------------------------
 export const CODEX_DIR = process.env.CODEX_DIR ?? (_selfContributingCentral ? '/host-codex' : join(HOME_DIR, '.codex'))
 export const CODEX_SESSIONS_DIR = join(CODEX_DIR, 'sessions')
+// Codex's own billing signal. `auth.json` holds the OAuth tokens AND an optional API key; only
+// the plan tier and the PRESENCE of a key are ever read — see `billing-detect.ts`.
+export const CODEX_AUTH_FILE = process.env.CODEX_AUTH_FILE ?? join(CODEX_DIR, 'auth.json')
 
 // ---------------------------------------------------------------------------
 // Gemini CLI harness. Override with GEMINI_DIR; disable with AGENTISTICS_HARNESS_GEMINI=0.

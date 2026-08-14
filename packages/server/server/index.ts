@@ -56,6 +56,7 @@ async function readLocalLiveSnapshot(sessions: SessionMeta[]): Promise<{
 }
 import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
 import { CAPS, PROFILE } from './exposure'
+import { chatAllowed } from './chat-gate'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
 import { corsHeadersFor } from './cors'
@@ -750,6 +751,30 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
+    if (url.pathname === '/api/billing/plan-prices' && req.method === 'GET') {
+      // Reads two public vendor pages — no host access, so no capability registration. It is
+      // anchored: a page that fails its known-good figure returns nothing rather than a wrong
+      // price, and the built-in catalog stands.
+      const { fetchPlanPrices } = await import('./plan-pricing')
+      return new Response(JSON.stringify(await fetchPlanPrices()), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname === '/api/billing/detect' && req.method === 'GET') {
+      // Detection describes ONE machine's own configuration, so a central — which aggregates many
+      // machines and would only ever see its operator's — has no use for it and does not serve it.
+      // The capability guard (localTranscripts) has already run by here; this is the second gate,
+      // not the only one.
+      if (TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const { detectBillingLocal } = await import('./billing-detect')
+      const adapters = await getEnabledAdapters()
+      const detections = await detectBillingLocal(adapters.map(a => a.id))
+      return new Response(JSON.stringify({ detections }), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/projects-list' && req.method === 'GET') {
       try {
         const dirs = await safeReadDir(PROJECTS_DIR)
@@ -939,6 +964,19 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       } catch (err) {
         return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
           status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // Chat is opt-in. `capability-guard.ts` has already refused these paths where the exposure
+    // profile forbids them; this is the user's own switch on top, and it can only narrow further
+    // (chat-gate.ts). Enforced HERE, not only in the UI, because a hidden button is not a closed
+    // door — the endpoint is what actually spawns the CLI.
+    if (url.pathname === '/api/chat-harnesses' || url.pathname === '/api/chat-tty') {
+      if (!chatAllowed(CAPS.localChat, (await readPreferences()).chatEnabled)) {
+        return new Response(JSON.stringify({ error: 'chat_disabled' }), {
+          status: 403,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
@@ -1320,7 +1358,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     }
 
     if (url.pathname === '/api/team/session' && req.method === 'GET') {
-      const res = handleSession(req)
+      const res = await handleSession(req)
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })

@@ -19,6 +19,8 @@ interface Props {
   perModel: Record<string, { hitRate: number; cacheReadTokens: number; inputTokens: number }>
   currency: 'USD' | 'BRL'
   brlRate: number
+  /** The page's active basis. This panel NEVER converts — it only says so when the rest has. */
+  costBasis?: 'api' | 'plan'
   lang: Lang
   /**
    * The active harness filter (undefined = unified / all-harness view).
@@ -104,6 +106,7 @@ export function CacheHitRatePanel({
   perModel,
   currency,
   brlRate,
+  costBasis = 'api',
   lang,
   harness,
 }: Props) {
@@ -237,6 +240,23 @@ export function CacheHitRatePanel({
           />
         </div>
       </div>
+
+      {/* These figures stay in API basis, ALWAYS, and say so when the rest of the page has moved.
+          Cache does not reduce a subscription bill — the plan costs the same either way; what it
+          buys you is more work inside the same rate limit. A "saving" converted to plan basis
+          would be a number invented to match the toggle. This is the same N/A-versus-a-confident-0
+          rule HARNESS_CAPABILITIES applies to metrics, applied to a basis. */}
+      {costBasis === 'plan' && (
+        <div style={{
+          fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5,
+          borderLeft: '2px solid var(--border)', paddingLeft: 9, marginTop: 2,
+        }}>
+          <strong style={{ color: 'var(--text-secondary)' }}>{pt ? 'Em preços de API.' : 'In API pricing.'}</strong>{' '}
+          {pt
+            ? 'O cache não reduz o valor de uma assinatura — o plano custa o mesmo. O que ele rende é mais trabalho dentro do mesmo limite de uso.'
+            : 'Cache does not reduce a subscription bill — the plan costs the same. What it buys you is more work inside the same rate limit.'}
+        </div>
+      )}
 
       {/* Per-model breakdown */}
       {perModelEntries.length > 1 && (

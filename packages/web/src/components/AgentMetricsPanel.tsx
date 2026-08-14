@@ -16,6 +16,9 @@ interface AgentMetricsPanelProps {
   totalDurationMs: number
   currency: 'USD' | 'BRL'
   brlRate: number
+  /** Claude's own C/A when the page is in plan basis. Agents are a Claude-only capability, so the
+   *  cross-harness aggregate would price them partly against a plan paying for something else. */
+  planFactor?: number | null
   lang: Lang
   /** When set, gates the panel — renders N/A if the harness cannot produce agent metrics. */
   harness?: HarnessId
@@ -91,6 +94,7 @@ export function AgentMetricsPanel({
   totalDurationMs,
   currency,
   brlRate,
+  planFactor = null,
   lang,
   harness,
 }: AgentMetricsPanelProps) {
@@ -142,10 +146,15 @@ export function AgentMetricsPanel({
           sub={`avg ${fmtTokens(Math.round(avgTokens))} / ${pt ? 'chamada' : 'call'}`}
           accent="var(--accent-blue)"
         />
+        {/* Agents are a Claude-only capability, so the allocation uses CLAUDE's own C/A — never
+            the cross-harness aggregate, which would price Claude's agents partly against a plan
+            paying for something else. */}
         <SummaryCard
-          label={pt ? 'Custo dos agentes' : 'Agent cost'}
-          value={fmtCost(totalCostUSD, currency, brlRate)}
-          sub={`avg ${fmtCost(totalCostUSD / totalInvocations, currency, brlRate)} / ${pt ? 'chamada' : 'call'}`}
+          label={planFactor !== null && planFactor !== undefined
+            ? (pt ? 'Custo dos agentes (rateado)' : 'Agent cost (allocated)')
+            : (pt ? 'Custo dos agentes' : 'Agent cost')}
+          value={fmtCost(totalCostUSD * (planFactor ?? 1), currency, brlRate)}
+          sub={`avg ${fmtCost((totalCostUSD * (planFactor ?? 1)) / totalInvocations, currency, brlRate)} / ${pt ? 'chamada' : 'call'}`}
           accent="var(--anthropic-orange)"
         />
         <SummaryCard

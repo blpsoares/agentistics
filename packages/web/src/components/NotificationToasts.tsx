@@ -90,9 +90,15 @@ export function NotificationToasts({ lang }: Props) {
         const { color, Icon } = STYLE[n.type]
         const { title, message } = resolveNotification(n, lang)
         const isLeaving = leaving.has(n.id)
+        // Same opt-in handoff as the bell row (see NotificationBell.tsx): the update check is
+        // automatic, the modal it can open is not.
+        const isUpdate = n.code === 'app.update_available'
         return (
           <div
             key={n.id}
+            role={isUpdate ? 'button' : undefined}
+            tabIndex={isUpdate ? 0 : undefined}
+            onClick={isUpdate ? () => { window.dispatchEvent(new CustomEvent('agentistics:open-update-modal')); startLeave(n.id) } : undefined}
             style={{
               pointerEvents: 'auto',
               display: 'flex', alignItems: 'flex-start', gap: 10,
@@ -100,6 +106,7 @@ export function NotificationToasts({ lang }: Props) {
               background: 'var(--bg-card)', border: '1px solid var(--border)',
               borderLeft: `3px solid ${color}`,
               boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
+              cursor: isUpdate ? 'pointer' : undefined,
               animation: isLeaving
                 ? `toastOut ${EXIT_MS}ms ease-in forwards`
                 : 'toastIn 0.18s ease-out',
@@ -115,7 +122,7 @@ export function NotificationToasts({ lang }: Props) {
               )}
             </div>
             <button
-              onClick={() => startLeave(n.id)}
+              onClick={e => { e.stopPropagation(); startLeave(n.id) }}
               aria-label="dismiss"
               style={{
                 flexShrink: 0, display: 'flex', padding: 2, border: 'none',

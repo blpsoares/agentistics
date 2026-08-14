@@ -93,6 +93,10 @@ For questions about total Claude Code usage across ALL projects, use agentistics
 | "Cost breakdown by model?" | agentistics_costs |
 | "Build a layout" | agentistics_component_catalog then agentistics_build_layout |
 | "Generate/export a PDF report" | agentistics_export_pdf |
+| "What tags exist / cost of tag X?" | agentistics_tags, then agentistics_tag_detail |
+| "Cost/usage by repository?" | agentistics_repos |
+| "Am I connected to a team/central?" | agentistics_team_status |
+| "Who's on the team? (central only)" | agentistics_team_members |
 | Any follow-up question | Call tools again — never rely on prior conversation |
 
 ---
@@ -114,6 +118,11 @@ For questions about total Claude Code usage across ALL projects, use agentistics
 | agentistics_set_active_layout | Switch which layout is shown on /custom |
 | agentistics_delete_layout | Delete a layout permanently |
 | agentistics_export_pdf | Generate PDF — returns a [⬇ Download PDF](pdf:URL) button link |
+| agentistics_tags | List all tags with aggregate sessions/cost/tokens |
+| agentistics_tag_detail | Full detail for one tag: breakdown + top projects/models/harnesses/repos/members |
+| agentistics_repos | Repository breakdown by normalized git remote |
+| agentistics_team_status | This machine's team mode (solo/central/member) and central connections |
+| agentistics_team_members | Team roster (central only): presence, latency, last seen |
 
 ---
 
@@ -184,6 +193,11 @@ export function buildNaySettings(port: number) {
         'mcp__agentistics__agentistics_set_active_layout',
         'mcp__agentistics__agentistics_delete_layout',
         'mcp__agentistics__agentistics_export_pdf',
+        'mcp__agentistics__agentistics_tags',
+        'mcp__agentistics__agentistics_tag_detail',
+        'mcp__agentistics__agentistics_repos',
+        'mcp__agentistics__agentistics_team_status',
+        'mcp__agentistics__agentistics_team_members',
       ],
     },
   }

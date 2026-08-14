@@ -26,6 +26,7 @@
 
 import type { ModelUsage, SessionMeta, TurnEvent } from '@agentistics/core'
 import { activeMinutesOf, emptyModelUsage, sessionModelUsage } from '@agentistics/core'
+import { canonicalTool, countGitCommands } from '../harness-activity'
 
 /** One parsed line of the global history.jsonl. */
 export interface AntigravityHistoryEntry {
@@ -351,6 +352,7 @@ export function parseAntigravityTranscriptDetailed(
   let toolErrors = 0
   const toolErrorCategories: Record<string, number> = {}
   const toolCounts: Record<string, number> = {}
+  let gitCommits = 0, gitPushes = 0
   const messageHours: number[] = []
   const userMessageTimestamps: string[] = []
   const timestamps: number[] = []
@@ -455,10 +457,30 @@ export function parseAntigravityTranscriptDetailed(
     }
 
     const calls = Array.isArray(step.tool_calls) ? step.tool_calls : []
+
+    // A shell command appears TWICE in an agy transcript: the model ASKS for it (a `run_command`
+    // tool_call on a PLANNER_RESPONSE step) and then it RUNS (a RUN_COMMAND step of its own, which
+    // is the one carrying the command text and the exit code). They are one command. Only the
+    // execution is counted — the same trap as Kimi's duplicated usage records, and the same answer:
+    // pick the single event that is the fact, never both. The request is skipped in the tool_calls
+    // loop below; counting the request instead would report commands that were never run.
+    if (type === 'RUN_COMMAND') {
+      toolCounts.Bash = (toolCounts.Bash ?? 0) + 1
+      const cmd = typeof step.content === 'string' ? step.content : ''
+      if (cmd) {
+        const g = countGitCommands(cmd)
+        gitCommits += g.commits
+        gitPushes += g.pushes
+      }
+    }
+
     for (const call of calls) {
       const name = call && typeof call.name === 'string' ? call.name : ''
       if (!name) continue
-      toolCounts[name] = (toolCounts[name] ?? 0) + 1
+      const shared = canonicalTool('antigravity', name)
+      // See the RUN_COMMAND block above: this is the REQUEST for a command, and its execution is
+      // counted there. Counting it here as well doubled every shell call agy made.
+      if (shared !== 'Bash') toolCounts[shared] = (toolCounts[shared] ?? 0) + 1
       if (name === 'invoke_subagent') usesTaskAgent = true
       if (WEB_SEARCH_TOOLS.has(name)) usesWebSearch = true
       if (WEB_FETCH_TOOLS.has(name)) usesWebFetch = true
@@ -545,8 +567,8 @@ export function parseAntigravityTranscriptDetailed(
     tool_output_tokens: {},
     agent_file_reads: {},
     languages: [],
-    git_commits: 0,
-    git_pushes: 0,
+    git_commits: gitCommits,
+    git_pushes: gitPushes,
     input_tokens: tokens?.inputTokens ?? 0,
     // gen_metadata field 3 is the TOTAL output (thinking + completion) — never add thinking.
     output_tokens: tokens?.outputTokens ?? 0,

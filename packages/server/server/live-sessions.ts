@@ -54,7 +54,10 @@ export function sessionCwd(s: SessionMeta): string {
  * Deliberately EXACT on each of the two paths, never a prefix test: a process sitting in `$HOME`
  * would otherwise claim every session on the machine.
  */
-export function sessionAtCwd(s: SessionMeta, cwd: string): boolean {
+export function sessionAtCwd(
+  s: { current_cwd?: string; project_path?: string },
+  cwd: string,
+): boolean {
   return s.current_cwd === cwd || s.project_path === cwd
 }
 

@@ -124,3 +124,90 @@ Tools consuming more than 40% of total output tokens are flagged as token "villa
 ## BRL conversion
 
 The Brazilian Real exchange rate is fetched from a public API by `/api/rates` and cached for 1 hour. If the fetch fails, a hardcoded fallback rate is used. The dashboard always shows the source and timestamp of the rate in the currency toggle tooltip.
+
+## Cost basis — API estimate vs your plan
+
+Every cost above is an **API-equivalent estimate**: tokens × the model's published rate. If you pay
+a flat subscription, that figure is not your invoice. Register your billing timeline in
+**Settings → Billing** and the dashboard can express the same metrics against what you actually
+pay.
+
+### The arithmetic
+
+For a filter window and one harness:
+
+```
+C = Σ over the harness's registered periods:
+      monthlyUSD(period) × overlapDays(period, window) / 30.44
+
+A = the API-equivalent cost of the filtered sessions, restricted to the SAME days
+
+V = A / C                              the value multiple
+effective $/1M tokens = C / (tokens / 1e6)
+```
+
+`V = 8.5` means you extracted 8.5× the plan's price in API-equivalent value over that window.
+`V = 1` is break-even.
+
+### Why proration, and why by days
+
+The plan price is monthly; a filter window is arbitrary. Counting whole calendar months is the
+*invoice* reading — you did pay the full amount even if you used three days — but applied to a
+7-day filter it reports a whole month's price against a fifth of a month's usage and calls the
+plan a bad deal. Prorating by days (`30.44` = the average month) gives a *rate*, and a rate is
+what makes one window comparable to another.
+
+A period change inside the window is priced exactly: each period contributes its own price for
+its own overlap. That is why the model is a timeline rather than a single "current plan".
+
+### Days with no registered plan
+
+A day no period covers has an A and no C. Including it inflates V; removing it from C alone
+inflates V harder. So such days are removed from **both** sides, and the card states the coverage:
+how many days were excluded and how much API value went with them.
+
+Two related facts appear in the same place:
+
+- **The measured window.** It can be narrower than your filter. Claude's daily token series does
+  not reach the whole history, so an "all time" filter may resolve to the last N days. The number
+  is correct for those days — the window is stated so the heading is not read as covering more.
+- **Undated history.** Claude's cumulative totals include usage the daily series cannot attribute
+  to a day. It is neither included nor excluded silently; it is reported as its own figure.
+
+### Modes other than a subscription
+
+- **API / pay-as-you-go** — those days' C *is* their A, so they contribute a multiple of exactly 1.
+  Nothing is gained or lost, which is the truth.
+- **Third party** (Bedrock, Vertex, a gateway) — the cost is off-machine and unknowable here, so
+  those days count as uncovered.
+
+### The monthly commitment
+
+The budget panel does **not** convert. It forecasts variable spend from the pace so far, and a
+subscription has no pace — it is a fixed number known on day one, so a converted forecast would
+only ever predict itself.
+
+Instead it gains a third figure beside the two variable ones: **Month commitment**, what your
+registered plans owe for the current calendar month. That is a different question from the plan
+cost of a filter window, and it is the one a monthly budget is actually set against. Days billed
+per token commit nothing to it — their cost is usage — so they are reported as variable spend on
+top rather than folded in. A plan that started or ended mid-month is prorated and labelled as
+such, so an unexpected figure explains itself.
+
+### What does not convert
+
+- **Cache savings** stay in API pricing, always. Cache does not reduce a subscription bill — the
+  plan costs the same either way. What it buys you is more work inside the same rate limit.
+- **The Settings → Pricing table** stays in API pricing. It is a *rate* table, and a flat monthly
+  fee has no per-token rate.
+- **Per-model, per-repo and per-agent costs** in plan basis are **allocations**: the plan cost
+  split in proportion to each row's API-equivalent share. Nobody is billed per model on a
+  subscription. Within one harness the split is a linear rescale, so every ranking and proportion
+  is preserved exactly; the labels say "allocated" so the figures are not read as observed.
+
+### What the app cannot know
+
+Prices in the plan catalog are a **prefill** carrying the date they were checked and the page they
+came from; several plans ship with no amount because no vendor page states one. Whatever you type
+wins. The app also cannot see your real API console spend, your overage, or which plan you were on
+historically — that last one is why the timeline asks for dates.

@@ -42,6 +42,28 @@ test('account resolves to every machine that account owns', () => {
   expect(sessionMatchesTag(s({ memberId: 'hashA' }), [{ type: 'account', value: 'ghost' }], lookups)).toBe(false)
 })
 
+test('harness matches session.harness, defaulting to claude for legacy sessions with none', () => {
+  const src: TagSource[] = [{ type: 'harness', value: 'codex' }]
+  expect(sessionMatchesTag(s({ harness: 'codex' }), src, noLookups)).toBe(true)
+  expect(sessionMatchesTag(s({ harness: 'claude' }), src, noLookups)).toBe(false)
+  const claudeSrc: TagSource[] = [{ type: 'harness', value: 'claude' }]
+  expect(sessionMatchesTag(s({ harness: undefined }), claudeSrc, noLookups)).toBe(true)
+})
+
+test('model matches session.model exactly; a session with no model matches nothing', () => {
+  const src: TagSource[] = [{ type: 'model', value: 'claude-opus-4-8' }]
+  expect(sessionMatchesTag(s({ model: 'claude-opus-4-8' }), src, noLookups)).toBe(true)
+  expect(sessionMatchesTag(s({ model: 'claude-sonnet-4-6' }), src, noLookups)).toBe(false)
+  expect(sessionMatchesTag(s({}), src, noLookups)).toBe(false)
+})
+
+test('user matches session.user exactly; a local session with no user matches nothing', () => {
+  const src: TagSource[] = [{ type: 'user', value: 'alice' }]
+  expect(sessionMatchesTag(s({ user: 'alice' }), src, noLookups)).toBe(true)
+  expect(sessionMatchesTag(s({ user: 'bob' }), src, noLookups)).toBe(false)
+  expect(sessionMatchesTag(s({}), src, noLookups)).toBe(false)
+})
+
 test('sources are an OR union and a session matching two sources is returned ONCE', () => {
   const sessions = [
     s({ session_id: '1', git_remote: 'github.com/org/a', memberId: 'hash1' }), // matches both

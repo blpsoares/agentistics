@@ -3,7 +3,7 @@ import { mkdir, writeFile, readFile } from 'fs/promises'
 import type { SessionMeta, HarnessId } from '@agentistics/core'
 import { CONSOLIDATED_DIR } from './config'
 import { createLimiter, safeReadDir, safeReadJson } from './utils'
-import { HARNESS_ORDER } from '@agentistics/core'
+import { HARNESS_ORDER, normalizeSessionTimes } from '@agentistics/core'
 
 const writeLimit = createLimiter(20)
 const readyDirs = new Set<string>()
@@ -60,6 +60,11 @@ export async function loadConsolidated(): Promise<Map<string, SessionMeta>> {
       const s = await safeReadJson<SessionMeta>(join(dir, f))
       if (!s?.session_id) return
       if (!s.harness) s.harness = 'claude'
+      // The store holds whatever an adapter wrote, including shapes it should not have written —
+      // Kimi persisted `start_time` as an epoch number, and every consumer that calls a string
+      // method on it threw. Repaired HERE, on the way in, because the file on disk is already
+      // wrong and fixing the adapter cannot reach it. See normalizeSessionTimes.
+      normalizeSessionTimes(s)
       // (harness, id) key; first writer wins per key
       const key = `${s.harness}:${s.session_id}`
       if (!map.has(key)) map.set(key, s)

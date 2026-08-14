@@ -89,9 +89,9 @@ test('parses rich Gemini JSON format with tokens and model', () => {
   expect(s!.message_hours.length).toBe(4)
   // user_message_timestamps: 2 user messages
   expect(s!.user_message_timestamps.length).toBe(2)
-  // tool_counts: run_shell_command x2, read_file x1
-  expect(s!.tool_counts['run_shell_command']).toBe(2)
-  expect(s!.tool_counts['read_file']).toBe(1)
+  // tool_counts, in the shared vocabulary: run_shell_command x2 → Bash, read_file x1 → Read
+  expect(s!.tool_counts['Bash']).toBe(2)
+  expect(s!.tool_counts['Read']).toBe(1)
 })
 
 test('rich JSON format: bootstrap-only info messages return null', () => {
@@ -314,4 +314,34 @@ test('handles $set messages without id field (no dedup crash)', () => {
   const line1 = JSON.stringify({ $set: { messages: [{ timestamp: '2026-01-01T10:00:01.000Z', type: 'user', content: [{ text: 'no id' }] }] } })
   const s = parseGeminiChat([line0, line1].join('\n'), 'fb', '/proj')
   expect(s!.user_message_count).toBe(1)
+})
+
+// Real shape, verified against ~/.gemini/tmp/*/chats/session-*.json on a live machine: a `gemini`
+// message carries `toolCalls: [{ name, args }]`, and a shell call puts the command in `args.command`.
+const SHELL_SESSION = JSON.stringify({
+  sessionId: 's1',
+  projectHash: 'h',
+  startTime: '2026-03-10T17:48:00.000Z',
+  messages: [
+    { id: '1', timestamp: '2026-03-10T17:48:00.000Z', type: 'user', content: 'commita isso' },
+    { id: '2', timestamp: '2026-03-10T17:48:10.000Z', type: 'gemini', content: '', model: 'gemini-3-flash-preview',
+      toolCalls: [
+        { id: 'a', name: 'run_shell_command', args: { command: 'git add -A && git commit -m "x"' } },
+        { id: 'b', name: 'run_shell_command', args: { command: 'git push origin main' } },
+        { id: 'c', name: 'read_file', args: { file_path: 'a.ts' } },
+      ] },
+  ],
+})
+
+test('counts gemini git commands from run_shell_command', () => {
+  const s = parseGeminiChat(SHELL_SESSION, 's1', '/repo')!
+  expect(s.git_commits).toBe(1)
+  expect(s.git_pushes).toBe(1)
+})
+
+test('gemini tools land in the shared vocabulary, like every other harness', () => {
+  const s = parseGeminiChat(SHELL_SESSION, 's1', '/repo')!
+  expect(s.tool_counts['Bash']).toBe(2)
+  expect(s.tool_counts['Read']).toBe(1)
+  expect(s.tool_counts['run_shell_command']).toBeUndefined()
 })

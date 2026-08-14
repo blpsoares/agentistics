@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { NO_REPO_KEY, normalizeGitRemote, emptyStatsCache } from '@agentistics/core'
+import { NO_REPO_KEY, normalizeGitRemote, emptyStatsCache, sessionDay as dayOfStartTime } from '@agentistics/core'
 import type { SessionMeta, WorkflowRun, StatsCache, ShareSource } from '@agentistics/core'
 
 export type RepoKey = string
@@ -453,7 +453,7 @@ export function denialSignature(denied: readonly string[] | null | undefined): s
 function sessionDay(s: Pick<SessionMeta, 'start_time' | 'harness'>, claudeOnly = true): string | null {
   if (!s.start_time) return null
   if (claudeOnly && (s.harness ?? 'claude') !== 'claude') return null
-  return s.start_time.slice(0, 10)
+  return dayOfStartTime(s.start_time) || null
 }
 
 /** Session START hour on the LOCAL clock, like every adapter (reading a UTC timestamp as local

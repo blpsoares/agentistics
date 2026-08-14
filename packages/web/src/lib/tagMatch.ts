@@ -17,7 +17,7 @@
  */
 import type { SessionMeta } from '@agentistics/core'
 
-export type TagSourceType = 'repo' | 'project' | 'machine' | 'team' | 'account'
+export type TagSourceType = 'repo' | 'project' | 'machine' | 'team' | 'account' | 'harness' | 'model' | 'user'
 
 export interface TagSource {
   type: TagSourceType
@@ -68,6 +68,9 @@ export function sessionMatchesTagSources(
         const machines = lookups.machinesByAccount[src.value]
         return !!machines && !!s.memberId && machines.includes(s.memberId)
       }
+      case 'harness': return (s.harness ?? 'claude') === src.value
+      case 'model': return s.model === src.value
+      case 'user': return s.user === src.value
       default: return false
     }
   })

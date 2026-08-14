@@ -18,10 +18,16 @@ export function fmtDuration(ms: number): string {
 export function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
   if (currency === 'BRL') {
     const brl = usd * rate
+    // Exactly zero (a local/offline model — see isLocalModelId) is a different fact from "some
+    // real but sub-cent amount" and must read differently: '<R$0,05' on a genuinely free session
+    // reads as "cheap", not "free", and hides the one signal a user has for spotting local-only
+    // usage in a cost breakdown.
+    if (brl === 0) return 'R$0,00'
     if (brl < 0.05) return '<R$0,05'
     const [intPart, decPart] = brl.toFixed(2).split('.')
     return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
   }
+  if (usd === 0) return 'USD 0.00'
   if (usd < 0.01) return '<USD 0.01'
   const [intPart, decPart] = usd.toFixed(2).split('.')
   return `USD ${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, ',')}.${decPart}`
@@ -33,7 +39,11 @@ export function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1):
  * `<local-command-caveat>…` blocks that make untitled sessions look broken). Returns '' when
  * there's nothing usable, so callers can supply their own localized placeholder.
  */
-export function sessionLabel(s: { title?: string; first_prompt?: string }): string {
+export function sessionLabel(s: { user_label?: string; title?: string; first_prompt?: string }): string {
+  // The user's own name wins over everything: being able to name a session is worth nothing if the
+  // harness's generated title then displaces it.
+  const own = (s.user_label ?? '').trim()
+  if (own) return own
   const title = (s.title ?? '').trim()
   if (title) return title
   const fp = (s.first_prompt ?? '').trim()
@@ -53,10 +63,12 @@ export function fmtFull(n: number): string {
 export function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
   if (currency === 'BRL') {
     const brl = usd * rate
+    if (brl === 0) return 'R$0,000000'
     if (brl < 0.00001) return '<R$0,00001'
     const [intPart, decPart] = brl.toFixed(6).split('.')
     return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
   }
+  if (usd === 0) return 'USD 0.000000'
   if (usd < 0.000001) return '<USD 0.000001'
   return `USD ${usd.toFixed(6)}`
 }

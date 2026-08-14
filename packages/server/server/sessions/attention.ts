@@ -1,0 +1,131 @@
+/**
+ * attention.ts — PURE. What a session is doing, from the only two things a backend can report:
+ * whether the screen moved, and what is on it.
+ *
+ * The order below is an order of EVIDENCE, strongest first, and each step exists because the ones
+ * after it are wrong in a case it covers:
+ *
+ *  - A blocked dialog outranks movement. The dialog IS the frame; nothing is running behind it.
+ *  - A probed `working` marker outranks the movement test, so a harness that thinks without
+ *    redrawing is never mistaken for quiet.
+ *  - Movement is tested two ways because each alone has a blind spot: tmux's `session_activity` has
+ *    one-second resolution and moves when a spinner redraws identical bytes, while a frame digest
+ *    cannot see a process that is busy and silent.
+ *
+ * `waiting` is the floor rather than an "unknown", and that is a deliberate claim: an interactive
+ * assistant that is alive and still is waiting for its user. The uncertainty this system genuinely
+ * has is about the REASON, and it lives in `attention-rules.ts` having no approval rule for a
+ * harness nobody probed — which the UI states in words.
+ */
+
+import type { AttentionRules, SessionActivity } from './types'
+
+/**
+ * One poll interval (5s) plus slack.
+ *
+ * A backend that reported output inside this window is working even if the frame it drew happens to
+ * hash the same as the last one — which is exactly what a redrawn-but-unchanged status line does.
+ */
+export const QUIET_MS = 6_000
+
+/**
+ * How long a `working` MARKER may outlive the last thing drawn on the screen.
+ *
+ * Measured on a real session: claude's footer reads `esc to interrupt` whenever there is anything
+ * interruptible — including background agents — so a session whose main thread had been idle for
+ * 199 seconds still carried the marker and reported `working` forever. The marker's job is to catch
+ * a turn that is thinking without redrawing, which is a matter of seconds; past a minute of total
+ * silence the screen is simply not doing anything, and saying otherwise makes the one column this
+ * monitor exists for permanently wrong.
+ */
+export const MARKER_STALE_MS = 60_000
+
+/**
+ * FNV-1a over the frame, joined with newlines.
+ *
+ * Dependency-free, and deliberately not a crypto hash: the only question ever asked of this value is
+ * "is this the same frame as last time". The `\n` separator is load-bearing — joining without one
+ * would make a reflowed frame (`['ab']` versus `['a','b']`) hash identically, and a reflow is
+ * movement.
+ */
+export function digestFrame(lines: readonly string[]): string {
+  const s = lines.join('\n')
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16)
+}
+
+export function attentionOf(o: {
+  alive: boolean
+  lastActivityMs: number
+  nowMs: number
+  frame: readonly string[]
+  frameDigest: string
+  /** Absent on the first sighting of a session — treated as "no movement observed", never as
+   *  movement, or every session would read as working for one interval after the poller starts. */
+  prevDigest?: string
+  /** Absent for a harness with no probed markers. Movement alone still decides. */
+  rules?: AttentionRules
+}): SessionActivity {
+  if (!o.alive) return 'exited'
+
+  const text = o.frame.join('\n')
+  if (o.rules && o.rules.approval.some(re => re.test(text))) return 'waiting-approval'
+
+  // The marker is PROOF of work only while the screen has been moving at all recently. A footer
+  // that lingers is not evidence, and silence eventually outweighs it — see `MARKER_STALE_MS`.
+  const silentFor = o.nowMs - o.lastActivityMs
+  if (silentFor <= MARKER_STALE_MS && o.rules?.working && o.rules.working.some(re => re.test(text))) {
+    return 'working'
+  }
+
+  // A frame that CHANGED is direct evidence, and outranks any staleness rule: something drew it.
+  if (o.prevDigest !== undefined && o.frameDigest !== o.prevDigest) return 'working'
+  if (silentFor < QUIET_MS) return 'working'
+
+  return 'waiting'
+}
+
+/** A line that is only box-drawing or rule characters — a frame's furniture, never its content. */
+const RULE = /^[─━═╌┄┈╭╰╮╯┌└┐┘│|+\-=_~]+$/
+/** An empty input box: the prompt glyph with nothing after it. */
+const EMPTY_PROMPT = /^[❯>›»]\s*$/
+
+/**
+ * The last few lines of the frame that actually say something — PURE.
+ *
+ * This is the "what is it doing right now" a person wants when they select a session, and it costs
+ * nothing extra: the frame was already captured to decide the state.
+ *
+ * The hard part is not finding the last lines, it is not returning the harness's own CHROME. Every
+ * one of these CLIs draws the same structure — the conversation, then an input box, then a status
+ * strip — so the content is everything ABOVE the box, and the box announces itself with a rule or a
+ * border. Cutting there is structural rather than a per-harness pattern, which matters: a pattern
+ * list would need re-probing on every CLI release, and this does not.
+ *
+ * Verified against real frames from claude 2.1.231, codex 0.113.0 and kimi 0.35.0 — see the tests.
+ */
+export function frameTail(frame: readonly string[], max = 4): string[] {
+  // Everything from the last rule or box edge onward is the input box and the status strip.
+  let end = frame.length
+  for (let i = frame.length - 1; i >= 0; i--) {
+    if (RULE.test((frame[i] ?? '').trim())) { end = i; break }
+  }
+
+  const body = frame.slice(0, end)
+  const out: string[] = []
+  for (let i = body.length - 1; i >= 0 && out.length < max; i--) {
+    const line = (body[i] ?? '').trim()
+    if (!line) continue
+    if (RULE.test(line) || EMPTY_PROMPT.test(line)) continue
+    // A harness with no rule around its box (codex) ends on a status strip instead: a run of
+    // `·`-separated facts. Dropped only at the very END of the frame, where it is chrome — the same
+    // characters mid-conversation are something the assistant actually said.
+    if (out.length === 0 && end === frame.length && line.includes(' · ') && !line.startsWith('●')) continue
+    out.push(line)
+  }
+  return out.reverse()
+}

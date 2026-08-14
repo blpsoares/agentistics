@@ -25,7 +25,7 @@ import { fitTabs, headerLayout, tabAtColumn } from './chrome.ts'
 import { paneHit, shellHit } from './hit'
 import { isActivation, trackClick, wheelDelta, type ClickTrack, type MouseReport, type Pointer } from './mouse'
 import { createPointerBus, PointerProvider, type MouseChannel } from './pointer'
-import { TAB_ORDER, type ActionResult, type ControlExit, type ControlHost, type ControlStatus, type TabId } from './types'
+import { TAB_ORDER, type ActionResult, type ControlExit, type ControlHost, type ControlSessions, type ControlStatus, type TabId } from './types'
 import { appendLines } from './stream'
 import type { CliLang } from './lang'
 import { controlStrings } from './i18n'
@@ -36,6 +36,8 @@ import { StaticTab } from './tabs/Static'
 import { Logs } from './tabs/Logs'
 import { Services } from './tabs/Services'
 import { Setup } from './tabs/Setup'
+import { Sessions } from './tabs/Sessions'
+import { writeFrame } from './altScreen'
 
 /**
  * What a screen tells the shell about itself.
@@ -95,6 +97,20 @@ export interface TaskView {
  */
 export type RunAction = (fn: () => Promise<ActionResult>, label?: string) => Promise<ActionResult>
 
+/**
+ * How often the fleet is re-read. Five seconds — the interval the monitor was specified at, and slow
+ * enough that a machine running a dozen sessions is not forking a `capture-pane` per second.
+ */
+const SESSION_POLL_MS = 5_000
+
+/**
+ * The terminal bell, as an escape rather than a literal byte.
+ *
+ * Written as `\u0007` on purpose: a raw BEL in a source file is invisible in every diff and every
+ * editor, and the next person to touch this line would have no way to see what it is.
+ */
+const BEL = '\u0007'
+
 /** Screens whose only state is a scroll position, which the shell holds for them. */
 type StaticTabId = 'help' | 'cheatsheet' | 'contribute'
 
@@ -144,6 +160,52 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   }, [host])
 
   useEffect(() => { void refresh() }, [refresh])
+
+  /**
+   * The session fleet, polled by the SHELL rather than by the sessions screen.
+   *
+   * It lives here because the counter it feeds is drawn in the header, which is on every tab: a poll
+   * that only ran while the sessions screen was open would leave that counter stale — or worse,
+   * confidently zero — everywhere else, which is the one thing it exists to prevent.
+   *
+   * `undefined` means the host has no fleet at all; `null` means it has one and has not answered
+   * yet. Two different sentences, and the screen must not collapse them into one.
+   */
+  const [fleet, setFleet] = useState<ControlSessions | null | undefined>(
+    host.sessions ? null : undefined,
+  )
+
+  /**
+   * One read of the fleet, callable on demand as well as on the interval.
+   *
+   * The sessions screen calls it straight after an action, because a kill or a rename the user just
+   * performed has to be visible before the next tick — a list that ignores you for five seconds
+   * reads as a list that ignored you.
+   */
+  const pollFleet = useCallback(async () => {
+    const read = host.sessions
+    if (!read) return
+    let next: ControlSessions
+    try {
+      next = await read.call(host)
+    } catch {
+      // `sessions()` is contracted never to throw. If it does anyway, the stale list beats a blank
+      // one — reporting an empty fleet would say every running session had ended.
+      return
+    }
+    setFleet(next)
+    // The bell rings for the TRANSITION into waiting, which the host computed; ringing on the level
+    // would beep every five seconds for as long as a question went unanswered. It goes through
+    // `writeFrame` because nothing may write to the alternate buffer around Ink.
+    if (next.rang.length > 0) writeFrame(BEL)
+  }, [host])
+
+  useEffect(() => {
+    if (!host.sessions) return
+    void pollFleet()
+    const timer = setInterval(() => { void pollFleet() }, SESSION_POLL_MS)
+    return () => clearInterval(timer)
+  }, [host, pollFleet])
 
   /**
    * The task the last action started, or `null` when nothing has been performed yet.
@@ -279,6 +341,9 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
     mode: status?.mode ?? '',
     version: status?.version ?? '',
     latestVersion: status?.latestVersion,
+    // Drawn in the header so it is readable from every tab — a counter you have to navigate to in
+    // order to see cannot tell you to navigate there.
+    attention: fleet?.attention ?? 0,
     width,
   })
   const height = bodyHeight(rows, header.rows)
@@ -288,7 +353,7 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   // Only the three interactive screens report, and only they clear their own flags again. Scoping
   // every claim to them means a screen that never reports cannot inherit a stale `true` and lock
   // the global keys with no owner left to release them.
-  const reports = tab === 'services' || tab === 'setup' || tab === 'logs'
+  const reports = tab === 'services' || tab === 'sessions' || tab === 'setup' || tab === 'logs'
   const capturing = chrome.capture && reports
   const arrowsClaimed = Boolean(chrome.claimArrows) && reports
 
@@ -482,6 +547,32 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
             mouseOn={mouseOn}
             onMouse={mouse ? toggleMouse : undefined}
           />
+        </Screen>
+
+        {/* Like the services cockpit, the sessions screen frames its OWN regions — a menu, the
+            list and the detail — so the one holding the keyboard can wear the accent border. One
+            frame around all three said nothing about which of them the arrows were talking to. */}
+        <Screen visible={tab === 'sessions'}>
+            <Sessions
+              host={host}
+              // Polled by the shell, not by this screen — the counter it feeds is in the header,
+              // which is on every tab.
+              fleet={fleet}
+              strings={s}
+              width={width}
+              height={height}
+              isActive={tab === 'sessions'}
+              run={run}
+              onChrome={reportChrome}
+              onExit={onExit}
+              // An action the user just took must be visible before the next tick, or the screen
+              // looks like it ignored them.
+              onRefreshFleet={() => { void pollFleet() }}
+              // Remembered across runs by the HOST, like the language and the mouse: the control
+              // center owns no persistence, so a setting it can toggle is a setting the host stores.
+              view={status?.sessionView}
+              onView={v => { void host.setSessionView?.(v) }}
+            />
         </Screen>
 
         <Screen visible={tab === 'setup'}>

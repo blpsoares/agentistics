@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { NavLink, useOutletContext } from 'react-router-dom'
 import type React from 'react'
 import { ExternalLink, AlertTriangle, ArrowUp, ArrowDown } from 'lucide-react'
 import { resolveProvider, providerOrder, type ProviderId } from '@agentistics/core'
@@ -464,6 +464,21 @@ export default function PricingSettings() {
         {pt
           ? 'O custo é o equivalente em API. Assinaturas (Claude Max, Copilot, Codex) não cobram por token, então o valor é quanto isto custaria pela API — não a sua fatura.'
           : 'Cost is the API equivalent. Subscriptions (Claude Max, Copilot, Codex) do not bill per token, so the figure is what this would cost through the API, not your invoice.'}
+        {' '}
+        <NavLink to="/settings/billing" style={{ color: 'var(--anthropic-orange)', textDecoration: 'none' }}>
+          {pt ? 'Cadastre seu plano' : 'Register your plan'}
+        </NavLink>
+        {pt
+          ? ' e o app passa a poder mostrar o custo real no lugar da estimativa.'
+          : ' and the app can show your real cost instead of the estimate.'}
+        {' '}
+        {/* This table itself never moves. It is a RATE table — a price per million tokens — and a
+            flat monthly fee has no per-token equivalent to put in these cells. */}
+        <em>
+          {pt
+            ? 'Esta tabela é sempre de preços de API: é uma tabela de tarifas, e uma assinatura mensal não tem tarifa por token.'
+            : 'This table is always API pricing: it is a rate table, and a flat monthly fee has no per-token rate.'}
+        </em>
       </div>
     </div>
   )

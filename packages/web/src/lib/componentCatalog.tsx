@@ -343,9 +343,9 @@ export const CATALOG: CatalogItem[] = [
   {
     id: 'costs.cache', labelPt: 'Eficiência de cache', labelEn: 'Cache efficiency', category: 'costs',
     icon: Gauge, defaultW: 6, defaultH: 7, minW: 4, minH: 4,
-    render: ({ derived, currency, brlRate, lang }) => (
+    render: ({ derived, currency, brlRate, lang, costBasis }) => (
       <Section title={<><Gauge size={14} /> {lang === 'pt' ? 'Eficiência de cache' : 'Cache efficiency'}</>}>
-        <CacheHitRatePanel hitRate={derived.cacheHitRate} cacheTotals={derived.cacheTotals} grossSavedUSD={derived.cacheGrossSavedUSD} writeOverheadUSD={derived.cacheWriteOverheadUSD} netSavedUSD={derived.cacheNetSavedUSD} perModel={derived.cachePerModel} currency={currency} brlRate={brlRate} lang={lang} />
+        <CacheHitRatePanel hitRate={derived.cacheHitRate} cacheTotals={derived.cacheTotals} grossSavedUSD={derived.cacheGrossSavedUSD} writeOverheadUSD={derived.cacheWriteOverheadUSD} netSavedUSD={derived.cacheNetSavedUSD} perModel={derived.cachePerModel} currency={currency} brlRate={brlRate} costBasis={costBasis} lang={lang} />
       </Section>
     ),
   },

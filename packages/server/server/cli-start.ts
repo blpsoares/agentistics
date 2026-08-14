@@ -32,13 +32,19 @@ import { spawn } from 'node:child_process'
 import { writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
-import { DEFAULT_TEAM, type TeamConnection } from '@agentistics/core'
+import {
+  DEFAULT_TEAM, HARNESS_ORDER, fmt, fmtCost, repoShortName,
+  type HarnessId, type TeamConnection,
+} from '@agentistics/core'
 import type {
   ActionResult,
   ActionTarget,
+  AttachTicket,
   BootState,
   ControlHost,
   ControlService,
+  ControlSession,
+  ControlSessions,
   ControlStatus,
   LogSource,
   RestartOption,
@@ -47,9 +53,18 @@ import type {
   ServiceRef,
   ServiceRuntimeState,
   ServiceState,
+  SessionHarnessOption,
+  SessionState,
+  SessionViewPrefs,
+  SpawnSessionRequest,
+  SpawnSessionResult,
+  ProjectOption,
+  ResumeSessionRequest,
   StartOption,
+  TabId,
   StartRequest,
 } from '@agentistics/tui/control'
+import { DEFAULT_SESSION_VIEW } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
 import { readPreferences, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
 import { centralStartPlan, runCentral, type CentralStartPlan } from './cli-central'
@@ -70,6 +85,18 @@ import { confirm } from './cli-ui'
 import { CURRENT_VERSION, getVersionInfo } from './version'
 import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
 import { resolveLang } from './cli-lang'
+import { scanProcesses } from './live-sessions'
+import { resolveBackend } from './sessions'
+import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
+import { findProjects } from './sessions/project-source'
+import { candidatePath } from './sessions/project-search'
+import { repoFacts, type RepoFacts } from './sessions/repo-facts'
+import { planTaskReopen, taskReopenSucceeded } from './sessions/task-reopen'
+import type { SpawnPlanError } from './sessions/types'
+import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './sessions/registry'
+import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
+import { conversationForProcess, forgetConversations, loadConversations } from './sessions/conversations'
+import type { SessionView } from './sessions/session-view'
 
 export type StartResult = number | 'foreground'
 
@@ -744,7 +771,11 @@ interface RestartMode extends RunMode {
   flags?: RebuildFlags
 }
 
-async function restartLocalSvc(s: CliStrings, mode: RestartMode = {}): Promise<void> {
+/** Returns whether the local server actually came back up. `startBackground` is fire-and-forget
+ *  by design (it detaches and returns immediately) — without polling the health endpoint here, a
+ *  freshly (re)compiled binary that crashes on boot, or a port still held by the process just
+ *  killed, was reported as a successful restart with nothing left listening. */
+async function restartLocalSvc(s: CliStrings, mode: RestartMode = {}): Promise<boolean> {
   // With a rebuild, actually rebuild the native binary (web + embedded assets) so the restart
   // serves the new frontend/code — not just bounce the old build. Needs the repo checkout.
   if (mode.rebuild) {
@@ -756,6 +787,17 @@ async function restartLocalSvc(s: CliStrings, mode: RestartMode = {}): Promise<v
   process.stdout.write(`  ${D}${s.restartingLocal}${R}\n`)
   await stopLocal(s)
   const log = startBackground()
+  // A fresh compile + boot can take longer than the plain bounce this loop also covers, so it
+  // gets more headroom than `stopLocal`'s symmetric wait-for-down loop (20 * 150ms).
+  let up = false
+  for (let i = 0; i < 40; i++) {
+    if (await isServerRunning()) { up = true; break }
+    await sleep(250)
+  }
+  if (!up) {
+    process.stderr.write(`  ${YE}${s.localStartFailed}${R}\n`)
+    return false
+  }
   // `agentop restart --all` is a plain CLI command with no screen to report into, and it is the one
   // caller of this that the user is watching. `startBackground` fell silent when the control center
   // took it over — which left that command saying "restarted" and never where the server now is or
@@ -765,23 +807,32 @@ async function restartLocalSvc(s: CliStrings, mode: RestartMode = {}): Promise<v
     `  ${D}${s.webLabel}:${R}  ${CY}http://localhost:${WEB_PORT}${R}\n` +
     `  ${D}${s.logsLabel}:${R} ${log}\n`,
   )
+  return true
 }
-async function restartCentralSvc(s: CliStrings, mode: RestartMode = {}): Promise<void> {
+/** Returns whether the central actually came back up — a non-zero exit here means the old
+ *  container (or none at all) is what's left running, and that must never be reported as a
+ *  restart that happened. */
+async function restartCentralSvc(s: CliStrings, mode: RestartMode = {}): Promise<boolean> {
   process.stdout.write(`  ${D}${mode.rebuild ? s.rebuildingCentral : s.restartingCentral}${R}\n`)
   // `up` rebuilds/pulls the image and recreates; `restart` just bounces the running container.
   // A rebuild states its answer to central.sh's setup prompt rather than relying on a piped child
   // happening to fail `[ -t 0 ]`, and rebuilds from scratch unless `--cache` was asked for.
+  let code: number
   if (!mode.rebuild) {
-    await runCentral('restart', [], { streamed: mode.stream })
-    return
+    code = await runCentral('restart', [], { streamed: mode.stream })
+  } else {
+    const flags = rebuildFlags(mode.flags ?? {})
+    if (flags.cache === 'fresh') process.stdout.write(`  ${D}${s.rebuildNoCache}${R}\n`)
+    code = await runCentral('up', centralRebuildArgs(mode.flags ?? {}, { streamed: mode.stream }), {
+      streamed: mode.stream,
+    })
   }
-  const flags = rebuildFlags(mode.flags ?? {})
-  if (flags.cache === 'fresh') process.stdout.write(`  ${D}${s.rebuildNoCache}${R}\n`)
-  await runCentral('up', centralRebuildArgs(mode.flags ?? {}, { streamed: mode.stream }), {
-    streamed: mode.stream,
-  })
+  if (code !== 0) process.stderr.write(`  ${YE}${s.centralFailed}${R}\n`)
+  return code === 0
 }
-async function restartMachineSvc(s: CliStrings, mode: RestartMode = {}): Promise<void> {
+/** Same contract as {@link restartCentralSvc}: false means the machine container did NOT end up
+ *  running the new build (or running at all), and the caller must say so rather than "restarted". */
+async function restartMachineSvc(s: CliStrings, mode: RestartMode = {}): Promise<boolean> {
   process.stdout.write(`  ${D}${mode.rebuild ? s.rebuildingMachine : s.restartingMachine}${R}\n`)
   if (mode.rebuild) {
     const compose = machineComposePath()
@@ -790,7 +841,8 @@ async function restartMachineSvc(s: CliStrings, mode: RestartMode = {}): Promise
       if (flags.cache === 'fresh') process.stdout.write(`  ${D}${s.rebuildNoCache}${R}\n`)
       // A cacheless rebuild is `build --no-cache` THEN `up` — compose's `up` has no --no-cache.
       // A failed build stops there: recreating on top of it would serve the OLD image while
-      // reporting a rebuild.
+      // reporting a rebuild. Every command in the sequence must exit 0, or this never happened.
+      let ok = true
       for (const cmd of composeRebuildCommands(compose, flags)) {
         const code = mode.stream
           ? await streamCommand(cmd)
@@ -798,26 +850,37 @@ async function restartMachineSvc(s: CliStrings, mode: RestartMode = {}): Promise
               const child = spawn(cmd[0]!, cmd.slice(1), { stdio: 'inherit' })
               child.on('exit', c => resolve(c ?? 1))
             })
-        if (code !== 0) break
+        if (code !== 0) { ok = false; break }
       }
-      return
+      if (!ok) process.stderr.write(`  ${YE}${s.dockerStartFailed}${R}\n`)
+      return ok
     }
     process.stderr.write(`  ${YE}${s.noComposeFrom(process.cwd())}${R}\n`)
     // fall through to a plain restart so the machine still comes back up
   }
   const ids = await dockerIds(MACHINE_FILTER)
-  if (ids.length) await sh(['docker', 'restart', ...ids])
+  if (!ids.length) {
+    process.stderr.write(`  ${YE}${s.dockerStartFailed}${R}\n`)
+    return false
+  }
+  const { code } = await sh(['docker', 'restart', ...ids])
+  if (code !== 0) process.stderr.write(`  ${YE}${s.dockerStartFailed}${R}\n`)
+  return code === 0
 }
 
-/** Bounce exactly these runtimes. `rebuild` makes a new build first; `stream` pipes every child. */
+/** Bounce exactly these runtimes. `rebuild` makes a new build first; `stream` pipes every child.
+ *  Returns whether every targeted runtime actually came back up — a rebuild whose docker command
+ *  failed leaves the old (or no) container running, and that is never a success. */
 async function restartRuntimes(
   s: CliStrings,
   targets: readonly RuntimeId[],
   mode: RestartMode = {},
-): Promise<void> {
-  if (targets.includes('local')) await restartLocalSvc(s, mode)
-  if (targets.includes('central')) await restartCentralSvc(s, mode)
-  if (targets.includes('machine')) await restartMachineSvc(s, mode)
+): Promise<boolean> {
+  let ok = true
+  if (targets.includes('local')) ok = (await restartLocalSvc(s, mode)) && ok
+  if (targets.includes('central')) ok = (await restartCentralSvc(s, mode)) && ok
+  if (targets.includes('machine')) ok = (await restartMachineSvc(s, mode)) && ok
+  return ok
 }
 
 /** Non-interactive `agentop restart --all [--rebuild]`: bounce (or rebuild) every running
@@ -855,8 +918,8 @@ export async function restartNativeServer(
   if (!(await isRuntimeUp('local'))) {
     return { ok: false, message: s.nothingRunning }
   }
-  await restartLocalSvc(s, { rebuild, flags })
-  return { ok: true, message: s.restartedDone }
+  const ok = await restartLocalSvc(s, { rebuild, flags })
+  return ok ? { ok: true, message: s.restartedDone } : { ok: false, message: s.localStartFailed }
 }
 
 export async function restartAllServices(rebuild = false, flags: RebuildFlags = {}): Promise<number> {
@@ -867,9 +930,9 @@ export async function restartAllServices(rebuild = false, flags: RebuildFlags = 
     return 0
   }
   // No stream: this is a plain command on the user's own terminal, and inherited output is right.
-  await restartRuntimes(s, targets, { rebuild, flags })
-  process.stdout.write(`\n  ${GR}${s.restartedAll}${R}\n`)
-  return 0
+  const ok = await restartRuntimes(s, targets, { rebuild, flags })
+  process.stdout.write(ok ? `\n  ${GR}${s.restartedAll}${R}\n` : `\n  ${YE}${s.restartFailed}${R}\n`)
+  return ok ? 0 : 1
 }
 
 // ---------------------------------------------------------------------------
@@ -1063,6 +1126,238 @@ async function tailFile(path: string, maxLines: number): Promise<string[]> {
   }
 }
 
+/**
+ * Hand the terminal to a session and wait for the user to come back.
+ *
+ * Printing here is SAFE and everywhere else in this flow is not: the control center has unmounted
+ * and left the alternate buffer by the time this runs, so the hint lands on the primary screen where
+ * it belongs. The hint itself is the whole reason this is not a bare spawn — a user who cannot get
+ * out is stranded in a buffer that hides their shell, and the key is read from the backend rather
+ * than assumed, because a tmux prefix the user rebound would make a guessed `Ctrl-b` actively wrong.
+ */
+let printedDetachHint = false
+
+async function execAttachTicket(ticket: AttachTicket, s: CliStrings): Promise<void> {
+  // Printed ONCE per run. Every attach used to announce itself, and tmux adds its own
+  // `[detached (from …)]` on the way out, so a session of ordinary use left a wall of the same two
+  // lines in the scrollback the control center then drew over. The hint is worth saying; saying it
+  // fourteen times is just noise, and the cockpit now carries it permanently anyway.
+  if (!printedDetachHint) {
+    console.log(s.sessAttaching(ticket.label, ticket.detachHint))
+    printedDetachHint = true
+  }
+  const [bin, ...rest] = ticket.argv
+  if (!bin) return
+  await new Promise<void>(resolve => {
+    const child = spawn(bin, rest, { stdio: 'inherit' })
+    child.on('exit', () => resolve())
+    // A backend that cannot be exec'd must not wedge the loop: the control center comes straight
+    // back up and the failure is visible as the session simply still being there.
+    child.on('error', () => resolve())
+  })
+}
+
+/**
+ * The session poller, created once for the life of the process.
+ *
+ * A singleton on purpose, and not for speed: the poller carries the previous frame digest and the
+ * previous state of every session between calls, and those two are what make movement detectable
+ * and the bell a TRANSITION rather than a level. A fresh poller per call would have no previous
+ * frame to compare against — so nothing could ever be seen to move, and every waiting session would
+ * ring the bell every five seconds forever.
+ */
+let sessionsPoller: SessionsPoller | null = null
+
+async function ensureSessionsPoller(): Promise<SessionsPoller> {
+  if (sessionsPoller) return sessionsPoller
+  const backend = await resolveBackend()
+  sessionsPoller = createSessionsPoller({ backend, readRegistry, scanProcesses, loadConversations })
+  return sessionsPoller
+}
+
+/**
+ * A refused spawn plan, in words.
+ *
+ * Mirrors `cli-session.ts`'s explainer rather than sharing it, because that one prints a CLI usage
+ * hint and this one goes into a status line — the same facts, addressed to someone looking at a
+ * screen rather than at a shell.
+ */
+function explainSpawnError(e: SpawnPlanError, s: CliStrings): string {
+  switch (e.code) {
+    case 'unsupported-harness': return s.sessSpawnUnsupported(e.harness)
+    case 'resume-unsupported': return s.sessSpawnNoResume(e.harness)
+    case 'model-unsupported': return s.sessSpawnNoModel(e.harness)
+    case 'effort-unsupported': return s.sessSpawnNoEffort(e.harness)
+    case 'unknown-effort': return s.sessSpawnBadEffort(e.harness, e.value, e.accepted)
+  }
+}
+
+/**
+ * Start one managed session — the ONE path every caller goes through.
+ *
+ * The wizard, a resume and "open this whole task" differ only in what they put in the request, so
+ * they share this rather than each doing their own plan/spawn/register dance. The plan is checked
+ * BEFORE anything is spawned, so an unsupported flag is a sentence rather than a session that starts
+ * and dies with a usage error on a screen nobody is looking at.
+ */
+/**
+ * The stored fleet arrangement — ALWAYS present, falling back to the defaults.
+ *
+ * Never absent, and that is the whole point. The screen restores the stored arrangement when one
+ * arrives and only starts persisting its own once it has; with an absent value it could not tell
+ * "the status has not loaded yet" from "this machine never chose", so on every remount — which is
+ * exactly what detaching from a session does — it wrote its DEFAULTS over the arrangement it was
+ * about to be handed. The grouping came back to `list` after every attach, twice.
+ */
+async function sessionViewPref(): Promise<{ sessionView: SessionViewPrefs }> {
+  const stored = (await readPreferences()).sessionView
+  return { sessionView: stored ?? DEFAULT_SESSION_VIEW }
+}
+
+async function spawnManaged(req: {
+  harness: HarnessId
+  cwd: string
+  attach: boolean
+  resumeId?: string
+  prompt?: string
+  model?: string
+  effort?: string
+  label?: string
+  task?: string
+}, s: CliStrings): Promise<SpawnSessionResult> {
+  const backend = await resolveBackend()
+  const blocked = await backend.unavailable()
+  if (blocked) return { ok: false, message: blocked }
+
+  const planned = planSpawn({
+    harness: req.harness,
+    cwd: req.cwd,
+    ...(req.resumeId ? { resumeId: req.resumeId } : {}),
+    ...(req.prompt ? { prompt: req.prompt } : {}),
+    ...(req.model ? { model: req.model } : {}),
+    ...(req.effort ? { effort: req.effort } : {}),
+  })
+  if (!planned.ok) return { ok: false, message: explainSpawnError(planned.error, s) }
+
+  const id = newSessionId()
+  try {
+    await backend.spawn({
+      id,
+      cwd: req.cwd,
+      argv: planned.plan.argv,
+      ...(planned.plan.sendKeys ? { sendKeys: planned.plan.sendKeys } : {}),
+    })
+  } catch (e) {
+    return { ok: false, message: s.sessSpawnFailed(e instanceof Error ? e.message : String(e)) }
+  }
+
+  await addSession({
+    id,
+    harness: req.harness,
+    cwd: req.cwd,
+    createdAt: new Date().toISOString(),
+    ...(req.model ? { model: req.model } : {}),
+    ...(req.effort ? { effort: req.effort } : {}),
+    ...(req.label ? { label: req.label } : {}),
+    ...(req.task ? { task: req.task } : {}),
+  })
+
+  const name = req.label ?? id
+  if (!req.attach) return { ok: true, id, message: s.sessStartedBg(name) }
+  return {
+    ok: true,
+    id,
+    message: s.sessStarted(name),
+    ticket: { argv: backend.attachCommand(id), detachHint: await backend.detachHint(), label: name },
+  }
+}
+
+/** The state word each session wears, and the machine-readable state beside it. */
+function sessionState(v: SessionView): SessionState {
+  if (v.status === 'closed') return 'closed'
+  if (v.status === 'external') return 'unknown'
+  if (v.status === 'lost') return 'lost'
+  switch (v.activity) {
+    case 'waiting-approval': return 'waiting-approval'
+    case 'waiting': return 'waiting'
+    case 'working': return 'working'
+    case 'exited': return 'exited'
+    // A row with no activity that is not external is one the poller could not read this time round.
+    // `lost` is the honest word for it: something is known to exist and nothing can be said about it.
+    default: return 'lost'
+  }
+}
+
+function stateLabel(state: SessionState, s: CliStrings): string {
+  switch (state) {
+    case 'working': return s.sessState.working
+    case 'waiting-approval': return s.sessState.waitingApproval
+    case 'waiting': return s.sessState.waiting
+    case 'exited': return s.sessState.exited
+    case 'lost': return s.sessState.lost
+    case 'unknown': return s.sessState.external
+    case 'closed': return s.sessState.closed
+  }
+}
+
+/** The last path segment — the "by project" grouping key, decided here so the TUI never parses a
+ *  path of its own. Backslashes normalised first, because a WSL machine sees both separators. */
+function projectName(cwd: string): string {
+  const parts = cwd.replace(/\\/g, '/').replace(/\/+$/, '').split('/')
+  return parts[parts.length - 1] ?? cwd
+}
+
+/** One server-side view, mapped to what the control center renders — every word already localized. */
+function toControlSession(
+  v: SessionView,
+  s: CliStrings,
+  /** What repository this session's directory belongs to, already resolved and memoized. */
+  facts: RepoFacts = { worktree: false },
+): ControlSession {
+  const state = sessionState(v)
+  const project = projectName(v.cwd)
+  const harness = v.harness ?? ''
+  return {
+    id: v.id,
+    // The user's own label wins over anything derived: naming a session is the whole point of
+    // being able to name one.
+    title: v.label ?? s.sessUntitled(harness || '?', project),
+    harness,
+    cwd: v.cwd,
+    project,
+    ...(v.model ? { model: v.model } : {}),
+    ...(v.note ? { note: v.note } : {}),
+    state,
+    stateLabel: stateLabel(state, s),
+    actionable: v.status !== 'external' && v.status !== 'closed',
+    // Stated only where it is TRUE and only for a session we actually HOST. A row that is closed or
+    // running outside agentop has no screen to read at all, so "approval detection is unavailable
+    // for this harness" is not merely noise there — it is false, and it said so about claude, which
+    // is probed.
+    ...(v.status !== 'external' && v.status !== 'closed' && !v.approvalDetection && harness
+      ? { approvalBlind: s.sessApprovalBlind(harness) }
+      : {}),
+    ...(v.createdMs !== undefined ? { startedAt: v.createdMs } : {}),
+    ...(v.task ? { task: v.task } : {}),
+    // Marked BY THE USER — a label, a note or a task. `title` cannot answer this: it always has a
+    // value, because the host derives one whenever there is no label.
+    ...(v.label || v.note || v.task ? { named: true } : {}),
+    ...(facts.repo ? { repo: facts.repo } : {}),
+    // Only when it differs: a session in the main checkout groups under its own folder already, and
+    // a field repeating what is beside it is one more thing that can disagree.
+    ...(facts.root && facts.root !== project ? { projectGroup: facts.root } : {}),
+    ...(facts.worktree ? { worktree: true } : {}),
+    ...(v.resume ? { resume: v.resume } : {}),
+    ...(v.lastLines?.length ? { lastLines: v.lastLines } : {}),
+    // Already formatted, because formatting is a presentation concern the host owns for everything
+    // else it hands over — and `fmt`/`fmtCost` are the shared helpers the dashboard uses.
+    ...(v.tokens !== undefined ? { tokens: fmt(v.tokens) } : {}),
+    ...(v.costUSD !== undefined ? { cost: fmtCost(v.costUSD) } : {}),
+    searchText: v.searchText,
+    attached: v.attached,
+  }
+}
+
 function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
   let lang = initialLang
   const S = () => cliStrings(lang)
@@ -1238,6 +1533,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         version: CURRENT_VERSION,
         latestVersion,
         archiveMode: await currentArchiveMode(),
+        ...(await sessionViewPref()),
         mouse,
       }
     },
@@ -1359,8 +1655,8 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
        */
       const watchable = rebuild || targets.includes('central') || targets.includes('machine')
       const work = () => restartRuntimes(s, targets, { rebuild, stream: watchable })
-      if (watchable) await streamOutput(work)
-      else await captureOutput(work)
+      const ok = watchable ? await streamOutput(work) : (await captureOutput(work)).value
+      if (!ok) return { ok: false, message: s.restartFailed }
       return { ok: true, message: target === 'all' ? s.restartedAll : s.restartedDone }
     },
 
@@ -1426,6 +1722,19 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       }
     },
 
+    async upgrade(): Promise<ActionResult> {
+      const s = S()
+      // A CHILD process, not `runUpgrade()` in here. That command prints — a lot, for minutes —
+      // and nothing may print while the alternate buffer is live; run as a child under
+      // `streamCommand` both pipes are captured and every line lands in the detail pane instead.
+      // It is also what makes the self-replacement safe: the binary being overwritten is this
+      // process's own, and upgrade.ts installs by rename, which a running process survives.
+      const code = await streamCommand([process.execPath, 'upgrade'])
+      return code === 0
+        ? { ok: true, message: s.upgradeDone }
+        : { ok: false, message: s.upgradeFailed(code) }
+    },
+
     async setArchiveMode(mode: ArchiveMode): Promise<ActionResult> {
       const s = S()
       try {
@@ -1489,6 +1798,20 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       return { ok: false, message: s.urlOpenFailed }
     },
 
+    /**
+     * Remember how the fleet list is arranged.
+     *
+     * Best-effort: a machine that cannot write its preferences still gets the arrangement for this
+     * run. Losing it across restarts is not worth failing anything for.
+     */
+    async setSessionView(view: SessionViewPrefs): Promise<void> {
+      try {
+        await writePreferences({ sessionView: view })
+      } catch {
+        // Deliberately silent — see above.
+      }
+    },
+
     async setLang(next: CliLang): Promise<void> {
       lang = next
       try { await writePreferences({ lang: next }) } catch { /* best-effort */ }
@@ -1523,6 +1846,265 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       if (r.code !== 0) return []
       return r.out.split('\n').filter(line => line.length > 0)
     },
+
+    /**
+     * The session fleet, already decided and already localized.
+     *
+     * The poller is created ONCE and reused, which is not an optimization: it carries the previous
+     * frame digest and the previous state of every session between calls, and those are what make
+     * movement detectable and the bell a transition rather than a level. A fresh poller each call
+     * would have no previous frame to compare against, so no session could ever be seen to move and
+     * every waiting one would ring the bell every five seconds.
+     */
+    async sessions(): Promise<ControlSessions> {
+      // `S()` rather than `this.lang`: the language is a closure variable `setLang` reassigns, and
+      // reading it through `this` would break the moment a caller detached the method.
+      const s = S()
+      const poller = await ensureSessionsPoller()
+      const snap = await poller.poll()
+      // Carried on every snapshot so the cockpit can state it permanently: a user who cannot get
+      // out of a session is stranded in a buffer that hides their shell, and a line printed once
+      // before the handover scrolls away the moment anything else happens.
+      const detachHint = await (await resolveBackend()).detachHint().catch(() => '')
+      // Read on every snapshot rather than cached: the toggle and the verb both write it, and a
+      // stale copy would leave a task the user just finished still heading a live section.
+      const finishedTasks = (await readPreferences()).finishedTasks ?? []
+      // Resolved per session and MEMOIZED by directory: a directory does not change repository, and
+      // this poll runs every five seconds over the whole fleet — asking git three times per session
+      // per tick would be a hundred processes a minute to learn the same thing.
+      const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd)))
+      return {
+        sessions: snap.sessions.map((v, i) => toControlSession(v, s, facts[i])),
+        attention: snap.attention,
+        rang: snap.rang,
+        ...(finishedTasks.length > 0 ? { finishedTasks } : {}),
+        ...(detachHint ? { detachHint } : {}),
+        ...(snap.unavailable ? { unavailable: snap.unavailable } : {}),
+      }
+    },
+
+    async attachSession(id: string): Promise<AttachTicket | null> {
+      const s = S()
+      const backend = await resolveBackend()
+      if (await backend.unavailable()) return null
+      // The label comes from the registry so the sentence printed on the way in names what the user
+      // selected, not an id they never typed.
+      const managed = (await readRegistry()).find(r => r.id === id)
+      return {
+        argv: backend.attachCommand(id),
+        detachHint: await backend.detachHint(),
+        label: managed?.label ?? id,
+      }
+    },
+
+    /**
+     * Stop a session, and delete its registry entry only once the backend CONFIRMS it is gone.
+     *
+     * The same rule `agentop session kill` follows, and for the same reason: clearing the entry on an
+     * unconfirmed kill turns a still-running session into one nothing can name again.
+     */
+    async killSession(id: string): Promise<ActionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+      if (!(await backend.kill(id))) return { ok: false, message: s.sessKillUnconfirmed(id) }
+      // MARKED finished, never deleted. Removing the row took with it the only record of which
+      // conversation this was — the store had not caught up, so there was nothing left to offer as
+      // reopenable and the session simply vanished from the screen. A session you end is still a
+      // thing that happened, and picking it back up is the ordinary next thing to want.
+      if (!(await patchSession(id, { endedAt: new Date().toISOString() }))) await removeSession(id)
+      forgetConversations()
+      return { ok: true, message: s.sessKilled(id) }
+    },
+
+    /**
+     * Mark a task finished, or reopen it.
+     *
+     * The state to SET rather than a toggle, so the screen and the store can never disagree about
+     * what the button just did. Nothing about the sessions changes: a finished task is a statement
+     * about the WORK, and its sessions stay listed, attachable and killable behind one switch.
+     */
+    async finishTask(task: string, done: boolean): Promise<ActionResult> {
+      const s = S()
+      if (!task) return { ok: false, message: s.sessNoTask }
+      const current = (await readPreferences()).finishedTasks ?? []
+      const next = done
+        ? (current.includes(task) ? current : [...current, task])
+        : current.filter(t => t !== task)
+      await writePreferences({ finishedTasks: next })
+      return { ok: true, message: done ? s.sessTaskFinished(task) : s.sessTaskReopened(task) }
+    },
+
+    async renameSession(id: string, label: string): Promise<ActionResult> {
+      const s = S()
+      const ok = await patchSession(id, { label })
+      return ok ? { ok: true, message: s.sessRenamed } : { ok: false, message: s.sessNoRegistryEntry }
+    },
+
+    async noteSession(id: string, text: string): Promise<ActionResult> {
+      const s = S()
+      const ok = await patchSession(id, { note: text })
+      return ok ? { ok: true, message: s.sessNoted } : { ok: false, message: s.sessNoRegistryEntry }
+    },
+
+    /** Every task in use, most-used first — the order that puts what you are working on at the top. */
+    async sessionTasks(): Promise<string[]> {
+      const counts = new Map<string, number>()
+      for (const m of await readRegistry()) {
+        if (!m.task) continue
+        counts.set(m.task, (counts.get(m.task) ?? 0) + 1)
+      }
+      return [...counts.entries()]
+        .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))
+        .map(([task]) => task)
+    },
+
+    async taskSession(id: string, task: string): Promise<ActionResult> {
+      const s = S()
+      const ok = await patchSession(id, { task })
+      return ok ? { ok: true, message: s.sessTasked } : { ok: false, message: s.sessNoRegistryEntry }
+    },
+
+    /**
+     * Reopen a conversation as a NEW managed session.
+     *
+     * The only way the cockpit can act on something it did not start: it cannot attach to a foreign
+     * process, but it can start a session that resumes the same conversation. The new session
+     * inherits the conversation's NAME, so the row keeps reading the same after the swap.
+     */
+    async resumeSession(req: ResumeSessionRequest): Promise<SpawnSessionResult> {
+      const s = S()
+      // What the old row knew about this work — its task and its note — comes with it. A reopen
+      // that dropped them would file the recovered session nowhere and lose what someone wrote
+      // about it, which is most of the reason the row was worth keeping across the reboot.
+      const previous = req.replaces
+        ? (await readRegistry()).find(m => m.id === req.replaces)
+        : undefined
+      const spawned = await spawnManaged({
+        harness: req.harness as HarnessId,
+        cwd: req.cwd,
+        resumeId: req.sessionId,
+        label: req.label,
+        attach: req.attach,
+        ...(previous?.task ? { task: previous.task } : {}),
+      }, s)
+      if (spawned.ok) {
+        if (previous?.note && spawned.id) await patchSession(spawned.id, { note: previous.note })
+        // The old row is RETIRED rather than deleted: it is still a thing that happened, and it
+        // stops standing beside its own continuation with the same name on it.
+        if (previous) await patchSession(previous.id, { endedAt: new Date().toISOString() })
+        // The store's view of what is running just changed, and the next poll must see it rather
+        // than waiting out the cache and showing the conversation as still closed.
+        forgetConversations()
+      }
+      return spawned
+    },
+
+    /**
+     * Reopen every session of one task, detached.
+     *
+     * The whole point of naming a task is getting its work back at once. Sessions whose conversation
+     * cannot be resolved are SKIPPED AND COUNTED — a partial reopen reported as a success would
+     * leave someone believing they had their whole task back when they did not.
+     */
+    async openTask(task: string): Promise<ActionResult> {
+      const s = S()
+      const wanted = (await readRegistry()).filter(m => m.task === task)
+      if (wanted.length === 0) return { ok: false, message: s.sessTaskEmpty(task) }
+
+      const conversations = await loadConversations()
+      const backend = await resolveBackend()
+      const live = new Set(
+        (await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id),
+      )
+      // The DECISION is the pure `planTaskReopen`, shared with `agentop session open` — the two
+      // were separate implementations of one gesture and had already drifted.
+      const plan = planTaskReopen({
+        entries: wanted,
+        liveIds: live,
+        conversationFor: m => {
+          const conv = conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
+          return conv?.resumable ? { sessionId: conv.sessionId, title: conv.title } : null
+        },
+      })
+
+      let opened = 0
+      let skipped = plan.skipped.length
+      for (const row of plan.reopen) {
+        const m = row.entry
+        const r = await spawnManaged({
+          harness: m.harness,
+          cwd: m.cwd,
+          resumeId: row.resumeId,
+          label: row.label,
+          task,
+          attach: false,
+        }, s)
+        if (!r.ok) { skipped++; continue }
+        opened++
+        // Retired, so a laptop closed and opened twice does not leave the task holding two dead
+        // twins and one live session, all under the same name.
+        await patchSession(m.id, { endedAt: new Date().toISOString() })
+        if (m.note && r.id) await patchSession(r.id, { note: m.note })
+      }
+      forgetConversations()
+      return taskReopenSucceeded(plan, opened)
+        ? { ok: true, message: s.sessTaskOpened(task, opened, skipped) }
+        : { ok: false, message: s.sessTaskNoneOpened(task, skipped) }
+    },
+
+    /**
+     * Derived from `SPAWN_SPECS`, never a second hand-written list.
+     *
+     * A harness with no spec is ABSENT from the wizard rather than offered and failing — the same
+     * rule `agentop session`'s `STARTABLE` already follows, and the reason the two can never drift.
+     */
+    async startableHarnesses(): Promise<SessionHarnessOption[]> {
+      return HARNESS_ORDER.flatMap(id => {
+        const spec = SPAWN_SPECS[id]
+        if (!spec) return []
+        return [{
+          id,
+          label: id,
+          modelSuggestions: spec.modelSuggestions,
+          supportsModel: spec.modelFlag !== undefined,
+          efforts: spec.efforts ?? [],
+        }]
+      })
+    },
+
+    async searchProjects(query: string): Promise<ProjectOption[]> {
+      const found = await findProjects(query, process.cwd())
+      return found.map(c => ({
+        path: c.path,
+        // Name and repo travel SEPARATELY: the picker aligns them into columns, and a pre-joined
+        // label is one cell holding two facts that no column arithmetic can take apart again.
+        label: c.name,
+        ...(c.remote ? { repo: repoShortName(c.remote) } : {}),
+        detail: candidatePath(c, homedir()),
+        source: c.source,
+      }))
+    },
+
+    /**
+     * Start a session, and — when it was asked for attached — hand back what it takes to enter it.
+     *
+     * The plan is checked BEFORE anything is spawned, so an unsupported flag is a sentence rather
+     * than a session that starts and immediately dies with a usage error on a screen nobody sees.
+     */
+    async spawnSession(req: SpawnSessionRequest): Promise<SpawnSessionResult> {
+      return spawnManaged({
+        harness: req.harness as HarnessId,
+        cwd: req.cwd,
+        attach: req.attach,
+        ...(req.prompt ? { prompt: req.prompt } : {}),
+        ...(req.model ? { model: req.model } : {}),
+        ...(req.effort ? { effort: req.effort } : {}),
+        ...(req.label ? { label: req.label } : {}),
+        ...(req.task ? { task: req.task } : {}),
+      }, S())
+    },
   }
 }
 
@@ -1550,8 +2132,19 @@ export async function runStart(): Promise<StartResult> {
   // unconfigured user on a list of services to start would leave the mode and the history-
   // preservation consent — the two things the wizard existed to ask — behind a tab they have no
   // reason to look for.
-  const exit = await runControlCenter({ lang, host, tab: (await isUnconfigured()) ? 'setup' : undefined })
-  if (exit.kind !== 'foreground') return exit.code
+  let tab: TabId | undefined = (await isUnconfigured()) ? 'setup' : undefined
+
+  // Attach and detach are two halves of ONE gesture, so this is a loop rather than an exit. The Ink
+  // app never execs anything: it unmounts, the session gets the real tty here, and when the user
+  // detaches the control center comes back up on the tab they left from. Anything else would make
+  // "look at a session" a one-way trip out of the application.
+  for (;;) {
+    const exit = await runControlCenter({ lang, host, tab })
+    if (exit.kind === 'foreground') break
+    if (exit.kind === 'quit') return exit.code
+    await execAttachTicket(exit.ticket, cliStrings(host.lang))
+    tab = 'sessions'
+  }
 
   // The terminal is ours again, so the two questions the foreground start has always asked can be
   // asked the way they always were — and in the same order: free the port first (a refusal aborts

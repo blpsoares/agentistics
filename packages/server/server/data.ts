@@ -1,10 +1,11 @@
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId, WorkflowRun } from '@agentistics/core'
-import { mergeStatsCaches } from '@agentistics/core'
+import { mergeStatsCaches, sessionDay, sanitizeStatsCache, normalizeSessionTimes } from '@agentistics/core'
 import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
+import { planProjectFacts, applyProjectFacts, type ResolvedFacts } from './project-facts'
 import { mergeLocalAndIngestedSessions, sessionKey } from './session-merge'
 import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
@@ -361,6 +362,36 @@ async function scanProjectDir(
   }
 }
 
+/**
+ * Read git for every project path that has not been read yet, and stamp what it finds.
+ *
+ * The IO half of `project-facts.ts`: the plan and the stamping are pure and tested there, this
+ * only spends the processes. Reads are memoized per path by the plan itself (one entry per distinct
+ * path) and bounded by a limiter — two harnesses in one directory cost one `git config`, not two.
+ */
+export async function resolveProjectFacts(
+  sessions: SessionMeta[],
+  projects: ServerProject[],
+  alreadyResolved: ReadonlySet<string>,
+): Promise<void> {
+  const plan = planProjectFacts(sessions, projects, alreadyResolved)
+  if (plan.length === 0) return
+
+  const limit = createLimiter(8)
+  const facts = new Map<string, ResolvedFacts>()
+  await Promise.all(plan.map(({ path, earliest }) => limit(async () => {
+    // Both are already total: a path that is gone, or is not a repo, yields '' / undefined rather
+    // than throwing. Guarded anyway — one unreadable directory must not fail the whole build.
+    const [remote, stats] = await Promise.all([
+      getGitRemote(path).catch(() => ''),
+      getProjectGitStats(path, earliest || undefined).catch(() => undefined),
+    ])
+    facts.set(path, { remote: remote ?? '', stats })
+  })))
+
+  applyProjectFacts(facts, sessions, projects)
+}
+
 export async function scanProjects(
   knownIds: Set<string>,
   metaMap: Map<string, SessionMeta>,
@@ -532,7 +563,10 @@ function supplementStatsCache(statsCache: StatsCache, sessions: SessionMeta[]): 
 
   for (const s of sessions) {
     if (!s.start_time) continue
-    const day = s.start_time.slice(0, 10)
+    // `sessionDay`, not `.slice`: an adapter that wrote the wrong shape must not be able to throw
+    // here and take the whole API response with it. See sessionDay.
+    const day = sessionDay(s.start_time)
+    if (!day) continue
     if (lastComputed && day <= lastComputed) continue
 
     const da = dailyActivity.get(day) ?? { messageCount: 0, sessionCount: 0, toolCallCount: 0 }
@@ -616,7 +650,7 @@ async function mergeArchivedStatsCache(statsCache: StatsCache, enabled: boolean)
   if (!enabled) return
   const snap = await safeReadJson<StatsCache>(join(ARCHIVE_STATS_DIR, 'latest.json'))
   if (!snap) return
-  applyArchivedStats(statsCache, snap)
+  applyArchivedStats(statsCache, sanitizeStatsCache(snap))
 }
 
 export function applyArchivedStats(statsCache: StatsCache, snap: StatsCache): void {
@@ -666,7 +700,7 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
     const [statsCache, metaMap, healthIssues] = await Promise.all([
       safeReadJson<StatsCache>(STATS_CACHE_FILE)
         .then(async v => {
-          const sc = v ?? ({} as StatsCache)
+          const sc = sanitizeStatsCache(v ?? ({} as StatsCache))
           await mergeArchivedStatsCache(sc, fullMode)
           onProgress('statsCache', 1)
           return sc
@@ -686,6 +720,9 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       (done, total) => onProgress('projects', total > 0 ? done / total : 1),
     )
     onProgress('projects', 1, String(projects.length))
+    // Every path the Claude walk has already asked git about — including the ones that turned out
+    // not to be repositories. `resolveProjectFacts` below skips these rather than re-reading them.
+    const gitResolvedPaths = new Set(projects.map(p => p.path))
 
     // Enrich project session created timestamps from meta where possible
     enrichProjectSessions(projects, metaMap)
@@ -694,6 +731,15 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
 
     const metaSessions = Array.from(metaMap.values())
     const allSessionsRaw: SessionMeta[] = [...metaSessions, ...extraSessions]
+
+    // Normalise at the boundary — where every harness's sessions ENTER the pipeline — before
+    // anything sorts, dedups, or persists them. `start_time`/`end_time` are typed `string`, but
+    // that is a compile-time promise only: an adapter can get the shape wrong (Kimi wrote an epoch
+    // NUMBER; jsonl.ts's own `ts` extraction was cast, not verified). Fixing it here means every
+    // downstream `.localeCompare`/`.slice`/`parseISO` — including the raw `.sort()` calls a few
+    // lines down — never has to defend against it individually, and a bad session is never even
+    // written to the consolidate store in the first place.
+    for (const s of allSessionsRaw) normalizeSessionTimes(s)
 
     // Deduplicate by session_id — same UUID can appear as both .jsonl AND UUID subdir
     // Prefer: meta > jsonl > subdir
@@ -815,6 +861,36 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
         }
       }
     }
+    // --- Repository discovery, for every harness ---
+    // A repository is a property of a DIRECTORY, not of whichever assistant happened to visit it.
+    // Until this ran, `getGitRemote` was only ever called from inside the ~/.claude walk, so a repo
+    // used exclusively through Codex/Gemini/Copilot was invisible until a Claude session appeared in
+    // it. Measured before this change on a real machine: claude 163 sessions / 95 with a remote,
+    // codex 10 / 0, copilot 8 / 1, gemini 15 / 1.
+    //
+    // It runs BEFORE the writeConsolidated below, so the remote reaches the store — and therefore
+    // the uploader and the central, which has no filesystem to recover it from.
+    await resolveProjectFacts(sessions, projects, gitResolvedPaths)
+
+    // --- The user's own session names ---
+    // A label someone typed in the session manager is the ONE label nothing upstream may overwrite,
+    // which is the whole reason to be able to set one. It is stamped here, after every harness's
+    // sessions are in one list, and only where the link is unambiguous — `linkManagedSessions`
+    // refuses in both directions rather than attributing on a coin flip, because a name on the
+    // WRONG conversation is a user reading someone else's work under a title they chose themselves.
+    //
+    // Before writeConsolidated, so the name reaches the store and survives the harness deleting its
+    // transcript — and it is scrubbed by `redactSecrets` on the way to a central exactly like
+    // `first_prompt`, which it sits beside in `sessionLabel()`.
+    try {
+      const { readRegistry } = await import('./sessions/registry')
+      const { applySessionLabels, linkManagedSessions } = await import('./sessions/link-sessions')
+      applySessionLabels(sessions, linkManagedSessions(await readRegistry(), sessions))
+    } catch (err) {
+      // A registry that cannot be read costs some labels, never the build.
+      console.warn('[session] could not apply session labels:', String(err))
+    }
+
     // Persist non-Claude sessions to the consolidate store too. The Claude-only
     // writeConsolidated() above runs before this merge, so without this the store
     // (and therefore the team uploader, which pushes loadConsolidated()) would only

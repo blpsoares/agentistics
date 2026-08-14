@@ -9,7 +9,7 @@ import { sessionTime } from '../lib/sessionTime'
 import { formatProjectName, formatModel, calcCost, getModelColor, sessionLabel, fmtCost } from '@agentistics/core'
 import { blendedCostPerToken } from '../hooks/useData'
 import { buildWorkflowSteps } from '../lib/workflowSteps'
-import { fmtFull } from '@agentistics/core'
+import { fmtFull, workflowTokens } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -466,7 +466,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                         <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor, flexShrink: 0 }} />
                         <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>{run.name}</span>
                         <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                          {run.totals.agentCount} {pt ? 'agentes' : 'agents'} · {fmt(run.totals.tokensIn + run.totals.tokensOut, fullPrecision)} tk · <strong style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(run.totals.costUSD, currency, brlRate)}</strong>
+                          {run.totals.agentCount} {pt ? 'agentes' : 'agents'} · {fmt(workflowTokens(run.totals), fullPrecision)} tk · <strong style={{ color: 'var(--anthropic-orange)' }}>{fmtCost(run.totals.costUSD, currency, brlRate)}</strong>
                         </span>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -476,7 +476,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
                             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{step.title}</span>
                             <span style={{ color: 'var(--text-tertiary)' }}>{step.subtotal.count} {pt ? 'agentes' : 'agents'}</span>
                             <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                              {fmt(step.subtotal.tokensIn + step.subtotal.tokensOut, fullPrecision)} tk · {fmtCost(step.subtotal.costUSD, currency, brlRate)}
+                              {fmt(workflowTokens(step.subtotal), fullPrecision)} tk · {fmtCost(step.subtotal.costUSD, currency, brlRate)}
                             </span>
                           </div>
                         ))}

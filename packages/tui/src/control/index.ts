@@ -146,12 +146,15 @@ export async function runControlCenter(opts: ControlCenterOptions): Promise<Cont
 export type {
   ActionResult,
   ActionTarget,
+  AttachTicket,
   BootState,
   RestartOption,
   RestartRequest,
   ControlExit,
   ControlHost,
   ControlService,
+  ControlSession,
+  ControlSessions,
   ControlStatus,
   LogSource,
   RuntimeId,
@@ -160,6 +163,13 @@ export type {
   ServiceRuntime,
   ServiceRuntimeState,
   ServiceState,
+  SessionHarnessOption,
+  SessionState,
+  SessionViewPrefs,
+  SpawnSessionRequest,
+  SpawnSessionResult,
+  ProjectOption,
+  ResumeSessionRequest,
   StartHow,
   StartOption,
   StartRequest,
@@ -167,5 +177,5 @@ export type {
   TabId,
   TeamMode,
 } from './types'
-export { TAB_ORDER } from './types'
+export { TAB_ORDER, DEFAULT_SESSION_VIEW } from './types'
 export type { CliLang } from './lang'

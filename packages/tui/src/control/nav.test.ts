@@ -32,6 +32,15 @@ describe('resolveTabKey', () => {
     expect(resolveTabKey(key({ leftArrow: true }), SECOND)).toBe(FIRST)
   })
 
+  it('moves with the BRACKETS even where a screen has claimed the arrows', () => {
+    // The escape hatch that lets a screen own its own arrows. Without it, claiming them is a screen
+    // nobody can leave — and the sessions cockpit, whose list is read with the arrows, claims them
+    // permanently.
+    expect(resolveTabKey(key({ input: ']' }), FIRST, false)).toBe(SECOND)
+    expect(resolveTabKey(key({ input: '[' }), SECOND, false)).toBe(FIRST)
+    expect(resolveTabKey(key({ input: ']' }), FIRST)).toBe(SECOND)
+  })
+
   it('answers no digit at all — the screens gave them back when the numbered strip went away', () => {
     // They belong to the screens' own lists now: the log viewer's three sources are numbered ON
     // screen, and `2` there used to switch the source AND leave the screen.

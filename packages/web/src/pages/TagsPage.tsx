@@ -11,7 +11,7 @@ import { DatePicker } from '../components/DatePicker'
 
 // /api/tags response shapes. Aggregate-only by design (spec rule 2): the server never sends the
 // session rows behind a tag, so everything rendered here is a number the server already computed.
-type TagSourceType = 'repo' | 'project' | 'machine' | 'team' | 'account'
+import { tagSourceTypes, type TagSourceType } from '../lib/tagSourceTypes'
 interface TagSource { type: TagSourceType; value: string }
 interface TagAggregate {
   sessions: number
@@ -51,7 +51,6 @@ const DEFAULT_COLOR = '#f59e0b'
  *  non-central instance knows about, which every local session is attributed to. */
 const LOCAL_MACHINE_ID = 'local'
 /** Source types that only exist where there is IAM. Hidden off a central, and refused there too. */
-const CENTRAL_ONLY_TYPES: TagSourceType[] = ['team', 'account']
 
 /** A label/value pair inside a grid card. */
 function MiniStat({ label, value }: { label: string; value: string }) {
@@ -211,6 +210,25 @@ export default function TagsPage() {
     for (const s of data.sessions) if (s.project_path) set.add(canonicalProjectPath(s.project_path))
     return [...set].sort().map(v => ({ value: v, label: formatProjectName(v) }))
   }, [data.sessions])
+  // Harness is a closed, known set (data.harnesses lists only harnesses actually present, per
+  // the harness-selector convention elsewhere in the app). Model has no such registry — every
+  // model that appears on any session is a valid option.
+  const harnessOptions = useMemo(
+    () => (data.harnesses ?? []).map(h => ({ value: h, label: HARNESS_LABELS[h] ?? h })),
+    [data.harnesses],
+  )
+  const modelOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const s of data.sessions) if (s.model) set.add(s.model)
+    return [...set].sort().map(v => ({ value: v, label: v }))
+  }, [data.sessions])
+  // `user` only ever has values in team mode (SessionMeta.user is unset on a solo session — see
+  // tagSourceTypes.ts) — the empty list on a machine is correct, not a bug.
+  const userOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const s of data.sessions) if (s.user) set.add(s.user)
+    return [...set].sort().map(v => ({ value: v, label: v }))
+  }, [data.sessions])
 
   /** Which repo each project belongs to, so the picker can say a path is already covered by one. */
   const repoByProject = useMemo(() => {
@@ -226,12 +244,15 @@ export default function TagsPage() {
   const accountName = useCallback((id: string) => accounts.find(a => a.id === id)?.name ?? id, [accounts])
   const machineName = useCallback((id: string) => machines.find(m => m.id === id)?.machineName ?? id, [machines])
 
-  const sourceTypeLabel = useCallback((t: TagSourceType) => ({
+  const sourceTypeLabel = useCallback((t: TagSourceType): string => ({
     repo: pt ? 'Repositório' : 'Repository',
     project: pt ? 'Projeto' : 'Project',
     machine: pt ? 'Máquina' : 'Machine',
     team: pt ? 'Time' : 'Team',
     account: pt ? 'Conta' : 'Account',
+    harness: pt ? 'Harness' : 'Harness',
+    model: pt ? 'Modelo' : 'Model',
+    user: pt ? 'Pessoa' : 'Person',
   }[t]), [pt])
 
   const sourceValueLabel = useCallback((s: TagSource) => {
@@ -240,15 +261,13 @@ export default function TagsPage() {
       case 'account': return accountName(s.value)
       case 'machine': return machineName(s.value)
       case 'project': return formatProjectName(s.value)
+      case 'harness': return HARNESS_LABELS[s.value as keyof typeof HARNESS_LABELS] ?? s.value
       default: return s.value
     }
   }, [teamName, accountName, machineName])
 
-  /** Team and account need IAM, which only a central has. */
-  const sourceTypes = useMemo<TagSourceType[]>(() => (
-    (['repo', 'project', 'machine', 'team', 'account'] as TagSourceType[])
-      .filter(t => isCentral || !CENTRAL_ONLY_TYPES.includes(t))
-  ), [isCentral])
+  /** Which dimensions can be picked here — see `tagSourceTypes`. */
+  const sourceTypes = useMemo<TagSourceType[]>(() => tagSourceTypes(isCentral), [isCentral])
 
   const optionsForType = useCallback((t: TagSourceType) => {
     switch (t) {
@@ -257,9 +276,12 @@ export default function TagsPage() {
       case 'machine': return machines.map(m => ({ value: m.id, label: m.machineName }))
       case 'team': return teams.map(t2 => ({ value: t2._id, label: t2.name }))
       case 'account': return accounts.map(a => ({ value: a.id, label: `${a.name} (${a.email})` }))
+      case 'harness': return harnessOptions
+      case 'model': return modelOptions
+      case 'user': return userOptions
       default: return []
     }
-  }, [repoOptions, projectOptions, machines, teams, accounts])
+  }, [repoOptions, projectOptions, machines, teams, accounts, harnessOptions, modelOptions, userOptions])
 
   /** The read-only detail is a page of its own (/tags/:id) — a card click navigates there. */
   const openDetail = useCallback((id: string) => {
@@ -445,6 +467,22 @@ export default function TagsPage() {
     if (t) openEdit(t)
     navigate('/tags', { replace: true, state: null })
   }, [editTagId, loaded, tags, openEdit, navigate])
+
+  // "Create tag with these filters" (the FiltersBar button, see filtersToTag.ts) hands off a
+  // precomputed draft via router state exactly the way the detail page's pencil hands off
+  // `editTagId` above — same mechanism, opens the SAME drawer, so central-only sections (sharing,
+  // etc.) show up for free. Does not wait on `loaded`: unlike editing, there is no existing tag to
+  // find first.
+  const draftFromFilters = (location.state as { draftFromFilters?: { sources: TagSource[]; filters: TagSource[]; window?: TagWindow } } | null)?.draftFromFilters
+  useEffect(() => {
+    if (!draftFromFilters) return
+    openCreate()
+    setSources(draftFromFilters.sources)
+    setFilters(draftFromFilters.filters)
+    setWinStart(draftFromFilters.window?.start ?? '')
+    setWinEnd(draftFromFilters.window?.end ?? '')
+    navigate('/tags', { replace: true, state: null })
+  }, [draftFromFilters, openCreate, navigate])
 
   return (
     <div>

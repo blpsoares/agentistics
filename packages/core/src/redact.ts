@@ -119,9 +119,25 @@ export function containsSecret(text: string): boolean {
  * `first_prompt` and `title` are the ONLY free text in a SessionMeta; every other field is a
  * count, an id, a path or a timestamp. If a future field carries user prose, add it here.
  */
-export function redactSessionText<T extends { first_prompt?: string; title?: string }>(session: T): T {
+export function redactSessionText<
+  T extends { first_prompt?: string; title?: string; user_label?: string; user_note?: string },
+>(session: T): T {
+  // Every field here is free text a person typed or pasted, and every one of them travels. Adding a
+  // new one to `SessionMeta` without adding it here is how a credential reaches a central through
+  // the one field nobody thought of — which is exactly why this is a list and not two lines.
   const fp = session.first_prompt ? redactSecrets(session.first_prompt) : session.first_prompt
   const ti = session.title ? redactSecrets(session.title) : session.title
-  if (fp === session.first_prompt && ti === session.title) return session
-  return { ...session, ...(fp !== undefined ? { first_prompt: fp } : {}), ...(ti !== undefined ? { title: ti } : {}) }
+  const ul = session.user_label ? redactSecrets(session.user_label) : session.user_label
+  const un = session.user_note ? redactSecrets(session.user_note) : session.user_note
+  if (
+    fp === session.first_prompt && ti === session.title
+    && ul === session.user_label && un === session.user_note
+  ) return session
+  return {
+    ...session,
+    ...(fp !== undefined ? { first_prompt: fp } : {}),
+    ...(ti !== undefined ? { title: ti } : {}),
+    ...(ul !== undefined ? { user_label: ul } : {}),
+    ...(un !== undefined ? { user_note: un } : {}),
+  }
 }

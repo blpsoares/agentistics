@@ -1,7 +1,7 @@
 import { join, dirname } from 'path'
 import { mkdir, rename, writeFile, open, unlink, stat, readFile, utimes } from 'node:fs/promises'
 import { AGENTISTICS_DATA_DIR, CLAUDE_DIR } from './config'
-import type { TeamConfig } from '@agentistics/core'
+import type { BillingSettings, SavedComparison, TeamConfig } from '@agentistics/core'
 import { migrateTeamConfig } from '@agentistics/core'
 
 // Preferences live in the writable ~/.agentistics dir. The legacy location under CLAUDE_DIR
@@ -32,15 +32,58 @@ export interface Preferences {
   cardPrecision?: Record<string, boolean>
   chatModel?: string
   chatSoundEnabled?: boolean
+  /** Whether this machine serves the chat at all. ABSENT READS AS OFF — chat spawns an assistant
+   *  CLI on the host, and until it was made opt-in every machine installed for its metrics also
+   *  shipped a shell nobody had chosen. It can only ever narrow `CAPS.localChat`; see chat-gate.ts. */
+  chatEnabled?: boolean
   /** true once the user dismissed the install prompt with "don't show again".
    *  Persisted server-side (not localStorage) so it survives incognito windows. */
   installDismissed?: boolean
+  /** How this machine is actually billed — a timeline of periods per harness, plus the display
+   *  basis. Drives the "plan" cost basis; see `billing.ts` in @agentistics/core.
+   *
+   *  LOCAL ONLY. This never enters `IngestBody`, a team document or an audit event: what someone
+   *  pays is theirs, and a central cannot price a fleet from one operator's timeline anyway.
+   *  It needs no `redactPreferences` entry — a plan id and a monthly amount are not credentials,
+   *  and the writes go through the same shallow merge as every other field, so the settings screen
+   *  must always PUT the complete object rather than a partial one. */
+  billing?: BillingSettings
+  /** Saved comparisons — N filter scopes the user asks about repeatedly, and which of them are
+   *  pinned to the Home page. Local only, same as `billing`. */
+  comparisons?: SavedComparison[]
   /** How the app preserves session history past Claude's 30-day cleanup.
    *  `undefined` = not chosen yet (the blocking consent gate is shown).
    *    - 'consolidate' = store computed per-session metrics only (~KB, recommended)
    *    - 'full'        = mirror raw transcripts too (heavy, lets you re-read chats)
    *    - 'off'         = do nothing, use Claude's default folder */
   archiveMode?: 'off' | 'consolidate' | 'full'
+  /**
+   * How the cockpit's fleet list was last arranged.
+   *
+   * Stored here rather than held in the TUI because the control center owns no persistence — the
+   * same reason the language lives here. Without it the grouping was per-run state, so every restart
+   * threw away the arrangement someone chose, which reads as the screen forgetting on its own.
+   */
+  sessionView?: {
+    grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo'
+    showClosed: boolean
+    showExited: boolean
+    showUnfiled: boolean
+    showDone?: boolean
+    onlyActive?: boolean
+    states?: string[]
+    sort?: { by: string; dir: 'asc' | 'desc' }
+    hideDetail?: boolean
+    marked?: string[]
+  }
+  /**
+   * The session TASKS the user has marked finished.
+   *
+   * A task is a free string on a session, so "finished" cannot live on the sessions — it is a
+   * statement about the work, and the work outlives any one of its sessions. Kept here beside the
+   * arrangement for the same reason: the control center owns no persistence.
+   */
+  finishedTasks?: string[]
   /** @deprecated legacy boolean — read by resolveArchiveMode for migration only */
   archiveSessions?: boolean
   /** Team mode configuration. Absent / mode=solo means solo behavior (no push). */

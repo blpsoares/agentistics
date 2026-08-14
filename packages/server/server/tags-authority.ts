@@ -24,6 +24,11 @@ export interface TagAuthorityContext {
   visibleAccountIds: Set<string>
   visibleRepos: Set<string>
   visibleProjects: Set<string>
+  /** Display names (`session.user`) seen on a session this principal can already see. A `user`
+   *  source is an identity string exactly like a machine or account — unrestricted visibility
+   *  would let a scoped manager compose a tag over a person's name and read their activity
+   *  outside the manager's own teams, the same escalation Rule 1 exists to close for `machine`. */
+  visibleUsers: Set<string>
   /** accountId → memberIds of every machine that account owns. An `account` source expands to all
    *  of them at resolution time, so seeing the account is NOT enough — see canSeeSource. */
   machinesByAccount: Record<string, string[]>
@@ -45,6 +50,10 @@ export function canSeeSource(p: Principal, src: TagSource, ctx: TagAuthorityCont
     }
     case 'repo': return ctx.visibleRepos.has(src.value)
     case 'project': return ctx.visibleProjects.has(src.value)
+    case 'user': return ctx.visibleUsers.has(src.value)
+    // Which HARNESS or MODEL a session used is not identity — it says nothing about who ran it —
+    // so unlike `user` there is nothing to scope or withhold here.
+    case 'harness': case 'model': return true
     default: return false
   }
 }

@@ -1,6 +1,64 @@
 import { describe, test, expect } from 'bun:test'
-import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, projectFolder, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, normalizeGitRemote, repoShortName, canonicalProjectPath, HARNESS_ORDER } from './types'
+import { calcCost, getModelPrice, sessionModelUsage, sessionCostUSD, MODEL_PRICING, formatModel, getModelColor, formatProjectName, projectFolder, HARNESS_CAPABILITIES, emptyStatsCache, mergeStatsCaches, sanitizeStatsCache, normalizeGitRemote, repoShortName, canonicalProjectPath, HARNESS_ORDER, sessionDay, normalizeSessionTimes } from './types'
 import type { ModelUsage, StatsCache } from './types'
+
+describe('sanitizeStatsCache', () => {
+  function sc(over: Partial<StatsCache>): StatsCache {
+    return { ...emptyStatsCache(), ...over }
+  }
+
+  test('drops dailyActivity entries with a missing date', () => {
+    const input = sc({
+      dailyActivity: [
+        { date: '2026-01-01', messageCount: 5, sessionCount: 2, toolCallCount: 3 },
+        { date: undefined as unknown as string, messageCount: 9, sessionCount: 1, toolCallCount: 0 },
+      ],
+    })
+    const out = sanitizeStatsCache(input)
+    expect(out.dailyActivity).toEqual([{ date: '2026-01-01', messageCount: 5, sessionCount: 2, toolCallCount: 3 }])
+  })
+
+  test('drops dailyActivity entries with a non-string or empty date', () => {
+    const input = sc({
+      dailyActivity: [
+        { date: '2026-01-01', messageCount: 1, sessionCount: 1, toolCallCount: 1 },
+        { date: null as unknown as string, messageCount: 2, sessionCount: 1, toolCallCount: 0 },
+        { date: '', messageCount: 3, sessionCount: 1, toolCallCount: 0 },
+        { date: 12345 as unknown as string, messageCount: 4, sessionCount: 1, toolCallCount: 0 },
+      ],
+    })
+    const out = sanitizeStatsCache(input)
+    expect(out.dailyActivity).toHaveLength(1)
+    expect(out.dailyActivity[0]!.date).toBe('2026-01-01')
+  })
+
+  test('drops dailyModelTokens entries with a missing date', () => {
+    const input = sc({
+      dailyModelTokens: [
+        { date: '2026-01-01', tokensByModel: { 'claude-x': 100 } },
+        { date: undefined as unknown as string, tokensByModel: { 'claude-x': 50 } },
+      ],
+    })
+    const out = sanitizeStatsCache(input)
+    expect(out.dailyModelTokens).toEqual([{ date: '2026-01-01', tokensByModel: { 'claude-x': 100 } }])
+  })
+
+  test('tolerates a statsCache with no dailyActivity/dailyModelTokens at all', () => {
+    const input = { version: 1 } as StatsCache
+    expect(() => sanitizeStatsCache(input)).not.toThrow()
+    expect(sanitizeStatsCache(input).dailyActivity).toEqual([])
+  })
+
+  test('leaves a well-formed statsCache untouched', () => {
+    const input = sc({
+      dailyActivity: [{ date: '2026-01-01', messageCount: 5, sessionCount: 2, toolCallCount: 3 }],
+      dailyModelTokens: [{ date: '2026-01-01', tokensByModel: { 'claude-x': 100 } }],
+    })
+    const out = sanitizeStatsCache(input)
+    expect(out.dailyActivity).toHaveLength(1)
+    expect(out.dailyModelTokens).toHaveLength(1)
+  })
+})
 
 describe('mergeStatsCaches', () => {
   function sc(over: Partial<StatsCache>): StatsCache {
@@ -337,11 +395,13 @@ test('claude is fully capable; gemini and copilot have tokens/cost/model', () =>
   expect(HARNESS_CAPABILITIES.gemini.tools).toBe(true)
   expect(HARNESS_CAPABILITIES.gemini.agents).toBe(false)
   expect(HARNESS_CAPABILITIES.gemini.gitLines).toBe(false)
-  // copilot: tokens/cost/model/gitLines enabled; tools and agents not supported
+  // copilot: tokens/cost/model/gitLines/tools enabled; agents not supported. `tools` flipped once
+  // the adapter actually read `tool.execution_start`, which had been carrying the tool name and its
+  // arguments all along — the flag had been out of date, not the data missing.
   expect(HARNESS_CAPABILITIES.copilot.tokens).toBe(true)
   expect(HARNESS_CAPABILITIES.copilot.cost).toBe(true)
   expect(HARNESS_CAPABILITIES.copilot.model).toBe(true)
-  expect(HARNESS_CAPABILITIES.copilot.tools).toBe(false)
+  expect(HARNESS_CAPABILITIES.copilot.tools).toBe(true)
   expect(HARNESS_CAPABILITIES.copilot.agents).toBe(false)
   expect(HARNESS_CAPABILITIES.copilot.gitLines).toBe(true)
 })
@@ -546,4 +606,32 @@ test('current Anthropic models are priced as themselves, not as the fallback', (
   const fallback = getModelPrice('a-model-that-does-not-exist')
   expect(fallback.output).toBe(15)
   expect(getModelPrice('claude-opus-5').output).not.toBe(fallback.output)
+})
+
+test('sessionDay tolerates a start_time an adapter got wrong', () => {
+  expect(sessionDay('2026-08-05T10:00:00.000Z')).toBe('2026-08-05')
+  // Kimi wrote an epoch number; one such session used to 500 the whole /api/data response.
+  expect(sessionDay(1785939883717)).toBe(new Date(1785939883717).toISOString().slice(0, 10))
+  expect(sessionDay(undefined)).toBe('')
+  expect(sessionDay(null)).toBe('')
+  expect(sessionDay({})).toBe('')
+  expect(sessionDay(NaN)).toBe('')
+  expect(sessionDay(-1)).toBe('')
+})
+
+test('normalizeSessionTimes repairs a start_time an adapter wrote as a number', () => {
+  const s = normalizeSessionTimes({ start_time: 1785939883717 as unknown as string, end_time: undefined })
+  expect(s.start_time).toBe(new Date(1785939883717).toISOString())
+  expect(s.end_time).toBeUndefined()   // absent stays absent, never becomes ''
+})
+
+test('normalizeSessionTimes leaves a correct session untouched', () => {
+  const s = normalizeSessionTimes({ start_time: '2026-08-05T10:00:00.000Z', end_time: '2026-08-05T11:00:00.000Z' })
+  expect(s.start_time).toBe('2026-08-05T10:00:00.000Z')
+  expect(s.end_time).toBe('2026-08-05T11:00:00.000Z')
+})
+
+test('normalizeSessionTimes turns junk into the empty string the pipeline already handles', () => {
+  expect(normalizeSessionTimes({ start_time: {} as unknown as string }).start_time).toBe('')
+  expect(normalizeSessionTimes({ start_time: NaN as unknown as string }).start_time).toBe('')
 })

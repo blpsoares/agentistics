@@ -30,6 +30,10 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   ├── agentop watch        → server/otel-watcher.ts (daemon only)
   ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull; `up` takes -y/-n and --cache/--no-cache, honored on the standalone path too)
   ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
+  ├── agentop session …    → server/sessions/cli-session.ts (start/list/attach/kill/rename/note;
+  │                          `--bg` detaches via tmux, attach prints the REAL detach key; `list`
+  │                          reports what each session is DOING and names the harnesses whose
+  │                          approval detection is unavailable)
   ├── agentop ci-push      → server/ci-push.ts (one-shot GitHub Actions runner → central push; env AGENTISTICS_CENTRAL_URL/AGENTISTICS_CI_TOKEN)
   ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc + ~/.zshrc update-check hook)
   ├── agentop upgrade      → server/upgrade.ts
@@ -55,6 +59,52 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── version.ts           → getVersionInfo (current vs latest); drives update banners/notifications
   ├── autostart.ts         → systemd user service + loginctl linger + ~/.bashrc + ~/.zshrc update-check hook
   ├── cli-setup.ts / cli-central.ts / cli-member.ts → the agentop setup/central/member command handlers
+  ├── sessions/            → the session manager and the fleet monitor behind the cockpit's
+  │                          `sessions` tab. `SessionBackend` is the platform boundary (tmux;
+  │                          **there is no Windows backend and `index.ts` records why** — Bun
+  │                          exposes no PTY primitive and a native module cannot live in the
+  │                          single compiled binary, so Windows is told to use WSL rather than
+  │                          handed a verb that cannot work). The PURE `spawn-spec.ts`
+  │                          (`Record<HarnessId, SpawnSpec|null>` — a harness with no spec is
+  │                          ABSENT from the wizard, never offered and failing), the PURE
+  │                          `tmux-cli.ts` (every tmux argv and parse), `session-ref.ts` and the
+  │                          `managed-sessions.json` registry. **Every flag is read from the
+  │                          tool's own `--help`, never guessed** — codex's reasoning effort is
+  │                          deliberately absent for that reason, while agy's IS wired up because
+  │                          its `--help` prints the closed set. `kimi` and `copilot` get their
+  │                          first prompt TYPED IN, because their `-p` exits after answering.
+  │                          **What a session is DOING** is the pure `attention.ts` over two
+  │                          signals — a probed screen marker and whether the frame moved — with
+  │                          `attention-rules.ts` holding six per-harness patterns **captured
+  │                          from six live dialogs**, each with its CLI version and date. There
+  │                          is deliberately no `idle` state: an interactive assistant that is
+  │                          alive and still is waiting for you, and the uncertainty that really
+  │                          exists is about the REASON, which lives in an absent approval rule
+  │                          the UI states in words. `session-view.ts` merges the managed fleet
+  │                          with the EXTERNAL assistants `/proc` reports (listed, marked, and
+  │                          carrying no activity — nothing about them is capturable), and
+  │                          `sessions-host.ts` is the 5s poller, whose failed poll keeps the
+  │                          previous list plus a reason rather than reporting an empty one.
+  │                          `project-search.ts` / `project-source.ts` feed the wizard's search
+  │                          field from the LOCAL store, so it works with the server stopped.
+  │                          **A reboot takes tmux and leaves the registry**, so every managed
+  │                          session reconciles to `lost` while keeping its name, note and task —
+  │                          `session-view.ts` therefore offers REOPEN for any managed row that is
+  │                          not running, not only for one the user finished, and the pure
+  │                          `task-reopen.ts` holds what "open the whole task" means (a running row
+  │                          is left alone and reported as `already`, never as a skip; a FINISHED
+  │                          row is not resurrected; an unresolvable one is skipped AND counted;
+  │                          everything reopened RETIRES the row it replaced, or a laptop closed
+  │                          twice leaves the task holding dead twins under one name). It is shared
+  │                          by `agentop session open` and the cockpit's verb, which were two
+  │                          implementations of one gesture and had already drifted.
+  │                          `repo-facts.ts` answers which REPOSITORY a directory belongs to,
+  │                          keyed on the git REMOTE — the only key a worktree provably shares with
+  │                          its main checkout, since their directory names deliberately differ —
+  │                          falling back to the COMMON git dir's parent (`--show-toplevel` would
+  │                          answer with the worktree, which is the one name that must not become
+  │                          the key). Memoized by directory: the poll runs every five seconds.
+  │                          See docs/session-manager.md
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
@@ -77,6 +127,10 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── envelope-store.ts / envelope-routes.ts → central `machineKeys` + `envelopes` collections and /api/team/keys + /api/team/envelopes. Sender stamped from the token; recipient must be a machine of the caller's own ACCOUNT (`allowedRecipients`)
   ├── envelope-client.ts   → member: publish key, pin peers, seal on a rules change, collect + decrypt. Never applies anything. **A sender absent from the key directory is refused even when unpinned** (omitting a machine is the cheaper twin of fabricating one — no pin means no pin-comparison and no notification), and **every first-time pin is announced** (`member.peer_pinned`) — a central need not substitute a key, it can INVENT a machine under one it holds, so trust may be automatic but never silent. One unusable directory key is skipped and counted, never thrown (an unguarded `seal` in the peer loop was a free, silent off-switch for the whole channel)
   ├── envelope-inbox.ts / envelope-proposals.ts → decrypted, NOT-YET-APPLIED proposals + GET/DELETE /api/team/proposals (capability-guarded: it returns a sibling's full source list). **There is deliberately no apply path**: applying is the ordinary PATCH /api/team/connections/:id a user's click performs. `openedDigests` (sha256 of ciphertext+tag, NOT the central-minted id) is the replay memory and **survives dismissal** — otherwise a permissive pre-restriction envelope could be replayed as a one-click downgrade. The inbox also holds `siblingRules` — the **FACT** each envelope carries (what that machine announced about its OWN rules), stored apart from the **PROPOSAL** because they have different lifetimes: dismissing "apply this here" must not erase "the sibling withholds this". Superseded per `machineId` (each message is a full snapshot, which is how a sibling that LIFTS a restriction retracts the fact); a machine that goes QUIET never retracts, and rules applied before the channel existed were never announced. **PROPOSALS are superseded per `machineId` too** (`mergeProposals`) — a newer announcement replaces its own sender's pending one rather than joining it, so a machine can never hold two cards — and a proposal with **nothing left to apply** is dropped on the READ path (`selectLiveProposals`, the same `proposalAddsNothing` arithmetic re-run against the connection's CURRENT rules). Filtered, never deleted: "nothing left to apply" is a statement about the RECIPIENT's rules, which the user can lift at any time, while a sibling only re-announces when its own rules change — the supersede case is the opposite, permanently stale, and IS pruned from the store
+  ├── workflow-metrics.ts / workflow-script.ts / workflow-agent.ts / workflow-match.ts → Dynamic Workflow runs. **A run's transcripts are `agent-<hash>.jsonl` and the hash carries NO order** — pairing them with the script's `agent()` calls by POSITION (after an alphabetical file sort) gave every agent a label belonging to some other agent, and the run still rendered as if it matched: the CLI said `recon:services · 71.2k` while the dashboard put that agent's numbers under `fix:backends`. The only thing a transcript and its call provably share is the PROMPT, so `parseWorkflowScript` extracts each call's literal (non-`${…}`) prompt segments as FINGERPRINTS and the pure `workflow-match.ts` pairs them by longest verbatim match. It is deliberately conservative — **no match, or a tie, yields the file name and no phase**, because a wrong label is worse than a missing one — and it is per transcript, never a bijection (a `pipeline()`/loop re-runs one call site many times, and all those transcripts legitimately carry that one label). **Tokens include cache**: `WorkflowRun.totals` carries `cacheRead`/`cacheWrite` (optional, so a doc from an older central still reads) and every surface sums them through `workflowTokens()` in `@agentistics/core` — a subagent's cache read dwarfs its input, so an in+out headline understated a real run by ~250x while the cost beside it (which always priced the cache) disagreed
+  ├── project-facts.ts / data.ts `resolveProjectFacts` → **a repository is a property of a DIRECTORY, not of whichever assistant visited it.** `getGitRemote` / `getProjectGitStats` used to be called only from inside the `~/.claude/projects` walk, so a repo used exclusively through Codex/Gemini/Copilot stayed invisible until a Claude session appeared in it (measured: claude 163 sessions / 95 with a remote, **codex 10 / 0**, copilot 8 / 1, gemini 15 / 1). The pure `planProjectFacts` keys on `project_path` from ANY harness and skips paths the Claude walk already read (a resolved path with no remote is not a repo — asking git again every build spends a process to learn the same nothing), and `applyProjectFacts` stamps the result. **It never overwrites a `git_remote` that is already set** — CI ingest stamps it authoritatively from a repo-bound token — and **an empty result clears nothing**: "not a repo here" is not evidence that a remote recorded elsewhere is wrong. It runs BEFORE `writeConsolidated`, so the remote reaches the store, the uploader and the central
+  ├── harness-activity.ts  → **pure, and the reason no adapter could count anything**: `countGitCommands` (a command line is a CHAIN — split it, judge each segment; `(?![\w-])` rather than `\b`, or `git commit-tree` counts as a commit) and `canonicalTool` (each harness's own name → the shared vocabulary, which is Claude's, because that is what every chart and filter is written against). Both lived INSIDE `jsonl.ts`, the Claude parser, which is exactly why every other adapter hardcoded `git_commits: 0` — the rule was not reachable, not the data missing. **`canonicalTool` is a MAPPING, never a filter**: an unmapped name passes through unchanged so a new tool shows up as itself. **Agy counts the EXECUTION, never the request** — a shell command appears twice there (a `run_command` tool_call asking, then a `RUN_COMMAND` step running, which is the one carrying the command text), and counting both doubled every shell call: same trap as Kimi's duplicated usage records, same answer
+  ├── chat-gate.ts         → **pure**: `chatAllowed(capable, preference)`. Chat spawns an assistant CLI on the host — the most powerful thing this server does — and it used to be ON anywhere the exposure profile allowed it, so a machine installed for its metrics also shipped a shell nobody chose. Now **absent reads as OFF** (deliberately NOT the `shareMode` migration rule: treating absence as ON there would invert live sharing rules, treating it as ON here would leave the shell open on every machine not yet touched), and the preference may only ever NARROW `CAPS.localChat` — a switch that could re-enable what `public` denied is the opt-in `exposure.ts` exists to make impossible. **Enforced in `index.ts` before the chat routes, not only in the UI** — a hidden button is not a closed door. `/api/team/session` carries `chatEnabled` (capability AND switch) separately from `capabilities.localChat` (the profile alone), so Settings → Chat can say "your profile allows this, you have it off"
   ├── team-watch.ts        → central watches the team collection → SSE refresh (fallback)
   ├── team-repos.ts        → central repo registry (`repos` collection): registerRepo (mints a repo-bound CI token + records name/remote; re-register rotates), listRepos, unregisterRepo
   ├── ci-push.ts           → `agentop ci-push`: one-shot push of an ephemeral GitHub Actions runner's ~/.claude metrics to a central; prefers keyless OIDC (fetches the runner's id-token), falls back to a static token; never fails the CI job on a push error
@@ -474,6 +528,92 @@ The display **name is set by the central** on the minted token — there is no n
 
 ---
 
+## Cost basis — API vs plan
+
+Every cost in this product is an **API-equivalent estimate** (`calcCost()` × `MODEL_PRICING`).
+Most people pay a flat subscription, so that figure is not their invoice. `costBasis: 'api' |
+'plan'` (on `AppContext`, plumbed exactly like `currency`) re-expresses it against what the user
+actually pays.
+
+- **`packages/core/src/billing.ts` is the ONLY place the plan arithmetic lives.** No caller may
+  re-derive coverage. `C = Σ monthly × days / 30.44` over the user's registered periods; `V = A/C`.
+  Proration is by DAYS, not calendar months — the calendar reading cannot survive an arbitrary
+  filter window.
+- **The model is a TIMELINE of periods per harness, never a single "current plan".** No file on
+  any machine records which plan was in force when, so a window spanning a plan change can only
+  be priced by asking. Overlapping periods are refused at entry **and re-checked in
+  `computePlanCost`** — `preferences.json` is hand-editable and a silently doubled C is worse
+  than none.
+- **Uncovered days are cut from BOTH A and C**, via the single `coveredDayKeys` set. Cutting one
+  side only inflates V; re-deriving the day set elsewhere makes A and C measure different periods.
+- **N/A, never a confident 0.** An uncovered window is `unavailable`; a multiple over zero cost is
+  `null`; an unconvertible BRL price uncovers its days rather than yielding `Infinity`. `viewCost`
+  refuses too: asking for the plan basis with no usable factor returns the API figure flagged
+  `unavailable`, never a silent zero under a plan label.
+- **Two day rules exist in this repo; billing uses `start_time.slice(0, 10)` (UTC)**, matching
+  `tagSessionDay` — not the local-clock `format(parseISO(...))` used for the session-gap count. At
+  UTC-3 the two disagree, and mixing them drifts a session across a period boundary.
+- **`apiCostByDay.undatedCostUSD` is real spend with no day.** In the unfiltered view Claude's
+  total comes from the cumulative `statsCache.modelUsage` while the only day series
+  (`dailyModelTokens`) does not sum to it, so a per-day A that closes on the headline does not
+  exist. The residue is the EXACT difference (`Σ days + undated === totalCostUSD`, pinned by a
+  test) and is reported, never folded into a day it did not happen on. A **negative** residue is
+  the two local sources contradicting each other and withholds the basis entirely.
+- **The plan basis is unavailable on a central, and the refusal lives in `usePlanBasis`.** It
+  aggregates many machines and could only ever hold its operator's timeline; Settings → Billing is
+  hidden there too. Forcing `costBasis` to `'api'` is NOT the guard — two surfaces read `planBasis`
+  directly and bypass the switch (Home's "API vs your plan" panel, gated on
+  `basis?.coverage.computable`, and `CompareByFilter`'s per-side Plan button, gated on
+  `billingReady.ready && basis !== null`). A central whose `preferences.json` still carried a
+  timeline — a machine that used to be solo, or a hand edit — would then price a whole FLEET from
+  one operator's subscription. `central: true` returns `{basis: null, blocked: 'central'}` at the
+  single place the basis is computed, so there is nothing downstream to forget. Hiding the settings
+  screen is the cheap fix that leaves exactly that hole open.
+- **A panel where "plan" has no meaning renders in API basis and says so** — `CacheHitRatePanel`
+  is hard-wired, because cache does not reduce a subscription bill, it extends a rate limit. Same
+  rule as `HARNESS_CAPABILITIES`, applied to a basis instead of a metric. `BudgetPanel` likewise
+  keeps its variable tracking (a forecast of a fixed fee only predicts itself) and instead shows
+  `monthlyCommitment()` — a SEPARATE question from `computePlanCost`, answering "what do I owe
+  this month" rather than "what did this window cost". api-mode days commit nothing to it.
+- **A Claude-only metric allocates against Claude's own C/A**, never the cross-harness aggregate —
+  `AgentMetricsPanel` would otherwise price agents partly against a plan paying for something else.
+- **The HEADLINE is `planCostUSD` read straight off the basis — never `totalCostUSD × factor`.**
+  That rescale is the right shape for a per-ROW allocation and the wrong shape for the total: the
+  factor is `C/A` of the COVERED harnesses while `totalCostUSD` spans every harness in the filter,
+  so multiplying them yields neither C nor an allocation. Measured: R$2.500,86 on screen against a
+  real `500 × 126/30.44 = R$2.069,65`, with `PlanValuePanel` — which always read `planCostUSD` —
+  printing the correct figure directly below it. When the covered scope is narrower than what is on
+  screen, `planScopeNote` names it ("só Claude Code"), because the cards beside the headline count
+  every harness and an unexplained smaller number reads as a bug.
+- **A harness selection of exactly `['claude']` is NOT cache-blind.** `stats-cache.json` IS Claude's
+  history, so that selection is served by the cache; treating it as a session-only filter made the
+  same scope report LESS with the chip than without it (Claude deletes transcripts after 30 days,
+  the cache keeps the totals). A MIXED selection stays session-based — `nonClaudeInRange` is empty
+  whenever any chip is set, so a cache-backed branch would silently drop the other harness.
+- **Per-row plan figures are ALLOCATIONS, labelled as such.** Within one harness it is a linear
+  rescale by C/A, so rankings and proportions survive exactly; across harnesses the factors differ
+  and the label is the only thing stopping it being read as a measurement.
+- **`plan-catalog.ts` inherits the `MODEL_PRICING` rule structurally**: `CatalogPrice` requires
+  `verifiedAt` and `source`, so a price cannot exist without provenance. An unverifiable price is
+  OMITTED and the user types it — several entries ship with no amount for exactly this reason.
+- **`billing-detect.ts` may name only the whitelisted fields.** The files it reads also hold OAuth
+  secrets, a mail address and account identifiers; `billing-detect.test.ts` greps the module's own
+  source and fails if one is so much as mentioned. Never shell out to the macOS Keychain.
+  Detection is a PROPOSAL — it cannot know when a plan started, which is what the timeline needs
+  most. **Codex's tier is only ever written inside the ID token's payload**, so `readJwtClaim`
+  decodes that segment and returns one named claim; the token itself is never held, and the guard
+  list grew `access_token`/`refresh_token` so the module cannot name the pair beside it. **A tier
+  detected as FREE proposes `mode: 'unknown'`, not a subscription of zero** (zero is not a price —
+  it would make every multiple infinite), and the settings screen states the finding while
+  withholding the "use what we detected" button, which would open a form prefilled with nothing.
+- **The basis toggle is a GATE**: disabled until `billingReadiness().ready`, and pressing it
+  disabled opens the setup prompt rather than doing nothing.
+
+See `docs/metrics.md` for the arithmetic written out and `docs/security.md` for the reader's
+boundary.
+
+---
+
 ## Calculation functions — single source of truth
 
 **All layers** use the same functions from `packages/core/src/types.ts` via `@agentistics/core`. Never inline pricing calculations.
@@ -661,7 +801,10 @@ packages/tui/src/
     Pane.tsx         the ONE containment style: rounded frame, title in the border, accent when focused
     Chrome.tsx Surface.tsx Menu.tsx Prompt.tsx ArchiveChoice.tsx   shared primitives (cockpit / linear / questions)
     Output.tsx       the pane a streaming task owns — the detail region, auto-following its tail
-    tabs/            Services (the cockpit), Setup, Logs, Static (Help / Cheat sheet / Contribute)
+    sessions.ts      PURE arithmetic for the sessions tab: its row budget, the cell fit, the
+                     grouping and the ordering (tested in sessions.test.ts)
+    tabs/            Services (the cockpit), Sessions (+ SessionWizard), Setup, Logs,
+                     Static (Help / Cheat sheet / Contribute)
   stubs/react-devtools-core/   REQUIRED for the binary build — see below
 packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to stdout at a chosen
                                    size/lang/mode, with `--keys` to drive it into a question first
@@ -802,6 +945,65 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
 - **Order footer hints most-important-first** — `footerHints` drops from the RIGHT, so `q quit`
   and the tab keys lead. A narrow terminal that hides how to leave strands the user in a buffer
   that hides their shell.
+- **The sessions tab shows the WHOLE fleet, and says what it cannot know.** Sessions agentop
+  started are attachable, killable and nameable; assistants running beside it (from `/proc`) are
+  listed as `external` and carry NO state — nothing about them is capturable, so claiming one would
+  be inventing it. A verb pressed on such a row refuses in a SENTENCE rather than doing nothing: a
+  control that is silently inert is indistinguishable from a broken one. The waiting counter lives
+  in the HEADER because it must be readable from every tab, and it outranks the version under width
+  pressure — a version is one `agentop --version` away, a session waiting on you is why the app is
+  open. The bell rings on the TRANSITION into waiting, never on the level.
+- **`o` attaches, and attaching is a `ControlExit`, not an exec.** The Ink app unmounts,
+  `cli-start.ts` gives the session the real tty, and `runStart` LOOPS — so detaching comes back to
+  the sessions tab. `enter` opens the MENU instead, which is what made every other verb reachable.
+  The detach key is read from the backend, carried on the fleet SNAPSHOT and stated on the row —
+  printed once before the handover, it scrolled away under whatever the session drew next, and a
+  user who cannot get out is stranded in a buffer that hides their shell. **The kill key is `x`,
+  never `k`** — `k` is `up` in this list, and a key that navigates on one screen and destroys work
+  on another is a real accident waiting to happen. **Pressing `o` on a row with nothing RUNNING
+  asks whether to reopen that conversation** rather than refusing (external rows included): the
+  row-specific verb is decided by what is running, not by whether agentop hosts the row, or a
+  session whose backend died offers a button whose only outcome is an error.
+- **The sessions cockpit is three framed panes and claims the ARROWS.** Menu, fleet, detail; the one
+  holding the keyboard wears the accent border, and clicking the list focuses it too — a pointer
+  that moves the selection without moving the focus leaves the frame saying one thing while the keys
+  do another. `←`/`→` had no meaning inside the screen and every meaning outside it, so overshooting
+  a list by one row left the screen entirely; `[` and `]` change tab ALWAYS, claim or no claim, and
+  the active tab wears those brackets. Inside the menu the arrows step between SECTIONS, and `1`-`9`
+  jump to one from either pane — a soft keyboard has no arrow keys at all, so the digits are the way
+  in that always exists.
+- **The menu FOLDS, and every section keeps its name.** `asideFold` is the one answer for every
+  height: the section holding the cursor is a framed pane with all of its rows, the others open in
+  reading order while they fit WHOLE, and what does not fit keeps its NAME on one row. Opening a
+  section part-way was the middle ground and the worst of the three — a block cut to two rows says
+  no more than its heading did. The leftover goes to the open section so the column ends flush with
+  the list: air under a pane is a fault, air inside one is a pane.
+- **`onlyActive` is the one switch that OVERRIDES the named-row rule**, and the only one on that
+  block that narrows rather than widens — which is why it is listed first: a switch that appears to
+  do nothing is one people conclude is broken. The named rule is right by default (it is what stops
+  a reboot emptying the list), but on a machine with months of named work it shows all of it.
+- **A row the user NAMED is never withheld by the history switches** (`sessionNamed`). A machine
+  restart makes every managed session `lost`, and with those switches off — which is how they ship —
+  the list came back EMPTY, taking the session you had renamed and filed under a task with it.
+  `named` is its own flag rather than inferred from `title`, because `title` always has a value: the
+  host derives one whenever there is no label.
+- **The default arrangement is stated ONCE** (`DEFAULT_SESSION_VIEW`): ONLY ACTIVE conversations,
+  grouped by project. It is strict, so when nothing is running it shows an empty list — and the
+  screen must therefore say WHY and name the key that lifts it, since the `lost` rows behind it are
+  still there and still reopenable. The reason is chosen by what actually emptied the list: blaming
+  the filter while a search removed the rows sends someone to the wrong switch, and blaming a search
+  while nothing is running at all would hide that the filter is on. The host's fallback, the screen's initial state and the `ctrl+r` reset all read it —
+  three copies of a default is three chances for the app to open on one arrangement and reset to
+  another. It is persisted by the HOST (`setSessionView`), and **nothing is written before the
+  restore has happened**: `sessionViewPref` always answers, so an absent `view` means "not loaded
+  yet" and nothing else. It used to mean both that and "never chosen", so every remount — which is
+  what detaching is — wrote the defaults a moment before the stored arrangement arrived.
+- **Every column is measured against the CONTENT width, headings included.** `sessionColumns` and
+  `projectColumns` size each column to the widest row ON SCREEN and to its own heading — a heading
+  wider than its column is truncated, and a truncated heading sits over a cell it no longer names.
+  A cell nothing on screen carries is ZERO and costs no gap. Measuring against the pane rather than
+  its body made every column four characters too wide, and the table survived only because Ink
+  truncated it.
 - **`stats-cache.json` stays Claude-only here too.** `selectors.ts` reads Claude totals from the
   cache and every other harness from per-session sums; `applyHarnessFilter` blanks the cache when
   a non-Claude harness is selected, or Claude's numbers would survive the filter.
