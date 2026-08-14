@@ -41,6 +41,22 @@ export const QUIET_MS = 6_000
 export const MARKER_STALE_MS = 60_000
 
 /**
+ * How much of the BOTTOM of a frame counts as its footer.
+ *
+ * Every approval pattern in `attention-rules.ts` is a footer, and every dialog probed for this
+ * feature draws its footer on the last line — the three claude components, codex, kimi, gemini,
+ * copilot and agy alike. Four leaves room for a trailing blank or a strip drawn beneath it without
+ * reaching far enough up to catch the conversation.
+ *
+ * The window is the point. Matching a footer anywhere in a sixty-line capture means any session
+ * that QUOTES one is read as sitting in it, and in this repository that is guaranteed rather than
+ * unlikely: agentop is developed with agentop, so a session editing `attention-rules.ts` has those
+ * exact strings on screen all day. One was offered a destructive key over a question it had never
+ * asked. A quotation lives in the middle of a screen; a footer lives at the end of it.
+ */
+export const FOOTER_LINES = 4
+
+/**
  * FNV-1a over the frame, joined with newlines.
  *
  * Dependency-free, and deliberately not a crypto hash: the only question ever asked of this value is
@@ -73,12 +89,28 @@ export function attentionOf(o: {
   if (!o.alive) return 'exited'
 
   const text = o.frame.join('\n')
-  if (o.rules && o.rules.approval.some(re => re.test(text))) return 'waiting-approval'
+  // A dialog's footer is a property of the BOTTOM of the screen, and matching it anywhere in the
+  // frame is what let a session that merely TALKED about one be reported as blocked in it. That is
+  // not a hypothetical here: this project is built with agentop, so sessions spend whole mornings
+  // with strings like `Esc to cancel · Tab to amend` on screen as source code — and one of them was
+  // offered a destructive key over a question it had never asked. Reported from a real machine.
+  const footer = o.frame.slice(Math.max(0, o.frame.length - FOOTER_LINES)).join('\n')
+  const working = (haystack: string) =>
+    Boolean(o.rules?.working && o.rules.working.some(re => re.test(haystack)))
+  // A frame whose FOOTER says something is interruptible is not a frame sitting on a dialog: the
+  // dialog's own footer takes that row while it is open. Checked in the footer rather than over the
+  // whole frame, and that narrowness is deliberate — claude prints `esc to interrupt` whenever
+  // anything is interruptible INCLUDING BACKGROUND AGENTS, so a whole-frame veto would suppress a
+  // genuine permission prompt on a session whose subagents happen to be running. Suppressing a real
+  // block is the one error worse than the one being fixed.
+  if (o.rules && !working(footer) && o.rules.approval.some(re => re.test(footer))) {
+    return 'waiting-approval'
+  }
 
   // The marker is PROOF of work only while the screen has been moving at all recently. A footer
   // that lingers is not evidence, and silence eventually outweighs it — see `MARKER_STALE_MS`.
   const silentFor = o.nowMs - o.lastActivityMs
-  if (silentFor <= MARKER_STALE_MS && o.rules?.working && o.rules.working.some(re => re.test(text))) {
+  if (silentFor <= MARKER_STALE_MS && working(text)) {
     return 'working'
   }
 

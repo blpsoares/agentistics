@@ -107,17 +107,47 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          probed — so a session sitting on "may I run this command" read as
   │                          `waiting`, and a prompt sent to it went into the dialog's own filter
   │                          where the submit took the highlighted option. Probe every dialog a
-  │                          harness draws, not the first one it shows you.
+  │                          harness draws, not the first one it shows you. It has since been THREE
+  │                          for claude — startup select, permission prompt, `AskUserQuestion` —
+  │                          each with its own footer, so assume there is another until somebody has
+  │                          looked. Two harnesses MAY share a footer (claude and gemini measurably
+  │                          do); that is a fact about the CLIs, not a loose pattern, and costs
+  │                          nothing because `rulesFor` only ever tests a harness against itself.
+  │                          **A footer is matched in the LAST FEW LINES ONLY** (`FOOTER_LINES`), and
+  │                          a frame whose FOOTER carries the WORKING marker is never `waiting-
+  │                          approval`. Matching anywhere in a 60-line capture meant any session that
+  │                          QUOTED a footer read as sitting in that dialog — guaranteed here rather
+  │                          than unlikely, since agentop is developed with agentop: a session
+  │                          editing `attention-rules.ts` has those exact strings on screen all day,
+  │                          and one was offered a destructive key over a question it never asked.
+  │                          The working-marker veto is deliberately checked in the FOOTER and not
+  │                          over the whole frame — claude prints `esc to interrupt` whenever
+  │                          anything is interruptible, background subagents included, so a
+  │                          whole-frame veto would suppress a REAL permission prompt on a busy
+  │                          session. Suppressing a real block is the one error worse than the one
+  │                          being fixed.
   │                          **ACTING on a session without entering it** is `SessionBackend.sendText`
   │                          / `sendKey` (they were already implemented, buried inside `spawn`) plus
-  │                          the pure `approval-spec.ts`: `Record<HarnessId, {key, probed} | null>`,
-  │                          where the key CONFIRMS THE HIGHLIGHTED OPTION and is not "approve". No
-  │                          CLI here reports which option is highlighted, so the keystroke is only
-  │                          half the design — the host RE-READS the screen immediately before
-  │                          sending (a poll is 5s old) and the confirmation SHOWS the dialog
-  │                          (`approvalTail`, which is deliberately not `frameTail`: that one cuts at
-  │                          the last rule and so cuts the dialog away). A prompt is refused on a
-  │                          session with a dialog OPEN, in words, for the same reason.
+  │                          the pure `approval-spec.ts` + `dialog-choice.ts`. **Most dialogs are not
+  │                          yes/no**: claude's permission prompt is itself `1. Yes / 2. Yes, always
+  │                          / 3. No`, and an `AskUserQuestion` can offer five answers that do
+  │                          different work. A key that "approves" takes whichever row is
+  │                          HIGHLIGHTED, which on such a dialog is choosing for the user — reported
+  │                          by one, looking at "how do I promote to prod?" with four answers. So
+  │                          `parseDialogOptions` reads the options OFF THE SCREEN (bottom-up,
+  │                          stopping at `1.`, and refusing unless they come out exactly `1..n` —
+  │                          half-read options are worse than none because they get OFFERED), the UI
+  │                          lists them, and the PICKED one is sent. `ApprovalSpec.choice` says how
+  │                          to select by number and exists ONLY for claude, verified by driving a
+  │                          live session; everywhere else a numbered dialog is REFUSED in words
+  │                          naming what does work (attach), because falling back to the confirm key
+  │                          is the defect. The bare confirm survives only where there is genuinely
+  │                          nothing to choose between (codex's `Press enter to continue`). The host
+  │                          RE-READS the screen immediately before sending (a poll is 5s old) and
+  │                          refuses when the options CHANGED, and the question SHOWS the dialog
+  │                          (`approvalTail`, deliberately not `frameTail`: that one cuts at the last
+  │                          rule and so cuts the dialog away). A prompt is refused on a session with
+  │                          a dialog OPEN, in words, for the same reason.
   │                          **WHICH SESSIONS FELL TOGETHER** is the pure `crash-group.ts`. The hard
   │                          part is not grouping, it is not admitting garbage: a `lost` row from
   │                          three days ago never fell, and a group holding everything that ever ran

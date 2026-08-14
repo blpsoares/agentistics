@@ -61,6 +61,7 @@ import type {
   StartOption,
   TabId,
   StartRequest,
+  RestoreCandidate,
 } from '@agentistics/tui/control'
 import { DEFAULT_SESSION_VIEW } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
@@ -93,9 +94,10 @@ import { repoFacts } from './sessions/repo-facts'
 // rows from the same decision rather than mapping the fleet a second time.
 import { toControlSession } from './sessions/control-session'
 import { planTaskReopen, taskReopenSucceeded, type TaskReopenPlan } from './sessions/task-reopen'
-import { approvalFor } from './sessions/approval-spec'
+import { approvalFor, choiceKey } from './sessions/approval-spec'
+import { needsChoice, parseDialogOptions } from './sessions/dialog-choice'
 import { rulesFor } from './sessions/attention-rules'
-import { planCrashGroup } from './sessions/crash-group'
+import { planCrashGroup, planFellOffer } from './sessions/crash-group'
 import { loadHarnessSessions } from './sessions/harness-sessions'
 import type { ManagedSession, SpawnPlanError } from './sessions/types'
 import {
@@ -115,6 +117,7 @@ export type StartResult = number | 'foreground'
  * an open menu.
  */
 const SEND_CAPTURE_LINES = 60
+
 
 // ANSI, for the output this module still writes to the REAL terminal: the suspended commands,
 // the foreground handover and the non-interactive `agentop restart --all`.
@@ -1363,6 +1366,52 @@ async function reopenEntries(
   return { plan, opened, skipped }
 }
 
+/**
+ * The fall, named ROW BY ROW — what the offer made on the way in shows.
+ *
+ * The SELECTION is `planCrashGroup` and nothing else. This started life as a second selection
+ * (`planRestore`, from the branch this is reconciled with), and the two agreed about `endedAt` and
+ * about claiming a conversation once while disagreeing about the thing that matters: `planRestore`
+ * had no evidence a row was ever ALIVE, so it offered every resolvable `lost` row — which on a
+ * machine with months of history is the "sessões lixo" complaint this feature was built to answer.
+ * Two selections is two sets of rules; the repo has paid for that once already (`task-reopen.ts`).
+ *
+ * Exactly ONE rule is added on top, and it belongs here rather than in the pure selection because it
+ * is about the OFFER and not about the fall: a row whose conversation cannot be resolved is dropped,
+ * because this list is clickable and a row that cannot be reopened is a button that fails. It stays
+ * inside `fell`, where `reopenEntries` counts it as skipped — the fall is what happened, and the
+ * offer is what can be done about it.
+ */
+async function restorableSessions(fell: readonly ManagedSession[]): Promise<RestoreCandidate[]> {
+  if (fell.length === 0) return []
+  const conversations = await loadConversations()
+  const taken = new Set<string>()
+
+  // The DECISION is the pure `planFellOffer`; this is the I/O around it — the conversation store,
+  // and the claiming that stops four fallen rows in one repository being offered four copies of one
+  // conversation.
+  return planFellOffer({
+    entries: fell,
+    conversationFor: m => {
+      const own = m.conversationId
+        ? conversations.find(c => c.sessionId === m.conversationId)
+        : undefined
+      const conv = own ?? conversations.find(c =>
+        !taken.has(c.sessionId) && c.harness === m.harness && c.cwd === m.cwd)
+      if (!conv?.resumable) return null
+      taken.add(conv.sessionId)
+      return { sessionId: conv.sessionId, title: conv.title }
+    },
+  }).map(o => ({
+    id: o.entry.id,
+    label: o.label,
+    harness: o.entry.harness,
+    // The last segment, the same key the "by project" grouping falls back to.
+    project: o.entry.cwd.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? '',
+    ...(o.startedMs !== undefined ? { startedAt: o.startedMs } : {}),
+  }))
+}
+
 function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
   let lang = initialLang
   const S = () => cliStrings(lang)
@@ -1878,7 +1927,13 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // this poll runs every five seconds over the whole fleet — asking git three times per session
       // per tick would be a hundred processes a minute to learn the same thing.
       const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd)))
+      // What the machine LOST and could start again — named row by row for the offer, from the
+      // SAME selection the count below reports. Read off the snapshot the poll already produced
+      // rather than recomputed, so the screen cannot be shown two answers to one question while a
+      // poll is in flight.
+      const restorable = await restorableSessions(snap.fell?.entries ?? [])
       return {
+        ...(restorable.length > 0 ? { restorable } : {}),
         sessions: snap.sessions.map((v, i) => toControlSession(v, s, facts[i])),
         attention: snap.attention,
         rang: snap.rang,
@@ -1935,6 +1990,38 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
      * what the button just did. Nothing about the sessions changes: a finished task is a statement
      * about the WORK, and its sessions stay listed, attachable and killable behind one switch.
      */
+    /**
+     * Start the offered sessions again, detached — or decline them.
+     *
+     * ACCEPTING is `reopenEntries`, the same thing "open the whole task" and "reopen what fell"
+     * perform. It arrived here as its own copy of that loop, which made THREE implementations of
+     * one gesture — the drift `task-reopen.ts` was extracted to end, reintroduced by two sessions
+     * that could not see each other's work. The set is different, the act is not.
+     *
+     * DECLINING retires the rows it was offered. "No" here means the work is over, and without it
+     * the same offer greets you on the next run and the one after, which is how a prompt becomes
+     * something people clear without reading. Nothing is destroyed either way: a retired row stays
+     * listed, and `endedAt` is exactly what keeps it out of the next crash group while leaving it
+     * individually reopenable.
+     */
+    async restoreSessions(ids: string[], accept: boolean): Promise<ActionResult> {
+      const s = S()
+      const registry = await readRegistry()
+      const wanted = registry.filter(m => ids.includes(m.id))
+      if (wanted.length === 0) return { ok: false, message: s.sessRestoreNone }
+
+      if (!accept) {
+        const stamp = new Date().toISOString()
+        for (const m of wanted) await patchSession(m.id, { endedAt: stamp })
+        return { ok: true, message: s.sessRestoreDeclined(wanted.length) }
+      }
+
+      const { opened, skipped } = await reopenEntries(wanted, s)
+      return opened > 0
+        ? { ok: true, message: s.sessRestored(opened, skipped) }
+        : { ok: false, message: s.sessRestoreFailed(skipped) }
+    },
+
     async finishTask(task: string, done: boolean): Promise<ActionResult> {
       const s = S()
       if (!task) return { ok: false, message: s.sessNoTask }
@@ -2097,15 +2184,14 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     },
 
     /**
-     * Send the key that takes the option this session's dialog is highlighting.
+     * Answer the dialog this session is blocked on.
      *
-     * Three things have to be true at THIS instant, and each is checked rather than assumed: the
-     * harness's dialog has been read (so the key is a recorded fact — `approval-spec.ts`), the
-     * session is still asking (re-read from the screen, not from a snapshot), and the backend
-     * accepted the keystroke. Anything less and an unconditional Enter goes into a session that has
-     * moved on — a blank turn at best, and at worst a menu answered while nobody was looking.
+     * Everything is checked at THIS instant rather than assumed from a snapshot: the session is
+     * still asking, the options on screen are still the ones the user was shown, and the harness has
+     * a verified way to select the one they picked. A snapshot is up to five seconds old, and an
+     * answer sent to a question that has changed underneath it is both wrong and silent.
      */
-    async approveSession(id: string): Promise<ActionResult> {
+    async answerSession(id: string, choice?: number): Promise<ActionResult> {
       const s = S()
       const backend = await resolveBackend()
       const blocked = await backend.unavailable()
@@ -2126,6 +2212,30 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         return { ok: false, message: s.sessNotAsking }
       }
 
+      // What is on the screen RIGHT NOW, not what was drawn up to a poll ago.
+      const options = parseDialogOptions(frame)
+
+      if (needsChoice(options)) {
+        // A numbered dialog is NEVER answered with a bare confirm. `Enter` takes whichever row is
+        // highlighted, and on "only my fix / promote everything / stop here / type something" that
+        // is choosing between four different outcomes on somebody else's repository.
+        if (choice === undefined) return { ok: false, message: s.sessNeedsChoice(options.length) }
+        const picked = options.find(o => o.number === choice)
+        // The question CHANGED between being shown and being answered. Sending "3" to a question
+        // that now has different answers is worse than sending nothing, and nothing about it would
+        // be visible afterwards — so it is refused by name.
+        if (!picked) return { ok: false, message: s.sessChoiceGone }
+        const key = choiceKey(spec, choice)
+        if (!key) return { ok: false, message: s.sessChooseUnknown(managed.harness) }
+        return (await backend.sendKey(id, key))
+          ? { ok: true, message: s.sessAnswered(picked.label) }
+          : { ok: false, message: s.sessSendFailed(id) }
+      }
+
+      // No readable options: the codex-shaped `Press enter to continue`, where there genuinely is
+      // nothing to choose between. A choice offered here would be answering a question with no
+      // answers, so it is refused rather than quietly ignored.
+      if (choice !== undefined) return { ok: false, message: s.sessChoiceGone }
       return (await backend.sendKey(id, spec.key))
         ? { ok: true, message: s.sessApproved(id) }
         : { ok: false, message: s.sessSendFailed(id) }

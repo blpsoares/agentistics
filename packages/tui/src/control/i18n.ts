@@ -235,12 +235,16 @@ export interface ControlStrings {
   sessionsPaneDetail: string
   sessionsPaneAsk: string
   sessionsPaneKeys: string
+  sessionsPaneRestore: string
+  restoreTitle: (n: number) => string
+  restoreAnswer: string
   /** What each key on the sessions screen does — the one list `ctrl+h` prints. */
   sessionsKeyWhat: {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
     note: string; task: string; mark: string; onlyActive: string; closed: string
-    exited: string; unfiled: string; group: string; detail: string; reset: string
+    exited: string; unfiled: string; group: string; detail: string; menuFold: string
+    reset: string
     tabs: string; help: string; quit: string
     approve: string; prompt: string; reopenFell: string
   }
@@ -268,6 +272,12 @@ export interface ControlStrings {
   sessionsApproveCaveat: string
   /** Heading over the dialog lines carried into the confirmation. */
   sessionsApproveWhat: string
+  /** Marks the option the dialog itself is highlighting, inside the picker. */
+  sessionsChoiceHighlighted: string
+  /** Fallback for a harness with no verified way to pick — the host normally supplies its own. */
+  sessionsChooseBlind: string
+  /** What DOES work when the options cannot be picked from here. */
+  sessionsChooseAttach: string
   asideProjects: string
   asideAllProjects: string
   toggleDone: string
@@ -315,6 +325,10 @@ export interface ControlStrings {
   keySessionsActions: string
   keySessionsApprove: string
   keySessionsPrompt: string
+  /** The menu fold — the plain letter, because tmux's default prefix never arrives inside a tmux. */
+  keySessionsFold: string
+  /** The two keys the restore offer answers, and nothing else. */
+  keyRestoreAnswer: string
   /** The visible action row — the same verbs the letters run, spelled out and clickable. */
   actSessions: {
     attach: string
@@ -609,6 +623,10 @@ const EN: ControlStrings = {
   sessionsPaneDetail: 'detail',
   sessionsPaneAsk: 'question',
   sessionsPaneKeys: 'keys',
+  sessionsPaneRestore: 'last time',
+  restoreTitle: (n: number) =>
+    n === 1 ? 'Your last session was this one:' : `Your last ${n} sessions were these:`,
+  restoreAnswer: 'enter starts them in the background · esc leaves them closed',
   sessionsKeyWhat: {
     move: 'move the cursor',
     open: 'switch between the menu and the list',
@@ -629,6 +647,7 @@ const EN: ControlStrings = {
     unfiled: 'show sessions under no task',
     group: 'change the grouping',
     detail: 'hide the detail pane',
+    menuFold: 'fold the menu away — any digit brings it back',
     reset: 'back to how the app opens',
     tabs: 'change screen',
     help: 'this list',
@@ -660,6 +679,9 @@ const EN: ControlStrings = {
   sessionsApproveCaveat:
     'it takes whichever option the dialog above has highlighted — read it first.',
   sessionsApproveWhat: 'on its screen right now',
+  sessionsChoiceHighlighted: '(its default)',
+  sessionsChooseBlind: 'this dialog is a choice, and agentop cannot pick an option on this harness.',
+  sessionsChooseAttach: 'o attaches to the session, where you can answer it — esc goes back.',
   asideProjects: 'PROJECTS',
   asideAllProjects: 'every project',
   toggleDone: 'finished tasks',
@@ -709,6 +731,8 @@ const EN: ControlStrings = {
   keySessionsActions: 'tab actions',
   keySessionsApprove: 'y approve',
   keySessionsPrompt: 'p send',
+  keySessionsFold: 'b menu',
+  keyRestoreAnswer: 'enter start · esc leave closed',
   actSessions: {
     attach: 'Attach',
     resume: 'Reopen',
@@ -987,6 +1011,10 @@ const PT: ControlStrings = {
   sessionsPaneDetail: 'detalhe',
   sessionsPaneAsk: 'pergunta',
   sessionsPaneKeys: 'teclas',
+  sessionsPaneRestore: 'da última vez',
+  restoreTitle: (n: number) =>
+    n === 1 ? 'Sua última sessão foi esta:' : `Suas últimas ${n} sessões foram estas:`,
+  restoreAnswer: 'enter inicia em background · esc deixa fechadas',
   sessionsKeyWhat: {
     move: 'move o cursor',
     open: 'alterna entre o menu e a lista',
@@ -1007,6 +1035,7 @@ const PT: ControlStrings = {
     unfiled: 'mostra sessões sem tarefa',
     group: 'muda o agrupamento',
     detail: 'oculta o painel de detalhe',
+    menuFold: 'recolhe o menu — qualquer dígito traz de volta',
     reset: 'volta para como o app abre',
     tabs: 'muda de tela',
     help: 'esta lista',
@@ -1037,6 +1066,9 @@ const PT: ControlStrings = {
   sessionsApproveCaveat:
     'ela pega a opção que o diálogo acima está destacando — leia antes.',
   sessionsApproveWhat: 'na tela dela agora',
+  sessionsChoiceHighlighted: '(o padrão dela)',
+  sessionsChooseBlind: 'esse diálogo é uma escolha, e o agentop não sabe selecionar uma opção neste harness.',
+  sessionsChooseAttach: 'o anexa na sessão, onde dá para responder — esc volta.',
   asideProjects: 'PROJETOS',
   asideAllProjects: 'todos os projetos',
   toggleDone: 'tarefas finalizadas',
@@ -1086,6 +1118,8 @@ const PT: ControlStrings = {
   keySessionsActions: 'tab ações',
   keySessionsApprove: 'y aprovar',
   keySessionsPrompt: 'p enviar',
+  keySessionsFold: 'b menu',
+  keyRestoreAnswer: 'enter inicia · esc deixa fechadas',
   actSessions: {
     attach: 'Anexar',
     resume: 'Reabrir',
