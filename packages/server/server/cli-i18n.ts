@@ -139,8 +139,15 @@ export interface CliStrings {
   sessAnswered: (label: string) => string
   /** Nothing fell, or everything that did has already been picked back up. */
   sessNoFell: string
-  sessFellOpened: (opened: number, skipped: number) => string
+  sessFellOpened: (opened: number, skipped: number, held: number) => string
   sessFellNoneOpened: (skipped: number) => string
+  /**
+   * Refusing to open a conversation a live session already has, and NAMING that session.
+   *
+   * The name is the whole message. "Already open" leaves someone hunting for it; the twins this
+   * prevents were only found by reading two screens side by side and noticing identical text.
+   */
+  sessResumeInUse: (holder: string) => string
   /** The fallback title for a session the user never named. */
   sessUntitled: (harness: string, project: string) => string
   sessKilled: (id: string) => string
@@ -158,7 +165,7 @@ export interface CliStrings {
   sessNoted: string
   sessTasked: string
   sessTaskEmpty: (task: string) => string
-  sessTaskOpened: (task: string, opened: number, skipped: number) => string
+  sessTaskOpened: (task: string, opened: number, skipped: number, held: number) => string
   sessTaskNoneOpened: (task: string, skipped: number) => string
   /** A session the backend hosts but the registry never recorded has no metadata to patch. */
   sessNoRegistryEntry: string
@@ -386,12 +393,14 @@ const EN: CliStrings = {
     `agentop has no verified way to pick an option on ${harness}, and will not confirm the highlighted one for you — attach to answer it there.`,
   sessAnswered: (label: string) => `answered: ${label}`,
   sessNoFell: 'nothing fell — no session was lost with the machine still on record.',
-  sessFellOpened: (opened: number, skipped: number) =>
-    skipped > 0
-      ? `reopened ${opened} of the session(s) that fell — ${skipped} could not be reopened.`
-      : `reopened ${opened} session(s) that fell.`,
+  sessFellOpened: (opened: number, skipped: number, held: number) =>
+    `reopened ${opened} session(s) that fell.`
+    + (held > 0 ? ` ${held} already open in another session.` : '')
+    + (skipped > 0 ? ` ${skipped} could not be reopened.` : ''),
   sessFellNoneOpened: (skipped: number) =>
     `none of the ${skipped} session(s) that fell could be reopened.`,
+  sessResumeInUse: (holder: string) =>
+    `that conversation is already open in ${holder} — open it there instead of starting a second assistant in it.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
   sessKilled: (id: string) => `stopped ${id}.`,
   sessRestoreNone: 'those sessions are no longer in the registry.',
@@ -412,10 +421,10 @@ const EN: CliStrings = {
   sessNoted: 'note saved.',
   sessTasked: 'task set.',
   sessTaskEmpty: (task: string) => `no sessions are filed under "${task}".`,
-  sessTaskOpened: (task: string, opened: number, skipped: number) =>
-    skipped > 0
-      ? `reopened ${opened} session(s) of "${task}" — ${skipped} could not be reopened.`
-      : `reopened ${opened} session(s) of "${task}".`,
+  sessTaskOpened: (task: string, opened: number, skipped: number, held: number) =>
+    `reopened ${opened} session(s) of "${task}".`
+    + (held > 0 ? ` ${held} already open in another session.` : '')
+    + (skipped > 0 ? ` ${skipped} could not be reopened.` : ''),
   sessTaskNoneOpened: (task: string, skipped: number) =>
     `none of the ${skipped} session(s) of "${task}" could be reopened.`,
   sessNoRegistryEntry: 'that session has no record to update — it was not started by agentop.',
@@ -608,12 +617,14 @@ const PT: CliStrings = {
     `o agentop não tem forma verificada de escolher uma opção no ${harness}, e não vai confirmar a destacada por você — anexe para responder lá.`,
   sessAnswered: (label: string) => `respondido: ${label}`,
   sessNoFell: 'nada caiu — nenhuma sessão foi perdida com registro de que estava viva.',
-  sessFellOpened: (opened: number, skipped: number) =>
-    skipped > 0
-      ? `${opened} sessão(ões) que caíram reabertas — ${skipped} não puderam ser reabertas.`
-      : `${opened} sessão(ões) que caíram reabertas.`,
+  sessFellOpened: (opened: number, skipped: number, held: number) =>
+    `${opened} sessão(ões) que caíram reabertas.`
+    + (held > 0 ? ` ${held} já estava(m) aberta(s) em outra sessão.` : '')
+    + (skipped > 0 ? ` ${skipped} não puderam ser reabertas.` : ''),
   sessFellNoneOpened: (skipped: number) =>
     `nenhuma das ${skipped} sessão(ões) que caíram pôde ser reaberta.`,
+  sessResumeInUse: (holder: string) =>
+    `essa conversa já está aberta em ${holder} — abra ela por lá, em vez de colocar um segundo assistente dentro dela.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
   sessKilled: (id: string) => `${id} encerrada.`,
   sessRestoreNone: 'essas sessões não estão mais no registro.',
@@ -634,10 +645,10 @@ const PT: CliStrings = {
   sessNoted: 'nota salva.',
   sessTasked: 'tarefa definida.',
   sessTaskEmpty: (task: string) => `nenhuma sessão está na tarefa "${task}".`,
-  sessTaskOpened: (task: string, opened: number, skipped: number) =>
-    skipped > 0
-      ? `${opened} sessão(ões) de "${task}" reabertas — ${skipped} não puderam ser reabertas.`
-      : `${opened} sessão(ões) de "${task}" reabertas.`,
+  sessTaskOpened: (task: string, opened: number, skipped: number, held: number) =>
+    `${opened} sessão(ões) de "${task}" reabertas.`
+    + (held > 0 ? ` ${held} já estava(m) aberta(s) em outra sessão.` : '')
+    + (skipped > 0 ? ` ${skipped} não puderam ser reabertas.` : ''),
   sessTaskNoneOpened: (task: string, skipped: number) =>
     `nenhuma das ${skipped} sessão(ões) de "${task}" pôde ser reaberta.`,
   sessNoRegistryEntry: 'essa sessão não tem registro para atualizar — não foi o agentop que iniciou ela.',

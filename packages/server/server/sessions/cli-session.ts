@@ -28,6 +28,7 @@ import { loadHarnessSessions } from './harness-sessions'
 import { createSessionsPoller, type SessionSnapshot } from './sessions-host'
 import { needsAttention, type SessionView } from './session-view'
 import { planTaskReopen, taskReopenSucceeded } from './task-reopen'
+import { liveConversationHolders } from './live-claims'
 import type { SessionBackend, SpawnPlanError } from './types'
 
 /** Derived from the specs, never a second hand-written list — the two could not then disagree. */
@@ -252,15 +253,34 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
   }
   const conversations = await loadConversations()
   const live = new Set((await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id))
+  // What is already being driven, so this cannot put a second assistant into a conversation that has
+  // one. `live` above cannot answer it: it is keyed by ROW, and the twin case is a row that is down
+  // while a DIFFERENT row drives its conversation. Same collector the cockpit's verb uses.
+  const inUse = await liveConversationHolders(backend)
+  // Claimed within this batch too. The cockpit's copy of this loop has had this set for a while and
+  // this one never did, so `conversationForProcess` — which matches on harness and directory, and
+  // therefore answers with the FIRST conversation of a repository — handed the same one to every row
+  // of a task filed in that repository. The drift `planTaskReopen` was extracted to end, met again
+  // one layer out.
+  const taken = new Set<string>()
   // The DECISION is the pure `planTaskReopen`, shared with the cockpit's verb. The two used to be
   // separate implementations and had drifted: only one retired the row it replaced, so the same
   // gesture left a different registry depending on where you pressed it.
   const plan = planTaskReopen({
     entries: wanted,
     liveIds: live,
+    inUse,
     conversationFor: m => {
-      const conv = conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
-      return conv?.resumable ? { sessionId: conv.sessionId, title: conv.title } : null
+      const own = m.conversationId
+        ? conversations.find(c => c.sessionId === m.conversationId)
+        : undefined
+      const conv = own ?? conversationForProcess(
+        conversations.filter(c => !taken.has(c.sessionId)),
+        { harness: m.harness, cwd: m.cwd },
+      )
+      if (!conv?.resumable) return null
+      taken.add(conv.sessionId)
+      return { sessionId: conv.sessionId, title: conv.title }
     },
   })
 
@@ -287,13 +307,22 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
   }
 
   if (json) {
-    console.log(JSON.stringify({ task, started, skipped, already: plan.already }, null, 2))
+    console.log(JSON.stringify({
+      task, started, skipped, already: plan.already,
+      // Each one NAMES the session that already has the conversation, because a machine reader is
+      // exactly who needs to be told where the work is rather than that something did not happen.
+      heldElsewhere: plan.heldElsewhere.map(h => ({ id: h.id, heldBy: h.holder.id, label: h.holder.label })),
+    }, null, 2))
   } else {
     for (const id of started) console.log(id)
     // Reported, never silent: a partial reopen presented as a success leaves someone believing they
     // have their whole task back.
+    for (const h of plan.heldElsewhere) {
+      console.log(`${h.id}\talready open in ${h.holder.label}`)
+    }
     const alreadyUp = plan.already.length ? `, ${plan.already.length} already running` : ''
-    console.log(`\n${started.length} reopened${skipped.length ? `, ${skipped.length} could not be` : ''}${alreadyUp}.`)
+    const held = plan.heldElsewhere.length ? `, ${plan.heldElsewhere.length} already open elsewhere` : ''
+    console.log(`\n${started.length} reopened${skipped.length ? `, ${skipped.length} could not be` : ''}${alreadyUp}${held}.`)
   }
   return taskReopenSucceeded(plan, started.length) ? 0 : 1
 }
