@@ -181,6 +181,22 @@ viva, e o agentop abre a segunda por cima.
 3. Considere ainda **recusar o spawn** de um `--resume <id>` cuja conversa já tem sessão viva,
    dizendo qual é. É a trava na porta, e é a que teria evitado todos os nove casos.
 
+**Defeito 3 — a linha reaberta não grava a conversa que está retomando.** No caminho de reopen do
+`cli-session.ts` (~linha 278), o `addSession` do reopen escreve `id`, `harness`, `cwd`, `task`,
+`label` e `note` — e **não** `conversationId`, embora `row.resumeId` esteja logo ali e seja
+exatamente esse valor. Consequência direta: a linha nova nasce sem o link EXATO, então o próximo
+reopen dela cai na inferência harness-e-diretório do `conversationForProcess` — a inferência que o
+CLAUDE.md já descreve como a que "reabriu três linhas na mesma conversa". É uma linha de código, e
+sem ela os defeitos 1 e 2 voltam a acontecer por outro caminho.
+
+#### Lacuna de CLI: não dá para reabrir UMA conversa
+
+A CLI só sabe reabrir **uma task inteira** (`agentop session open "<task>"`). Não existe verbo para
+"reabra esta conversa", e é justamente o que "trazer uma sessão externa para dentro do agentop"
+precisa — uma sessão externa tipicamente não tem task nenhuma. O cockpit tem o gesto (`o` numa
+linha fechada); a CLI não. Adicione `agentop session open --conversation <id>` (ou
+`agentop session resume <id>`), passando pelo MESMO `planTaskReopen`, com o mesmo cadeado.
+
 ### 2.2 A frota inteira parada numa pergunta de onboarding que ninguém detecta (alta)
 
 **9 das 11 sessões vivas** estavam paradas em:
