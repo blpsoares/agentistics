@@ -33,21 +33,24 @@ import type { AttentionRules } from './types'
 
 export const ATTENTION_RULES: Record<HarnessId, AttentionRules | null> = {
   claude: {
-    probed: 'claude 2.1.231 2026-08-13; permission prompt re-probed on 2.1.232, 2026-08-14',
+    probed: 'claude 2.1.231 + 2.1.232, 2026-08-13 and 2026-08-14',
     approval: [
-      // Captured from the folder-trust dialog claude opens with, and from `/model`.
+      // The startup/select component: the folder-trust dialog it opens with, and `/model`.
       /Enter to confirm · Esc to cancel/,
-      // THE PERMISSION PROMPT DOES NOT DRAW THAT FOOTER, and the comment here used to claim it did.
-      // Caught by watching a real session sit on `rm -v …` while the monitor reported plain
-      // `waiting`: a tool-permission prompt draws `Esc to cancel · Tab to amend · ctrl+e to
-      // explain` and asks `Do you want to proceed?`. Both are matched, because they fail
-      // independently — the footer varies with what the prompt offers (a plan-mode prompt has no
-      // `Tab to amend`), while the question is the component's own and does not.
+      // **The PERMISSION prompt, and it is a DIFFERENT component with a different footer.** The
+      // line above does not match it, which was measured the hard way on 2026-08-14: a live claude
+      // 2.1.232 sitting on "Do you want to proceed?" reported `waiting`, and the prompt that was
+      // then typed into it went into the dialog's own filter — where the submit selected the
+      // highlighted option and approved a shell command nobody had read. That is the exact accident
+      // this whole feature exists to prevent, and it was one rule away.
       //
-      // This is exactly the failure mode this file's header warns about, and it is worth recording
-      // that it happened anyway: a pattern that never matches does not throw and does not look
-      // wrong. It reported the ONE state this whole channel exists for as an ordinary wait.
-      /Do you want to proceed\?/,
+      // Captured from TWO distinct permission dialogs, which is what makes this the component's
+      // footer rather than one dialog's wording — the same standard the gemini entry below holds
+      // itself to:
+      //   Bash   `Esc to cancel · Tab to amend · ctrl+e to explain`
+      //   Write  `Esc to cancel · Tab to amend`
+      // The shared part is what is matched. `ctrl+e to explain` is offered only where there is a
+      // command to explain, so keying on it would have missed every file edit.
       /Esc to cancel · Tab to amend/,
     ],
     // The footer while a turn runs. `? for shortcuts` takes its place when the turn ends.

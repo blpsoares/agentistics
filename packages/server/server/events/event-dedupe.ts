@@ -2,8 +2,9 @@
  * event-dedupe.ts — PURE. The same end of turn, seen twice, read once.
  *
  * A Claude session that stops answering is reported by BOTH sources: the `Stop` hook fires
- * immediately, and the poller notices up to five seconds later that the screen went quiet. They are
- * the same fact. The reader wants it once.
+ * immediately, and the poller notices tens of seconds later that the screen went quiet — it has to
+ * see the new state twice before it counts it (`event-plan.ts`) and it has a fleet of panes to
+ * capture. They are the same fact. The reader wants it once.
  *
  * ## The hook wins, and the rule is one-directional
  *
@@ -35,11 +36,27 @@ import type { SessionEvent } from './event-types'
 /**
  * How long a hook event shadows the poll event that duplicates it.
  *
- * Wider than the five-second poll (the poll that notices is the one AFTER the turn ended, so the
- * gap can be a full interval plus the capture) and narrow enough that a second turn in the same
- * conversation is its own event. Twenty seconds is two polls plus room.
+ * ## Why this is ninety seconds and not two poll intervals
+ *
+ * The first value here was twenty seconds, reasoned from "the poll that notices is the one after
+ * the turn ended, so the gap is one interval plus the capture". That reasoning was obsolete the
+ * moment `event-plan.ts` started requiring a state to be confirmed on TWO consecutive polls: the
+ * poll source now reports a turn end at least one further interval later, and on a fleet of eight
+ * sessions the capture of each pane adds more. **Measured**: a hook event at 13:58:12.738 and the
+ * poll's duplicate of the same turn at 13:58:44.818 — 32 seconds — so the user was told twice.
+ *
+ * Ninety seconds covers that with room for a slower machine or a larger fleet, and over-covering
+ * is the SAFE direction here, which is what makes the number defensible rather than arbitrary:
+ * suppression requires a hook event to already exist for that conversation. A Claude session with
+ * no `Stop` hook installed produces no hook events, so nothing of its is ever suppressed, however
+ * wide this is. And where the hook IS installed it fires on EVERY turn — so a second turn landing
+ * inside the window still reaches the reader, through its own hook event, which is the exact
+ * record rather than the inferred one.
+ *
+ * The residual case is narrow and stated: a session whose hook was uninstalled between two turns
+ * loses the poll copy of the second turn if it lands within ninety seconds of the first.
  */
-export const DEDUPE_WINDOW_MS = 20_000
+export const DEDUPE_WINDOW_MS = 90_000
 
 /** The kinds that describe "the turn ended", one word per source. */
 const TURN_END_KINDS = new Set(['turn-end', 'waiting'])

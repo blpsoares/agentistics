@@ -95,16 +95,8 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          first prompt TYPED IN, because their `-p` exits after answering.
   │                          **What a session is DOING** is the pure `attention.ts` over two
   │                          signals — a probed screen marker and whether the frame moved — with
-  │                          `attention-rules.ts` holding the per-harness patterns **captured
-  │                          from live dialogs**, each with its CLI version and date. **One dialog
-  │                          per harness is not enough**: claude's rule was captured from the
-  │                          folder-trust prompt, and the TOOL PERMISSION prompt draws a completely
-  │                          different footer (`Esc to cancel · Tab to amend · ctrl+e to explain`,
-  │                          asking `Do you want to proceed?`) — so a session really blocked on `rm`
-  │                          was reported as an ordinary `waiting` for as long as the rule existed.
-  │                          That is the silent failure the file's own header warns about, and it
-  │                          happened anyway: a pattern that never matches does not throw and does
-  │                          not look wrong. There
+  │                          `attention-rules.ts` holding six per-harness patterns **captured
+  │                          from six live dialogs**, each with its CLI version and date. There
   │                          is deliberately no `idle` state: an interactive assistant that is
   │                          alive and still is waiting for you, and the uncertainty that really
   │                          exists is about the REASON, which lives in an absent approval rule

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { dedupeEvents, isDuplicate } from './event-dedupe'
+import { DEDUPE_WINDOW_MS, dedupeEvents, isDuplicate } from './event-dedupe'
 import { MAX_TAIL_LINES, parseEvent, parseEvents, serializeEvent } from './event-line'
 import { EMPTY_MEMORY, planEvents, seedMemory, type EventMemory } from './event-plan'
 import { EMPTY_CURSOR, advanceCursor, planRead, planRotation } from './event-rotate'
@@ -160,9 +160,17 @@ describe('dedupe', () => {
     expect(isDuplicate(poll, [hook], NOW_MS + 3_000)).toBe(true)
   })
 
-  test('outside the window it is a second turn, not a duplicate', () => {
+  test('the MEASURED gap is inside the window — 32s between the hook and the poll copy', () => {
+    // Real numbers from a live fleet: hook 13:58:12.738, poll 13:58:44.818. The first window was
+    // 20s, sized before `event-plan.ts` began requiring two consecutive polls, and the user was
+    // told twice.
     const poll = ev({ source: 'poll', kind: 'waiting', harness: 'claude', cwd: '/repo', conversationId: 'c1' })
-    expect(isDuplicate(poll, [hook], NOW_MS + 60_000)).toBe(false)
+    expect(isDuplicate(poll, [hook], NOW_MS + 32_080)).toBe(true)
+  })
+
+  test('well outside the window it is a second turn, not a duplicate', () => {
+    const poll = ev({ source: 'poll', kind: 'waiting', harness: 'claude', cwd: '/repo', conversationId: 'c1' })
+    expect(isDuplicate(poll, [hook], NOW_MS + DEDUPE_WINDOW_MS + 1)).toBe(false)
   })
 
   test('a hook event is never suppressed by a poll event — the exact record always lands', () => {
