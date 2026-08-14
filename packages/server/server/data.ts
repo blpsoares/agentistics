@@ -10,7 +10,7 @@ import { mergeLocalAndIngestedSessions, sessionKey } from './session-merge'
 import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
 import { UUID_RE, decodeProjectDir, getProjectGitStats, getGitRemote } from './git'
-import { activeMinutesFromClaudeJsonl, parseSessionJsonl } from './jsonl'
+import { activeMinutesFromClaudeJsonl, contextTokensFromClaudeJsonl, parseSessionJsonl } from './jsonl'
 import type { MachineInfo } from './team-tokens'
 import { runHealthChecks, analyzeToolHealthIssues, analyzeCacheStaleness } from './health'
 import { extractAgentMetricsFromFile } from './agent-metrics'
@@ -208,6 +208,7 @@ async function scanProjectDir(
         cwdCounts[session.project_path] = (cwdCounts[session.project_path] ?? 0) + 1
         extraSessions.push(session)
       } else if (metaEntry && (!metaEntry.model || metaEntry.active_minutes === undefined
+        || metaEntry.context_tokens === undefined
         || (metaEntry.uses_task_agent && !metaEntry.agentMetrics))) {
         // Meta session — extract model, active time and/or agent metrics from the JSONL
         // (single read). Claude's own session-meta files carry none of the three.
@@ -218,7 +219,11 @@ async function scanProjectDir(
           // transcript, so it has to be computed here or the metric is blank for the path that
           // serves MOST Claude sessions.
           const needsActive = metaEntry.active_minutes === undefined
-          if (!needsModel && !needsAgentMetrics && !needsActive) return
+          // Same reason as active time, one metric later: Claude's session-meta files carry no
+          // context reading, and this path serves MOST Claude sessions — a gauge computed only
+          // inside `parseSessionJsonl` would be blank on nearly every row it exists for.
+          const needsContext = metaEntry.context_tokens === undefined
+          if (!needsModel && !needsAgentMetrics && !needsActive && !needsContext) return
 
           const content = await readFile(filePath, 'utf-8').catch(() => '')
           if (!content) return
@@ -240,6 +245,11 @@ async function scanProjectDir(
 
           if (needsActive) {
             metaEntry.active_minutes = activeMinutesFromClaudeJsonl(content.split('\n'))
+          }
+
+          if (needsContext) {
+            const ctx = contextTokensFromClaudeJsonl(content.split('\n'))
+            if (ctx !== undefined) metaEntry.context_tokens = ctx
           }
 
           if (needsAgentMetrics) {

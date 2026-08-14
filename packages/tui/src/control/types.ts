@@ -447,6 +447,28 @@ export interface ControlSession {
   tokens?: string
   /** Already-formatted cost, same. */
   cost?: string
+  /**
+   * How full this session's context window was on its last turn — ABSENT when it cannot be known.
+   *
+   * Absent covers three different situations that the screen deliberately does not distinguish,
+   * because the honest rendering of all three is the same nothing: the harness reports no per-turn
+   * context size (`HARNESS_CAPABILITIES.contextWindow`), the model's window is not in the verified
+   * table, or the row has no conversation behind it at all. A `0%` in any of those places is a
+   * confident answer to a question nobody could answer — the same rule the metrics cell follows.
+   *
+   * `fraction` can exceed 1: a session really can send more than the window this table names (see
+   * `contextWindows.ts` on Claude Code's smaller session cap), and the bar saturates while the
+   * label keeps saying the true number rather than pinning it at 100%.
+   */
+  context?: {
+    /** Used / window. Unclamped — see above. */
+    fraction: number
+    /** The percentage as a word, e.g. `45%`. Already localized-agnostic (digits + `%`). */
+    label: string
+    /** Both halves, already formatted, for the detail pane: `455.4k` and `1M`. */
+    used: string
+    window: string
+  }
   /** Everything this row can be found by, already lowercased — including a closed conversation's
    *  opening prompt, which is what a person remembers about work they put down. */
   searchText: string

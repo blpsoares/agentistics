@@ -59,6 +59,15 @@ export interface AntigravityTokenTotals {
   byModel?: Record<string, { inputTokens: number; cachedTokens: number; outputTokens: number }>
   /** Number of `gen_metadata` rows that decoded — used by the reconciliation test. */
   rowCount?: number
+  /**
+   * Field `1.4.5` of the LAST decoded row — how full the window was at that generation.
+   *
+   * agy is the one harness that measures this directly rather than leaving it to be reconstructed:
+   * the field is documented as "a gauge, never a sum" precisely because it is a level, not a
+   * quantity. Everything else on this interface is summed across rows; this one is read off the
+   * last.
+   */
+  contextTokens?: number
 }
 
 /** Optional inputs for {@link parseAntigravityTranscript}. */
@@ -575,6 +584,8 @@ export function parseAntigravityTranscriptDetailed(
     cache_read_input_tokens: tokens?.cachedTokens ?? 0,
     // agy does not record cache WRITES separately.
     cache_creation_input_tokens: 0,
+    // The `1.4.5` gauge off the last generation — absent when no row carried one.
+    ...(tokens?.contextTokens ? { context_tokens: tokens.contextTokens } : {}),
     first_prompt: firstPrompt,
     title,
     user_interruptions: 0,
