@@ -1755,10 +1755,23 @@ export function cardGrid(o: {
    * in it. Counted, those rows go back to the region and another band fits on the page.
    */
   lines?: number
+  /**
+   * Whether the grid will draw a group HEADING over its bands.
+   *
+   * A band's real cost is its cards plus the name over them, and sizing as though a band were only
+   * its cards is what made the grouped grid page four times over: the ceiling was measured for a
+   * region that then had to pay a row per band out of the same rows. Counted here, one row per
+   * band, the cards give up a line and the page carries a group more.
+   *
+   * It is the ARITHMETIC of a band, not a rule of thumb — the same `+ PANE_FRAME_Y` this function
+   * already pays for a frame, for the row a heading occupies.
+   */
+  headings?: boolean
 }): CardGrid | null {
   const width = Math.max(0, o.width)
   const height = Math.max(0, o.height)
-  const floorHeight = PANE_FRAME_Y + CARD_MIN_LINES
+  const head = o.headings ? 1 : 0
+  const floorHeight = PANE_FRAME_Y + CARD_MIN_LINES + head
   const fullHeight = PANE_FRAME_Y
     + Math.max(CARD_MIN_LINES, Math.min(CARD_LINES, o.lines ?? CARD_LINES))
   if (width < CARD_MIN_WIDTH || height < floorHeight) return null
@@ -1777,8 +1790,10 @@ export function cardGrid(o: {
     Math.min(CARD_MAX_WIDTH, Math.floor((width - CARD_GAP * (cols - 1)) / cols)),
   )
   // As tall as the band affords, never taller than the card has content for: rows of blank inside
-  // a frame are not a card, they are a box with a name in it.
-  const cardHeight = Math.min(fullHeight, Math.floor(height / rows))
+  // a frame are not a card, they are a box with a name in it. `- head` is the row the name over the
+  // band takes — the cards of a headed grid are shorter by exactly what their headings cost, and
+  // `rows <= maxRows` is what keeps the result at or above the floor.
+  const cardHeight = Math.min(fullHeight, Math.floor(height / rows) - head)
 
   return {
     cols, rows, cardWidth, cardHeight, gap: CARD_GAP,
