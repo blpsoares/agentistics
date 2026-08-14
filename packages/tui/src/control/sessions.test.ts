@@ -5,7 +5,7 @@ import {
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
   projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
   sessionHandle, worktreeName, sessionRunning, asideRowKey, resolveAsideCursor,
-  sessionAge, sessionKeyHelp, keyHelpColumn,
+  sessionAge, sessionKeyHelp, keyHelpColumn, closeCellWidth, canClose,
   DEFAULT_ORDER, usageOf, planSubmit,
   cardGrid, cardPages, pageOfCard, CARD_PAGE_MAX, CARD_MIN_WIDTH, CARD_GAP, CARD_LINES,
   cardBadges, cardLines, fitCardLines, cardStateCells, cardLabelWidth, CARD_VALUE_MIN,
@@ -1233,7 +1233,7 @@ describe('sessionKeyHelp', () => {
   const words = Object.fromEntries(
     ['move', 'open', 'attach', 'menu', 'section', 'newSession', 'search', 'clear', 'kill',
       'rename', 'note', 'task', 'mark', 'onlyActive', 'closed', 'exited', 'unfiled', 'group',
-      'detail', 'reset', 'tabs', 'help', 'quit',
+      'detail', 'menuFold', 'reset', 'tabs', 'help', 'quit',
       'approve', 'prompt', 'reopenFell'].map(k => [k, `does ${k}`]),
   ) as Parameters<typeof sessionKeyHelp>[0]
 
@@ -2114,5 +2114,31 @@ describe('the wizard name step', () => {
     // harness and the folder. An empty string is not a name called "".
     const plan = planSubmit({ draft: { harness, cwd: '/r', label: '' }, hasSpawn: true, attach: false })
     if (plan.ok) expect('label' in plan.req).toBe(false)
+  })
+})
+
+describe('the per-row close control', () => {
+  const live = session('a', { state: 'waiting' as SessionState })
+  const closed = session('b', { state: 'closed' as SessionState, actionable: false })
+  const gone = session('c', { state: 'exited' as SessionState })
+
+  it('is offered only on a row agentop can actually stop', () => {
+    // An external process is someone else's to stop, and a closed conversation has nothing running
+    // to end. A control that is visible and refuses is worse than one that is absent.
+    expect(canClose(live)).toBe(true)
+    expect(canClose(closed)).toBe(false)
+    expect(canClose(gone)).toBe(false)
+    expect(canClose(session('d', { state: 'unknown' as SessionState, actionable: false }))).toBe(false)
+  })
+
+  it('costs nothing when nothing on screen can be closed', () => {
+    expect(closeCellWidth([closed, gone], 120)).toBe(0)
+    expect(closeCellWidth([live], 120)).toBe(2)
+  })
+
+  it('gives up on a narrow list rather than squeezing the table for a button', () => {
+    // The keyboard's `x` still works there, and a table squeezed to make room is the worse trade.
+    expect(closeCellWidth([live], 30)).toBe(0)
+    expect(closeCellWidth([live], 40)).toBe(2)
   })
 })

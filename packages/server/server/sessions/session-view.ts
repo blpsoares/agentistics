@@ -11,6 +11,7 @@
 import type { HarnessId } from '@agentistics/core'
 import { type HarnessProcess, sessionAtCwd } from '../live-sessions'
 import { rulesFor } from './attention-rules'
+import type { DialogOption } from './dialog-choice'
 import { chosenName, type HarnessSessionFile } from './harness-session-file'
 import type { HarnessSessionIndex } from './harness-sessions'
 import type { ReconciledSession } from './session-ref'
@@ -69,6 +70,14 @@ export interface SessionView {
    * is taking. See `approval-spec.ts` and `approvalTail`.
    */
   approvalLines?: string[]
+  /**
+   * The OPTIONS that dialog is offering, when they could be read with confidence.
+   *
+   * Present only alongside `approvalLines`, and empty rather than invented when the screen cannot be
+   * parsed — see `dialog-choice.ts`. It is what makes answering a four-way question possible at all:
+   * a keystroke that confirms the highlighted row is choosing on the user's behalf.
+   */
+  dialogOptions?: DialogOption[]
   /**
    * This session was taken by the machine along with the others, and is offered back with them.
    *
@@ -191,6 +200,8 @@ export function buildSessionViews(o: {
   tails?: ReadonlyMap<string, string[]>
   /** The DIALOG a blocked session is showing, keyed by session id — see `SessionView.approvalLines`. */
   approvals?: ReadonlyMap<string, string[]>
+  /** The options that dialog offers, keyed by session id. Absent where they could not be read. */
+  dialogOptions?: ReadonlyMap<string, DialogOption[]>
   /** The ids `crash-group.ts` decided fell together. A set, because the question is about a set. */
   fell?: ReadonlySet<string>
   /**
@@ -276,6 +287,9 @@ export function buildSessionViews(o: {
       // be shown under "what you are about to confirm" for a question that is no longer open.
       ...(activity === 'waiting-approval' && (o.approvals?.get(r.id)?.length ?? 0) > 0
         ? { approvalLines: o.approvals!.get(r.id)! }
+        : {}),
+      ...(activity === 'waiting-approval' && (o.dialogOptions?.get(r.id)?.length ?? 0) > 0
+        ? { dialogOptions: o.dialogOptions!.get(r.id)! }
         : {}),
       ...(o.fell?.has(r.id) ? { fell: true as const } : {}),
       ...(r.managed?.label ? { label: r.managed.label } : {}),
@@ -371,15 +385,28 @@ export function buildSessionViews(o: {
   // covers its conversation, whether that row is one we host or one we merely observed.
   const shown = new Set<string>()
   for (const v of external) if (v.resume) shown.add(v.resume.sessionId)
-  for (const m of managed) {
-    // A managed row does not carry a conversation id, so it covers by the same harness+directory
-    // inference used for a foreign process. `exited` and `lost` rows cover nothing: their work IS
-    // over, and the conversation belongs in history where it can be reopened.
-    if (m.status !== 'running' && m.status !== 'unregistered') continue
-    const conv = m.harness
-      ? conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
-      : undefined
-    if (conv) shown.add(conv.sessionId)
+  //
+  // A row that RECORDED its conversation covers exactly that one. The rest fall back to the
+  // harness+directory inference, and it is CLAIMED — because that inference answers with the FIRST
+  // conversation in the directory, so four live sessions in one repository all covered the same
+  // one. The other three stayed in history as `closed` rows for conversations that were open, and
+  // whichever conversation happened to be first vanished from history while it was the one nobody
+  // was running. "Some sessions do not appear" and "some appear twice" were the same bug, seen
+  // from its two ends.
+  const coveredConv = new Set<string>()
+  for (const r of o.reconciled) {
+    const m = managed.find(v => v.id === r.id)
+    // `exited` and `lost` rows cover nothing: their work IS over, and the conversation belongs in
+    // history where it can be reopened.
+    if (!m || (m.status !== 'running' && m.status !== 'unregistered')) continue
+    const own = r.managed?.conversationId
+    if (own) { shown.add(own); coveredConv.add(own); continue }
+    if (!m.harness) continue
+    const conv = conversations.find(c =>
+      !coveredConv.has(c.sessionId)
+      && c.harness === m.harness
+      && sessionAtCwd({ current_cwd: c.cwd, project_path: c.cwd }, m.cwd))
+    if (conv) { shown.add(conv.sessionId); coveredConv.add(conv.sessionId) }
   }
 
   const closed: SessionView[] = conversations

@@ -39,6 +39,7 @@ import {
   type ControlSession,
   type ControlSessions,
   type ProjectOption,
+  type RestoreCandidate,
   type ControlService,
   type ControlStatus,
   type ServiceRuntimeState,
@@ -98,6 +99,14 @@ interface Options {
   pending: boolean
   /** Make the fake host REFUSE to spawn, which is the wizard's failure path. */
   failSpawn: boolean
+  /**
+   * Show the "your last sessions were these" offer.
+   *
+   * Its own flag because the offer renders in FRONT of the list: stocking the fixture with it
+   * unconditionally would put a modal over every other sessions preview, so the screen this exists
+   * to check would be the only one anybody could ever see.
+   */
+  restore: boolean
 }
 
 const USAGE = `
@@ -126,12 +135,14 @@ const USAGE = `
                             gate: --pending --keys enter,right,enter
     --fail-spawn            the new-session wizard's spawn is refused, so its failure
                             path is drawn: --fail-spawn --keys a,enter,enter,enter,enter,enter,enter
+    --restore               the machine lost its fleet, so the "start these again?"
+                            offer is drawn in front of the list
 `
 
 function parseArgs(argv: string[]): Options {
   const opts: Options = {
     cols: 100, rows: 34, lang: 'en', screen: 'services', mode: 'solo', keys: [], task: 'off',
-    pending: false, failSpawn: false,
+    pending: false, failSpawn: false, restore: false,
   }
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]
@@ -143,6 +154,7 @@ function parseArgs(argv: string[]): Options {
       case '--keys': opts.keys = value.split(',').filter(Boolean); i++; break
       case '--pending': opts.pending = true; break
       case '--fail-spawn': opts.failSpawn = true; break
+      case '--restore': opts.restore = true; break
       case '--task':
         opts.task = value === 'done' ? 'done' : 'running'
         i++
@@ -360,7 +372,10 @@ function fakeHost(opts: Options, apiUrl?: string): ControlHost {
       return () => { watchers.delete(handler) }
     },
     readLog: async (source, maxLines) => (LOG[source] ?? []).slice(-maxLines),
-    sessions: async () => FAKE_FLEET,
+    sessions: async () => (opts.restore
+      ? { ...FAKE_FLEET, restorable: FAKE_RESTORABLE }
+      : FAKE_FLEET),
+    restoreSessions: done,
     startableHarnesses: async () => [
       { id: 'claude', label: 'claude', modelSuggestions: ['opus', 'sonnet', 'haiku'], supportsModel: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
       { id: 'codex', label: 'codex', modelSuggestions: ['gpt-5.4', 'gpt-5.4-mini'], supportsModel: true, efforts: [] },
@@ -377,7 +392,7 @@ function fakeHost(opts: Options, apiUrl?: string): ControlHost {
     // nothing: the questions are what a layout check needs to see, and the preview must never send
     // a keystroke anywhere.
     promptSession: done,
-    approveSession: done,
+    answerSession: done,
     reopenFell: done,
   }
 }
@@ -397,6 +412,18 @@ const FAKE_PROJECTS: ProjectOption[] = [
   { path: '/home/dev/embark', label: 'embark', detail: '~/orgs/opvibes/embark', source: 'repo' },
   { path: '/home/dev/embark2', label: 'embark', detail: '~/archive/2024/embark', source: 'folder' },
   { path: '/home/dev/scratch', label: 'scratch', detail: '~/scratch', source: 'folder' },
+]
+
+/**
+ * What the offer names after a fall — the awkward cases rather than the tidy one: a long label that
+ * has to be truncated beside its harness and project, a row with no start time at all, and enough
+ * of them to reach the pane's own limit on a short terminal.
+ */
+const FAKE_RESTORABLE: RestoreCandidate[] = [
+  { id: 'f00d01', label: 'ledger reconciliation', harness: 'claude', project: 'agentistics', startedAt: Date.now() - 3 * 60 * 60_000 },
+  { id: 'f00d02', label: 'invoice export', harness: 'codex', project: 'prontuario', startedAt: Date.now() - 3 * 60 * 60_000 },
+  { id: 'f00d03', label: 'rewrite the CSV importer so it stops guessing the encoding', harness: 'kimi', project: 'embark', startedAt: Date.now() - 4 * 60 * 60_000 },
+  { id: 'f00d04', label: 'no start time on record', harness: 'claude', project: 'aipe' },
 ]
 
 const FAKE_FLEET: ControlSessions = {
@@ -424,17 +451,49 @@ const FAKE_FLEET: ControlSessions = {
       // The dialog, at the width a real one is drawn at — which is the point: the confirmation has
       // to fit it into a pane that is often much narrower, and a fixture of short lines would never
       // show that.
-      canApprove: true,
+      // A THREE-way choice, which is what a claude permission prompt actually is — the case the
+      // picker exists for. `canApprove` is deliberately absent: there is no approving here.
+      canChoose: true,
+      dialogOptions: [
+        { number: 1, label: 'Yes', selected: true },
+        { number: 2, label: 'Yes, allow all edits during this session (shift+tab)', selected: false },
+        { number: 3, label: 'No', selected: false },
+      ],
       approvalLines: [
         '│ Bash command                                                    │',
         '│   bun run db:migrate --env production                           │',
         '│                                                                 │',
         '│ Do you want to proceed?                                         │',
         '│ ❯ 1. Yes                                                        │',
-        '│   2. No, and tell Claude what to do differently                 │',
-        '│ Enter to confirm · Esc to cancel                                │',
+        '│   2. Yes, allow all edits during this session (shift+tab)       │',
+        '│   3. No                                                         │',
+        '│ Esc to cancel · Tab to amend                                    │',
       ],
       startedAt: Date.now() - 22 * 60_000, attached: false,
+    },
+    // A dialog whose options ARE readable but whose harness nobody has verified a way to pick on.
+    // The one row that must draw a REFUSAL naming why, rather than a picker that would confirm the
+    // highlighted row on the user's behalf.
+    {
+      id: 'c0de01', title: 'promote to prod', harness: 'gemini',
+      cwd: '/home/dev/embark', project: 'embark',
+      state: 'waiting-approval', stateLabel: 'needs approval', actionable: true,
+      dialogOptions: [
+        { number: 1, label: 'Só o meu fix, isolado', selected: true },
+        { number: 2, label: 'Promover dev→main inteiro', selected: false },
+        { number: 3, label: 'Parar em dev por enquanto', selected: false },
+        { number: 4, label: 'Type something.', selected: false },
+      ],
+      approvalLines: [
+        'Como promover pra prod? O merge dev→main levaria junto ID-100, ID-81 e ID-54.',
+        '❯ 1. Só o meu fix, isolado',
+        '  2. Promover dev→main inteiro',
+        '  3. Parar em dev por enquanto',
+        '  4. Type something.',
+        'Enter to select · ↑/↓ to navigate · Esc to cancel',
+      ],
+      chooseBlind: 'this dialog is a choice, and nobody has verified how to pick an option on gemini — attach to answer it there.',
+      startedAt: Date.now() - 8 * 60_000, attached: false,
     },
     // The two the machine took together. `lost`, named, and carrying their task — which is what a
     // reboot leaves behind and what "reopen what fell" puts back.
