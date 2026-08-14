@@ -15,8 +15,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import type {
-  ActionResult, ControlExit, ControlHost, ControlSession, ControlSessions, SessionState,
-  SessionViewPrefs,
+  ActionResult, ControlExit, ControlHost, ControlSession, ControlSessions, RestoreCandidate,
+  SessionState, SessionViewPrefs,
 } from '../types'
 import type { ControlStrings } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
@@ -24,7 +24,7 @@ import { DEFAULT_SESSION_VIEW } from '../types'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import { ACTION_SEP, actionAtColumn, fitActionRow } from '../chrome.ts'
 import { Divider } from '../Surface'
-import { PANE_MIN_ROWS } from '../chrome.ts'
+import { PANE_MIN_ROWS, paneBadgeRoom, paneTitleRoom } from '../chrome.ts'
 import { Pane, paneBody, paneRows } from '../Pane'
 
 /** Columns a pane spends on its left edge: one of border, one of padding. */
@@ -48,15 +48,25 @@ function ScrollBar({ cells }: { cells: readonly string[] }) {
   )
 }
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
+import { Menu } from '../Menu'
+// Aliased: this file has its own `Question` component, which is the whole question PANE. This one
+// is the shared wrapped-sentence primitive `ConfirmPrompt` draws its label with.
+import { Question as WrappedText } from '../Surface'
 import { SessionWizard } from './SessionWizard'
 import { TaskChoice } from '../TaskChoice'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
-  QUESTION_ROWS, actionLabels, asideRows, asideSelectable, asideRowKey, resolveAsideCursor,
+  QUESTION_ROWS, askRows, fitApprovalPreview, actionLabels, asideRows, asideSelectable,
+  asideRowKey, resolveAsideCursor,
   enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
-  taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
-  DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder,
+  taskCounts, projectCounts, sessionMetric, sessionContext, contextLevel,
+  sessionHandle, worktreeName, sessionRunning,
+  sessionAge, sessionKeyHelp, keyHelpColumn, closeCellWidth, canClose, CLOSE_CELL,
+  DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder, type SessionLayout,
+  cardGrid, cardPages, pageOfCard, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
+  cardHit, cardStep, cardPageRows, cardLabelWidth, CARD_LABEL_GAP, pagerCells, pagerHit,
+  type CardBand, type CardGrid, type CardLabels, type CardLine, type CardPage, type PagerCells,
   asideSections, asideFold, scrollBar, THUMB,
   sessionNamed,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
@@ -66,6 +76,20 @@ import { isActivation, wheelDelta } from '../mouse'
 import { usePointer } from '../pointer'
 import { truncate } from '../../components/Primitives'
 import { COLORS, HARNESS_COLOR } from '../../theme'
+import type { ContextLevel } from '../sessions'
+
+/**
+ * The gauge's colour by level, mirroring `session-table.ts`'s ANSI table.
+ *
+ * `ok` is `undefined` and rendered `dimColor`, which is how every other neutral fact on the row is
+ * drawn: a bar that is coloured at 12% has spent the attention it needs at 95%, and the whole
+ * reason to colour this cell at all is that "nearly full" must be readable without reading.
+ */
+const CONTEXT_COLOR: Record<ContextLevel, string | undefined> = {
+  ok: undefined,
+  warn: COLORS.accent,
+  full: COLORS.danger,
+}
 
 /** The colour each state wears. Paired with a WORD everywhere it is drawn — a fleet state announced
  *  in colour alone is unreadable on a terminal with a flattened palette, and this is the one screen
@@ -83,6 +107,31 @@ const STATE_COLOR: Record<SessionState, string | undefined> = {
 }
 
 /**
+ * The already-localized word for every verb, in ONE place.
+ *
+ * It was written out twice — once for the action row and once for the aside menu — and the two are
+ * `Record<SessionAction, string>`s of the same map, so adding a verb meant finding both copies. The
+ * compiler catches a missing key, which is exactly why the duplicate was cheap enough to survive
+ * three verbs and then cost an afternoon on the fourth.
+ */
+const ACTION_WORDS = (s: ControlStrings): Record<SessionAction, string> => ({
+  attach: s.actSessions.attach,
+  resume: s.actSessions.resume,
+  approve: s.actSessions.approve,
+  prompt: s.actSessions.prompt,
+  rename: s.actSessions.rename,
+  note: s.actSessions.note,
+  task: s.actSessions.task,
+  kill: s.actSessions.kill,
+  openTask: s.actSessions.openTask,
+  reopenFell: s.actSessions.reopenFell,
+  finishTask: s.actSessions.finishTask,
+  new: s.actSessions.newSession,
+  search: s.actSessions.search,
+  group: s.actSessions.group,
+})
+
+/**
  * A question this screen is asking. While one is open it reports `capture`, so the global keys stand
  * down — typing a session name would otherwise quit the app on the `q` and refresh it on the `r`.
  */
@@ -90,6 +139,8 @@ type Ask =
   /** Everything about WHAT the list shows, in one vertical panel. */
   | { kind: 'view' }
   | { kind: 'search' }
+  /** The whole key list. Its own kind because it answers nothing and acts on nothing. */
+  | { kind: 'keys' }
   /** Finishing or reopening a TASK — the session is only how the task was named. */
   | { kind: 'finishTask'; session: ControlSession }
   | { kind: 'task'; session: ControlSession }
@@ -98,6 +149,18 @@ type Ask =
   | { kind: 'rename'; session: ControlSession }
   | { kind: 'note'; session: ControlSession }
   | { kind: 'kill'; session: ControlSession }
+  /** Typing a line into a session without entering it. */
+  | { kind: 'prompt'; session: ControlSession }
+  /**
+   * Answering the dialog a session is blocked on.
+   *
+   * The only question on this screen that carries EVIDENCE: the dialog itself is drawn above the
+   * confirmation, because the keystroke takes whichever option is highlighted and nothing but the
+   * screen can say which that is.
+   */
+  | { kind: 'approve'; session: ControlSession }
+  /** Reopening everything the machine took at once — a FLEET question, so it names no session. */
+  | { kind: 'reopenFell' }
   /** Starting a new one — the only question that needs no selected row. */
   | { kind: 'new' }
 
@@ -128,6 +191,19 @@ export function Sessions({
   const [grouping, setGrouping] = useState<SessionGrouping>(
     view?.grouping ?? DEFAULT_SESSION_VIEW.grouping,
   )
+  /** A list of rows, or a grid of cards. See `cardGrid` for why the grid may refuse. */
+  const [layout, setLayout] = useState<SessionLayout>(
+    view?.layout ?? DEFAULT_SESSION_VIEW.layout ?? 'list',
+  )
+  /**
+   * The session at the top of the open card page.
+   *
+   * The page itself is DERIVED from the cursor, so there is no second position to keep in sync —
+   * but it still has to survive a restart, and a page NUMBER would name different sessions by the
+   * next poll. Held in state rather than read back off `view`, so switching to the list and back
+   * does not lose the page.
+   */
+  const [cardAnchor, setCardAnchor] = useState<string | undefined>(view?.cardAnchor)
   const [cursor, setCursor] = useState(0)
   const [ask, setAsk] = useState<Ask | null>(null)
   const [query, setQuery] = useState('')
@@ -158,6 +234,17 @@ export function Sessions({
    * seconds: a mark that meant "the third row" would be on someone else's session by the next poll.
    */
   const [marked, setMarked] = useState<ReadonlySet<string>>(new Set(view?.marked ?? []))
+  /**
+   * Whether the menu is folded away entirely, for when the list is what you came to read.
+   *
+   * NOT persisted, unlike every other part of the arrangement: it is a gesture you make to look at
+   * something, not a setting. A menu that was still hidden three days later would be a feature
+   * nobody could find their way back out of — and the keys that open it (`1`-`9`) are the same ones
+   * that jump to a section, so opening it is never a thing you have to remember how to do.
+   */
+  const [menuHidden, setMenuHidden] = useState(false)
+  /** Ids the user has already been asked about this run, so the offer is made once. */
+  const [restoreAsked, setRestoreAsked] = useState(false)
   /**
    * Whether the visible action row has the keyboard.
    *
@@ -249,12 +336,23 @@ export function Sessions({
     },
     fleet?.finishedTasks ?? [],
     order,
-  ), s.sessionsClosedWord, s.sessionsDoneWord), [
-    fleet?.sessions, fleet?.finishedTasks, done, grouping, query, showClosed, showExited,
-    hideEmptyTask, showDone, onlyActive, states, order, taskFilter, projectFilter, s,
+    // The heading is passed only when something ACTUALLY fell. `sessionRows` treats an absent word
+    // as "there is no such section", so on an ordinary machine the reading order is unchanged
+    // rather than carrying an empty block that exists to say nothing.
+  ), s.sessionsClosedWord, s.sessionsDoneWord, fleet?.fell ? s.sessionsFellWord : undefined), [
+    fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, query, showClosed,
+    showExited, hideEmptyTask, showDone, onlyActive, states, order, taskFilter, projectFilter, s,
   ])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
+
+  // The cards are the SAME sequence the list draws, headings removed — so `at` (an index into
+  // `selectable`) names the same session in both layouts, and switching layout keeps the selection.
+  const cards = useMemo(
+    () => rows.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
+    [rows],
+  )
+  const badges = useMemo(() => cardBadges(rows), [rows])
 
   // Clamped on every render rather than corrected in an effect: a session that ends between two
   // polls shortens the list under the cursor, and a stored index would point past the end for one
@@ -267,6 +365,24 @@ export function Sessions({
   // The detail pane asks for exactly what it has to say, and the list absorbs the difference. A
   // pane sized to a constant leaves dead rows under it — air under a pane is a fault, and a list
   // with room to grow is not air, it is a list.
+  /**
+   * Whether the "start these again?" offer is the thing on screen.
+   *
+   * Decided HERE rather than beside the render below, because the FOOTER has to know: the offer owns
+   * the keyboard, and while it is up every hint the list would print names a key that does nothing.
+   * That is the one bug this footer exists to prevent, and it shipped — the offer drew over the list
+   * while the strip underneath still advertised `o attach`, `y approve` and `tab actions`.
+   */
+  const restorable = fleet?.restorable ?? []
+  const restoring = !restoreAsked && restorable.length > 0 && Boolean(host.restoreSessions)
+
+  /** Whether typing into the selected row is a thing that can work — the same rule
+   *  `sessionActions` applies, read once so the footer and the verb cannot disagree. */
+  const canPrompt = Boolean(selected)
+    && selected!.actionable
+    && (selected!.state === 'working' || selected!.state === 'waiting'
+      || selected!.state === 'waiting-approval')
+
   const detail = useMemo(() => (selected ? detailLines(selected, {
     where: s.sessionsWhere,
     model: s.sessionsModel,
@@ -277,6 +393,9 @@ export function Sessions({
     doing: s.sessionsDoing,
     task: s.sessionsTask,
     metrics: s.sessionsMetrics,
+    context: s.sessionsContext,
+    alsoLabel: s.sessionsAlsoLabel,
+    alsoHarness: s.sessionsAlsoHarness,
     // Absent when the backend did not report one — an invented keystroke is worse than none, since
     // the whole point of this line is that it is the key that actually works here.
     ...(fleet?.detachHint ? { detach: { label: s.sessionsDetach, keys: fleet.detachHint } } : {}),
@@ -293,7 +412,20 @@ export function Sessions({
   // frame rather than a cramped one.
   // A QUESTION always gets its rows, switch or no switch: it is a prompt, and one with nowhere to
   // draw cannot be answered. Only the FACTS are what the switch withholds.
-  const detailWanted = ask ? Math.max(QUESTION_ROWS, detail.length) : hideDetail ? 0 : detail.length
+  // A card holds what the detail pane holds, so in cards mode the pane is not asked for at all and
+  // the whole band goes to the grid — a fleet drawn twice on one screen is half a screen wasted. A
+  // QUESTION still gets its rows, switch or no switch: a prompt with nowhere to draw cannot be
+  // answered.
+  // The one question that carries EVIDENCE. Its rows are BUDGETED here rather than drawn on top of
+  // the answers: Ink composites what does not fit, so an unbudgeted preview would not crowd the two
+  // answers, it would draw over whatever sits under them.
+  const askPreview = ask?.kind === 'approve' ? (ask.session.approvalLines?.length ?? 0) : 0
+  // A picker needs a row per option on top of the evidence, or the answers are composited over
+  // whatever sits under the pane — the same reason the evidence itself is budgeted.
+  const askChoices = ask?.kind === 'approve' ? (ask.session.dialogOptions?.length ?? 0) : 0
+  const detailWanted = ask
+    ? askRows({ preview: askPreview, detail: detail.length, choices: askChoices })
+    : layout === 'cards' || hideDetail ? 0 : detail.length
 
   /**
    * Act on the selected row, or say why it cannot be acted on.
@@ -303,25 +435,16 @@ export function Sessions({
    * refusal is a sentence rather than a silently ignored keypress: a control that does nothing and
    * says nothing is indistinguishable from a broken one.
    */
-  const actions = useMemo(() => sessionActions(selected), [selected])
+  const actions = useMemo(
+    () => sessionActions(selected, { fell: fleet?.fell?.count ?? 0 }),
+    [selected, fleet?.fell?.count],
+  )
   // The cursor moves over the ENABLED verbs only; the dim ones keep the row's shape and are never
   // landed on. Clamped every render, because which are enabled changes with the selection.
   const liveActions = useMemo(() => enabledActionIndexes(actions), [actions])
   const liveAt = liveActions.length === 0 ? 0 : Math.min(actionIndex, liveActions.length - 1)
   const at2 = liveActions[liveAt] ?? 0
-  const actionWords = useMemo(() => actionLabels(actions, {
-    attach: s.actSessions.attach,
-    resume: s.actSessions.resume,
-    rename: s.actSessions.rename,
-    note: s.actSessions.note,
-    task: s.actSessions.task,
-    kill: s.actSessions.kill,
-    openTask: s.actSessions.openTask,
-    finishTask: s.actSessions.finishTask,
-    new: s.actSessions.newSession,
-    search: s.actSessions.search,
-    group: s.actSessions.group,
-  }), [actions, s])
+  const actionWords = useMemo(() => actionLabels(actions, ACTION_WORDS(s)), [actions, s])
 
   /** How many sessions wear each state, over the WHOLE fleet — see the note in `asideRows`. */
   const stateCounts = useMemo(() => {
@@ -332,15 +455,10 @@ export function Sessions({
 
   const asideList = useMemo(() => asideRows({
     actions,
-    actionWords: {
-      attach: s.actSessions.attach, resume: s.actSessions.resume, rename: s.actSessions.rename,
-      note: s.actSessions.note, task: s.actSessions.task, kill: s.actSessions.kill,
-      openTask: s.actSessions.openTask, finishTask: s.actSessions.finishTask,
-      new: s.actSessions.newSession,
-      search: s.actSessions.search, group: s.actSessions.group,
-    },
+    actionWords: ACTION_WORDS(s),
     grouping,
     groupWords: s.sessionsGroupings,
+    layout: { heading: s.asideLayout, words: s.sessionsLayouts, value: layout },
     toggles: {
       closed: showClosed, exited: showExited, unfiled: !hideEmptyTask, done: showDone,
       active: onlyActive, detail: !hideDetail,
@@ -378,7 +496,7 @@ export function Sessions({
       allLabel: s.asideAllProjects,
     },
   }), [
-    actions, grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
+    actions, grouping, layout, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
     states, stateCounts, order, taskFilter,
     projectFilter, fleet?.sessions, fleet?.finishedTasks, s,
   ])
@@ -405,12 +523,108 @@ export function Sessions({
   // narrow to carry the menu — where it is the only menu there is — and whether that is the case
   // depends on the width alone, so one extra call settles it without either budget guessing at the
   // other. A row taken without being paid for is composited over the one under it.
-  const probe = sessionsCockpit({ width, height, asideLabel, detailWanted })
+  // `hideAside` is passed to BOTH, or the probe answers with an aside the real layout will not draw
+  // and the action row is budgeted against a menu that is not there.
+  const fold = { asideLabel, hideAside: menuHidden }
+  const probe = sessionsCockpit({ width, height, detailWanted, ...fold })
   const actionRows = probe.aside > 0 ? 0 : height >= 12 ? 2 : height >= 8 ? 1 : 0
   const cockpit = actionRows === 0
     ? probe
-    : sessionsCockpit({ width, height: Math.max(1, height - actionRows), asideLabel, detailWanted })
+    : sessionsCockpit({ width, height: Math.max(1, height - actionRows), detailWanted, ...fold })
 
+  // The grid, decided HERE rather than beside the list's own arithmetic further down: both input
+  // handlers read it, and a value declared under them reads as "used before its declaration" to
+  // anyone editing this file, even though the closures run late.
+  //
+  // No scrollbar in cards mode — the pager is what says where you are — so it is measured against
+  // the pane's full body. `null` on a terminal too small for one whole card, and the LIST is drawn
+  // instead: the same degradation the aside menu makes when it is dropped rather than squeezed.
+  const cardsBody = paneBody(cockpit.list)
+  const band = cardBand({ listRows: cockpit.listRows, header: cockpit.header })
+  /**
+   * The words a card names its facts with — the very ones the list's column header prints, so the
+   * two layouts call one fact one thing.
+   *
+   * Composed once here rather than inside each card: the layout has to COUNT the lines before any
+   * card is drawn, and a second copy of this table is a second answer to what a card says.
+   */
+  const cardWords = useMemo(() => ({
+    attached: s.sessionsCardAttached,
+    blind: s.sessionsCardBlind,
+    worktree: s.sessionsCols.worktree,
+    project: s.sessionsCols.where,
+    task: s.sessionsCols.task,
+    note: s.sessionsNote,
+    model: s.sessionsModel,
+    // The clock arithmetic happens HERE, not in the pure module: a card repaints far more often
+    // than the poll runs, so a duration computed upstream would freeze at whatever it was.
+    ago: (startedAt: number) =>
+      s.sessionsAgo(Math.max(0, Math.round((Date.now() - startedAt) / 1000))),
+  }), [s])
+  /**
+   * Whether the grid draws the group HEADINGS the list draws.
+   *
+   * It costs a row of every band, so it is asked as a question the geometry can answer: measure the
+   * grid with that row charged to each band, and take the headings only if a whole card still fits.
+   * A region too short for both keeps the cards and gives them their group BADGE back — one of the
+   * two always says which group a card belongs to, and the fallback to the list is unchanged.
+   */
+  const wantHeadings = layout === 'cards' && rows.some(r => r.kind === 'heading')
+  /**
+   * How many lines each card will draw, so the frames are as tall as they have content for and no
+   * taller — the MAX sets the grid's ceiling, and `cardPages` sizes each band to its own tallest
+   * card inside it.
+   *
+   * Counted off the same `cardLines` the cards are drawn from, and off `badges`, which name each
+   * card's group whether or not the band ends up drawing a heading — so these numbers do not depend
+   * on the decision they feed.
+   */
+  const cardLineCounts = useMemo(() => (layout === 'cards'
+    ? cards.map((c, i) => cardLines(c, cardWords, badges[i] ?? '').length)
+    : []), [layout, cards, badges, cardWords])
+  const cardMaxLines = cardLineCounts.reduce((n, v) => Math.max(n, v), 0)
+  const headedGrid: CardGrid | null = wantHeadings && rows.length > 0
+    ? cardGrid({
+        width: cardsBody, height: band.gridRows, total: cards.length,
+        lines: cardMaxLines, headings: true,
+      })
+    : null
+  const headed = headedGrid !== null
+  const grid: CardGrid | null = layout === 'cards' && rows.length > 0
+    ? headedGrid
+      ?? cardGrid({ width: cardsBody, height: band.gridRows, total: cards.length, lines: cardMaxLines })
+    : null
+  const pages = useMemo(() => (grid
+    ? cardPages({
+        rows,
+        cols: grid.cols,
+        gridRows: band.gridRows,
+        cardHeight: grid.cardHeight,
+        lines: cardLineCounts,
+        capacity: grid.capacity,
+        headed,
+      })
+    : []),
+  [grid?.cols, grid?.cardHeight, grid?.capacity, band.gridRows, headed, rows, cardLineCounts])
+  // The page is the one holding the CURSOR — derived, never stored beside it. Turning a page is
+  // therefore moving the cursor, and there is no second position that can fall out of step.
+  const pageAt = pages.length > 0 ? pageOfCard(pages, Math.max(0, at)) : 0
+  const page: CardPage | null = pages[pageAt] ?? null
+  const pager = grid && page && band.pager
+    ? pagerCells({
+        label: s.sessionsPage(pageAt + 1, pages.length),
+        note: s.sessionsShowing(page.items.length, cards.length),
+        width: cardsBody,
+      })
+    : null
+
+
+  // Updated only when the PAGE changes, never on every cursor move: `setSessionView` writes
+  // `preferences.json` to disk, and a disk write per arrow key is not a thing this screen may do.
+  const pageAnchor = page ? cards[page.items[0] ?? 0]?.id : undefined
+  useEffect(() => {
+    if (pageAnchor && pageAnchor !== cardAnchor) setCardAnchor(pageAnchor)
+  }, [pageAnchor, cardAnchor])
 
   /** Run one verb, whether it arrived from a letter, an arrow key or a click. */
   const runAction = useCallback((a: SessionAction) => {
@@ -420,6 +634,17 @@ export function Sessions({
     // what the options were, or what the current one is, is a control people stop trusting — and
     // the hide-closed and hide-unfiled switches had nowhere to live at all.
     if (a === 'group') { setAsk({ kind: 'view' }); return }
+    // A FLEET verb: it names no row, so it must not be gated on one being selected. Refused in a
+    // SENTENCE when nothing fell, never silently — a control that does nothing and says nothing is
+    // indistinguishable from a broken one.
+    if (a === 'reopenFell') {
+      if (!fleet?.fell || !host.reopenFell) {
+        void run(async () => ({ ok: false, message: s.sessionsNoFell }))
+        return
+      }
+      setAsk({ kind: 'reopenFell' })
+      return
+    }
     if (!selected) return
     if (a === 'attach') return actOn('attach')
     if (a === 'resume') { setAsk({ kind: 'resume', session: selected }); return }
@@ -427,10 +652,27 @@ export function Sessions({
     // Asked rather than done: finishing is a statement about a whole piece of work, and the
     // confirmation is where the screen says what happens to its sessions.
     if (a === 'finishTask') { setAsk({ kind: 'finishTask', session: selected }); return }
+    // Refused in words rather than by a key that does nothing: pressing `y` on a session that is
+    // working is a reasonable thing to try, and the answer is "it is not asking anything", which is
+    // information. Two different refusals, because they are two different facts — the harness's
+    // dialog was never read, or this row is not blocked at all.
+    // `y` opens the ANSWER question wherever there is something to answer — a bare confirm on a
+    // plain dialog, the option picker on a numbered one. It refuses only where there is genuinely
+    // nothing: a session that is not blocked at all, or one whose harness nobody has read.
+    if (a === 'approve' && !selected.canApprove && !selected.canChoose) {
+      // A dialog whose options are readable but unpickable is a refusal that NAMES why and points
+      // at attaching, which works — so it opens the question rather than swallowing the keypress.
+      if ((selected.dialogOptions?.length ?? 0) > 1) return actOn('approve')
+      const why = selected.approveBlind ?? s.sessionsNotAsking
+      void run(async () => ({ ok: false, message: why }))
+      return
+    }
     return actOn(a)
-  }, [host, grouping, selected])
+  }, [host, grouping, selected, fleet?.fell, run, s])
 
-  const actOn = useCallback((kind: Ask['kind'] | 'attach') => {
+  // Only the kinds that NAME a session. `reopenFell` is a fleet question and is handled in
+  // `runAction`; routing it through here would hand it a row it must not act on.
+  const actOn = useCallback((kind: Extract<Ask, { session: ControlSession }>['kind'] | 'attach') => {
     if (!selected) return
     // Asking to ATTACH to something with nothing running is asking to pick that conversation back
     // up — so it is answered with the reopen question rather than refused. Pressing the one key
@@ -493,6 +735,7 @@ export function Sessions({
     setStates(null)
     setOrder(DEFAULT_ORDER)
     setHideDetail(false)
+    setLayout(DEFAULT_SESSION_VIEW.layout ?? 'list')
     setMarked(new Set())
     setHideEmptyTask(!DEFAULT_SESSION_VIEW.showUnfiled)
     setTaskFilter(null)
@@ -507,6 +750,7 @@ export function Sessions({
     if (!row) return
     if (row.kind === 'action') { if (row.enabled) runAction(row.action); return }
     if (row.kind === 'group') { setGrouping(row.value); setCursor(0); return }
+    if (row.kind === 'layout') { setLayout(row.value); return }
     if (row.kind === 'task') { setTaskFilter(row.name || null); setCursor(0); return }
     if (row.kind === 'project') { setProjectFilter(row.name || null); setCursor(0); return }
     if (row.kind === 'sort') {
@@ -563,9 +807,11 @@ export function Sessions({
     // The DIGITS jump straight to a menu section, from the list as well as from the menu — every
     // section wears its number, so this is a key the screen documents itself rather than one you
     // have to be told about. They work where the arrows are not available at all.
-    if (cockpit.aside > 0 && input >= '1' && input <= '9') {
+    // A digit brings the menu BACK as well as jumping to a section: the keys that reach the menu
+    // are the way out of having hidden it, so there is nothing extra to remember.
+    if (input >= '1' && input <= '9') {
       const n = Number(input) - 1
-      if (n < sections.length) { gotoSection(n); return }
+      if (n < sections.length) { setMenuHidden(false); gotoSection(n); return }
     }
 
     if (focus === 'aside' && cockpit.aside > 0) {
@@ -625,11 +871,33 @@ export function Sessions({
     // you fiddled with three weeks ago follow you around — and finding your way out of it one
     // toggle at a time means knowing what the defaults were.
     if (key.ctrl && input === 'r') { resetView(); return }
+    // `ctrl+a` beside `l`, and `ctrl+h` for the list of everything. Two keys for one switch is not
+    // duplication here: `l` is what the footer has room to name, and a chord is what someone
+    // reaches for without having read the footer at all.
+    if (key.ctrl && input === 'a') { setOnlyActive(v => !v); setCursor(0); return }
+    // Folding the menu answers TWO keys, and the second one is not a convenience.
+    //
+    // `ctrl+b` is tmux's DEFAULT PREFIX. Run in a plain terminal the cockpit receives it and this
+    // works — measured through the preview, which writes the real 0x02 byte. Run inside the user's
+    // own tmux it never arrives at all: intercepting the prefix is what a prefix IS, so the client
+    // consumes it and the pane is never told. This app already knows that, which is why it reads
+    // the real prefix from `show-options -g prefix` to tell people how to detach.
+    //
+    // A chord that silently does nothing for everyone who works inside tmux is exactly the "the
+    // command to hide the aside menu is not working" this was reported as. So plain `b` does it
+    // too, and it is the one the footer and the key list name.
+    if (input === 'b' || (key.ctrl && input === 'b')) { setMenuHidden(v => !v); return }
+    // `?` is the key, and `ctrl+h` is accepted where the terminal can tell it apart from backspace.
+    // It usually cannot: `ctrl+h` IS ASCII 8, which is the backspace byte, so Ink reports it as
+    // `key.backspace` and a binding on it would either never fire or fire on backspace. Measured
+    // here, not assumed. `?` has no such collision and is what every list-shaped TUI already uses.
+    if (input === '?' || (key.ctrl && input === 'h')) { setAsk({ kind: 'keys' }); return }
     if (input === 'v') return runAction('group')
     if (input === 'c') { setShowClosed(v => !v); setCursor(0); return }
     if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
     if (input === 'l') { setOnlyActive(v => !v); setCursor(0); return }
     if (input === 'd') { setHideDetail(v => !v); return }
+    if (input === 'f') { setLayout(l => (l === 'list' ? 'cards' : 'list')); return }
     // The HIGHLIGHTER. `space` because it is the mark key of every list that has one, and because
     // it is the only unclaimed key on this screen that a person reaches for without being told.
     if (input === ' ') {
@@ -654,6 +922,38 @@ export function Sessions({
     if (input === 'x') return runAction('kill')
     if (input === 'n') return runAction('rename')
     if (input === 't') return runAction('note')
+    // The two that act on a session WITHOUT entering it. `y` for yes and `p` for prompt, both
+    // unclaimed on this screen — and neither is a navigation key, which is the rule `x` exists for:
+    // a key that moves the cursor on one screen and writes into somebody's session on another is
+    // the shape of a real accident.
+    if (input === 'y') return runAction('approve')
+    if (input === 'p') return runAction('prompt')
+    // Capital `R`, so it cannot be hit while reaching for anything else. It is the one verb here
+    // that acts on the whole fleet.
+    if (input === 'R') return runAction('reopenFell')
+
+    // A grid has two axes, so the arrows mean what they mean in a grid: `←`/`→` step one card,
+    // `↑`/`↓` step a whole BAND of them. The list's own reducer wraps a single column, which in a
+    // grid would send the cursor from the top-left card to the bottom-RIGHT one.
+    if (grid && selectable.length > 0) {
+      const here = Math.max(0, at)
+      const to = (n: number) => setCursor(Math.max(0, Math.min(n, selectable.length - 1)))
+      // Band to band rather than by `cols`: with grouping on, a band holding a one-card group is
+      // shorter than the grid is wide, and stepping by `cols` jumped clean over the band below it.
+      const step = (dy: number) => to(cardStep(pages, here, dy))
+      if (key.leftArrow) return to(here - 1)
+      if (key.rightArrow) return to(here + 1)
+      if (key.upArrow || input === 'k') return step(-1)
+      if (key.downArrow || input === 'j') return step(1)
+      // The page is always the one holding the cursor, so turning a page IS moving the cursor —
+      // there is no second position to keep in sync with the first. Onto the page's FIRST card
+      // rather than a fixed number of cards along: with headings the pages hold different amounts.
+      if (key.pageUp) return to(pages[Math.max(0, pageAt - 1)]?.items[0] ?? 0)
+      if (key.pageDown) return to(pages[Math.min(pages.length - 1, pageAt + 1)]?.items[0] ?? here)
+      if (key.home || input === 'g') return to(0)
+      if (key.end || input === 'G') return to(selectable.length - 1)
+      return
+    }
 
     if (selectable.length > 0) {
       const next = resolveListKey(nav, Math.max(0, at), selectable.length)
@@ -688,8 +988,27 @@ export function Sessions({
     setStates(view.states ? new Set(view.states as SessionState[]) : null)
     setOrder((view.sort as SessionOrder | undefined) ?? DEFAULT_ORDER)
     setHideDetail(view.hideDetail ?? false)
+    // The DEFAULT, never a literal — same rule, same reason as `onlyActive` above.
+    setLayout(view.layout ?? DEFAULT_SESSION_VIEW.layout ?? 'list')
+    setCardAnchor(view.cardAnchor)
     setMarked(new Set(view.marked ?? []))
   }, [view])
+
+  /**
+   * Put the cursor back on the remembered page, ONCE, when the fleet finally arrives.
+   *
+   * Separate from the arrangement restore because it needs a different thing to have loaded: the
+   * arrangement comes from the host's status, the anchor can only be resolved against the sessions.
+   * An anchor no longer in the list — the session ended, a filter changed, the machine is another
+   * one — simply leaves the cursor where it is, which is page 0.
+   */
+  const anchored = useRef(false)
+  useEffect(() => {
+    if (anchored.current || cards.length === 0 || !view?.cardAnchor) return
+    anchored.current = true
+    const index = cards.findIndex(v => v.id === view.cardAnchor)
+    if (index >= 0) setCursor(index)
+  }, [cards, view?.cardAnchor])
 
   // Written whenever any part of the arrangement moves, rather than at each call site: four setters
   // that each had to remember to persist is four places for one to be forgotten. It waits for the
@@ -705,18 +1024,24 @@ export function Sessions({
     onView({
       grouping, showClosed, showExited, showUnfiled: !hideEmptyTask, showDone, onlyActive,
       hideDetail,
+      layout,
+      ...(cardAnchor ? { cardAnchor } : {}),
       ...(marked.size > 0 ? { marked: [...marked] } : {}),
       ...(states ? { states: [...states] } : {}),
       sort: order,
     })
   }, [grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
-      states, order, marked, onView, view])
+      layout, cardAnchor, states, order, marked, onView, view])
 
   useEffect(() => {
     if (!isActive) return
     // While a question is open the global keys stand down and the footer says only what works —
     // a hint for a key that does nothing is the one bug this footer exists to prevent.
-    onChrome(ask
+    onChrome(restoring
+      // The offer owns the keyboard and answers exactly two keys. It says so on the pane itself;
+      // the footer must not contradict it with a strip of verbs that do nothing.
+      ? { capture: true, hints: [s.keyRestoreAnswer] }
+      : ask
       ? { capture: true, hints: [s.keyBack] }
       : focus === 'aside' && cockpit.aside > 0
         // The menu is a vertical list, so it answers ↑↓ and enter — and `esc` is the way back to the
@@ -736,12 +1061,22 @@ export function Sessions({
             hints: [
               s.keyQuit, s.keyTabsAlt, s.keySessionsActions, s.keyAsideSection,
               s.keySessionsAttach, s.keyMove,
+              // Named only where the key actually does something on the selected row. The footer is
+              // the only documentation this screen has, and a hint for an inert key is the one bug
+              // it exists to prevent.
+              ...(selected?.canApprove || selected?.canChoose ? [s.keySessionsApprove] : []),
+              ...(canPrompt ? [s.keySessionsPrompt] : []),
               s.keySessionsSearch, s.keySessionsNew, s.keySessionsGroup, s.keySessionsClosed,
               ...(grouping === 'task' ? [s.keySessionsNoTask] : []),
+              // Named only while the menu is THERE to fold: on a narrow terminal the aside is
+              // dropped anyway, and a hint for a key with nothing to act on is the one bug this
+              // footer exists to prevent.
+              ...(cockpit.aside > 0 || menuHidden ? [s.keySessionsFold] : []),
               s.keySessionsReset,
             ],
           })
-  }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping])
+  }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping,
+      selected?.canApprove, selected?.canChoose, canPrompt, menuHidden, restoring])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
@@ -815,10 +1150,50 @@ export function Sessions({
       // The summary row states what is being shown; the controls live in the view panel, which a
       // click on that row opens. One place to change these, rather than two that can disagree.
       if (cockpit.summary && y === 0) { setAsk({ kind: 'view' }); return }
-      const row = offset + (y - (cockpit.summary ? 1 : 0))
+      if (grid && page) {
+        // Resolved against the very grid that drew the cards: the pane's frame and the summary row
+        // are both paid for here rather than assumed, or the click answers with the card above the
+        // one that was pointed at.
+        const gy = y - (cockpit.summary ? 1 : 0)
+        const gx = p.x - listX - PANE_EDGE_X
+        // Measured off the bands actually on this page, never off `rows * cardHeight`: a heading
+        // costs a row and a short group's band still costs a whole one, so the pager does not sit
+        // where a uniform grid would have put it.
+        if (pager && gy === cardPageRows(page.bands)) {
+          const hit = pagerHit(pager, gx)
+          // Turning a page IS moving the cursor — the page is derived from it, so there is nothing
+          // else to set and nothing that can fall out of step.
+          if (hit) {
+            const next = pages[hit === 'next' ? pageAt + 1 : pageAt - 1]
+            if (next) setCursor(Math.min(next.items[0] ?? 0, selectable.length - 1))
+          }
+          return
+        }
+        const index = cardHit({
+          bands: page.bands,
+          cardWidth: grid.cardWidth,
+          gap: grid.gap,
+          x: gx,
+          y: gy,
+        })
+        if (index !== null && index < selectable.length) setCursor(index)
+        return
+      }
+      // The column HEADER is paid for as well as the summary row. Without it every click in the
+      // list answered with the row ABOVE the one under the pointer — the grid branch above returns
+      // first, and cards draw no header, so this is the list path's arithmetic alone.
+      const row = offset + (y - (cockpit.summary ? 1 : 0) - (cockpit.header ? 1 : 0))
       if (row < 0 || row >= rows.length) return
       const found = selectable.indexOf(row)
-      if (found >= 0) setCursor(found)
+      if (found < 0) return
+      setCursor(found)
+      // The X at the right edge. It SELECTS the row first and then asks — so the confirmation names
+      // the session under the pointer, never the one that happened to be selected before.
+      const entry = rows[row]
+      const onClose = closeCell > 0 && p.x >= listX + PANE_EDGE_X + listBody - 1
+      if (onClose && entry?.kind === 'session' && canClose(entry.session)) {
+        setAsk({ kind: 'kill', session: entry.session })
+      }
       return
     }
 
@@ -837,6 +1212,23 @@ export function Sessions({
     }
   }, { isActive })
 
+  /**
+   * How long ago each row that is NOT running began, already localized.
+   *
+   * Computed here because the clock lives here: the host reports the INSTANT a session started and
+   * this pane repaints far more often than the poll runs, so a duration computed upstream would
+   * freeze at whatever it was when the host last looked.
+   */
+  const ages = useMemo(() => {
+    const now = Date.now()
+    const out = new Map<string, string>()
+    for (const v of fleet?.sessions ?? []) {
+      const age = sessionAge(v, now, secs => s.sessionsAgo(secs))
+      if (age) out.set(v.id, age)
+    }
+    return out
+  }, [fleet?.sessions, s])
+
   const offset = windowOffset(at < 0 ? 0 : selectable[at]!, rows.length, cockpit.listRows)
   const visible = rows.slice(offset, offset + cockpit.listRows)
   /**
@@ -849,8 +1241,25 @@ export function Sessions({
    */
   const runningCount = (fleet?.sessions ?? []).filter(sessionRunning).length
   const narrowed = Boolean(query || projectFilter !== null || taskFilter !== null)
+  /**
+   * How long ago the fall was, already localized — `undefined` when nothing fell.
+   *
+   * The clock lives here for the same reason every other age on this screen does: the host reports
+   * the INSTANT, and this pane repaints far more often than the poll runs.
+   */
+  const fellAgo = fleet?.fell
+    ? s.sessionsAgo(Math.max(0, Math.round((Date.now() - fleet.fell.atMs) / 1000)))
+    : undefined
   const emptyReason = onlyActive && runningCount === 0 && (fleet?.sessions.length ?? 0) > 0
-    ? s.sessionsEmptyActive(fleet!.sessions.length)
+    // The strict filter empties the list on exactly the machine that has just rebooted, and the
+    // sessions it is withholding are the ones somebody most wants back. So when a fall is on record
+    // the sentence names IT and the key that reopens it, rather than only the switch that would
+    // reveal the rows. The filter is not overridden — `only active` means what it says, no
+    // exceptions — but a blank pane must not be the only thing standing between a user and their
+    // work.
+    ? (fleet!.fell && fellAgo
+        ? `${s.sessionsEmptyActive(fleet!.sessions.length)} · ${s.sessionsFellNote(fleet!.fell.count, fellAgo)}`
+        : s.sessionsEmptyActive(fleet!.sessions.length))
     : narrowed ? s.sessionsEmptyFiltered
     : s.sessionsEmpty
 
@@ -858,6 +1267,12 @@ export function Sessions({
   // full pane and then drawn beside a bar is a table truncated by one character on every row.
   const listBar = scrollBar({ offset, total: rows.length, rows: cockpit.listRows })
   const listBody = paneBody(cockpit.list) - (listBar.length > 0 ? 1 : 0)
+  // Reserved BEFORE the columns are measured: a control drawn after a table that already spent the
+  // full width is a control drawn on top of the last cell.
+  const closeCell = closeCellWidth(
+    visible.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
+    listBody,
+  )
 
   // Slicing from zero would leave the view switches below the fold on a short terminal — invisible,
   // and still the thing `enter` would act on.
@@ -877,14 +1292,15 @@ export function Sessions({
       visible.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
       // The CONTENT width, not the pane's: measuring against the frame made every column four
       // characters wider than the row it was drawn into, and the table survived only because Ink
-      // truncated it.
-      listBody,
+      // truncated it. Minus whatever the close control took.
+      listBody - closeCell,
       {
         groupedByTask: grouping === 'task',
+        ages,
         ...(cockpit.header ? { headings: s.sessionsCols } : {}),
       },
     ),
-    [visible, listBody, grouping, cockpit.header, s],
+    [visible, listBody, closeCell, grouping, cockpit.header, ages, s],
   )
 
   // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
@@ -906,6 +1322,42 @@ export function Sessions({
           onHideEmptyTask={v => { setHideEmptyTask(v); setCursor(0) }}
           onClose={() => setAsk(null)}
         />
+      </Box>
+    )
+  }
+
+  /**
+   * The offer, made ONCE and only when there is something to offer.
+   *
+   * It comes before the list because it is about the list: after a crash the fleet you are looking
+   * at is not the one you left, and finding that out by noticing what is missing is worse than
+   * being told. Declining retires those rows, so the same modal never greets you twice.
+   */
+  if (restoring) {
+    return (
+      <Box flexDirection="column" width={width} flexShrink={0}>
+        <RestoreOffer
+          rows={restorable}
+          strings={s}
+          width={width}
+          height={height}
+          isActive={isActive}
+          onAnswer={accept => {
+            setRestoreAsked(true)
+            const restore = host.restoreSessions
+            if (!restore) return
+            void run(() => restore.call(host, restorable.map(r => r.id), accept))
+              .then(onRefreshFleet)
+          }}
+        />
+      </Box>
+    )
+  }
+
+  if (ask?.kind === 'keys') {
+    return (
+      <Box flexDirection="column" width={width} flexShrink={0}>
+        <KeyHelpScreen strings={s} width={width} height={height} onClose={() => setAsk(null)} />
       </Box>
     )
   }
@@ -1037,22 +1489,29 @@ export function Sessions({
           showClosed={showClosed}
           hideEmptyTask={grouping === 'task' ? hideEmptyTask : null}
           onlyActive={onlyActive}
+          // How many rows are ON SCREEN, counted from the very list being drawn. The header used to
+          // read the fleet's length, so with `only active` on it announced 44 over a screen showing
+          // ten — a number describing a screen nobody is looking at.
+          shown={rows.reduce((n, r) => n + (r.kind === 'session' ? 1 : 0), 0)}
           query={query}
           scope={projectFilter ?? taskFilter ?? ''}
+          fell={fleet?.fell && fellAgo ? s.sessionsFellNote(fleet.fell.count, fellAgo) : ''}
         />
       ) : null}
 
       {/* What each cell IS. The row was six aligned columns of unlabelled text — the alignment made
           it scannable and the labels are what make it readable, and they are drawn from the very
           same measured widths so the heading can never sit over the wrong column. */}
-      {cockpit.header && rows.length > 0 ? (
+      {cockpit.header && rows.length > 0 && !grid ? (
         <Text dimColor wrap="truncate">
           {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')
             + padCell(s.sessionsCols.state, columns.state)}
           {columns.title > 0 ? '  ' + padCell(s.sessionsCols.title, columns.title) : ''}
+          {columns.age > 0 ? '  ' + padCell(s.sessionsCols.age, columns.age) : ''}
           {columns.worktree > 0 ? '  ' + padCell(s.sessionsCols.worktree, columns.worktree) : ''}
           {columns.task > 0 ? '  ' + padCell(s.sessionsCols.task, columns.task) : ''}
           {columns.metrics > 0 ? '  ' + padCell(s.sessionsCols.metrics, columns.metrics) : ''}
+          {columns.context > 0 ? '  ' + padCell(s.sessionsCols.context, columns.context) : ''}
           {columns.harness > 0 ? '  ' + padCell(s.sessionsCols.harness, columns.harness) : ''}
           {columns.where > 0 ? '  ' + padCell(s.sessionsCols.where, columns.where) : ''}
         </Text>
@@ -1073,6 +1532,42 @@ export function Sessions({
           {fleet.unavailable ? ''
             : truncate(emptyReason, listBody)}
         </Text>
+      ) : grid && page ? (
+        <Box flexDirection="column" width={cardsBody} flexShrink={0}>
+          {/* One band per group, and the air to the right of a short group is DELIBERATE: it is
+              what separates one group from the next, and filling it with the following group's
+              cards is exactly how this grid used to ignore the grouping it was drawn under. */}
+          {page.bands.map((b, i) => (b.kind === 'heading' ? (
+            <GroupHeading key={`h${i}`} band={b} width={cardsBody} />
+          ) : (
+            <Box key={`b${i}`} flexDirection="row" height={b.height} flexShrink={0}>
+              {b.items.map((index, c) => {
+                const card = cards[index]
+                if (!card) return null
+                return (
+                  <Box key={card.id} flexDirection="row" flexShrink={0}>
+                    {c > 0 ? <Box width={grid.gap} flexShrink={0} /> : null}
+                    <SessionCard
+                      session={card}
+                      // The group is named ONCE: by the heading over the band when there is one,
+                      // and by the card's own title when there is not. The card is told both which
+                      // group it is in and whether the band already said so — the same rule that
+                      // drops the list's `task` cell while grouping by task.
+                      group={badges[index] ?? ''}
+                      headed={headed}
+                      selected={selected?.id === card.id}
+                      marked={marked.has(card.id)}
+                      width={grid.cardWidth}
+                      height={b.height}
+                      words={cardWords}
+                    />
+                  </Box>
+                )
+              })}
+            </Box>
+          )))}
+          {pager ? <Pager cells={pager} /> : null}
+        </Box>
       ) : (
         // NO fixed height: the rows pack upward so nothing sits at the bottom of a tall pane with a
         // field of blank above it. The leftover space belongs at the very bottom of the frame.
@@ -1102,8 +1597,10 @@ export function Sessions({
                 session={row.session}
                 selected={selected?.id === row.session.id}
                 marked={marked.has(row.session.id)}
+                ages={ages}
                 columns={columns}
                 width={listBody}
+                closeCell={closeCell}
               />
             )
           })}
@@ -1144,9 +1641,11 @@ export function Sessions({
         >
           {ask ? (
             <Question
-              ask={ask as Exclude<Ask, { kind: 'new' } | { kind: 'view' }>}
+              ask={ask as Exclude<Ask, { kind: 'new' } | { kind: 'view' } | { kind: 'keys' }>}
               strings={s}
               width={paneBody(width)}
+              rows={paneRows(cockpit.detail)}
+              fellAgo={fellAgo}
               onClose={() => setAsk(null)}
               onRun={(fn, label) => {
                 setAsk(null)
@@ -1191,7 +1690,7 @@ export function Sessions({
  * to state the answer, so a glance tells you why the list looks the way it does.
  */
 function SummaryRow({
-  fleet, grouping, strings: s, width, showClosed, hideEmptyTask, onlyActive, query, scope,
+  fleet, grouping, strings: s, width, showClosed, hideEmptyTask, onlyActive, shown, query, scope, fell,
 }: {
   fleet: ControlSessions | null | undefined
   grouping: SessionGrouping
@@ -1202,10 +1701,20 @@ function SummaryRow({
   hideEmptyTask: boolean | null
   /** The strict switch, which withholds more than the other two together. */
   onlyActive: boolean
+  /** Rows actually drawn, counted from the drawn list rather than from the fleet. */
+  shown: number
   /** The active search, or `''`. Stated HERE because a list narrowed silently reads as an empty one. */
   query: string
   /** The active task or project scope, already localized, or `''`. */
   scope: string
+  /**
+   * Already-localized "N sessions fell X ago — R reopens them", or `''`.
+   *
+   * On this row rather than only in the empty state, because the list is NOT always empty after a
+   * fall: a machine where one session survived, or where the history switches are on, shows rows —
+   * and the offer to get the rest back would then have no place to be said at all.
+   */
+  fell: string
 }) {
   if (fleet?.unavailable) {
     return <Text color={COLORS.accent} wrap="truncate">{truncate(fleet.unavailable, width)}</Text>
@@ -1234,8 +1743,9 @@ function SummaryRow({
   const cells = summaryCells({
     group: narrowed || `${s.sessionsGroupBy} ${s.sessionsGroupings[grouping]}`,
     hiding: hiding.length > 0 ? `− ${hiding.join(', ')}` : '',
-    count: s.sessionsCount(fleet?.sessions.length ?? 0),
+    count: s.sessionsCount(shown, fleet?.sessions.length ?? 0),
     waiting: waiting > 0 ? s.sessionsWaitingCount(waiting) : '',
+    fell,
     width,
   })
 
@@ -1251,6 +1761,10 @@ function SummaryRow({
           </>
         )}
         {cells.hiding ? <Text dimColor>{`   ${cells.hiding}`}</Text> : null}
+        {/* The fall is an OFFER, not a description, so it is the one cell on this row that wears a
+            colour: everything beside it says what the list contains, and this says what is one
+            keypress from coming back. */}
+        {cells.fell ? <Text color={COLORS.info} bold>{`   ${cells.fell}`}</Text> : null}
       </Text>
       <Text wrap="truncate">
         <Text dimColor>{cells.count}</Text>
@@ -1262,13 +1776,17 @@ function SummaryRow({
   )
 }
 
-function SessionRowView({ session, selected, marked, columns, width }: {
+function SessionRowView({ session, selected, marked, ages, columns, width, closeCell }: {
   session: ControlSession
   selected: boolean
+  /** Already-localized ages by session id — this component owns no clock and no strings. */
+  ages: ReadonlyMap<string, string>
   /** The user's own highlight. Survives re-sorting, and outlives the cursor moving away. */
   marked: boolean
   columns: SessionColumns
   width: number
+  /** Columns reserved at the right edge for the close control — `0` when there is none. */
+  closeCell: number
 }) {
   // `harness` is a plain string here because it can be EMPTY — a session the registry has
   // forgotten runs a harness nobody recorded. An empty one simply gets no colour.
@@ -1303,6 +1821,11 @@ function SessionRowView({ session, selected, marked, columns, width }: {
           {gap + padCell(session.title, columns.title)}
         </Text>
       ) : null}
+      {/* How long ago it started, on rows that are NOT running — the age is most of the "reopen
+          this or not" decision, and it lived only in the detail pane. */}
+      {columns.age > 0 ? (
+        <Text dimColor>{gap + padCell(ages.get(session.id) ?? '', columns.age)}</Text>
+      ) : null}
       {/* A linked WORKTREE says so, because it changes what the row IS: three rows of one repo in
           three directories are three checkouts, and without the word they read as three projects.
           The word, never a glyph alone — a distinction announced in a symbol is one that has to be
@@ -1323,12 +1846,275 @@ function SessionRowView({ session, selected, marked, columns, width }: {
       {columns.metrics > 0 ? (
         <Text color={COLORS.secondary}>{gap + padCell(sessionMetric(session), columns.metrics)}</Text>
       ) : null}
+      {/* How full the context window is. Beside the usage because it is the same kind of fact and
+          the opposite reading of it: usage is what this session has spent, this is what it has
+          left. A row with no reading draws a BLANK of the same width rather than a `0%` — the
+          column exists because some rows can answer, not because all of them can. */}
+      {columns.context > 0 ? (
+        <Text color={session.context ? CONTEXT_COLOR[contextLevel(session.context.fraction)] : undefined}
+              dimColor={!session.context || contextLevel(session.context.fraction) === 'ok'}>
+          {gap + padCell(sessionContext(session), columns.context)}
+        </Text>
+      ) : null}
       {columns.harness > 0 ? (
         <Text color={harnessColor}>{gap + padCell(session.harness, columns.harness)}</Text>
       ) : null}
       {columns.where > 0 ? (
         <Text dimColor>{gap + padCell(session.projectGroup || session.project, columns.where)}</Text>
       ) : null}
+      {/* The close control, at the right edge and only on a row that can take it. It asks before
+          it acts — the same confirmation `x` opens, because a one-click stop on a list that
+          re-sorts under the pointer every five seconds is a session ended by accident. */}
+      {closeCell > 0 ? (
+        <Text color={canClose(session) ? COLORS.danger : undefined}>
+          {' ' + (canClose(session) ? CLOSE_CELL : ' ')}
+        </Text>
+      ) : null}
+    </Text>
+  )
+}
+
+/**
+ * "Your last sessions were these — start them again?"
+ *
+ * Every row is NAMED, because the answer is a decision about specific work and a count is not
+ * enough to make it with: three sessions in a repository you have finished with and one you were
+ * in the middle of are the same "4" on screen.
+ */
+function RestoreOffer({ rows, strings: s, width, height, isActive, onAnswer }: {
+  rows: readonly RestoreCandidate[]
+  strings: ControlStrings
+  width: number
+  height: number
+  isActive: boolean
+  onAnswer: (accept: boolean) => void
+}) {
+  useInput((_i, key) => {
+    if (key.return) return onAnswer(true)
+    if (key.escape) return onAnswer(false)
+  }, { isActive })
+
+  const now = Date.now()
+  // Two rows of chrome above and two below; what is left is the list, and a list longer than that
+  // says how many it could not show rather than drawing over the answer.
+  const page = Math.max(1, height - 5)
+
+  return (
+    <Pane title={s.sessionsPaneRestore} focused width={width} height={height}>
+      <Text bold wrap="truncate">{truncate(s.restoreTitle(rows.length), paneBody(width))}</Text>
+      <Text> </Text>
+      {rows.slice(0, page).map(r => (
+        <Text key={r.id} wrap="truncate">
+          <Text color={COLORS.accent}>{'  ' + r.label}</Text>
+          <Text dimColor>{`  ${r.harness}  ${r.project}`}</Text>
+          {r.startedAt !== undefined ? (
+            <Text dimColor>
+              {`  ${s.sessionsAgo(Math.max(0, Math.round((now - r.startedAt) / 1000)))}`}
+            </Text>
+          ) : null}
+        </Text>
+      ))}
+      {rows.length > page ? <Text dimColor>{`  … +${rows.length - page}`}</Text> : null}
+      <Text> </Text>
+      <Text wrap="truncate">{truncate(s.restoreAnswer, paneBody(width))}</Text>
+    </Pane>
+  )
+}
+
+/**
+ * Every key this screen answers, on one screen.
+ *
+ * The footer names the handful that fit; this is the rest. It reads the SAME list the pure module
+ * owns, so a key that exists and is not here would have to be left out of that list deliberately.
+ */
+function KeyHelpScreen({ strings: s, width, height, onClose }: {
+  strings: ControlStrings
+  width: number
+  height: number
+  onClose: () => void
+}) {
+  useInput((_i, key) => { if (key.escape || key.return) onClose() })
+
+  const rows = useMemo(() => sessionKeyHelp(s.sessionsKeyWhat), [s])
+  const keyCol = keyHelpColumn(rows)
+  // Two rows of chrome: the title and the blank under it. Budgeted, because Ink composites what
+  // does not fit rather than clipping it.
+  const page = Math.max(1, height - 3)
+
+  return (
+    <Pane title={s.sessionsPaneKeys} focused width={width} height={height}>
+      {rows.slice(0, page).map(r => (
+        <Text key={r.keys} wrap="truncate">
+          <Text color={COLORS.accent}>{padCell(r.keys, keyCol)}</Text>
+          <Text dimColor>{'  ' + truncate(r.what, Math.max(1, paneBody(width) - keyCol - 2))}</Text>
+        </Text>
+      ))}
+      {rows.length > page ? <Text dimColor>{`… +${rows.length - page}`}</Text> : null}
+    </Pane>
+  )
+}
+
+/**
+ * The name of a group, over the band holding its cards.
+ *
+ * Drawn exactly as the LIST draws its headings — accented and bold, with a dim rule running to the
+ * edge — because it is the same heading: both layouts read it off the same `sessionRows`, and a
+ * grouping that looked like two different things in two layouts would be two features.
+ */
+function GroupHeading({ band, width }: {
+  band: Extract<CardBand, { kind: 'heading' }>
+  width: number
+}) {
+  const head = `${band.label}  ${band.count}`
+  const rule = Math.max(0, width - head.length - 3)
+  return (
+    <Text wrap="truncate">
+      <Text color={band.muted ? COLORS.muted : COLORS.secondary} bold={!band.muted}>
+        {truncate(head, width)}
+      </Text>
+      <Text dimColor>{rule > 0 ? `  ${'─'.repeat(rule)}` : ''}</Text>
+    </Text>
+  )
+}
+
+/**
+ * One session as a card — the same `Pane` every other framed region of this app uses.
+ *
+ * The frame names the card with what identifies it HERE and badges it with what identifies it
+ * elsewhere. Which is which depends on whether the band above already says the group:
+ *
+ *  - **Grouped**: the heading names the project, so the title is the HANDLE and there is no badge.
+ *  - **Ungrouped**: the title is the PROJECT — the thing a person scans a wall of cards for — and
+ *    the handle moves to the badge. It never simply disappears: it is the prefix
+ *    `agentop session attach 3f5f` resolves, and the only thing on the card naming this session to
+ *    anything outside this screen. So the project is cut to `paneTitleRoom` to leave space for it,
+ *    rather than taking the space and letting `paneTop`'s whole-or-nothing badge rule drop it.
+ *
+ * A conversation agentop did not start has no handle at all, and gets no badge rather than a
+ * stand-in: the harness is already on its state line, and five characters of a synthetic id would
+ * offer a handle the CLI cannot resolve.
+ *
+ * The lines come from the pure `cardLines`, cut from the bottom by `fitCardLines`, so what the card
+ * gives up on a short terminal is decided in one place and tested there.
+ */
+function SessionCard({ session, group, headed, selected, marked, width, height, words }: {
+  session: ControlSession
+  /** The group this card belongs to — the heading's own words, or the project when there is none. */
+  group: string
+  /** True while the band above already names that group, so the card must not repeat it. */
+  headed: boolean
+  selected: boolean
+  marked: boolean
+  width: number
+  height: number
+  /** The already-localized words, composed once by the screen — see `cardWords`. */
+  words: CardLabels
+}) {
+  const inner = paneBody(width)
+  const lines = fitCardLines(cardLines(session, words, group), paneRows(height))
+  const handle = sessionHandle(session)
+  // Grouped: the handle IS the title. Ungrouped: the project leads and the handle badges it.
+  const title = headed ? handle || session.harness : group || handle || session.harness
+  const badge = headed ? '' : handle
+
+  return (
+    <Pane
+      title={truncate(title, paneTitleRoom(badge, width))}
+      // Fitted HERE rather than left to `paneTop`, whose badge rule is whole-or-nothing: the handle
+      // is the only place a card carries the name the CLI resolves, so it is truncated rather than
+      // dropped. `paneBadgeRoom` is that frame's own arithmetic.
+      badge={truncate(badge, paneBadgeRoom(title, width))}
+      focused={selected}
+      width={width}
+      height={height}
+    >
+      {lines.map(line => (
+        <CardLineView
+          key={line.key}
+          line={line}
+          width={inner}
+          labelWidth={cardLabelWidth(lines, inner)}
+          marked={marked}
+          selected={selected}
+          stateColor={STATE_COLOR[session.state]}
+          bold={session.state === 'waiting-approval'}
+        />
+      ))}
+    </Pane>
+  )
+}
+
+/**
+ * One line of a card. The state keeps its colour and its WORD, exactly as the row does.
+ *
+ * A labelled line pads its label to `labelWidth` so every value on the card starts at one column —
+ * `labelWidth` is `0` when the card is too narrow to name its facts and keep them readable, and then
+ * every line draws bare. The lines that name themselves (the title, the state, the usage, what the
+ * assistant is saying) take no indent: they are the card's headline, and pushing them right to line
+ * up with a label they do not have would spend the width for nothing.
+ */
+function CardLineView({ line, width, labelWidth, marked, selected, stateColor, bold }: {
+  line: CardLine
+  width: number
+  /** Columns the label column takes, or `0` to draw no labels at all. */
+  labelWidth: number
+  marked: boolean
+  selected: boolean
+  stateColor: string | undefined
+  bold: boolean
+}) {
+  if (line.kind === 'state') {
+    const cells = cardStateCells(line.text, line.tail ?? '', width)
+    return (
+      <Text wrap="truncate">
+        <Text color={stateColor} bold={bold}>{cells.state}</Text>
+        <Text dimColor>{cells.tail}</Text>
+      </Text>
+    )
+  }
+  if (line.kind === 'title') {
+    return (
+      <Text wrap="truncate" color={selected ? COLORS.accent : marked ? COLORS.info : undefined} bold>
+        {truncate(line.text, width)}
+      </Text>
+    )
+  }
+  const label = labelWidth > 0 && line.label ? line.label : ''
+  const room = label === '' ? width : Math.max(1, width - labelWidth - CARD_LABEL_GAP)
+  // The gauge carries its own level, so it is coloured by what it SAYS rather than by what kind of
+  // line it is — the one line on the card whose colour is a reading rather than a role. It is drawn
+  // unlabelled, like the `usage` line it sits under and shares a subject with, but it is measured
+  // against `room` rather than `width` so a label added later cannot push it off its own line.
+  if (line.kind === 'gauge') {
+    const color = CONTEXT_COLOR[line.level ?? 'ok']
+    return (
+      <Text wrap="truncate" color={color} dimColor={color === undefined}>
+        {truncate(line.text, room)}
+      </Text>
+    )
+  }
+  // What the assistant said is drawn in the text colour: it is the content, and every other line is
+  // a label for it.
+  return (
+    <Text wrap="truncate">
+      {label === '' ? null : (
+        <Text dimColor>{padCell(label, labelWidth) + ' '.repeat(CARD_LABEL_GAP)}</Text>
+      )}
+      <Text color={line.kind === 'say' ? COLORS.text : COLORS.secondary}>
+        {truncate(line.text, room)}
+      </Text>
+    </Text>
+  )
+}
+
+/** Which page, how much of the fleet is on it, and the two arrows that move it. */
+function Pager({ cells }: { cells: PagerCells }) {
+  return (
+    <Text wrap="truncate">
+      <Text color={COLORS.accent}>{cells.prev ? `${cells.prev} ` : ''}</Text>
+      <Text bold>{cells.label}</Text>
+      <Text color={COLORS.accent}>{cells.next ? ` ${cells.next}` : ''}</Text>
+      <Text dimColor>{cells.note ? `   ${cells.note}` : ''}</Text>
     </Text>
   )
 }
@@ -1379,11 +2165,17 @@ function Detail({ lines, width, rows }: {
  * In place of the facts rather than over them: a modal floating above a list is a second thing to
  * read at the moment the user is deciding, and the row being acted on stays visible above.
  */
-function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery, fleet }: {
+function Question({
+  ask, strings: s, width, rows, fellAgo, onClose, onRun, host, query, onQuery, fleet,
+}: {
   /** Never `new` — the wizard takes the whole screen and is rendered before this is reached. */
-  ask: Exclude<Ask, { kind: 'new' } | { kind: 'view' }>
+  ask: Exclude<Ask, { kind: 'new' } | { kind: 'view' } | { kind: 'keys' }>
   strings: ControlStrings
   width: number
+  /** Rows this pane was actually given — what the dialog preview is cut against. */
+  rows: number
+  /** How long ago the fall was, already localized. Absent when nothing fell. */
+  fellAgo?: string
   onClose: () => void
   onRun: (fn: () => Promise<ActionResult>, label?: string) => void
   host: ControlHost
@@ -1413,7 +2205,147 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
     )
   }
 
+  // The FLEET question: it names no session, so it is answered before `session` is reached at all.
+  if (ask.kind === 'reopenFell') {
+    const fell = fleet?.fell
+    return (
+      <ConfirmPrompt
+        // The count AND when. A fall from three days ago is a perfectly legitimate thing to offer,
+        // and an offer that does not say when reads as one that just happened.
+        label={s.sessionsFellConfirm(fell?.count ?? 0, fellAgo ?? '')}
+        yesLabel={s.yes}
+        noLabel={s.no}
+        width={width}
+        height={rows}
+        onCancel={onClose}
+        onAnswer={(yes: boolean) => {
+          const reopen = host.reopenFell
+          if (!yes || !reopen) return onClose()
+          onRun(() => reopen.call(host), s.actSessions.reopenFell)
+        }}
+      />
+    )
+  }
+
   const { session } = ask
+
+  /**
+   * Answering the dialog a session is blocked on — the only question here that shows EVIDENCE.
+   *
+   * Two shapes, because the dialogs are two shapes:
+   *
+   *  - **It offers OPTIONS.** They are listed and one is picked, and the picked one is what gets
+   *    sent. There is no "approve" here to offer: a session asking "only my fix / promote
+   *    everything / stop in dev / type something" has four answers that do different work, and a key
+   *    that took the highlighted row would be choosing between them for the user. That was the
+   *    defect, and it was reported by somebody looking at exactly that dialog.
+   *  - **It offers nothing to choose between** — codex's `Press enter to continue`. Then it really
+   *    is a confirmation, and the dialog is shown above it because the confirm key still takes
+   *    whatever is on the screen.
+   */
+  if (ask.kind === 'approve') {
+    const options = session.dialogOptions ?? []
+    // What is left for the dialog once the question has taken its rows. Cut from the TOP, so the
+    // options and the footer — the part being answered — are what survives a short pane.
+    const room = Math.max(0, rows - QUESTION_ROWS - 1)
+    const preview = fitApprovalPreview(session.approvalLines ?? [], room)
+    const evidence = preview.length > 0 ? (
+      <>
+        <Text dimColor>{truncate(s.sessionsApproveWhat, width)}</Text>
+        {preview.map((line, i) => (
+          <Text key={`ap${i}`} wrap="truncate" color={COLORS.text}>{truncate(line, width)}</Text>
+        ))}
+      </>
+    ) : null
+
+    if (options.length > 1) {
+      // No verified way to pick on this harness. Refused in WORDS, naming what does work — a
+      // refusal you can act on beats a verb that silently answers for you.
+      if (!session.canChoose) {
+        return (
+          <Box flexDirection="column" width={width}>
+            {evidence}
+            {/* WRAPPED, not truncated: this is the whole content of the answer, and a refusal cut
+                off at "nobody has verified how to pick an option on ge…" tells nobody anything.
+                Bounded so it cannot grow over the rows the pane was given. */}
+            <WrappedText
+              text={session.chooseBlind ?? s.sessionsChooseBlind}
+              width={width}
+              maxRows={Math.max(1, rows - preview.length - 2)}
+            />
+            <Text dimColor wrap="truncate">{truncate(s.sessionsChooseAttach, width)}</Text>
+          </Box>
+        )
+      }
+      return (
+        <Box flexDirection="column" width={width}>
+          {evidence}
+          <Menu
+            // `Menu` numbers its own rows from 1, and the parser guarantees the options ARE `1..n`
+            // in order — so the number beside a row here is the same number the session printed
+            // beside it. Adding the option's number to the label would print it twice.
+            items={options.map(o => ({
+              label: o.label,
+              value: String(o.number),
+              ...(o.selected ? { hint: s.sessionsChoiceHighlighted } : {}),
+            }))}
+            width={width}
+            // The row the dialog is highlighting, so pressing enter straight away does what
+            // attaching and pressing enter would have done — and nothing else does.
+            initialIndex={Math.max(0, options.findIndex(o => o.selected))}
+            height={Math.max(2, rows - preview.length - (preview.length > 0 ? 1 : 0))}
+            isActive
+            onCancel={onClose}
+            onSelect={value => {
+              const answer = host.answerSession
+              if (!answer) return onClose()
+              onRun(() => answer.call(host, session.id, Number(value)), s.actSessions.approve)
+            }}
+          />
+        </Box>
+      )
+    }
+
+    return (
+      <Box flexDirection="column" width={width}>
+        {evidence}
+        <ConfirmPrompt
+          label={`${s.sessionsApproveConfirm(session.title)} ${s.sessionsApproveCaveat}`}
+          yesLabel={s.yes}
+          noLabel={s.no}
+          width={width}
+          height={Math.max(QUESTION_ROWS, rows - preview.length - (preview.length > 0 ? 1 : 0))}
+          onCancel={onClose}
+          onAnswer={(yes: boolean) => {
+            const answer = host.answerSession
+            if (!yes || !answer) return onClose()
+            onRun(() => answer.call(host, session.id), s.actSessions.approve)
+          }}
+        />
+      </Box>
+    )
+  }
+
+  if (ask.kind === 'prompt') {
+    return (
+      <Box flexDirection="column" width={width}>
+        <Text dimColor>{truncate(s.sessionsPromptHint, width)}</Text>
+        <TextPrompt
+          label={s.sessionsPromptLabel(session.title)}
+          width={width}
+          onCancel={onClose}
+          onSubmit={value => {
+            const text = value.trim()
+            const send = host.promptSession
+            // An empty submit is a CANCEL, never a blank turn sent to an assistant — the same rule
+            // the rename prompt follows for the same reason.
+            if (!send || !text) return onClose()
+            onRun(() => send.call(host, session.id, text), s.actSessions.prompt)
+          }}
+        />
+      </Box>
+    )
+  }
 
   if (ask.kind === 'kill') {
     return (
@@ -1491,15 +2423,26 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
   if (ask.kind === 'finishTask') {
     const task = session.task ?? ''
     const already = (fleet?.finishedTasks ?? []).includes(task)
-    const count = (fleet?.sessions ?? []).filter(v => v.task === task).length
+    const mine = (fleet?.sessions ?? []).filter(v => v.task === task)
+    const count = mine.length
+    // Counted separately and stated separately. "N sessions" alone does not tell you whether any of
+    // them is an assistant currently burning tokens, and that is the fact somebody is worried about
+    // when they hesitate over this button.
+    const running = mine.filter(sessionRunning).length
     return (
       <ConfirmPrompt
-        // The question states what happens to the SESSIONS, because that is the part nobody can
-        // guess: finishing a task hides them behind a switch, it does not stop or delete anything.
-        label={already ? s.sessionsReopenConfirm(task) : s.sessionsFinishConfirm(task, count)}
+        // The question states what finishing ACTUALLY does — mark the task, hide its sessions
+        // behind a switch — and says outright that nothing is stopped. It must not describe
+        // something the code does not do: a warning that claims to end everything, over an action
+        // that ends nothing, is worse than no warning, because it teaches people that the warnings
+        // on this screen can be ignored.
+        label={already
+          ? s.sessionsReopenConfirm(task)
+          : s.sessionsFinishConfirm(task, count, running)}
         yesLabel={s.yes}
         noLabel={s.no}
         width={width}
+        height={rows}
         onCancel={onClose}
         onAnswer={(yes: boolean) => {
           const finish = host.finishTask

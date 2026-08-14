@@ -207,8 +207,9 @@ once**, with different sharing rules for each.
 # host a central
 agentop central init && agentop central up
 
-# join one
-agentop member connect --endpoint http://<central-host>:48080 --token <token>
+# join one — a token minted by a central with a public URL carries it,
+# so the token alone is enough (--endpoint only for a bare token)
+agentop member connect --token <token>
 ```
 
 ### Accounts, teams and roles
@@ -294,6 +295,8 @@ A check that could not be verified reports `fail`, never a reassuring `pass`.
 | `watch` | The OTel daemon only |
 | `central` | `up` / `init` / `down` / `logs` / `status` / `restart` / `pull` |
 | `member` | `connect` / `leave` / `status` / `list` |
+| `session` | Start / list / attach / kill background assistant sessions (tmux-backed), or a whole `batch` of them under one task |
+| `hooks` | Teach Claude Code to fan work out across several assistants through agentop |
 | `ci-push` | One-shot push of a CI runner's metrics |
 | `autostart` | Start a mode with the system (systemd user service) |
 | `doctor` | Exposure preflight; `--exposed` checks against the strict public bar |
@@ -301,7 +304,14 @@ A check that could not be verified reports `fail`, never a reassuring `pass`.
 | `reset-password` | The way back in for a locked-out last owner |
 | `upgrade` · `check-update` | Update, or print a notice when one is due |
 
-→ **Full reference:** [docs/cli.md](docs/cli.md)
+`agentop hooks install` installs two things into Claude Code — a **skill** that teaches it to split
+independent work across several assistants and start them with `agentop session batch`, and a
+**SessionStart hook** that tells each new session which of those are already running. A hook infers
+nothing (it is a shell command on an event); the inference is Claude's, reading what the skill
+teaches. Nothing is written to `~/.claude` until you run that command, and `uninstall` takes back
+exactly what it wrote.
+
+→ **Full reference:** [docs/cli.md](docs/cli.md) · [docs/claude-integration.md](docs/claude-integration.md)
 
 ---
 
@@ -375,6 +385,8 @@ claude mcp list   # should show "agentistics"
 | [docs/harness-contract.md](docs/harness-contract.md) | What each metric must MEAN across harnesses |
 | [docs/data-sources.md](docs/data-sources.md) | Data sources, JSONL parsing, `SessionMeta` |
 | [docs/metrics.md](docs/metrics.md) | Pricing table, cost formula, streak, cache |
+| [docs/session-manager.md](docs/session-manager.md) | Background assistant sessions, the batch form, the cockpit |
+| [docs/claude-integration.md](docs/claude-integration.md) | The Claude Code skill + SessionStart hook `agentop hooks` installs |
 | [docs/nay.md](docs/nay.md) · [docs/mcp.md](docs/mcp.md) | The chat assistant and the MCP tools |
 
 ---

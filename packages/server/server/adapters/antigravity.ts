@@ -116,6 +116,10 @@ export async function readAntigravityTokensFromFile(
     let cachedTokens = 0
     let outputTokens = 0
     let rowCount = 0
+    // The gauge, off the LAST row that carried one — never accumulated. `SELECT` with no ORDER BY
+    // walks the table in rowid order, which is insertion order, so the last row is the newest
+    // generation. A row with no `1.4.5` leaves the previous reading standing rather than zeroing it.
+    let contextTokens = 0
     const modelCounts = new Map<string, number>()
     const byModel: Record<string, { inputTokens: number; cachedTokens: number; outputTokens: number }> = {}
     for (const row of rows) {
@@ -125,6 +129,7 @@ export async function readAntigravityTokensFromFile(
       )
       if (!meta) continue
       rowCount++
+      if (meta.totalContextTokens > 0) contextTokens = meta.totalContextTokens
       inputTokens += meta.inputTokens
       cachedTokens += meta.cachedTokens
       outputTokens += meta.outputTokens
@@ -140,7 +145,10 @@ export async function readAntigravityTokensFromFile(
     let modelId = ''
     let best = 0
     for (const [id, n] of modelCounts) if (n > best) { best = n; modelId = id }
-    return { inputTokens, cachedTokens, outputTokens, modelId, byModel, rowCount }
+    return {
+      inputTokens, cachedTokens, outputTokens, modelId, byModel, rowCount,
+      ...(contextTokens > 0 ? { contextTokens } : {}),
+    }
   } catch {
     return null
   } finally {

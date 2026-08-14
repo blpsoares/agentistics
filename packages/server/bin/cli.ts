@@ -59,7 +59,13 @@ Commands:
   watch         Start the background metrics daemon only
   central       Manage the team central (Docker; runs from anywhere)
   member        Configure this machine as a team member
-  session       Start / list / attach assistant sessions (tmux-backed; --bg detaches)
+  session       Start / list / attach assistant sessions (tmux-backed; --bg detaches);
+                'session ls' prints the cockpit's table of what is running
+  hooks         Teach Claude Code to run work in parallel through agentop
+                (installs a skill + SessionStart/Stop hooks; explicit, reversible)
+  events        Be told when a session starts waiting, blocks on a permission prompt or
+                exits — in an inbox, in another Claude session, and on your desktop
+                ('events watch' to subscribe, 'events status' to see who is watching)
   ci-push       One-shot push of a CI runner's metrics to a central
   upgrade       Upgrade agentop to the latest version
   autostart     Start a mode with the system (systemd user service on Linux)
@@ -132,9 +138,11 @@ Central:
     e-mail-based reset, so this is how a locked-out last owner gets back in.
 
 Member (a machine may belong to several centrals at once):
-  agentop member connect --endpoint <url> --token <token> [--org <org>] [--label <name>]
+  agentop member connect --token <token> [--endpoint <url>] [--org <org>] [--label <name>]
     Verify the token against the central, then add a new connection or UPDATE an existing
     one keyed by its endpoint (a token rotation on a known central updates in place).
+    A token minted by a central with a public URL configured carries that URL, so the token
+    alone is enough — --endpoint is only needed for a bare token.
   agentop member list
     List every connection this machine has, with its live sync state. ('status' is an alias.)
   agentop member status [--endpoint <url>]
@@ -154,6 +162,21 @@ CI (GitHub Actions):
     static token. Reads AGENTISTICS_CENTRAL_URL / AGENTISTICS_CI_TOKEN /
     AGENTISTICS_OIDC_AUDIENCE / AGENTISTICS_TEAM_ORG when flags are omitted.
     Never fails the job on a push error.
+
+Claude Code integration:
+  agentop hooks <install|uninstall|status> [--hook-only|--skill-only]
+    Two things, both explicit and both reversible:
+      skill  ~/.claude/skills/agentop-parallel-sessions/SKILL.md — WHAT Claude needs to know
+             to split independent work across several assistants and start them with
+             \`agentop session batch\`. Loaded by Claude only when the task matches it, so it
+             costs nothing on a session that never parallelises.
+      hook   a SessionStart entry in ~/.claude/settings.json — FACTS a static file cannot
+             hold: which agentop sessions are running now, which one is blocked on a
+             permission prompt, which task can be reopened here. Prints nothing when there
+             is nothing running.
+    A hook infers nothing; it is a shell command on an event. The inference is Claude's,
+    reading what the skill teaches and what the hook injected. \`uninstall\` removes exactly
+    what \`install\` wrote, and every other key in settings.json is left untouched.
 
 Updates:
   agentop upgrade
@@ -187,6 +210,7 @@ Examples:
   agentop tui
   agentop watch
   agentop central up
+  agentop member connect --token act1_aHR0cHM6Ly9jZW50cmFsLmV4YW1wbGU.abc123
   agentop member connect --endpoint http://host:48080 --token abc123
   agentop member connect --endpoint http://other:48080 --token def456 --label "Client B"
   agentop member list
@@ -196,6 +220,8 @@ Examples:
   agentop check-update
   agentop autostart server enable
   agentop autostart status
+  agentop hooks install
+  agentop hooks status
 `.trim()
 
 // ---------------------------------------------------------------------------
@@ -382,6 +408,18 @@ if (command === 'session') {
   process.exit(code)
 }
 
+if (command === 'hooks') {
+  const { runHooks } = await import('../server/cli-hooks.ts')
+  const code = await runHooks(args)
+  process.exit(code)
+}
+
+if (command === 'events') {
+  const { runEvents } = await import('../server/cli-events.ts')
+  const code = await runEvents(args)
+  process.exit(code)
+}
+
 if (command === 'member') {
   const sub = args[0]
   const rest = args.slice(1)
@@ -396,15 +434,16 @@ if (command === 'member') {
 
   if (sub === 'connect') {
     const { memberConnect } = await import('../server/cli-member.ts')
-    const endpoint = readFlag('--endpoint')
-    const token = readFlag('--token')
-    const org = readFlag('--org')
-    const label = readFlag('--label')
-    if (!endpoint || !token) {
-      console.error('Usage: agentop member connect --endpoint <url> --token <token> [--org <org>] [--label <name>]\n')
+    const { parseMemberConnectArgs } = await import('../server/member-connect-args.ts')
+    // Only the token is required: a composite `act1_…` token carries the central's URL, and
+    // demanding --endpoint here refused the very command the central prints. See
+    // member-connect-args.ts — resolving the endpoint is memberConnect's job, not the gate's.
+    const parsed = parseMemberConnectArgs(rest)
+    if (!parsed.ok) {
+      console.error(`${parsed.usage}\n`)
       process.exit(1)
     }
-    const code = await memberConnect({ endpoint, token, org, label })
+    const code = await memberConnect(parsed.opts)
     process.exit(code)
   }
   if (sub === 'leave') {

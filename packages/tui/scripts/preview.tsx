@@ -39,6 +39,7 @@ import {
   type ControlSession,
   type ControlSessions,
   type ProjectOption,
+  type RestoreCandidate,
   type ControlService,
   type ControlStatus,
   type ServiceRuntimeState,
@@ -96,6 +97,16 @@ interface Options {
    * so it takes a start to reach it (`--keys enter,right,enter` on a stopped service).
    */
   pending: boolean
+  /** Make the fake host REFUSE to spawn, which is the wizard's failure path. */
+  failSpawn: boolean
+  /**
+   * Show the "your last sessions were these" offer.
+   *
+   * Its own flag because the offer renders in FRONT of the list: stocking the fixture with it
+   * unconditionally would put a modal over every other sessions preview, so the screen this exists
+   * to check would be the only one anybody could ever see.
+   */
+  restore: boolean
 }
 
 const USAGE = `
@@ -109,19 +120,29 @@ const USAGE = `
                             which fake machine to show (default solo)
                             conflict = native AND docker up; nodocker = no docker installed;
                             norepo = no checkout here, so no rebuild is offered
+                            --screen dashboard serves a fixture AppData over a real
+                            throwaway HTTP port, so the metrics screens are drawn
+                            through the same fetch the shipped tab uses
     --keys   k,k,…          press these first, e.g. enter,down,enter
+                            on the dashboard: 1-5 pick a screen, f opens the filter
                             names: enter esc tab shift-tab up down left right
-                            pgup pgdn space; anything else is typed literally
+                            pgup pgdn space, and ctrl-<letter>; anything else is
+                            typed literally
     --task   running|done   the next start/restart streams a build into the output pane
                             and either never finishes (running) or does (done);
                             reach it with --keys enter,enter
     --pending               history consent still unanswered, so a start opens the
                             gate: --pending --keys enter,right,enter
+    --fail-spawn            the new-session wizard's spawn is refused, so its failure
+                            path is drawn: --fail-spawn --keys a,enter,enter,enter,enter,enter,enter
+    --restore               the machine lost its fleet, so the "start these again?"
+                            offer is drawn in front of the list
 `
 
 function parseArgs(argv: string[]): Options {
   const opts: Options = {
-    cols: 100, rows: 34, lang: 'en', screen: 'services', mode: 'solo', keys: [], task: 'off', pending: false,
+    cols: 100, rows: 34, lang: 'en', screen: 'services', mode: 'solo', keys: [], task: 'off',
+    pending: false, failSpawn: false, restore: false,
   }
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]
@@ -132,6 +153,8 @@ function parseArgs(argv: string[]): Options {
       case '--lang': opts.lang = value === 'pt' ? 'pt' : 'en'; i++; break
       case '--keys': opts.keys = value.split(',').filter(Boolean); i++; break
       case '--pending': opts.pending = true; break
+      case '--fail-spawn': opts.failSpawn = true; break
+      case '--restore': opts.restore = true; break
       case '--task':
         opts.task = value === 'done' ? 'done' : 'running'
         i++
@@ -184,17 +207,22 @@ const LOCAL_URLS = { webUrl: 'http://localhost:47292', apiUrl: 'http://localhost
  * stopped service offers, the conflict sentence, the empty option list of a running one — falls out
  * of the model rather than being written down here.
  */
-function services(mode: Case, s: CliStrings): ControlService[] {
+function services(mode: Case, s: CliStrings, apiUrl?: string): ControlService[] {
   const nativeUp = mode !== 'central'
   const machineUp = mode === 'conflict'
   const noDocker = mode === 'nodocker'
+
+  // The dashboard screen reads `/api/data` off the api URL the host reported, so when the preview is
+  // drawing that screen it points this at its own fixture server — the SAME path the real tab takes,
+  // rather than a hand-drawn frame the model could never produce.
+  const urls = apiUrl ? { ...LOCAL_URLS, apiUrl } : LOCAL_URLS
 
   const native: ServiceRuntimeState = {
     id: 'local',
     kind: 'native',
     state: nativeUp ? 'up' : 'down',
     available: true,
-    ...(nativeUp ? { ...LOCAL_URLS, pid: 48213, startedAt: Date.now() - 134 * MINUTES } : {}),
+    ...(nativeUp ? { ...urls, pid: 48213, startedAt: Date.now() - 134 * MINUTES } : {}),
   }
   const machine: ServiceRuntimeState = {
     id: 'machine',
@@ -235,14 +263,14 @@ function services(mode: Case, s: CliStrings): ControlService[] {
   ]
 }
 
-function fakeStatus(opts: Options): ControlStatus {
+function fakeStatus(opts: Options, apiUrl?: string): ControlStatus {
   const s = cliStrings(opts.lang)
   return {
     // The two extra cases are arrangements of SERVICES, not team modes; they show a solo machine.
     mode: opts.mode === 'central' || opts.mode === 'member' ? opts.mode : 'solo',
     modeLabel: opts.mode === 'member' ? s.configMemberBare : opts.mode === 'central' ? s.configCentral : s.configSolo,
     endpoint: opts.mode === 'member' ? LONG_ENDPOINT : undefined,
-    services: services(opts.mode, s),
+    services: services(opts.mode, s, apiUrl),
     version: '1.7.3',
     latestVersion: '1.7.4',
     archiveMode: 'consolidate',
@@ -295,7 +323,7 @@ const BUILD_CHUNKS: string[] = [
   `  compiled ./release/agentop\n#5 DONE 41.3s\n\n#6 exporting to image\n#6 DONE 3.1s\n${ESC}[?25h`,
 ]
 
-function fakeHost(opts: Options): ControlHost {
+function fakeHost(opts: Options, apiUrl?: string): ControlHost {
   const done = async () => ({ ok: true, message: 'preview — nothing was performed' })
 
   // The output channel, in the shape `cli-stream.ts` implements for real.
@@ -319,7 +347,7 @@ function fakeHost(opts: Options): ControlHost {
   const act = opts.task === 'off' ? done : streamed
 
   return {
-    refresh: async () => fakeStatus(opts),
+    refresh: async () => fakeStatus(opts, apiUrl),
     start: act,
     connect: done,
     disconnect: done,
@@ -344,7 +372,10 @@ function fakeHost(opts: Options): ControlHost {
       return () => { watchers.delete(handler) }
     },
     readLog: async (source, maxLines) => (LOG[source] ?? []).slice(-maxLines),
-    sessions: async () => FAKE_FLEET,
+    sessions: async () => (opts.restore
+      ? { ...FAKE_FLEET, restorable: FAKE_RESTORABLE }
+      : FAKE_FLEET),
+    restoreSessions: done,
     startableHarnesses: async () => [
       { id: 'claude', label: 'claude', modelSuggestions: ['opus', 'sonnet', 'haiku'], supportsModel: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
       { id: 'codex', label: 'codex', modelSuggestions: ['gpt-5.4', 'gpt-5.4-mini'], supportsModel: true, efforts: [] },
@@ -352,7 +383,17 @@ function fakeHost(opts: Options): ControlHost {
     ],
     searchProjects: async (query: string) => FAKE_PROJECTS
       .filter(p => p.label.toLowerCase().includes(query.trim().toLowerCase())),
-    spawnSession: async () => ({ ok: true, message: 'preview — nothing was performed' }),
+    // `--fail-spawn` drives the wizard's REFUSAL path, which is the one that used to eat the
+    // prompt: it closed the wizard and put the reason on a status line one row tall.
+    spawnSession: async () => (opts.failSpawn
+      ? { ok: false, message: 'tmux recusou: sessão duplicada' }
+      : { ok: true, message: 'preview — nothing was performed' }),
+    // Present so the three verbs that write into a session are reachable here at all. They perform
+    // nothing: the questions are what a layout check needs to see, and the preview must never send
+    // a keystroke anywhere.
+    promptSession: done,
+    answerSession: done,
+    reopenFell: done,
   }
 }
 
@@ -373,25 +414,118 @@ const FAKE_PROJECTS: ProjectOption[] = [
   { path: '/home/dev/scratch', label: 'scratch', detail: '~/scratch', source: 'folder' },
 ]
 
+/**
+ * What the offer names after a fall — the awkward cases rather than the tidy one: a long label that
+ * has to be truncated beside its harness and project, a row with no start time at all, and enough
+ * of them to reach the pane's own limit on a short terminal.
+ */
+const FAKE_RESTORABLE: RestoreCandidate[] = [
+  { id: 'f00d01', label: 'ledger reconciliation', harness: 'claude', project: 'agentistics', startedAt: Date.now() - 3 * 60 * 60_000 },
+  { id: 'f00d02', label: 'invoice export', harness: 'codex', project: 'prontuario', startedAt: Date.now() - 3 * 60 * 60_000 },
+  { id: 'f00d03', label: 'rewrite the CSV importer so it stops guessing the encoding', harness: 'kimi', project: 'embark', startedAt: Date.now() - 4 * 60 * 60_000 },
+  { id: 'f00d04', label: 'no start time on record', harness: 'claude', project: 'aipe' },
+]
+
 const FAKE_FLEET: ControlSessions = {
   attention: 2,
   rang: [],
   detachHint: 'Ctrl-b then d',
   finishedTasks: ['billing'],
+  // A fall on record, so the summary row's note, the "fell together" section and the reopen
+  // confirmation are all reachable here. Reach the rows with `--keys l` (the default view is only
+  // what is running, and a session that fell is by definition not).
+  fell: { count: 2, atMs: Date.now() - 6 * MINUTES },
   sessions: withSearchText([
     {
       id: 'a1b2c3', title: 'migrate the auth store', harness: 'claude',
-      cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus', task: 'billing',
+      cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus', task: 'auth store',
       repo: 'blpsoares/agentistics',
+      // NOT under `billing`, deliberately: that task is finished in this fixture, so a row filed
+      // under it is hidden by default — and the one row this preview exists to reach is the blocked
+      // one. `f00d01` carries `billing` instead, which keeps the finished-task case covered.
       state: 'waiting-approval', stateLabel: 'needs approval', actionable: true,
       // Usage on SOME rows and not others, deliberately: the column is sized to the widest row that
       // has any, and a fixture where every row carries one would never exercise the padding.
       tokens: '51.7k', cost: '$1.24',
+      // The WARN level: far enough along to be worth acting on, not yet past the window. The three
+      // levels are on screen at once in this fixture on purpose — a palette you can only see one
+      // shade of at a time is one nobody checks.
+      context: { fraction: 0.87, label: '87%', used: '174k', window: '200k' },
+      lastLines: ['applying migration 003_auth_store.sql', 'waiting for your approval'],
+      // The dialog, at the width a real one is drawn at — which is the point: the confirmation has
+      // to fit it into a pane that is often much narrower, and a fixture of short lines would never
+      // show that.
+      // A THREE-way choice, which is what a claude permission prompt actually is — the case the
+      // picker exists for. `canApprove` is deliberately absent: there is no approving here.
+      canChoose: true,
+      dialogOptions: [
+        { number: 1, label: 'Yes', selected: true },
+        { number: 2, label: 'Yes, allow all edits during this session (shift+tab)', selected: false },
+        { number: 3, label: 'No', selected: false },
+      ],
+      approvalLines: [
+        '│ Bash command                                                    │',
+        '│   bun run db:migrate --env production                           │',
+        '│                                                                 │',
+        '│ Do you want to proceed?                                         │',
+        '│ ❯ 1. Yes                                                        │',
+        '│   2. Yes, allow all edits during this session (shift+tab)       │',
+        '│   3. No                                                         │',
+        '│ Esc to cancel · Tab to amend                                    │',
+      ],
       startedAt: Date.now() - 22 * 60_000, attached: false,
+    },
+    // A dialog whose options ARE readable but whose harness nobody has verified a way to pick on.
+    // The one row that must draw a REFUSAL naming why, rather than a picker that would confirm the
+    // highlighted row on the user's behalf.
+    {
+      id: 'c0de01', title: 'promote to prod', harness: 'gemini',
+      cwd: '/home/dev/embark', project: 'embark',
+      state: 'waiting-approval', stateLabel: 'needs approval', actionable: true,
+      dialogOptions: [
+        { number: 1, label: 'Só o meu fix, isolado', selected: true },
+        { number: 2, label: 'Promover dev→main inteiro', selected: false },
+        { number: 3, label: 'Parar em dev por enquanto', selected: false },
+        { number: 4, label: 'Type something.', selected: false },
+      ],
+      approvalLines: [
+        'Como promover pra prod? O merge dev→main levaria junto ID-100, ID-81 e ID-54.',
+        '❯ 1. Só o meu fix, isolado',
+        '  2. Promover dev→main inteiro',
+        '  3. Parar em dev por enquanto',
+        '  4. Type something.',
+        'Enter to select · ↑/↓ to navigate · Esc to cancel',
+      ],
+      chooseBlind: 'this dialog is a choice, and nobody has verified how to pick an option on gemini — attach to answer it there.',
+      startedAt: Date.now() - 8 * 60_000, attached: false,
+    },
+    // The two the machine took together. `lost`, named, and carrying their task — which is what a
+    // reboot leaves behind and what "reopen what fell" puts back.
+    {
+      id: 'f00d01', title: 'ledger reconciliation', harness: 'claude',
+      cwd: '/home/dev/agentistics', project: 'agentistics', repo: 'blpsoares/agentistics',
+      task: 'billing', named: true, fell: true,
+      state: 'lost', stateLabel: 'lost', actionable: true,
+      resume: { sessionId: 'r1', title: 'ledger reconciliation' },
+      startedAt: Date.now() - 3 * 60 * 60_000, attached: false,
+    },
+    {
+      id: 'f00d02', title: 'invoice export', harness: 'codex',
+      cwd: '/home/dev/prontuario', project: 'prontuario', repo: 'org/prontuario',
+      named: true, fell: true,
+      state: 'lost', stateLabel: 'lost', actionable: true,
+      resume: { sessionId: 'r2', title: 'invoice export' },
+      startedAt: Date.now() - 3 * 60 * 60_000, attached: false,
     },
     {
       id: 'd4e5f6', title: 'flaky test hunt', harness: 'codex',
       cwd: '/home/dev/prontuario', project: 'prontuario', task: 'flaky triage', repo: 'org/prontuario',
+      // Named in BOTH places, so the detail pane's "the other name" row is on screen: the title is
+      // the one typed inside the session, and `named here` states the agentop label that lost.
+      titleSource: 'harness', titleOther: 'flaky-triage',
+      // Codex states its OWN window (`model_context_window`), so this row's denominator is the
+      // harness's answer rather than a table lookup — and it is not a round number.
+      context: { fraction: 0.12, label: '12%', used: '31k', window: '258.4k' },
       note: 'reproduces only on CI', state: 'waiting', stateLabel: 'waiting',
       actionable: true, approvalBlind: 'agentop has no verified screen markers for codex, so a blocking question here shows as "waiting" like any other pause.',
       startedAt: Date.now() - 3 * 60_000, attached: false,
@@ -401,13 +535,19 @@ const FAKE_FLEET: ControlSessions = {
       cwd: '/home/dev/embark', project: 'embark', model: 'kimi-k3',
       state: 'working', stateLabel: 'working', actionable: true,
       tokens: '308.2k', cost: '$0.91',
+      // PAST the window: the bar saturates and the number keeps telling the truth. This is not a
+      // contrived case — 212.959 tokens against a 200k window is a real measurement off this
+      // machine, and a bar that silently pinned at 100% here would be the reassuring kind of wrong.
+      context: { fraction: 1.06, label: '106%', used: '212.9k', window: '200k' },
+      lastLines: ['rewriting src/importer/rows.ts'],
+      note: 'blocked on the CSV encoding',
       startedAt: Date.now() - 90_000, attached: true,
     },
     {
       id: 'aabbcc', title: 'release notes', harness: 'claude',
       cwd: '/home/dev/agentistics/.claude/worktrees/notes', project: 'notes',
       repo: 'blpsoares/agentistics', projectGroup: 'agentistics', worktree: true,
-      state: 'exited', stateLabel: 'exited', actionable: true,
+      state: 'exited', stateLabel: 'exited', actionable: true, named: true,
       startedAt: Date.now() - 4 * 60 * 60_000, attached: false,
     },
     {
@@ -440,6 +580,104 @@ function withSearchText(rows: Array<Omit<ControlSession, 'searchText'>>): Contro
     ...r,
     searchText: [r.title, r.harness, r.cwd, r.note, r.task].filter(Boolean).join(' ').toLowerCase(),
   }))
+}
+
+// ---------------------------------------------------------------------------
+// the dashboard's data
+// ---------------------------------------------------------------------------
+
+/**
+ * A day key `n` days back, so the sparkline has something to draw whenever this is run.
+ *
+ * Dates in the fixture are relative for the same reason the fleet's timestamps are: a hardcoded
+ * month would render an empty activity chart the moment it fell out of the 30-day window, and the
+ * preview would be reporting a layout problem the screen does not have.
+ */
+function dayKey(back: number): string {
+  const d = new Date(Date.now() - back * 24 * 60 * MINUTES)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function fakeSession(over: Record<string, unknown>): Record<string, unknown> {
+  return {
+    project_path: '/home/dev/agentistics', start_time: new Date(Date.now() - 3 * 60 * MINUTES).toISOString(),
+    duration_minutes: 24, user_message_count: 12, assistant_message_count: 14,
+    tool_counts: {}, tool_output_tokens: {}, agent_file_reads: {}, languages: [],
+    git_commits: 0, git_pushes: 0, input_tokens: 0, output_tokens: 0, first_prompt: '',
+    user_interruptions: 0, user_response_times: [], tool_errors: 0, tool_error_categories: {},
+    uses_task_agent: false, uses_mcp: false, uses_web_search: false, uses_web_fetch: false,
+    lines_added: 0, lines_removed: 0, files_modified: 0, message_hours: [], user_message_timestamps: [],
+    ...over,
+  }
+}
+
+/**
+ * An `AppData` shaped like a real machine's, and awkward on purpose.
+ *
+ * Claude's totals come from the statsCache and everything else from per-session sums — the rule
+ * `selectors.ts` exists to enforce — so the fixture carries BOTH, or the preview would never show a
+ * screen where the two sources meet. The long project path and the eleven-digit token counts are the
+ * two things that actually break a column.
+ */
+function dashboardData(): unknown {
+  return {
+    harnesses: ['claude', 'codex', 'gemini', 'kimi'],
+    liveSessionIds: ['s-live'],
+    projects: [],
+    allSessions: [],
+    statsCache: {
+      totalSessions: 1284, totalMessages: 41902,
+      lastComputedDate: dayKey(1),
+      dailyActivity: Array.from({ length: 30 }, (_, i) => ({
+        date: dayKey(29 - i),
+        messageCount: [0, 12, 340, 88, 512, 1204, 90][i % 7]!,
+        sessionCount: 3,
+      })),
+      dailyTokens: {},
+      dailyModelTokens: {},
+      modelUsage: {
+        'claude-opus-4-6': { inputTokens: 4_120_000, outputTokens: 812_000, cacheReadInputTokens: 903_400_000, cacheCreationInputTokens: 41_000_000 },
+        'claude-sonnet-4-6': { inputTokens: 2_004_000, outputTokens: 410_000, cacheReadInputTokens: 210_000_000, cacheCreationInputTokens: 9_800_000 },
+      },
+    },
+    sessions: [
+      fakeSession({ session_id: 's-live', harness: 'claude', model: 'claude-opus-4-6', title: 'wire the dashboard tab into the cockpit', input_tokens: 91_000, output_tokens: 12_400, cache_read_input_tokens: 8_100_000 }),
+      fakeSession({ session_id: 's-2', harness: 'codex', model: 'gpt-5.4', title: 'flaky test hunt', project_path: '/home/dev/prontuario/packages/front', input_tokens: 410_000, output_tokens: 61_000 }),
+      fakeSession({ session_id: 's-3', harness: 'kimi', model: 'gemini-3.5-flash-lite', title: 'rewrite the importer', project_path: '/home/dev/orgs/opvibes/embark', input_tokens: 1_200_000, output_tokens: 88_000 }),
+      fakeSession({ session_id: 's-4', harness: 'gemini', title: 'read the migration plan', project_path: '/home/dev/agentistics/.claude/worktrees/dashboard-tab', start_time: new Date(Date.now() - 26 * 60 * MINUTES).toISOString() }),
+      fakeSession({ session_id: 's-5', harness: 'claude', model: 'claude-sonnet-4-6', title: 'ledger reconciliation', project_path: '/home/dev/agentistics', start_time: new Date(Date.now() - 50 * 60 * MINUTES).toISOString(), input_tokens: 44_000, output_tokens: 9_100 }),
+    ],
+  }
+}
+
+/**
+ * A throwaway server answering the two endpoints the dashboard reads.
+ *
+ * The alternative was a `data` prop the tab accepts only for previews, which is a hole in the
+ * component's contract kept open for a dev script — and it would prove nothing about the path that
+ * actually ships. This exercises the real fetch, the real SSE handshake and the real "the server is
+ * up, here is its api URL" resolution.
+ */
+function serveFixture(): { apiBase: string; stop: () => void } {
+  const server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const { pathname } = new URL(req.url)
+      if (pathname === '/api/data') return Response.json(dashboardData())
+      if (pathname === '/api/events') {
+        // One SSE COMMENT and then silence. The comment is not politeness: a stream that enqueues
+        // nothing never flushes its headers, so `fetch` does not resolve and the screen is captured
+        // still saying `connecting` — a preview reporting a state the real server never shows. A
+        // single `\n` rather than the blank line an event ends with, so it is not read as one.
+        return new Response(
+          new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(': preview\n')) } }),
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      }
+      return new Response('not found', { status: 404 })
+    },
+  })
+  return { apiBase: `http://localhost:${server.port}`, stop: () => { void server.stop(true) } }
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +719,18 @@ function ruler(cols: number): string[] {
  * unpreviewable: they exist only after a keypress, which is exactly the state a screenshot cannot
  * reach and therefore the state that shipped wrong twice.
  */
+/**
+ * A control chord as the byte a terminal actually sends: `ctrl-a` is 0x01, `ctrl-h` is 0x08.
+ *
+ * Named rather than typed literally because there is no way to type a control byte into a shell
+ * argument, and this screen now answers three of them — a key the preview cannot press is a key no
+ * layout check ever sees.
+ */
+function ctrlByte(name: string): string | undefined {
+  const m = /^ctrl-([a-z])$/.exec(name)
+  return m ? String.fromCharCode(m[1]!.charCodeAt(0) - 96) : undefined
+}
+
 const KEYS: Record<string, string> = {
   enter: '\r',
   esc: ESC,
@@ -506,9 +756,13 @@ async function main(): Promise<void> {
   Object.defineProperty(process.stdout, 'columns', { value: opts.cols, configurable: true })
   Object.defineProperty(process.stdout, 'rows', { value: opts.rows, configurable: true })
 
+  // Only the dashboard reads over HTTP, so only it opens a port — every other screen is drawn from
+  // values the fake host returns directly, and a listener nobody uses is a listener that can fail.
+  const fixture = opts.screen === 'dashboard' ? serveFixture() : null
+
   const element = (
     <ControlCenter
-      host={fakeHost(opts)}
+      host={fakeHost(opts, fixture?.apiBase)}
       lang={opts.lang}
       initial={{ tab: opts.screen }}
       onExit={() => {}}
@@ -523,13 +777,15 @@ async function main(): Promise<void> {
   app.rerender(element)
 
   // The first frame is drawn before `refresh()` resolves, so it is the spinner. Waiting a beat is
-  // what makes the preview show the screen rather than its loading state.
-  await sleep(200)
+  // what makes the preview show the screen rather than its loading state. The dashboard waits
+  // longer: its status has to land BEFORE it knows which address to read, so it is two round trips
+  // rather than one.
+  await sleep(fixture ? 700 : 200)
 
   // One key per tick, with the app given time to settle between them: a question opens on a state
   // change, and a burst written in one chunk would be parsed as a single garbled sequence.
   for (const key of opts.keys) {
-    app.stdin.write(KEYS[key] ?? key)
+    app.stdin.write(KEYS[key] ?? ctrlByte(key) ?? key)
     await sleep(60)
   }
 
@@ -551,6 +807,7 @@ async function main(): Promise<void> {
   ].join('\n')
 
   app.unmount()
+  fixture?.stop()
   process.stdout.write(`${out}\n`)
   // Ink's spinner keeps an interval alive past the unmount; the frame is printed, so the only thing
   // left to do is leave rather than idle on a timer nobody is watching.

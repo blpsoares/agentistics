@@ -5,6 +5,7 @@ import { fmt, fmtCost } from '@agentistics/core'
 import { projectRows, type ProjectRow } from '../selectors'
 import { DataTable, Empty, type Column } from '../components/Primitives'
 import { COLORS } from '../theme'
+import { listRows } from '../dashboard/view'
 import type { TuiStrings } from '../i18n'
 
 export function Projects({ data, s, width, height }: {
@@ -26,11 +27,13 @@ export function Projects({ data, s, width, height }: {
     { key: 'last', header: s.lastActivity, width: 12, align: 'right', render: r => r.lastActivity.slice(0, 10) },
   ]
 
+  // One row fewer than the height: the table draws a header before the first result, and asking for
+  // `height` results would overflow by exactly that row — which Ink composites rather than clips.
   return (
     <Box flexDirection="column">
       <DataTable
         columns={columns}
-        rows={rows.slice(0, Math.max(1, height))}
+        rows={rows.slice(0, listRows(height))}
         keyOf={r => r.path}
         width={width}
       />

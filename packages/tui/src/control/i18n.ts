@@ -48,6 +48,10 @@ export interface ControlStrings {
   keyEnds: string
   keyRefresh: string
   keyLogSource: string
+  /** The dashboard's own two keys. Its screens are digits and `tab`, never the arrows — see
+   *  `resolveDashboardScreen` for why the shell's `←→ screens` had to survive this tab. */
+  dashView: string
+  dashFilter: string
   /**
    * The mouse's two hints, said only while there IS a mouse.
    *
@@ -195,7 +199,15 @@ export interface ControlStrings {
   /** Said when the host does not implement the fleet at all — not the same as an empty fleet. */
   sessionsUnsupported: string
   /** The summary row: "3 sessions · 1 waiting on you". */
-  sessionsCount: (n: number) => string
+  /**
+   * How many rows are ON SCREEN, and out of how many the machine has.
+   *
+   * Two numbers, always, because one of them alone lies: with `only active` on, a fleet of 44 shows
+   * ten rows, and a header reading "44 sessions" over ten of them describes a screen nobody is
+   * looking at. `shown === total` is the case where the second number says nothing new, and that is
+   * the only case where it is dropped.
+   */
+  sessionsCount: (shown: number, total: number) => string
   sessionsWaitingCount: (n: number) => string
   sessionsGroupBy: string
   sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project' | 'task' | 'repo', string>
@@ -206,7 +218,7 @@ export interface ControlStrings {
   sessionsUnknownRepo: string
   sessionsWorktreeTag: string
   /** The sessions list's column headings — an unlabelled column is one you have to learn. */
-  sessionsCols: Record<'id' | 'state' | 'title' | 'task' | 'worktree' | 'metrics' | 'harness' | 'where', string>
+  sessionsCols: Record<'id' | 'state' | 'age' | 'title' | 'task' | 'worktree' | 'metrics' | 'context' | 'harness' | 'where', string>
   /** Detail-pane field labels. */
   sessionsWhere: string
   sessionsModel: string
@@ -215,6 +227,11 @@ export interface ControlStrings {
   sessionsDoing: string
   sessionsTask: string
   sessionsMetrics: string
+  /** Detail-pane label for the context gauge spelled out. */
+  sessionsContext: string
+  /** The name that did NOT win, when a session is named in agentop AND inside the harness. */
+  sessionsAlsoLabel: string
+  sessionsAlsoHarness: string
   /** Label of the detail line stating how to LEAVE an attached session. */
   sessionsDetach: string
   /** Marks a finished task's heading, and the word the toggle uses. */
@@ -223,8 +240,50 @@ export interface ControlStrings {
   sessionsPaneMenu: string
   sessionsPaneDetail: string
   sessionsPaneAsk: string
-  sessionsFinishConfirm: (task: string, count: number) => string
+  sessionsPaneKeys: string
+  sessionsPaneRestore: string
+  restoreTitle: (n: number) => string
+  restoreAnswer: string
+  /** What each key on the sessions screen does — the one list `ctrl+h` prints. */
+  sessionsKeyWhat: {
+    move: string; open: string; attach: string; menu: string; section: string
+    newSession: string; search: string; clear: string; kill: string; rename: string
+    note: string; task: string; mark: string; onlyActive: string; closed: string
+    exited: string; unfiled: string; group: string; detail: string; menuFold: string
+    reset: string
+    tabs: string; help: string; quit: string
+    approve: string; prompt: string; reopenFell: string
+  }
+  /**
+   * The finish-task confirmation.
+   *
+   * It states what finishing a task ACTUALLY does, which is hide its sessions behind a switch —
+   * nothing is stopped and nothing is deleted, and `running` is called out separately because a
+   * warning that implied otherwise would be worse than no warning at all. See `finishTask` in
+   * `cli-start.ts`.
+   */
+  sessionsFinishConfirm: (task: string, count: number, running: number) => string
   sessionsReopenConfirm: (task: string) => string
+  /** The heading over the sessions the machine took at once. */
+  sessionsFellWord: string
+  /** Said on the summary row and in the empty state: N fell, this long ago, and the key. */
+  sessionsFellNote: (count: number, ago: string) => string
+  /** The confirmation, naming how many and when. */
+  sessionsFellConfirm: (count: number, ago: string) => string
+  /** The prompt field, and the sentence above it saying where the text is going. */
+  sessionsPromptLabel: (title: string) => string
+  sessionsPromptHint: string
+  /** The approval confirmation — and its caveat, which is the whole design. */
+  sessionsApproveConfirm: (title: string) => string
+  sessionsApproveCaveat: string
+  /** Heading over the dialog lines carried into the confirmation. */
+  sessionsApproveWhat: string
+  /** Marks the option the dialog itself is highlighting, inside the picker. */
+  sessionsChoiceHighlighted: string
+  /** Fallback for a harness with no verified way to pick — the host normally supplies its own. */
+  sessionsChooseBlind: string
+  /** What DOES work when the options cannot be picked from here. */
+  sessionsChooseAttach: string
   asideProjects: string
   asideAllProjects: string
   toggleDone: string
@@ -234,6 +293,18 @@ export interface ControlStrings {
   toggleDetail: string
   /** Written on the detail pane itself: the key that puts it away. */
   sessionsDetailHide: string
+  /** The menu's layout section, and what the two layouts are called. */
+  asideLayout: string
+  sessionsLayouts: Record<'list' | 'cards', string>
+  /** The card pager: which page, and how much of the fleet is on it. */
+  sessionsPage: (page: number, pages: number) => string
+  sessionsShowing: (shown: number, total: number) => string
+  /** Card markers — said on the state line, where a row has no room for them. */
+  sessionsCardAttached: string
+  sessionsCardBlind: string
+  keySessionsLayout: string
+  keySessionsCard: string
+  keySessionsPage: string
   asideSort: string
   asideStates: string
   sessionsSorts: Record<'state' | 'name' | 'started' | 'usage' | 'project', string>
@@ -258,6 +329,12 @@ export interface ControlStrings {
   keySessionsNew: string
   keySessionsSearch: string
   keySessionsActions: string
+  keySessionsApprove: string
+  keySessionsPrompt: string
+  /** The menu fold — the plain letter, because tmux's default prefix never arrives inside a tmux. */
+  keySessionsFold: string
+  /** The two keys the restore offer answers, and nothing else. */
+  keyRestoreAnswer: string
   /** The visible action row — the same verbs the letters run, spelled out and clickable. */
   actSessions: {
     attach: string
@@ -265,8 +342,11 @@ export interface ControlStrings {
     rename: string
     note: string
     task: string
+    approve: string
+    prompt: string
     kill: string
     openTask: string
+    reopenFell: string
     finishTask: string
     newSession: string
     search: string
@@ -328,7 +408,16 @@ export interface ControlStrings {
   wizEffort: string
   wizPrompt: string
   wizPromptHint: string
+  wizName: string
+  wizNameHint: string
   wizHow: string
+  /** Said while the session is being started, so `enter` is visibly doing something. */
+  wizStarting: string
+  /** Said under a failure: nothing you typed was thrown away. */
+  wizKeptDraft: string
+  wizNoSpawn: string
+  wizNeedHarness: string
+  wizNeedCwd: string
   wizAttached: string
   wizBackground: string
   wizSkip: string
@@ -350,11 +439,25 @@ export interface ControlStrings {
   sessionsKillConfirm: (title: string) => string
   /** Said when a verb is pressed on a row that cannot take it. */
   sessionsNotActionable: string
+  /** Said when the approve key is pressed on a session that is not blocked on anything. */
+  sessionsNotAsking: string
+  /** Said when "reopen what fell" is pressed and nothing did. */
+  sessionsNoFell: string
 
   /** Static tabs. */
   helpIntro: string
   cheatIntro: string
   contributeIntro: string
+  /**
+   * Why the dashboard is showing no numbers.
+   *
+   * Two sentences rather than one: `dashDown` is actionable and names the screen that starts the
+   * server, while `dashUnknown` is the honest form of a service whose state could not be read at
+   * all. Reporting the second as the first would send someone to press a button for a problem they
+   * do not have — the same N/A-versus-a-confident-0 rule the rest of this app follows.
+   */
+  dashDown: string
+  dashUnknown: string
   copyHint: string
   /** The same reminder while the mouse reports, when a plain drag no longer selects. */
   copyHintShift: string
@@ -366,6 +469,7 @@ const EN: ControlStrings = {
   tabs: {
     services: 'Services',
     sessions: 'Sessions',
+    dashboard: 'Dashboard',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Cheat sheet',
@@ -376,6 +480,7 @@ const EN: ControlStrings = {
   tabsShort: {
     services: 'services',
     sessions: 'sessions',
+    dashboard: 'dashboard',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'commands',
@@ -400,6 +505,8 @@ const EN: ControlStrings = {
   keyEnds: 'g/G ends',
   keyRefresh: 'r refresh',
   keyLogSource: '[ ] source',
+  dashView: '1-5/tab view',
+  dashFilter: 'f harness',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+drag to copy',
 
@@ -490,7 +597,9 @@ const EN: ControlStrings = {
   sessionsEmptyFiltered: 'nothing matches · esc clears the filter',
   sessionsLoading: 'reading…',
   sessionsUnsupported: 'session management is not available on this machine.',
-  sessionsCount: (n: number) => (n === 1 ? '1 session' : `${n} sessions`),
+  sessionsCount: (shown: number, total: number) => (shown === total
+    ? (total === 1 ? '1 session' : `${total} sessions`)
+    : `${shown} of ${total} sessions`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
   sessionsGroupBy: 'GROUP',
   sessionsGroupings: {
@@ -511,10 +620,14 @@ const EN: ControlStrings = {
   sessionsCols: {
     id: 'id',
     state: 'state',
+    age: 'started',
     title: 'session',
     task: 'task',
     worktree: 'worktree',
     metrics: 'usage',
+    // The WINDOW, not "context": the cell shows how full one is, and a column headed `context`
+    // over a bar reads as "this session's context" — a thing, not a level.
+    context: 'window',
     harness: 'harness',
     where: 'project',
   },
@@ -525,20 +638,89 @@ const EN: ControlStrings = {
   sessionsDoing: 'saying',
   sessionsTask: 'task',
   sessionsMetrics: 'usage',
+  sessionsContext: 'context window',
+  sessionsAlsoLabel: 'named here',
+  sessionsAlsoHarness: 'named inside',
   sessionsDetach: 'to detach',
   sessionsDoneWord: 'finished',
   sessionsPaneMenu: 'menu',
   sessionsPaneDetail: 'detail',
   sessionsPaneAsk: 'question',
-  sessionsFinishConfirm: (task, count) =>
-    `Mark "${task}" finished? Its ${count} session${count === 1 ? '' : 's'} stay listed behind the "finished tasks" switch.`,
+  sessionsPaneKeys: 'keys',
+  sessionsPaneRestore: 'last time',
+  restoreTitle: (n: number) =>
+    n === 1 ? 'Your last session was this one:' : `Your last ${n} sessions were these:`,
+  restoreAnswer: 'enter starts them in the background · esc leaves them closed',
+  sessionsKeyWhat: {
+    move: 'move the cursor',
+    open: 'switch between the menu and the list',
+    attach: 'attach — or reopen, when nothing is running',
+    menu: 'open the menu on this row',
+    section: 'jump to a menu section',
+    newSession: 'start a session',
+    search: 'search everything, closed conversations included',
+    clear: 'drop the search, then the project, then the task',
+    kill: 'stop this session',
+    rename: 'rename it',
+    note: 'write a note on it',
+    task: 'file it under a task',
+    mark: 'mark this row, and keep it marked',
+    onlyActive: 'show only what is running',
+    closed: 'show closed conversations',
+    exited: 'show sessions that ended',
+    unfiled: 'show sessions under no task',
+    group: 'change the grouping',
+    detail: 'hide the detail pane',
+    menuFold: 'fold the menu away — any digit brings it back',
+    reset: 'back to how the app opens',
+    tabs: 'change screen',
+    help: 'this list',
+    quit: 'leave agentop',
+    approve: 'answer the question this session is blocked on',
+    prompt: 'send it a line without attaching',
+    reopenFell: 'reopen everything the machine took at once',
+  },
+  // Says what finishing ACTUALLY does. It marks the task and hides its sessions behind a switch —
+  // it stops nothing — so the sentence names the count, calls out the ones still running, and names
+  // the switch that brings them back.
+  sessionsFinishConfirm: (task, count, running) =>
+    `Mark "${task}" finished? Its ${count} session${count === 1 ? '' : 's'}`
+    + `${running > 0 ? ` (${running} still running)` : ''}`
+    + (count === 1
+      ? ' is NOT stopped — it keeps running and stays'
+      : ' are NOT stopped — they keep running and stay')
+    + ' listed behind the "finished tasks" switch.',
   sessionsReopenConfirm: task => `Reopen "${task}"?`,
+  sessionsFellWord: 'fell together',
+  sessionsFellNote: (count, ago) =>
+    `${count} session${count === 1 ? '' : 's'} fell ${ago} — R reopens them`,
+  sessionsFellConfirm: (count, ago) =>
+    `Reopen the ${count} session${count === 1 ? '' : 's'} that fell ${ago}? `
+    + 'Each comes back as a new session resuming its own conversation; anything still running is left alone.',
+  sessionsPromptLabel: (title: string) => `Send to "${title}"`,
+  sessionsPromptHint: 'typed straight into the session — it reads it when it gets there',
+  sessionsApproveConfirm: (title: string) => `Send the confirm key to "${title}"?`,
+  sessionsApproveCaveat:
+    'it takes whichever option the dialog above has highlighted — read it first.',
+  sessionsApproveWhat: 'on its screen right now',
+  sessionsChoiceHighlighted: '(its default)',
+  sessionsChooseBlind: 'this dialog is a choice, and agentop cannot pick an option on this harness.',
+  sessionsChooseAttach: 'o attaches to the session, where you can answer it — esc goes back.',
   asideProjects: 'PROJECTS',
   asideAllProjects: 'every project',
   toggleDone: 'finished tasks',
   toggleActive: 'only active',
   toggleDetail: 'detail pane',
   sessionsDetailHide: 'd hides',
+  asideLayout: 'LAYOUT',
+  sessionsLayouts: { list: 'list', cards: 'cards' },
+  sessionsPage: (page, pages) => `${page} / ${pages}`,
+  sessionsShowing: (shown, total) => `${shown} of ${total}`,
+  sessionsCardAttached: 'attached',
+  sessionsCardBlind: 'approval unknown',
+  keySessionsLayout: 'f list/cards',
+  keySessionsCard: '←→ card',
+  keySessionsPage: 'pgup/pgdn page',
   asideSort: 'ORDER',
   asideStates: 'STATE',
   sessionsSorts: {
@@ -571,14 +753,23 @@ const EN: ControlStrings = {
   keySessionsNew: 'a new',
   keySessionsSearch: '/ search',
   keySessionsActions: 'tab actions',
+  keySessionsApprove: 'y approve',
+  keySessionsPrompt: 'p send',
+  keySessionsFold: 'b menu',
+  keyRestoreAnswer: 'enter start · esc leave closed',
   actSessions: {
     attach: 'Attach',
     resume: 'Reopen',
+    // "Answer" rather than "Approve": the key takes whichever option is highlighted, and the verb
+    // must not promise more than the keystroke can deliver.
+    approve: 'Answer its question',
+    prompt: 'Send a prompt',
     rename: 'Rename',
     note: 'Note',
     task: 'Task',
     kill: 'Stop session',
     openTask: 'Open whole task',
+    reopenFell: 'Reopen what fell',
     finishTask: 'Finish task',
     newSession: 'New session',
     search: 'Search',
@@ -636,7 +827,14 @@ const EN: ControlStrings = {
   wizEffort: 'Which reasoning effort?',
   wizPrompt: 'First prompt (optional)',
   wizPromptHint: 'leave empty to start with nothing typed',
+  wizName: 'Call it what?',
+  wizNameHint: 'a name of your own — enter alone derives one from the harness and the folder',
   wizHow: 'Start it how?',
+  wizStarting: 'starting…',
+  wizKeptDraft: 'nothing you typed was lost — esc goes back a step, or try again',
+  wizNoSpawn: 'this build cannot start sessions.',
+  wizNeedHarness: 'pick an assistant first.',
+  wizNeedCwd: 'pick a folder first.',
   wizAttached: 'attached — take this terminal now',
   wizBackground: 'background — keep it running and stay here',
   wizSkip: 'use the default',
@@ -654,10 +852,14 @@ const EN: ControlStrings = {
   sessionsNotePrompt: 'Describe this session',
   sessionsKillConfirm: (title: string) => `Stop "${title}"? The assistant running in it is ended.`,
   sessionsNotActionable: 'that session was not started by agentop, so it cannot be driven from here.',
+  sessionsNotAsking: 'that session is not blocked on a question — there is nothing to answer.',
+  sessionsNoFell: 'nothing fell — no session was lost with the machine still on record.',
 
   helpIntro: 'Every command, with the flags that matter. `agentop --help` prints this plain.',
   cheatIntro: 'The commands worth remembering.',
   contributeIntro: 'Agentistics is open source — issues and pull requests welcome.',
+  dashDown: 'The agentistics server is not running, so there are no metrics to read. Start it on the services screen.',
+  dashUnknown: 'The agentistics server\u2019s state could not be read, so there are no metrics to show. The services screen says why.',
   copyHint: 'select with the mouse to copy',
   copyHintShift: 'hold shift and drag to select and copy',
 }
@@ -668,6 +870,7 @@ const PT: ControlStrings = {
   tabs: {
     services: 'Serviços',
     sessions: 'Sessões',
+    dashboard: 'Dashboard',
     setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Comandos',
@@ -678,6 +881,7 @@ const PT: ControlStrings = {
   tabsShort: {
     services: 'serviços',
     sessions: 'sessões',
+    dashboard: 'dashboard',
     setup: 'setup',
     logs: 'logs',
     cheatsheet: 'comandos',
@@ -702,6 +906,8 @@ const PT: ControlStrings = {
   keyEnds: 'g/G extremos',
   keyRefresh: 'r atualizar',
   keyLogSource: '[ ] fonte',
+  dashView: '1-5/tab tela',
+  dashFilter: 'f assistente',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+arrastar copia',
 
@@ -790,7 +996,9 @@ const PT: ControlStrings = {
   sessionsEmptyFiltered: 'nada corresponde · esc limpa o filtro',
   sessionsLoading: 'lendo…',
   sessionsUnsupported: 'gerenciamento de sessões não está disponível nesta máquina.',
-  sessionsCount: (n: number) => (n === 1 ? '1 sessão' : `${n} sessões`),
+  sessionsCount: (shown: number, total: number) => (shown === total
+    ? (total === 1 ? '1 sessão' : `${total} sessões`)
+    : `${shown} de ${total} sessões`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
   sessionsGroupBy: 'AGRUPAR',
   sessionsGroupings: {
@@ -810,10 +1018,12 @@ const PT: ControlStrings = {
   sessionsCols: {
     id: 'id',
     state: 'estado',
+    age: 'iniciada',
     title: 'sessão',
     task: 'tarefa',
     worktree: 'worktree',
     metrics: 'uso',
+    context: 'janela',
     harness: 'harness',
     where: 'projeto',
   },
@@ -824,20 +1034,88 @@ const PT: ControlStrings = {
   sessionsDoing: 'dizendo',
   sessionsTask: 'tarefa',
   sessionsMetrics: 'uso',
+  sessionsContext: 'janela de contexto',
+  sessionsAlsoLabel: 'nome daqui',
+  sessionsAlsoHarness: 'nome de dentro',
   sessionsDetach: 'para sair',
   sessionsDoneWord: 'finalizada',
   sessionsPaneMenu: 'menu',
   sessionsPaneDetail: 'detalhe',
   sessionsPaneAsk: 'pergunta',
-  sessionsFinishConfirm: (task, count) =>
-    `Finalizar "${task}"? Suas ${count} sessõe${count === 1 ? '' : 's'} continuam listadas atrás do interruptor "tarefas finalizadas".`,
+  sessionsPaneKeys: 'teclas',
+  sessionsPaneRestore: 'da última vez',
+  restoreTitle: (n: number) =>
+    n === 1 ? 'Sua última sessão foi esta:' : `Suas últimas ${n} sessões foram estas:`,
+  restoreAnswer: 'enter inicia em background · esc deixa fechadas',
+  sessionsKeyWhat: {
+    move: 'move o cursor',
+    open: 'alterna entre o menu e a lista',
+    attach: 'anexa — ou reabre, quando não há nada rodando',
+    menu: 'abre o menu nessa linha',
+    section: 'pula para uma seção do menu',
+    newSession: 'inicia uma sessão',
+    search: 'busca tudo, inclusive conversas fechadas',
+    clear: 'limpa a busca, depois o projeto, depois a tarefa',
+    kill: 'encerra esta sessão',
+    rename: 'renomeia',
+    note: 'escreve uma nota nela',
+    task: 'arquiva sob uma tarefa',
+    mark: 'marca esta linha, e mantém marcada',
+    onlyActive: 'mostra só o que está rodando',
+    closed: 'mostra conversas fechadas',
+    exited: 'mostra sessões encerradas',
+    unfiled: 'mostra sessões sem tarefa',
+    group: 'muda o agrupamento',
+    detail: 'oculta o painel de detalhe',
+    menuFold: 'recolhe o menu — qualquer dígito traz de volta',
+    reset: 'volta para como o app abre',
+    tabs: 'muda de tela',
+    help: 'esta lista',
+    quit: 'sai do agentop',
+    approve: 'responde a pergunta que travou a sessão',
+    prompt: 'envia uma linha para ela sem anexar',
+    reopenFell: 'reabre tudo que a máquina levou de uma vez',
+  },
+  sessionsFinishConfirm: (task, count, running) =>
+    `Finalizar "${task}"? ${count === 1 ? 'A sessão dela' : `As ${count} sessões dela`}`
+    + `${running > 0 ? ` (${running} ainda rodando)` : ''}`
+    + (count === 1
+      ? ' NÃO é encerrada — continua rodando e fica listada'
+      : ' NÃO são encerradas — continuam rodando e ficam listadas')
+    + ' atrás do interruptor "tarefas finalizadas".',
   sessionsReopenConfirm: task => `Reabrir "${task}"?`,
+  sessionsFellWord: 'caíram juntas',
+  sessionsFellNote: (count, ago) =>
+    (count === 1 ? `1 sessão caiu ${ago} — R reabre` : `${count} sessões caíram ${ago} — R reabre todas`),
+  sessionsFellConfirm: (count, ago) =>
+    (count === 1
+      ? `Reabrir a sessão que caiu ${ago}? `
+      : `Reabrir as ${count} sessões que caíram ${ago}? `)
+    + 'Cada uma volta como uma sessão nova retomando a própria conversa; o que ainda estiver rodando fica como está.',
+  sessionsPromptLabel: (title: string) => `Enviar para "${title}"`,
+  sessionsPromptHint: 'digitado direto na sessão — ela lê quando chegar lá',
+  sessionsApproveConfirm: (title: string) => `Enviar a tecla de confirmação para "${title}"?`,
+  sessionsApproveCaveat:
+    'ela pega a opção que o diálogo acima está destacando — leia antes.',
+  sessionsApproveWhat: 'na tela dela agora',
+  sessionsChoiceHighlighted: '(o padrão dela)',
+  sessionsChooseBlind: 'esse diálogo é uma escolha, e o agentop não sabe selecionar uma opção neste harness.',
+  sessionsChooseAttach: 'o anexa na sessão, onde dá para responder — esc volta.',
   asideProjects: 'PROJETOS',
   asideAllProjects: 'todos os projetos',
   toggleDone: 'tarefas finalizadas',
   toggleActive: 'apenas ativas',
   toggleDetail: 'painel de detalhe',
   sessionsDetailHide: 'd oculta',
+  asideLayout: 'FORMATO',
+  sessionsLayouts: { list: 'lista', cards: 'cards' },
+  sessionsPage: (page, pages) => `${page} / ${pages}`,
+  sessionsShowing: (shown, total) => `${shown} de ${total}`,
+  sessionsCardAttached: 'anexada',
+  sessionsCardBlind: 'aprovação incerta',
+  keySessionsLayout: 'f lista/cards',
+  keySessionsCard: '←→ card',
+  keySessionsPage: 'pgup/pgdn página',
   asideSort: 'ORDENAR',
   asideStates: 'ESTADO',
   sessionsSorts: {
@@ -870,14 +1148,23 @@ const PT: ControlStrings = {
   keySessionsNew: 'a nova',
   keySessionsSearch: '/ buscar',
   keySessionsActions: 'tab ações',
+  keySessionsApprove: 'y aprovar',
+  keySessionsPrompt: 'p enviar',
+  keySessionsFold: 'b menu',
+  keyRestoreAnswer: 'enter inicia · esc deixa fechadas',
   actSessions: {
     attach: 'Anexar',
     resume: 'Reabrir',
+    // "Responder", não "Aprovar": a tecla pega a opção destacada, e o verbo não pode prometer mais
+    // do que a tecla entrega.
+    approve: 'Responder a pergunta',
+    prompt: 'Enviar prompt',
     rename: 'Renomear',
     note: 'Nota',
     task: 'Tarefa',
     kill: 'Encerrar sessão',
     openTask: 'Abrir tarefa toda',
+    reopenFell: 'Reabrir o que caiu',
     finishTask: 'Finalizar tarefa',
     newSession: 'Nova sessão',
     search: 'Buscar',
@@ -935,7 +1222,14 @@ const PT: ControlStrings = {
   wizEffort: 'Qual nível de raciocínio?',
   wizPrompt: 'Primeiro prompt (opcional)',
   wizPromptHint: 'deixe vazio para começar sem nada digitado',
+  wizName: 'Chamar de quê?',
+  wizNameHint: 'um nome seu — enter vazio deriva um do harness e da pasta',
   wizHow: 'Iniciar como?',
+  wizStarting: 'iniciando…',
+  wizKeptDraft: 'nada do que você digitou foi perdido — esc volta um passo, ou tente de novo',
+  wizNoSpawn: 'esta build não consegue iniciar sessões.',
+  wizNeedHarness: 'escolha um assistente primeiro.',
+  wizNeedCwd: 'escolha uma pasta primeiro.',
   wizAttached: 'anexada — assume este terminal agora',
   wizBackground: 'background — deixa rodando e fica aqui',
   wizSkip: 'usar o padrão',
@@ -953,10 +1247,14 @@ const PT: ControlStrings = {
   sessionsNotePrompt: 'Descreva esta sessão',
   sessionsKillConfirm: (title: string) => `Encerrar "${title}"? O assistente que roda nela é finalizado.`,
   sessionsNotActionable: 'essa sessão não foi iniciada pelo agentop, então não dá para controlá-la daqui.',
+  sessionsNotAsking: 'essa sessão não está travada em uma pergunta — não há o que responder.',
+  sessionsNoFell: 'nada caiu — nenhuma sessão foi perdida com registro de que estava viva.',
 
   helpIntro: 'Todos os comandos, com as flags que importam. `agentop --help` imprime isto puro.',
   cheatIntro: 'Os comandos que vale a pena lembrar.',
   contributeIntro: 'Agentistics é open source — issues e pull requests são bem-vindos.',
+  dashDown: 'O servidor agentistics não está rodando, então não há métricas para ler. Suba-o na tela de serviços.',
+  dashUnknown: 'Não foi possível ler o estado do servidor agentistics, então não há métricas para mostrar. A tela de serviços diz por quê.',
   copyHint: 'selecione com o mouse para copiar',
   copyHintShift: 'segure shift e arraste para selecionar e copiar',
 }

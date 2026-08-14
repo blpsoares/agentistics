@@ -25,6 +25,8 @@ import {
   LEFT_MAX_SHARE,
   LEFT_MIN,
   paneTop,
+  paneBadgeRoom,
+  paneTitleRoom,
   PANE_FRAME_X,
   PANE_FRAME_Y,
   PANE_MIN_ROWS,
@@ -39,6 +41,7 @@ import {
   type TabSpec,
 } from './chrome.ts'
 import { TAB_ORDER, type ControlService, type ServiceRuntimeState } from './types'
+import { truncate } from '../components/Primitives'
 import { PANE_ORDER } from './nav'
 import { brandMark, brandWidth, WORDMARK_ART } from '../components/Wordmark'
 import { controlStrings } from './i18n'
@@ -340,6 +343,32 @@ describe('paneTop', () => {
     expect(top.title).toBe('')
     expect(top.head.startsWith('╭')).toBe(true)
     expect(top.tail).toBe('╮')
+  })
+})
+
+describe('paneTitleRoom', () => {
+  // The inverse of `paneBadgeRoom`, for the caller whose BADGE is the thing that may not disappear:
+  // a card puts the session handle there, and `paneTop` would drop it whole rather than cut the
+  // project name in the title. Cutting the title first is what keeps the handle on the frame.
+  test('a title cut to this width never costs a badge the frame could have drawn', () => {
+    const long = 'a-very-long-project-name-indeed'
+    for (const badge of ['a1b2c', 'following']) {
+      for (let w = 0; w <= 120; w++) {
+        // What the frame can do at ALL at this width: the shortest possible title, which is the
+        // most room a badge can ever be given.
+        const best = paneTop('x', badge, w).badge
+        const cut = paneTop(truncate(long, paneTitleRoom(badge, w)), badge, w).badge
+        expect(cut).toBe(best)
+      }
+      // And the cut is only ever as deep as the badge needs: with the badge gone, the title takes
+      // everything the frame has.
+      expect(paneTitleRoom('', 40)).toBeGreaterThan(paneTitleRoom(badge, 40))
+    }
+  })
+
+  test('a pane with no badge gives the whole budget to the title', () => {
+    expect(paneTitleRoom('', 40)).toBeGreaterThan(paneTitleRoom('a1b2c', 40))
+    expect(paneTitleRoom('a1b2c', 0)).toBe(0)
   })
 })
 
@@ -1238,5 +1267,24 @@ describe('actionAtColumn', () => {
 
   test('says nothing about an empty row', () => {
     expect(actionAtColumn(fitActionRow([], 0, 40), 2)).toBeNull()
+  })
+})
+
+describe('paneBadgeRoom', () => {
+  // The contract is exact: a badge cut to this length must actually be DRAWN, and one character
+  // longer must be the case `paneTop` drops. A room that is merely "about right" is a badge that
+  // vanishes on some widths and not others.
+  test('is exactly the length paneTop will draw', () => {
+    for (let w = 0; w <= 80; w++) {
+      const room = paneBadgeRoom('3f5f', w)
+      if (room === 0) continue
+      expect(paneTop('3f5f', 'x'.repeat(room), w).badge).toBe('x'.repeat(room))
+      expect(paneTop('3f5f', 'x'.repeat(room + 1), w).badge).toBe('')
+    }
+  })
+
+  test('answers zero on a pane with no room for one', () => {
+    expect(paneBadgeRoom('3f5f', 6)).toBe(0)
+    expect(paneBadgeRoom('3f5f', 0)).toBe(0)
   })
 })

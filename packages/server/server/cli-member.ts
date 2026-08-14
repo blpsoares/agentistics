@@ -35,7 +35,9 @@ import { cliStrings, resolveLang, type CliStrings } from './cli-i18n'
 // ---------------------------------------------------------------------------
 
 export interface MemberConnectOptions {
-  endpoint: string
+  /** Optional: a composite `act1_…` token carries the central's URL (see `unpackConnectToken`), so
+   *  the token alone connects a machine. Only a bare secret needs this. */
+  endpoint?: string
   token: string
   org?: string
   label?: string

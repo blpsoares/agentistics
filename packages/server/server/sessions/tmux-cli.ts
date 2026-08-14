@@ -50,17 +50,67 @@ export function sendKeysLiteralArgs(id: string, text: string): string[] {
   return sock(['send-keys', '-t', tmuxName(id), '-l', text])
 }
 
+/**
+ * One NAMED key — `Enter`, `Escape`, `Down` — which is the opposite of `-l` above.
+ *
+ * Without `-l` tmux interprets the argument as a key name, and that is the whole point here: the
+ * approval keystroke is a key, not text. It is a separate builder rather than a flag on the literal
+ * one because getting the two the wrong way round fails SILENTLY — `send-keys -l Enter` types the
+ * five characters `E n t e r` into the assistant's prompt and reports success.
+ */
+export function sendKeysNamedArgs(id: string, key: string): string[] {
+  return sock(['send-keys', '-t', tmuxName(id), key])
+}
+
 export function sendKeysEnterArgs(id: string): string[] {
-  return sock(['send-keys', '-t', tmuxName(id), 'Enter'])
+  return sendKeysNamedArgs(id, 'Enter')
 }
 
 export function listSessionsArgs(): string[] {
   return sock(['list-sessions', '-F', LIST_FORMAT])
 }
 
-/** Keeps a finished session listable, with its last frame still capturable — the `exited` state. */
-export function remainOnExitArgs(): string[] {
-  return sock(['set-option', '-g', 'remain-on-exit', 'on'])
+/**
+ * How many lines of scrollback each pane keeps.
+ *
+ * tmux's own default is 2000, which for an assistant transcript is a few minutes of work: attaching
+ * to a session that has been running an hour and scrolling up finds the middle of a sentence. This
+ * is roughly a day of it, and costs memory only for what was actually printed.
+ */
+export const HISTORY_LIMIT = 50_000
+
+/**
+ * Every option agentop sets on ITS OWN tmux server, applied before the first session exists.
+ *
+ * On its own socket (`-L agentop`), which is the whole reason this is safe: none of it reaches the
+ * user's tmux, their config, or the sessions they started themselves.
+ *
+ * Applied UP FRONT, not afterwards, and that is not a style choice for any of the three:
+ * `remain-on-exit` set after the fact is a race a fast-failing command always wins, and
+ * `history-limit` only ever applies to panes created after it — a session started first keeps
+ * tmux's 2000 forever, which is the exact case someone hits when they attach to the long-running
+ * one and find nothing above the fold.
+ *
+ * `mouse on` is what makes the wheel scroll at all. Without it the pane is a window onto the last
+ * screenful and nothing else, so attaching to a session to read what it did is attaching to a
+ * session you cannot read. It has a cost worth stating rather than discovering: with the mouse
+ * captured, dragging to select goes to tmux instead of to the terminal, and SHIFT is the bypass —
+ * the same trade the control center already documents for its own mouse mode.
+ */
+export function serverOptionsArgs(): string[][] {
+  return [
+    // Keeps a finished session listable, with its last frame still capturable — the `exited` state.
+    sock(['set-option', '-g', 'remain-on-exit', 'on']),
+    sock(['set-option', '-g', 'mouse', 'on']),
+    sock(['set-option', '-g', 'history-limit', String(HISTORY_LIMIT)]),
+    // No STATUS BAR. tmux draws a green band across the bottom listing the windows, the session
+    // name and a clock — useful when you are managing windows, and every one of those facts is
+    // wrong here: an agentop session is one window with one pane, its name is `agentop-<id>` rather
+    // than anything a person chose, and the cockpit you came from already shows all of it. So the
+    // band costs a row of the assistant's screen to say nothing, in a colour that is hard to
+    // ignore.
+    sock(['set-option', '-g', 'status', 'off']),
+  ]
 }
 
 export function showPrefixArgs(): string[] {

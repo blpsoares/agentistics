@@ -23,6 +23,21 @@ jobs:
   build:
     name: Build binary (Linux x64)
     runs-on: ubuntu-latest
+    env:
+      # The packages a release stamps its version onto, in ONE place.
+      #
+      # There were two lists: the bump script wrote the files and `git add` staged them, and they
+      # were not the same list. Adding `packages/tui` to the first alone meant the file was written
+      # in the runner's working tree and thrown away — which is why the tui package went out at
+      # 1.7.3 in the 1.9.0 release, reporting a version no release has ever produced. Two hardcoded
+      # lists that must agree is the shape of the bug, not the fix.
+      PKG_FILES: >-
+        package.json
+        packages/core/package.json
+        packages/server/package.json
+        packages/web/package.json
+        packages/mcp/package.json
+        packages/tui/package.json
     outputs:
       skip: ${{ steps.skip_check.outputs.skip }}
       version_skip: ${{ steps.version.outputs.skip }}
@@ -161,16 +176,7 @@ jobs:
           VERSION="${{ steps.version.outputs.next }}"
           bun -e "
             const fs = require('fs');
-            const targets = [
-              'package.json',
-              'packages/core/package.json',
-              'packages/server/package.json',
-              'packages/web/package.json',
-              'packages/mcp/package.json',
-              // Left out until now, which is why it sat at 1.7.3 while everything else was 1.7.7:
-              // a package that never gets bumped reports a version no release ever produced.
-              'packages/tui/package.json',
-            ];
+            const targets = process.env.PKG_FILES.split(' ').filter(Boolean);
             for (const f of targets) {
               const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
               pkg.version = '$VERSION';
@@ -257,7 +263,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json packages/core/package.json packages/server/package.json packages/web/package.json packages/mcp/package.json
+          git add $PKG_FILES
           git commit -m "chore: bump version to ${VERSION} [skip ci]"
           git tag "$TAG"
           git push origin main "$TAG"

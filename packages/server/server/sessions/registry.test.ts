@@ -117,3 +117,64 @@ describe('newSessionId', () => {
     for (const id of ids) expect(id).toMatch(/^[a-z0-9]{10}$/)
   })
 })
+
+describe('the heartbeat', () => {
+  it('stamps every id given with ONE timestamp, in one write', async () => {
+    // One shared timestamp is what makes `crash-group.ts` exact rather than fuzzy: sessions that
+    // later fall together do not merely have nearby `lastSeenMs`, they have the same one.
+    const reg = createSessionRegistry(file)
+    await reg.add(session('a'))
+    await reg.add(session('b'))
+    expect(await reg.touch(['a', 'b'], 1_786_700_000_000)).toBe(2)
+    const rows = await reg.read()
+    expect(rows.map(r => r.lastSeenMs)).toEqual([1_786_700_000_000, 1_786_700_000_000])
+  })
+
+  it('leaves alone the ids it was not given', async () => {
+    const reg = createSessionRegistry(file)
+    await reg.add(session('a'))
+    await reg.add(session('b'))
+    await reg.touch(['a'], 42)
+    const rows = await reg.read()
+    expect(rows.find(r => r.id === 'a')?.lastSeenMs).toBe(42)
+    expect(rows.find(r => r.id === 'b')?.lastSeenMs).toBeUndefined()
+  })
+
+  it('does not write at all when no id matches', async () => {
+    // A heartbeat runs every minute forever. Touching the file to change nothing would be a write a
+    // minute for the life of the process, on a fleet this registry does not hold.
+    const reg = createSessionRegistry(file)
+    await reg.add(session('a'))
+    const before = await readFile(file, 'utf-8')
+    expect(await reg.touch(['nope'], 42)).toBe(0)
+    expect(await readFile(file, 'utf-8')).toBe(before)
+  })
+
+  it('survives an empty registry', async () => {
+    expect(await createSessionRegistry(file).touch(['a'], 42)).toBe(0)
+  })
+})
+
+describe('what survives a round trip', () => {
+  it('keeps conversationId, which the sanitiser used to drop', async () => {
+    // It was written by `resumeSession` and then read back as absent, so the exact conversation a
+    // reopened session drives was recorded and never used — and the next reopen fell back to the
+    // harness+directory guess that cannot tell two sessions of one repository apart.
+    const reg = createSessionRegistry(file)
+    await reg.add(session('a'))
+    await reg.patch('a', { conversationId: 'conv-1' })
+    expect((await reg.read())[0]!.conversationId).toBe('conv-1')
+  })
+
+  it('refuses a lastSeenMs that is not a finite number', async () => {
+    // Hand-editable file. A NaN reaching `crash-group.ts` would put an always-false comparison in
+    // charge of which sessions get reopened.
+    await writeFile(file, JSON.stringify([
+      { ...session('a'), lastSeenMs: 'yesterday' },
+      { ...session('b'), lastSeenMs: 7 },
+    ]), 'utf-8')
+    const rows = await createSessionRegistry(file).read()
+    expect(rows[0]!.lastSeenMs).toBeUndefined()
+    expect(rows[1]!.lastSeenMs).toBe(7)
+  })
+})

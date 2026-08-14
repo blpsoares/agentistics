@@ -30,10 +30,30 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   ├── agentop watch        → server/otel-watcher.ts (daemon only)
   ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull; `up` takes -y/-n and --cache/--no-cache, honored on the standalone path too)
   ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
-  ├── agentop session …    → server/sessions/cli-session.ts (start/list/attach/kill/rename/note;
+  ├── agentop session …    → server/sessions/cli-session.ts (start/ls/list/attach/kill/rename/note;
   │                          `--bg` detaches via tmux, attach prints the REAL detach key; `list`
   │                          reports what each session is DOING and names the harnesses whose
-  │                          approval detection is unavailable)
+  │                          approval detection is unavailable). **`ls` is the COCKPIT'S TABLE
+  │                          printed**: it consumes `packages/tui/src/control/sessions.ts` —
+  │                          `sessionColumns` / `groupSessions` / `sessionRows` / `sessionRunning`
+  │                          — through the pure `session-table.ts`, and owns only the DRAWING (ANSI,
+  │                          `process.stdout.columns`, a final clip so no row can wrap). A second
+  │                          implementation of the table would be a second set of rules, which is
+  │                          the bug `task-reopen.ts` exists to have fixed once. It is a NEW command
+  │                          rather than a flag: `list` is the tab-separated dump scripts already
+  │                          read, so its output is untouched and both print the same `--json`.
+  │                          Without a tty there is no colour and the width comes from `COLUMNS`
+  │                          when there is one — a pager IS a reader — so `session ls | grep` works
+  ├── agentop hooks …      → server/cli-hooks.ts (install/uninstall/status/context — the Claude Code
+  │                          integration: a SKILL that teaches the `session batch` contract, a
+  │                          SessionStart HOOK that injects the live fleet, and a Stop HOOK that
+  │                          feeds the event channel. Explicit, idempotent, exactly reversible;
+  │                          see docs/claude-integration.md)
+  ├── agentop events …     → server/cli-events.ts (watch/unwatch/status/tail/run/emit/test — the
+  │                          EVENT CHANNEL: a state TRANSITION reaches a person and the assistant
+  │                          orchestrating the fleet. See `events/` below and docs/session-events.md.
+  │                          It is `events`, not `watch`, because `agentop watch` is already the
+  │                          OTel daemon and `agentop restart watch` would become ambiguous)
   ├── agentop ci-push      → server/ci-push.ts (one-shot GitHub Actions runner → central push; env AGENTISTICS_CENTRAL_URL/AGENTISTICS_CI_TOKEN)
   ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc + ~/.zshrc update-check hook)
   ├── agentop upgrade      → server/upgrade.ts
@@ -75,12 +95,83 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          first prompt TYPED IN, because their `-p` exits after answering.
   │                          **What a session is DOING** is the pure `attention.ts` over two
   │                          signals — a probed screen marker and whether the frame moved — with
-  │                          `attention-rules.ts` holding six per-harness patterns **captured
-  │                          from six live dialogs**, each with its CLI version and date. There
+  │                          `attention-rules.ts` holding the per-harness patterns **captured
+  │                          from live dialogs**, each with its CLI version and date. There
   │                          is deliberately no `idle` state: an interactive assistant that is
   │                          alive and still is waiting for you, and the uncertainty that really
   │                          exists is about the REASON, which lives in an absent approval rule
-  │                          the UI states in words. `session-view.ts` merges the managed fleet
+  │                          the UI states in words. **One harness can have SEVERAL dialog
+  │                          components with different footers**: claude's startup select says
+  │                          `Enter to confirm · Esc to cancel` and its PERMISSION prompt says
+  │                          `Esc to cancel · Tab to amend`, and for one release only the first was
+  │                          probed — so a session sitting on "may I run this command" read as
+  │                          `waiting`, and a prompt sent to it went into the dialog's own filter
+  │                          where the submit took the highlighted option. Probe every dialog a
+  │                          harness draws, not the first one it shows you. It has since been THREE
+  │                          for claude — startup select, permission prompt, `AskUserQuestion` —
+  │                          each with its own footer, so assume there is another until somebody has
+  │                          looked. Two harnesses MAY share a footer (claude and gemini measurably
+  │                          do); that is a fact about the CLIs, not a loose pattern, and costs
+  │                          nothing because `rulesFor` only ever tests a harness against itself.
+  │                          **A footer is matched in the LAST FEW LINES ONLY** (`FOOTER_LINES`), and
+  │                          a frame whose FOOTER carries the WORKING marker is never `waiting-
+  │                          approval`. Matching anywhere in a 60-line capture meant any session that
+  │                          QUOTED a footer read as sitting in that dialog — guaranteed here rather
+  │                          than unlikely, since agentop is developed with agentop: a session
+  │                          editing `attention-rules.ts` has those exact strings on screen all day,
+  │                          and one was offered a destructive key over a question it never asked.
+  │                          The working-marker veto is deliberately checked in the FOOTER and not
+  │                          over the whole frame — claude prints `esc to interrupt` whenever
+  │                          anything is interruptible, background subagents included, so a
+  │                          whole-frame veto would suppress a REAL permission prompt on a busy
+  │                          session. Suppressing a real block is the one error worse than the one
+  │                          being fixed.
+  │                          **ACTING on a session without entering it** is `SessionBackend.sendText`
+  │                          / `sendKey` (they were already implemented, buried inside `spawn`) plus
+  │                          the pure `approval-spec.ts` + `dialog-choice.ts`. **Most dialogs are not
+  │                          yes/no**: claude's permission prompt is itself `1. Yes / 2. Yes, always
+  │                          / 3. No`, and an `AskUserQuestion` can offer five answers that do
+  │                          different work. A key that "approves" takes whichever row is
+  │                          HIGHLIGHTED, which on such a dialog is choosing for the user — reported
+  │                          by one, looking at "how do I promote to prod?" with four answers. So
+  │                          `parseDialogOptions` reads the options OFF THE SCREEN (bottom-up,
+  │                          stopping at `1.`, and refusing unless they come out exactly `1..n` —
+  │                          half-read options are worse than none because they get OFFERED), the UI
+  │                          lists them, and the PICKED one is sent. `ApprovalSpec.choice` says how
+  │                          to select by number and exists ONLY for claude, verified by driving a
+  │                          live session; everywhere else a numbered dialog is REFUSED in words
+  │                          naming what does work (attach), because falling back to the confirm key
+  │                          is the defect. The bare confirm survives only where there is genuinely
+  │                          nothing to choose between (codex's `Press enter to continue`). The host
+  │                          RE-READS the screen immediately before sending (a poll is 5s old) and
+  │                          refuses when the options CHANGED, and the question SHOWS the dialog
+  │                          (`approvalTail`, deliberately not `frameTail`: that one cuts at the last
+  │                          rule and so cuts the dialog away). A prompt is refused on a session with
+  │                          a dialog OPEN, in words, for the same reason.
+  │                          **WHICH SESSIONS FELL TOGETHER** is the pure `crash-group.ts`. The hard
+  │                          part is not grouping, it is not admitting garbage: a `lost` row from
+  │                          three days ago never fell, and a group holding everything that ever ran
+  │                          cannot be reopened without reading it first. Membership needs evidence a
+  │                          session was ALIVE, which did not exist — so the registry carries
+  │                          `lastSeenMs`, stamped at birth and refreshed by a 60s HEARTBEAT that
+  │                          writes ONE timestamp for EVERY live session in one write. That is what
+  │                          makes the clustering exact rather than fuzzy. Every rule errs toward
+  │                          EXCLUDING (no `lastSeenMs` = not in the group, ever): a session wrongly
+  │                          left out costs one keypress on its own Reopen verb, one wrongly let in
+  │                          is invisible and makes the whole group untrustworthy.
+  │                          **What a session CALLS ITSELF** is `harness-session-file.ts` (pure) +
+  │                          `harness-sessions.ts`: Claude Code writes `~/.claude/sessions/<pid>.json`
+  │                          holding the name `/rename` set, the conversation id, the pid, and — for
+  │                          a session we started — the TMUX SESSION NAME, which is an EXACT link to
+  │                          one of our rows where everything else here has had to guess by
+  │                          harness-and-directory. `Record<HarnessId, source | null>`, claude only.
+  │                          `nameSource: 'derived'` marks a name the HARNESS invented (24 of 40 on
+  │                          a real machine) and it never competes; `pickTitle` settles the rest by
+  │                          recency where both sides say when, and otherwise gives it to the
+  │                          harness — `nameSince` exists only from claude 2.1.232, and the
+  │                          complaint this answers is a rename made inside the session that agentop
+  │                          went on ignoring. NEITHER name is discarded when they differ: the row
+  │                          says which place the one it is showing came from. `session-view.ts` merges the managed fleet
   │                          with the EXTERNAL assistants `/proc` reports (listed, marked, and
   │                          carrying no activity — nothing about them is capturable), and
   │                          `sessions-host.ts` is the 5s poller, whose failed poll keeps the
@@ -96,20 +187,139 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          row is not resurrected; an unresolvable one is skipped AND counted;
   │                          everything reopened RETIRES the row it replaced, or a laptop closed
   │                          twice leaves the task holding dead twins under one name). It is shared
-  │                          by `agentop session open` and the cockpit's verb, which were two
-  │                          implementations of one gesture and had already drifted.
+  │                          by `agentop session open`, the cockpit's verb and "reopen what fell",
+  │                          which were separate implementations of one gesture and had drifted.
+  │                          **Every poller must be given the same SOURCES** — `session ls` builds its
+  │                          own and went one commit missing `loadHarnessSessions`, so a row renamed
+  │                          inside its session read correctly in the cockpit and stale on the command
+  │                          line. It gets no heartbeat, though: a one-shot command must not stamp
+  │                          `lastSeenMs`.
   │                          `repo-facts.ts` answers which REPOSITORY a directory belongs to,
   │                          keyed on the git REMOTE — the only key a worktree provably shares with
   │                          its main checkout, since their directory names deliberately differ —
   │                          falling back to the COMMON git dir's parent (`--show-toplevel` would
   │                          answer with the worktree, which is the one name that must not become
   │                          the key). Memoized by directory: the poll runs every five seconds.
-  │                          See docs/session-manager.md
+  │                          **A MANAGED row now carries the conversation's metrics too** — tokens,
+  │                          cost and the CONTEXT GAUGE. Only `external` and `closed` rows read them
+  │                          from the store before, so on a machine whose whole fleet is
+  │                          agentop-started (the normal case once the session manager is in use) the
+  │                          usage column was empty on every live row. `metricsOf` is a READ, never a
+  │                          claim: it is deliberately separate from `claimResume`, which hands out a
+  │                          reopen target and must give each conversation to at most one row, and it
+  │                          accepts only the EXACT links (the harness's own `~/.claude/sessions/<pid>.json`
+  │                          matched by tmux session, or the id the registry stored while the session
+  │                          was up). The harness-and-directory INFERENCE that `claimResume` falls back
+  │                          to is refused here: a reopen is offered to a person who can recognise the
+  │                          title and decline, while a gauge is read at a glance and believed, so two
+  │                          sessions in one worktree would both wear the older one's fill level with
+  │                          nothing on screen saying so.
+  │                          The pure `control-session.ts` is the ONE `SessionView` -> `ControlSession`
+  │                          mapping (it lived inside `cli-start.ts` while the cockpit was the only
+  │                          thing drawing a row) and `session-table.ts` is the pure renderer behind
+  │                          `agentop session ls` — including `emptyReason`, which keeps "the poll
+  │                          failed", "there is nothing" and "the filter withheld it" three different
+  │                          sentences. See docs/session-manager.md
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
   ├── rebuild-flags.ts     → **pure**: the rebuild's two answers (`-y`/`-n` for central.sh's setup prompt, `--cache`/`--no-cache` for the image build) — parse, conflict-refuse, and the argv each path receives
   ├── cli-i18n.ts          → EN/PT strings the HOST produces (CLI is English by default; language follows --lang / preferences.lang / the in-app toggle). The control center's own chrome strings live in tui/src/control/i18n.ts
+  ├── cli-hooks.ts + claude-hooks.ts / claude-skill.ts / session-context.ts → **the Claude Code
+  │                          integration** (`agentop hooks install|uninstall|status|context`). Two
+  │                          pieces because they answer two different questions, and a **HOOK INFERS
+  │                          NOTHING** — it is a deterministic shell callback on an event; the
+  │                          inference is the MODEL's, reading what was injected. So the KNOWLEDGE
+  │                          half (when to fan work out, how to write each session's prompt, the
+  │                          `session batch` contract) is a **SKILL** — loaded by description when
+  │                          the task matches, free otherwise — and never a SessionStart injection,
+  │                          which would tax every session for the few that parallelise. The FACTS
+  │                          half (which sessions run NOW, which is blocked on approval, which task
+  │                          reopens HERE) cannot live in a static file and IS the hook — which
+  │                          prints NOTHING when the fleet is empty, so a quiet machine pays no
+  │                          tokens either. `claude-hooks.ts` is **pure**: the settings merge that
+  │                          preserves every key it did not write, REFUSES a document it cannot
+  │                          merge into rather than fixing it, is idempotent, and whose removal is
+  │                          the exact inverse (containers that existed only to hold our entry are
+  │                          pruned; a group carrying someone else's hook is kept). Our entry is
+  │                          identified by the COMMAND it runs — a hook entry has no field for
+  │                          provenance and inventing an unknown key in someone else's schema is how
+  │                          a settings file stops validating — with the version carried in that same
+  │                          command, so `status` can read a file it never wrote. `claude-skill.ts`
+  │                          is **pure**: the document plus an ownership MARKER (delete the line and
+  │                          the file is the user's, permanently). `session-context.ts` is **pure**:
+  │                          what the hook prints, including when it prints nothing. **Installing is
+  │                          an explicit act** — `agentop setup` only SUGGESTS the command, exactly
+  │                          as `autostart.ts` does for `~/.bashrc` — and paths come from HOME_DIR,
+  │                          never CLAUDE_DIR (which can be a container's read-only mount of someone
+  │                          else's `~/.claude`; same distinction `mcp-list.ts` makes). The session
+  │                          verbs are deliberately NOT MCP tools: `agentop session batch` already
+  │                          exists as a CLI and Bash's permission prompt is the consent gate for
+  │                          starting N billable assistants. There are TWO hook events, held in one
+  │                          `HOOK_SPECS` table so there is exactly ONE settings merge: `SessionStart
+  │                          → hooks context` (the facts, 10s) and `Stop → events emit` (the exact
+  │                          end-of-turn signal for the event channel, 5s — it runs on EVERY turn, so
+  │                          a budget that is felt is a budget that is wrong). The command matcher is
+  │                          NARROWED by event, or removing one hook would delete a `Stop` entry
+  │                          somebody had moved under `SessionStart`. See docs/claude-integration.md
+  ├── events/              → **the EVENT CHANNEL** behind `agentop events`: a state TRANSITION
+  │                          reaching a person and the assistant orchestrating the fleet.
+  │                          **The producer MUST be long-lived, and that decides its home.**
+  │                          `createSessionsPoller` holds each session's last frame digest in
+  │                          memory, and MOVEMENT is the only universal `working` signal there is
+  │                          (codex draws an identical screen streaming and idle); tmux's own
+  │                          `session_activity` is no substitute — measured: a session working for
+  │                          53 minutes reported its last activity 3185s earlier, because nothing
+  │                          was attached. So a single-invocation poll reports WORKING sessions as
+  │                          FINISHED, and a cron-shaped design would announce five sessions
+  │                          finishing at the moment they all started. The producer therefore rides
+  │                          along with the daemon `agentop server` already runs (`daemon.ts` inside
+  │                          otel-watcher), never as a service the user must remember to start;
+  │                          `events run` is the foreground fallback and `events status` reports the
+  │                          producer as running / stale / ABSENT, because "nothing arrived" must be
+  │                          distinguishable from "nothing was watching". `event-plan.ts` is
+  │                          **pure** and holds the rule the whole feature is judged on: **a state
+  │                          counts only once it has been observed on TWO CONSECUTIVE POLLS.** A
+  │                          repaint (a tmux advisory line, a plugin notice) moves the frame for one
+  │                          poll, is correctly read as `working`, and reported the same session as
+  │                          `waiting` twice ten seconds apart. A TIME WINDOW does not fix it — that
+  │                          was the first attempt, the next flicker landed outside it, and any
+  │                          window wide enough also swallows a genuine follow-up turn. The cost is
+  │                          stated: a turn inside one poll interval is invisible to this source,
+  │                          which is exactly what the `Stop` hook covers. TWO SOURCES, not
+  │                          equivalent: the poll is the FLOOR (all six harnesses, reads the screen,
+  │                          the only thing that can see a permission prompt at all — Claude Code
+  │                          fires no `Stop` for one) and the hook is EXACT (Claude only).
+  │                          `event-dedupe.ts` drops the poll's copy of a turn a hook already
+  │                          reported, one-directionally, and NEVER dedupes `waiting-approval`.
+  │                          **The INBOX (`~/.agentistics/events.jsonl`, 0600) is the heart, not a
+  │                          cache**: a Claude session only exists while invoked, so an event
+  │                          delivered to a parked one happened to nobody — the socket and the toast
+  │                          make the read happen SOONER, never instead. A cursor is `offset:seq`
+  │                          because a byte offset is exactly what rotation invalidates, and a
+  │                          pre-rotation cursor reads from the start and SAYS `rotated` rather than
+  │                          returning nothing. `peer-target.ts` is **pure**: the registry says who
+  │                          EXISTS, the SOCKET says who is UP (measured: 79 records, 5 live
+  │                          sockets), a name matches WHOLE never by prefix, and the message carries
+  │                          the target's own `session_id` so a recycled pid cannot misdeliver a
+  │                          fleet event into an unrelated conversation. `notify-plan.ts` is
+  │                          **pure**: the desktop cascade ccn → notify-send → powershell → bell →
+  │                          none, each step named in a SENTENCE by `status`, because a notification
+  │                          that fails silently is worse than none. **ccn
+  │                          (`claude-code-notifications`) is DETECTED, never embedded** — it ships
+  │                          through the Claude Code plugin system with its own release cycle while
+  │                          agentop is one binary, so a copy would be a second version to drift;
+  │                          agentop shapes its event into the `Notification` hook envelope ccn
+  │                          already accepts and contributes the five harnesses ccn cannot see plus
+  │                          the task grouping neither has alone. Subscriptions are a FILE
+  │                          (`event-subscriptions.json`), not a process: a foreground watcher is
+  │                          one the user forgets to start and is dead when it matters.
+  │                          **THE FRONTIER**: an event carries facts and no instruction, a
+  │                          subscription can ask for DELIVERY and never for an ACTION, and
+  │                          `waiting-approval` is reported as waiting on A PERSON — nothing here
+  │                          may approve anything for anyone. `events-frontier.test.ts` asserts it
+  │                          over the module SOURCE, so a field named `action` or an imperative
+  │                          sentence fails the build. See docs/session-events.md
   ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
   ├── rotate-identity.ts   → **pure**: what a TOKEN ROTATION carries. `memberId = sha256(token)`, so rotating renames the machine in every collection keyed by that id — this module holds the ENUMERATION (`tokens`, `sessions`, `memberStats`, `workflows`, `machineKeys` and a tag's `machine` sources all migrate; `audit.targetId` is left as written, because an audit records what was true then; CI sessions are keyed by `ciMemberId(remote)` = `repo:<remote>` and move nothing; the member side's per-connection state is named by the LOCAL connection id and is reconciled by the sync fingerprint). **Any new collection keyed by a machine id must be added here or a rotation silently strands it — that is the same bug three times already.** `planEnvelopeRotation` is the mailbox decision and has NO re-address option: the routing is the GCM AAD, so mail addressed to the old id yields `recipient_mismatch` for anyone (dropped, and counted in the audit as a LOSS) while mail SENT by it still opens exactly as sealed (kept — re-stamping the sender would destroy it). `retargetMachineSources` matches on the source TYPE as well as the value, so an `account` id that happens to read the same is never dragged along. **Sibling pins are deliberately not carried**: to a sibling the rotated machine is new, is pinned on first sight and is ANNOUNCED — continuity would need a claim the central can forge (a "formerly" field, or "same public key", which a central can copy onto an invented machine), and the announcement is the one control against a fabricated peer
   ├── mongo-dates.ts       → **the date boundary**: BSON `Date` in Mongo, ISO string on the wire. Pure toBsonDate/fromBsonDate(+OrNull)/toBsonDates/fromBsonDates + `DATE_FIELDS` (every stored timestamp, by collection) + `migrateStringDatesToBson()` (idempotent, runs at boot; also `scripts/migrate-mongo-dates.ts`)
@@ -292,6 +502,48 @@ Copilot both run OpenAI models, Antigravity runs Google's and Anthropic's.
 ### N/A vs real 0 — `HARNESS_CAPABILITIES`
 
 `HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper (re-exported from `lib/harness.ts`), rather than showing a misleading 0. Current limitations: Codex and Gemini do not produce agent metrics or git line counts. **Antigravity produces `tokens`/`cost`/`model`** (decoded from the `gen_metadata` protobuf in `~/.gemini/antigravity-cli/conversations/<id>.db`, cost via the standard pricing table) and `gitLines` (edit deltas computed from the transcript's edit payloads, not `git diff`); it has `agents: false` because an `invoke_subagent` child is its own conversation, not an agent invocation on the parent. `dynamicWorkflows` (runs of the multi-agent orchestration Workflow tool) is `true` only for `claude` — it gates the repo-detail "Dynamic Workflows" tab.
+
+### The context gauge — a LEVEL, and a window that is never guessed
+
+The bar on a session row says how full that conversation's context window was on its **last turn**.
+It has two halves and the second is the one that can lie.
+
+**The measurement** is `SessionMeta.context_tokens`, gated by `HARNESS_CAPABILITIES.contextWindow`.
+It is a **gauge, never a sum** — reassigned per turn, not accumulated — and that is why it is its own
+field rather than something derived from the four token counters. Measured on a real session here:
+cumulative input 44.3M against a context of 455k, so a gauge built from the totals would have read
+~4400%. Per harness: **claude** — the last `message.usage`'s input side (`input` + `cache_creation` +
+`cache_read`; verified 2 + 693 + 454.714 = 455.409 against a hand count of the same bytes);
+**codex** — `last_token_usage.input_tokens`, which already includes the cached portion, NOT the
+cumulative `total_token_usage`; **kimi** — the input side of one per-turn `usage.record`, from the
+**main** agent only and chosen by timestamp (a subagent runs its own, emptier window, and file read
+order must not decide the answer); **antigravity** — protobuf field `1.4.5`, already documented as
+"a gauge, never a sum", off the last row. **gemini** and **copilot** are `false`: gemini's chat
+files carry no token data at all, and copilot reports tokens only cumulatively at shutdown.
+
+**The window** is `resolveContextWindow` (`packages/core/src/contextWindows.ts`) — the
+`MODEL_PRICING` provenance rule applied to a different number. `ContextWindow` requires
+`verifiedAt` + `source`, so a window cannot exist without provenance, and **a model that is not in
+the table draws no bar**. That is deliberate: an absent gauge is visible, a wrong percentage is not,
+and the same 212.959 tokens is 106% of a 200k window and 21% of a 1M one. Two consequences:
+- **A harness that states its own window outranks the table.** Codex writes `model_context_window`
+  into every `token_count` event → `SessionMeta.context_window`. It knows the deployment and any
+  per-session cap; a model id cannot express either.
+- **OpenAI and Google models are absent** (checked 2026-08-14: neither publishes a citable input
+  token limit). So Antigravity's Gemini conversations and Kimi's routed models measure a context and
+  still draw no bar. Add them the day the figures can be cited, never before.
+
+**Known limitation, stated rather than papered over:** Claude Code can run `claude-opus-5` under a
+200k session cap (its `opus[1m]` picker) and the transcript records only `claude-opus-5` — no
+suffix, no window field. The table therefore reports the MODEL's documented maximum, so a session
+deliberately running the smaller cap reads low.
+
+**Rendering.** `contextFraction` is `null` whenever either half is missing or unusable, and null is
+the only thing that decides whether a bar is drawn — never a `0%`. The **fraction is unclamped**
+because a session really can exceed the table's window, so the **bar saturates** (or it would draw
+outside its cell and shear every row under it) while the **label keeps saying `106%`**. Both round
+DOWN, so neither can read full with room left. The cell outlives `metrics` under width pressure:
+usage is what a session has spent, the gauge is what it has left.
 
 ### Aggregation — stats-cache.json is Claude-only
 
@@ -1004,6 +1256,34 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   A cell nothing on screen carries is ZERO and costs no gap. Measuring against the pane rather than
   its body made every column four characters too wide, and the table survived only because Ink
   truncated it.
+- **The CARD layout is the same rows in another shape, and a card names every fact it carries.**
+  `cardPages` walks the very `SessionRow[]` the list draws, so what a group is called, which ones
+  are muted and where the history section begins are decided ONCE, in `sessionRows`. A band belongs
+  to one GROUP — the air to the right of a one-card group is what separates it from the next, not
+  waste, and filling it with the following group's cards is how the grid used to ignore the
+  grouping it was drawn under. A heading is never placed without a row of cards under it, and a
+  group crossing a page break REPEATS its name (within a page it is said once — it is a band or two
+  above and plainly governs what follows). Each group is named exactly ONCE per card: by the band's
+  heading when there is one, and otherwise by the card's own frame title, with the session HANDLE
+  moving to the badge — cut to `paneTitleRoom`, because `paneTop` drops a badge whole rather than
+  truncate a title and the handle is the prefix `agentop session attach 3f5f` resolves. A fact whose
+  value IS that name is dropped from the card, the same rule `sessionColumns` applies to its `task`
+  cell while grouping by task. The facts a reader cannot name from the value alone — the folder, the
+  model, the task, the note — carry a LABEL, in the words `sessionsCols` already prints over the
+  list's columns; the labels are aligned in one column and given up ALL AT ONCE
+  (`cardLabelWidth`), because labels that come and go leave the values starting at different
+  columns. And a card is never taller than it has content for: `cardGrid` takes the line count the
+  screen measured and each BAND is then sized to its own tallest card, because one height for the
+  whole grid is the height of the richest card in the fleet — one session carrying a model, a task
+  and a note made every other card two rows taller than it had anything to put in them, and rows of
+  blank inside a frame are a box with a name in it. The band and not the card: cards of one band
+  stand side by side, and giving each its own height leaves the row's bottom edge ragged, which is
+  worse to look at than the one blank line a short card beside a rich one still keeps. The rows a
+  short band gives back become another band on the page, not air under the pager. And a band's cost
+  is its cards PLUS the name over them, so `cardGrid` is told whether headings will be drawn and
+  charges that row to EVERY band — sizing as though a band were only its cards measured the ceiling
+  for a region that then had to pay a row per band out of the very same rows, and the grouped grid
+  paged four times over. The trade it makes is one line of card for another group on the page.
 - **`stats-cache.json` stays Claude-only here too.** `selectors.ts` reads Claude totals from the
   cache and every other harness from per-session sums; `applyHarnessFilter` blanks the cache when
   a non-Claude harness is selected, or Claude's numbers would survive the filter.
@@ -1013,6 +1293,15 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
 
 ## Important rules
 
+- **Anything agentop writes OUTSIDE its own directories is an explicit act of the user, and is
+  exactly reversible.** `~/.bashrc` and `~/.zshrc` (`autostart.ts`), `~/.claude/settings.json` and
+  `~/.claude/skills/` (`cli-hooks.ts`): each is written only behind a command the user typed, never
+  as a side effect of installing or configuring agentop, which may only ever SUGGEST it. Those files
+  hold other people's configuration, so the write is a MERGE that preserves every key it did not
+  author, a document it cannot merge into is REFUSED rather than repaired, running it twice changes
+  nothing, and the uninstall removes exactly what the install wrote — including the containers that
+  existed only to hold it. If the target tool is not installed at all, the command says so and
+  creates neither directory nor file.
 - **EVERY new screen and EVERY layout fix MUST also deliver its mobile version — no exceptions.**
   A change is not done when it looks right at 1440px. Before calling any UI work complete:
   - Build the mobile branch *in the same change*, not as a follow-up. A "we'll do mobile later" pass

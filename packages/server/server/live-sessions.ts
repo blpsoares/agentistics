@@ -228,6 +228,15 @@ export interface HarnessProcess {
   sessionId?: string
   /** Process start time (epoch ms). Bounds which sessions an anonymous process could be driving. */
   startedMs?: number
+  /**
+   * The OS pid, when this record came from `/proc` rather than from an older caller's plain cwd.
+   *
+   * Carried because it is an EXACT key into what a harness writes about its own live sessions:
+   * Claude Code names its record `~/.claude/sessions/<pid>.json` (see `harness-sessions.ts`), so a
+   * process found here can be matched to the session it is running with no inference at all. Every
+   * other correlation in this area has had to guess by harness-and-directory.
+   */
+  pid?: number
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -301,7 +310,7 @@ export async function scanProcesses(): Promise<{
       const startedMs = await processStartMs(pid, btimeSec, hz)
       // An open session file beats argv: it is what the process is writing to right now.
       const sessionId = (await sessionIdFromFds(pid, harness)) ?? sessionIdFromArgv(argv)
-      procs.push({ harness, cwd, sessionId, startedMs })
+      procs.push({ harness, cwd, sessionId, startedMs, pid: Number(pid) })
     } catch { /* process exited or not ours — ignore */ }
   }))
   const unavailable = procs.length > 0
@@ -482,6 +491,9 @@ export function resolveLiveSnapshot(
       cwd: p.cwd,
       ...(p.startedMs !== undefined ? { startedMs: p.startedMs } : {}),
       ...(p.sessionId ? { sessionId: p.sessionId } : {}),
+      // Carried through, because these are exactly the rows the cockpit lists as `external` — and
+      // the pid is the one key that names what each of them is actually running.
+      ...(p.pid !== undefined ? { pid: p.pid } : {}),
     })
   }
   return { liveSessionIds: [...open], liveProcesses: unmatched }

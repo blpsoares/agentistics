@@ -106,6 +106,31 @@ Covered in depth in `CLAUDE.md` (§ "Pricing — three layered sources"). The co
 - No cache-write counter → leave `cache_creation_input_tokens` at 0, and say so in the capability
   comment.
 
+### 3a. Context size is a GAUGE, and it is not the token total
+
+`SessionMeta.context_tokens` answers "how full was the window on the last turn", which is a
+**level**, not a quantity — it is reassigned per turn, never accumulated. The distinction is the
+whole reason it is a separate field: on a real session measured here the cumulative input was
+44.3M against a context of 455k, so a gauge derived from the totals would have reported ~4400% of
+the window. Rules:
+
+- **A cumulative counter can never answer this.** Codex's `total_token_usage` and Kimi's summed
+  `usage.record`s are session totals; the per-turn `last_token_usage` / individual `usage.record`
+  are what qualify. If the harness reports only running totals, `contextWindow: false` — even
+  though `tokens: true`.
+- **Count the INPUT side only.** The prompt that was sent is fresh input + cache read + cache
+  write; output is what came back and is not in the window when the turn is issued.
+- **A subagent's window is not the session's.** Where a harness folds child agents into one
+  session (Kimi), the gauge comes from the main agent only, chosen by timestamp so it does not
+  depend on the order the files were read.
+- **A harness that states its own window wins.** Codex writes `model_context_window` per session;
+  store it in `SessionMeta.context_window` and it outranks any table lookup, because it knows the
+  deployment and any per-session cap that a model id cannot express.
+- **Otherwise the window comes from `resolveContextWindow`** (`packages/core/src/contextWindows.ts`),
+  which holds only models with a dated source — the `MODEL_PRICING` provenance rule applied to a
+  different number. A model that is not in it draws no bar at all: an absent gauge is visible, a
+  wrong percentage is not.
+
 ## 4. Capabilities — `N/A` vs a real `0`
 
 `HARNESS_CAPABILITIES` (`packages/core/src/types.ts`) is a `Record<HarnessId, …>`, so the build

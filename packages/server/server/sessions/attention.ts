@@ -41,6 +41,22 @@ export const QUIET_MS = 6_000
 export const MARKER_STALE_MS = 60_000
 
 /**
+ * How much of the BOTTOM of a frame counts as its footer.
+ *
+ * Every approval pattern in `attention-rules.ts` is a footer, and every dialog probed for this
+ * feature draws its footer on the last line — the three claude components, codex, kimi, gemini,
+ * copilot and agy alike. Four leaves room for a trailing blank or a strip drawn beneath it without
+ * reaching far enough up to catch the conversation.
+ *
+ * The window is the point. Matching a footer anywhere in a sixty-line capture means any session
+ * that QUOTES one is read as sitting in it, and in this repository that is guaranteed rather than
+ * unlikely: agentop is developed with agentop, so a session editing `attention-rules.ts` has those
+ * exact strings on screen all day. One was offered a destructive key over a question it had never
+ * asked. A quotation lives in the middle of a screen; a footer lives at the end of it.
+ */
+export const FOOTER_LINES = 4
+
+/**
  * FNV-1a over the frame, joined with newlines.
  *
  * Dependency-free, and deliberately not a crypto hash: the only question ever asked of this value is
@@ -73,12 +89,28 @@ export function attentionOf(o: {
   if (!o.alive) return 'exited'
 
   const text = o.frame.join('\n')
-  if (o.rules && o.rules.approval.some(re => re.test(text))) return 'waiting-approval'
+  // A dialog's footer is a property of the BOTTOM of the screen, and matching it anywhere in the
+  // frame is what let a session that merely TALKED about one be reported as blocked in it. That is
+  // not a hypothetical here: this project is built with agentop, so sessions spend whole mornings
+  // with strings like `Esc to cancel · Tab to amend` on screen as source code — and one of them was
+  // offered a destructive key over a question it had never asked. Reported from a real machine.
+  const footer = o.frame.slice(Math.max(0, o.frame.length - FOOTER_LINES)).join('\n')
+  const working = (haystack: string) =>
+    Boolean(o.rules?.working && o.rules.working.some(re => re.test(haystack)))
+  // A frame whose FOOTER says something is interruptible is not a frame sitting on a dialog: the
+  // dialog's own footer takes that row while it is open. Checked in the footer rather than over the
+  // whole frame, and that narrowness is deliberate — claude prints `esc to interrupt` whenever
+  // anything is interruptible INCLUDING BACKGROUND AGENTS, so a whole-frame veto would suppress a
+  // genuine permission prompt on a session whose subagents happen to be running. Suppressing a real
+  // block is the one error worse than the one being fixed.
+  if (o.rules && !working(footer) && o.rules.approval.some(re => re.test(footer))) {
+    return 'waiting-approval'
+  }
 
   // The marker is PROOF of work only while the screen has been moving at all recently. A footer
   // that lingers is not evidence, and silence eventually outweighs it — see `MARKER_STALE_MS`.
   const silentFor = o.nowMs - o.lastActivityMs
-  if (silentFor <= MARKER_STALE_MS && o.rules?.working && o.rules.working.some(re => re.test(text))) {
+  if (silentFor <= MARKER_STALE_MS && working(text)) {
     return 'working'
   }
 
@@ -87,6 +119,32 @@ export function attentionOf(o: {
   if (silentFor < QUIET_MS) return 'working'
 
   return 'waiting'
+}
+
+/**
+ * The BOTTOM of the frame, verbatim — what a blocked session is asking, PURE.
+ *
+ * Deliberately not `frameTail`, and the difference is the whole point. `frameTail` answers "what is
+ * this session SAYING", so it cuts at the last rule and throws away the input box and the status
+ * strip — which for a session sitting on a dialog throws away the dialog, and leaves whatever the
+ * assistant said before it opened. That text read perfectly plausibly under a heading saying "you
+ * are about to confirm this", which is the worst possible way to be wrong.
+ *
+ * So this takes the last lines AS DRAWN, chrome included. The options, the highlighted one and the
+ * footer naming the key are the answer to "what am I agreeing to", and none of them survive being
+ * tidied. Blank lines at either end are dropped because they are padding rather than content;
+ * everything between is kept exactly as the pane rendered it.
+ *
+ * It is the only thing standing between `approvalFor()`'s keystroke and a confirmation the user
+ * cannot check — see `approval-spec.ts`.
+ */
+export function approvalTail(frame: readonly string[], max = 10): string[] {
+  const lines = frame.slice(Math.max(0, frame.length - Math.max(0, max)))
+  let start = 0
+  let end = lines.length
+  while (start < end && (lines[start] ?? '').trim() === '') start++
+  while (end > start && (lines[end - 1] ?? '').trim() === '') end--
+  return lines.slice(start, end)
 }
 
 /** A line that is only box-drawing or rule characters — a frame's furniture, never its content. */
