@@ -220,6 +220,24 @@ one prompt non-interactively and exits — so agentop types the prompt in once t
 Codex's reasoning effort is a `-c key=value` configuration override rather than a flag; it is not
 wired up because the key could not be verified from the CLI itself, and agentop does not guess flags.
 
+## Scrolling an attached session
+
+Sessions are hosted on agentop's own tmux socket (`-L agentop`), and agentop sets three options on
+it before the first one exists: `remain-on-exit` (a finished session stays listable with its last
+frame readable), `mouse on`, and a `history-limit` of 50000 lines.
+
+The mouse is what makes the wheel scroll at all — without it a pane shows the last screenful and
+nothing else, so attaching to a session to read what it did was attaching to a session you cannot
+read. The trade is that dragging to select now goes to tmux rather than to your terminal: **hold
+shift** to select and copy the terminal's own way.
+
+The scrollback is set up front because it does not apply retroactively — a pane created before it
+keeps tmux's default 2000 for as long as it lives. Sessions started by an older agentop therefore
+keep the small buffer until they are reopened; the mouse, being a server option, applies to them
+immediately.
+
+None of this touches your own tmux: different socket, different server, different config.
+
 ## Where state lives
 
 `~/.agentistics/managed-sessions.json` — the sessions agentop started, with their labels, notes and
