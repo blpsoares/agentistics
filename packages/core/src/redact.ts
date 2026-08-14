@@ -60,7 +60,29 @@ const STRONG: RegExp[] = [
   /\bAIza[A-Za-z0-9\-_]{35}/g,
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\beyJ[A-Za-z0-9\-_]{8,}\.eyJ[A-Za-z0-9\-_]{8,}\.[A-Za-z0-9\-_]{8,}/g, // JWT
+  // OUR OWN connect token — `act1_<base64url endpoint>.<hex secret>`, from `packConnectToken`.
+  //
+  // This list carried GitHub's, Anthropic's, OpenAI's, Slack's, Google's, AWS's and a JWT before it
+  // carried agentistics'. The gap was found the way these are: a real one, pasted as a session's
+  // opening message, sitting in plaintext in `first_prompt` in the local store — the exact field
+  // this module exists to protect, and the one that travels to a central.
+  //
+  // Unguarded like its neighbours, because `act1_` is a namespace this product mints: nothing else
+  // produces it, so there is no prose to protect from a false positive.
+  /\bact1_[A-Za-z0-9\-_]+\.[A-Za-z0-9]{16,}/g,
 ]
+
+/**
+ * NOT in the list above, deliberately: the BARE secret half, 64 hex characters (96 for a repo/CI
+ * token — see `mintToken`).
+ *
+ * It carries no namespace, and 64 hex is exactly the shape of a SHA-256 — which this product prints
+ * constantly and legitimately, `hashToken`'s own output included. A rule for it would redact any
+ * session label that merely quotes a hash, and the first thing anyone does with a noisy redactor is
+ * switch it off. A bare secret pasted WITH context is already covered: `ASSIGNMENT` catches
+ * `token=<hex>` and `BEARER` catches `Bearer <hex>`. Pasted entirely alone it is indistinguishable
+ * from a hash, and this module's stated rule is to leave text alone when in doubt.
+ */
 
 /**
  * The password inside a `scheme://user:password@host` URI.

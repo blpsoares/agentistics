@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { redactSecrets, containsSecret } from './redact'
+import { redactSecrets, containsSecret, redactSessionText, REDACTION } from './redact'
 
 const R = '[REDACTED]'
 
@@ -158,5 +158,56 @@ describe('behavior', () => {
     const dirty = 'mongodb+srv://u:pw12345678@h/db'
     expect(containsSecret(dirty)).toBe(true)
     expect(containsSecret(redactSecrets(dirty))).toBe(false)
+  })
+})
+
+describe("agentistics' own connect token", () => {
+  /**
+   * The composite form `packConnectToken` produces and the UI tells people to paste: `act1_` +
+   * base64url of the central URL + `.` + the hex secret. Shaped like the real one that was found in
+   * a session's `first_prompt`; the secret here is random hex typed for this test.
+   */
+  const TOKEN = 'act1_aHR0cHM6Ly9jZW50cmFsLmV4YW1wbGUuY29t'
+    + '.1f3c9a7e5b2d4068af91c3e7d5b8402619ac7f3e0d2b5849c6ef1a3b7d90c254'
+
+  test('redacts the token this product mints, which is the one it kept missing', () => {
+    // Every other vendor's format was on the STRONG list and ours was not. It was found in
+    // plaintext in `first_prompt` — the field this module exists to protect.
+    expect(redactSecrets(TOKEN)).toBe(REDACTION)
+    expect(containsSecret(TOKEN)).toBe(true)
+  })
+
+  test('redacts it inside the prose somebody actually pastes', () => {
+    const out = redactSecrets(`agentop member connect --token ${TOKEN} nao funciona`)
+    expect(out).not.toContain(TOKEN)
+    // The sentence still says what the session was ABOUT, which is the whole value of a label.
+    expect(out).toContain('agentop member connect')
+    expect(out).toContain('nao funciona')
+  })
+
+  test('scrubs it out of a session the way the push boundary does', () => {
+    const session = { first_prompt: `here is my token: ${TOKEN}`, title: 'connect fails' }
+    const out = redactSessionText(session)
+    expect(out.first_prompt).not.toContain(TOKEN)
+    expect(out.title).toBe('connect fails')
+  })
+
+  test('leaves a bare SHA-256 alone — 64 hex is a hash, not a namespace', () => {
+    // The deliberate limit. `hashToken` output, git objects and content hashes are all this shape,
+    // and a rule for it would redact labels that merely quote one. A noisy redactor gets switched
+    // off, which costs more than it saves.
+    const sha = 'a'.repeat(64)
+    expect(redactSecrets(`the id is ${sha}`)).toContain(sha)
+  })
+
+  test('still catches a bare secret when it is pasted WITH context', () => {
+    const secret = '1f3c9a7e5b2d4068af91c3e7d5b8402619ac7f3e0d2b5849c6ef1a3b7d90c254'
+    expect(redactSecrets(`--token=${secret}`)).not.toContain(secret)
+    expect(redactSecrets(`Authorization: Bearer ${secret}`)).not.toContain(secret)
+  })
+
+  test('does not fire on the prefix alone, or on prose that merely mentions it', () => {
+    expect(redactSecrets('paste your act1_ token here')).toBe('paste your act1_ token here')
+    expect(redactSecrets('the act1_ format embeds the endpoint')).toBe('the act1_ format embeds the endpoint')
   })
 })
