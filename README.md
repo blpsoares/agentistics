@@ -207,8 +207,9 @@ once**, with different sharing rules for each.
 # host a central
 agentop central init && agentop central up
 
-# join one
-agentop member connect --endpoint http://<central-host>:48080 --token <token>
+# join one — a token minted by a central with a public URL carries it,
+# so the token alone is enough (--endpoint only for a bare token)
+agentop member connect --token <token>
 ```
 
 ### Accounts, teams and roles
