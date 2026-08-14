@@ -218,7 +218,7 @@ export interface ControlStrings {
   sessionsUnknownRepo: string
   sessionsWorktreeTag: string
   /** The sessions list's column headings — an unlabelled column is one you have to learn. */
-  sessionsCols: Record<'id' | 'state' | 'age' | 'title' | 'task' | 'worktree' | 'metrics' | 'harness' | 'where', string>
+  sessionsCols: Record<'id' | 'state' | 'age' | 'title' | 'task' | 'worktree' | 'metrics' | 'context' | 'harness' | 'where', string>
   /** Detail-pane field labels. */
   sessionsWhere: string
   sessionsModel: string
@@ -227,6 +227,8 @@ export interface ControlStrings {
   sessionsDoing: string
   sessionsTask: string
   sessionsMetrics: string
+  /** Detail-pane label for the context gauge spelled out. */
+  sessionsContext: string
   /** The name that did NOT win, when a session is named in agentop AND inside the harness. */
   sessionsAlsoLabel: string
   sessionsAlsoHarness: string
@@ -623,6 +625,9 @@ const EN: ControlStrings = {
     task: 'task',
     worktree: 'worktree',
     metrics: 'usage',
+    // The WINDOW, not "context": the cell shows how full one is, and a column headed `context`
+    // over a bar reads as "this session's context" — a thing, not a level.
+    context: 'window',
     harness: 'harness',
     where: 'project',
   },
@@ -633,6 +638,7 @@ const EN: ControlStrings = {
   sessionsDoing: 'saying',
   sessionsTask: 'task',
   sessionsMetrics: 'usage',
+  sessionsContext: 'context window',
   sessionsAlsoLabel: 'named here',
   sessionsAlsoHarness: 'named inside',
   sessionsDetach: 'to detach',
@@ -1017,6 +1023,7 @@ const PT: ControlStrings = {
     task: 'tarefa',
     worktree: 'worktree',
     metrics: 'uso',
+    context: 'janela',
     harness: 'harness',
     where: 'projeto',
   },
@@ -1027,6 +1034,7 @@ const PT: ControlStrings = {
   sessionsDoing: 'dizendo',
   sessionsTask: 'tarefa',
   sessionsMetrics: 'uso',
+  sessionsContext: 'janela de contexto',
   sessionsAlsoLabel: 'nome daqui',
   sessionsAlsoHarness: 'nome de dentro',
   sessionsDetach: 'para sair',

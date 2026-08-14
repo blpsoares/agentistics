@@ -127,6 +127,9 @@ export interface SessionView {
   /** Metrics of the conversation behind this row, when it has any. Absent is never zero. */
   tokens?: number
   costUSD?: number
+  /** How full the context window was on the last turn, and out of how much. Both or neither. */
+  contextTokens?: number
+  contextWindow?: number
   /**
    * Whether this harness has probed approval rules at all.
    *
@@ -265,6 +268,31 @@ export function buildSessionViews(o: {
     return { resume: { sessionId: conv.sessionId, title: conv.title } }
   }
 
+  /**
+   * The conversation a RUNNING managed row is driving, for its metrics — a read, never a claim.
+   *
+   * Separate from `claimResume` on purpose. That one hands out a REOPEN target and must give each
+   * conversation to at most one row, or a crash that left five rows in one directory offers the
+   * same conversation five times. This one only wants numbers, and numbers are not scarce: two rows
+   * reading the same conversation is a display question, while a row silently losing its metrics to
+   * whichever row was mapped first is a wrong answer.
+   *
+   * Only the EXACT links are used — the harness's own record (`~/.claude/sessions/<pid>.json`,
+   * matched by tmux session name) and the id the registry stored while the session was up. The
+   * harness-and-directory inference `claimResume` falls back to is deliberately not accepted here:
+   * for a reopen it is offered to a person who can recognise the title and decline, whereas a
+   * context gauge is read at a glance and believed. Two sessions in one worktree would otherwise
+   * both wear the older one's fill level with nothing on screen saying so.
+   */
+  const metricsOf = (
+    managed: ManagedSession | undefined,
+    exactId?: string,
+  ): Conversation | undefined => {
+    const pool = o.conversations ?? []
+    const id = exactId ?? managed?.conversationId
+    return id ? pool.find(c => c.sessionId === id) : undefined
+  }
+
   const managed: SessionView[] = o.reconciled.map(r => {
     const harness = r.managed?.harness
     // What the harness says about ITSELF, matched by the tmux session it recorded — the one exact
@@ -276,6 +304,10 @@ export function buildSessionViews(o: {
     // among the things you can talk to.
     const finished = Boolean(r.managed?.endedAt)
     const activity = finished ? ('exited' as const) : o.activity.get(r.id)
+    // A managed row carried no metrics at all until now — `external` and `closed` rows read them
+    // from the store and this one did not, so on a machine whose whole fleet is agentop-started
+    // (the normal case once the session manager is in use) the usage column was empty everywhere.
+    const conv = metricsOf(r.managed, own?.sessionId)
     return {
       id: r.id,
       ...(harness ? { harness } : {}),
@@ -322,6 +354,11 @@ export function buildSessionViews(o: {
         // own `conversationId` decides, exactly as before. That is not a gap: the id was recorded
         // into the registry while the session was up, by the branch below.
         ? claimResume(r.managed, harness, own?.sessionId)
+        : {}),
+      ...(conv?.tokens !== undefined ? { tokens: conv.tokens } : {}),
+      ...(conv?.costUSD !== undefined ? { costUSD: conv.costUSD } : {}),
+      ...(conv?.contextTokens !== undefined && conv.contextWindow !== undefined
+        ? { contextTokens: conv.contextTokens, contextWindow: conv.contextWindow }
         : {}),
       attached: r.backend?.attached ?? false,
       approvalDetection: harness !== undefined && rulesFor(harness) !== undefined,
@@ -372,6 +409,9 @@ export function buildSessionViews(o: {
       ...(conv?.resumable ? { resume: { sessionId: conv.sessionId, title: conv.title } } : {}),
       ...(conv?.tokens !== undefined ? { tokens: conv.tokens } : {}),
       ...(conv?.costUSD !== undefined ? { costUSD: conv.costUSD } : {}),
+      ...(conv?.contextTokens !== undefined && conv.contextWindow !== undefined
+        ? { contextTokens: conv.contextTokens, contextWindow: conv.contextWindow }
+        : {}),
       searchText: searchTextOf(p.harness, p.cwd, ownName, conv?.title, conv?.firstPrompt),
     }
   })
@@ -424,6 +464,9 @@ export function buildSessionViews(o: {
       ...(c.resumable ? { resume: { sessionId: c.sessionId, title: c.title } } : {}),
       ...(c.tokens !== undefined ? { tokens: c.tokens } : {}),
       ...(c.costUSD !== undefined ? { costUSD: c.costUSD } : {}),
+      ...(c.contextTokens !== undefined && c.contextWindow !== undefined
+        ? { contextTokens: c.contextTokens, contextWindow: c.contextWindow }
+        : {}),
       searchText: searchTextOf(c.harness, c.cwd, c.title, c.firstPrompt),
     }))
 

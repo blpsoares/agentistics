@@ -60,7 +60,8 @@ import {
   asideRowKey, resolveAsideCursor,
   enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
-  taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
+  taskCounts, projectCounts, sessionMetric, sessionContext, contextLevel,
+  sessionHandle, worktreeName, sessionRunning,
   sessionAge, sessionKeyHelp, keyHelpColumn, closeCellWidth, canClose, CLOSE_CELL,
   DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder, type SessionLayout,
   cardGrid, cardPages, pageOfCard, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
@@ -75,6 +76,20 @@ import { isActivation, wheelDelta } from '../mouse'
 import { usePointer } from '../pointer'
 import { truncate } from '../../components/Primitives'
 import { COLORS, HARNESS_COLOR } from '../../theme'
+import type { ContextLevel } from '../sessions'
+
+/**
+ * The gauge's colour by level, mirroring `session-table.ts`'s ANSI table.
+ *
+ * `ok` is `undefined` and rendered `dimColor`, which is how every other neutral fact on the row is
+ * drawn: a bar that is coloured at 12% has spent the attention it needs at 95%, and the whole
+ * reason to colour this cell at all is that "nearly full" must be readable without reading.
+ */
+const CONTEXT_COLOR: Record<ContextLevel, string | undefined> = {
+  ok: undefined,
+  warn: COLORS.accent,
+  full: COLORS.danger,
+}
 
 /** The colour each state wears. Paired with a WORD everywhere it is drawn — a fleet state announced
  *  in colour alone is unreadable on a terminal with a flattened palette, and this is the one screen
@@ -378,6 +393,7 @@ export function Sessions({
     doing: s.sessionsDoing,
     task: s.sessionsTask,
     metrics: s.sessionsMetrics,
+    context: s.sessionsContext,
     alsoLabel: s.sessionsAlsoLabel,
     alsoHarness: s.sessionsAlsoHarness,
     // Absent when the backend did not report one — an invented keystroke is worse than none, since
@@ -1495,6 +1511,7 @@ export function Sessions({
           {columns.worktree > 0 ? '  ' + padCell(s.sessionsCols.worktree, columns.worktree) : ''}
           {columns.task > 0 ? '  ' + padCell(s.sessionsCols.task, columns.task) : ''}
           {columns.metrics > 0 ? '  ' + padCell(s.sessionsCols.metrics, columns.metrics) : ''}
+          {columns.context > 0 ? '  ' + padCell(s.sessionsCols.context, columns.context) : ''}
           {columns.harness > 0 ? '  ' + padCell(s.sessionsCols.harness, columns.harness) : ''}
           {columns.where > 0 ? '  ' + padCell(s.sessionsCols.where, columns.where) : ''}
         </Text>
@@ -1829,6 +1846,16 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
       {columns.metrics > 0 ? (
         <Text color={COLORS.secondary}>{gap + padCell(sessionMetric(session), columns.metrics)}</Text>
       ) : null}
+      {/* How full the context window is. Beside the usage because it is the same kind of fact and
+          the opposite reading of it: usage is what this session has spent, this is what it has
+          left. A row with no reading draws a BLANK of the same width rather than a `0%` — the
+          column exists because some rows can answer, not because all of them can. */}
+      {columns.context > 0 ? (
+        <Text color={session.context ? CONTEXT_COLOR[contextLevel(session.context.fraction)] : undefined}
+              dimColor={!session.context || contextLevel(session.context.fraction) === 'ok'}>
+          {gap + padCell(sessionContext(session), columns.context)}
+        </Text>
+      ) : null}
       {columns.harness > 0 ? (
         <Text color={harnessColor}>{gap + padCell(session.harness, columns.harness)}</Text>
       ) : null}
@@ -2054,6 +2081,18 @@ function CardLineView({ line, width, labelWidth, marked, selected, stateColor, b
   }
   const label = labelWidth > 0 && line.label ? line.label : ''
   const room = label === '' ? width : Math.max(1, width - labelWidth - CARD_LABEL_GAP)
+  // The gauge carries its own level, so it is coloured by what it SAYS rather than by what kind of
+  // line it is — the one line on the card whose colour is a reading rather than a role. It is drawn
+  // unlabelled, like the `usage` line it sits under and shares a subject with, but it is measured
+  // against `room` rather than `width` so a label added later cannot push it off its own line.
+  if (line.kind === 'gauge') {
+    const color = CONTEXT_COLOR[line.level ?? 'ok']
+    return (
+      <Text wrap="truncate" color={color} dimColor={color === undefined}>
+        {truncate(line.text, room)}
+      </Text>
+    )
+  }
   // What the assistant said is drawn in the text colour: it is the content, and every other line is
   // a label for it.
   return (

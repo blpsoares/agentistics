@@ -10,6 +10,7 @@ import {
   cardGrid, cardPages, pageOfCard, CARD_PAGE_MAX, CARD_MIN_WIDTH, CARD_GAP, CARD_LINES,
   cardBadges, cardLines, fitCardLines, cardStateCells, cardLabelWidth, CARD_VALUE_MIN,
   cardBand, cardHit, cardStep, cardRows, cardPageRows, pagerCells, pagerHit,
+  contextBar, contextLevel, sessionContext,
   askRows, fitApprovalPreview, APPROVAL_PREVIEW_MAX, QUESTION_ROWS, CARD_MIN_LINES,
   type CardBand, type CardLine, type SessionRow,
 } from './sessions'
@@ -210,6 +211,7 @@ describe('detailLines', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'started outside agentop', closed: 'not running', doing: 'saying', task: 'task', metrics: 'usage',
+    context: 'window',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
@@ -310,7 +312,7 @@ describe('detailLines — the two non-actionable rows say different things', () 
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'started outside agentop', closed: 'not running', doing: 'saying',
-    task: 'task', metrics: 'usage',
+    task: 'task', metrics: 'usage', context: 'window',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
@@ -1587,8 +1589,7 @@ describe('cardLines', () => {
 
   // The ORDER is the give-up order — `fitCardLines` cuts from the bottom — so it is the thing worth
   // pinning: the name and the state can never be lost, and a card as tall as `CARD_LINES` reaches
-  // the task. The note and what the assistant is saying are below that and are the two a full card
-  // gives up, exactly as they were before the model took a line of its own.
+  // the note. What the assistant is saying sits below that and is what a full card gives up.
   it('composes its facts in the order a short card gives them up', () => {
     const full = cardLines({
       ...base, tokens: '51.7k', cost: '$1.24', model: 'opus', task: 'billing', note: 'a note',
@@ -1597,7 +1598,21 @@ describe('cardLines', () => {
     expect(full.map(l => l.key))
       .toEqual(['title', 'state', 'usage', 'where', 'model', 'task', 'note', 'say'])
     expect(fitCardLines(full, CARD_LINES).map(l => l.key))
-      .toEqual(['title', 'state', 'usage', 'where', 'model', 'task'])
+      .toEqual(['title', 'state', 'usage', 'where', 'model', 'task', 'note'])
+  })
+
+  // The gauge takes the slot right after the usage it belongs with, so on a card as tall as
+  // `CARD_LINES` it displaces the LAST fact rather than any of the identifying ones.
+  it('places the gauge under the usage without costing the name, state or place', () => {
+    const full = cardLines({
+      ...base, tokens: '51.7k', cost: '$1.24', model: 'opus', task: 'billing', note: 'a note',
+      context: { fraction: 0.87, label: '87%', used: '174k', window: '200k' },
+      lastLines: ['running the migration'],
+    }, labels)
+    expect(full.map(l => l.key))
+      .toEqual(['title', 'state', 'usage', 'context', 'where', 'model', 'task', 'note', 'say'])
+    expect(fitCardLines(full, CARD_LINES).map(l => l.key))
+      .toEqual(['title', 'state', 'usage', 'context', 'where', 'model', 'task'])
   })
 
   it('always carries the name and the state, in that order', () => {
@@ -2040,6 +2055,7 @@ describe('detailLines — named in two places', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'external', closed: 'closed', doing: 'saying', task: 'task', metrics: 'usage',
+    context: 'window',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
@@ -2068,6 +2084,186 @@ describe('detailLines — named in two places', () => {
       labels, ago,
     )
     expect(lines.map(l => l.key).slice(0, 3)).toEqual(['say0', 'also', 'where'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// the context gauge
+// ---------------------------------------------------------------------------
+
+/** A session carrying a gauge at `pct` percent full. */
+const gauged = (id: string, pct: number, over: Partial<ControlSession> = {}): ControlSession =>
+  session(id, {
+    context: {
+      fraction: pct / 100,
+      label: `${Math.floor(pct)}%`,
+      used: `${pct}k`,
+      window: '100k',
+    },
+    ...over,
+  })
+
+describe('contextBar', () => {
+  it('fills in proportion, rounding DOWN', () => {
+    expect(contextBar(0, 6)).toBe('░░░░░░')
+    expect(contextBar(0.5, 6)).toBe('███░░░')
+    expect(contextBar(1, 6)).toBe('██████')
+  })
+
+  it('never reads full while the window has room left', () => {
+    // 99% must not draw six of six. The shape is what gets believed at a glance, so a bar that
+    // rounds up is the one telling the lie — and it is the reassuring direction, which is worse.
+    expect(contextBar(0.99, 6)).toBe('█████░')
+  })
+
+  it('SATURATES past the window instead of drawing outside its cell', () => {
+    // A session really can exceed the window this reading was computed against. An overflowing bar
+    // would be wider than the column it was measured for and shear every row under it — the exact
+    // failure the pure-layout rule exists to prevent.
+    expect(contextBar(1.06, 6)).toBe('██████')
+    expect(contextBar(44.3, 6)).toBe('██████')
+    expect(contextBar(1.06, 6).length).toBe(6)
+  })
+
+  it('is exactly `width` columns for every fraction and every width', () => {
+    for (let w = 0; w <= 20; w++) {
+      for (const f of [-1, 0, 0.001, 0.3333, 0.5, 0.9999, 1, 2, 99, Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect(contextBar(f, w).length, `w=${w} f=${f}`).toBe(w)
+      }
+    }
+  })
+
+  it('draws nothing at zero width rather than one stray glyph', () => {
+    expect(contextBar(0.5, 0)).toBe('')
+  })
+})
+
+describe('contextLevel', () => {
+  it('warns at 80% and calls it full at exactly 100%', () => {
+    expect(contextLevel(0)).toBe('ok')
+    expect(contextLevel(0.79)).toBe('ok')
+    expect(contextLevel(0.8)).toBe('warn')
+    expect(contextLevel(0.99)).toBe('warn')
+    expect(contextLevel(1)).toBe('full')
+    expect(contextLevel(1.06)).toBe('full')
+  })
+})
+
+describe('sessionContext', () => {
+  it('is EMPTY for a row with no reading — never a confident 0%', () => {
+    // The three reasons a row has no gauge (harness cannot report it, model has no verified
+    // window, no conversation behind the row) all render the same nothing, on purpose.
+    expect(sessionContext(session('a'))).toBe('')
+  })
+
+  it('is the bar, a space, then the percentage', () => {
+    expect(sessionContext(gauged('a', 50))).toBe('███░░░ 50%')
+  })
+})
+
+describe('sessionColumns — the context cell', () => {
+  it('is ZERO when no row on screen has a reading', () => {
+    // Never a column of blanks: the heading would name a cell nothing occupies, and every title on
+    // the screen would pay for the space.
+    expect(sessionColumns([session('a'), session('b')], 200).context).toBe(0)
+  })
+
+  it('is drawn as soon as ONE row has a reading', () => {
+    const c = sessionColumns([session('a'), gauged('b', 50)], 200)
+    expect(c.context).toBe(sessionContext(gauged('b', 50)).length)
+  })
+
+  it('sizes to the widest cell on screen, heading included', () => {
+    const rows = [gauged('a', 5), gauged('b', 100)]
+    // `100%` is a column wider than `5%`, and the heading must fit over both.
+    const c = sessionColumns(rows, 200, { headings: { context: 'window' } })
+    expect(c.context).toBeGreaterThanOrEqual(sessionContext(gauged('b', 100)).length)
+    expect(c.context).toBeGreaterThanOrEqual('window'.length)
+  })
+
+  it('outlives the metrics cell under width pressure', () => {
+    // The ordering decision stated in SessionColumns: usage is what a session has spent, the gauge
+    // is what it has left, and on a narrow terminal the second is the one being acted on.
+    const rows = [gauged('a', 50, { tokens: '12.4k', cost: '$0.83', harness: 'claude' })]
+    let sawGaugeWithoutMetrics = false
+    for (let w = 20; w <= 200; w++) {
+      const c = sessionColumns(rows, w)
+      if (c.metrics > 0) expect(c.context, `w=${w}`).toBeGreaterThan(0)
+      if (c.context > 0 && c.metrics === 0) sawGaugeWithoutMetrics = true
+    }
+    expect(sawGaugeWithoutMetrics).toBe(true)
+  })
+
+  it('never lets a row exceed its width, at any width', () => {
+    // The rule the whole module exists for: a row one column too wide wraps and shears every row
+    // under it, and Ink composites rather than clipping.
+    const rows = [
+      gauged('alpha', 45, { tokens: '455.4k', cost: '$12.30', task: 'context gauge', harness: 'claude' }),
+      gauged('beta', 106, { tokens: '1.2M', cost: '$3.00', worktree: true, project: 'wt' }),
+      session('gamma', { title: 'a very long session title indeed', harness: 'antigravity' }),
+    ]
+    for (let w = 20; w <= 240; w++) {
+      const c = sessionColumns(rows, w, { headings: { context: 'window' } })
+      const cells = [c.id, c.state, c.title, c.where, c.harness, c.metrics, c.context, c.task, c.worktree, c.age]
+      const drawn = cells.filter(n => n > 0).length
+      const total = 2 + cells.reduce((n, v) => n + v, 0) + 2 * (drawn - 1)
+      expect(total, `width=${w} → ${total}`).toBeLessThanOrEqual(w)
+    }
+  })
+})
+
+describe('cardLines — the gauge', () => {
+  const labels = {
+    attached: 'attached', blind: 'blind', ago: () => '5m ago',
+    worktree: 'worktree', project: 'project', task: 'task', note: 'note', model: 'model',
+  }
+
+  it('gets its OWN line, carrying its level', () => {
+    const lines = cardLines(gauged('a', 95), labels)
+    const gauge = lines.find(l => l.key === 'context')
+    expect(gauge?.kind).toBe('gauge')
+    expect(gauge?.level).toBe('warn')
+    expect(gauge?.text).toBe(sessionContext(gauged('a', 95)))
+  })
+
+  it('is absent — not a zero line — for a row with no reading', () => {
+    expect(cardLines(session('a'), labels).some(l => l.key === 'context')).toBe(false)
+  })
+
+  it('sits under the usage line and above where', () => {
+    const lines = cardLines(
+      gauged('a', 50, { tokens: '9k', startedAt: 1, model: 'claude-opus-5' }),
+      labels,
+    )
+    const keys = lines.map(l => l.key)
+    expect(keys.indexOf('context')).toBeGreaterThan(keys.indexOf('usage'))
+    expect(keys.indexOf('context')).toBeLessThan(keys.indexOf('where'))
+  })
+
+  it('is cut before the name and the state on a short card', () => {
+    const lines = cardLines(gauged('a', 50, { tokens: '9k' }), labels)
+    expect(fitCardLines(lines, 2).map(l => l.kind)).toEqual(['title', 'state'])
+  })
+})
+
+describe('detailLines — the gauge spelled out', () => {
+  const labels = {
+    where: 'where', model: 'model', note: 'note', started: 'started',
+    external: 'external', closed: 'closed', doing: 'saying', task: 'task', metrics: 'usage',
+    context: 'context window',
+    alsoLabel: 'named here', alsoHarness: 'named inside',
+  }
+
+  it('prints both numbers, so a reading can be audited', () => {
+    const l = detailLines(gauged('a', 45), labels, () => '5m ago')
+    const line = l.find(x => x.key === 'context')
+    expect(line?.label).toBe('context window')
+    expect(line?.value).toBe('45%  ·  45k / 100k')
+  })
+
+  it('is absent for a row with no reading', () => {
+    const l = detailLines(session('a'), labels, () => '5m ago')
+    expect(l.some(x => x.key === 'context')).toBe(false)
   })
 })
 
