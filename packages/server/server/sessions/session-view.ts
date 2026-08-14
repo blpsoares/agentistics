@@ -175,7 +175,7 @@ function rankOf(v: SessionView): number {
  * in one directory (harness + cwd alone would collapse them into a single row), and unlike a list
  * index it does not change when an unrelated process appears or exits.
  */
-function externalId(p: HarnessProcess): string {
+export function externalId(p: HarnessProcess): string {
   return `external:${p.harness}:${p.cwd}:${p.startedMs ?? 0}`
 }
 

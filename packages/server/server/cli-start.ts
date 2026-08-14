@@ -99,6 +99,10 @@ import { needsChoice, parseDialogOptions } from './sessions/dialog-choice'
 import { rulesFor } from './sessions/attention-rules'
 import { planCrashGroup, planFellOffer } from './sessions/crash-group'
 import { loadHarnessSessions } from './sessions/harness-sessions'
+// The lock on the door: one conversation, one live session. See `conversation-claim.ts` for the
+// measurement that made it necessary, and `live-claims.ts` for the evidence it is allowed to use.
+import { conversationHeldBy } from './sessions/conversation-claim'
+import { liveConversationHolders } from './sessions/live-claims'
 import type { ManagedSession, SpawnPlanError } from './sessions/types'
 import {
   addSession, newSessionId, patchSession, readRegistry, removeSession, touchSessions,
@@ -1320,6 +1324,10 @@ async function reopenEntries(
   const live = new Set(
     (await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id),
   )
+  // What is already being driven, so a task reopen cannot put a second assistant into a conversation
+  // that has one. `live` above cannot answer this: it is keyed by ROW, and the twin case is a row
+  // that is down while another row drives its conversation.
+  const inUse = await liveConversationHolders(backend)
 
   // CLAIMED, one per row: the harness+directory match cannot tell two sessions of one repository
   // apart, so a set of five rows used to start five copies of one conversation. A row that RECORDED
@@ -1328,6 +1336,7 @@ async function reopenEntries(
   const plan = planTaskReopen({
     entries,
     liveIds: live,
+    inUse,
     conversationFor: entry => {
       const own = entry.conversationId
         ? conversations.find(c => c.sessionId === entry.conversationId)
@@ -2081,6 +2090,17 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const previous = req.replaces
         ? (await readRegistry()).find(m => m.id === req.replaces)
         : undefined
+      // THE LOCK ON THE DOOR. Refused before anything is spawned, and NAMING the session that
+      // already has this conversation, because a refusal the user cannot act on is a dead end: the
+      // next thing they want is to go and look at it. This is the cheapest defence there is against
+      // the worst thing this feature has done — two assistants typing into one transcript and one
+      // working tree — and it is deliberately a refusal rather than a tidy-up afterwards.
+      const holder = conversationHeldBy(
+        await liveConversationHolders(await resolveBackend()),
+        req.sessionId,
+        req.replaces,
+      )
+      if (holder) return { ok: false, message: s.sessResumeInUse(holder.label) }
       const spawned = await spawnManaged({
         harness: req.harness as HarnessId,
         cwd: req.cwd,
@@ -2121,7 +2141,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // with `reopenFell` below, which is the same gesture over a set chosen a different way.
       const { plan, opened, skipped } = await reopenEntries(wanted, s)
       return taskReopenSucceeded(plan, opened)
-        ? { ok: true, message: s.sessTaskOpened(task, opened, skipped) }
+        ? { ok: true, message: s.sessTaskOpened(task, opened, skipped, plan.heldElsewhere.length) }
         : { ok: false, message: s.sessTaskNoneOpened(task, skipped) }
     },
 
@@ -2145,7 +2165,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
 
       const { plan, opened, skipped } = await reopenEntries(group.entries, s)
       return taskReopenSucceeded(plan, opened)
-        ? { ok: true, message: s.sessFellOpened(opened, skipped) }
+        ? { ok: true, message: s.sessFellOpened(opened, skipped, plan.heldElsewhere.length) }
         : { ok: false, message: s.sessFellNoneOpened(skipped) }
     },
 
