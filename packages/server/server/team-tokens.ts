@@ -24,6 +24,7 @@ import type { Collection } from 'mongodb'
 import { getMongoDb } from './mongo'
 import { fromBsonDate, fromBsonDateOrNull } from './mongo-dates'
 import { teamDocId, type TeamSessionDoc } from './team-store'
+import { claimRotation } from './rotate-claim'
 import { accountTeamsMap, resolveMachineTeams } from '@agentistics/core'
 
 // ---------------------------------------------------------------------------
@@ -213,18 +214,31 @@ export interface RotationResult {
  *   - `tags`         — a `machine` source stores this id; re-pointed, or the tag empties.
  *   - `machineKeys`  — the machine's published envelope key moves with it.
  *   - `envelopes`    — inbound mail is dropped (undeliverable), outbound is left sealed.
- *   - `tokens`       — the token doc is replaced (new hash id, same metadata).
+ *   - `tokens`       — the token doc is replaced (new hash id, same metadata). This happens
+ *                      FIRST, as an atomic claim (`rotate-claim.ts`), not last: it is what makes
+ *                      concurrent rotations of one machine settle into one machine instead of
+ *                      several, and `null` therefore also means "another rotation got here first".
  *
  * `rotate-identity.ts` holds the full enumeration of what is keyed by the machine id, what is
  * only keyed by something that LOOKS like it, and why sibling pins are deliberately not carried.
  */
 export async function rotateToken(oldId: string): Promise<RotationResult | null> {
   const col = await getTokensCollection()
-  const doc = await col.findOne({ _id: oldId })
-  if (!doc) return null
 
   const token = randomBytes(32).toString('hex')
   const newId = hashToken(token)
+
+  // CLAIM FIRST, migrate after. Two overlapping rotations of one machine used to both read the old
+  // doc and both write a replacement, so a double-clicked Rotate button turned one machine into
+  // several — see rotate-claim.ts. Exactly one caller can win this; a loser wrote nothing and is
+  // answered like a machine that no longer exists, because by the time it looked, it did not.
+  const claim = await claimRotation<TokenDoc>({
+    findOne: id => col.findOne({ _id: id }),
+    insert: async d => { await col.insertOne(d) },
+    takeIfPresent: id => col.findOneAndDelete({ _id: id }),
+    remove: async id => { await col.deleteOne({ _id: id }) },
+  }, oldId, newId)
+  if (!claim.won) return null
 
   const db = await getMongoDb()
 
@@ -259,13 +273,8 @@ export async function rotateToken(oldId: string): Promise<RotationResult | null>
       .catch(() => ({ keyMoved: false, envelopesDropped: 0 })),
   ])
 
-  // Replace the token doc (new hash id, same metadata) — preserve team + owner assignment so
-  // rotating a machine's token keeps its teams/owners (previously these were silently dropped).
-  await col.insertOne({
-    ...doc,
-    _id: newId,
-  })
-  await col.deleteOne({ _id: oldId })
+  // The token doc itself moved at the top, in the claim: it carries the same metadata under the
+  // new hash id, so a rotation keeps the machine's teams and owners (they used to be dropped).
 
   return {
     token,
