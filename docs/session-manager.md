@@ -88,6 +88,14 @@ same way — id, status, activity, task and the conversation id each row could r
 fails to start does NOT abort the rest: four that started are four that are running, and every
 outcome is reported.
 
+### Letting Claude Code drive it
+
+`agentop hooks install` installs a skill that teaches Claude Code exactly the contract above — so
+when a task splits into independent pieces, Claude proposes the split, writes each session's prompt
+and runs the `batch` itself, once you approve. A companion `SessionStart` hook tells each new
+session which agentop sessions are already running and which task can be reopened where it started.
+See [docs/claude-integration.md](claude-integration.md).
+
 ## The cockpit
 
 `agentop` → the **sessions** tab. It is three framed panes — a menu, the fleet, and a detail pane

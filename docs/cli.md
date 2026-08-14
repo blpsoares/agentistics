@@ -35,6 +35,7 @@ agentop --version    # print version (and a notice if an update exists)
 | [`central`](#central) | Manage the Team Mode central (wraps `central.sh`) |
 | [`member`](#member) | Join / leave / inspect a Team Mode central from this machine |
 | [`session`](#session) | Start / list / attach / kill background assistant sessions (tmux-backed); `ls` prints the cockpit's table |
+| [`hooks`](#hooks) | Teach Claude Code to fan work out across several assistants through agentop |
 | [`ci-push`](#ci-push) | One-shot push of a GitHub Actions run's metrics to a central (per repo) |
 | [`autostart`](#autostart) | Start a mode with the system (systemd user service) |
 | [`upgrade`](#upgrade) | Upgrade `agentop` to the latest release |
@@ -466,6 +467,46 @@ about what it means.
 Needs **tmux** (Linux, macOS); Windows support arrives with the PTY backend. Full command reference,
 the cockpit, harness support table and where state lives: see
 [docs/session-manager.md](session-manager.md).
+
+To have **Claude Code itself** propose the split, write each session's prompt and drive `batch`, see
+[`hooks`](#hooks) below.
+
+---
+
+## `hooks`
+
+Teach Claude Code to fan work out across several assistants through agentop.
+
+```bash
+agentop hooks install   [--hook-only | --skill-only]
+agentop hooks uninstall [--hook-only | --skill-only]
+agentop hooks status
+```
+
+Two pieces, installed together, each doing what the other cannot:
+
+- **a skill** at `~/.claude/skills/agentop-parallel-sessions/SKILL.md` — the *knowledge*: when a task
+  splits into independent pieces, how to propose the split, how to write a prompt for a session that
+  cannot see your conversation, and the exact `agentop session batch` contract. Claude loads it when
+  the task matches its description, so it costs **nothing** on a session that never parallelises.
+- **a `SessionStart` hook** in `~/.claude/settings.json` — the *facts* a static file cannot hold:
+  which agentop sessions are running right now, which one is blocked on a permission prompt, which
+  task can be reopened in this directory. It prints **nothing** when there is nothing running.
+
+**A hook does not infer anything** — it is a deterministic shell command on an event. The inference
+is Claude's, reading what the skill teaches and what the hook injected. That is why the "activate
+when it is relevant" half is a skill and not a hook that taxes every session.
+
+Guarantees: nothing is written to `~/.claude` unless you run this command (`agentop setup` only
+*suggests* it); every other key in your `settings.json` is preserved; a file that cannot be merged
+into is refused rather than rewritten; installing twice changes nothing; `uninstall` removes exactly
+what `install` wrote; and with no Claude Code present the command creates no directory and no file.
+
+Claude never starts a session on its own — the skill's first rule is to propose, show the prompts,
+and wait for a yes.
+
+Full write-up, including why not `UserPromptSubmit` and why the session verbs are not MCP tools:
+[docs/claude-integration.md](claude-integration.md).
 
 ---
 
