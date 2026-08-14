@@ -48,6 +48,10 @@ function ScrollBar({ cells }: { cells: readonly string[] }) {
   )
 }
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
+import { Menu } from '../Menu'
+// Aliased: this file has its own `Question` component, which is the whole question PANE. This one
+// is the shared wrapped-sentence primitive `ConfirmPrompt` draws its label with.
+import { Question as WrappedText } from '../Surface'
 import { SessionWizard } from './SessionWizard'
 import { TaskChoice } from '../TaskChoice'
 import {
@@ -400,8 +404,11 @@ export function Sessions({
   // the answers: Ink composites what does not fit, so an unbudgeted preview would not crowd the two
   // answers, it would draw over whatever sits under them.
   const askPreview = ask?.kind === 'approve' ? (ask.session.approvalLines?.length ?? 0) : 0
+  // A picker needs a row per option on top of the evidence, or the answers are composited over
+  // whatever sits under the pane — the same reason the evidence itself is budgeted.
+  const askChoices = ask?.kind === 'approve' ? (ask.session.dialogOptions?.length ?? 0) : 0
   const detailWanted = ask
-    ? askRows({ preview: askPreview, detail: detail.length })
+    ? askRows({ preview: askPreview, detail: detail.length, choices: askChoices })
     : layout === 'cards' || hideDetail ? 0 : detail.length
 
   /**
@@ -633,7 +640,13 @@ export function Sessions({
     // working is a reasonable thing to try, and the answer is "it is not asking anything", which is
     // information. Two different refusals, because they are two different facts — the harness's
     // dialog was never read, or this row is not blocked at all.
-    if (a === 'approve' && !selected.canApprove) {
+    // `y` opens the ANSWER question wherever there is something to answer — a bare confirm on a
+    // plain dialog, the option picker on a numbered one. It refuses only where there is genuinely
+    // nothing: a session that is not blocked at all, or one whose harness nobody has read.
+    if (a === 'approve' && !selected.canApprove && !selected.canChoose) {
+      // A dialog whose options are readable but unpickable is a refusal that NAMES why and points
+      // at attaching, which works — so it opens the question rather than swallowing the keypress.
+      if ((selected.dialogOptions?.length ?? 0) > 1) return actOn('approve')
       const why = selected.approveBlind ?? s.sessionsNotAsking
       void run(async () => ({ ok: false, message: why }))
       return
@@ -1035,7 +1048,7 @@ export function Sessions({
               // Named only where the key actually does something on the selected row. The footer is
               // the only documentation this screen has, and a hint for an inert key is the one bug
               // it exists to prevent.
-              ...(selected?.canApprove ? [s.keySessionsApprove] : []),
+              ...(selected?.canApprove || selected?.canChoose ? [s.keySessionsApprove] : []),
               ...(canPrompt ? [s.keySessionsPrompt] : []),
               s.keySessionsSearch, s.keySessionsNew, s.keySessionsGroup, s.keySessionsClosed,
               ...(grouping === 'task' ? [s.keySessionsNoTask] : []),
@@ -1047,7 +1060,7 @@ export function Sessions({
             ],
           })
   }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping,
-      selected?.canApprove, canPrompt, menuHidden, restoring])
+      selected?.canApprove, selected?.canChoose, canPrompt, menuHidden, restoring])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
@@ -2180,25 +2193,83 @@ function Question({
   /**
    * Answering the dialog a session is blocked on — the only question here that shows EVIDENCE.
    *
-   * The dialog is drawn ABOVE the confirmation, and the caveat under it says in words what the
-   * keystroke actually does: it takes whichever option is highlighted. Nothing in this product can
-   * read which option that is, so the screen showing the dialog is not a nicety, it IS the check.
+   * Two shapes, because the dialogs are two shapes:
+   *
+   *  - **It offers OPTIONS.** They are listed and one is picked, and the picked one is what gets
+   *    sent. There is no "approve" here to offer: a session asking "only my fix / promote
+   *    everything / stop in dev / type something" has four answers that do different work, and a key
+   *    that took the highlighted row would be choosing between them for the user. That was the
+   *    defect, and it was reported by somebody looking at exactly that dialog.
+   *  - **It offers nothing to choose between** — codex's `Press enter to continue`. Then it really
+   *    is a confirmation, and the dialog is shown above it because the confirm key still takes
+   *    whatever is on the screen.
    */
   if (ask.kind === 'approve') {
-    // What is left for the dialog once the confirmation has taken its rows. Cut from the TOP, so
-    // the options and the footer — the part being answered — are what survives a short pane.
+    const options = session.dialogOptions ?? []
+    // What is left for the dialog once the question has taken its rows. Cut from the TOP, so the
+    // options and the footer — the part being answered — are what survives a short pane.
     const room = Math.max(0, rows - QUESTION_ROWS - 1)
     const preview = fitApprovalPreview(session.approvalLines ?? [], room)
+    const evidence = preview.length > 0 ? (
+      <>
+        <Text dimColor>{truncate(s.sessionsApproveWhat, width)}</Text>
+        {preview.map((line, i) => (
+          <Text key={`ap${i}`} wrap="truncate" color={COLORS.text}>{truncate(line, width)}</Text>
+        ))}
+      </>
+    ) : null
+
+    if (options.length > 1) {
+      // No verified way to pick on this harness. Refused in WORDS, naming what does work — a
+      // refusal you can act on beats a verb that silently answers for you.
+      if (!session.canChoose) {
+        return (
+          <Box flexDirection="column" width={width}>
+            {evidence}
+            {/* WRAPPED, not truncated: this is the whole content of the answer, and a refusal cut
+                off at "nobody has verified how to pick an option on ge…" tells nobody anything.
+                Bounded so it cannot grow over the rows the pane was given. */}
+            <WrappedText
+              text={session.chooseBlind ?? s.sessionsChooseBlind}
+              width={width}
+              maxRows={Math.max(1, rows - preview.length - 2)}
+            />
+            <Text dimColor wrap="truncate">{truncate(s.sessionsChooseAttach, width)}</Text>
+          </Box>
+        )
+      }
+      return (
+        <Box flexDirection="column" width={width}>
+          {evidence}
+          <Menu
+            // `Menu` numbers its own rows from 1, and the parser guarantees the options ARE `1..n`
+            // in order — so the number beside a row here is the same number the session printed
+            // beside it. Adding the option's number to the label would print it twice.
+            items={options.map(o => ({
+              label: o.label,
+              value: String(o.number),
+              ...(o.selected ? { hint: s.sessionsChoiceHighlighted } : {}),
+            }))}
+            width={width}
+            // The row the dialog is highlighting, so pressing enter straight away does what
+            // attaching and pressing enter would have done — and nothing else does.
+            initialIndex={Math.max(0, options.findIndex(o => o.selected))}
+            height={Math.max(2, rows - preview.length - (preview.length > 0 ? 1 : 0))}
+            isActive
+            onCancel={onClose}
+            onSelect={value => {
+              const answer = host.answerSession
+              if (!answer) return onClose()
+              onRun(() => answer.call(host, session.id, Number(value)), s.actSessions.approve)
+            }}
+          />
+        </Box>
+      )
+    }
+
     return (
       <Box flexDirection="column" width={width}>
-        {preview.length > 0 ? (
-          <>
-            <Text dimColor>{truncate(s.sessionsApproveWhat, width)}</Text>
-            {preview.map((line, i) => (
-              <Text key={`ap${i}`} wrap="truncate" color={COLORS.text}>{truncate(line, width)}</Text>
-            ))}
-          </>
-        ) : null}
+        {evidence}
         <ConfirmPrompt
           label={`${s.sessionsApproveConfirm(session.title)} ${s.sessionsApproveCaveat}`}
           yesLabel={s.yes}
@@ -2207,9 +2278,9 @@ function Question({
           height={Math.max(QUESTION_ROWS, rows - preview.length - (preview.length > 0 ? 1 : 0))}
           onCancel={onClose}
           onAnswer={(yes: boolean) => {
-            const approve = host.approveSession
-            if (!yes || !approve) return onClose()
-            onRun(() => approve.call(host, session.id), s.actSessions.approve)
+            const answer = host.answerSession
+            if (!yes || !answer) return onClose()
+            onRun(() => answer.call(host, session.id), s.actSessions.approve)
           }}
         />
       </Box>

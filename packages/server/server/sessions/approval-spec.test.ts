@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { HARNESS_ORDER } from '@agentistics/core'
-import { APPROVAL_SPECS, approvalFor } from './approval-spec'
+import { APPROVAL_SPECS, approvalFor, choiceKey } from './approval-spec'
 import { ATTENTION_RULES } from './attention-rules'
 
 describe('APPROVAL_SPECS', () => {
@@ -36,5 +36,45 @@ describe('APPROVAL_SPECS', () => {
   it('answers with undefined rather than null, and for an absent harness at all', () => {
     expect(approvalFor('claude')?.key).toBe('Enter')
     expect(approvalFor(undefined)).toBeUndefined()
+  })
+})
+
+describe('choiceKey', () => {
+  it('types the option NUMBER on a harness where that was verified', () => {
+    // Driven against a live claude 2.1.232 twice on 2026-08-14: `3` at a Write permission prompt
+    // produced `User rejected write` (option 3 = No), and `3` at an AskUserQuestion selected that
+    // question's third answer.
+    expect(choiceKey(approvalFor('claude'), 3)).toBe('3')
+  })
+
+  it('REFUSES on a harness where nobody has verified how to choose', () => {
+    // There is no safe fallback to the confirm key. Confirming the highlighted row on a dialog
+    // somebody is being shown four answers to is choosing for them, which is the whole defect.
+    for (const id of ['codex', 'kimi', 'gemini', 'copilot', 'antigravity'] as const) {
+      expect(choiceKey(approvalFor(id), 1), id).toBeNull()
+    }
+  })
+
+  it('refuses a number that is not a typeable option', () => {
+    const claude = approvalFor('claude')
+    expect(choiceKey(claude, 0)).toBeNull()
+    expect(choiceKey(claude, -1)).toBeNull()
+    expect(choiceKey(claude, 1.5)).toBeNull()
+    // Past nine there is no single key to type, and inventing a mechanism for a dialog nobody has
+    // seen is how a guess ships.
+    expect(choiceKey(claude, 10)).toBeNull()
+  })
+
+  it('refuses when there is no spec at all', () => {
+    expect(choiceKey(undefined, 1)).toBeNull()
+  })
+})
+
+describe('the choice capability', () => {
+  it('records where it was verified, like every other probed value here', () => {
+    for (const [id, spec] of Object.entries(APPROVAL_SPECS)) {
+      if (!spec?.choice) continue
+      expect(spec.choice.probed, id).toMatch(/\d.*\d, \d{4}-\d{2}-\d{2}/)
+    }
   })
 })

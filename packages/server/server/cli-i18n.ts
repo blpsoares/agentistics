@@ -127,6 +127,16 @@ export interface CliStrings {
   sessNotAsking: string
   /** Refused: this harness's dialog has never been read, so there is no key to send. */
   sessApproveUnknown: (harness: string) => string
+  /** Said on a row whose dialog offers OPTIONS and whose harness has no verified way to pick one. */
+  sessChooseBlind: (harness: string) => string
+  /** Refused: the dialog offers N options, so there is nothing to merely "approve". */
+  sessNeedsChoice: (n: number) => string
+  /** Refused: the question changed between being shown and being answered. */
+  sessChoiceGone: string
+  /** Refused: no verified way to select an option by number on this harness. */
+  sessChooseUnknown: (harness: string) => string
+  /** The chosen option went in — and the sentence names WHICH, because that is the whole point. */
+  sessAnswered: (label: string) => string
   /** Nothing fell, or everything that did has already been picked back up. */
   sessNoFell: string
   sessFellOpened: (opened: number, skipped: number) => string
@@ -366,6 +376,15 @@ const EN: CliStrings = {
   sessNotAsking: 'that session is not asking anything right now — nothing was sent.',
   sessApproveUnknown: (harness: string) =>
     `agentop has not read ${harness}'s dialog, so it will not guess which key answers it.`,
+  sessChooseBlind: (harness: string) =>
+    `this dialog is a choice, and nobody has verified how to pick an option on ${harness} — attach to answer it there.`,
+  sessNeedsChoice: (n: number) =>
+    `that dialog offers ${n} options, so there is nothing to simply approve — pick one.`,
+  sessChoiceGone:
+    'the session is asking something else now — nothing was sent. Look again before answering.',
+  sessChooseUnknown: (harness: string) =>
+    `agentop has no verified way to pick an option on ${harness}, and will not confirm the highlighted one for you — attach to answer it there.`,
+  sessAnswered: (label: string) => `answered: ${label}`,
   sessNoFell: 'nothing fell — no session was lost with the machine still on record.',
   sessFellOpened: (opened: number, skipped: number) =>
     skipped > 0
@@ -579,6 +598,15 @@ const PT: CliStrings = {
   sessNotAsking: 'essa sessão não está perguntando nada agora — nada foi enviado.',
   sessApproveUnknown: (harness: string) =>
     `o agentop não leu o diálogo do ${harness}, e não vai chutar qual tecla responde.`,
+  sessChooseBlind: (harness: string) =>
+    `esse diálogo é uma escolha, e ninguém verificou como selecionar uma opção no ${harness} — anexe para responder lá.`,
+  sessNeedsChoice: (n: number) =>
+    `esse diálogo tem ${n} opções, então não há o que simplesmente aprovar — escolha uma.`,
+  sessChoiceGone:
+    'a sessão está perguntando outra coisa agora — nada foi enviado. Olhe de novo antes de responder.',
+  sessChooseUnknown: (harness: string) =>
+    `o agentop não tem forma verificada de escolher uma opção no ${harness}, e não vai confirmar a destacada por você — anexe para responder lá.`,
+  sessAnswered: (label: string) => `respondido: ${label}`,
   sessNoFell: 'nada caiu — nenhuma sessão foi perdida com registro de que estava viva.',
   sessFellOpened: (opened: number, skipped: number) =>
     skipped > 0

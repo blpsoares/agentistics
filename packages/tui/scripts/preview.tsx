@@ -383,7 +383,7 @@ function fakeHost(opts: Options): ControlHost {
     // nothing: the questions are what a layout check needs to see, and the preview must never send
     // a keystroke anywhere.
     promptSession: done,
-    approveSession: done,
+    answerSession: done,
     reopenFell: done,
   }
 }
@@ -442,17 +442,49 @@ const FAKE_FLEET: ControlSessions = {
       // The dialog, at the width a real one is drawn at — which is the point: the confirmation has
       // to fit it into a pane that is often much narrower, and a fixture of short lines would never
       // show that.
-      canApprove: true,
+      // A THREE-way choice, which is what a claude permission prompt actually is — the case the
+      // picker exists for. `canApprove` is deliberately absent: there is no approving here.
+      canChoose: true,
+      dialogOptions: [
+        { number: 1, label: 'Yes', selected: true },
+        { number: 2, label: 'Yes, allow all edits during this session (shift+tab)', selected: false },
+        { number: 3, label: 'No', selected: false },
+      ],
       approvalLines: [
         '│ Bash command                                                    │',
         '│   bun run db:migrate --env production                           │',
         '│                                                                 │',
         '│ Do you want to proceed?                                         │',
         '│ ❯ 1. Yes                                                        │',
-        '│   2. No, and tell Claude what to do differently                 │',
-        '│ Enter to confirm · Esc to cancel                                │',
+        '│   2. Yes, allow all edits during this session (shift+tab)       │',
+        '│   3. No                                                         │',
+        '│ Esc to cancel · Tab to amend                                    │',
       ],
       startedAt: Date.now() - 22 * 60_000, attached: false,
+    },
+    // A dialog whose options ARE readable but whose harness nobody has verified a way to pick on.
+    // The one row that must draw a REFUSAL naming why, rather than a picker that would confirm the
+    // highlighted row on the user's behalf.
+    {
+      id: 'c0de01', title: 'promote to prod', harness: 'gemini',
+      cwd: '/home/dev/embark', project: 'embark',
+      state: 'waiting-approval', stateLabel: 'needs approval', actionable: true,
+      dialogOptions: [
+        { number: 1, label: 'Só o meu fix, isolado', selected: true },
+        { number: 2, label: 'Promover dev→main inteiro', selected: false },
+        { number: 3, label: 'Parar em dev por enquanto', selected: false },
+        { number: 4, label: 'Type something.', selected: false },
+      ],
+      approvalLines: [
+        'Como promover pra prod? O merge dev→main levaria junto ID-100, ID-81 e ID-54.',
+        '❯ 1. Só o meu fix, isolado',
+        '  2. Promover dev→main inteiro',
+        '  3. Parar em dev por enquanto',
+        '  4. Type something.',
+        'Enter to select · ↑/↓ to navigate · Esc to cancel',
+      ],
+      chooseBlind: 'this dialog is a choice, and nobody has verified how to pick an option on gemini — attach to answer it there.',
+      startedAt: Date.now() - 8 * 60_000, attached: false,
     },
     // The two the machine took together. `lost`, named, and carrying their task — which is what a
     // reboot leaves behind and what "reopen what fell" puts back.

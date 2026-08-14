@@ -388,6 +388,26 @@ export interface ControlSession {
    */
   canApprove?: boolean
   /**
+   * The OPTIONS the dialog is offering, when its screen could be read with confidence.
+   *
+   * Present only on a blocked row, and ABSENT rather than invented when the screen cannot be
+   * parsed. Its presence changes what "answering" means: with options there is no such thing as
+   * approving, only choosing one of them, and the UI must show them and send the one picked.
+   *
+   * The case this exists for is real and was reported: a session asking "how should I promote to
+   * prod?" with four different answers, in front of a key called `approve` that would have silently
+   * taken whichever was highlighted.
+   */
+  dialogOptions?: Array<{ number: number; label: string; selected: boolean }>
+  /**
+   * Whether the user may pick one of `dialogOptions` from here.
+   *
+   * False when this harness has no verified way to select an option by number (`approval-spec.ts`).
+   * There is deliberately NO fallback to the confirm key in that case: confirming the highlighted
+   * row on a dialog somebody is being shown four answers to is choosing for them.
+   */
+  canChoose?: boolean
+  /**
    * Why approving is unavailable HERE, already localized — present only when the session is blocked
    * and nobody has read this harness's dialog.
    *
@@ -395,6 +415,14 @@ export interface ControlSession {
    * and a verb that vanished without a word reads as the feature being broken.
    */
   approveBlind?: string
+  /**
+   * Why the options on screen cannot be answered from here, already localized — present only when
+   * there ARE options and this harness has no verified way to pick one.
+   *
+   * A refusal that names its reason is usable: it tells someone to attach, which works. A verb that
+   * quietly picks for them is not.
+   */
+  chooseBlind?: string
   /**
    * This session was taken by the machine along with the others, and comes back with them.
    *
@@ -788,17 +816,20 @@ export interface ControlHost {
   promptSession?(id: string, text: string): Promise<ActionResult>
 
   /**
-   * Press the key that takes the option this session's dialog is HIGHLIGHTING.
+   * Answer the dialog this session is blocked on.
    *
-   * Not "approve", and the contract says so on purpose: no CLI here reports which option is
-   * selected, so what this sends is a keystroke and what it confirms is whatever is on the screen.
-   * That is why `ControlSession.approvalLines` exists and why the confirmation must show it.
+   * `choice` is the option NUMBER to pick, and it is the whole point of this signature: a dialog
+   * offering "only my fix / promote everything / stop here / type something" has no approval, and a
+   * verb that took the highlighted row would be choosing between four different outcomes on the
+   * user's behalf. Omitted only for a dialog with no readable options — the codex-shaped
+   * `Press enter to continue`, where there genuinely is nothing to choose between — and the host
+   * then sends the confirm key.
    *
    * The host re-reads the frame immediately before sending and refuses when the session is no longer
-   * asking — a snapshot is up to five seconds old, and an unconditional Enter into a session that
-   * has moved on is a blank turn at best.
+   * asking, or when the options on screen no longer match what the user was shown. A snapshot is up
+   * to five seconds old, and an answer to a question that has changed is worse than no answer.
    */
-  approveSession?(id: string): Promise<ActionResult>
+  answerSession?(id: string, choice?: number): Promise<ActionResult>
 
   /**
    * Reopen every session of the last fall, in the background.

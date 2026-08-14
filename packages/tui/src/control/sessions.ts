@@ -509,9 +509,15 @@ export function fitApprovalPreview(lines: readonly string[], rows: number): stri
  * own numbered options, the confirmation under it has two of its own, and without a line saying
  * which is which the pane is two menus stacked on top of each other.
  */
-export function askRows(o: { preview: number; detail: number }): number {
+export function askRows(o: { preview: number; detail: number; choices?: number }): number {
   const preview = Math.max(0, Math.min(o.preview, APPROVAL_PREVIEW_MAX))
-  return Math.max(QUESTION_ROWS + (preview > 0 ? preview + 1 : 0), Math.max(0, o.detail))
+  // A picker draws one row per option instead of the two a yes/no carries, and it is budgeted for
+  // the same reason the evidence is: Ink composites what does not fit, so an unbudgeted list does
+  // not scroll, it draws over whatever is under the pane. `QUESTION_ROWS` stays the floor — a
+  // two-option dialog must not end up with less room than a confirmation would have had.
+  const choices = Math.max(0, o.choices ?? 0)
+  const body = choices > 1 ? Math.max(QUESTION_ROWS, choices) : QUESTION_ROWS
+  return Math.max(body + (preview > 0 ? preview + 1 : 0), Math.max(0, o.detail))
 }
 
 
@@ -582,7 +588,15 @@ export function sessionActions(
     // exists. The host decides `canApprove`, and it is true only when the session is genuinely
     // asking AND somebody has read this harness's dialog — a keystroke sent into a session that is
     // not asking is a blank turn, or an option taken out of a menu nobody was looking at.
-    { action: 'approve', enabled: Boolean(selected?.canApprove) },
+    // Enabled wherever there is something to ANSWER: a plain confirmation, a pickable option list,
+    // or an option list this harness cannot pick from — that last one opens a refusal that names why
+    // and points at attaching, which is information rather than an inert key.
+    {
+      action: 'approve',
+      enabled: Boolean(selected?.canApprove)
+        || Boolean(selected?.canChoose)
+        || (selected?.dialogOptions?.length ?? 0) > 1,
+    },
     // Typing into a session needs it to be RUNNING and nothing more: a session that is working will
     // read what it was handed when it gets there. The one case that must not go through is a
     // session sitting on a dialog, where the prompt is a menu — and that is refused by the HOST,

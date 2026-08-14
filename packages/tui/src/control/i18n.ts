@@ -272,6 +272,12 @@ export interface ControlStrings {
   sessionsApproveCaveat: string
   /** Heading over the dialog lines carried into the confirmation. */
   sessionsApproveWhat: string
+  /** Marks the option the dialog itself is highlighting, inside the picker. */
+  sessionsChoiceHighlighted: string
+  /** Fallback for a harness with no verified way to pick — the host normally supplies its own. */
+  sessionsChooseBlind: string
+  /** What DOES work when the options cannot be picked from here. */
+  sessionsChooseAttach: string
   asideProjects: string
   asideAllProjects: string
   toggleDone: string
@@ -673,6 +679,9 @@ const EN: ControlStrings = {
   sessionsApproveCaveat:
     'it takes whichever option the dialog above has highlighted — read it first.',
   sessionsApproveWhat: 'on its screen right now',
+  sessionsChoiceHighlighted: '(its default)',
+  sessionsChooseBlind: 'this dialog is a choice, and agentop cannot pick an option on this harness.',
+  sessionsChooseAttach: 'o attaches to the session, where you can answer it — esc goes back.',
   asideProjects: 'PROJECTS',
   asideAllProjects: 'every project',
   toggleDone: 'finished tasks',
@@ -1057,6 +1066,9 @@ const PT: ControlStrings = {
   sessionsApproveCaveat:
     'ela pega a opção que o diálogo acima está destacando — leia antes.',
   sessionsApproveWhat: 'na tela dela agora',
+  sessionsChoiceHighlighted: '(o padrão dela)',
+  sessionsChooseBlind: 'esse diálogo é uma escolha, e o agentop não sabe selecionar uma opção neste harness.',
+  sessionsChooseAttach: 'o anexa na sessão, onde dá para responder — esc volta.',
   asideProjects: 'PROJETOS',
   asideAllProjects: 'todos os projetos',
   toggleDone: 'tarefas finalizadas',

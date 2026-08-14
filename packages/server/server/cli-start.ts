@@ -94,7 +94,8 @@ import { repoFacts } from './sessions/repo-facts'
 // rows from the same decision rather than mapping the fleet a second time.
 import { toControlSession } from './sessions/control-session'
 import { planTaskReopen, taskReopenSucceeded, type TaskReopenPlan } from './sessions/task-reopen'
-import { approvalFor } from './sessions/approval-spec'
+import { approvalFor, choiceKey } from './sessions/approval-spec'
+import { needsChoice, parseDialogOptions } from './sessions/dialog-choice'
 import { rulesFor } from './sessions/attention-rules'
 import { planCrashGroup, planFellOffer } from './sessions/crash-group'
 import { loadHarnessSessions } from './sessions/harness-sessions'
@@ -2183,15 +2184,14 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     },
 
     /**
-     * Send the key that takes the option this session's dialog is highlighting.
+     * Answer the dialog this session is blocked on.
      *
-     * Three things have to be true at THIS instant, and each is checked rather than assumed: the
-     * harness's dialog has been read (so the key is a recorded fact — `approval-spec.ts`), the
-     * session is still asking (re-read from the screen, not from a snapshot), and the backend
-     * accepted the keystroke. Anything less and an unconditional Enter goes into a session that has
-     * moved on — a blank turn at best, and at worst a menu answered while nobody was looking.
+     * Everything is checked at THIS instant rather than assumed from a snapshot: the session is
+     * still asking, the options on screen are still the ones the user was shown, and the harness has
+     * a verified way to select the one they picked. A snapshot is up to five seconds old, and an
+     * answer sent to a question that has changed underneath it is both wrong and silent.
      */
-    async approveSession(id: string): Promise<ActionResult> {
+    async answerSession(id: string, choice?: number): Promise<ActionResult> {
       const s = S()
       const backend = await resolveBackend()
       const blocked = await backend.unavailable()
@@ -2212,6 +2212,30 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         return { ok: false, message: s.sessNotAsking }
       }
 
+      // What is on the screen RIGHT NOW, not what was drawn up to a poll ago.
+      const options = parseDialogOptions(frame)
+
+      if (needsChoice(options)) {
+        // A numbered dialog is NEVER answered with a bare confirm. `Enter` takes whichever row is
+        // highlighted, and on "only my fix / promote everything / stop here / type something" that
+        // is choosing between four different outcomes on somebody else's repository.
+        if (choice === undefined) return { ok: false, message: s.sessNeedsChoice(options.length) }
+        const picked = options.find(o => o.number === choice)
+        // The question CHANGED between being shown and being answered. Sending "3" to a question
+        // that now has different answers is worse than sending nothing, and nothing about it would
+        // be visible afterwards — so it is refused by name.
+        if (!picked) return { ok: false, message: s.sessChoiceGone }
+        const key = choiceKey(spec, choice)
+        if (!key) return { ok: false, message: s.sessChooseUnknown(managed.harness) }
+        return (await backend.sendKey(id, key))
+          ? { ok: true, message: s.sessAnswered(picked.label) }
+          : { ok: false, message: s.sessSendFailed(id) }
+      }
+
+      // No readable options: the codex-shaped `Press enter to continue`, where there genuinely is
+      // nothing to choose between. A choice offered here would be answering a question with no
+      // answers, so it is refused rather than quietly ignored.
+      if (choice !== undefined) return { ok: false, message: s.sessChoiceGone }
       return (await backend.sendKey(id, spec.key))
         ? { ok: true, message: s.sessApproved(id) }
         : { ok: false, message: s.sessSendFailed(id) }
