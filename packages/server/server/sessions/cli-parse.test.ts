@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { parseSessionArgs } from './cli-parse'
+import { LS_DEFAULT, parseSessionArgs } from './cli-parse'
 
 describe('parseSessionArgs', () => {
   it('starts a background session on the given harness', () => {
@@ -33,6 +33,60 @@ describe('parseSessionArgs', () => {
     expect(parseSessionArgs(['kill', 'a1'])).toEqual({ kind: 'kill', ref: 'a1' })
     expect(parseSessionArgs(['rename', 'a1', 'refactor auth'])).toEqual({ kind: 'rename', ref: 'a1', label: 'refactor auth' })
     expect(parseSessionArgs(['note', 'a1', 'split the god object'])).toEqual({ kind: 'note', ref: 'a1', text: 'split the god object' })
+  })
+
+  it('ls defaults to the running sessions, grouped by project', () => {
+    expect(parseSessionArgs(['ls'])).toEqual({ kind: 'ls', all: false, group: 'project' })
+    expect(LS_DEFAULT).toEqual({ all: false, group: 'project' })
+  })
+
+  it('ls takes --all, --group, --json, --width and the colour override', () => {
+    expect(parseSessionArgs(['ls', '--all', '--group', 'repo', '--json'])).toEqual({
+      kind: 'ls', all: true, group: 'repo', json: true,
+    })
+    expect(parseSessionArgs(['ls', '-a', '-g', 'task'])).toEqual({ kind: 'ls', all: true, group: 'task' })
+    expect(parseSessionArgs(['ls', '--width', '80', '--no-color'])).toEqual({
+      kind: 'ls', all: false, group: 'project', width: 80, color: false,
+    })
+    expect(parseSessionArgs(['ls', '--color'])).toEqual({
+      kind: 'ls', all: false, group: 'project', color: true,
+    })
+  })
+
+  it('ls refuses a grouping the table cannot draw', () => {
+    expect(parseSessionArgs(['ls', '--group', 'nonsense'])).toEqual({
+      kind: 'error', message: expect.stringContaining('nonsense'),
+    })
+  })
+
+  it('ls never swallows the next flag as a value', () => {
+    // `--group --json` used to be the shape that grouped by "--json" and then printed no JSON.
+    expect(parseSessionArgs(['ls', '--group', '--json'])).toEqual({
+      kind: 'error', message: expect.stringContaining('Missing value'),
+    })
+    expect(parseSessionArgs(['ls', '--width', '--all'])).toEqual({
+      kind: 'error', message: expect.stringContaining('Missing value'),
+    })
+  })
+
+  it('ls refuses a width that is not a positive number of columns', () => {
+    expect(parseSessionArgs(['ls', '--width', 'wide'])).toEqual({
+      kind: 'error', message: expect.stringContaining('--width'),
+    })
+    expect(parseSessionArgs(['ls', '--width', '0'])).toEqual({
+      kind: 'error', message: expect.stringContaining('--width'),
+    })
+  })
+
+  it('ls rejects an option it does not know rather than ignoring it', () => {
+    expect(parseSessionArgs(['ls', '--sort'])).toEqual({
+      kind: 'error', message: expect.stringContaining('--sort'),
+    })
+  })
+
+  it('list is untouched by ls — a script reading it keeps its dump', () => {
+    expect(parseSessionArgs(['list'])).toEqual({ kind: 'list' })
+    expect(parseSessionArgs(['list', '--json'])).toEqual({ kind: 'list', json: true })
   })
 
   it('rejects a harness that is not a harness', () => {
