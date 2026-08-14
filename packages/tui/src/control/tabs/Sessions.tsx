@@ -24,7 +24,7 @@ import { DEFAULT_SESSION_VIEW } from '../types'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import { ACTION_SEP, actionAtColumn, fitActionRow } from '../chrome.ts'
 import { Divider } from '../Surface'
-import { PANE_MIN_ROWS } from '../chrome.ts'
+import { PANE_MIN_ROWS, paneBadgeRoom } from '../chrome.ts'
 import { Pane, paneBody, paneRows } from '../Pane'
 
 /** Columns a pane spends on its left edge: one of border, one of padding. */
@@ -58,6 +58,9 @@ import {
   taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
   sessionAge, sessionKeyHelp, keyHelpColumn,
   DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder, type SessionLayout,
+  cardGrid, cardPage, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
+  cardAt, pagerCells, pagerHit,
+  type CardGrid, type CardLine, type PagerCells,
   asideSections, asideFold, scrollBar, THUMB,
   sessionNamed,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
@@ -263,6 +266,14 @@ export function Sessions({
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
 
+  // The cards are the SAME sequence the list draws, headings removed — so `at` (an index into
+  // `selectable`) names the same session in both layouts, and switching layout keeps the selection.
+  const cards = useMemo(
+    () => rows.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
+    [rows],
+  )
+  const badges = useMemo(() => cardBadges(rows), [rows])
+
   // Clamped on every render rather than corrected in an effect: a session that ends between two
   // polls shortens the list under the cursor, and a stored index would point past the end for one
   // frame — which is the frame the user presses enter on.
@@ -300,7 +311,13 @@ export function Sessions({
   // frame rather than a cramped one.
   // A QUESTION always gets its rows, switch or no switch: it is a prompt, and one with nowhere to
   // draw cannot be answered. Only the FACTS are what the switch withholds.
-  const detailWanted = ask ? Math.max(QUESTION_ROWS, detail.length) : hideDetail ? 0 : detail.length
+  // A card holds what the detail pane holds, so in cards mode the pane is not asked for at all and
+  // the whole band goes to the grid — a fleet drawn twice on one screen is half a screen wasted. A
+  // QUESTION still gets its rows, switch or no switch: a prompt with nowhere to draw cannot be
+  // answered.
+  const detailWanted = ask
+    ? Math.max(QUESTION_ROWS, detail.length)
+    : layout === 'cards' || hideDetail ? 0 : detail.length
 
   /**
    * Act on the selected row, or say why it cannot be acted on.
@@ -418,6 +435,31 @@ export function Sessions({
   const cockpit = actionRows === 0
     ? probe
     : sessionsCockpit({ width, height: Math.max(1, height - actionRows), asideLabel, detailWanted })
+
+  // The grid, decided HERE rather than beside the list's own arithmetic further down: both input
+  // handlers read it, and a value declared under them reads as "used before its declaration" to
+  // anyone editing this file, even though the closures run late.
+  //
+  // No scrollbar in cards mode — the pager is what says where you are — so it is measured against
+  // the pane's full body. `null` on a terminal too small for one whole card, and the LIST is drawn
+  // instead: the same degradation the aside menu makes when it is dropped rather than squeezed.
+  const cardsBody = paneBody(cockpit.list)
+  const band = cardBand({ listRows: cockpit.listRows, header: cockpit.header })
+  const grid: CardGrid | null = layout === 'cards' && rows.length > 0
+    ? cardGrid({ width: cardsBody, height: band.gridRows, total: cards.length })
+    : null
+  // The page is the one holding the CURSOR — derived, never stored beside it. Turning a page is
+  // therefore moving the cursor, and there is no second position that can fall out of step.
+  const page = grid
+    ? cardPage(cards.length, grid.capacity, Math.floor(Math.max(0, at) / grid.capacity))
+    : null
+  const pager = grid && page && band.pager
+    ? pagerCells({
+        label: s.sessionsPage(page.page + 1, page.pages),
+        note: s.sessionsShowing(page.to - page.from, cards.length),
+        width: cardsBody,
+      })
+    : null
 
 
   /** Run one verb, whether it arrived from a letter, an arrow key or a click. */
@@ -648,6 +690,7 @@ export function Sessions({
     if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
     if (input === 'l') { setOnlyActive(v => !v); setCursor(0); return }
     if (input === 'd') { setHideDetail(v => !v); return }
+    if (input === 'f') { setLayout(l => (l === 'list' ? 'cards' : 'list')); return }
     // The HIGHLIGHTER. `space` because it is the mark key of every list that has one, and because
     // it is the only unclaimed key on this screen that a person reaches for without being told.
     if (input === ' ') {
@@ -672,6 +715,25 @@ export function Sessions({
     if (input === 'x') return runAction('kill')
     if (input === 'n') return runAction('rename')
     if (input === 't') return runAction('note')
+
+    // A grid has two axes, so the arrows mean what they mean in a grid: `←`/`→` step one card,
+    // `↑`/`↓` step a whole row of them. The list's own reducer wraps a single column, which in a
+    // grid would send the cursor from the top-left card to the bottom-RIGHT one.
+    if (grid && selectable.length > 0) {
+      const here = Math.max(0, at)
+      const to = (n: number) => setCursor(Math.max(0, Math.min(n, selectable.length - 1)))
+      if (key.leftArrow) return to(here - 1)
+      if (key.rightArrow) return to(here + 1)
+      if (key.upArrow || input === 'k') return to(here - grid.cols)
+      if (key.downArrow || input === 'j') return to(here + grid.cols)
+      // The page is always the one holding the cursor, so turning a page IS moving the cursor —
+      // there is no second position to keep in sync with the first.
+      if (key.pageUp) return to(here - grid.capacity)
+      if (key.pageDown) return to(here + grid.capacity)
+      if (key.home || input === 'g') return to(0)
+      if (key.end || input === 'G') return to(selectable.length - 1)
+      return
+    }
 
     if (selectable.length > 0) {
       const next = resolveListKey(nav, Math.max(0, at), selectable.length)
@@ -1089,7 +1151,7 @@ export function Sessions({
       {/* What each cell IS. The row was six aligned columns of unlabelled text — the alignment made
           it scannable and the labels are what make it readable, and they are drawn from the very
           same measured widths so the heading can never sit over the wrong column. */}
-      {cockpit.header && rows.length > 0 ? (
+      {cockpit.header && rows.length > 0 && !grid ? (
         <Text dimColor wrap="truncate">
           {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')
             + padCell(s.sessionsCols.state, columns.state)}
@@ -1118,6 +1180,39 @@ export function Sessions({
           {fleet.unavailable ? ''
             : truncate(emptyReason, listBody)}
         </Text>
+      ) : grid && page ? (
+        <Box flexDirection="column" width={cardsBody} flexShrink={0}>
+          {Array.from({ length: grid.rows }, (_, r) => (
+            <Box key={`row${r}`} flexDirection="row" height={grid.cardHeight} flexShrink={0}>
+              {Array.from({ length: grid.cols }, (_, c) => {
+                const slot = r * grid.cols + c
+                const index = page.from + slot
+                const card = slot < grid.capacity ? cards[index] : undefined
+                return (
+                  <Box key={`col${c}`} flexDirection="row" flexShrink={0}>
+                    {c > 0 ? <Box width={grid.gap} flexShrink={0} /> : null}
+                    {card ? (
+                      <SessionCard
+                        session={card}
+                        badge={badges[index] ?? ''}
+                        selected={selected?.id === card.id}
+                        marked={marked.has(card.id)}
+                        width={grid.cardWidth}
+                        height={grid.cardHeight}
+                        strings={s}
+                      />
+                    ) : (
+                      // An empty cell keeps the grid's shape without drawing a frame around
+                      // nothing — a card with no session in it is a box claiming to be one.
+                      <Box width={grid.cardWidth} height={grid.cardHeight} flexShrink={0} />
+                    )}
+                  </Box>
+                )
+              })}
+            </Box>
+          ))}
+          {pager ? <Pager cells={pager} /> : null}
+        </Box>
       ) : (
         // NO fixed height: the rows pack upward so nothing sits at the bottom of a tall pane with a
         // field of blank above it. The leftover space belongs at the very bottom of the frame.
@@ -1416,6 +1511,110 @@ function KeyHelpScreen({ strings: s, width, height, onClose }: {
       ))}
       {rows.length > page ? <Text dimColor>{`… +${rows.length - page}`}</Text> : null}
     </Pane>
+  )
+}
+
+/**
+ * One session as a card — the same `Pane` every other framed region of this app uses.
+ *
+ * The frame's title is the HANDLE, because `agentop session attach 3f5f` takes a prefix and that is
+ * the one thing on the card naming this session to anything but this screen; the badge is the GROUP,
+ * so a card read on its own is never ambiguous about which project or task it belongs to.
+ *
+ * The lines come from the pure `cardLines`, cut from the bottom by `fitCardLines`, so what the card
+ * gives up on a short terminal is decided in one place and tested there.
+ */
+function SessionCard({ session, badge, selected, marked, width, height, strings: s }: {
+  session: ControlSession
+  badge: string
+  selected: boolean
+  marked: boolean
+  width: number
+  height: number
+  strings: ControlStrings
+}) {
+  const inner = paneBody(width)
+  const lines = fitCardLines(
+    cardLines(session, {
+      attached: s.sessionsCardAttached,
+      blind: s.sessionsCardBlind,
+      // The clock arithmetic happens HERE, not in the pure module: the card repaints far more often
+      // than the poll runs, so a duration computed upstream would freeze at whatever it was.
+      ago: startedAt => s.sessionsAgo(Math.max(0, Math.round((Date.now() - startedAt) / 1000))),
+    }),
+    paneRows(height),
+  )
+  const handle = sessionHandle(session) || session.harness
+
+  return (
+    <Pane
+      title={handle}
+      // Fitted HERE rather than left to `paneTop`, whose badge rule is whole-or-nothing: the group
+      // is the only place a card says which project or task it belongs to, so it is truncated
+      // rather than dropped. `paneBadgeRoom` is that frame's own arithmetic.
+      badge={truncate(badge, paneBadgeRoom(handle, width))}
+      focused={selected}
+      width={width}
+      height={height}
+    >
+      {lines.map(line => (
+        <CardLineView
+          key={line.key}
+          line={line}
+          width={inner}
+          marked={marked}
+          selected={selected}
+          stateColor={STATE_COLOR[session.state]}
+          bold={session.state === 'waiting-approval'}
+        />
+      ))}
+    </Pane>
+  )
+}
+
+/** One line of a card. The state keeps its colour and its WORD, exactly as the row does. */
+function CardLineView({ line, width, marked, selected, stateColor, bold }: {
+  line: CardLine
+  width: number
+  marked: boolean
+  selected: boolean
+  stateColor: string | undefined
+  bold: boolean
+}) {
+  if (line.kind === 'state') {
+    const cells = cardStateCells(line.text, line.tail ?? '', width)
+    return (
+      <Text wrap="truncate">
+        <Text color={stateColor} bold={bold}>{cells.state}</Text>
+        <Text dimColor>{cells.tail}</Text>
+      </Text>
+    )
+  }
+  if (line.kind === 'title') {
+    return (
+      <Text wrap="truncate" color={selected ? COLORS.accent : marked ? COLORS.info : undefined} bold>
+        {truncate(line.text, width)}
+      </Text>
+    )
+  }
+  // What the assistant said is drawn in the text colour: it is the content, and every other line is
+  // a label for it.
+  return (
+    <Text wrap="truncate" color={line.kind === 'say' ? COLORS.text : COLORS.secondary}>
+      {truncate(line.text, width)}
+    </Text>
+  )
+}
+
+/** Which page, how much of the fleet is on it, and the two arrows that move it. */
+function Pager({ cells }: { cells: PagerCells }) {
+  return (
+    <Text wrap="truncate">
+      <Text color={COLORS.accent}>{cells.prev ? `${cells.prev} ` : ''}</Text>
+      <Text bold>{cells.label}</Text>
+      <Text color={COLORS.accent}>{cells.next ? ` ${cells.next}` : ''}</Text>
+      <Text dimColor>{cells.note ? `   ${cells.note}` : ''}</Text>
+    </Text>
   )
 }
 
