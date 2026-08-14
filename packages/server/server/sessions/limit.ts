@@ -62,6 +62,10 @@
 
 import type { HarnessId } from '@agentistics/core'
 
+// See docs/specs/2026-08-14-session-limit-and-fleet-hygiene.md for the rest of the plan this file is
+// the first step of. This module is deliberately the smallest honest piece: the banner and the
+// clock. Nothing here decides what to DO about a blocked session — that is `limit-resume.ts`.
+
 /** One harness's limit banner, read from real frames. */
 export interface LimitRule {
   /** A tail line matching one of these is the harness refusing to continue. */
