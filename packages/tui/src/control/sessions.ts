@@ -863,6 +863,8 @@ export type AsideRow =
   | { kind: 'rule' }
   | { kind: 'action'; action: SessionAction; label: string; enabled: boolean }
   | { kind: 'group'; value: SessionGrouping; label: string; on: boolean }
+  /** One LAYOUT the list can be drawn in, and whether it is the one in force. */
+  | { kind: 'layout'; value: SessionLayout; label: string; on: boolean }
   | { kind: 'toggle'; toggle: SessionToggle; label: string; on: boolean }
   /** One task, with how many sessions are filed under it. `name: ''` is "all of them". */
   | { kind: 'task'; name: string; count: number; on: boolean; done?: boolean }
@@ -924,6 +926,14 @@ export function asideRows(o: {
   actionWords: Record<SessionAction, string>
   grouping: SessionGrouping
   groupWords: Record<SessionGrouping, string>
+  /**
+   * The layout block.
+   *
+   * Its own section rather than two more rows among the groupings: "list or cards" and "grouped by
+   * what" are different questions, and six grouping rows with two unlike ones among them is a menu
+   * nobody reads correctly.
+   */
+  layout: { heading: string; words: Record<SessionLayout, string>; value: SessionLayout }
   toggles: Record<SessionToggle, boolean>
   toggleWords: Record<SessionToggle, string>
   headings: { actions: string; view: string; show: string }
@@ -972,6 +982,12 @@ export function asideRows(o: {
   const rows: AsideRow[] = [{ kind: 'heading', label: o.headings.actions }]
   for (const a of o.actions) {
     rows.push({ kind: 'action', action: a.action, label: o.actionWords[a.action], enabled: a.enabled })
+  }
+  rows.push({ kind: 'rule' }, { kind: 'heading', label: o.layout.heading })
+  for (const value of LAYOUTS) {
+    rows.push({
+      kind: 'layout', value, label: o.layout.words[value], on: value === o.layout.value,
+    })
   }
   rows.push({ kind: 'rule' }, { kind: 'heading', label: o.headings.view })
   for (const g of GROUPINGS) {
@@ -1087,6 +1103,7 @@ export function asideRowKey(row: AsideRow): string {
   switch (row.kind) {
     case 'action': return `action:${row.action}`
     case 'group': return `group:${row.value}`
+    case 'layout': return `layout:${row.value}`
     case 'toggle': return `toggle:${row.toggle}`
     case 'task': return `task:${row.name}`
     case 'state': return `state:${row.value}`
@@ -1515,4 +1532,348 @@ export function sessionKeyHelp(w: {
 /** The width the keystroke column needs, so the descriptions line up — PURE. */
 export function keyHelpColumn(rows: readonly KeyHelp[]): number {
   return rows.reduce((n, r) => Math.max(n, r.keys.length), 0)
+}
+
+// the card grid
+// ---------------------------------------------------------------------------
+
+/**
+ * How the fleet is ARRANGED — the same rows, two shapes.
+ *
+ * The list is the right shape for scanning forty sessions and the wrong shape for reading one:
+ * what a session is saying, which model it runs, the note left on it and how long it has been
+ * going exist only in the detail pane, one selection at a time. A card carries them all at once.
+ */
+export type SessionLayout = 'list' | 'cards'
+
+/**
+ * The most cards one page may hold.
+ *
+ * A CAP rather than a page size: ten cards rarely fit — at 130x30 the pane carries six — and a
+ * fixed ten would have to SCROLL inside the page, which is two mechanisms for reaching one card.
+ * The page is what the grid can actually show, and on a terminal that can carry ten it is ten.
+ */
+export const CARD_PAGE_MAX = 10
+
+/**
+ * The layouts, in the order the menu lists them.
+ *
+ * A `const` array rather than a literal inside `asideRows`, for the same reason `SESSION_STATES`
+ * is one: a layout added later shows up as a missing row rather than as a menu that silently
+ * cannot reach it.
+ */
+export const LAYOUTS: readonly SessionLayout[] = ['list', 'cards'] as const
+
+/** One column between two cards. The frames already separate them; a wider gutter is spent air. */
+export const CARD_GAP = 1
+
+/**
+ * The narrowest card worth drawing, frame included.
+ *
+ * `PANE_FRAME_X` of that is border and padding, so the floor leaves 24 columns for a name — below
+ * which every card is an ellipsis and the grid says less than the list it replaced.
+ */
+export const CARD_MIN_WIDTH = 28
+
+/**
+ * The widest a card is allowed to grow, so a fleet of three on a 200-column terminal draws three
+ * readable cards rather than three billboards. The same bounded-growth rule the aside menu follows.
+ */
+export const CARD_MAX_WIDTH = 46
+
+/** Content lines a full card carries: name, state, usage, where, and what it is saying. */
+export const CARD_LINES = 5
+
+/** The fewest a card is worth: the name, the state, and one fact. Below that it is a list row. */
+export const CARD_MIN_LINES = 3
+
+export interface CardGrid {
+  /** Cards across. */
+  cols: number
+  /** Rows of cards. */
+  rows: number
+  /** Columns per card, FRAME INCLUDED. */
+  cardWidth: number
+  /** Rows per card, FRAME INCLUDED. */
+  cardHeight: number
+  /** Columns between two cards. */
+  gap: number
+  /** How many cards one page holds — `cols * rows`, never above `CARD_PAGE_MAX`. */
+  capacity: number
+}
+
+/**
+ * The grid a region can carry — PURE, and `null` when it cannot carry one whole card.
+ *
+ * `null` is a real answer, not a failure: on a short or narrow terminal the screen falls back to
+ * the list, which is the same degradation the aside menu makes when it is dropped rather than
+ * squeezed. A grid drawn into a region too small for it is composited over the rows below.
+ *
+ * The shape is decided by the FLEET rather than by the cap: a 6x2 grid holding three sessions is
+ * three cards and nine holes. So the rows are the fewest that can carry what will be shown, the
+ * columns are the fewest that can place them in those rows, and every column left over is spent
+ * making the cards WIDER rather than making more of them.
+ */
+export function cardGrid(o: { width: number; height: number; total: number }): CardGrid | null {
+  const width = Math.max(0, o.width)
+  const height = Math.max(0, o.height)
+  const floorHeight = PANE_FRAME_Y + CARD_MIN_LINES
+  const fullHeight = PANE_FRAME_Y + CARD_LINES
+  if (width < CARD_MIN_WIDTH || height < floorHeight) return null
+
+  // How many the region could carry at the floor — the ceiling on everything below.
+  const maxCols = Math.max(1, Math.floor((width + CARD_GAP) / (CARD_MIN_WIDTH + CARD_GAP)))
+  const maxRows = Math.max(1, Math.floor(height / floorHeight))
+  const want = Math.max(1, Math.min(Math.max(0, o.total), CARD_PAGE_MAX))
+
+  const rows = Math.max(1, Math.min(maxRows, Math.ceil(want / maxCols)))
+  const cols = Math.max(1, Math.min(maxCols, Math.ceil(want / rows)))
+  // The floor is unreachable — `cols <= maxCols` guarantees it — and stated anyway, because this is
+  // the one line whose being wrong truncates every card by the frame it was measured against.
+  const cardWidth = Math.max(
+    CARD_MIN_WIDTH,
+    Math.min(CARD_MAX_WIDTH, Math.floor((width - CARD_GAP * (cols - 1)) / cols)),
+  )
+  // As tall as the band affords, never taller than the card has content for: rows of blank inside
+  // a frame are not a card, they are a box with a name in it.
+  const cardHeight = Math.min(fullHeight, Math.floor(height / rows))
+
+  return {
+    cols, rows, cardWidth, cardHeight, gap: CARD_GAP,
+    capacity: Math.min(cols * rows, CARD_PAGE_MAX),
+  }
+}
+
+export interface CardPage {
+  /** The page actually in force, clamped into range. */
+  page: number
+  pages: number
+  /** Index of the first card of this page, and one past its last. */
+  from: number
+  to: number
+}
+
+/**
+ * Which slice of the fleet a page names — PURE, and CLAMPED on every call.
+ *
+ * Clamped rather than corrected in an effect, for the same reason the list's cursor is: a session
+ * that ends between two polls shortens the list under the page, and a stored index would point past
+ * the end for exactly one frame — which is the frame the user presses a key on.
+ */
+export function cardPage(total: number, capacity: number, page: number): CardPage {
+  const size = Math.max(1, capacity)
+  const count = Math.max(0, total)
+  const pages = Math.max(1, Math.ceil(count / size))
+  const at = Math.max(0, Math.min(Math.floor(page), pages - 1))
+  const from = at * size
+  return { page: at, pages, from, to: Math.min(count, from + size) }
+}
+
+// ---------------------------------------------------------------------------
+// what a card says
+// ---------------------------------------------------------------------------
+
+/**
+ * The group each card belongs to, in the order the cards are drawn — PURE.
+ *
+ * Taken from the HEADING the list would have drawn above that row, never re-derived from the
+ * session: `sessionRows` already decides what a group is called, including the history section, a
+ * finished task's suffix and the localized word for an absent key. Working it out a second way is a
+ * second implementation of the grouping, and the two would disagree the first time either changed.
+ *
+ * With grouping off there is no heading, and the card falls back to the project — the fact every
+ * session already carries. A blank badge is a frame with a gap in it.
+ */
+export function cardBadges(rows: readonly SessionRow[]): string[] {
+  const out: string[] = []
+  let heading = ''
+  for (const row of rows) {
+    if (row.kind === 'heading') { heading = row.label; continue }
+    if (row.kind !== 'session') continue
+    out.push(heading || row.session.projectGroup || row.session.project)
+  }
+  return out
+}
+
+/** What a card line IS, so the component can colour it without parsing it back. */
+export type CardLineKind = 'title' | 'state' | 'fact' | 'say'
+
+export interface CardLine {
+  key: string
+  kind: CardLineKind
+  text: string
+  /** Drawn dim on the same row, after `text`. Given up first when the card is narrow. */
+  tail?: string
+}
+
+/** The already-localized words a card needs. This module owns no strings. */
+export interface CardLabels {
+  /** Said on a session whose terminal is currently handed over. */
+  attached: string
+  /** Short caveat for a harness with no probed approval markers. */
+  blind: string
+  ago: (startedAt: number) => string
+}
+
+/**
+ * Everything a card can say about one session, most identifying first — PURE.
+ *
+ * The order IS the give-up order: `fitCardLines` cuts from the bottom, so the name and the state
+ * are the two a card can never lose — the name because a card you cannot identify is not one you
+ * can act on, the state because nothing else on the frame says whether this session is waiting for
+ * you.
+ *
+ * A fact that was never recorded is an ABSENT line, never a zero: a harness that cannot report
+ * usage would otherwise show every one of its sessions costing nothing, in the very place a person
+ * looks to decide what to close. Same rule the detail pane and `sessionMetric` already follow.
+ */
+export function cardLines(s: ControlSession, labels: CardLabels): CardLine[] {
+  const marks = [
+    s.attached ? labels.attached : '',
+    s.approvalBlind ? labels.blind : '',
+  ].filter(Boolean)
+  const tail = [s.harness, ...marks].filter(Boolean).join(' · ')
+
+  const out: CardLine[] = [
+    { key: 'title', kind: 'title', text: s.title },
+    { key: 'state', kind: 'state', text: s.stateLabel, ...(tail ? { tail: ` · ${tail}` } : {}) },
+  ]
+
+  const usage = [sessionMetric(s), s.startedAt !== undefined ? labels.ago(s.startedAt) : '']
+    .filter(Boolean).join(' · ')
+  if (usage) out.push({ key: 'usage', kind: 'fact', text: usage })
+
+  // WHERE, and which checkout of it: with several worktrees of one repository open at once, the
+  // folder name is the only thing telling them apart.
+  const where = [worktreeName(s) || s.projectGroup || s.project, s.model].filter(Boolean).join(' · ')
+  if (where) out.push({ key: 'where', kind: 'fact', text: where })
+
+  if (s.task) out.push({ key: 'task', kind: 'fact', text: s.task })
+  if (s.note) out.push({ key: 'note', kind: 'fact', text: s.note })
+
+  // What it is SAYING, last, because it is the line a short card gives up first — and the only one
+  // that would be invented if it were not there. Present only for a session agentop hosts.
+  const say = s.lastLines?.[0]
+  if (say) out.push({ key: 'say', kind: 'say', text: say })
+
+  return out
+}
+
+/** The lines that fit, cut from the BOTTOM — so the name and the state are the two that survive. */
+export function fitCardLines(lines: readonly CardLine[], rows: number): CardLine[] {
+  return lines.slice(0, Math.max(0, rows))
+}
+
+/**
+ * The state row's two halves, fitted — PURE.
+ *
+ * The state WORD is what a card may never give up, exactly as `sessionCells` keeps it for a row:
+ * the harness is said again by the card's colour, the markers are said again by the detail pane,
+ * but nothing else on the card says whether this session is waiting for you.
+ */
+export function cardStateCells(state: string, tail: string, width: number): {
+  state: string
+  tail: string
+} {
+  const room = Math.max(0, width)
+  if (state.length + tail.length <= room) return { state, tail }
+  if (state.length <= room) return { state, tail: '' }
+  return { state: truncateCell(state, room), tail: '' }
+}
+
+// ---------------------------------------------------------------------------
+// the card band, its pager, and where a click lands
+// ---------------------------------------------------------------------------
+
+/**
+ * How the list pane's rows are split between the grid and its pager — PURE.
+ *
+ * The column HEADER is reclaimed: it names cells (`state`, `task`, `harness`) that a card does not
+ * have, so drawing it over a grid would be a heading over nothing. The PAGER is a row like any
+ * other and is paid for out of the same band — a row taken without being paid for is composited
+ * onto the frame below it, which reads as a corrupted frame rather than a cramped one.
+ *
+ * The pager is given up before the grid: a page you cannot leave is worse than one you cannot
+ * count, and the keys still turn the page.
+ */
+export function cardBand(o: { listRows: number; header: boolean }): {
+  gridRows: number
+  pager: boolean
+} {
+  const available = Math.max(0, o.listRows) + (o.header ? 1 : 0)
+  const pager = available >= PANE_FRAME_Y + CARD_MIN_LINES + 1
+  return { gridRows: Math.max(0, available - (pager ? 1 : 0)), pager }
+}
+
+/**
+ * Which card a click landed on, in grid coordinates — PURE, and the SAME arithmetic that drew it.
+ *
+ * The gutter between two cards belongs to neither: rounding it into one of them answers a click
+ * the user did not make, which is worse than not answering at all.
+ */
+export function cardAt(grid: CardGrid, x: number, y: number): number | null {
+  if (x < 0 || y < 0) return null
+  const stride = grid.cardWidth + grid.gap
+  const col = Math.floor(x / stride)
+  if (col >= grid.cols) return null
+  if (x - col * stride >= grid.cardWidth) return null
+  const row = Math.floor(y / grid.cardHeight)
+  if (row >= grid.rows) return null
+  const index = row * grid.cols + col
+  return index >= grid.capacity ? null : index
+}
+
+export interface PagerCells {
+  /** `''` when the row is too narrow to carry the arrows at all. */
+  prev: string
+  next: string
+  label: string
+  /** How many of how many. The first cell given up. */
+  note: string
+  /** Column each arrow is drawn at, or `-1` when it is not drawn. */
+  prevAt: number
+  nextAt: number
+  /** What the row actually occupies — never more than the width it was measured against. */
+  width: number
+}
+
+/** The glyphs, so the drawn row and the hit test cannot disagree about their width. */
+const PAGER_PREV = '‹'
+const PAGER_NEXT = '›'
+
+/**
+ * The pager row, fitted — PURE.
+ *
+ * Cells are given up in the order the row can afford to lose them: the COUNT first (the page label
+ * already says where you are), then the arrows (the keys still work, and the footer names them),
+ * and the page label last — a pager that cannot say which page this is has stopped being a pager.
+ */
+export function pagerCells(o: { label: string; note: string; width: number }): PagerCells {
+  const width = Math.max(0, o.width)
+  const none: PagerCells = {
+    prev: '', next: '', label: '', note: '', prevAt: -1, nextAt: -1, width: 0,
+  }
+  if (width === 0) return none
+
+  const arrows = 4 + o.label.length // "‹ label ›"
+  if (arrows <= width) {
+    const nextAt = 2 + o.label.length + 1
+    const noteAt = nextAt + 3
+    const withNote = noteAt + o.note.length <= width && o.note !== ''
+    return {
+      prev: PAGER_PREV, next: PAGER_NEXT, label: o.label,
+      note: withNote ? o.note : '',
+      prevAt: 0, nextAt,
+      width: withNote ? noteAt + o.note.length : arrows,
+    }
+  }
+  const label = o.label.length <= width ? o.label : o.label.slice(0, width)
+  return { ...none, label, width: label.length }
+}
+
+/** Which arrow a click landed on, resolved against the very cells that were drawn. */
+export function pagerHit(cells: PagerCells, x: number): 'prev' | 'next' | null {
+  if (cells.prev !== '' && x === cells.prevAt) return 'prev'
+  if (cells.next !== '' && x === cells.nextAt) return 'next'
+  return null
 }

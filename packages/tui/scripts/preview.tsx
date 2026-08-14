@@ -398,6 +398,7 @@ const FAKE_FLEET: ControlSessions = {
       // Usage on SOME rows and not others, deliberately: the column is sized to the widest row that
       // has any, and a fixture where every row carries one would never exercise the padding.
       tokens: '51.7k', cost: '$1.24',
+      lastLines: ['applying migration 003_auth_store.sql', 'waiting for your approval'],
       startedAt: Date.now() - 22 * 60_000, attached: false,
     },
     {
@@ -412,6 +413,8 @@ const FAKE_FLEET: ControlSessions = {
       cwd: '/home/dev/embark', project: 'embark', model: 'kimi-k3',
       state: 'working', stateLabel: 'working', actionable: true,
       tokens: '308.2k', cost: '$0.91',
+      lastLines: ['rewriting src/importer/rows.ts'],
+      note: 'blocked on the CSV encoding',
       startedAt: Date.now() - 90_000, attached: true,
     },
     {

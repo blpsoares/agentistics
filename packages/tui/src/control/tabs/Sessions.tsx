@@ -24,7 +24,7 @@ import { DEFAULT_SESSION_VIEW } from '../types'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import { ACTION_SEP, actionAtColumn, fitActionRow } from '../chrome.ts'
 import { Divider } from '../Surface'
-import { PANE_MIN_ROWS } from '../chrome.ts'
+import { PANE_MIN_ROWS, paneBadgeRoom } from '../chrome.ts'
 import { Pane, paneBody, paneRows } from '../Pane'
 
 /** Columns a pane spends on its left edge: one of border, one of padding. */
@@ -57,7 +57,10 @@ import {
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
   taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
   sessionAge, sessionKeyHelp, keyHelpColumn,
-  DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder,
+  DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder, type SessionLayout,
+  cardGrid, cardPage, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
+  cardAt, pagerCells, pagerHit,
+  type CardGrid, type CardLine, type PagerCells,
   asideSections, asideFold, scrollBar, THUMB,
   sessionNamed,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
@@ -131,6 +134,19 @@ export function Sessions({
   const [grouping, setGrouping] = useState<SessionGrouping>(
     view?.grouping ?? DEFAULT_SESSION_VIEW.grouping,
   )
+  /** A list of rows, or a grid of cards. See `cardGrid` for why the grid may refuse. */
+  const [layout, setLayout] = useState<SessionLayout>(
+    view?.layout ?? DEFAULT_SESSION_VIEW.layout ?? 'list',
+  )
+  /**
+   * The session at the top of the open card page.
+   *
+   * The page itself is DERIVED from the cursor, so there is no second position to keep in sync —
+   * but it still has to survive a restart, and a page NUMBER would name different sessions by the
+   * next poll. Held in state rather than read back off `view`, so switching to the list and back
+   * does not lose the page.
+   */
+  const [cardAnchor, setCardAnchor] = useState<string | undefined>(view?.cardAnchor)
   const [cursor, setCursor] = useState(0)
   const [ask, setAsk] = useState<Ask | null>(null)
   const [query, setQuery] = useState('')
@@ -259,6 +275,14 @@ export function Sessions({
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
 
+  // The cards are the SAME sequence the list draws, headings removed — so `at` (an index into
+  // `selectable`) names the same session in both layouts, and switching layout keeps the selection.
+  const cards = useMemo(
+    () => rows.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
+    [rows],
+  )
+  const badges = useMemo(() => cardBadges(rows), [rows])
+
   // Clamped on every render rather than corrected in an effect: a session that ends between two
   // polls shortens the list under the cursor, and a stored index would point past the end for one
   // frame — which is the frame the user presses enter on.
@@ -296,7 +320,13 @@ export function Sessions({
   // frame rather than a cramped one.
   // A QUESTION always gets its rows, switch or no switch: it is a prompt, and one with nowhere to
   // draw cannot be answered. Only the FACTS are what the switch withholds.
-  const detailWanted = ask ? Math.max(QUESTION_ROWS, detail.length) : hideDetail ? 0 : detail.length
+  // A card holds what the detail pane holds, so in cards mode the pane is not asked for at all and
+  // the whole band goes to the grid — a fleet drawn twice on one screen is half a screen wasted. A
+  // QUESTION still gets its rows, switch or no switch: a prompt with nowhere to draw cannot be
+  // answered.
+  const detailWanted = ask
+    ? Math.max(QUESTION_ROWS, detail.length)
+    : layout === 'cards' || hideDetail ? 0 : detail.length
 
   /**
    * Act on the selected row, or say why it cannot be acted on.
@@ -344,6 +374,7 @@ export function Sessions({
     },
     grouping,
     groupWords: s.sessionsGroupings,
+    layout: { heading: s.asideLayout, words: s.sessionsLayouts, value: layout },
     toggles: {
       closed: showClosed, exited: showExited, unfiled: !hideEmptyTask, done: showDone,
       active: onlyActive, detail: !hideDetail,
@@ -381,7 +412,7 @@ export function Sessions({
       allLabel: s.asideAllProjects,
     },
   }), [
-    actions, grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
+    actions, grouping, layout, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
     states, stateCounts, order, taskFilter,
     projectFilter, fleet?.sessions, fleet?.finishedTasks, s,
   ])
@@ -414,6 +445,38 @@ export function Sessions({
     ? probe
     : sessionsCockpit({ width, height: Math.max(1, height - actionRows), asideLabel, detailWanted })
 
+  // The grid, decided HERE rather than beside the list's own arithmetic further down: both input
+  // handlers read it, and a value declared under them reads as "used before its declaration" to
+  // anyone editing this file, even though the closures run late.
+  //
+  // No scrollbar in cards mode — the pager is what says where you are — so it is measured against
+  // the pane's full body. `null` on a terminal too small for one whole card, and the LIST is drawn
+  // instead: the same degradation the aside menu makes when it is dropped rather than squeezed.
+  const cardsBody = paneBody(cockpit.list)
+  const band = cardBand({ listRows: cockpit.listRows, header: cockpit.header })
+  const grid: CardGrid | null = layout === 'cards' && rows.length > 0
+    ? cardGrid({ width: cardsBody, height: band.gridRows, total: cards.length })
+    : null
+  // The page is the one holding the CURSOR — derived, never stored beside it. Turning a page is
+  // therefore moving the cursor, and there is no second position that can fall out of step.
+  const page = grid
+    ? cardPage(cards.length, grid.capacity, Math.floor(Math.max(0, at) / grid.capacity))
+    : null
+  const pager = grid && page && band.pager
+    ? pagerCells({
+        label: s.sessionsPage(page.page + 1, page.pages),
+        note: s.sessionsShowing(page.to - page.from, cards.length),
+        width: cardsBody,
+      })
+    : null
+
+
+  // Updated only when the PAGE changes, never on every cursor move: `setSessionView` writes
+  // `preferences.json` to disk, and a disk write per arrow key is not a thing this screen may do.
+  const pageAnchor = page ? cards[page.from]?.id : undefined
+  useEffect(() => {
+    if (pageAnchor && pageAnchor !== cardAnchor) setCardAnchor(pageAnchor)
+  }, [pageAnchor, cardAnchor])
 
   /** Run one verb, whether it arrived from a letter, an arrow key or a click. */
   const runAction = useCallback((a: SessionAction) => {
@@ -496,6 +559,7 @@ export function Sessions({
     setStates(null)
     setOrder(DEFAULT_ORDER)
     setHideDetail(false)
+    setLayout(DEFAULT_SESSION_VIEW.layout ?? 'list')
     setMarked(new Set())
     setHideEmptyTask(!DEFAULT_SESSION_VIEW.showUnfiled)
     setTaskFilter(null)
@@ -510,6 +574,7 @@ export function Sessions({
     if (!row) return
     if (row.kind === 'action') { if (row.enabled) runAction(row.action); return }
     if (row.kind === 'group') { setGrouping(row.value); setCursor(0); return }
+    if (row.kind === 'layout') { setLayout(row.value); return }
     if (row.kind === 'task') { setTaskFilter(row.name || null); setCursor(0); return }
     if (row.kind === 'project') { setProjectFilter(row.name || null); setCursor(0); return }
     if (row.kind === 'sort') {
@@ -642,6 +707,7 @@ export function Sessions({
     if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
     if (input === 'l') { setOnlyActive(v => !v); setCursor(0); return }
     if (input === 'd') { setHideDetail(v => !v); return }
+    if (input === 'f') { setLayout(l => (l === 'list' ? 'cards' : 'list')); return }
     // The HIGHLIGHTER. `space` because it is the mark key of every list that has one, and because
     // it is the only unclaimed key on this screen that a person reaches for without being told.
     if (input === ' ') {
@@ -666,6 +732,25 @@ export function Sessions({
     if (input === 'x') return runAction('kill')
     if (input === 'n') return runAction('rename')
     if (input === 't') return runAction('note')
+
+    // A grid has two axes, so the arrows mean what they mean in a grid: `←`/`→` step one card,
+    // `↑`/`↓` step a whole row of them. The list's own reducer wraps a single column, which in a
+    // grid would send the cursor from the top-left card to the bottom-RIGHT one.
+    if (grid && selectable.length > 0) {
+      const here = Math.max(0, at)
+      const to = (n: number) => setCursor(Math.max(0, Math.min(n, selectable.length - 1)))
+      if (key.leftArrow) return to(here - 1)
+      if (key.rightArrow) return to(here + 1)
+      if (key.upArrow || input === 'k') return to(here - grid.cols)
+      if (key.downArrow || input === 'j') return to(here + grid.cols)
+      // The page is always the one holding the cursor, so turning a page IS moving the cursor —
+      // there is no second position to keep in sync with the first.
+      if (key.pageUp) return to(here - grid.capacity)
+      if (key.pageDown) return to(here + grid.capacity)
+      if (key.home || input === 'g') return to(0)
+      if (key.end || input === 'G') return to(selectable.length - 1)
+      return
+    }
 
     if (selectable.length > 0) {
       const next = resolveListKey(nav, Math.max(0, at), selectable.length)
@@ -700,8 +785,27 @@ export function Sessions({
     setStates(view.states ? new Set(view.states as SessionState[]) : null)
     setOrder((view.sort as SessionOrder | undefined) ?? DEFAULT_ORDER)
     setHideDetail(view.hideDetail ?? false)
+    // The DEFAULT, never a literal — same rule, same reason as `onlyActive` above.
+    setLayout(view.layout ?? DEFAULT_SESSION_VIEW.layout ?? 'list')
+    setCardAnchor(view.cardAnchor)
     setMarked(new Set(view.marked ?? []))
   }, [view])
+
+  /**
+   * Put the cursor back on the remembered page, ONCE, when the fleet finally arrives.
+   *
+   * Separate from the arrangement restore because it needs a different thing to have loaded: the
+   * arrangement comes from the host's status, the anchor can only be resolved against the sessions.
+   * An anchor no longer in the list — the session ended, a filter changed, the machine is another
+   * one — simply leaves the cursor where it is, which is page 0.
+   */
+  const anchored = useRef(false)
+  useEffect(() => {
+    if (anchored.current || cards.length === 0 || !view?.cardAnchor) return
+    anchored.current = true
+    const index = cards.findIndex(v => v.id === view.cardAnchor)
+    if (index >= 0) setCursor(index)
+  }, [cards, view?.cardAnchor])
 
   // Written whenever any part of the arrangement moves, rather than at each call site: four setters
   // that each had to remember to persist is four places for one to be forgotten. It waits for the
@@ -717,12 +821,14 @@ export function Sessions({
     onView({
       grouping, showClosed, showExited, showUnfiled: !hideEmptyTask, showDone, onlyActive,
       hideDetail,
+      layout,
+      ...(cardAnchor ? { cardAnchor } : {}),
       ...(marked.size > 0 ? { marked: [...marked] } : {}),
       ...(states ? { states: [...states] } : {}),
       sort: order,
     })
   }, [grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
-      states, order, marked, onView, view])
+      layout, cardAnchor, states, order, marked, onView, view])
 
   useEffect(() => {
     if (!isActive) return
@@ -827,6 +933,28 @@ export function Sessions({
       // The summary row states what is being shown; the controls live in the view panel, which a
       // click on that row opens. One place to change these, rather than two that can disagree.
       if (cockpit.summary && y === 0) { setAsk({ kind: 'view' }); return }
+      if (grid && page) {
+        // Resolved against the very grid that drew the cards: the pane's frame and the summary row
+        // are both paid for here rather than assumed, or the click answers with the card above the
+        // one that was pointed at.
+        const gy = y - (cockpit.summary ? 1 : 0)
+        const gx = p.x - listX - PANE_EDGE_X
+        if (pager && gy === grid.rows * grid.cardHeight) {
+          const hit = pagerHit(pager, gx)
+          // Turning a page IS moving the cursor — the page is derived from it, so there is nothing
+          // else to set and nothing that can fall out of step.
+          if (hit) {
+            const step = hit === 'next' ? grid.capacity : -grid.capacity
+            setCursor(c => Math.max(0, Math.min(Math.max(0, c) + step, selectable.length - 1)))
+          }
+          return
+        }
+        const slot = cardAt(grid, gx, gy)
+        if (slot === null) return
+        const index = page.from + slot
+        if (index < selectable.length) setCursor(index)
+        return
+      }
       const row = offset + (y - (cockpit.summary ? 1 : 0))
       if (row < 0 || row >= rows.length) return
       const found = selectable.indexOf(row)
@@ -1083,7 +1211,7 @@ export function Sessions({
       {/* What each cell IS. The row was six aligned columns of unlabelled text — the alignment made
           it scannable and the labels are what make it readable, and they are drawn from the very
           same measured widths so the heading can never sit over the wrong column. */}
-      {cockpit.header && rows.length > 0 ? (
+      {cockpit.header && rows.length > 0 && !grid ? (
         <Text dimColor wrap="truncate">
           {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')
             + padCell(s.sessionsCols.state, columns.state)}
@@ -1112,6 +1240,39 @@ export function Sessions({
           {fleet.unavailable ? ''
             : truncate(emptyReason, listBody)}
         </Text>
+      ) : grid && page ? (
+        <Box flexDirection="column" width={cardsBody} flexShrink={0}>
+          {Array.from({ length: grid.rows }, (_, r) => (
+            <Box key={`row${r}`} flexDirection="row" height={grid.cardHeight} flexShrink={0}>
+              {Array.from({ length: grid.cols }, (_, c) => {
+                const slot = r * grid.cols + c
+                const index = page.from + slot
+                const card = slot < grid.capacity ? cards[index] : undefined
+                return (
+                  <Box key={`col${c}`} flexDirection="row" flexShrink={0}>
+                    {c > 0 ? <Box width={grid.gap} flexShrink={0} /> : null}
+                    {card ? (
+                      <SessionCard
+                        session={card}
+                        badge={badges[index] ?? ''}
+                        selected={selected?.id === card.id}
+                        marked={marked.has(card.id)}
+                        width={grid.cardWidth}
+                        height={grid.cardHeight}
+                        strings={s}
+                      />
+                    ) : (
+                      // An empty cell keeps the grid's shape without drawing a frame around
+                      // nothing — a card with no session in it is a box claiming to be one.
+                      <Box width={grid.cardWidth} height={grid.cardHeight} flexShrink={0} />
+                    )}
+                  </Box>
+                )
+              })}
+            </Box>
+          ))}
+          {pager ? <Pager cells={pager} /> : null}
+        </Box>
       ) : (
         // NO fixed height: the rows pack upward so nothing sits at the bottom of a tall pane with a
         // field of blank above it. The leftover space belongs at the very bottom of the frame.
@@ -1410,6 +1571,110 @@ function KeyHelpScreen({ strings: s, width, height, onClose }: {
       ))}
       {rows.length > page ? <Text dimColor>{`… +${rows.length - page}`}</Text> : null}
     </Pane>
+  )
+}
+
+/**
+ * One session as a card — the same `Pane` every other framed region of this app uses.
+ *
+ * The frame's title is the HANDLE, because `agentop session attach 3f5f` takes a prefix and that is
+ * the one thing on the card naming this session to anything but this screen; the badge is the GROUP,
+ * so a card read on its own is never ambiguous about which project or task it belongs to.
+ *
+ * The lines come from the pure `cardLines`, cut from the bottom by `fitCardLines`, so what the card
+ * gives up on a short terminal is decided in one place and tested there.
+ */
+function SessionCard({ session, badge, selected, marked, width, height, strings: s }: {
+  session: ControlSession
+  badge: string
+  selected: boolean
+  marked: boolean
+  width: number
+  height: number
+  strings: ControlStrings
+}) {
+  const inner = paneBody(width)
+  const lines = fitCardLines(
+    cardLines(session, {
+      attached: s.sessionsCardAttached,
+      blind: s.sessionsCardBlind,
+      // The clock arithmetic happens HERE, not in the pure module: the card repaints far more often
+      // than the poll runs, so a duration computed upstream would freeze at whatever it was.
+      ago: startedAt => s.sessionsAgo(Math.max(0, Math.round((Date.now() - startedAt) / 1000))),
+    }),
+    paneRows(height),
+  )
+  const handle = sessionHandle(session) || session.harness
+
+  return (
+    <Pane
+      title={handle}
+      // Fitted HERE rather than left to `paneTop`, whose badge rule is whole-or-nothing: the group
+      // is the only place a card says which project or task it belongs to, so it is truncated
+      // rather than dropped. `paneBadgeRoom` is that frame's own arithmetic.
+      badge={truncate(badge, paneBadgeRoom(handle, width))}
+      focused={selected}
+      width={width}
+      height={height}
+    >
+      {lines.map(line => (
+        <CardLineView
+          key={line.key}
+          line={line}
+          width={inner}
+          marked={marked}
+          selected={selected}
+          stateColor={STATE_COLOR[session.state]}
+          bold={session.state === 'waiting-approval'}
+        />
+      ))}
+    </Pane>
+  )
+}
+
+/** One line of a card. The state keeps its colour and its WORD, exactly as the row does. */
+function CardLineView({ line, width, marked, selected, stateColor, bold }: {
+  line: CardLine
+  width: number
+  marked: boolean
+  selected: boolean
+  stateColor: string | undefined
+  bold: boolean
+}) {
+  if (line.kind === 'state') {
+    const cells = cardStateCells(line.text, line.tail ?? '', width)
+    return (
+      <Text wrap="truncate">
+        <Text color={stateColor} bold={bold}>{cells.state}</Text>
+        <Text dimColor>{cells.tail}</Text>
+      </Text>
+    )
+  }
+  if (line.kind === 'title') {
+    return (
+      <Text wrap="truncate" color={selected ? COLORS.accent : marked ? COLORS.info : undefined} bold>
+        {truncate(line.text, width)}
+      </Text>
+    )
+  }
+  // What the assistant said is drawn in the text colour: it is the content, and every other line is
+  // a label for it.
+  return (
+    <Text wrap="truncate" color={line.kind === 'say' ? COLORS.text : COLORS.secondary}>
+      {truncate(line.text, width)}
+    </Text>
+  )
+}
+
+/** Which page, how much of the fleet is on it, and the two arrows that move it. */
+function Pager({ cells }: { cells: PagerCells }) {
+  return (
+    <Text wrap="truncate">
+      <Text color={COLORS.accent}>{cells.prev ? `${cells.prev} ` : ''}</Text>
+      <Text bold>{cells.label}</Text>
+      <Text color={COLORS.accent}>{cells.next ? ` ${cells.next}` : ''}</Text>
+      <Text dimColor>{cells.note ? `   ${cells.note}` : ''}</Text>
+    </Text>
   )
 }
 

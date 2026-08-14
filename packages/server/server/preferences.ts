@@ -75,6 +75,11 @@ export interface Preferences {
     sort?: { by: string; dir: 'asc' | 'desc' }
     hideDetail?: boolean
     marked?: string[]
+    /** How the fleet is arranged — a list of rows, or a grid of cards. */
+    layout?: 'list' | 'cards'
+    /** The session at the top of the open card page: a page number would name other sessions by
+     *  the next poll, so the page is remembered by identity. */
+    cardAnchor?: string
   }
   /**
    * The session TASKS the user has marked finished.
