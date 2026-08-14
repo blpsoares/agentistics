@@ -34,6 +34,10 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   │                          `--bg` detaches via tmux, attach prints the REAL detach key; `list`
   │                          reports what each session is DOING and names the harnesses whose
   │                          approval detection is unavailable)
+  ├── agentop hooks …      → server/cli-hooks.ts (install/uninstall/status/context — the Claude Code
+  │                          integration: a SKILL that teaches the `session batch` contract and a
+  │                          SessionStart HOOK that injects the live fleet. Explicit, idempotent,
+  │                          exactly reversible; see docs/claude-integration.md)
   ├── agentop ci-push      → server/ci-push.ts (one-shot GitHub Actions runner → central push; env AGENTISTICS_CENTRAL_URL/AGENTISTICS_CI_TOKEN)
   ├── agentop autostart …  → server/autostart.ts (systemd user service + linger + ~/.bashrc + ~/.zshrc update-check hook)
   ├── agentop upgrade      → server/upgrade.ts
@@ -110,6 +114,37 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
   ├── rebuild-flags.ts     → **pure**: the rebuild's two answers (`-y`/`-n` for central.sh's setup prompt, `--cache`/`--no-cache` for the image build) — parse, conflict-refuse, and the argv each path receives
   ├── cli-i18n.ts          → EN/PT strings the HOST produces (CLI is English by default; language follows --lang / preferences.lang / the in-app toggle). The control center's own chrome strings live in tui/src/control/i18n.ts
+  ├── cli-hooks.ts + claude-hooks.ts / claude-skill.ts / session-context.ts → **the Claude Code
+  │                          integration** (`agentop hooks install|uninstall|status|context`). Two
+  │                          pieces because they answer two different questions, and a **HOOK INFERS
+  │                          NOTHING** — it is a deterministic shell callback on an event; the
+  │                          inference is the MODEL's, reading what was injected. So the KNOWLEDGE
+  │                          half (when to fan work out, how to write each session's prompt, the
+  │                          `session batch` contract) is a **SKILL** — loaded by description when
+  │                          the task matches, free otherwise — and never a SessionStart injection,
+  │                          which would tax every session for the few that parallelise. The FACTS
+  │                          half (which sessions run NOW, which is blocked on approval, which task
+  │                          reopens HERE) cannot live in a static file and IS the hook — which
+  │                          prints NOTHING when the fleet is empty, so a quiet machine pays no
+  │                          tokens either. `claude-hooks.ts` is **pure**: the settings merge that
+  │                          preserves every key it did not write, REFUSES a document it cannot
+  │                          merge into rather than fixing it, is idempotent, and whose removal is
+  │                          the exact inverse (containers that existed only to hold our entry are
+  │                          pruned; a group carrying someone else's hook is kept). Our entry is
+  │                          identified by the COMMAND it runs — a hook entry has no field for
+  │                          provenance and inventing an unknown key in someone else's schema is how
+  │                          a settings file stops validating — with the version carried in that same
+  │                          command, so `status` can read a file it never wrote. `claude-skill.ts`
+  │                          is **pure**: the document plus an ownership MARKER (delete the line and
+  │                          the file is the user's, permanently). `session-context.ts` is **pure**:
+  │                          what the hook prints, including when it prints nothing. **Installing is
+  │                          an explicit act** — `agentop setup` only SUGGESTS the command, exactly
+  │                          as `autostart.ts` does for `~/.bashrc` — and paths come from HOME_DIR,
+  │                          never CLAUDE_DIR (which can be a container's read-only mount of someone
+  │                          else's `~/.claude`; same distinction `mcp-list.ts` makes). The session
+  │                          verbs are deliberately NOT MCP tools: `agentop session batch` already
+  │                          exists as a CLI and Bash's permission prompt is the consent gate for
+  │                          starting N billable assistants. See docs/claude-integration.md
   ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
   ├── rotate-identity.ts   → **pure**: what a TOKEN ROTATION carries. `memberId = sha256(token)`, so rotating renames the machine in every collection keyed by that id — this module holds the ENUMERATION (`tokens`, `sessions`, `memberStats`, `workflows`, `machineKeys` and a tag's `machine` sources all migrate; `audit.targetId` is left as written, because an audit records what was true then; CI sessions are keyed by `ciMemberId(remote)` = `repo:<remote>` and move nothing; the member side's per-connection state is named by the LOCAL connection id and is reconciled by the sync fingerprint). **Any new collection keyed by a machine id must be added here or a rotation silently strands it — that is the same bug three times already.** `planEnvelopeRotation` is the mailbox decision and has NO re-address option: the routing is the GCM AAD, so mail addressed to the old id yields `recipient_mismatch` for anyone (dropped, and counted in the audit as a LOSS) while mail SENT by it still opens exactly as sealed (kept — re-stamping the sender would destroy it). `retargetMachineSources` matches on the source TYPE as well as the value, so an `account` id that happens to read the same is never dragged along. **Sibling pins are deliberately not carried**: to a sibling the rotated machine is new, is pinned on first sight and is ANNOUNCED — continuity would need a claim the central can forge (a "formerly" field, or "same public key", which a central can copy onto an invented machine), and the announcement is the one control against a fabricated peer
   ├── mongo-dates.ts       → **the date boundary**: BSON `Date` in Mongo, ISO string on the wire. Pure toBsonDate/fromBsonDate(+OrNull)/toBsonDates/fromBsonDates + `DATE_FIELDS` (every stored timestamp, by collection) + `migrateStringDatesToBson()` (idempotent, runs at boot; also `scripts/migrate-mongo-dates.ts`)
@@ -1013,6 +1048,15 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
 
 ## Important rules
 
+- **Anything agentop writes OUTSIDE its own directories is an explicit act of the user, and is
+  exactly reversible.** `~/.bashrc` and `~/.zshrc` (`autostart.ts`), `~/.claude/settings.json` and
+  `~/.claude/skills/` (`cli-hooks.ts`): each is written only behind a command the user typed, never
+  as a side effect of installing or configuring agentop, which may only ever SUGGEST it. Those files
+  hold other people's configuration, so the write is a MERGE that preserves every key it did not
+  author, a document it cannot merge into is REFUSED rather than repaired, running it twice changes
+  nothing, and the uninstall removes exactly what the install wrote — including the containers that
+  existed only to hold it. If the target tool is not installed at all, the command says so and
+  creates neither directory nor file.
 - **EVERY new screen and EVERY layout fix MUST also deliver its mobile version — no exceptions.**
   A change is not done when it looks right at 1440px. Before calling any UI work complete:
   - Build the mobile branch *in the same change*, not as a follow-up. A "we'll do mobile later" pass
