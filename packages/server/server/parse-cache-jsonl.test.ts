@@ -3,8 +3,8 @@ import { mkdtemp, rm, writeFile, utimes, stat } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { openParseCache } from './parse-cache'
-import { cachedParseSession } from './parse-cache-jsonl'
-import { parseSessionJsonl } from './jsonl'
+import { cachedParseSession, cachedEnrich } from './parse-cache-jsonl'
+import { parseSessionJsonl, activeMinutesFromClaudeJsonl } from './jsonl'
 
 const dirs: string[] = []
 async function tempDir(): Promise<string> {
@@ -105,6 +105,73 @@ describe('cachedParseSession', () => {
     const b = await cachedParseSession(cache, file, 'sess-1', '/fallback', 'subdir')
     expect(a._source).toBe('jsonl')
     expect(b._source).toBe('subdir')
+    cache.close()
+  })
+})
+
+describe('cachedEnrich', () => {
+  test('derives the model from the transcript when the caller has none', async () => {
+    const { dir, file } = await fixture()
+    const cache = await openParseCache(join(dir, 'cache.db'))
+    const r = await cachedEnrich(cache, file, '')
+    expect(r?.model).toBe('claude-opus-4-6')
+    cache.close()
+  })
+
+  test('active minutes match the live computation', async () => {
+    const { dir, file } = await fixture()
+    const cache = await openParseCache(join(dir, 'cache.db'))
+    const r = await cachedEnrich(cache, file, '')
+    expect(r?.activeMinutes).toBe(activeMinutesFromClaudeJsonl(TRANSCRIPT.split('\n')) ?? null)
+    cache.close()
+  })
+
+  test('a hit reproduces the cold result exactly and reads no file', async () => {
+    // A cache lookup still needs to `stat()` the file to build the FileStamp (exactly
+    // like cachedParseSession) — a deleted file has no version to check freshness
+    // against and correctly falls into the "missing" path tested below. What this test
+    // proves is the "does not read no file CONTENT" half: overwrite the bytes with
+    // garbage of the same length, then restore the original mtime exactly, so the
+    // stored row still matches this "new" version. A genuine hit answers from the
+    // database alone; a re-read would derive from the garbage content instead.
+    const { dir, file } = await fixture()
+    const cache = await openParseCache(join(dir, 'cache.db'))
+    const cold = await cachedEnrich(cache, file, '')
+
+    const before = await stat(file)
+    await writeFile(file, 'x'.repeat(TRANSCRIPT.length))
+    await utimes(file, before.atime, before.mtime)
+
+    const warm = await cachedEnrich(cache, file, '')
+    expect(JSON.stringify(warm)).toBe(JSON.stringify(cold))
+    cache.close()
+  })
+
+  test('the caller-supplied model is part of the identity', async () => {
+    // extractAgentMetrics PRICES against the model id the caller passes. Two callers
+    // with different ids must not read each other's row, or a session is costed with
+    // another session's rate.
+    const { dir, file } = await fixture()
+    const cache = await openParseCache(join(dir, 'cache.db'))
+    await cachedEnrich(cache, file, 'claude-opus-4-6')
+    await cachedEnrich(cache, file, 'claude-haiku-4-5-20251001')
+    expect(cache.rowCount()).toBe(2)
+    cache.close()
+  })
+
+  test('a missing file yields null rather than an invented result', async () => {
+    const dir = await tempDir()
+    const cache = await openParseCache(join(dir, 'cache.db'))
+    expect(await cachedEnrich(cache, join(dir, 'missing.jsonl'), '')).toBeNull()
+    cache.close()
+  })
+
+  test('an empty file yields null', async () => {
+    const dir = await tempDir()
+    const file = join(dir, 'empty.jsonl')
+    await writeFile(file, '')
+    const cache = await openParseCache(join(dir, 'cache.db'))
+    expect(await cachedEnrich(cache, file, '')).toBeNull()
     cache.close()
   })
 })

@@ -10,12 +10,12 @@ import { mergeLocalAndIngestedSessions, sessionKey } from './session-merge'
 import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
 import { UUID_RE, decodeProjectDir, getProjectGitStats, getGitRemote } from './git'
-import { activeMinutesFromClaudeJsonl, parseSessionJsonl } from './jsonl'
+import { parseSessionJsonl } from './jsonl'
 import type { MachineInfo } from './team-tokens'
 import { runHealthChecks, analyzeToolHealthIssues, analyzeCacheStaleness } from './health'
 import { extractAgentMetricsFromFile } from './agent-metrics'
 import { openParseCache, NOOP_PARSE_CACHE, type ParseCache } from './parse-cache'
-import { cachedParseSession } from './parse-cache-jsonl'
+import { cachedParseSession, cachedEnrich } from './parse-cache-jsonl'
 
 /** Extract the model ID from a JSONL file by reading only the first assistant message.
  *  Skips `<synthetic>` — Claude Code sentinel for system-generated turns, not a real model. */
@@ -212,44 +212,23 @@ async function scanProjectDir(
         extraSessions.push(session)
       } else if (metaEntry && (!metaEntry.model || metaEntry.active_minutes === undefined
         || (metaEntry.uses_task_agent && !metaEntry.agentMetrics))) {
-        // Meta session — extract model, active time and/or agent metrics from the JSONL
-        // (single read). Claude's own session-meta files carry none of the three.
+        // Meta session — model, active time and agent metrics all come from the
+        // transcript (Claude's own session-meta files carry none of the three), and all
+        // three are cached as one unit keyed on the file's version. Wall-clock duration
+        // is in the meta file; per-turn active time only exists here, so it has to be
+        // computed or the metric is blank for the path that serves MOST Claude sessions.
         await fileLimit(async () => {
           const needsModel = !metaEntry.model
           const needsAgentMetrics = metaEntry.uses_task_agent && !metaEntry.agentMetrics
-          // Wall-clock duration is in the meta file; per-turn active time only exists in the
-          // transcript, so it has to be computed here or the metric is blank for the path that
-          // serves MOST Claude sessions.
           const needsActive = metaEntry.active_minutes === undefined
           if (!needsModel && !needsAgentMetrics && !needsActive) return
 
-          const content = await readFile(filePath, 'utf-8').catch(() => '')
-          if (!content) return
+          const enriched = await cachedEnrich(cache, filePath, metaEntry.model ?? '')
+          if (!enriched) return
 
-          if (needsModel) {
-            for (const raw of content.split('\n').slice(0, 200)) {
-              const line = raw.trim()
-              if (!line) continue
-              try {
-                const e = JSON.parse(line)
-                const m = e.message?.model
-                if (e.type === 'assistant' && typeof m === 'string' && m && m.startsWith('claude-')) {
-                  metaEntry.model = m as string
-                  break
-                }
-              } catch { /* skip */ }
-            }
-          }
-
-          if (needsActive) {
-            metaEntry.active_minutes = activeMinutesFromClaudeJsonl(content.split('\n'))
-          }
-
-          if (needsAgentMetrics) {
-            const { extractAgentMetrics } = await import('./agent-metrics')
-            const metrics = extractAgentMetrics(content.split('\n'), metaEntry.model ?? '')
-            if (metrics.totalInvocations > 0) metaEntry.agentMetrics = metrics
-          }
+          if (needsModel && enriched.model) metaEntry.model = enriched.model
+          if (needsActive) metaEntry.active_minutes = enriched.activeMinutes ?? undefined
+          if (needsAgentMetrics && enriched.agentMetrics) metaEntry.agentMetrics = enriched.agentMetrics
         })
       }
       return
