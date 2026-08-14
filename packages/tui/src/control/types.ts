@@ -14,20 +14,25 @@ export type TabId =
   | 'sessions'
   /** The metrics dashboard — the whole of what `agentop tui` shows, as a screen of this app. */
   | 'dashboard'
-  | 'setup'
   | 'logs'
   | 'cheatsheet'
   | 'help'
   | 'contribute'
 
 // Operations first (what is running, and what you can do to it), then the numbers, then the
-// machine's own configuration, then the documentation. The dashboard sits where it does because it
-// answers a question about the same work the two screens before it are managing.
+// documentation. The dashboard sits where it does because it answers a question about the same work
+// the two screens before it are managing.
+//
+// There is no `setup` screen any more, and its absence is the point: choosing solo / central /
+// member is a question ABOUT the services on this box — you cannot re-run `central.sh init` on a
+// central that is up, and the only way to know that is to be looking at whether it is up. The
+// wizard is a QUESTION the cockpit asks, drawn in the detail region like every other one, reached
+// from the config pane's mode row. `agentop setup` still exists as the non-interactive command —
+// one implementation, two entrances.
 export const TAB_ORDER: readonly TabId[] = [
   'services',
   'sessions',
   'dashboard',
-  'setup',
   'logs',
   'cheatsheet',
   'help',
@@ -178,6 +183,49 @@ export interface StartOption extends StartRequest {
   offersBoot?: boolean
 }
 
+/**
+ * One boot registration this box can turn ON or OFF, ready to be drawn and handed back.
+ *
+ * It exists because `enableBoot` alone was a switch with one position. A service registered at boot
+ * comes back after every reboot and after every login that starts the user's systemd manager, so a
+ * user who deliberately stopped their central found it running again and had nowhere in the product
+ * to say "stay down" — the machine could disable it (`disableAutostart` has always existed), the
+ * cockpit simply had no way to ask.
+ *
+ * Composed by the host for the same reason `StartOption` is: WHICH mechanism brings a service back
+ * is a fact about this box (`agentistics` has two — a native unit and one that runs `docker compose
+ * … up -d` — and the central has one), and whether a mechanism can be registered here at all
+ * depends on files only the host can look for. A mechanism the host cannot ask about produces NO
+ * option, never a disabled one: the same absence-is-absence rule `ControlService.boot` follows.
+ */
+export interface BootOption {
+  /** The runtime this registration brings back. Handed straight back to `enableBoot`/`disableBoot`. */
+  runtime?: RuntimeId
+  /** True turns it on (`enableBoot`), false turns it off (`disableBoot`). */
+  enable: boolean
+  /** Already-localized verb, e.g. "Start at boot (native)" / "Stop starting at boot (docker)". */
+  label: string
+  /** Already-localized one-line explanation, for surfaces that show hints. */
+  hint?: string
+  /**
+   * Already-localized sentence stating exactly what pressing it does, NAMING the unit.
+   *
+   * The confirmation may not be "are you sure?": this writes or removes a systemd user unit, which
+   * is a change to the machine that outlives the session. Naming the unit is also the only way the
+   * answer to "what keeps bringing my central back" is discoverable from inside agentop.
+   */
+  confirm: string
+  /**
+   * The same question asked in the OTHER place it comes up: unprompted, right after a stop worked.
+   *
+   * Present only on a disable option, because that is the only direction that case has. It needs its
+   * own sentence because the user did not press a boot verb to get here — "Remove <unit>?" appearing
+   * on its own after `Stop` reads as a non sequitur, while "…is stopped, but <unit> still starts it
+   * at boot" states why it is being asked at all.
+   */
+  confirmAfterStop?: string
+}
+
 /** A stop that names ONE runtime — offered only to break a conflict. */
 export interface StopOption {
   runtime: RuntimeId
@@ -255,6 +303,24 @@ export interface ControlService {
    * the TUI owns, and the host is the only side that can answer the question.
    */
   boot?: BootState
+  /**
+   * WHAT brings it back — the systemd unit name, present only when `boot` is known.
+   *
+   * A proper noun, deliberately untranslated, and the whole of the honest trail: "starts at boot" on
+   * its own tells a user that something will restart their central and gives them nothing to go
+   * look at. With the unit named, `systemctl --user status <unit>` and `agentop autostart status`
+   * both answer, and the verb that turns it off is on the same pane.
+   */
+  bootUnit?: string
+  /**
+   * The boot registrations this box can change right now — on, off, or both, per mechanism.
+   *
+   * Offered whatever the service's state, unlike `startOptions`/`restartOptions`: "should this come
+   * back after a reboot" is a question about the FUTURE and is just as answerable while the thing is
+   * running as while it is stopped. Empty on a box the host cannot ask (no user systemd), which is
+   * why the verbs are absent there rather than present and failing.
+   */
+  bootOptions: BootOption[]
   /** The starts this box can perform right now. ALWAYS EMPTY while the service is up. */
   startOptions: StartOption[]
   /**
@@ -715,6 +781,21 @@ export interface ControlStatus {
   latestVersion?: string
   /** The history-preservation setting in force, or `undefined` while it is still unanswered. */
   archiveMode?: ArchiveMode
+  /**
+   * Why a mode cannot be chosen right now, already localized — one entry per BLOCKED mode, and the
+   * ordinary case is an empty object.
+   *
+   * Reconfiguring a service that is RUNNING is the trap this closes: `central` re-runs
+   * `central.sh init`, which rewrites the environment file and recreates the containers, so
+   * choosing it in the middle of a working session tears down the very central being used. The
+   * cockpit already refuses a start for something that is up by handing over an empty
+   * `startOptions`; this is the same rule applied to the wizard.
+   *
+   * A REASON, never a bare flag: a greyed row with no explanation is indistinguishable from a bug,
+   * and the sentence has to name what to do instead ("stop it first"). The host decides, because
+   * only it knows what is running.
+   */
+  setupBlocked?: Partial<Record<TeamMode, string>>
   /** How the fleet list was last arranged. Absent on a machine that has never chosen. */
   sessionView?: SessionViewPrefs
   /**
@@ -807,6 +888,25 @@ export interface ControlHost {
    * Docker for `central`, its only mechanism).
    */
   enableBoot(service: ServiceId, runtime?: RuntimeId): Promise<ActionResult>
+
+  /**
+   * Remove that registration again — the other half of the switch.
+   *
+   * It was missing, and its absence is the bug this pair exists to fix: `enableBoot` wrote a
+   * systemd user unit that nothing in the product could take away, so stopping a service stopped
+   * only this instance of it. The unit stayed enabled, and the next boot — or the next login that
+   * starts the user's systemd manager — ran it again. "I stopped my central and it keeps coming
+   * back" is exactly what a one-way switch produces.
+   *
+   * It NEVER stops what is running. Turning off "come back after a reboot" is a statement about the
+   * future, and a verb that also killed the live service would be two actions behind one label —
+   * the cockpit already has `Stop` for the other one. (`agentop autostart <mode> disable` keeps its
+   * older meaning and does both; the flag lives on `disableAutostart`, not here.)
+   *
+   * `runtime` is read the same way `enableBoot` reads it: it names WHICH mechanism to remove, since
+   * `agentistics` has two.
+   */
+  disableBoot(service: ServiceId, runtime?: RuntimeId): Promise<ActionResult>
 
   setLang(lang: CliLang): Promise<void>
 

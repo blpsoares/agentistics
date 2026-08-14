@@ -51,7 +51,7 @@ import type { CliLang } from '../src/control/lang'
 // and `--lang pt` would prove nothing. `cli-i18n.ts` is a dependency-free table of strings; reading
 // it from a dev script does not give the TUI a runtime dependency on the server.
 import { cliStrings, type CliStrings } from '../../server/server/cli-i18n'
-import { buildService } from '../../server/server/cli-start'
+import { bootOptionsFor, buildService } from '../../server/server/cli-start'
 // The REAL sanitiser, fed the raw bytes a build produces: a preview that emitted clean lines would
 // be previewing a pane nobody's docker ever fills.
 import { createLineDecoder } from '../src/control/stream'
@@ -257,9 +257,25 @@ function services(mode: Case, s: CliStrings, apiUrl?: string): ControlService[] 
     // determined — which must render as no boot row at all rather than as "no".
     buildService('agentistics', s.svcAgentistics, [native, machine], s, {
       boot: 'on',
+      bootUnit: 'agentop-server.service',
+      // BOTH positions of the switch on one service, which is the case worth drawing: the native
+      // unit is registered (so it offers to remove it) and the container's is not (so it offers to
+      // write it). A fixture with one position would never render the longer of the two verbs.
+      bootOptions: bootOptionsFor([
+        { unit: 'agentop-server.service', runtime: 'local', mech: 'native', on: true, installable: true },
+        { unit: 'agentop-machine.service', runtime: 'machine', mech: 'docker', on: false, installable: canRebuild },
+      ], s, true, s.svcAgentistics),
       rebuild: { local: canRebuild, machine: canRebuild },
     }),
-    buildService('central', s.svcCentral, [central], s, { rebuild: { central: true } }),
+    // No `boot` at all — the state this must render as NO boot row rather than as "does not start
+    // at boot", and therefore with no boot verb either.
+    buildService('central', s.svcCentral, [central], s, {
+      rebuild: { central: true },
+      bootOptions: bootOptionsFor(
+        [{ unit: 'agentop-central.service', runtime: 'central', mech: '', on: false, installable: true }],
+        s, true, s.svcCentral,
+      ),
+    }),
   ]
 }
 
@@ -274,6 +290,9 @@ function fakeStatus(opts: Options, apiUrl?: string): ControlStatus {
     version: '1.7.3',
     latestVersion: '1.7.4',
     archiveMode: 'consolidate',
+    // The wizard's blocked row, stated whenever the fake central is up: it is the case the fold
+    // exists for, and a preview that only ever drew three selectable modes would never show it.
+    setupBlocked: opts.mode === 'central' ? { central: s.setupBlockedCentralUp } : {},
   }
 }
 
@@ -360,6 +379,7 @@ function fakeHost(opts: Options, apiUrl?: string): ControlHost {
     upgrade: done,
     setArchiveMode: done,
     enableBoot: done,
+    disableBoot: done,
     setLang: async () => {},
     // The preview has no terminal to report a mouse, so `ControlCenter` is rendered without a
     // channel and never asks for tracking — this only satisfies the contract.
@@ -794,6 +814,17 @@ async function main(): Promise<void> {
   const [tens, units] = ruler(opts.cols)
   const over = lines.filter(l => visibleWidth(l) > opts.cols)
 
+  /**
+   * HEIGHT is measured too, and it fails the same way width does.
+   *
+   * Ink does not clip an overflowing child, it COMPOSITES it — a body one row too tall is drawn
+   * into the same cells as the status line, which reads as a corrupted frame rather than a cramped
+   * one. Every screen budgets itself against `height` for exactly that reason, and a budget nobody
+   * checks is a budget that drifts: this is the check. Reported as its own line, because "three rows
+   * too tall" and "three columns too wide" are different bugs in different functions.
+   */
+  const tall = lines.length - opts.rows
+
   const out = [
     `  ${opts.mode} · ${opts.screen} · ${opts.lang} · ${opts.cols}x${opts.rows}`,
     tens,
@@ -802,7 +833,10 @@ async function main(): Promise<void> {
     units,
     over.length
       ? `  ✗ ${over.length} row(s) exceed ${opts.cols} columns — widest is ${Math.max(...over.map(visibleWidth))}`
-      : `  ✓ every row fits ${opts.cols} columns (${lines.length} of ${opts.rows} rows used)`,
+      : `  ✓ every row fits ${opts.cols} columns`,
+    tall > 0
+      ? `  ✗ the frame is ${tall} row(s) taller than ${opts.rows} — Ink composites the overflow`
+      : `  ✓ the frame fits ${opts.rows} rows (${lines.length} used)`,
     '',
   ].join('\n')
 
@@ -811,7 +845,7 @@ async function main(): Promise<void> {
   process.stdout.write(`${out}\n`)
   // Ink's spinner keeps an interval alive past the unmount; the frame is printed, so the only thing
   // left to do is leave rather than idle on a timer nobody is watching.
-  process.exit(over.length ? 1 : 0)
+  process.exit(over.length || tall > 0 ? 1 : 0)
 }
 
 void main()

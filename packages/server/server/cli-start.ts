@@ -60,6 +60,7 @@ import type {
   ProjectOption,
   ResumeSessionRequest,
   StartOption,
+  BootOption,
   TabId,
   StartRequest,
   RestoreCandidate,
@@ -80,7 +81,13 @@ import {
 import { createLineDecoder } from '@agentistics/tui/control/stream'
 import { ensureArchiveModeChosen } from './cli-setup'
 import { memberConnect, memberLeave } from './cli-member'
-import { enableAutostart, type AutostartMode } from './autostart'
+import {
+  disableAutostart,
+  enableAutostart,
+  serviceCommandFor,
+  unitName,
+  type AutostartMode,
+} from './autostart'
 import { confirm } from './cli-ui'
 import { CURRENT_VERSION, getVersionInfo } from './version'
 import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
@@ -396,6 +403,88 @@ function restartOptionsFor(
 }
 
 /**
+ * One way a service can be registered to come back, as this box currently finds it.
+ *
+ * A mechanism is a systemd USER UNIT, and `agentistics` has two of them — `agentop-server` runs the
+ * binary, `agentop-machine` runs `docker compose … up -d` — which is exactly why the boot switch
+ * cannot be one flag on the service: turning "boot" off for a machine that registered the container
+ * would have removed the native unit and left the container coming back.
+ */
+export interface BootMechanism {
+  /** The full unit name, e.g. `agentop-central.service`. NAMED in every sentence it produces. */
+  unit: string
+  /** Which runtime it brings back, handed straight back to `enableBoot`/`disableBoot`. */
+  runtime?: RuntimeId
+  /** The word that distinguishes it on a verb (`native`, `docker`), or '' when there is only one. */
+  mech: string
+  /** Registered right now. The ONLY thing that decides whether the verb is "on" or "off". */
+  on: boolean
+  /**
+   * Whether the unit could be WRITTEN here — its `ExecStart` needs a file that only a repo checkout
+   * has (`central.sh`, `docker-compose.machine.yml`). False means no enable verb is offered, rather
+   * than one that writes a unit systemd would then restart every five seconds forever.
+   */
+  installable: boolean
+}
+
+/**
+ * The boot verbs a service offers — PURE, one per mechanism, and never both positions of the same
+ * switch.
+ *
+ * `supported` is the platform answer and it is all-or-nothing: `enableAutostart` writes a systemd
+ * user unit and macOS/Windows are not wired up at all, so there the list is EMPTY. That is the same
+ * absence-is-absence rule `ControlService.boot` follows — a verb that refuses on principle is worse
+ * than a missing one, and the detail pane is already silent about boot on those platforms.
+ */
+export function bootOptionsFor(
+  mechs: readonly BootMechanism[],
+  s: CliStrings,
+  supported: boolean,
+  /** The service's own name, for the sentence asked right after a stop. */
+  serviceLabel = '',
+): BootOption[] {
+  if (!supported) return []
+  const out: BootOption[] = []
+  for (const m of mechs) {
+    if (m.on) {
+      out.push({
+        runtime: m.runtime,
+        enable: false,
+        label: s.optBootOff(m.mech),
+        hint: s.optBootOffHint,
+        confirm: s.bootConfirmOff(m.unit),
+        confirmAfterStop: s.bootAfterStop(serviceLabel, m.unit),
+      })
+      continue
+    }
+    if (!m.installable) continue
+    out.push({
+      runtime: m.runtime,
+      enable: true,
+      label: s.optBootOn(m.mech),
+      hint: s.optBootOnHint,
+      confirm: s.bootConfirmOn(m.unit),
+    })
+  }
+  return out
+}
+
+/**
+ * Which autostart MODE a boot verb on this service means — PURE, and shared by both halves of the
+ * switch so `enableBoot` and `disableBoot` can never resolve the same press differently.
+ *
+ * `agentistics` boots as the native server by default: the verb offered while nothing is running
+ * has always meant that. `runtime: 'machine'` is the ONE case that means something else — the
+ * container's unit runs `docker compose … up -d`, so writing (or removing) a native unit there
+ * would act on a mechanism that does not match what the user pointed at. `central` has exactly one
+ * mechanism regardless of `runtime`.
+ */
+export function bootModeFor(service: ServiceId, runtime?: RuntimeId): AutostartMode {
+  if (service === 'central') return 'central'
+  return runtime === 'machine' ? 'machine' : 'server'
+}
+
+/**
  * One logical service, assembled from the runtimes it could be running under.
  *
  * PURE — states and strings in, the value the screen draws out — because every judgement worth
@@ -414,7 +503,15 @@ export function buildService(
    * cannot ask — or a platform with no user systemd — produces a service that says nothing about
    * boot rather than one that says "no", and offers no rebuild rather than one that cannot work.
    */
-  facts: { boot?: BootState; rebuild?: RebuildAbility; centralPlan?: CentralStartPlan } = {},
+  facts: {
+    boot?: BootState
+    /** The unit `boot` is describing. Carried so the pane can NAME what brings the service back. */
+    bootUnit?: string
+    /** Every registration this box can change. Empty on a platform with no user systemd. */
+    bootOptions?: BootOption[]
+    rebuild?: RebuildAbility
+    centralPlan?: CentralStartPlan
+  } = {},
 ): ControlService {
   const up = runtimes.filter(r => r.state === 'up')
   const { state, reason } = aggregateState(runtimes)
@@ -426,6 +523,10 @@ export function buildService(
     running: up.map(r => r.id),
     active: up[0],
     boot: facts.boot,
+    // Only ever beside a state: a unit name under no state would be a fact about a question nobody
+    // could answer.
+    bootUnit: facts.boot ? facts.bootUnit : undefined,
+    bootOptions: facts.bootOptions ?? [],
     // Named, not merely coloured, and never reduced to whichever copy we happened to find first.
     conflict: up.length > 1 ? s.svcConflict(up.map(r => r.kind)) : undefined,
     reason,
@@ -1554,6 +1655,14 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         : {}),
     }
 
+    // Only a Linux box has the mechanism at all — see `bootOptionsFor`. Asked once and handed to
+    // both services, so the two rows can never disagree about whether this box does boot units.
+    const bootSupported = platform() === 'linux'
+    // `serviceCommandFor` is what decides `installable`: it returns null when the file the unit's
+    // ExecStart would point at is not here, and a unit whose ExecStart cannot resolve is a service
+    // systemd restarts every five seconds for the life of the machine.
+    const canWrite = (mode: AutostartMode) => serviceCommandFor(mode) !== null
+
     return [
       buildService('agentistics', s.svcAgentistics, [nativeRuntime, machineRuntime], s, {
         // Two distinct boot mechanisms now exist for this one service (native `agentop-server` vs
@@ -1561,6 +1670,20 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         // matches whichever runtime is actually up — the native unit otherwise, matching this
         // field's behavior before the Docker runtime had a boot mechanism of its own at all.
         boot: machine.state === 'up' ? bootMachine : bootAgentistics,
+        bootUnit: unitName(machine.state === 'up' ? 'machine' : 'server'),
+        // BOTH mechanisms get a verb, whichever runtime happens to be up: the row states one and
+        // the switch has to reach either, or a machine that registered the container at boot could
+        // never turn that off while running natively.
+        bootOptions: bootOptionsFor([
+          {
+            unit: unitName('server'), runtime: 'local', mech: 'native',
+            on: bootAgentistics === 'on', installable: canWrite('server'),
+          },
+          {
+            unit: unitName('machine'), runtime: 'machine', mech: 'docker',
+            on: bootMachine === 'on', installable: canWrite('machine'),
+          },
+        ], s, bootSupported, s.svcAgentistics),
         rebuild: { local: repo, machine: machineCompose },
       }),
       // The central's rebuild always works: `central.sh up` inside a checkout, and the published
@@ -1568,6 +1691,12 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // (the only state that offers a restart) has already proved whichever path it took.
       buildService('central', s.svcCentral, [centralRuntime], s, {
         boot: bootCentral,
+        bootUnit: unitName('central'),
+        // One mechanism, so no word distinguishes it — `Start at boot`, not `Start at boot (docker)`.
+        bootOptions: bootOptionsFor([{
+          unit: unitName('central'), runtime: 'central', mech: '',
+          on: bootCentral === 'on', installable: canWrite('central'),
+        }], s, bootSupported, s.svcCentral),
         rebuild: { central: true },
         centralPlan,
       }),
@@ -1621,6 +1750,14 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         version: CURRENT_VERSION,
         latestVersion,
         archiveMode: await currentArchiveMode(),
+        // The setup wizard is a question the cockpit asks, so what it may offer is decided here,
+        // beside the very service states that decide it. `central` is the only mode that
+        // RECONFIGURES a running service — it re-runs `central.sh init`, which rewrites the
+        // environment file and recreates the containers — so it is the only one withheld, and it
+        // is withheld with a sentence rather than by disappearing.
+        setupBlocked: services.some(v => v.id === 'central' && v.state === 'up')
+          ? { central: s.setupBlockedCentralUp }
+          : {},
         ...(await sessionViewPref()),
         mouse,
       })
@@ -1842,10 +1979,32 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // unit (`docker compose … up -d`) instead of a native unit that would not match what is
       // actually running. `central` has one mechanism regardless of `runtime` — `agentop-central`
       // already runs `central.sh up` (Docker) — so it is passed through unchanged.
-      const mode = service === 'central' ? 'central' : runtime === 'machine' ? 'machine' : 'server'
+      const mode = bootModeFor(service, runtime)
       const res = await enableAutostart(mode)
       // enableAutostart formats for a printed block; the status line is one row.
       return { ok: res.ok, message: res.message.split('\n').map(l => l.trim()).filter(Boolean).join(' · ') }
+    },
+
+    /**
+     * Take the registration away again — and take NOTHING else.
+     *
+     * `stop: false` is the whole difference from `agentop autostart <mode> disable`, and it is
+     * deliberate: the cockpit's switch answers "should this come back after a reboot", which is a
+     * statement about the future. A verb that also killed the running service would be doing two
+     * things under one label, and the row it sits on already carries `Stop` for the other one.
+     *
+     * The message NAMES the unit rather than repeating systemd's block: the status line is one row,
+     * and the one fact worth spending it on is which registration is now gone.
+     */
+    async disableBoot(service: ServiceId, runtime?: RuntimeId): Promise<ActionResult> {
+      const s = S()
+      const mode = bootModeFor(service, runtime)
+      const unit = unitName(mode)
+      const res = await disableAutostart(mode, { stop: false })
+      if (!res.ok) {
+        return { ok: false, message: `${s.bootDisableFailed(unit)} ${lastLine(res.message)}`.trim() }
+      }
+      return { ok: true, message: s.bootDisabled(unit) }
     },
 
     /**
@@ -2371,19 +2530,24 @@ export async function runStart(): Promise<StartResult> {
 
   const host = createControlHost(lang, altScreen)
 
-  // A machine that has never been configured opens on Setup rather than on Services. Bare
-  // `agentop` used to run the wizard outright; the control center replaced that, and landing an
-  // unconfigured user on a list of services to start would leave the mode and the history-
-  // preservation consent — the two things the wizard existed to ask — behind a tab they have no
-  // reason to look for.
-  let tab: TabId | undefined = (await isUnconfigured()) ? 'setup' : undefined
+  // A machine that has never been configured still opens on the WIZARD — it is just no longer a tab
+  // of its own. Setup is a question the cockpit asks, drawn in the detail region like every other
+  // one, so "open on setup" is now "open the cockpit with the question up": `initial.setup`. Landing
+  // an unconfigured user on a list of services to start would still leave the mode and the
+  // history-preservation consent behind something they have no reason to look for.
+  const setup = await isUnconfigured()
+  let tab: TabId | undefined
 
   // Attach and detach are two halves of ONE gesture, so this is a loop rather than an exit. The Ink
   // app never execs anything: it unmounts, the session gets the real tty here, and when the user
   // detaches the control center comes back up on the tab they left from. Anything else would make
   // "look at a session" a one-way trip out of the application.
+  // The wizard is offered on the FIRST pass only. Detaching from a session re-enters the loop, and
+  // a question that greeted the user again there would be one they learn to dismiss without reading.
+  let opening = setup
   for (;;) {
-    const exit = await runControlCenter({ lang, host, tab })
+    const exit = await runControlCenter({ lang, host, tab, setup: opening })
+    opening = false
     if (exit.kind === 'foreground') break
     if (exit.kind === 'quit') return exit.code
     await execAttachTicket(exit.ticket, cliStrings(host.lang))

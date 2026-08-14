@@ -22,8 +22,8 @@ packages/
 
 ```
 packages/server/bin/cli.ts  (binary entry point — agentop)
-  ├── agentop (bare) / start → server/cli-start.ts → @agentistics/tui/control (the full-screen control center: Services / Setup / Logs / Cheat sheet / Help / Contribute; EN default + pt-BR toggle; opens on Setup when the machine is unconfigured). Non-TTY stdin falls through to `server`; without a terminal bare `agentop` prints the help instead
-  ├── agentop setup        → server/cli-setup.ts (the same solo/central/member wizard, non-interactively scriptable and as the control center's Setup tab)
+  ├── agentop (bare) / start → server/cli-start.ts → @agentistics/tui/control (the full-screen control center: Services / Sessions / Dashboard / Logs / Cheat sheet / Help / Contribute; EN default + pt-BR toggle; an unconfigured machine opens with the SETUP WIZARD already asking — `runControlCenter({ setup: true })`, a flag rather than a tab, because setup is a question the cockpit asks). Non-TTY stdin falls through to `server`; without a terminal bare `agentop` prints the help instead
+  ├── agentop setup        → server/cli-setup.ts (the same solo/central/member wizard, non-interactively scriptable; its interactive twin is the cockpit's wizard, reached from the config pane's mode row)
   ├── agentop server       → server/index.ts + server/otel-watcher.ts (always together)
   ├── agentop restart …    → bounce a mode's service (`server`/`watch` → systemd; `central` → central.sh restart; `--all` → cli-start.ts restartAllServices over every running service). `--rebuild` rebuilds before restarting instead of just bouncing (`central` → `up`; machine → `compose build --no-cache` then `compose up -d --force-recreate`; `server`/`watch` → `rebuildNativeBinary()`, i.e. `bun run bin`, which needs the repo checkout — outside one it says so and restarts the existing build). **A rebuild is a FULL rebuild**: the Docker paths pass `--no-cache`, because a cached one could hand back the very image it was asked to replace, and they say so on the way in — that build is several minutes. `--cache` is the escape hatch (reuse Docker's layer cache); `-y`/`-n` answer `central.sh up`'s "re-run interactive setup?" prompt up front, so an unattended rebuild never waits on a keypress. All of it is resolved by the pure `rebuild-flags.ts` (`parseRebuildFlags` / `centralRebuildArgs` / `composeRebuildCommands`) — the shell receives an already-decided answer, `-y` with `-n` (or `--cache` with `--no-cache`) is refused rather than resolved, and the control center's rebuild verb passes `-n` EXPLICITLY instead of relying on its piped child failing `[ -t 0 ]`. A plain `agentop central up` / `central.sh up` is not a rebuild and keeps its cached build
   ├── agentop tui          → @agentistics/tui (Ink dashboard; language resolved via cli-lang.ts)
@@ -1090,7 +1090,8 @@ packages/tui/src/
     Output.tsx       the pane a streaming task owns — the detail region, auto-following its tail
     sessions.ts      PURE arithmetic for the sessions tab: its row budget, the cell fit, the
                      grouping and the ordering (tested in sessions.test.ts)
-    tabs/            Services (the cockpit), Sessions (+ SessionWizard), Setup, Logs,
+    tabs/            Services (the cockpit — and the SETUP wizard, as a question in its detail
+                     region), Sessions (+ SessionWizard), Dashboard, Logs,
                      Static (Help / Cheat sheet / Contribute)
   stubs/react-devtools-core/   REQUIRED for the binary build — see below
 packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to stdout at a chosen
@@ -1185,6 +1186,40 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   macOS/Windows are never asked), and an absent boot draws no row — the same N/A-versus-real-0 rule
   the dashboard applies to harness capabilities. `fitDetailLines` cuts from the bottom and then
   drops a trailing rule or blank, so a short pane never spends a row heading nothing.
+- **The boot switch has TWO positions, and the row NAMES the unit.** `enableBoot` used to be the
+  whole of it: the systemd user unit it wrote could be removed by nothing in the product, so a user
+  who stopped their central because they were finished with it got it back on the next boot — and on
+  the next login that reaches `default.target` — with nothing on screen naming what had brought it
+  back. `ControlHost.disableBoot` is the other half, and it **never stops what is running**
+  (`disableAutostart(mode, { stop: false })`; the older `agentop autostart <mode> disable` keeps its
+  meaning and does both) — turning off "come back after a reboot" is a statement about the future,
+  and the row already carries `Stop` two cells away. The verbs are `ControlService.bootOptions`,
+  composed by the HOST because `agentistics` has TWO mechanisms (`agentop-server` runs the binary,
+  `agentop-machine` runs `docker compose … up -d`) and a single flag could only ever act on one of
+  them; `bootModeFor` is the one mapping both halves resolve through, so the switch can never turn
+  one mechanism on and a different one off. **Exactly one option per mechanism** — a row offering
+  both directions of one switch asks which of two facts about the same unit is true — and a
+  mechanism whose unit could not be WRITTEN here (`serviceCommandFor` returns null: no `central.sh`,
+  no compose file) is ABSENT, because a unit whose `ExecStart` cannot resolve is a service systemd
+  restarts every five seconds forever. Off Linux the list is EMPTY. `ControlService.bootUnit` is the
+  honest trail: "starts at boot" alone tells someone that SOMETHING will bring their central back
+  and gives them nowhere to look, so the pane prints `starts at boot · agentop-central.service` and
+  `agentop autostart status` prints the unit's `ExecStart` and the command that removes it. **A stop
+  that worked ASKS about the boot registration** (`BootOption.confirmAfterStop`, a different
+  sentence because the user did not press a boot verb to get there) — the moment of the stop is the
+  only moment the person knows whether they are done with the service or bouncing it.
+- **Setup is a QUESTION the cockpit asks, not a screen.** It was a tab; choosing solo / central /
+  member is a question ABOUT these services — you cannot re-run `central.sh init` on a central that
+  is up — so it is drawn in the detail region like every other question, reached from the config
+  pane's mode row, and the whole flow it already owned (the three connect prompts, the archive
+  consent, the boot offer) is the flow it routes into. **A mode that would reconfigure a RUNNING
+  service is withheld with a SENTENCE**, never merely greyed: `ControlStatus.setupBlocked` is
+  decided by the host, because only it knows what is running, and a disabled row that explains
+  nothing is indistinguishable from a broken one. It is the same rule as the empty `startOptions` of
+  a running service — the offer is unreachable rather than refused after the fact. `agentop setup`
+  is untouched and stays the non-interactive twin; `initial.setup` (a flag, not a `TabId`) is what
+  opens an unconfigured machine on the wizard. The row budget went with the screen: `setupRows` /
+  `setupBodyTop` are deleted, and the question is budgeted by `cockpitLayout`'s `QUESTION_ROWS`.
 - **Screens change with `←`/`→` and nothing else.** The tab bar is at the TOP, under the title, with
   an accent rule under the active cell (`tabUnderline`), so the reading order is title, where-am-I,
   content, keys. There are no digit shortcuts for screens: the numbered bottom strip is gone, and

@@ -245,6 +245,36 @@ export interface CliStrings {
   stopRuntime: (runtime: string) => string
 
   /**
+   * The BOOT switch, both positions, composed here for the same reason the starts are: which unit
+   * brings a service back is a fact about this box, and `agentistics` has two of them.
+   *
+   * `mech` is the mechanism in one word — the runtime for `agentistics`, nothing for the central,
+   * which has only one. The confirmations NAME the unit, because a sentence that says "it will not
+   * come back" and does not say what was doing the bringing back leaves the user with nothing to go
+   * look at — which is the whole of the complaint these strings answer.
+   */
+  optBootOn: (mech: string) => string
+  optBootOnHint: string
+  optBootOff: (mech: string) => string
+  optBootOffHint: string
+  bootConfirmOn: (unit: string) => string
+  bootConfirmOff: (unit: string) => string
+  /** Asked right after a stop that worked, while a boot unit is still registered for it. */
+  bootAfterStop: (service: string, unit: string) => string
+  bootDisabled: (unit: string) => string
+  bootDisableFailed: (unit: string) => string
+
+  /**
+   * Why a setup mode cannot be chosen right now.
+   *
+   * `central` re-runs `central.sh init`, which rewrites the environment file and recreates the
+   * containers — on a central that is up that is a teardown of the thing being used. The sentence
+   * names what to do instead, because a greyed row that explains nothing is indistinguishable from
+   * a broken one.
+   */
+  setupBlockedCentralUp: string
+
+  /**
    * The restarts a RUNNING service offers — composed here for the same reason the starts are: only
    * this side knows whether a rebuild has what it needs on this box.
    *
@@ -487,13 +517,25 @@ const EN: CliStrings = {
   optCentralNativeBackground: 'Start (background)',
   optCentralNativeBackgroundHint: 'detached — keeps running, no Docker needed',
   stopRuntime: (runtime) => `Stop (${runtime})`,
+  optBootOn: (mech) => (mech ? `Start at boot (${mech})` : 'Start at boot'),
+  optBootOnHint: 'register a systemd user service so it comes back after a reboot',
+  optBootOff: (mech) => (mech ? `Do not start at boot (${mech})` : 'Do not start at boot'),
+  optBootOffHint: 'remove that registration — anything running now keeps running',
+  bootConfirmOn: (unit) => `Register ${unit} so this comes back on every boot?`,
+  bootConfirmOff: (unit) =>
+    `Remove ${unit}? It stops bringing this back after a reboot. Anything running now keeps running.`,
+  bootAfterStop: (service, unit) =>
+    `${service} is stopped, but ${unit} still starts it at boot. Remove that registration too?`,
+  bootDisabled: (unit) => `${unit} removed — it no longer starts at boot.`,
+  bootDisableFailed: (unit) => `Could not remove ${unit}.`,
+  setupBlockedCentralUp: 'the central is running — stop it before reconfiguring it',
   optRestart: 'Restart',
   optRestartHint: 'bounce it — same build',
   optRebuild: 'Rebuild & restart',
   optRebuildRuntime: (runtime) => `Rebuild & restart (${runtime})`,
   optRebuildNativeHint: 'recompile the binary first (bun run bin), then restart',
   optRebuildDockerHint: 'rebuild the image and recreate the container',
-  archiveUnsetHint: 'history preservation is still unset — see the Setup tab',
+  archiveUnsetHint: 'history preservation is still unset — the config pane can set it',
   dockerStartFailed: 'the machine container did not start.',
   localStartFailed: 'the local server did not come back up.',
   centralStarted: 'agentistics central is up.',
@@ -714,13 +756,25 @@ const PT: CliStrings = {
   optCentralNativeBackground: 'Iniciar (background)',
   optCentralNativeBackgroundHint: 'destacado — continua rodando, sem Docker',
   stopRuntime: (runtime) => `Parar (${runtime})`,
+  optBootOn: (mech) => (mech ? `Iniciar no boot (${mech})` : 'Iniciar no boot'),
+  optBootOnHint: 'registra um serviço systemd de usuário para voltar depois de reiniciar',
+  optBootOffHint: 'remove esse registro — o que está rodando agora continua rodando',
+  optBootOff: (mech) => (mech ? `Não iniciar no boot (${mech})` : 'Não iniciar no boot'),
+  bootConfirmOn: (unit) => `Registrar ${unit} para isto voltar a cada boot?`,
+  bootConfirmOff: (unit) =>
+    `Remover ${unit}? Ele deixa de trazer isto de volta depois de reiniciar. O que está rodando agora continua rodando.`,
+  bootAfterStop: (service, unit) =>
+    `${service} está parado, mas ${unit} ainda o inicia no boot. Remover esse registro também?`,
+  bootDisabled: (unit) => `${unit} removido — não inicia mais no boot.`,
+  bootDisableFailed: (unit) => `Não foi possível remover ${unit}.`,
+  setupBlockedCentralUp: 'a central está rodando — pare ela antes de reconfigurá-la',
   optRestart: 'Reiniciar',
   optRestartHint: 'só reinicia — mesmo build',
   optRebuild: 'Reconstruir & reiniciar',
   optRebuildRuntime: (runtime) => `Reconstruir & reiniciar (${runtime})`,
   optRebuildNativeHint: 'recompila o binário (bun run bin) e depois reinicia',
   optRebuildDockerHint: 'reconstrói a imagem e recria o container',
-  archiveUnsetHint: 'a preservação do histórico ainda não foi definida — veja a aba Setup',
+  archiveUnsetHint: 'a preservação do histórico ainda não foi definida — o painel de config define',
   dockerStartFailed: 'o container da máquina não subiu.',
   localStartFailed: 'o server local não voltou a rodar.',
   centralStarted: 'agentistics central está no ar.',
