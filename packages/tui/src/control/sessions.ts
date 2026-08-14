@@ -863,6 +863,8 @@ export type AsideRow =
   | { kind: 'rule' }
   | { kind: 'action'; action: SessionAction; label: string; enabled: boolean }
   | { kind: 'group'; value: SessionGrouping; label: string; on: boolean }
+  /** One LAYOUT the list can be drawn in, and whether it is the one in force. */
+  | { kind: 'layout'; value: SessionLayout; label: string; on: boolean }
   | { kind: 'toggle'; toggle: SessionToggle; label: string; on: boolean }
   /** One task, with how many sessions are filed under it. `name: ''` is "all of them". */
   | { kind: 'task'; name: string; count: number; on: boolean; done?: boolean }
@@ -924,6 +926,14 @@ export function asideRows(o: {
   actionWords: Record<SessionAction, string>
   grouping: SessionGrouping
   groupWords: Record<SessionGrouping, string>
+  /**
+   * The layout block.
+   *
+   * Its own section rather than two more rows among the groupings: "list or cards" and "grouped by
+   * what" are different questions, and six grouping rows with two unlike ones among them is a menu
+   * nobody reads correctly.
+   */
+  layout: { heading: string; words: Record<SessionLayout, string>; value: SessionLayout }
   toggles: Record<SessionToggle, boolean>
   toggleWords: Record<SessionToggle, string>
   headings: { actions: string; view: string; show: string }
@@ -972,6 +982,12 @@ export function asideRows(o: {
   const rows: AsideRow[] = [{ kind: 'heading', label: o.headings.actions }]
   for (const a of o.actions) {
     rows.push({ kind: 'action', action: a.action, label: o.actionWords[a.action], enabled: a.enabled })
+  }
+  rows.push({ kind: 'rule' }, { kind: 'heading', label: o.layout.heading })
+  for (const value of LAYOUTS) {
+    rows.push({
+      kind: 'layout', value, label: o.layout.words[value], on: value === o.layout.value,
+    })
   }
   rows.push({ kind: 'rule' }, { kind: 'heading', label: o.headings.view })
   for (const g of GROUPINGS) {
@@ -1087,6 +1103,7 @@ export function asideRowKey(row: AsideRow): string {
   switch (row.kind) {
     case 'action': return `action:${row.action}`
     case 'group': return `group:${row.value}`
+    case 'layout': return `layout:${row.value}`
     case 'toggle': return `toggle:${row.toggle}`
     case 'task': return `task:${row.name}`
     case 'state': return `state:${row.value}`
@@ -1537,6 +1554,15 @@ export type SessionLayout = 'list' | 'cards'
  * The page is what the grid can actually show, and on a terminal that can carry ten it is ten.
  */
 export const CARD_PAGE_MAX = 10
+
+/**
+ * The layouts, in the order the menu lists them.
+ *
+ * A `const` array rather than a literal inside `asideRows`, for the same reason `SESSION_STATES`
+ * is one: a layout added later shows up as a missing row rather than as a menu that silently
+ * cannot reach it.
+ */
+export const LAYOUTS: readonly SessionLayout[] = ['list', 'cards'] as const
 
 /** One column between two cards. The frames already separate them; a wider gutter is spent air. */
 export const CARD_GAP = 1

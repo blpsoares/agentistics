@@ -14,6 +14,13 @@ import {
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
+/** The layout block every aside fixture carries — it is a required option, like the groupings. */
+const LAYOUT = {
+  heading: 'LAYOUT',
+  words: { list: 'list', cards: 'cards' } as const,
+  value: 'list' as const,
+}
+
 const UNKNOWN = {
   harness: 'harness unknown', model: 'no model recorded', project: 'no directory', task: 'no task',
   repo: 'no repository',
@@ -531,6 +538,7 @@ describe('asideRows', () => {
     toggles: { closed: false, exited: false, unfiled: false, done: false, active: false, detail: false },
     toggleWords,
     headings,
+    layout: LAYOUT,
     showUnfiled: false,
     ...o,
   })
@@ -1016,6 +1024,7 @@ describe('the only-active toggle', () => {
       repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
       project: 'project',
     },
+    layout: LAYOUT,
     toggles: { closed: false, exited: false, unfiled: false, done: false, active: true, detail: false },
     toggleWords: {
       closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks',
@@ -1449,5 +1458,48 @@ describe('pagerCells', () => {
     expect(pagerHit(c, c.prevAt)).toBe('prev')
     expect(pagerHit(c, c.nextAt)).toBe('next')
     expect(pagerHit(c, c.prevAt + 1)).toBeNull()
+  })
+})
+
+describe('asideRows — the layout section', () => {
+  const rowsFor = (value: 'list' | 'cards') => asideRows({
+    actions: sessionActions(session('m')),
+    actionWords: {
+      attach: 'A', resume: 'R', rename: 'N', note: 'O', task: 'T', kill: 'K',
+      openTask: 'OT', finishTask: 'FT', new: 'NW', search: 'S', group: 'G',
+    },
+    grouping: 'project',
+    groupWords: {
+      repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
+      project: 'project',
+    },
+    layout: { ...LAYOUT, value },
+    toggles: { closed: false, exited: false, unfiled: false, done: false, active: true, detail: false },
+    toggleWords: {
+      closed: 'closed', exited: 'exited', unfiled: 'unfiled', done: 'done', active: 'active',
+      detail: 'detail',
+    },
+    headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
+    showUnfiled: false,
+  })
+
+  it('offers both layouts and marks the one in force', () => {
+    const rows = rowsFor('cards').filter(r => r.kind === 'layout')
+    expect(rows).toHaveLength(2)
+    expect(rows.map(r => (r as { value: string }).value)).toEqual(['list', 'cards'])
+    expect(rows.map(r => (r as { on: boolean }).on)).toEqual([false, true])
+  })
+
+  // The cursor is a NAME, not a position: the menu is rebuilt on every poll, and an index would be
+  // pointing at a different row by the next one.
+  it('keys a layout row by what it selects', () => {
+    const row = rowsFor('list').find(r => r.kind === 'layout')!
+    expect(asideRowKey(row)).toBe('layout:list')
+  })
+
+  it('lets the cursor land on a layout row', () => {
+    const rows = rowsFor('list')
+    const index = rows.findIndex(r => r.kind === 'layout')
+    expect(asideSelectable(rows)).toContain(index)
   })
 })

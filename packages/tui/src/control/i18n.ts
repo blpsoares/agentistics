@@ -243,6 +243,18 @@ export interface ControlStrings {
   toggleDetail: string
   /** Written on the detail pane itself: the key that puts it away. */
   sessionsDetailHide: string
+  /** The menu's layout section, and what the two layouts are called. */
+  asideLayout: string
+  sessionsLayouts: Record<'list' | 'cards', string>
+  /** The card pager: which page, and how much of the fleet is on it. */
+  sessionsPage: (page: number, pages: number) => string
+  sessionsShowing: (shown: number, total: number) => string
+  /** Card markers — said on the state line, where a row has no room for them. */
+  sessionsCardAttached: string
+  sessionsCardBlind: string
+  keySessionsLayout: string
+  keySessionsCard: string
+  keySessionsPage: string
   asideSort: string
   asideStates: string
   sessionsSorts: Record<'state' | 'name' | 'started' | 'usage' | 'project', string>
@@ -582,6 +594,15 @@ const EN: ControlStrings = {
   toggleActive: 'only active',
   toggleDetail: 'detail pane',
   sessionsDetailHide: 'd hides',
+  asideLayout: 'LAYOUT',
+  sessionsLayouts: { list: 'list', cards: 'cards' },
+  sessionsPage: (page, pages) => `${page} / ${pages}`,
+  sessionsShowing: (shown, total) => `${shown} of ${total}`,
+  sessionsCardAttached: 'attached',
+  sessionsCardBlind: 'approval unknown',
+  keySessionsLayout: 'f list/cards',
+  keySessionsCard: '←→ card',
+  keySessionsPage: 'pgup/pgdn page',
   asideSort: 'ORDER',
   asideStates: 'STATE',
   sessionsSorts: {
@@ -913,6 +934,15 @@ const PT: ControlStrings = {
   toggleActive: 'apenas ativas',
   toggleDetail: 'painel de detalhe',
   sessionsDetailHide: 'd oculta',
+  asideLayout: 'FORMATO',
+  sessionsLayouts: { list: 'lista', cards: 'cards' },
+  sessionsPage: (page, pages) => `${page} / ${pages}`,
+  sessionsShowing: (shown, total) => `${shown} de ${total}`,
+  sessionsCardAttached: 'anexada',
+  sessionsCardBlind: 'aprovação incerta',
+  keySessionsLayout: 'f lista/cards',
+  keySessionsCard: '←→ card',
+  keySessionsPage: 'pgup/pgdn página',
   asideSort: 'ORDENAR',
   asideStates: 'ESTADO',
   sessionsSorts: {

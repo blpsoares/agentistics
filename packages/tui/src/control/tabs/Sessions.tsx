@@ -57,7 +57,7 @@ import {
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
   taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
   sessionAge, sessionKeyHelp, keyHelpColumn,
-  DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder,
+  DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder, type SessionLayout,
   asideSections, asideFold, scrollBar, THUMB,
   sessionNamed,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
@@ -130,6 +130,10 @@ export function Sessions({
 }) {
   const [grouping, setGrouping] = useState<SessionGrouping>(
     view?.grouping ?? DEFAULT_SESSION_VIEW.grouping,
+  )
+  /** A list of rows, or a grid of cards. See `cardGrid` for why the grid may refuse. */
+  const [layout, setLayout] = useState<SessionLayout>(
+    view?.layout ?? DEFAULT_SESSION_VIEW.layout ?? 'list',
   )
   const [cursor, setCursor] = useState(0)
   const [ask, setAsk] = useState<Ask | null>(null)
@@ -344,6 +348,7 @@ export function Sessions({
     },
     grouping,
     groupWords: s.sessionsGroupings,
+    layout: { heading: s.asideLayout, words: s.sessionsLayouts, value: layout },
     toggles: {
       closed: showClosed, exited: showExited, unfiled: !hideEmptyTask, done: showDone,
       active: onlyActive, detail: !hideDetail,
@@ -381,7 +386,7 @@ export function Sessions({
       allLabel: s.asideAllProjects,
     },
   }), [
-    actions, grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
+    actions, grouping, layout, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
     states, stateCounts, order, taskFilter,
     projectFilter, fleet?.sessions, fleet?.finishedTasks, s,
   ])
@@ -510,6 +515,7 @@ export function Sessions({
     if (!row) return
     if (row.kind === 'action') { if (row.enabled) runAction(row.action); return }
     if (row.kind === 'group') { setGrouping(row.value); setCursor(0); return }
+    if (row.kind === 'layout') { setLayout(row.value); return }
     if (row.kind === 'task') { setTaskFilter(row.name || null); setCursor(0); return }
     if (row.kind === 'project') { setProjectFilter(row.name || null); setCursor(0); return }
     if (row.kind === 'sort') {
