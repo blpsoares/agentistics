@@ -22,6 +22,14 @@ export interface ControlCenterOptions {
   host: ControlHost
   /** Which tab to open on. Defaults to Services. */
   tab?: TabId
+  /**
+   * Open with the setup wizard already asking — a machine that has never been configured.
+   *
+   * A flag rather than a tab, because Setup stopped being one: choosing solo / central / member is a
+   * question ABOUT the services on this box, so it is drawn in the cockpit's detail region like
+   * every other question. The caller still gets to say "start there", which is what it always meant.
+   */
+  setup?: boolean
 }
 
 /**
@@ -53,7 +61,7 @@ function inkStdout(): NodeJS.WriteStream {
 }
 
 export async function runControlCenter(opts: ControlCenterOptions): Promise<ControlExit> {
-  const { lang, host, tab } = opts
+  const { lang, host, tab, setup } = opts
 
   // Ink needs raw mode, which a pipe or a systemd unit cannot give it; it would throw from inside
   // a React effect and surface as a reconciler stack. One sentence and a non-zero code instead.
@@ -103,7 +111,7 @@ export async function runControlCenter(opts: ControlCenterOptions): Promise<Cont
   // `createElement` rather than JSX so this entry can stay a `.ts` file: it is imported by the
   // server, and a `.tsx` extension there would drag JSX settings into a module that renders nothing.
   const app = render(
-    React.createElement(ControlCenter, { host, lang, initial: { tab }, onExit, mouse }),
+    React.createElement(ControlCenter, { host, lang, initial: { tab, setup }, onExit, mouse }),
     {
       stdin: input.stdin,
       // THE FRAME MUST NOT GO THROUGH `process.stdout.write` — see `inkStdout`.
@@ -147,6 +155,7 @@ export type {
   ActionResult,
   ActionTarget,
   AttachTicket,
+  BootOption,
   BootState,
   RestartOption,
   RestartRequest,

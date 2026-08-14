@@ -403,73 +403,15 @@ export function staticRows(height: number, introHeight: number): StaticRows {
   return { intro, body: rest, footer }
 }
 
-/** What the Setup screen may draw at this height: the same idea, one screen further along. */
-export interface SetupRows {
-  intro: boolean
-  /** The `CONFIG` rule and the facts under it — a unit, since a header over nothing says nothing. */
-  configHeader: boolean
-  configRows: number
-  /** The blank row between the facts and the step. */
-  gap: boolean
-  /** The rule naming the step the wizard is on. */
-  stepHeader: boolean
-  /** Rows left for the step itself — the menu, the prompt, the question. Never below one. */
-  body: number
-}
-
-/**
- * Divides the Setup screen's rows between its facts and the step it is asking.
+/*
+ * `SetupRows` / `setupRows` / `setupBodyTop` lived here and are gone with the screen they budgeted.
  *
- * Same hazard as `staticRows` and the same fix, one screen further along: the old count assumed
- * every piece was affordable and then clamped the remainder to one, so at twelve rows the `CONFIG`
- * rule was painted straight through the `mode` row.
- *
- * The priority is what the screen cannot be without. The step's body comes first — a wizard that
- * dropped its question is not a degraded wizard — then the header naming which step it is, then the
- * facts (which the cockpit's config pane also states), then the air between them, then the intro.
+ * Setup stopped being a linear screen of its own: choosing solo / central / member is a question
+ * ABOUT the services on this box, so it is drawn in the cockpit's detail region like every other
+ * question and is budgeted by `cockpitLayout`'s `QUESTION_ROWS` instead. A row budget for a screen
+ * that no longer exists is documentation of a program that no longer exists — the same reason
+ * `cli-i18n.ts` deleted the old launcher's forty strings rather than leaving them in place.
  */
-export function setupRows(height: number, introHeight: number, facts: number): SetupRows {
-  const none: SetupRows = {
-    intro: false, configHeader: false, configRows: 0, gap: false, stepHeader: false, body: 0,
-  }
-  if (height <= 0) return none
-
-  // One row for the step, always: everything below is spent out of what is left over.
-  let rest = height - 1
-  const stepHeader = rest >= 1
-  if (stepHeader) rest -= 1
-
-  // The config block is a unit. A `CONFIG ────` rule with no rows under it is a heading for
-  // nothing, and rows with no heading are still four labelled facts — so the header is only drawn
-  // when at least one row can follow it.
-  const configHeader = rest >= 2 && facts > 0
-  const configRows = configHeader ? Math.min(facts, rest - 1) : 0
-  if (configHeader) rest -= 1 + configRows
-
-  const gap = configHeader && rest >= 1
-  if (gap) rest -= 1
-
-  const intro = introHeight > 0 && rest >= introHeight
-  if (intro) rest -= introHeight
-
-  return { intro, configHeader, configRows, gap, stepHeader, body: 1 + rest }
-}
-
-/**
- * The row the Setup screen's STEP starts on, given what its budget could afford.
- *
- * Everything above it is optional — the intro is dropped first, the config block goes as a unit, the
- * blank row with it — so the offset a pointer needs is the sum of what actually survived rather than
- * a constant. It is derived from the same `SetupRows` the screen renders from, which is what keeps a
- * click on the third mode from answering the second one on a twelve-row terminal.
- */
-export function setupBodyTop(rows: SetupRows, introHeight: number): number {
-  return (rows.intro ? introHeight : 0)
-    + (rows.configHeader ? 1 : 0)
-    + rows.configRows
-    + (rows.gap ? 1 : 0)
-    + (rows.stepHeader ? 1 : 0)
-}
 
 // ---------------------------------------------------------------------------
 // scroll position
