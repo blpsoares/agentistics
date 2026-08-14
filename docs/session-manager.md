@@ -20,11 +20,39 @@ nothing else changes.
 
     agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>]
                               [--cwd <path>] [--name "label"] [--task "<name>"]
+    agentop session ls     [--all] [--group repo|project|task|harness|model|none]
+                           [--json] [--width <n>] [--no-color]
     agentop session list   [--json]
     agentop session attach <id|name>
     agentop session kill   <id|name>
     agentop session rename <id|name> "label"
     agentop session note   <id|name> "text"
+
+### `ls` — the cockpit's table, printed once
+
+`ls` is the fleet for a PERSON to read: the same table the cockpit's fleet pane draws, printed to
+stdout and gone. Only what is running, grouped by project — `--all` adds the finished, lost and
+closed conversations, `--group` changes the sections.
+
+    agentop session ls                    # what is running, by project
+    agentop session ls --all --group repo # everything, by repository
+    agentop session ls --json             # exactly what `list --json` prints
+
+It draws by CONSUMING the cockpit's own arithmetic (`packages/tui/src/control/sessions.ts`) rather
+than by re-implementing it: `sessionColumns` measures the page so the columns line up, `groupSessions`
+and `sessionRows` decide the sections and the air between them, `sessionRunning` decides what
+"running" means — an `external` row included, since it exists because a live assistant process was
+found. A second copy of any of those would be a second set of rules that agree until the day they do
+not, which this repository has already paid for once. What `agentop session ls` owns is the
+DRAWING: ANSI written to a terminal instead of Ink components, the width taken from
+`process.stdout.columns`, and a final clip so no row can wrap.
+
+`ls` is a new command rather than a flag on `list`, because `list` is the tab-separated dump scripts
+already read line by line. Its output does not change.
+
+Piped output is plain: `process.stdout.isTTY` decides colour (`NO_COLOR` and `--no-color` override
+it), and a pipe gets no invented terminal width — the table comes out as wide as its content, so
+nothing is truncated to fit a terminal nobody is looking at.
 
 ## Orchestrating several at once
 
@@ -178,7 +206,7 @@ keystroke is printed before it does. `--cwd` defaults to the directory you are i
 
 ## What a session is doing
 
-`agentop session list` reports a state per session:
+`agentop session ls` / `list` report a state per session:
 
 | State | Meaning |
 |---|---|
@@ -196,7 +224,7 @@ moving is waiting for you; there is no third thing it could be doing. What canno
 Telling a blocking question apart from an ordinary pause needs screen markers captured from the real
 CLI, so it exists only for the harnesses that were probed (claude, codex, kimi). For any other
 harness a blocking question shows as `waiting` — still counted, still surfaced, but the reason
-cannot be named. `list` says so rather than leaving you to assume otherwise.
+cannot be named. `ls` and `list` both say so rather than leaving you to assume otherwise.
 
 The states are also honest about their own timing. When a turn ends, the poll that *observes* it
 ending sees a frame that changed since the last one, which is movement — so the session reads
