@@ -13,10 +13,23 @@ import { enableAutostart } from './autostart'
 import { runCentral } from './cli-central'
 import { memberConnect } from './cli-member'
 import { select, input, confirm } from './cli-ui'
+import { suggestHooksLine } from './cli-hooks'
 
 const ESC = '\x1b'
 const R = `${ESC}[0m`
 const D = `${ESC}[2m`
+
+/**
+ * Print the Claude Code integration OFFER, if there is one to make.
+ *
+ * A suggestion, deliberately, and never the install itself: writing hooks into someone's
+ * `~/.claude` because they configured a metrics dashboard is exactly the thing `agentop hooks
+ * install` exists to make an explicit act. Same rule autostart follows with `~/.bashrc`.
+ */
+async function offerHooks(): Promise<void> {
+  const line = await suggestHooksLine()
+  if (line) process.stdout.write(`\n  ${D}${line}${R}\n`)
+}
 
 /**
  * Ask, ONCE, how the app should preserve session history past Claude's 30-day cleanup, and
@@ -88,6 +101,7 @@ export async function runSetup(): Promise<number> {
     await writePreferences({ team: defaultTeam() })
     await ensureArchiveModeChosen()
     process.stdout.write(`\n  ${D}solo mode set — you're all done.${R}\n`)
+    await offerHooks()
     return 0
   }
 
@@ -121,5 +135,6 @@ export async function runSetup(): Promise<number> {
     process.stdout.write('\n  ' + res.message.replace(/\n/g, '\n  ') + '\n')
   }
   process.stdout.write(`\n  ${D}member configured.${R}\n`)
+  await offerHooks()
   return 0
 }
