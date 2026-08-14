@@ -1301,6 +1301,35 @@ describe('cardGrid', () => {
     expect(g.cols).toBeLessThanOrEqual(4)
     expect(g.cardWidth).toBeGreaterThan(CARD_MIN_WIDTH)
   })
+
+  // A band's real cost is its cards PLUS the name over them. Sizing as though a band were only its
+  // cards is what made the grouped grid page four times over: the ceiling was measured for a region
+  // that then had to pay a row per band out of the very same rows.
+  it('charges a heading row to every band when the grid will draw them', () => {
+    for (let w = CARD_MIN_WIDTH; w <= 200; w += 7) {
+      for (let h = 2; h <= 44; h++) {
+        const g = cardGrid({ width: w, height: h, total: 40, headings: true })
+        if (!g) continue
+        expect(g.rows * (g.cardHeight + 1)).toBeLessThanOrEqual(h)
+        expect(g.cardHeight).toBeGreaterThanOrEqual(PANE_FRAME_Y + CARD_MIN_LINES)
+      }
+    }
+  })
+
+  // Same region, one more group on the page and one line less on each card.
+  it('trades a line of card for another band', () => {
+    const plain = cardGrid({ width: 100, height: 18, total: 9, lines: CARD_LINES })!
+    const headed = cardGrid({ width: 100, height: 18, total: 9, lines: CARD_LINES, headings: true })!
+    expect(headed.cardHeight).toBe(plain.cardHeight - 1)
+  })
+
+  // The degradation ladder is unchanged: a region that cannot carry a headed band is asked again
+  // without headings, and only then does the screen fall back to the list.
+  it('refuses a region too short for a band with a name over it', () => {
+    const floor = PANE_FRAME_Y + CARD_MIN_LINES
+    expect(cardGrid({ width: 120, height: floor, total: 9, headings: true })).toBeNull()
+    expect(cardGrid({ width: 120, height: floor, total: 9 })).not.toBeNull()
+  })
 })
 
 describe('cardPages', () => {

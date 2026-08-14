@@ -516,10 +516,10 @@ export function Sessions({
   /**
    * Whether the grid draws the group HEADINGS the list draws.
    *
-   * It costs a row of the band, so it is asked as a question the geometry can answer: measure the
-   * grid one row shorter, and take the headings only if a whole card still fits. A band too short
-   * for both keeps the cards and gives them their group BADGE back — one of the two always says
-   * which group a card belongs to, and the fallback to the list is unchanged.
+   * It costs a row of every band, so it is asked as a question the geometry can answer: measure the
+   * grid with that row charged to each band, and take the headings only if a whole card still fits.
+   * A region too short for both keeps the cards and gives them their group BADGE back — one of the
+   * two always says which group a card belongs to, and the fallback to the list is unchanged.
    */
   const wantHeadings = layout === 'cards' && rows.some(r => r.kind === 'heading')
   /**
@@ -536,7 +536,10 @@ export function Sessions({
     : []), [layout, cards, badges, cardWords])
   const cardMaxLines = cardLineCounts.reduce((n, v) => Math.max(n, v), 0)
   const headedGrid: CardGrid | null = wantHeadings && rows.length > 0
-    ? cardGrid({ width: cardsBody, height: band.gridRows - 1, total: cards.length, lines: cardMaxLines })
+    ? cardGrid({
+        width: cardsBody, height: band.gridRows, total: cards.length,
+        lines: cardMaxLines, headings: true,
+      })
     : null
   const headed = headedGrid !== null
   const grid: CardGrid | null = layout === 'cards' && rows.length > 0
