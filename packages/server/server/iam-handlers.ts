@@ -1029,7 +1029,10 @@ export async function handleMachines(req: Request, ip = 'unknown'): Promise<Resp
       if (!machine) return json({ error: 'machine not found' }, 404)
       if (!canManageMachine(principal, machine)) return json({ error: 'forbidden' }, 403)
       const rotated = await rotateToken(rotateId)
-      if (rotated === null) return json({ error: 'machine not found' }, 404)
+      // `null` also covers "another rotation of this machine won the race" (rotate-claim.ts) — from
+      // here the two are the same fact: this id no longer names a machine. Reported as 409 rather
+      // than 404 so the caller can say "it was just rotated, reload" instead of "no such machine".
+      if (rotated === null) return json({ error: 'machine_rotated_or_missing' }, 409)
       // The audit says what MOVED and what was lost: `envelopesDropped` is undelivered sealed mail
       // that no id can open again (the recipient is inside the seal), so it is destroyed by the
       // rotation, not migrated by it. An audit that only recorded the happy half would be a

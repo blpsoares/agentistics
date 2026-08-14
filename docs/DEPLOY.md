@@ -378,6 +378,10 @@ agentop setup
 Non-interactive equivalent:
 
 ```bash
+# a token minted by a central with a public URL carries that URL
+agentop member connect --token <minted-token> [--org <org>]
+
+# a bare token needs the address beside it
 agentop member connect --endpoint http://<central-host>:48080 --token <minted-token> [--org <org>]
 ```
 
@@ -385,9 +389,10 @@ agentop member connect --endpoint http://<central-host>:48080 --token <minted-to
 anything — a bad token never leaves a half-written config. On success it prints
 `connected as <name>` (the name comes from the central).
 
-> Use the central's reachable address for `--endpoint`. Inside a tailnet this is the central's
-> Tailscale IP (e.g. `http://100.x.y.z:48080`). The bearer token is stored locally and never
-> logged.
+> Set the central's **public URL** (Settings → Machines) and the tokens it mints embed it, which is
+> what makes the panel's copy-paste command work. Otherwise use the central's reachable address for
+> `--endpoint`: inside a tailnet that is the central's Tailscale IP (e.g. `http://100.x.y.z:48080`).
+> The bearer token is stored locally and never logged.
 
 ### 3. Check / leave
 
