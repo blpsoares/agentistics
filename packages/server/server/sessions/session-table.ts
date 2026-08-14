@@ -134,13 +134,52 @@ export interface SessionTableOptions {
 }
 
 /**
- * A width no row reaches, for output that is not going to a terminal.
+ * A width no row reaches, for output that is not going to a terminal and says nothing about one.
  *
- * A pipe has no width, and inventing one truncates a session's name to fit a terminal nobody is
- * looking at. Passed as the budget, `sessionColumns` gives every column its natural size and the
- * lines come out exactly as long as their content.
+ * A pipe has no width of its own, and inventing one truncates a session's name to fit a terminal
+ * nobody is looking at. Passed as the budget, `sessionColumns` gives every column its natural size
+ * and the lines come out exactly as long as their content.
+ *
+ * It is the LAST answer, not the first — see `resolveWidth`.
  */
 export const NATURAL_WIDTH = 10_000
+
+/**
+ * How many columns to fit — PURE, and the whole precedence in one place.
+ *
+ *  1. `explicit` — `--width`. Somebody stated it; nothing else gets a say.
+ *  2. `columns` — the terminal's own, via `process.stdout.columns`, which exists only on a tty.
+ *  3. `env` — `COLUMNS`. **The reason this function exists.** Without a tty the width was the
+ *     natural one, so `agentop session ls | less -S` in an 80-column terminal received a table as
+ *     wide as its content and `less` broke every row. A pipe is not evidence that nobody is
+ *     reading: a pager IS a reader, and when there is no tty to ask, `COLUMNS` is the only thing
+ *     left that says how wide the reader is. It is the convention `git` and `ls` follow.
+ *  4. The natural width — a pipe that said nothing about a width still gets nothing truncated.
+ *
+ * A `COLUMNS` that is present but not a width (`abc`, `0`, `-1`, `12.5`) falls through to the next
+ * answer rather than throwing or being coerced: the variable is set by all sorts of things, and a
+ * junk value is a statement about the environment, not an instruction. There is no MINIMUM applied
+ * either — a caller asking for twenty columns gets twenty, and the clip is what keeps the rows
+ * inside them. A floor here would silently overrule the one thing the caller actually said.
+ */
+export function resolveWidth(o: {
+  /** `--width`, when it was given. */
+  explicit?: number
+  /** `process.stdout.columns` — pass it only when stdout really is a tty. */
+  columns?: number
+  /** The raw `COLUMNS` variable, exactly as the environment holds it. */
+  env?: string
+}): number {
+  if (isWidth(o.explicit)) return o.explicit
+  if (isWidth(o.columns)) return o.columns
+  const fromEnv = o.env === undefined || o.env.trim() === '' ? Number.NaN : Number(o.env)
+  if (isWidth(fromEnv)) return fromEnv
+  return NATURAL_WIDTH
+}
+
+function isWidth(n: number | undefined): n is number {
+  return n !== undefined && Number.isInteger(n) && n > 0
+}
 
 /**
  * Why there is no table — PURE, and `null` when there is one.

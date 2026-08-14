@@ -54,6 +54,13 @@ Piped output is plain: `process.stdout.isTTY` decides colour (`NO_COLOR` and `--
 it), and a pipe gets no invented terminal width — the table comes out as wide as its content, so
 nothing is truncated to fit a terminal nobody is looking at.
 
+A pipe can still SAY how wide it is, though, and a pager is a reader: `resolveWidth` takes `--width`
+first, then the terminal's own columns, then **`COLUMNS`** when there is no tty to ask, and only then
+the natural width. `COLUMNS=80 agentop session ls | less -S` therefore fits 80 columns instead of
+handing `less` a row it has to break. A `COLUMNS` that is not a width falls through rather than
+throwing, and no minimum is imposed on one that is — a caller asking for twenty columns gets twenty,
+and the clip is what keeps the rows inside them.
+
 ## Orchestrating several at once
 
 The form an ASSISTANT should drive. It exists because doing this through the single-session command

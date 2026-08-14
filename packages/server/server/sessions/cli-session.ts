@@ -17,7 +17,7 @@ import { resolveLang } from '../cli-lang'
 import { readPreferences } from '../preferences'
 import { toControlSession } from './control-session'
 import { repoFacts } from './repo-facts'
-import { NATURAL_WIDTH, emptyReason, renderSessionTable } from './session-table'
+import { emptyReason, renderSessionTable, resolveWidth } from './session-table'
 import { SPAWN_SPECS, planSpawn } from './spawn-spec'
 import { reconcileSessions, resolveSessionRef, type ReconciledSession, type RefCandidate } from './session-ref'
 import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './registry'
@@ -362,10 +362,15 @@ async function ls(
   const shown = cmd.all ? fleet : fleet.filter(sessionRunning)
 
   const tty = process.stdout.isTTY === true
-  // A pipe has no width. Inventing one would truncate a session's name to fit a terminal nobody is
-  // looking at, so the natural width is used instead and the lines come out as long as their
-  // content — which is what `agentop session ls | grep` needs.
-  const width = cmd.width ?? (tty ? (process.stdout.columns || 100) : NATURAL_WIDTH)
+  // `--width`, then the terminal, then `COLUMNS`, then the natural width — the precedence is
+  // `resolveWidth`'s, so it is stated and tested in one place. `columns` is passed ONLY on a tty:
+  // off one it is undefined anyway, and asking for it would make the fallback depend on a value
+  // that cannot exist.
+  const width = resolveWidth({
+    ...(cmd.width !== undefined ? { explicit: cmd.width } : {}),
+    ...(tty && process.stdout.columns ? { columns: process.stdout.columns } : {}),
+    ...(process.env.COLUMNS !== undefined ? { env: process.env.COLUMNS } : {}),
+  })
   const color = cmd.color ?? (tty && !process.env.NO_COLOR)
   // Every SENTENCE this command prints is wrapped, never truncated: they name sessions and flags,
   // and a cut one hides the very thing it exists to say. Through the app's own `wrapText`, and a

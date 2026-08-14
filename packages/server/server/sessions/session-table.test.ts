@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import type { ControlSession, SessionState } from '@agentistics/tui/control'
 import {
-  NATURAL_WIDTH, composeLine, emptyReason, renderSessionTable, type SessionTableStrings,
+  NATURAL_WIDTH, composeLine, emptyReason, renderSessionTable, resolveWidth,
+  type SessionTableStrings,
 } from './session-table'
 
 const STRINGS: SessionTableStrings = {
@@ -136,6 +137,46 @@ describe('renderSessionTable', () => {
       doneTasks: ['auth-refactor'],
     })
     expect(lines.join('\n')).toContain('auth-refactor · finished')
+  })
+})
+
+describe('resolveWidth', () => {
+  test('--width outranks everything, including a terminal that disagrees', () => {
+    expect(resolveWidth({ explicit: 72, columns: 200, env: '30' })).toBe(72)
+  })
+
+  test('a terminal answers for itself', () => {
+    expect(resolveWidth({ columns: 118, env: '30' })).toBe(118)
+  })
+
+  test('with no tty, COLUMNS is what says how wide the reader is', () => {
+    // `agentop session ls | less -S` in an 80-column terminal: a pipe is not evidence that nobody
+    // is reading, and COLUMNS is the only thing left that says how wide the reader is.
+    expect(resolveWidth({ env: '80' })).toBe(80)
+    expect(resolveWidth({ env: ' 96 ' })).toBe(96)
+  })
+
+  test('a pipe that says nothing gets the natural width, so nothing is truncated', () => {
+    expect(resolveWidth({})).toBe(NATURAL_WIDTH)
+    expect(resolveWidth({ env: undefined })).toBe(NATURAL_WIDTH)
+    expect(resolveWidth({ env: '' })).toBe(NATURAL_WIDTH)
+  })
+
+  test('a COLUMNS that is not a width falls through rather than exploding', () => {
+    for (const junk of ['abc', '0', '-1', '12.5', 'NaN', '1e3px', ' ']) {
+      expect(resolveWidth({ env: junk })).toBe(NATURAL_WIDTH)
+    }
+  })
+
+  test('no floor is invented — a caller asking for twenty columns gets twenty', () => {
+    expect(resolveWidth({ env: '20' })).toBe(20)
+    expect(resolveWidth({ explicit: 1 })).toBe(1)
+    // ...and the table still fits inside them, which is the clip's job, not a minimum's.
+    const lines = renderSessionTable({
+      sessions: FLEET, width: resolveWidth({ env: '20' }), grouping: 'project',
+      strings: STRINGS, color: true,
+    })
+    for (const line of lines) expect(stripAnsi(line).length).toBeLessThanOrEqual(20)
   })
 })
 

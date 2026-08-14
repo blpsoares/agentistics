@@ -428,6 +428,7 @@ apresentacao  1  ─────────────────────
 | `--group`, `-g` | `project` (default), `repo`, `task`, `harness`, `model`, `none` |
 | `--json` | The same JSON `list --json` prints — one machine-readable shape, not two |
 | `--width <n>` | Fit this many columns instead of asking the terminal |
+| `COLUMNS` (env) | Read **only when stdout is not a tty** — how wide the reader is when there is no terminal to ask (`ls \| less -S`) |
 | `--no-color` | Never colour, whatever the terminal says (`NO_COLOR` does the same) |
 
 It is a **separate command from `list`**, not a flag on it: `list` is the tab-separated dump scripts
@@ -447,6 +448,10 @@ Some particulars, all of them shared with the cockpit rather than re-decided her
   last resort, so a narrow terminal loses cells rather than wrapping every row onto the next.
 - **Piped output is plain.** No colour, no escapes, and no invented terminal width — the table comes
   out as wide as its content, so `agentop session ls | grep` works.
+- **A pipe can still state a width**, and a pager is a reader: with no tty to ask,
+  `COLUMNS=80 agentop session ls | less -S` fits 80 columns, the same lever `git` and `ls` honour.
+  The order is `--width` → the terminal → `COLUMNS` → as wide as the content; a `COLUMNS` that is
+  not a width (`abc`, `0`) is ignored rather than obeyed, and no minimum is imposed on one that is.
 
 `--bg` detaches and returns immediately; without it the session takes over your terminal, and the
 detach keystroke is printed first (read from your own tmux prefix, never assumed to be `Ctrl-b`).
