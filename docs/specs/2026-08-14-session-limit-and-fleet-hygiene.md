@@ -108,9 +108,9 @@ que ele faz ("everything reopened RETIRES the row it replaced, or a laptop close
 task holding dead twins under one name"). Na prática ficaram os dois vivos. Reproduza com a
 frota real antes de mexer no planejador: pode ser o registry, não a aritmética.
 
-### 2.2 Sessão reaberta volta VAZIA e trava na pergunta de onboarding (alta)
+### 2.2 A frota inteira parada numa pergunta de onboarding que ninguém detecta (alta)
 
-**9 das 11 sessões vivas** estão paradas em:
+**9 das 11 sessões vivas** estavam paradas em:
 
 ```
 Make auto mode your default permission mode?
@@ -118,15 +118,25 @@ Make auto mode your default permission mode?
     2. No, keep manual mode
 ```
 
-Sem conversa, sem contexto, sem lembrança da task. Ou seja: a reabertura **não retomou a conversa**
-— subiu uma CLI nova no diretório certo e parou na primeira pergunta de primeira execução. Duas
-coisas a corrigir, e a segunda é a que importa:
+> **Correção de uma versão anterior desta spec.** Ela dizia que essas sessões tinham voltado
+> VAZIAS e que a reabertura não retomava a conversa. **Isso está errado**, e foi verificado
+> empiricamente hoje: respondendo a pergunta (`2`, que não muda o default global), as nove voltaram
+> com a **conversa inteira** — histórico, PR aberto no rodapé, subagentes rodando. O diálogo é
+> desenhado POR CIMA da conversa; ler só as últimas linhas do frame mostra o diálogo e nada mais.
+> A retomada funciona. Não vá caçar bug de `--resume`.
 
-1. essa pergunta é um `waiting-approval` legítimo e o cockpit deveria oferecer resposta (o
-   "escolher para responder" do #118 já cobre isso — verifique se está pegando);
-2. **a reabertura precisa passar o id da conversa** (`--resume`/`--continue`, lido do `--help` do
-   harness, nunca adivinhado). Reabrir sem retomar é perder o trabalho enquanto parece que
-   recuperou — o pior dos dois mundos, porque a linha volta verde.
+O bug real é mais simples e mais barato:
+
+1. **Essa pergunta não é detectada como aprovação.** As sessões apareciam como `waiting`, não como
+   `needs approval` — então nada no cockpit dizia que a frota inteira estava a uma tecla de voltar.
+   O rodapé desse diálogo é `Enter to confirm · Esc to cancel`, que JÁ está em `ATTENTION_RULES`,
+   então a regra existe e mesmo assim não pegou: descubra por quê antes de escrever padrão novo
+   (candidatos: o rodapé cai fora do `FOOTER_LINES`, ou o binário da máquina está velho —
+   v1.13.1 contra v1.13.7 na main).
+2. **Lição de leitura, que vale para o `limit.ts` do item 1:** um diálogo cobre a conversa. Quem
+   olha só o tail conclui "vazia" — foi exatamente o erro cometido nesta varredura. `frameTail`
+   corta no último rule e por isso corta o diálogo fora; o `approvalTail` existe justamente para
+   isso. Use o certo para cada pergunta.
 
 ### 2.3 Conflito nativo-vs-nativo não é detectado (média)
 
@@ -242,7 +252,7 @@ Só quatro worktrees têm código fora do `dev`. Todo o resto já está mergeado
 
 | worktree | estado | o que fazer |
 |---|---|---|
-| `services-setup` | 1 commit **wip** (Setup unificado em Services + toggle de boot, 684 linhas) | **não verificado** — rodar `tsc` + `bun test`, revisar, e abrir PR |
+| `services-setup` | 1 commit **wip** (Setup unificado em Services + toggle de boot, 684 linhas) | **não verificado** — rodar `tsc` + `bun test`, revisar, e abrir PR. A sessão `d41dc788ef` está viva e com a conversa dessa implementação inteira: pergunte a ela antes de refazer nada |
 | `parse-cache-sqlite` | 9 commits, o último **wip** | idem; é a maior peça independente |
 | `cockpit-remount-flash` | 1 commit | **PR #126 já aberto** |
 | `agentop-sessions-tui` | 11 commits, órfão, sem sessão e sem remoto | conteúdo já relandado no dev sob outros SHAs — confirmar e **apagar** |
