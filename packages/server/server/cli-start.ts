@@ -61,6 +61,7 @@ import type {
   StartOption,
   TabId,
   StartRequest,
+  RestoreCandidate,
 } from '@agentistics/tui/control'
 import { DEFAULT_SESSION_VIEW } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
@@ -93,6 +94,7 @@ import { repoFacts } from './sessions/repo-facts'
 // rows from the same decision rather than mapping the fleet a second time.
 import { toControlSession } from './sessions/control-session'
 import { planTaskReopen, taskReopenSucceeded } from './sessions/task-reopen'
+import { planRestore } from './sessions/session-restore'
 import type { SpawnPlanError } from './sessions/types'
 import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
@@ -1272,6 +1274,42 @@ async function spawnManaged(req: {
   }
 }
 
+/**
+ * The sessions this machine LOST, as the cockpit's modal needs them.
+ *
+ * The decision is the pure `planRestore`; this is the I/O around it — the registry, what tmux still
+ * holds, and the conversation store. Claimed one per row, so a repository holding four lost rows is
+ * not offered four copies of one conversation.
+ */
+async function restorableSessions(): Promise<RestoreCandidate[]> {
+  const backend = await resolveBackend()
+  const live = new Set((await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id))
+  const conversations = await loadConversations()
+  const taken = new Set<string>()
+  const plan = planRestore({
+    entries: await readRegistry(),
+    liveIds: live,
+    conversationFor: m => {
+      const own = m.conversationId
+        ? conversations.find(c => c.sessionId === m.conversationId)
+        : undefined
+      const conv = own ?? conversations.find(c =>
+        !taken.has(c.sessionId) && c.harness === m.harness && c.cwd === m.cwd)
+      if (!conv?.resumable) return null
+      taken.add(conv.sessionId)
+      return { sessionId: conv.sessionId, title: conv.title }
+    },
+  })
+  return plan.map(c => ({
+    id: c.id,
+    label: c.label,
+    harness: c.harness,
+    // The last segment, the same key the "by project" grouping falls back to.
+    project: c.cwd.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? '',
+    ...(c.startedMs !== undefined ? { startedAt: c.startedMs } : {}),
+  }))
+}
+
 function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
   let lang = initialLang
   const S = () => cliStrings(lang)
@@ -1787,7 +1825,11 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // this poll runs every five seconds over the whole fleet — asking git three times per session
       // per tick would be a hundred processes a minute to learn the same thing.
       const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd)))
+      // What the machine LOST and could start again. Computed on the snapshot rather than fetched
+      // separately, so the screen cannot ask twice and get two answers while a poll is in flight.
+      const restorable = await restorableSessions()
       return {
+        ...(restorable.length > 0 ? { restorable } : {}),
         sessions: snap.sessions.map((v, i) => toControlSession(v, s, facts[i])),
         attention: snap.attention,
         rang: snap.rang,
@@ -1839,6 +1881,58 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
      * what the button just did. Nothing about the sessions changes: a finished task is a statement
      * about the WORK, and its sessions stay listed, attachable and killable behind one switch.
      */
+    /**
+     * Start the offered sessions again, detached — or decline them.
+     *
+     * Declining RETIRES the rows it was offered. "No" here means the work is over, and without that
+     * the same modal greets you on the next run and the one after, which is how a prompt becomes
+     * something people clear without reading. Nothing is destroyed either way: a retired row stays
+     * listed and individually reopenable.
+     */
+    async restoreSessions(ids: string[], accept: boolean): Promise<ActionResult> {
+      const s = S()
+      const registry = await readRegistry()
+      const wanted = registry.filter(m => ids.includes(m.id))
+      if (wanted.length === 0) return { ok: false, message: s.sessRestoreNone }
+
+      if (!accept) {
+        const stamp = new Date().toISOString()
+        for (const m of wanted) await patchSession(m.id, { endedAt: stamp })
+        return { ok: true, message: s.sessRestoreDeclined(wanted.length) }
+      }
+
+      const conversations = await loadConversations()
+      const taken = new Set<string>()
+      let opened = 0
+      let skipped = 0
+      for (const m of wanted) {
+        const own = m.conversationId
+          ? conversations.find(c => c.sessionId === m.conversationId)
+          : undefined
+        const conv = own ?? conversations.find(c =>
+          !taken.has(c.sessionId) && c.harness === m.harness && c.cwd === m.cwd)
+        if (!conv?.resumable) { skipped++; continue }
+        taken.add(conv.sessionId)
+        const r = await spawnManaged({
+          harness: m.harness,
+          cwd: m.cwd,
+          resumeId: conv.sessionId,
+          label: m.label ?? conv.title,
+          attach: false,
+          ...(m.task ? { task: m.task } : {}),
+        }, s)
+        if (!r.ok) { skipped++; continue }
+        opened++
+        if (r.id) await patchSession(r.id, { conversationId: conv.sessionId })
+        if (m.note && r.id) await patchSession(r.id, { note: m.note })
+        await patchSession(m.id, { endedAt: new Date().toISOString() })
+      }
+      forgetConversations()
+      return opened > 0
+        ? { ok: true, message: s.sessRestored(opened, skipped) }
+        : { ok: false, message: s.sessRestoreFailed(skipped) }
+    },
+
     async finishTask(task: string, done: boolean): Promise<ActionResult> {
       const s = S()
       if (!task) return { ok: false, message: s.sessNoTask }

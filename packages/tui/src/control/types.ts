@@ -457,6 +457,30 @@ export const DEFAULT_SESSION_VIEW: SessionViewPrefs = {
   onlyActive: true,
 }
 
+/**
+ * A session the machine lost that could be started again — see `planRestore`.
+ *
+ * Offered ONCE, on the run after everything went down, and never while anything is still running:
+ * a machine with live sessions did not lose everything, and a modal that greets an ordinary restart
+ * is a modal people learn to dismiss without reading.
+ */
+export interface RestoreCandidate {
+  id: string
+  /** Already-composed name: the user's own when there is one, else the conversation's. */
+  label: string
+  harness: string
+  /** The last path segment, for a list that has to stay narrow. */
+  project: string
+  /**
+   * When it started, epoch ms — absent when the registry's timestamp is unreadable.
+   *
+   * An instant rather than a duration, like every other time this contract carries: the screen
+   * repaints far more often than the poll runs, so a duration computed here would freeze at
+   * whatever it was when the host last looked.
+   */
+  startedAt?: number
+}
+
 export interface ControlSessions {
   sessions: ControlSession[]
   /** How many are waiting on a person. Drives the header counter, from every tab. */
@@ -482,6 +506,13 @@ export interface ControlSessions {
    * hidden by default and shown by a toggle.
    */
   finishedTasks?: string[]
+  /**
+   * Sessions the machine lost, worth offering back — empty whenever there is nothing to offer.
+   *
+   * On the SNAPSHOT rather than fetched separately so the screen cannot ask a second time and get a
+   * different answer while a poll is in flight.
+   */
+  restorable?: RestoreCandidate[]
 }
 
 export type TeamMode = 'solo' | 'central' | 'member'
@@ -691,6 +722,16 @@ export interface ControlHost {
    * way the moment two things happen between polls.
    */
   finishTask?(task: string, done: boolean): Promise<ActionResult>
+
+  /**
+   * Start the offered sessions again, detached, or decline them.
+   *
+   * DECLINING is not a no-op: it retires the rows it was offered (`endedAt`), because "no" here
+   * means the work is over. Without that the same modal greets you on the next run and the run
+   * after, which is how a prompt becomes something people clear without reading — and the rows
+   * stay listed and individually reopenable either way, so nothing is destroyed by saying no.
+   */
+  restoreSessions?(ids: string[], accept: boolean): Promise<ActionResult>
 
   /**
    * The harnesses this machine can actually START, with what each of them accepts.

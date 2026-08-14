@@ -814,11 +814,13 @@ export function sessionsCockpit(o: {
   asideLabel: number
   /** Rows the detail pane is asking for, `0` when there is nothing selected to describe. */
   detailWanted: number
+  /** Folded away by the user — the list takes the whole width, whatever it would have fitted. */
+  hideAside?: boolean
 }): CockpitLayout {
   const width = Math.max(1, o.width)
   const height = Math.max(1, o.height)
 
-  const aside = width >= ASIDE_NEEDS
+  const aside = o.hideAside ? 0 : width >= ASIDE_NEEDS
     // `+ 4` rather than `+ 2`: the rows carry a cursor, a state dot and — for a task or a project —
     // a trailing count, and sizing to the label alone truncated every long verb in the menu.
     ? Math.min(ASIDE_MAX, Math.max(ASIDE_MIN, o.asideLabel + 4))
@@ -1483,8 +1485,8 @@ export function sessionKeyHelp(w: {
   move: string; open: string; attach: string; menu: string; section: string
   newSession: string; search: string; clear: string; kill: string; rename: string
   note: string; task: string; mark: string; onlyActive: string; closed: string
-  exited: string; unfiled: string; group: string; detail: string; reset: string
-  tabs: string; help: string; quit: string
+  exited: string; unfiled: string; group: string; detail: string; menuFold: string
+  reset: string; tabs: string; help: string; quit: string
 }): KeyHelp[] {
   return [
     { keys: '↑ ↓ / j k', what: w.move },
@@ -1505,6 +1507,7 @@ export function sessionKeyHelp(w: {
     { keys: 'u', what: w.unfiled },
     { keys: 'v', what: w.group },
     { keys: 'd', what: w.detail },
+    { keys: 'ctrl+b', what: w.menuFold },
     { keys: 'ctrl+r', what: w.reset },
     { keys: '[ ]', what: w.tabs },
     { keys: '?', what: w.help },
@@ -1515,4 +1518,34 @@ export function sessionKeyHelp(w: {
 /** The width the keystroke column needs, so the descriptions line up — PURE. */
 export function keyHelpColumn(rows: readonly KeyHelp[]): number {
   return rows.reduce((n, r) => Math.max(n, r.keys.length), 0)
+}
+
+/** The glyph that closes a session from its own row. */
+export const CLOSE_CELL = '✕'
+
+/**
+ * Columns reserved at the right edge of the list for the per-row close control — PURE.
+ *
+ * Two: a gap and the glyph. Reserved from the width BEFORE the columns are measured, because a
+ * control drawn after a table that already spent the full width is a control drawn on top of the
+ * last cell.
+ *
+ * Zero when nothing on screen can be closed, and zero on a list too narrow to spare it — the
+ * keyboard's `x` still works there, and a table squeezed to make room for a button is a worse
+ * trade than a button that is only on the wider terminal.
+ */
+export function closeCellWidth(rows: readonly ControlSession[], width: number): number {
+  const NEEDS = 40
+  return width >= NEEDS && rows.some(canClose) ? 2 : 0
+}
+
+/**
+ * Can this row be closed at all?
+ *
+ * Only a session agentop HOSTS: an external process is someone else's to stop, and a closed
+ * conversation has nothing running to end. A row that cannot take it draws no glyph — a control
+ * that is visible and refuses is worse than one that is absent.
+ */
+export function canClose(s: ControlSession): boolean {
+  return s.actionable && s.state !== 'closed' && s.state !== 'exited'
 }

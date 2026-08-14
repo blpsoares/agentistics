@@ -5,7 +5,7 @@ import {
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
   projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
   sessionHandle, worktreeName, sessionRunning, asideRowKey, resolveAsideCursor,
-  sessionAge, sessionKeyHelp, keyHelpColumn,
+  sessionAge, sessionKeyHelp, keyHelpColumn, closeCellWidth, canClose,
   DEFAULT_ORDER, usageOf, planSubmit,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
@@ -1212,7 +1212,7 @@ describe('sessionKeyHelp', () => {
   const words = Object.fromEntries(
     ['move', 'open', 'attach', 'menu', 'section', 'newSession', 'search', 'clear', 'kill',
       'rename', 'note', 'task', 'mark', 'onlyActive', 'closed', 'exited', 'unfiled', 'group',
-      'detail', 'reset', 'tabs', 'help', 'quit'].map(k => [k, `does ${k}`]),
+      'detail', 'menuFold', 'reset', 'tabs', 'help', 'quit'].map(k => [k, `does ${k}`]),
   ) as Parameters<typeof sessionKeyHelp>[0]
 
   it('describes every key it lists, with no blanks', () => {
@@ -1234,5 +1234,31 @@ describe('sessionKeyHelp', () => {
     const rows = sessionKeyHelp(words)
     expect(keyHelpColumn(rows)).toBe(Math.max(...rows.map(r => r.keys.length)))
     expect(keyHelpColumn([])).toBe(0)
+  })
+})
+
+describe('the per-row close control', () => {
+  const live = session('a', { state: 'waiting' as SessionState })
+  const closed = session('b', { state: 'closed' as SessionState, actionable: false })
+  const gone = session('c', { state: 'exited' as SessionState })
+
+  it('is offered only on a row agentop can actually stop', () => {
+    // An external process is someone else's to stop, and a closed conversation has nothing running
+    // to end. A control that is visible and refuses is worse than one that is absent.
+    expect(canClose(live)).toBe(true)
+    expect(canClose(closed)).toBe(false)
+    expect(canClose(gone)).toBe(false)
+    expect(canClose(session('d', { state: 'unknown' as SessionState, actionable: false }))).toBe(false)
+  })
+
+  it('costs nothing when nothing on screen can be closed', () => {
+    expect(closeCellWidth([closed, gone], 120)).toBe(0)
+    expect(closeCellWidth([live], 120)).toBe(2)
+  })
+
+  it('gives up on a narrow list rather than squeezing the table for a button', () => {
+    // The keyboard's `x` still works there, and a table squeezed to make room is the worse trade.
+    expect(closeCellWidth([live], 30)).toBe(0)
+    expect(closeCellWidth([live], 40)).toBe(2)
   })
 })

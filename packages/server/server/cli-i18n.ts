@@ -107,6 +107,10 @@ export interface CliStrings {
   /** The fallback title for a session the user never named. */
   sessUntitled: (harness: string, project: string) => string
   sessKilled: (id: string) => string
+  sessRestoreNone: string
+  sessRestoreDeclined: (n: number) => string
+  sessRestored: (opened: number, skipped: number) => string
+  sessRestoreFailed: (skipped: number) => string
   sessNoTask: string
   sessTaskFinished: (task: string) => string
   sessTaskReopened: (task: string) => string
@@ -325,6 +329,13 @@ const EN: CliStrings = {
     `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
   sessKilled: (id: string) => `stopped ${id}.`,
+  sessRestoreNone: 'those sessions are no longer in the registry.',
+  sessRestoreDeclined: (n: number) =>
+    `left ${n} session${n === 1 ? '' : 's'} closed — still listed, still reopenable.`,
+  sessRestored: (opened: number, skipped: number) =>
+    `restored ${opened}${skipped ? `, ${skipped} could not be` : ''}.`,
+  sessRestoreFailed: (skipped: number) =>
+    `nothing could be restored${skipped ? ` — ${skipped} had no conversation to reopen` : ''}.`,
   sessNoTask: 'that session has no task.',
   sessTaskFinished: (task: string) => `"${task}" marked finished.`,
   sessTaskReopened: (task: string) => `"${task}" reopened.`,
@@ -512,6 +523,13 @@ const PT: CliStrings = {
     `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando", como qualquer outra pausa.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
   sessKilled: (id: string) => `${id} encerrada.`,
+  sessRestoreNone: 'essas sessões não estão mais no registro.',
+  sessRestoreDeclined: (n: number) =>
+    `${n} ${n === 1 ? 'sessão deixada fechada' : 'sessões deixadas fechadas'} — continuam listadas e reabríveis.`,
+  sessRestored: (opened: number, skipped: number) =>
+    `${opened} restaurada${opened === 1 ? '' : 's'}${skipped ? `, ${skipped} não deu` : ''}.`,
+  sessRestoreFailed: (skipped: number) =>
+    `nada pôde ser restaurado${skipped ? ` — ${skipped} sem conversa para reabrir` : ''}.`,
   sessNoTask: 'essa sessão não tem tarefa.',
   sessTaskFinished: (task: string) => `"${task}" marcada como finalizada.`,
   sessTaskReopened: (task: string) => `"${task}" reaberta.`,
