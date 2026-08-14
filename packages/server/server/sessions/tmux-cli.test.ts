@@ -3,6 +3,7 @@ import {
   LIST_FORMAT, attachArgs, capturePaneArgs, idFromTmuxName, isSessionGoneError, killSessionArgs,
   newSessionArgs, parsePrefix, parseTmuxList, sendKeysEnterArgs, sendKeysLiteralArgs, trimCapture,
   tmuxName,
+  serverOptionsArgs, HISTORY_LIMIT,
 } from './tmux-cli'
 
 describe('names', () => {
@@ -105,5 +106,32 @@ describe('isSessionGoneError', () => {
   it('treats any other stderr as a real failure, never a guessed "gone"', () => {
     expect(isSessionGoneError('permission denied')).toBe(false)
     expect(isSessionGoneError('')).toBe(false)
+  })
+})
+
+describe('serverOptionsArgs', () => {
+  const all = serverOptionsArgs()
+
+  it('touches only agentop own socket', () => {
+    // The whole reason setting global options is safe: none of this reaches the user's tmux, their
+    // config, or the sessions they started themselves.
+    for (const args of all) expect(args.slice(0, 2)).toEqual(['-L', 'agentop'])
+  })
+
+  it('turns the mouse on, because a pane you cannot scroll is a pane you cannot read', () => {
+    const mouse = all.find(a => a.includes('mouse'))
+    expect(mouse).toEqual(['-L', 'agentop', 'set-option', '-g', 'mouse', 'on'])
+  })
+
+  it('raises the scrollback well past tmux own 2000', () => {
+    // Two thousand lines of an assistant transcript is a few minutes of work: attaching to a
+    // session that has run for an hour and scrolling up finds the middle of a sentence.
+    const history = all.find(a => a.includes('history-limit'))
+    expect(history?.at(-1)).toBe(String(HISTORY_LIMIT))
+    expect(HISTORY_LIMIT).toBeGreaterThan(2000)
+  })
+
+  it('still holds a finished session listable', () => {
+    expect(all.some(a => a.includes('remain-on-exit') && a.at(-1) === 'on')).toBe(true)
   })
 })
