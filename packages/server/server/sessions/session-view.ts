@@ -371,15 +371,28 @@ export function buildSessionViews(o: {
   // covers its conversation, whether that row is one we host or one we merely observed.
   const shown = new Set<string>()
   for (const v of external) if (v.resume) shown.add(v.resume.sessionId)
-  for (const m of managed) {
-    // A managed row does not carry a conversation id, so it covers by the same harness+directory
-    // inference used for a foreign process. `exited` and `lost` rows cover nothing: their work IS
-    // over, and the conversation belongs in history where it can be reopened.
-    if (m.status !== 'running' && m.status !== 'unregistered') continue
-    const conv = m.harness
-      ? conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
-      : undefined
-    if (conv) shown.add(conv.sessionId)
+  //
+  // A row that RECORDED its conversation covers exactly that one. The rest fall back to the
+  // harness+directory inference, and it is CLAIMED — because that inference answers with the FIRST
+  // conversation in the directory, so four live sessions in one repository all covered the same
+  // one. The other three stayed in history as `closed` rows for conversations that were open, and
+  // whichever conversation happened to be first vanished from history while it was the one nobody
+  // was running. "Some sessions do not appear" and "some appear twice" were the same bug, seen
+  // from its two ends.
+  const coveredConv = new Set<string>()
+  for (const r of o.reconciled) {
+    const m = managed.find(v => v.id === r.id)
+    // `exited` and `lost` rows cover nothing: their work IS over, and the conversation belongs in
+    // history where it can be reopened.
+    if (!m || (m.status !== 'running' && m.status !== 'unregistered')) continue
+    const own = r.managed?.conversationId
+    if (own) { shown.add(own); coveredConv.add(own); continue }
+    if (!m.harness) continue
+    const conv = conversations.find(c =>
+      !coveredConv.has(c.sessionId)
+      && c.harness === m.harness
+      && sessionAtCwd({ current_cwd: c.cwd, project_path: c.cwd }, m.cwd))
+    if (conv) { shown.add(conv.sessionId); coveredConv.add(conv.sessionId) }
   }
 
   const closed: SessionView[] = conversations

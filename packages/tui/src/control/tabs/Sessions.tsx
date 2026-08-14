@@ -15,8 +15,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import type {
-  ActionResult, ControlExit, ControlHost, ControlSession, ControlSessions, SessionState,
-  SessionViewPrefs,
+  ActionResult, ControlExit, ControlHost, ControlSession, ControlSessions, RestoreCandidate,
+  SessionState, SessionViewPrefs,
 } from '../types'
 import type { ControlStrings } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
@@ -57,7 +57,7 @@ import {
   enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
   taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
-  sessionAge, sessionKeyHelp, keyHelpColumn,
+  sessionAge, sessionKeyHelp, keyHelpColumn, closeCellWidth, canClose, CLOSE_CELL,
   DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder, type SessionLayout,
   cardGrid, cardPages, pageOfCard, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
   cardHit, cardStep, cardPageRows, cardLabelWidth, CARD_LABEL_GAP, pagerCells, pagerHit,
@@ -216,6 +216,17 @@ export function Sessions({
    */
   const [marked, setMarked] = useState<ReadonlySet<string>>(new Set(view?.marked ?? []))
   /**
+   * Whether the menu is folded away entirely, for when the list is what you came to read.
+   *
+   * NOT persisted, unlike every other part of the arrangement: it is a gesture you make to look at
+   * something, not a setting. A menu that was still hidden three days later would be a feature
+   * nobody could find their way back out of — and the keys that open it (`1`-`9`) are the same ones
+   * that jump to a section, so opening it is never a thing you have to remember how to do.
+   */
+  const [menuHidden, setMenuHidden] = useState(false)
+  /** Ids the user has already been asked about this run, so the offer is made once. */
+  const [restoreAsked, setRestoreAsked] = useState(false)
+  /**
    * Whether the visible action row has the keyboard.
    *
    * The row is there so the screen can be used WITHOUT knowing any letters — every verb is spelled
@@ -335,6 +346,17 @@ export function Sessions({
   // The detail pane asks for exactly what it has to say, and the list absorbs the difference. A
   // pane sized to a constant leaves dead rows under it — air under a pane is a fault, and a list
   // with room to grow is not air, it is a list.
+  /**
+   * Whether the "start these again?" offer is the thing on screen.
+   *
+   * Decided HERE rather than beside the render below, because the FOOTER has to know: the offer owns
+   * the keyboard, and while it is up every hint the list would print names a key that does nothing.
+   * That is the one bug this footer exists to prevent, and it shipped — the offer drew over the list
+   * while the strip underneath still advertised `o attach`, `y approve` and `tab actions`.
+   */
+  const restorable = fleet?.restorable ?? []
+  const restoring = !restoreAsked && restorable.length > 0 && Boolean(host.restoreSessions)
+
   /** Whether typing into the selected row is a thing that can work — the same rule
    *  `sessionActions` applies, read once so the footer and the verb cannot disagree. */
   const canPrompt = Boolean(selected)
@@ -478,11 +500,14 @@ export function Sessions({
   // narrow to carry the menu — where it is the only menu there is — and whether that is the case
   // depends on the width alone, so one extra call settles it without either budget guessing at the
   // other. A row taken without being paid for is composited over the one under it.
-  const probe = sessionsCockpit({ width, height, asideLabel, detailWanted })
+  // `hideAside` is passed to BOTH, or the probe answers with an aside the real layout will not draw
+  // and the action row is budgeted against a menu that is not there.
+  const fold = { asideLabel, hideAside: menuHidden }
+  const probe = sessionsCockpit({ width, height, detailWanted, ...fold })
   const actionRows = probe.aside > 0 ? 0 : height >= 12 ? 2 : height >= 8 ? 1 : 0
   const cockpit = actionRows === 0
     ? probe
-    : sessionsCockpit({ width, height: Math.max(1, height - actionRows), asideLabel, detailWanted })
+    : sessionsCockpit({ width, height: Math.max(1, height - actionRows), detailWanted, ...fold })
 
   // The grid, decided HERE rather than beside the list's own arithmetic further down: both input
   // handlers read it, and a value declared under them reads as "used before its declaration" to
@@ -753,9 +778,11 @@ export function Sessions({
     // The DIGITS jump straight to a menu section, from the list as well as from the menu — every
     // section wears its number, so this is a key the screen documents itself rather than one you
     // have to be told about. They work where the arrows are not available at all.
-    if (cockpit.aside > 0 && input >= '1' && input <= '9') {
+    // A digit brings the menu BACK as well as jumping to a section: the keys that reach the menu
+    // are the way out of having hidden it, so there is nothing extra to remember.
+    if (input >= '1' && input <= '9') {
       const n = Number(input) - 1
-      if (n < sections.length) { gotoSection(n); return }
+      if (n < sections.length) { setMenuHidden(false); gotoSection(n); return }
     }
 
     if (focus === 'aside' && cockpit.aside > 0) {
@@ -819,6 +846,18 @@ export function Sessions({
     // duplication here: `l` is what the footer has room to name, and a chord is what someone
     // reaches for without having read the footer at all.
     if (key.ctrl && input === 'a') { setOnlyActive(v => !v); setCursor(0); return }
+    // Folding the menu answers TWO keys, and the second one is not a convenience.
+    //
+    // `ctrl+b` is tmux's DEFAULT PREFIX. Run in a plain terminal the cockpit receives it and this
+    // works — measured through the preview, which writes the real 0x02 byte. Run inside the user's
+    // own tmux it never arrives at all: intercepting the prefix is what a prefix IS, so the client
+    // consumes it and the pane is never told. This app already knows that, which is why it reads
+    // the real prefix from `show-options -g prefix` to tell people how to detach.
+    //
+    // A chord that silently does nothing for everyone who works inside tmux is exactly the "the
+    // command to hide the aside menu is not working" this was reported as. So plain `b` does it
+    // too, and it is the one the footer and the key list name.
+    if (input === 'b' || (key.ctrl && input === 'b')) { setMenuHidden(v => !v); return }
     // `?` is the key, and `ctrl+h` is accepted where the terminal can tell it apart from backspace.
     // It usually cannot: `ctrl+h` IS ASCII 8, which is the backspace byte, so Ink reports it as
     // `key.backspace` and a binding on it would either never fire or fire on backspace. Measured
@@ -969,7 +1008,11 @@ export function Sessions({
     if (!isActive) return
     // While a question is open the global keys stand down and the footer says only what works —
     // a hint for a key that does nothing is the one bug this footer exists to prevent.
-    onChrome(ask
+    onChrome(restoring
+      // The offer owns the keyboard and answers exactly two keys. It says so on the pane itself;
+      // the footer must not contradict it with a strip of verbs that do nothing.
+      ? { capture: true, hints: [s.keyRestoreAnswer] }
+      : ask
       ? { capture: true, hints: [s.keyBack] }
       : focus === 'aside' && cockpit.aside > 0
         // The menu is a vertical list, so it answers ↑↓ and enter — and `esc` is the way back to the
@@ -996,11 +1039,15 @@ export function Sessions({
               ...(canPrompt ? [s.keySessionsPrompt] : []),
               s.keySessionsSearch, s.keySessionsNew, s.keySessionsGroup, s.keySessionsClosed,
               ...(grouping === 'task' ? [s.keySessionsNoTask] : []),
+              // Named only while the menu is THERE to fold: on a narrow terminal the aside is
+              // dropped anyway, and a hint for a key with nothing to act on is the one bug this
+              // footer exists to prevent.
+              ...(cockpit.aside > 0 || menuHidden ? [s.keySessionsFold] : []),
               s.keySessionsReset,
             ],
           })
   }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping,
-      selected?.canApprove, canPrompt])
+      selected?.canApprove, canPrompt, menuHidden, restoring])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
@@ -1103,10 +1150,21 @@ export function Sessions({
         if (index !== null && index < selectable.length) setCursor(index)
         return
       }
-      const row = offset + (y - (cockpit.summary ? 1 : 0))
+      // The column HEADER is paid for as well as the summary row. Without it every click in the
+      // list answered with the row ABOVE the one under the pointer — the grid branch above returns
+      // first, and cards draw no header, so this is the list path's arithmetic alone.
+      const row = offset + (y - (cockpit.summary ? 1 : 0) - (cockpit.header ? 1 : 0))
       if (row < 0 || row >= rows.length) return
       const found = selectable.indexOf(row)
-      if (found >= 0) setCursor(found)
+      if (found < 0) return
+      setCursor(found)
+      // The X at the right edge. It SELECTS the row first and then asks — so the confirmation names
+      // the session under the pointer, never the one that happened to be selected before.
+      const entry = rows[row]
+      const onClose = closeCell > 0 && p.x >= listX + PANE_EDGE_X + listBody - 1
+      if (onClose && entry?.kind === 'session' && canClose(entry.session)) {
+        setAsk({ kind: 'kill', session: entry.session })
+      }
       return
     }
 
@@ -1180,6 +1238,12 @@ export function Sessions({
   // full pane and then drawn beside a bar is a table truncated by one character on every row.
   const listBar = scrollBar({ offset, total: rows.length, rows: cockpit.listRows })
   const listBody = paneBody(cockpit.list) - (listBar.length > 0 ? 1 : 0)
+  // Reserved BEFORE the columns are measured: a control drawn after a table that already spent the
+  // full width is a control drawn on top of the last cell.
+  const closeCell = closeCellWidth(
+    visible.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
+    listBody,
+  )
 
   // Slicing from zero would leave the view switches below the fold on a short terminal — invisible,
   // and still the thing `enter` would act on.
@@ -1199,15 +1263,15 @@ export function Sessions({
       visible.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
       // The CONTENT width, not the pane's: measuring against the frame made every column four
       // characters wider than the row it was drawn into, and the table survived only because Ink
-      // truncated it.
-      listBody,
+      // truncated it. Minus whatever the close control took.
+      listBody - closeCell,
       {
         groupedByTask: grouping === 'task',
         ages,
         ...(cockpit.header ? { headings: s.sessionsCols } : {}),
       },
     ),
-    [visible, listBody, grouping, cockpit.header, ages, s],
+    [visible, listBody, closeCell, grouping, cockpit.header, ages, s],
   )
 
   // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
@@ -1228,6 +1292,34 @@ export function Sessions({
           onShowClosed={v => { setShowClosed(v); setCursor(0) }}
           onHideEmptyTask={v => { setHideEmptyTask(v); setCursor(0) }}
           onClose={() => setAsk(null)}
+        />
+      </Box>
+    )
+  }
+
+  /**
+   * The offer, made ONCE and only when there is something to offer.
+   *
+   * It comes before the list because it is about the list: after a crash the fleet you are looking
+   * at is not the one you left, and finding that out by noticing what is missing is worse than
+   * being told. Declining retires those rows, so the same modal never greets you twice.
+   */
+  if (restoring) {
+    return (
+      <Box flexDirection="column" width={width} flexShrink={0}>
+        <RestoreOffer
+          rows={restorable}
+          strings={s}
+          width={width}
+          height={height}
+          isActive={isActive}
+          onAnswer={accept => {
+            setRestoreAsked(true)
+            const restore = host.restoreSessions
+            if (!restore) return
+            void run(() => restore.call(host, restorable.map(r => r.id), accept))
+              .then(onRefreshFleet)
+          }}
         />
       </Box>
     )
@@ -1478,6 +1570,7 @@ export function Sessions({
                 ages={ages}
                 columns={columns}
                 width={listBody}
+                closeCell={closeCell}
               />
             )
           })}
@@ -1653,7 +1746,7 @@ function SummaryRow({
   )
 }
 
-function SessionRowView({ session, selected, marked, ages, columns, width }: {
+function SessionRowView({ session, selected, marked, ages, columns, width, closeCell }: {
   session: ControlSession
   selected: boolean
   /** Already-localized ages by session id — this component owns no clock and no strings. */
@@ -1662,6 +1755,8 @@ function SessionRowView({ session, selected, marked, ages, columns, width }: {
   marked: boolean
   columns: SessionColumns
   width: number
+  /** Columns reserved at the right edge for the close control — `0` when there is none. */
+  closeCell: number
 }) {
   // `harness` is a plain string here because it can be EMPTY — a session the registry has
   // forgotten runs a harness nobody recorded. An empty one simply gets no colour.
@@ -1727,7 +1822,62 @@ function SessionRowView({ session, selected, marked, ages, columns, width }: {
       {columns.where > 0 ? (
         <Text dimColor>{gap + padCell(session.projectGroup || session.project, columns.where)}</Text>
       ) : null}
+      {/* The close control, at the right edge and only on a row that can take it. It asks before
+          it acts — the same confirmation `x` opens, because a one-click stop on a list that
+          re-sorts under the pointer every five seconds is a session ended by accident. */}
+      {closeCell > 0 ? (
+        <Text color={canClose(session) ? COLORS.danger : undefined}>
+          {' ' + (canClose(session) ? CLOSE_CELL : ' ')}
+        </Text>
+      ) : null}
     </Text>
+  )
+}
+
+/**
+ * "Your last sessions were these — start them again?"
+ *
+ * Every row is NAMED, because the answer is a decision about specific work and a count is not
+ * enough to make it with: three sessions in a repository you have finished with and one you were
+ * in the middle of are the same "4" on screen.
+ */
+function RestoreOffer({ rows, strings: s, width, height, isActive, onAnswer }: {
+  rows: readonly RestoreCandidate[]
+  strings: ControlStrings
+  width: number
+  height: number
+  isActive: boolean
+  onAnswer: (accept: boolean) => void
+}) {
+  useInput((_i, key) => {
+    if (key.return) return onAnswer(true)
+    if (key.escape) return onAnswer(false)
+  }, { isActive })
+
+  const now = Date.now()
+  // Two rows of chrome above and two below; what is left is the list, and a list longer than that
+  // says how many it could not show rather than drawing over the answer.
+  const page = Math.max(1, height - 5)
+
+  return (
+    <Pane title={s.sessionsPaneRestore} focused width={width} height={height}>
+      <Text bold wrap="truncate">{truncate(s.restoreTitle(rows.length), paneBody(width))}</Text>
+      <Text> </Text>
+      {rows.slice(0, page).map(r => (
+        <Text key={r.id} wrap="truncate">
+          <Text color={COLORS.accent}>{'  ' + r.label}</Text>
+          <Text dimColor>{`  ${r.harness}  ${r.project}`}</Text>
+          {r.startedAt !== undefined ? (
+            <Text dimColor>
+              {`  ${s.sessionsAgo(Math.max(0, Math.round((now - r.startedAt) / 1000)))}`}
+            </Text>
+          ) : null}
+        </Text>
+      ))}
+      {rows.length > page ? <Text dimColor>{`  … +${rows.length - page}`}</Text> : null}
+      <Text> </Text>
+      <Text wrap="truncate">{truncate(s.restoreAnswer, paneBody(width))}</Text>
+    </Pane>
   )
 }
 

@@ -527,6 +527,30 @@ export const DEFAULT_SESSION_VIEW: SessionViewPrefs = {
   layout: 'list',
 }
 
+/**
+ * A session the machine lost that could be started again — see `planRestore`.
+ *
+ * Offered ONCE, on the run after everything went down, and never while anything is still running:
+ * a machine with live sessions did not lose everything, and a modal that greets an ordinary restart
+ * is a modal people learn to dismiss without reading.
+ */
+export interface RestoreCandidate {
+  id: string
+  /** Already-composed name: the user's own when there is one, else the conversation's. */
+  label: string
+  harness: string
+  /** The last path segment, for a list that has to stay narrow. */
+  project: string
+  /**
+   * When it started, epoch ms — absent when the registry's timestamp is unreadable.
+   *
+   * An instant rather than a duration, like every other time this contract carries: the screen
+   * repaints far more often than the poll runs, so a duration computed here would freeze at
+   * whatever it was when the host last looked.
+   */
+  startedAt?: number
+}
+
 export interface ControlSessions {
   sessions: ControlSession[]
   /** How many are waiting on a person. Drives the header counter, from every tab. */
@@ -564,6 +588,24 @@ export interface ControlSessions {
    * legitimate thing to offer, and an offer that does not say when reads as one that just happened.
    */
   fell?: { count: number; atMs: number }
+  /**
+   * The SAME fall, named row by row, for the offer made on the way in.
+   *
+   * `fell` is the count and the instant — enough for the summary row, the section heading and the
+   * menu verb. This is the list a person reads to DECIDE, and a count cannot be decided on: three
+   * sessions in a repository you have finished with and one you were in the middle of are the same
+   * "4" on screen.
+   *
+   * Both come from ONE selection (`planCrashGroup`), and that is the point of them being two fields
+   * rather than two questions: a second answer to "what fell" is a second set of rules, which is
+   * the bug `task-reopen.ts` exists to have fixed once.
+   *
+   * Narrower than `fell` by exactly one rule: a row whose conversation does not resolve is dropped
+   * here, because this list is CLICKABLE and a row that cannot be reopened is a button that fails.
+   * It stays inside `fell`, where the reopen counts it as skipped rather than pretending it never
+   * fell.
+   */
+  restorable?: RestoreCandidate[]
 }
 
 export type TeamMode = 'solo' | 'central' | 'member'
@@ -808,6 +850,16 @@ export interface ControlHost {
    * way the moment two things happen between polls.
    */
   finishTask?(task: string, done: boolean): Promise<ActionResult>
+
+  /**
+   * Start the offered sessions again, detached, or decline them.
+   *
+   * DECLINING is not a no-op: it retires the rows it was offered (`endedAt`), because "no" here
+   * means the work is over. Without that the same modal greets you on the next run and the run
+   * after, which is how a prompt becomes something people clear without reading — and the rows
+   * stay listed and individually reopenable either way, so nothing is destroyed by saying no.
+   */
+  restoreSessions?(ids: string[], accept: boolean): Promise<ActionResult>
 
   /**
    * The harnesses this machine can actually START, with what each of them accepts.

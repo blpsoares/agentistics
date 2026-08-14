@@ -39,6 +39,7 @@ import {
   type ControlSession,
   type ControlSessions,
   type ProjectOption,
+  type RestoreCandidate,
   type ControlService,
   type ControlStatus,
   type ServiceRuntimeState,
@@ -98,6 +99,14 @@ interface Options {
   pending: boolean
   /** Make the fake host REFUSE to spawn, which is the wizard's failure path. */
   failSpawn: boolean
+  /**
+   * Show the "your last sessions were these" offer.
+   *
+   * Its own flag because the offer renders in FRONT of the list: stocking the fixture with it
+   * unconditionally would put a modal over every other sessions preview, so the screen this exists
+   * to check would be the only one anybody could ever see.
+   */
+  restore: boolean
 }
 
 const USAGE = `
@@ -122,12 +131,14 @@ const USAGE = `
                             gate: --pending --keys enter,right,enter
     --fail-spawn            the new-session wizard's spawn is refused, so its failure
                             path is drawn: --fail-spawn --keys a,enter,enter,enter,enter,enter,enter
+    --restore               the machine lost its fleet, so the "start these again?"
+                            offer is drawn in front of the list
 `
 
 function parseArgs(argv: string[]): Options {
   const opts: Options = {
     cols: 100, rows: 34, lang: 'en', screen: 'services', mode: 'solo', keys: [], task: 'off',
-    pending: false, failSpawn: false,
+    pending: false, failSpawn: false, restore: false,
   }
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]
@@ -139,6 +150,7 @@ function parseArgs(argv: string[]): Options {
       case '--keys': opts.keys = value.split(',').filter(Boolean); i++; break
       case '--pending': opts.pending = true; break
       case '--fail-spawn': opts.failSpawn = true; break
+      case '--restore': opts.restore = true; break
       case '--task':
         opts.task = value === 'done' ? 'done' : 'running'
         i++
@@ -351,7 +363,10 @@ function fakeHost(opts: Options): ControlHost {
       return () => { watchers.delete(handler) }
     },
     readLog: async (source, maxLines) => (LOG[source] ?? []).slice(-maxLines),
-    sessions: async () => FAKE_FLEET,
+    sessions: async () => (opts.restore
+      ? { ...FAKE_FLEET, restorable: FAKE_RESTORABLE }
+      : FAKE_FLEET),
+    restoreSessions: done,
     startableHarnesses: async () => [
       { id: 'claude', label: 'claude', modelSuggestions: ['opus', 'sonnet', 'haiku'], supportsModel: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
       { id: 'codex', label: 'codex', modelSuggestions: ['gpt-5.4', 'gpt-5.4-mini'], supportsModel: true, efforts: [] },
@@ -388,6 +403,18 @@ const FAKE_PROJECTS: ProjectOption[] = [
   { path: '/home/dev/embark', label: 'embark', detail: '~/orgs/opvibes/embark', source: 'repo' },
   { path: '/home/dev/embark2', label: 'embark', detail: '~/archive/2024/embark', source: 'folder' },
   { path: '/home/dev/scratch', label: 'scratch', detail: '~/scratch', source: 'folder' },
+]
+
+/**
+ * What the offer names after a fall — the awkward cases rather than the tidy one: a long label that
+ * has to be truncated beside its harness and project, a row with no start time at all, and enough
+ * of them to reach the pane's own limit on a short terminal.
+ */
+const FAKE_RESTORABLE: RestoreCandidate[] = [
+  { id: 'f00d01', label: 'ledger reconciliation', harness: 'claude', project: 'agentistics', startedAt: Date.now() - 3 * 60 * 60_000 },
+  { id: 'f00d02', label: 'invoice export', harness: 'codex', project: 'prontuario', startedAt: Date.now() - 3 * 60 * 60_000 },
+  { id: 'f00d03', label: 'rewrite the CSV importer so it stops guessing the encoding', harness: 'kimi', project: 'embark', startedAt: Date.now() - 4 * 60 * 60_000 },
+  { id: 'f00d04', label: 'no start time on record', harness: 'claude', project: 'aipe' },
 ]
 
 const FAKE_FLEET: ControlSessions = {

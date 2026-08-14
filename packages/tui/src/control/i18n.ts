@@ -235,12 +235,16 @@ export interface ControlStrings {
   sessionsPaneDetail: string
   sessionsPaneAsk: string
   sessionsPaneKeys: string
+  sessionsPaneRestore: string
+  restoreTitle: (n: number) => string
+  restoreAnswer: string
   /** What each key on the sessions screen does — the one list `ctrl+h` prints. */
   sessionsKeyWhat: {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
     note: string; task: string; mark: string; onlyActive: string; closed: string
-    exited: string; unfiled: string; group: string; detail: string; reset: string
+    exited: string; unfiled: string; group: string; detail: string; menuFold: string
+    reset: string
     tabs: string; help: string; quit: string
     approve: string; prompt: string; reopenFell: string
   }
@@ -315,6 +319,10 @@ export interface ControlStrings {
   keySessionsActions: string
   keySessionsApprove: string
   keySessionsPrompt: string
+  /** The menu fold — the plain letter, because tmux's default prefix never arrives inside a tmux. */
+  keySessionsFold: string
+  /** The two keys the restore offer answers, and nothing else. */
+  keyRestoreAnswer: string
   /** The visible action row — the same verbs the letters run, spelled out and clickable. */
   actSessions: {
     attach: string
@@ -609,6 +617,10 @@ const EN: ControlStrings = {
   sessionsPaneDetail: 'detail',
   sessionsPaneAsk: 'question',
   sessionsPaneKeys: 'keys',
+  sessionsPaneRestore: 'last time',
+  restoreTitle: (n: number) =>
+    n === 1 ? 'Your last session was this one:' : `Your last ${n} sessions were these:`,
+  restoreAnswer: 'enter starts them in the background · esc leaves them closed',
   sessionsKeyWhat: {
     move: 'move the cursor',
     open: 'switch between the menu and the list',
@@ -629,6 +641,7 @@ const EN: ControlStrings = {
     unfiled: 'show sessions under no task',
     group: 'change the grouping',
     detail: 'hide the detail pane',
+    menuFold: 'fold the menu away — any digit brings it back',
     reset: 'back to how the app opens',
     tabs: 'change screen',
     help: 'this list',
@@ -709,6 +722,8 @@ const EN: ControlStrings = {
   keySessionsActions: 'tab actions',
   keySessionsApprove: 'y approve',
   keySessionsPrompt: 'p send',
+  keySessionsFold: 'b menu',
+  keyRestoreAnswer: 'enter start · esc leave closed',
   actSessions: {
     attach: 'Attach',
     resume: 'Reopen',
@@ -987,6 +1002,10 @@ const PT: ControlStrings = {
   sessionsPaneDetail: 'detalhe',
   sessionsPaneAsk: 'pergunta',
   sessionsPaneKeys: 'teclas',
+  sessionsPaneRestore: 'da última vez',
+  restoreTitle: (n: number) =>
+    n === 1 ? 'Sua última sessão foi esta:' : `Suas últimas ${n} sessões foram estas:`,
+  restoreAnswer: 'enter inicia em background · esc deixa fechadas',
   sessionsKeyWhat: {
     move: 'move o cursor',
     open: 'alterna entre o menu e a lista',
@@ -1007,6 +1026,7 @@ const PT: ControlStrings = {
     unfiled: 'mostra sessões sem tarefa',
     group: 'muda o agrupamento',
     detail: 'oculta o painel de detalhe',
+    menuFold: 'recolhe o menu — qualquer dígito traz de volta',
     reset: 'volta para como o app abre',
     tabs: 'muda de tela',
     help: 'esta lista',
@@ -1086,6 +1106,8 @@ const PT: ControlStrings = {
   keySessionsActions: 'tab ações',
   keySessionsApprove: 'y aprovar',
   keySessionsPrompt: 'p enviar',
+  keySessionsFold: 'b menu',
+  keyRestoreAnswer: 'enter inicia · esc deixa fechadas',
   actSessions: {
     attach: 'Anexar',
     resume: 'Reabrir',

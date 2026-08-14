@@ -61,6 +61,7 @@ import type {
   StartOption,
   TabId,
   StartRequest,
+  RestoreCandidate,
 } from '@agentistics/tui/control'
 import { DEFAULT_SESSION_VIEW } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
@@ -95,7 +96,7 @@ import { toControlSession } from './sessions/control-session'
 import { planTaskReopen, taskReopenSucceeded, type TaskReopenPlan } from './sessions/task-reopen'
 import { approvalFor } from './sessions/approval-spec'
 import { rulesFor } from './sessions/attention-rules'
-import { planCrashGroup } from './sessions/crash-group'
+import { planCrashGroup, planFellOffer } from './sessions/crash-group'
 import { loadHarnessSessions } from './sessions/harness-sessions'
 import type { ManagedSession, SpawnPlanError } from './sessions/types'
 import {
@@ -115,6 +116,7 @@ export type StartResult = number | 'foreground'
  * an open menu.
  */
 const SEND_CAPTURE_LINES = 60
+
 
 // ANSI, for the output this module still writes to the REAL terminal: the suspended commands,
 // the foreground handover and the non-interactive `agentop restart --all`.
@@ -1363,6 +1365,52 @@ async function reopenEntries(
   return { plan, opened, skipped }
 }
 
+/**
+ * The fall, named ROW BY ROW — what the offer made on the way in shows.
+ *
+ * The SELECTION is `planCrashGroup` and nothing else. This started life as a second selection
+ * (`planRestore`, from the branch this is reconciled with), and the two agreed about `endedAt` and
+ * about claiming a conversation once while disagreeing about the thing that matters: `planRestore`
+ * had no evidence a row was ever ALIVE, so it offered every resolvable `lost` row — which on a
+ * machine with months of history is the "sessões lixo" complaint this feature was built to answer.
+ * Two selections is two sets of rules; the repo has paid for that once already (`task-reopen.ts`).
+ *
+ * Exactly ONE rule is added on top, and it belongs here rather than in the pure selection because it
+ * is about the OFFER and not about the fall: a row whose conversation cannot be resolved is dropped,
+ * because this list is clickable and a row that cannot be reopened is a button that fails. It stays
+ * inside `fell`, where `reopenEntries` counts it as skipped — the fall is what happened, and the
+ * offer is what can be done about it.
+ */
+async function restorableSessions(fell: readonly ManagedSession[]): Promise<RestoreCandidate[]> {
+  if (fell.length === 0) return []
+  const conversations = await loadConversations()
+  const taken = new Set<string>()
+
+  // The DECISION is the pure `planFellOffer`; this is the I/O around it — the conversation store,
+  // and the claiming that stops four fallen rows in one repository being offered four copies of one
+  // conversation.
+  return planFellOffer({
+    entries: fell,
+    conversationFor: m => {
+      const own = m.conversationId
+        ? conversations.find(c => c.sessionId === m.conversationId)
+        : undefined
+      const conv = own ?? conversations.find(c =>
+        !taken.has(c.sessionId) && c.harness === m.harness && c.cwd === m.cwd)
+      if (!conv?.resumable) return null
+      taken.add(conv.sessionId)
+      return { sessionId: conv.sessionId, title: conv.title }
+    },
+  }).map(o => ({
+    id: o.entry.id,
+    label: o.label,
+    harness: o.entry.harness,
+    // The last segment, the same key the "by project" grouping falls back to.
+    project: o.entry.cwd.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? '',
+    ...(o.startedMs !== undefined ? { startedAt: o.startedMs } : {}),
+  }))
+}
+
 function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
   let lang = initialLang
   const S = () => cliStrings(lang)
@@ -1878,7 +1926,13 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // this poll runs every five seconds over the whole fleet — asking git three times per session
       // per tick would be a hundred processes a minute to learn the same thing.
       const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd)))
+      // What the machine LOST and could start again — named row by row for the offer, from the
+      // SAME selection the count below reports. Read off the snapshot the poll already produced
+      // rather than recomputed, so the screen cannot be shown two answers to one question while a
+      // poll is in flight.
+      const restorable = await restorableSessions(snap.fell?.entries ?? [])
       return {
+        ...(restorable.length > 0 ? { restorable } : {}),
         sessions: snap.sessions.map((v, i) => toControlSession(v, s, facts[i])),
         attention: snap.attention,
         rang: snap.rang,
@@ -1935,6 +1989,38 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
      * what the button just did. Nothing about the sessions changes: a finished task is a statement
      * about the WORK, and its sessions stay listed, attachable and killable behind one switch.
      */
+    /**
+     * Start the offered sessions again, detached — or decline them.
+     *
+     * ACCEPTING is `reopenEntries`, the same thing "open the whole task" and "reopen what fell"
+     * perform. It arrived here as its own copy of that loop, which made THREE implementations of
+     * one gesture — the drift `task-reopen.ts` was extracted to end, reintroduced by two sessions
+     * that could not see each other's work. The set is different, the act is not.
+     *
+     * DECLINING retires the rows it was offered. "No" here means the work is over, and without it
+     * the same offer greets you on the next run and the one after, which is how a prompt becomes
+     * something people clear without reading. Nothing is destroyed either way: a retired row stays
+     * listed, and `endedAt` is exactly what keeps it out of the next crash group while leaving it
+     * individually reopenable.
+     */
+    async restoreSessions(ids: string[], accept: boolean): Promise<ActionResult> {
+      const s = S()
+      const registry = await readRegistry()
+      const wanted = registry.filter(m => ids.includes(m.id))
+      if (wanted.length === 0) return { ok: false, message: s.sessRestoreNone }
+
+      if (!accept) {
+        const stamp = new Date().toISOString()
+        for (const m of wanted) await patchSession(m.id, { endedAt: stamp })
+        return { ok: true, message: s.sessRestoreDeclined(wanted.length) }
+      }
+
+      const { opened, skipped } = await reopenEntries(wanted, s)
+      return opened > 0
+        ? { ok: true, message: s.sessRestored(opened, skipped) }
+        : { ok: false, message: s.sessRestoreFailed(skipped) }
+    },
+
     async finishTask(task: string, done: boolean): Promise<ActionResult> {
       const s = S()
       if (!task) return { ok: false, message: s.sessNoTask }

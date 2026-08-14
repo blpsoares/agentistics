@@ -109,3 +109,61 @@ export function planCrashGroup(o: {
   const entries = candidates.filter(e => e.lastSeenMs! >= atMs - window)
   return { atMs, entries }
 }
+
+/**
+ * How many rows the "start these again?" offer will NAME.
+ *
+ * A list read under one question, so it is bounded for the same reason the closed block is: a modal
+ * listing forty rows is not an offer, it is a wall. What it cannot show, the caller counts.
+ */
+export const OFFER_LIMIT = 8
+
+/** One fallen row, reduced to what an offer has to show to be decidable. */
+export interface FellOffer {
+  entry: ManagedSession
+  /** The user's own name when there is one, else the conversation's. */
+  label: string
+  resumeId: string
+  /** When it started, epoch ms — absent when the registry's timestamp is unreadable. */
+  startedMs?: number
+}
+
+/**
+ * The fall as an OFFER — PURE, and deliberately narrower than the fall itself by exactly one rule.
+ *
+ * The SELECTION is `planCrashGroup` and stays there. This is the presentation question on top of
+ * it: which of those rows can be put in a list someone clicks. A row whose conversation does not
+ * resolve is dropped, because such a row is a button that fails — and it is dropped HERE rather
+ * than in the selection, because it is still a session that fell. `reopenEntries` counts it as
+ * skipped, which is the honest report; leaving it out of `planCrashGroup` would make the count on
+ * the summary row quietly smaller than the event it describes.
+ *
+ * Ordered newest first: this is read under one question, and the sessions somebody was in the
+ * middle of are the recent ones.
+ *
+ * A conversation is CLAIMED once. The harness+directory fallback answers with the first
+ * conversation in a directory, so four fallen rows in one repository would otherwise be offered
+ * four copies of one conversation — a bug this project has already shipped once.
+ */
+export function planFellOffer(o: {
+  entries: readonly ManagedSession[]
+  /** The conversation this entry would reopen, or `null` when none resolves. */
+  conversationFor: (entry: ManagedSession) => { sessionId: string; title: string } | null
+  limit?: number
+}): FellOffer[] {
+  const out: FellOffer[] = []
+  for (const entry of o.entries) {
+    const conv = o.conversationFor(entry)
+    if (!conv) continue
+    const started = Date.parse(entry.createdAt)
+    out.push({
+      entry,
+      label: entry.label ?? conv.title,
+      resumeId: conv.sessionId,
+      ...(Number.isFinite(started) ? { startedMs: started } : {}),
+    })
+  }
+  return out
+    .sort((a, b) => (b.startedMs ?? 0) - (a.startedMs ?? 0))
+    .slice(0, o.limit ?? OFFER_LIMIT)
+}
