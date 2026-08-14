@@ -52,7 +52,8 @@ import { SessionWizard } from './SessionWizard'
 import { TaskChoice } from '../TaskChoice'
 import {
   GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
-  QUESTION_ROWS, actionLabels, asideRows, asideSelectable, asideRowKey, resolveAsideCursor,
+  QUESTION_ROWS, askRows, fitApprovalPreview, actionLabels, asideRows, asideSelectable,
+  asideRowKey, resolveAsideCursor,
   enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
   taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
@@ -87,6 +88,31 @@ const STATE_COLOR: Record<SessionState, string | undefined> = {
 }
 
 /**
+ * The already-localized word for every verb, in ONE place.
+ *
+ * It was written out twice — once for the action row and once for the aside menu — and the two are
+ * `Record<SessionAction, string>`s of the same map, so adding a verb meant finding both copies. The
+ * compiler catches a missing key, which is exactly why the duplicate was cheap enough to survive
+ * three verbs and then cost an afternoon on the fourth.
+ */
+const ACTION_WORDS = (s: ControlStrings): Record<SessionAction, string> => ({
+  attach: s.actSessions.attach,
+  resume: s.actSessions.resume,
+  approve: s.actSessions.approve,
+  prompt: s.actSessions.prompt,
+  rename: s.actSessions.rename,
+  note: s.actSessions.note,
+  task: s.actSessions.task,
+  kill: s.actSessions.kill,
+  openTask: s.actSessions.openTask,
+  reopenFell: s.actSessions.reopenFell,
+  finishTask: s.actSessions.finishTask,
+  new: s.actSessions.newSession,
+  search: s.actSessions.search,
+  group: s.actSessions.group,
+})
+
+/**
  * A question this screen is asking. While one is open it reports `capture`, so the global keys stand
  * down — typing a session name would otherwise quit the app on the `q` and refresh it on the `r`.
  */
@@ -104,6 +130,18 @@ type Ask =
   | { kind: 'rename'; session: ControlSession }
   | { kind: 'note'; session: ControlSession }
   | { kind: 'kill'; session: ControlSession }
+  /** Typing a line into a session without entering it. */
+  | { kind: 'prompt'; session: ControlSession }
+  /**
+   * Answering the dialog a session is blocked on.
+   *
+   * The only question on this screen that carries EVIDENCE: the dialog itself is drawn above the
+   * confirmation, because the keystroke takes whichever option is highlighted and nothing but the
+   * screen can say which that is.
+   */
+  | { kind: 'approve'; session: ControlSession }
+  /** Reopening everything the machine took at once — a FLEET question, so it names no session. */
+  | { kind: 'reopenFell' }
   /** Starting a new one — the only question that needs no selected row. */
   | { kind: 'new' }
 
@@ -268,9 +306,12 @@ export function Sessions({
     },
     fleet?.finishedTasks ?? [],
     order,
-  ), s.sessionsClosedWord, s.sessionsDoneWord), [
-    fleet?.sessions, fleet?.finishedTasks, done, grouping, query, showClosed, showExited,
-    hideEmptyTask, showDone, onlyActive, states, order, taskFilter, projectFilter, s,
+    // The heading is passed only when something ACTUALLY fell. `sessionRows` treats an absent word
+    // as "there is no such section", so on an ordinary machine the reading order is unchanged
+    // rather than carrying an empty block that exists to say nothing.
+  ), s.sessionsClosedWord, s.sessionsDoneWord, fleet?.fell ? s.sessionsFellWord : undefined), [
+    fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, query, showClosed,
+    showExited, hideEmptyTask, showDone, onlyActive, states, order, taskFilter, projectFilter, s,
   ])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
@@ -294,6 +335,13 @@ export function Sessions({
   // The detail pane asks for exactly what it has to say, and the list absorbs the difference. A
   // pane sized to a constant leaves dead rows under it — air under a pane is a fault, and a list
   // with room to grow is not air, it is a list.
+  /** Whether typing into the selected row is a thing that can work — the same rule
+   *  `sessionActions` applies, read once so the footer and the verb cannot disagree. */
+  const canPrompt = Boolean(selected)
+    && selected!.actionable
+    && (selected!.state === 'working' || selected!.state === 'waiting'
+      || selected!.state === 'waiting-approval')
+
   const detail = useMemo(() => (selected ? detailLines(selected, {
     where: s.sessionsWhere,
     model: s.sessionsModel,
@@ -304,6 +352,8 @@ export function Sessions({
     doing: s.sessionsDoing,
     task: s.sessionsTask,
     metrics: s.sessionsMetrics,
+    alsoLabel: s.sessionsAlsoLabel,
+    alsoHarness: s.sessionsAlsoHarness,
     // Absent when the backend did not report one — an invented keystroke is worse than none, since
     // the whole point of this line is that it is the key that actually works here.
     ...(fleet?.detachHint ? { detach: { label: s.sessionsDetach, keys: fleet.detachHint } } : {}),
@@ -324,8 +374,12 @@ export function Sessions({
   // the whole band goes to the grid — a fleet drawn twice on one screen is half a screen wasted. A
   // QUESTION still gets its rows, switch or no switch: a prompt with nowhere to draw cannot be
   // answered.
+  // The one question that carries EVIDENCE. Its rows are BUDGETED here rather than drawn on top of
+  // the answers: Ink composites what does not fit, so an unbudgeted preview would not crowd the two
+  // answers, it would draw over whatever sits under them.
+  const askPreview = ask?.kind === 'approve' ? (ask.session.approvalLines?.length ?? 0) : 0
   const detailWanted = ask
-    ? Math.max(QUESTION_ROWS, detail.length)
+    ? askRows({ preview: askPreview, detail: detail.length })
     : layout === 'cards' || hideDetail ? 0 : detail.length
 
   /**
@@ -336,25 +390,16 @@ export function Sessions({
    * refusal is a sentence rather than a silently ignored keypress: a control that does nothing and
    * says nothing is indistinguishable from a broken one.
    */
-  const actions = useMemo(() => sessionActions(selected), [selected])
+  const actions = useMemo(
+    () => sessionActions(selected, { fell: fleet?.fell?.count ?? 0 }),
+    [selected, fleet?.fell?.count],
+  )
   // The cursor moves over the ENABLED verbs only; the dim ones keep the row's shape and are never
   // landed on. Clamped every render, because which are enabled changes with the selection.
   const liveActions = useMemo(() => enabledActionIndexes(actions), [actions])
   const liveAt = liveActions.length === 0 ? 0 : Math.min(actionIndex, liveActions.length - 1)
   const at2 = liveActions[liveAt] ?? 0
-  const actionWords = useMemo(() => actionLabels(actions, {
-    attach: s.actSessions.attach,
-    resume: s.actSessions.resume,
-    rename: s.actSessions.rename,
-    note: s.actSessions.note,
-    task: s.actSessions.task,
-    kill: s.actSessions.kill,
-    openTask: s.actSessions.openTask,
-    finishTask: s.actSessions.finishTask,
-    new: s.actSessions.newSession,
-    search: s.actSessions.search,
-    group: s.actSessions.group,
-  }), [actions, s])
+  const actionWords = useMemo(() => actionLabels(actions, ACTION_WORDS(s)), [actions, s])
 
   /** How many sessions wear each state, over the WHOLE fleet — see the note in `asideRows`. */
   const stateCounts = useMemo(() => {
@@ -365,13 +410,7 @@ export function Sessions({
 
   const asideList = useMemo(() => asideRows({
     actions,
-    actionWords: {
-      attach: s.actSessions.attach, resume: s.actSessions.resume, rename: s.actSessions.rename,
-      note: s.actSessions.note, task: s.actSessions.task, kill: s.actSessions.kill,
-      openTask: s.actSessions.openTask, finishTask: s.actSessions.finishTask,
-      new: s.actSessions.newSession,
-      search: s.actSessions.search, group: s.actSessions.group,
-    },
+    actionWords: ACTION_WORDS(s),
     grouping,
     groupWords: s.sessionsGroupings,
     layout: { heading: s.asideLayout, words: s.sessionsLayouts, value: layout },
@@ -486,6 +525,17 @@ export function Sessions({
     // what the options were, or what the current one is, is a control people stop trusting — and
     // the hide-closed and hide-unfiled switches had nowhere to live at all.
     if (a === 'group') { setAsk({ kind: 'view' }); return }
+    // A FLEET verb: it names no row, so it must not be gated on one being selected. Refused in a
+    // SENTENCE when nothing fell, never silently — a control that does nothing and says nothing is
+    // indistinguishable from a broken one.
+    if (a === 'reopenFell') {
+      if (!fleet?.fell || !host.reopenFell) {
+        void run(async () => ({ ok: false, message: s.sessionsNoFell }))
+        return
+      }
+      setAsk({ kind: 'reopenFell' })
+      return
+    }
     if (!selected) return
     if (a === 'attach') return actOn('attach')
     if (a === 'resume') { setAsk({ kind: 'resume', session: selected }); return }
@@ -493,10 +543,21 @@ export function Sessions({
     // Asked rather than done: finishing is a statement about a whole piece of work, and the
     // confirmation is where the screen says what happens to its sessions.
     if (a === 'finishTask') { setAsk({ kind: 'finishTask', session: selected }); return }
+    // Refused in words rather than by a key that does nothing: pressing `y` on a session that is
+    // working is a reasonable thing to try, and the answer is "it is not asking anything", which is
+    // information. Two different refusals, because they are two different facts — the harness's
+    // dialog was never read, or this row is not blocked at all.
+    if (a === 'approve' && !selected.canApprove) {
+      const why = selected.approveBlind ?? s.sessionsNotAsking
+      void run(async () => ({ ok: false, message: why }))
+      return
+    }
     return actOn(a)
-  }, [host, grouping, selected])
+  }, [host, grouping, selected, fleet?.fell, run, s])
 
-  const actOn = useCallback((kind: Ask['kind'] | 'attach') => {
+  // Only the kinds that NAME a session. `reopenFell` is a fleet question and is handled in
+  // `runAction`; routing it through here would hand it a row it must not act on.
+  const actOn = useCallback((kind: Extract<Ask, { session: ControlSession }>['kind'] | 'attach') => {
     if (!selected) return
     // Asking to ATTACH to something with nothing running is asking to pick that conversation back
     // up — so it is answered with the reopen question rather than refused. Pressing the one key
@@ -732,6 +793,15 @@ export function Sessions({
     if (input === 'x') return runAction('kill')
     if (input === 'n') return runAction('rename')
     if (input === 't') return runAction('note')
+    // The two that act on a session WITHOUT entering it. `y` for yes and `p` for prompt, both
+    // unclaimed on this screen — and neither is a navigation key, which is the rule `x` exists for:
+    // a key that moves the cursor on one screen and writes into somebody's session on another is
+    // the shape of a real accident.
+    if (input === 'y') return runAction('approve')
+    if (input === 'p') return runAction('prompt')
+    // Capital `R`, so it cannot be hit while reaching for anything else. It is the one verb here
+    // that acts on the whole fleet.
+    if (input === 'R') return runAction('reopenFell')
 
     // A grid has two axes, so the arrows mean what they mean in a grid: `←`/`→` step one card,
     // `↑`/`↓` step a whole row of them. The list's own reducer wraps a single column, which in a
@@ -854,12 +924,18 @@ export function Sessions({
             hints: [
               s.keyQuit, s.keyTabsAlt, s.keySessionsActions, s.keyAsideSection,
               s.keySessionsAttach, s.keyMove,
+              // Named only where the key actually does something on the selected row. The footer is
+              // the only documentation this screen has, and a hint for an inert key is the one bug
+              // it exists to prevent.
+              ...(selected?.canApprove ? [s.keySessionsApprove] : []),
+              ...(canPrompt ? [s.keySessionsPrompt] : []),
               s.keySessionsSearch, s.keySessionsNew, s.keySessionsGroup, s.keySessionsClosed,
               ...(grouping === 'task' ? [s.keySessionsNoTask] : []),
               s.keySessionsReset,
             ],
           })
-  }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping])
+  }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping,
+      selected?.canApprove, canPrompt])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
@@ -1006,8 +1082,25 @@ export function Sessions({
    */
   const runningCount = (fleet?.sessions ?? []).filter(sessionRunning).length
   const narrowed = Boolean(query || projectFilter !== null || taskFilter !== null)
+  /**
+   * How long ago the fall was, already localized — `undefined` when nothing fell.
+   *
+   * The clock lives here for the same reason every other age on this screen does: the host reports
+   * the INSTANT, and this pane repaints far more often than the poll runs.
+   */
+  const fellAgo = fleet?.fell
+    ? s.sessionsAgo(Math.max(0, Math.round((Date.now() - fleet.fell.atMs) / 1000)))
+    : undefined
   const emptyReason = onlyActive && runningCount === 0 && (fleet?.sessions.length ?? 0) > 0
-    ? s.sessionsEmptyActive(fleet!.sessions.length)
+    // The strict filter empties the list on exactly the machine that has just rebooted, and the
+    // sessions it is withholding are the ones somebody most wants back. So when a fall is on record
+    // the sentence names IT and the key that reopens it, rather than only the switch that would
+    // reveal the rows. The filter is not overridden — `only active` means what it says, no
+    // exceptions — but a blank pane must not be the only thing standing between a user and their
+    // work.
+    ? (fleet!.fell && fellAgo
+        ? `${s.sessionsEmptyActive(fleet!.sessions.length)} · ${s.sessionsFellNote(fleet!.fell.count, fellAgo)}`
+        : s.sessionsEmptyActive(fleet!.sessions.length))
     : narrowed ? s.sessionsEmptyFiltered
     : s.sessionsEmpty
 
@@ -1205,6 +1298,7 @@ export function Sessions({
           onlyActive={onlyActive}
           query={query}
           scope={projectFilter ?? taskFilter ?? ''}
+          fell={fleet?.fell && fellAgo ? s.sessionsFellNote(fleet.fell.count, fellAgo) : ''}
         />
       ) : null}
 
@@ -1348,6 +1442,8 @@ export function Sessions({
               ask={ask as Exclude<Ask, { kind: 'new' } | { kind: 'view' } | { kind: 'keys' }>}
               strings={s}
               width={paneBody(width)}
+              rows={paneRows(cockpit.detail)}
+              fellAgo={fellAgo}
               onClose={() => setAsk(null)}
               onRun={(fn, label) => {
                 setAsk(null)
@@ -1392,7 +1488,7 @@ export function Sessions({
  * to state the answer, so a glance tells you why the list looks the way it does.
  */
 function SummaryRow({
-  fleet, grouping, strings: s, width, showClosed, hideEmptyTask, onlyActive, query, scope,
+  fleet, grouping, strings: s, width, showClosed, hideEmptyTask, onlyActive, query, scope, fell,
 }: {
   fleet: ControlSessions | null | undefined
   grouping: SessionGrouping
@@ -1407,6 +1503,14 @@ function SummaryRow({
   query: string
   /** The active task or project scope, already localized, or `''`. */
   scope: string
+  /**
+   * Already-localized "N sessions fell X ago — R reopens them", or `''`.
+   *
+   * On this row rather than only in the empty state, because the list is NOT always empty after a
+   * fall: a machine where one session survived, or where the history switches are on, shows rows —
+   * and the offer to get the rest back would then have no place to be said at all.
+   */
+  fell: string
 }) {
   if (fleet?.unavailable) {
     return <Text color={COLORS.accent} wrap="truncate">{truncate(fleet.unavailable, width)}</Text>
@@ -1437,6 +1541,7 @@ function SummaryRow({
     hiding: hiding.length > 0 ? `− ${hiding.join(', ')}` : '',
     count: s.sessionsCount(fleet?.sessions.length ?? 0),
     waiting: waiting > 0 ? s.sessionsWaitingCount(waiting) : '',
+    fell,
     width,
   })
 
@@ -1452,6 +1557,10 @@ function SummaryRow({
           </>
         )}
         {cells.hiding ? <Text dimColor>{`   ${cells.hiding}`}</Text> : null}
+        {/* The fall is an OFFER, not a description, so it is the one cell on this row that wears a
+            colour: everything beside it says what the list contains, and this says what is one
+            keypress from coming back. */}
+        {cells.fell ? <Text color={COLORS.info} bold>{`   ${cells.fell}`}</Text> : null}
       </Text>
       <Text wrap="truncate">
         <Text dimColor>{cells.count}</Text>
@@ -1724,11 +1833,17 @@ function Detail({ lines, width, rows }: {
  * In place of the facts rather than over them: a modal floating above a list is a second thing to
  * read at the moment the user is deciding, and the row being acted on stays visible above.
  */
-function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery, fleet }: {
+function Question({
+  ask, strings: s, width, rows, fellAgo, onClose, onRun, host, query, onQuery, fleet,
+}: {
   /** Never `new` — the wizard takes the whole screen and is rendered before this is reached. */
   ask: Exclude<Ask, { kind: 'new' } | { kind: 'view' } | { kind: 'keys' }>
   strings: ControlStrings
   width: number
+  /** Rows this pane was actually given — what the dialog preview is cut against. */
+  rows: number
+  /** How long ago the fall was, already localized. Absent when nothing fell. */
+  fellAgo?: string
   onClose: () => void
   onRun: (fn: () => Promise<ActionResult>, label?: string) => void
   host: ControlHost
@@ -1758,7 +1873,89 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
     )
   }
 
+  // The FLEET question: it names no session, so it is answered before `session` is reached at all.
+  if (ask.kind === 'reopenFell') {
+    const fell = fleet?.fell
+    return (
+      <ConfirmPrompt
+        // The count AND when. A fall from three days ago is a perfectly legitimate thing to offer,
+        // and an offer that does not say when reads as one that just happened.
+        label={s.sessionsFellConfirm(fell?.count ?? 0, fellAgo ?? '')}
+        yesLabel={s.yes}
+        noLabel={s.no}
+        width={width}
+        height={rows}
+        onCancel={onClose}
+        onAnswer={(yes: boolean) => {
+          const reopen = host.reopenFell
+          if (!yes || !reopen) return onClose()
+          onRun(() => reopen.call(host), s.actSessions.reopenFell)
+        }}
+      />
+    )
+  }
+
   const { session } = ask
+
+  /**
+   * Answering the dialog a session is blocked on — the only question here that shows EVIDENCE.
+   *
+   * The dialog is drawn ABOVE the confirmation, and the caveat under it says in words what the
+   * keystroke actually does: it takes whichever option is highlighted. Nothing in this product can
+   * read which option that is, so the screen showing the dialog is not a nicety, it IS the check.
+   */
+  if (ask.kind === 'approve') {
+    // What is left for the dialog once the confirmation has taken its rows. Cut from the TOP, so
+    // the options and the footer — the part being answered — are what survives a short pane.
+    const room = Math.max(0, rows - QUESTION_ROWS - 1)
+    const preview = fitApprovalPreview(session.approvalLines ?? [], room)
+    return (
+      <Box flexDirection="column" width={width}>
+        {preview.length > 0 ? (
+          <>
+            <Text dimColor>{truncate(s.sessionsApproveWhat, width)}</Text>
+            {preview.map((line, i) => (
+              <Text key={`ap${i}`} wrap="truncate" color={COLORS.text}>{truncate(line, width)}</Text>
+            ))}
+          </>
+        ) : null}
+        <ConfirmPrompt
+          label={`${s.sessionsApproveConfirm(session.title)} ${s.sessionsApproveCaveat}`}
+          yesLabel={s.yes}
+          noLabel={s.no}
+          width={width}
+          height={Math.max(QUESTION_ROWS, rows - preview.length - (preview.length > 0 ? 1 : 0))}
+          onCancel={onClose}
+          onAnswer={(yes: boolean) => {
+            const approve = host.approveSession
+            if (!yes || !approve) return onClose()
+            onRun(() => approve.call(host, session.id), s.actSessions.approve)
+          }}
+        />
+      </Box>
+    )
+  }
+
+  if (ask.kind === 'prompt') {
+    return (
+      <Box flexDirection="column" width={width}>
+        <Text dimColor>{truncate(s.sessionsPromptHint, width)}</Text>
+        <TextPrompt
+          label={s.sessionsPromptLabel(session.title)}
+          width={width}
+          onCancel={onClose}
+          onSubmit={value => {
+            const text = value.trim()
+            const send = host.promptSession
+            // An empty submit is a CANCEL, never a blank turn sent to an assistant — the same rule
+            // the rename prompt follows for the same reason.
+            if (!send || !text) return onClose()
+            onRun(() => send.call(host, session.id, text), s.actSessions.prompt)
+          }}
+        />
+      </Box>
+    )
+  }
 
   if (ask.kind === 'kill') {
     return (
@@ -1836,15 +2033,26 @@ function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery
   if (ask.kind === 'finishTask') {
     const task = session.task ?? ''
     const already = (fleet?.finishedTasks ?? []).includes(task)
-    const count = (fleet?.sessions ?? []).filter(v => v.task === task).length
+    const mine = (fleet?.sessions ?? []).filter(v => v.task === task)
+    const count = mine.length
+    // Counted separately and stated separately. "N sessions" alone does not tell you whether any of
+    // them is an assistant currently burning tokens, and that is the fact somebody is worried about
+    // when they hesitate over this button.
+    const running = mine.filter(sessionRunning).length
     return (
       <ConfirmPrompt
-        // The question states what happens to the SESSIONS, because that is the part nobody can
-        // guess: finishing a task hides them behind a switch, it does not stop or delete anything.
-        label={already ? s.sessionsReopenConfirm(task) : s.sessionsFinishConfirm(task, count)}
+        // The question states what finishing ACTUALLY does — mark the task, hide its sessions
+        // behind a switch — and says outright that nothing is stopped. It must not describe
+        // something the code does not do: a warning that claims to end everything, over an action
+        // that ends nothing, is worse than no warning, because it teaches people that the warnings
+        // on this screen can be ignored.
+        label={already
+          ? s.sessionsReopenConfirm(task)
+          : s.sessionsFinishConfirm(task, count, running)}
         yesLabel={s.yes}
         noLabel={s.no}
         width={width}
+        height={rows}
         onCancel={onClose}
         onAnswer={(yes: boolean) => {
           const finish = host.finishTask

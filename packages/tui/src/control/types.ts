@@ -295,8 +295,28 @@ export type SessionState =
  */
 export interface ControlSession {
   id: string
-  /** Already-localized display name: the user's label when there is one, else a derived one. */
+  /**
+   * Already-localized display name.
+   *
+   * A session can be named in TWO places — in agentop, and inside the harness with its own
+   * `/rename` — and the host decides which one this is. See `titleSource`.
+   */
   title: string
+  /**
+   * Where `title` came from, present ONLY when the two names disagree.
+   *
+   * `label` is the name typed in agentop, `harness` the one typed inside the session. Its presence
+   * is the statement: an ordinary row, named in one place or neither, carries nothing here.
+   */
+  titleSource?: 'label' | 'harness' | 'derived'
+  /**
+   * The name that LOST, when there was one and it differs.
+   *
+   * Neither name is ever discarded. Someone who renamed in both places must be able to see that both
+   * renames happened — a rename that vanishes without a word is indistinguishable from one that
+   * failed, which is the complaint this whole field exists to answer.
+   */
+  titleOther?: string
   /** Harness id, or `''` when the registry has forgotten it. The colour and grouping key. */
   harness: string
   cwd: string
@@ -349,6 +369,39 @@ export interface ControlSession {
    * invented one would be the worst possible thing to put under "what is it doing".
    */
   lastLines?: string[]
+  /**
+   * The DIALOG this session is blocked on, verbatim — present only while it is asking.
+   *
+   * A different reading of the frame from `lastLines`, which cuts the input box and the status strip
+   * away and would therefore cut the dialog away. This is what a person has to READ before agreeing:
+   * the options, which one is highlighted, and the footer naming the key. The keystroke that answers
+   * cannot know which option it is taking, so the screen showing this IS the safety.
+   */
+  approvalLines?: string[]
+  /**
+   * Whether the approve verb can run on this row at all.
+   *
+   * True only when the session is blocked on a dialog AND this harness's dialog has been read, so
+   * the keystroke that answers it is a recorded fact rather than a guess. False everywhere else,
+   * including on a perfectly healthy working session — approving something that is not asking
+   * anything sends a blank turn, or takes an option out of a menu nobody was looking at.
+   */
+  canApprove?: boolean
+  /**
+   * Why approving is unavailable HERE, already localized — present only when the session is blocked
+   * and nobody has read this harness's dialog.
+   *
+   * Its presence is the statement, the same shape as `approvalBlind`: absence is not a reassurance,
+   * and a verb that vanished without a word reads as the feature being broken.
+   */
+  approveBlind?: string
+  /**
+   * This session was taken by the machine along with the others, and comes back with them.
+   *
+   * Decided over the WHOLE registry rather than from this row — "did these fall together" is a
+   * question about a set — so the host hands the answer down rather than the screen inferring one.
+   */
+  fell?: boolean
   /** Already-formatted token count, when this row's conversation has metrics. */
   tokens?: string
   /** Already-formatted cost, same. */
@@ -499,6 +552,18 @@ export interface ControlSessions {
    * hidden by default and shown by a toggle.
    */
   finishedTasks?: string[]
+  /**
+   * The sessions the machine took ALL AT ONCE, when there are any.
+   *
+   * A reboot, an OOM kill or a lost tmux server turns every managed session into a `lost` row in the
+   * same instant. This names that event so all of them can be picked back up with one action — which
+   * is the whole point: a list of forty rows that includes everything that ever ran cannot be
+   * reopened without reading each one first.
+   *
+   * `atMs` is when it happened, and the UI must SAY it: a fall from three days ago is a perfectly
+   * legitimate thing to offer, and an offer that does not say when reads as one that just happened.
+   */
+  fell?: { count: number; atMs: number }
 }
 
 export type TeamMode = 'solo' | 'central' | 'member'
@@ -668,6 +733,41 @@ export interface ControlHost {
   attachSession?(id: string): Promise<AttachTicket | null>
 
   killSession?(id: string): Promise<ActionResult>
+
+  /**
+   * Type one line into a session and submit it, WITHOUT attaching to it.
+   *
+   * The ordinary case is a session that is working or waiting: the text lands in its prompt and it
+   * reads it when it gets there. The case that must be refused is a session with a DIALOG open —
+   * there the prompt is not a prompt, it is a menu, and a sentence typed into it is an answer to a
+   * question nobody read. The host re-reads the screen before sending and refuses in words; the
+   * screen cannot decide it, because its list is up to a poll old.
+   */
+  promptSession?(id: string, text: string): Promise<ActionResult>
+
+  /**
+   * Press the key that takes the option this session's dialog is HIGHLIGHTING.
+   *
+   * Not "approve", and the contract says so on purpose: no CLI here reports which option is
+   * selected, so what this sends is a keystroke and what it confirms is whatever is on the screen.
+   * That is why `ControlSession.approvalLines` exists and why the confirmation must show it.
+   *
+   * The host re-reads the frame immediately before sending and refuses when the session is no longer
+   * asking — a snapshot is up to five seconds old, and an unconditional Enter into a session that
+   * has moved on is a blank turn at best.
+   */
+  approveSession?(id: string): Promise<ActionResult>
+
+  /**
+   * Reopen every session of the last fall, in the background.
+   *
+   * The same arithmetic `openTask` runs (`task-reopen.ts`), over the set `ControlSessions.fell`
+   * names instead of over a task: a row still running is left alone and reported as such, a row
+   * already finished is not resurrected, an unresolvable one is skipped AND counted, and everything
+   * reopened retires the row it replaced.
+   */
+  reopenFell?(): Promise<ActionResult>
+
   renameSession?(id: string, label: string): Promise<ActionResult>
   noteSession?(id: string, text: string): Promise<ActionResult>
   /** File this session under a piece of work. Empty string clears it. */

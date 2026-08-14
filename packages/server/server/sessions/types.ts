@@ -111,6 +111,16 @@ export interface ManagedSession {
   model?: string
   effort?: string
   label?: string
+  /**
+   * When the label was written, epoch ms — so a name typed HERE can be compared with one typed
+   * inside the session.
+   *
+   * A harness records its own name too (`/rename` in Claude Code), and the two can disagree. The
+   * only non-arbitrary way to settle that is recency, which needs both sides to say WHEN — this is
+   * our side. Absent on a row renamed before agentop recorded it, which `pickTitle` handles rather
+   * than treating as "long ago". See `harness-session-file.ts`.
+   */
+  labelSince?: number
   note?: string
   /**
    * The piece of work this session belongs to.
@@ -120,6 +130,20 @@ export interface ManagedSession {
    * carrying the same task are that task's sessions, and can be reopened together.
    */
   task?: string
+  /**
+   * The last time this session was OBSERVED ALIVE, epoch ms — stamped at creation, then refreshed by
+   * the poller's heartbeat for every session the backend reports as running.
+   *
+   * It exists so that "these fell together" can be answered at all. A machine that reboots takes the
+   * backend with it, so nothing about a `lost` row says whether it was open at the time: `createdAt`
+   * is equally true of a session abandoned three weeks ago, and `BackendSession.lastActivityMs` only
+   * exists for a session the backend still has. See `crash-group.ts`.
+   *
+   * Absent on a row written by a build that predates it, and on one this process has never seen
+   * alive. Absent is never guessed at — it simply keeps the row out of a crash group until the next
+   * heartbeat stamps it.
+   */
+  lastSeenMs?: number
   /**
    * When this session was FINISHED, ISO — set instead of deleting the entry.
    *
@@ -184,6 +208,25 @@ export interface SessionBackend {
   list(): Promise<BackendSession[]>
   /** Newest-last lines of the last rendered frame, trailing blanks removed. */
   capture(id: string, lines: number): Promise<string[]>
+  /**
+   * Type `text` into the session and submit it — what a person does at the keyboard.
+   *
+   * A capability of its own rather than something only `spawn` may do. It was already implemented
+   * (kimi and copilot have no interactive prompt flag, so their opening line is TYPED IN), but it was
+   * buried inside the spawn path, so the one thing the backend could do that nothing else could ask
+   * for was talking to a session that already exists.
+   *
+   * `false` when the backend could not deliver it. Never a throw: a session that ended between the
+   * poll and the keystroke is an ordinary outcome, not an error to crash a caller with.
+   */
+  sendText(id: string, text: string): Promise<boolean>
+  /**
+   * Press ONE named key — the backend's own vocabulary (`Enter`, `Escape`).
+   *
+   * Separate from `sendText` because the two are opposites and confusing them fails silently: sent
+   * as text, `Enter` is five characters typed into the assistant's prompt.
+   */
+  sendKey(id: string, key: string): Promise<boolean>
   /**
    * Kill the session and report whether it is confirmed GONE afterwards. "Already gone" (the
    * session finished or was removed between `list` and this call) counts as success — the caller

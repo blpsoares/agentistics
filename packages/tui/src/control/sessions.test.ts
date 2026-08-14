@@ -10,6 +10,7 @@ import {
   cardGrid, cardPage, CARD_PAGE_MAX, CARD_MIN_WIDTH, CARD_GAP,
   cardBadges, cardLines, fitCardLines, cardStateCells,
   cardBand, cardAt, pagerCells, pagerHit,
+  askRows, fitApprovalPreview, APPROVAL_PREVIEW_MAX, QUESTION_ROWS,
   type CardLine, type SessionRow,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
@@ -207,6 +208,7 @@ describe('detailLines', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'started outside agentop', closed: 'not running', doing: 'saying', task: 'task', metrics: 'usage',
+    alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
 
@@ -238,7 +240,8 @@ describe('detailLines', () => {
 describe('sessionActions', () => {
   const words = {
     attach: 'Attach', resume: 'Reopen', rename: 'Rename', note: 'Note', task: 'Task',
-    kill: 'Stop', openTask: 'Open whole task', finishTask: 'Finish task',
+    kill: 'Stop', openTask: 'Open whole task', reopenFell: 'Reopen what fell',
+    finishTask: 'Finish task', approve: 'Answer', prompt: 'Send',
     new: 'New', search: 'Search', group: 'Group',
   }
   const of = (s?: ControlSession) => sessionActions(s).map(a => a.action)
@@ -306,6 +309,7 @@ describe('detailLines — the two non-actionable rows say different things', () 
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'started outside agentop', closed: 'not running', doing: 'saying',
     task: 'task', metrics: 'usage',
+    alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
 
@@ -351,7 +355,7 @@ describe('summaryCells', () => {
 
   it('keeps everything when the row fits', () => {
     expect(summaryCells(full)).toEqual({
-      group: full.group, hiding: full.hiding, count: full.count, waiting: full.waiting,
+      group: full.group, hiding: full.hiding, count: full.count, waiting: full.waiting, fell: '',
     })
   })
 
@@ -523,7 +527,8 @@ describe('sessionsCockpit', () => {
 describe('asideRows', () => {
   const words = {
     attach: 'Attach', resume: 'Reopen', rename: 'Rename', note: 'Note', task: 'Task',
-    kill: 'Stop', openTask: 'Open whole task', finishTask: 'Finish task',
+    kill: 'Stop', openTask: 'Open whole task', reopenFell: 'Reopen what fell',
+    finishTask: 'Finish task', approve: 'Answer', prompt: 'Send',
     new: 'New', search: 'Search', group: 'Group',
   }
   const groupWords = { repo: 'repo', none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project' }
@@ -1017,7 +1022,8 @@ describe('the only-active toggle', () => {
     actions: sessionActions(session('m')),
     actionWords: {
       attach: 'A', resume: 'R', rename: 'N', note: 'O', task: 'T', kill: 'K',
-      openTask: 'OT', finishTask: 'FT', new: 'NW', search: 'S', group: 'G',
+      openTask: 'OT', reopenFell: 'RF', finishTask: 'FT', approve: 'AP', prompt: 'PR',
+      new: 'NW', search: 'S', group: 'G',
     },
     grouping: 'project',
     groupWords: {
@@ -1225,7 +1231,8 @@ describe('sessionKeyHelp', () => {
   const words = Object.fromEntries(
     ['move', 'open', 'attach', 'menu', 'section', 'newSession', 'search', 'clear', 'kill',
       'rename', 'note', 'task', 'mark', 'onlyActive', 'closed', 'exited', 'unfiled', 'group',
-      'detail', 'reset', 'tabs', 'help', 'quit'].map(k => [k, `does ${k}`]),
+      'detail', 'reset', 'tabs', 'help', 'quit',
+      'approve', 'prompt', 'reopenFell'].map(k => [k, `does ${k}`]),
   ) as Parameters<typeof sessionKeyHelp>[0]
 
   it('describes every key it lists, with no blanks', () => {
@@ -1466,7 +1473,8 @@ describe('asideRows — the layout section', () => {
     actions: sessionActions(session('m')),
     actionWords: {
       attach: 'A', resume: 'R', rename: 'N', note: 'O', task: 'T', kill: 'K',
-      openTask: 'OT', finishTask: 'FT', new: 'NW', search: 'S', group: 'G',
+      openTask: 'OT', reopenFell: 'RF', finishTask: 'FT', approve: 'AP', prompt: 'PR',
+      new: 'NW', search: 'S', group: 'G',
     },
     grouping: 'project',
     groupWords: {
@@ -1501,5 +1509,230 @@ describe('asideRows — the layout section', () => {
     const rows = rowsFor('list')
     const index = rows.findIndex(r => r.kind === 'layout')
     expect(asideSelectable(rows)).toContain(index)
+  })
+})
+
+describe('the sessions that fell together', () => {
+  const fallen = (id: string) =>
+    session(id, { state: 'lost' as SessionState, stateLabel: 'lost', fell: true })
+  const history = (id: string) =>
+    session(id, { state: 'closed' as SessionState, stateLabel: 'closed' })
+  const live = (id: string) => session(id, { state: 'working' as SessionState, stateLabel: 'working' })
+
+  const headings = (rows: SessionRow[]) =>
+    rows.filter(r => r.kind === 'heading').map(r => (r as { label: string }).label)
+
+  it('is its own section, between what is running and what is history', () => {
+    const rows = sessionRows(
+      groupSessions([live('w'), fallen('f'), history('c')], 'none', UNKNOWN),
+      'closed', 'finished', 'fell together',
+    )
+    expect(headings(rows)).toEqual(['fell together', 'closed'])
+    // In reading order: the live rows, then what fell, then history.
+    const ids = rows.flatMap(r => (r.kind === 'session' ? [r.session.id] : []))
+    expect(ids).toEqual(['w', 'f', 'c'])
+  })
+
+  it('is NOT muted — it is the one block on this screen asking to be acted on', () => {
+    const rows = sessionRows(
+      groupSessions([fallen('f'), history('c')], 'none', UNKNOWN),
+      'closed', 'finished', 'fell together',
+    )
+    const fell = rows.find(r => r.kind === 'heading' && r.label === 'fell together')
+    const closed = rows.find(r => r.kind === 'heading' && r.label === 'closed')
+    expect((fell as { muted?: boolean }).muted).toBeUndefined()
+    expect((closed as { muted?: boolean }).muted).toBe(true)
+  })
+
+  it('leaves the rows exactly where they were when nothing fell', () => {
+    // The section is an addition to the reading order, never a change to which rows are listed. A
+    // machine with no fall on record must draw the same screen it drew before this existed.
+    const before = sessionRows(groupSessions([fallen('f')], 'none', UNKNOWN), 'closed', 'finished')
+    expect(headings(before)).toEqual(['closed'])
+  })
+
+  it('never claims a RUNNING row fell, whatever the flag says', () => {
+    // A row can be marked and then come back — a reopen leaves the flag on the retired row, not the
+    // new one, but a stale snapshot could still pair the two. Something running is not something
+    // lost, and the live section is decided before the mark is consulted.
+    const rows = sessionRows(
+      groupSessions([session('w', { state: 'working' as SessionState, stateLabel: 'working', fell: true })], 'none', UNKNOWN),
+      'closed', 'finished', 'fell together',
+    )
+    expect(headings(rows)).toEqual([])
+  })
+
+  it('says which group a fallen row belongs to, so a heading read alone is never ambiguous', () => {
+    const rows = sessionRows(
+      groupSessions([fallen('f')], 'project', UNKNOWN),
+      'closed', 'finished', 'fell together',
+    )
+    expect(headings(rows)).toEqual(['f · fell together'])
+  })
+})
+
+describe('sessionActions — the fleet verb', () => {
+  const of = (s: ControlSession | undefined, fleet?: { fell?: number }) =>
+    sessionActions(s, fleet).find(a => a.action === 'reopenFell')
+
+  it('is offered only when something actually fell', () => {
+    expect(of(session('a'), { fell: 3 })?.enabled).toBe(true)
+    expect(of(session('a'), { fell: 0 })?.enabled).toBe(false)
+    expect(of(session('a'))?.enabled).toBe(false)
+  })
+
+  it('never disappears — the row keeps its shape, and the dim verb says why nothing happens', () => {
+    expect(of(undefined)).toBeDefined()
+  })
+})
+
+describe('sessionActions — approve and prompt', () => {
+  const find = (s: ControlSession, a: 'approve' | 'prompt') =>
+    sessionActions(s).find(x => x.action === a)!
+
+  const blocked = session('b', {
+    state: 'waiting-approval' as SessionState, stateLabel: 'needs approval', canApprove: true,
+  })
+
+  it('offers approve only where the HOST said it can work', () => {
+    expect(find(blocked, 'approve').enabled).toBe(true)
+    // Blocked, but nobody has read this harness's dialog: there is no key to send, so the verb is
+    // dim rather than present and guessing.
+    expect(find(session('b2', {
+      state: 'waiting-approval' as SessionState, stateLabel: 'needs approval',
+    }), 'approve').enabled).toBe(false)
+    // Not blocked at all. Sending the confirm key here is a blank turn.
+    expect(find(session('w', { state: 'working' as SessionState }), 'approve').enabled).toBe(false)
+  })
+
+  it('offers prompt on anything RUNNING, blocked included', () => {
+    // A session sitting on a dialog is still refused — but by the HOST, which re-reads the screen.
+    // Deciding it here would decide it from a list up to a poll old.
+    expect(find(blocked, 'prompt').enabled).toBe(true)
+    expect(find(session('w', { state: 'working' as SessionState }), 'prompt').enabled).toBe(true)
+    expect(find(session('e', { state: 'exited' as SessionState }), 'prompt').enabled).toBe(false)
+    expect(find(session('x', {
+      state: 'unknown' as SessionState, actionable: false,
+    }), 'prompt').enabled).toBe(false)
+  })
+})
+
+describe('askRows', () => {
+  it('is the question floor when there is no evidence to show', () => {
+    expect(askRows({ preview: 0, detail: 0 })).toBe(QUESTION_ROWS)
+  })
+
+  it('BUDGETS the dialog, plus the rule between it and the question', () => {
+    // Ink composites what does not fit, so an unbudgeted preview does not crowd the two answers —
+    // it draws over whatever sits under them.
+    expect(askRows({ preview: 4, detail: 0 })).toBe(QUESTION_ROWS + 5)
+  })
+
+  it('never asks for more preview than a confirmation will ever draw', () => {
+    expect(askRows({ preview: 99, detail: 0 })).toBe(QUESTION_ROWS + APPROVAL_PREVIEW_MAX + 1)
+  })
+
+  it('still gives the facts their rows when they need more', () => {
+    expect(askRows({ preview: 0, detail: 20 })).toBe(20)
+  })
+
+  it('never goes negative on nonsense input', () => {
+    expect(askRows({ preview: -5, detail: -5 })).toBe(QUESTION_ROWS)
+  })
+})
+
+describe('fitApprovalPreview', () => {
+  const DIALOG = ['context', 'Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Enter to confirm']
+
+  it('cuts from the TOP, so the options and the footer survive', () => {
+    // The bottom is the part being answered. Cutting the other way round leaves a question with its
+    // answers off screen, which is the one thing a confirmation may not do.
+    expect(fitApprovalPreview(DIALOG, 2)).toEqual(['  2. No', 'Enter to confirm'])
+  })
+
+  it('shows a short dialog whole', () => {
+    expect(fitApprovalPreview(['a', 'b'], 6)).toEqual(['a', 'b'])
+  })
+
+  it('is capped however many rows it is offered', () => {
+    const long = Array.from({ length: 30 }, (_, i) => `l${i}`)
+    expect(fitApprovalPreview(long, 99)).toHaveLength(APPROVAL_PREVIEW_MAX)
+  })
+
+  it('draws nothing when there is no room, rather than one useless line', () => {
+    expect(fitApprovalPreview(DIALOG, 0)).toEqual([])
+    expect(fitApprovalPreview(DIALOG, -3)).toEqual([])
+  })
+})
+
+describe('summaryCells — the fall', () => {
+  const full = {
+    group: 'GROUP task',
+    hiding: '− closed conversations',
+    count: '18 sessions',
+    waiting: '3 waiting on you',
+    fell: '4 sessions fell 2m ago — R reopens them',
+    width: 200,
+  }
+
+  const rendered = (c: ReturnType<typeof summaryCells>) => {
+    const kept = [c.group, c.hiding, c.count, c.waiting, c.fell].filter(Boolean)
+    return kept.reduce((n, p) => n + p.length, 0) + 3 * Math.max(0, kept.length - 1)
+  }
+
+  it('outlives the cells that merely DESCRIBE the list', () => {
+    // Everything beside it says what the list contains; this says what is one keypress from coming
+    // back. It is also usually absent, so it costs nothing on an ordinary machine.
+    const c = summaryCells({ ...full, width: 55 })
+    expect(c.fell).toBe(full.fell)
+    expect(c.hiding).toBe('')
+    expect(c.count).toBe('')
+  })
+
+  it('is given up before the grouping, which explains the arrangement', () => {
+    const c = summaryCells({ ...full, width: 12 })
+    expect(c.fell).toBe('')
+    expect(c.group).toContain('GROUP')
+  })
+
+  it('NEVER renders wider than it was given, at any width', () => {
+    for (let w = 0; w <= 240; w++) {
+      expect(rendered(summaryCells({ ...full, width: w }))).toBeLessThanOrEqual(Math.max(w, 0) || 0)
+    }
+  })
+})
+
+describe('detailLines — named in two places', () => {
+  const labels = {
+    where: 'where', model: 'model', note: 'note', started: 'started',
+    external: 'external', closed: 'closed', doing: 'saying', task: 'task', metrics: 'usage',
+    alsoLabel: 'named here', alsoHarness: 'named inside',
+  }
+  const ago = () => '5m ago'
+  const row = (over: Partial<ControlSession>) =>
+    detailLines(session('a', over), labels, ago).find(l => l.key === 'also')
+
+  it('names the OTHER name, and which place it came from', () => {
+    // The label says where the LOSER came from, which is the fact that matters: without it someone
+    // who renamed in both places cannot tell whether the name on the row is the one they typed here
+    // or the one they typed inside the session — and one of the two renames reads as failed.
+    expect(row({ titleSource: 'harness', titleOther: 'Principal' }))
+      .toMatchObject({ label: 'named here', value: 'Principal' })
+    expect(row({ titleSource: 'label', titleOther: 'principal do cockpit' }))
+      .toMatchObject({ label: 'named inside', value: 'principal do cockpit' })
+  })
+
+  it('says nothing at all on an ordinary row', () => {
+    expect(row({})).toBeUndefined()
+  })
+
+  it('sits right under what the session is SAYING, above every other fact', () => {
+    // It answers "did my rename work", which is the question someone has the moment they notice the
+    // row saying something other than what they typed.
+    const lines = detailLines(
+      session('a', { titleSource: 'harness', titleOther: 'Principal', lastLines: ['thinking'] }),
+      labels, ago,
+    )
+    expect(lines.map(l => l.key).slice(0, 3)).toEqual(['say0', 'also', 'where'])
   })
 })

@@ -47,6 +47,8 @@ export function newSessionId(): string {
  */
 export interface SessionPatch {
   label?: string
+  /** Written alongside `label`, never on its own — see `ManagedSession.labelSince`. */
+  labelSince?: number
   note?: string
   task?: string
   endedAt?: string
@@ -59,6 +61,18 @@ export interface SessionRegistry {
   remove(id: string): Promise<void>
   /** False when no session carries that id — never a silent success. */
   patch(id: string, patch: SessionPatch): Promise<boolean>
+  /**
+   * Stamp `lastSeenMs` on every id given, in ONE write — the poller's heartbeat.
+   *
+   * One write is not an optimization, it is what makes `crash-group.ts` exact: every session alive at
+   * this moment gets the SAME timestamp, so sessions that later fall together are identifiable by
+   * equality rather than by a tolerance. `patch` in a loop would rewrite the file once per session
+   * and stamp each with a slightly different clock.
+   *
+   * Returns the number stamped. Nothing is written when no id matches — a heartbeat on an empty
+   * fleet must not touch the file every minute forever.
+   */
+  touch(ids: readonly string[], atMs: number): Promise<number>
 }
 
 /**
@@ -83,9 +97,22 @@ function sanitize(raw: unknown): ManagedSession | null {
     ...(typeof s.model === 'string' ? { model: s.model } : {}),
     ...(typeof s.effort === 'string' ? { effort: s.effort } : {}),
     ...(typeof s.label === 'string' ? { label: s.label } : {}),
+    ...(typeof s.labelSince === 'number' && Number.isFinite(s.labelSince)
+      ? { labelSince: s.labelSince }
+      : {}),
     ...(typeof s.note === 'string' ? { note: s.note } : {}),
     ...(typeof s.task === 'string' ? { task: s.task } : {}),
     ...(typeof s.endedAt === 'string' ? { endedAt: s.endedAt } : {}),
+    // Written by `resumeSession` and `openTask` and, until this line existed, dropped on the way back
+    // in — so the exact conversation a reopened session drives was recorded and then never read, and
+    // the next reopen fell back to the harness+directory guess that cannot tell two sessions of one
+    // repository apart. `SessionPatch` has carried the field all along.
+    ...(typeof s.conversationId === 'string' ? { conversationId: s.conversationId } : {}),
+    // A number, and finite: this is a hand-editable file, and `lastSeenMs: "yesterday"` reaching
+    // `crash-group.ts` would put a NaN comparison in charge of which sessions get reopened.
+    ...(typeof s.lastSeenMs === 'number' && Number.isFinite(s.lastSeenMs)
+      ? { lastSeenMs: s.lastSeenMs }
+      : {}),
   }
 }
 
@@ -184,6 +211,23 @@ export function createSessionRegistry(file: string): SessionRegistry {
         return true
       })
     },
+    touch(ids, atMs) {
+      return enqueue(async () => {
+        const wanted = new Set(ids)
+        const list = await read()
+        let stamped = 0
+        const next = list.map(s => {
+          if (!wanted.has(s.id)) return s
+          stamped++
+          return { ...s, lastSeenMs: atMs }
+        })
+        // No id matched — a heartbeat on a fleet whose rows this registry does not hold. Writing
+        // anyway would touch the file every minute forever to change nothing.
+        if (stamped === 0) return 0
+        await write(next)
+        return stamped
+      })
+    },
   }
 }
 
@@ -197,3 +241,7 @@ export const patchSession = (
   id: string,
   patch: SessionPatch,
 ): Promise<boolean> => defaultRegistry.patch(id, patch)
+export const touchSessions = (
+  ids: readonly string[],
+  atMs: number,
+): Promise<number> => defaultRegistry.touch(ids, atMs)
