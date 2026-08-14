@@ -390,6 +390,23 @@ export function paneBadgeRoom(title: string, width: number): number {
   return Math.max(0, budget - shownTitle.length - 3)
 }
 
+/**
+ * The widest TITLE that still leaves `paneTop` room to draw this badge — PURE, and the inverse of
+ * `paneBadgeRoom`.
+ *
+ * `paneTop` serves the title first and then keeps the badge whole or not at all, which is right when
+ * the badge repeats something the pane's rows already say and wrong when the badge is the only place
+ * a fact appears. A card puts the session HANDLE there — the prefix `agentop session attach 3f5f`
+ * resolves, and the one thing on the card naming the session to anything outside this screen — so a
+ * long project name in the title must be cut to make room for it, rather than silently taking it.
+ */
+export function paneTitleRoom(badge: string, width: number): number {
+  if (width < TOP_MIN) return 0
+  const budget = width - TOP_OVERHEAD
+  const whole = Math.max(1, budget - 1)
+  return badge === '' ? whole : Math.max(1, Math.min(whole, budget - badge.length - 3))
+}
+
 // ---------------------------------------------------------------------------
 // row cells shared by the two band panes
 //
