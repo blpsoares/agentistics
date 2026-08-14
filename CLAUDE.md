@@ -164,6 +164,20 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          falling back to the COMMON git dir's parent (`--show-toplevel` would
   │                          answer with the worktree, which is the one name that must not become
   │                          the key). Memoized by directory: the poll runs every five seconds.
+  │                          **A MANAGED row now carries the conversation's metrics too** — tokens,
+  │                          cost and the CONTEXT GAUGE. Only `external` and `closed` rows read them
+  │                          from the store before, so on a machine whose whole fleet is
+  │                          agentop-started (the normal case once the session manager is in use) the
+  │                          usage column was empty on every live row. `metricsOf` is a READ, never a
+  │                          claim: it is deliberately separate from `claimResume`, which hands out a
+  │                          reopen target and must give each conversation to at most one row, and it
+  │                          accepts only the EXACT links (the harness's own `~/.claude/sessions/<pid>.json`
+  │                          matched by tmux session, or the id the registry stored while the session
+  │                          was up). The harness-and-directory INFERENCE that `claimResume` falls back
+  │                          to is refused here: a reopen is offered to a person who can recognise the
+  │                          title and decline, while a gauge is read at a glance and believed, so two
+  │                          sessions in one worktree would both wear the older one's fill level with
+  │                          nothing on screen saying so.
   │                          The pure `control-session.ts` is the ONE `SessionView` -> `ControlSession`
   │                          mapping (it lived inside `cli-start.ts` while the cockpit was the only
   │                          thing drawing a row) and `session-table.ts` is the pure renderer behind
@@ -388,6 +402,48 @@ Copilot both run OpenAI models, Antigravity runs Google's and Anthropic's.
 ### N/A vs real 0 — `HARNESS_CAPABILITIES`
 
 `HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper (re-exported from `lib/harness.ts`), rather than showing a misleading 0. Current limitations: Codex and Gemini do not produce agent metrics or git line counts. **Antigravity produces `tokens`/`cost`/`model`** (decoded from the `gen_metadata` protobuf in `~/.gemini/antigravity-cli/conversations/<id>.db`, cost via the standard pricing table) and `gitLines` (edit deltas computed from the transcript's edit payloads, not `git diff`); it has `agents: false` because an `invoke_subagent` child is its own conversation, not an agent invocation on the parent. `dynamicWorkflows` (runs of the multi-agent orchestration Workflow tool) is `true` only for `claude` — it gates the repo-detail "Dynamic Workflows" tab.
+
+### The context gauge — a LEVEL, and a window that is never guessed
+
+The bar on a session row says how full that conversation's context window was on its **last turn**.
+It has two halves and the second is the one that can lie.
+
+**The measurement** is `SessionMeta.context_tokens`, gated by `HARNESS_CAPABILITIES.contextWindow`.
+It is a **gauge, never a sum** — reassigned per turn, not accumulated — and that is why it is its own
+field rather than something derived from the four token counters. Measured on a real session here:
+cumulative input 44.3M against a context of 455k, so a gauge built from the totals would have read
+~4400%. Per harness: **claude** — the last `message.usage`'s input side (`input` + `cache_creation` +
+`cache_read`; verified 2 + 693 + 454.714 = 455.409 against a hand count of the same bytes);
+**codex** — `last_token_usage.input_tokens`, which already includes the cached portion, NOT the
+cumulative `total_token_usage`; **kimi** — the input side of one per-turn `usage.record`, from the
+**main** agent only and chosen by timestamp (a subagent runs its own, emptier window, and file read
+order must not decide the answer); **antigravity** — protobuf field `1.4.5`, already documented as
+"a gauge, never a sum", off the last row. **gemini** and **copilot** are `false`: gemini's chat
+files carry no token data at all, and copilot reports tokens only cumulatively at shutdown.
+
+**The window** is `resolveContextWindow` (`packages/core/src/contextWindows.ts`) — the
+`MODEL_PRICING` provenance rule applied to a different number. `ContextWindow` requires
+`verifiedAt` + `source`, so a window cannot exist without provenance, and **a model that is not in
+the table draws no bar**. That is deliberate: an absent gauge is visible, a wrong percentage is not,
+and the same 212.959 tokens is 106% of a 200k window and 21% of a 1M one. Two consequences:
+- **A harness that states its own window outranks the table.** Codex writes `model_context_window`
+  into every `token_count` event → `SessionMeta.context_window`. It knows the deployment and any
+  per-session cap; a model id cannot express either.
+- **OpenAI and Google models are absent** (checked 2026-08-14: neither publishes a citable input
+  token limit). So Antigravity's Gemini conversations and Kimi's routed models measure a context and
+  still draw no bar. Add them the day the figures can be cited, never before.
+
+**Known limitation, stated rather than papered over:** Claude Code can run `claude-opus-5` under a
+200k session cap (its `opus[1m]` picker) and the transcript records only `claude-opus-5` — no
+suffix, no window field. The table therefore reports the MODEL's documented maximum, so a session
+deliberately running the smaller cap reads low.
+
+**Rendering.** `contextFraction` is `null` whenever either half is missing or unusable, and null is
+the only thing that decides whether a bar is drawn — never a `0%`. The **fraction is unclamped**
+because a session really can exceed the table's window, so the **bar saturates** (or it would draw
+outside its cell and shear every row under it) while the **label keeps saying `106%`**. Both round
+DOWN, so neither can read full with room left. The cell outlives `metrics` under width pressure:
+usage is what a session has spent, the gauge is what it has left.
 
 ### Aggregation — stats-cache.json is Claude-only
 

@@ -391,6 +391,8 @@ export function detailLines(s: ControlSession, labels: {
   doing: string
   task: string
   metrics: string
+  /** Heads the spelled-out gauge: `45%  ·  455.4k / 1M`. */
+  context: string
   /**
    * Labels for the OTHER name, when a session is named in both places.
    *
@@ -443,6 +445,17 @@ export function detailLines(s: ControlSession, labels: {
       key: 'metrics',
       label: labels.metrics,
       value: [s.tokens, s.cost].filter(Boolean).join('  ·  '),
+    })
+  }
+  // The gauge SPELLED OUT: the bar on the row is a glance, and this is the only place the two
+  // numbers behind it are legible. Without them a percentage is unauditable — you cannot tell a
+  // reading against the right window from one against the wrong one, which is the single most
+  // useful thing to be able to check about this feature.
+  if (s.context) {
+    out.push({
+      key: 'context',
+      label: labels.context,
+      value: `${s.context.label}  ·  ${s.context.used} / ${s.context.window}`,
     })
   }
   if (s.note) out.push({ key: 'note', label: labels.note, value: s.note })
@@ -718,6 +731,16 @@ export interface SessionColumns {
   worktree: number
   /** Tokens + cost. `0` when nothing on screen has any — never a column of blanks. */
   metrics: number
+  /**
+   * The context gauge — bar plus percentage. `0` when no row on screen has a reading.
+   *
+   * It outlives `metrics` under width pressure, which is the one ordering decision here worth
+   * stating: tokens and cost are a record of what a session HAS spent, while this is the only cell
+   * that says what it can still do. On a narrow terminal the question people are answering is
+   * "which of these do I need to deal with", and a session about to run out of window is the
+   * answer to it.
+   */
+  context: number
   harness: number
   where: number
 }
@@ -770,6 +793,61 @@ export function sessionMetric(s: ControlSession): string {
   return [s.tokens, s.cost].filter(Boolean).join(' ')
 }
 
+// ---------------------------------------------------------------------------
+// the context gauge
+// ---------------------------------------------------------------------------
+
+/**
+ * Columns the bar itself takes, label excluded.
+ *
+ * Six, because the bar's job on a row is a GLANCE — nearly empty, half, nearly full — and six cells
+ * resolve that to within a sixth. Anything finer is a number, and the number is already printed
+ * beside it. Anything coarser stops being a shape.
+ */
+export const CONTEXT_BAR = 6
+
+/** The filled/empty bar for a fraction — PURE, and SATURATED at both ends.
+ *
+ *  Saturation is the whole point of drawing this separately from the label: a session really can
+ *  exceed the window this reading was computed against, and a bar allowed to overflow would draw
+ *  past its own cell and shear every row under it — the exact failure the pure-layout rule exists
+ *  to prevent. So the BAR pins at full and the LABEL keeps telling the truth (`106%`), which is the
+ *  only division of labour where neither half lies. */
+export function contextBar(fraction: number, width: number = CONTEXT_BAR): string {
+  const w = Math.max(0, Math.floor(width))
+  if (w === 0) return ''
+  const safe = Number.isFinite(fraction) ? Math.max(0, Math.min(1, fraction)) : 0
+  // Rounded DOWN, mirroring the label: a bar showing full while the label says 99% is one of them
+  // being wrong, and it would be the bar — the shape is what gets believed at a glance.
+  const filled = Math.min(w, Math.floor(safe * w))
+  return '█'.repeat(filled) + '░'.repeat(w - filled)
+}
+
+/** The whole cell — bar, a space, then the percentage. `''` when this row has no reading. */
+export function sessionContext(s: ControlSession, width: number = CONTEXT_BAR): string {
+  if (!s.context) return ''
+  return `${contextBar(s.context.fraction, width)} ${s.context.label}`
+}
+
+/**
+ * How full is "too full" — the threshold the row changes colour at.
+ *
+ * Two of them rather than one, because they answer different questions: `warn` is "start thinking
+ * about wrapping this up", `full` is "the window this was measured against is exceeded and the
+ * reading past it is no longer a proportion of anything". `full` is deliberately 1 exactly, not
+ * 0.95: past it the number is not a warning, it is a different kind of statement.
+ */
+export const CONTEXT_WARN = 0.8
+export const CONTEXT_FULL = 1
+
+export type ContextLevel = 'ok' | 'warn' | 'full'
+
+export function contextLevel(fraction: number): ContextLevel {
+  if (fraction >= CONTEXT_FULL) return 'full'
+  if (fraction >= CONTEXT_WARN) return 'warn'
+  return 'ok'
+}
+
 /**
  * The column widths for a screenful of rows — PURE.
  *
@@ -812,15 +890,33 @@ export function sessionColumns(
 
   const id = widest('id', sessionHandle)
   const state = widest('state', s => s.stateLabel)
-  const task = o.groupedByTask ? 0 : widest('task', s => s.task ?? '')
-  const worktree = widest('worktree', worktreeName)
-  const age = widest('age', s => o.ages?.get(s.id) ?? '')
-  const metrics = widest('metrics', sessionMetric)
-  const harness = widest('harness', s => s.harness)
-  // The PROJECT, not the directory: once the grouping keys on the main checkout, a folder cell
-  // showing the worktree's own name says something the worktree cell already says better.
-  const where = widest('where', s => s.projectGroup || s.project)
   const title = widest('title', s => s.title)
+
+  /**
+   * The droppable cells, in the order the screen gives them up — least important FIRST.
+   *
+   * Named rather than positional. This used to be a list of six-number tuples fed to a six-argument
+   * `overhead(a, wt, k, m, h, w)`, which was already at the limit of what can be read; the context
+   * gauge would have made it seven, where a transposed pair is invisible in review and shows up as
+   * a column of the wrong width on somebody's terminal.
+   *
+   * The order itself: the directory first (the heading usually says it), then the harness (the
+   * row's colour says it), then tokens and cost, then the gauge, then the task, the worktree, and
+   * finally the age. The STATE and the NAME are not in this list at all — they are what a row
+   * cannot lose, the state because nothing else on the frame says whether this session is waiting
+   * for you, the name because a row you cannot identify is not a row you can act on.
+   */
+  const droppable = [
+    // The PROJECT, not the directory: once the grouping keys on the main checkout, a folder cell
+    // showing the worktree's own name says something the worktree cell already says better.
+    ['where', widest('where', s => s.projectGroup || s.project)],
+    ['harness', widest('harness', s => s.harness)],
+    ['metrics', widest('metrics', sessionMetric)],
+    ['context', widest('context', s => sessionContext(s))],
+    ['task', o.groupedByTask ? 0 : widest('task', s => s.task ?? '')],
+    ['worktree', widest('worktree', worktreeName)],
+    ['age', widest('age', s => o.ages?.get(s.id) ?? '')],
+  ] as const satisfies ReadonlyArray<readonly [keyof SessionColumns, number]>
 
   /**
    * Columns everything BUT the title costs: two for the cursor, the cells, and a gap between each
@@ -830,42 +926,41 @@ export function sessionColumns(
    * no session reports usage draws no metrics column, and paying its gap anyway would narrow every
    * title on the screen to reserve a space nothing occupies.
    */
-  const overhead = (a: number, wt: number, k: number, m: number, h: number, w: number) => {
-    const drawn = [id, state, 1, a, wt, k, m, h, w].filter(n => n > 0).length
-    return 2 + id + state + a + wt + k + m + h + w + GAP * (drawn - 1)
+  const overhead = (cells: Partial<Record<keyof SessionColumns, number>>) => {
+    const values = Object.values(cells).filter((n): n is number => n !== undefined)
+    const sum = values.reduce((n, v) => n + v, 0)
+    // `1` stands in for the title, which is always drawn and so always pays its own gap.
+    const drawn = [id, state, 1, ...values].filter(n => n > 0).length
+    return 2 + id + state + sum + GAP * (drawn - 1)
   }
 
   // The fewest columns a title is worth. Below it the row has a state word and an ellipsis, which
   // names nothing — so the screen gives up a whole cell instead.
   const MIN_TITLE = 8
 
-  // The give-up order, least important first: the directory, then the harness, then the usage. The
-  // STATE and the NAME are what a row cannot lose — the state because nothing else on the frame
-  // says whether this session is waiting for you, the name because a row you cannot identify is not
-  // a row you can act on.
-  const ladder: Array<[number, number, number, number, number, number]> = [
-    [age, worktree, task, metrics, harness, where],
-    [age, worktree, task, metrics, harness, 0],
-    [age, worktree, task, metrics, 0, 0],
-    [age, worktree, task, 0, 0, 0],
-    [age, worktree, 0, 0, 0, 0],
-    [age, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0],
-  ]
-  for (const [a, wt, k, m, h, w] of ladder) {
-    const room = width - overhead(a, wt, k, m, h, w)
+  const kept = new Map<keyof SessionColumns, number>(droppable)
+  const finish = (room: number): SessionColumns => ({
+    id, state, title: Math.max(1, Math.min(title, room)),
+    where: kept.get('where') ?? 0,
+    harness: kept.get('harness') ?? 0,
+    metrics: kept.get('metrics') ?? 0,
+    context: kept.get('context') ?? 0,
+    task: kept.get('task') ?? 0,
+    worktree: kept.get('worktree') ?? 0,
+    age: kept.get('age') ?? 0,
+  })
+
+  // One pass more than there are droppable cells: the first tries them all, the last tries none.
+  for (let i = 0; i <= droppable.length; i++) {
+    const room = width - overhead(Object.fromEntries(kept))
     // The title takes what it NEEDS, not what is left: stretching it to the full remainder pushed
     // the trailing cells to the far edge with a field of blank between, which is the old
     // misalignment wearing a different shape.
-    if (room >= MIN_TITLE || (a === 0 && wt === 0 && k === 0 && m === 0 && h === 0 && w === 0)) {
-      return {
-        id, state, title: Math.max(1, Math.min(title, room)),
-        age: a, worktree: wt, task: k, metrics: m, harness: h, where: w,
-      }
-    }
+    if (room >= MIN_TITLE || kept.size === 0) return finish(room)
+    kept.delete(droppable[i]![0])
   }
-  /* c8 ignore next */
-  return { id: 0, state: 1, title: 1, age: 0, worktree: 0, task: 0, metrics: 0, harness: 0, where: 0 }
+  /* c8 ignore next 2 */
+  return finish(width - overhead({}))
 }
 
 /** Pad or truncate a cell to exactly `w` columns. `0` means the column is not drawn. */
@@ -1698,8 +1793,14 @@ export const CARD_MIN_WIDTH = 28
  */
 export const CARD_MAX_WIDTH = 46
 
-/** Content lines a full card carries: name, state, usage, where, and what it is saying. */
-export const CARD_LINES = 5
+/** Content lines a full card carries: name, state, usage, the context gauge, where, and what it is
+ *  saying.
+ *
+ *  Six rather than five since the gauge joined them. It is a CEILING, not a demand — `cardGrid`
+ *  takes `min(fullHeight, what the band affords)` and `fitCardLines` cuts from the bottom, so a
+ *  short terminal draws exactly the cards it drew before and loses the same trailing lines. What
+ *  changes is only that a tall one is now allowed to say one more thing. */
+export const CARD_LINES = 6
 
 /** The fewest a card is worth: the name, the state, and one fact. Below that it is a list row. */
 export const CARD_MIN_LINES = 3
@@ -1812,8 +1913,12 @@ export function cardBadges(rows: readonly SessionRow[]): string[] {
   return out
 }
 
-/** What a card line IS, so the component can colour it without parsing it back. */
-export type CardLineKind = 'title' | 'state' | 'fact' | 'say'
+/** What a card line IS, so the component can colour it without parsing it back.
+ *
+ *  `gauge` is its own kind rather than a `fact` for exactly that reason: its colour depends on the
+ *  LEVEL it is showing, which no other line's does, and the component must not have to re-derive
+ *  that by parsing the text back out of the line. */
+export type CardLineKind = 'title' | 'state' | 'fact' | 'say' | 'gauge'
 
 export interface CardLine {
   key: string
@@ -1821,6 +1926,8 @@ export interface CardLine {
   text: string
   /** Drawn dim on the same row, after `text`. Given up first when the card is narrow. */
   tail?: string
+  /** Only on a `gauge` line: how full, so the component colours it without parsing `text` back. */
+  level?: ContextLevel
 }
 
 /** The already-localized words a card needs. This module owns no strings. */
@@ -1859,6 +1966,20 @@ export function cardLines(s: ControlSession, labels: CardLabels): CardLine[] {
   const usage = [sessionMetric(s), s.startedAt !== undefined ? labels.ago(s.startedAt) : '']
     .filter(Boolean).join(' · ')
   if (usage) out.push({ key: 'usage', kind: 'fact', text: usage })
+
+  // The gauge gets its OWN line rather than joining the usage one. A card is read one line at a
+  // time and the bar is the only thing on it that is a shape rather than a word — sharing a line
+  // with `12.4k $0.83` would make it read as one more figure in a run of figures, which is exactly
+  // the glance it exists to shortcut. It sits directly under the usage because it is the same
+  // subject, and above `where` because it is a fact about the session rather than its address.
+  if (s.context) {
+    out.push({
+      key: 'context',
+      kind: 'gauge',
+      text: sessionContext(s),
+      level: contextLevel(s.context.fraction),
+    })
+  }
 
   // WHERE, and which checkout of it: with several worktrees of one repository open at once, the
   // folder name is the only thing telling them apart.

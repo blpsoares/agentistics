@@ -75,6 +75,20 @@ export interface KimiWireTotals {
   cacheCreation: number
   /** Model of the last usage record — the session's dominant label. */
   model?: string
+  /**
+   * How full the window was on the MAIN agent's last turn, and when that turn was.
+   *
+   * Two narrowings the accumulated totals do not need, both because this is a gauge:
+   *
+   *  - **Main agent only.** Every agent of a session folds into these totals, which is right for
+   *    spend — a subagent's tokens are the session's tokens. It is wrong for a window: a subagent
+   *    runs its own, usually far emptier, and reporting it as the session's would say the
+   *    conversation you are looking at has plenty of room left when it does not.
+   *  - **Latest by TIME, not last read.** The wires arrive one file after another, so "last seen"
+   *    depends on directory order. `contextAtMs` makes the choice deterministic.
+   */
+  contextTokens?: number
+  contextAtMs?: number
   userPrompts: number
   assistantTurns: number
   toolCounts: Record<string, number>
@@ -106,8 +120,15 @@ export function emptyKimiTotals(): KimiWireTotals {
   }
 }
 
-/** Accumulate one agent's wire.jsonl into `acc`. Malformed lines are skipped, never thrown on. */
-export function accumulateKimiWire(text: string, acc: KimiWireTotals = emptyKimiTotals()): KimiWireTotals {
+/** Accumulate one agent's wire.jsonl into `acc`. Malformed lines are skipped, never thrown on.
+ *
+ *  `main` marks the session's own agent, so only its turns feed the context gauge — see
+ *  `KimiWireTotals.contextTokens`. Everything else accumulates from every agent as before. */
+export function accumulateKimiWire(
+  text: string,
+  acc: KimiWireTotals = emptyKimiTotals(),
+  opts: { main?: boolean } = {},
+): KimiWireTotals {
   for (const line of text.split('\n')) {
     if (!line.trim()) continue
     let d: Record<string, unknown>
@@ -130,6 +151,14 @@ export function accumulateKimiWire(text: string, acc: KimiWireTotals = emptyKimi
           acc.outputTokens += num(u.output)
           acc.cacheRead += num(u.inputCacheRead)
           acc.cacheCreation += num(u.inputCacheCreation)
+          // The INPUT side of one per-turn record is that turn's prompt — the context that was
+          // sent. `output` is excluded: it is what came back. `usageScope: 'turn'` is what makes
+          // this a gauge rather than a running total.
+          const sent = num(u.inputOther) + num(u.inputCacheRead) + num(u.inputCacheCreation)
+          if (opts.main && sent > 0 && time >= (acc.contextAtMs ?? 0)) {
+            acc.contextTokens = sent
+            acc.contextAtMs = time
+          }
         }
         if (typeof d.model === 'string' && d.model) acc.model = stripProvider(d.model)
         break
@@ -272,6 +301,7 @@ export function buildKimiSession(
     output_tokens: totals.outputTokens,
     cache_read_input_tokens: totals.cacheRead,
     cache_creation_input_tokens: totals.cacheCreation,
+    ...(totals.contextTokens ? { context_tokens: totals.contextTokens } : {}),
     first_prompt: totals.firstPrompt,
     ...(state?.title ? { title: state.title } : {}),
     user_interruptions: 0,

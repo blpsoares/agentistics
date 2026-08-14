@@ -16,6 +16,21 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
   let inputTokens = 0
   let outputTokens = 0
   let cacheRead = 0
+  /**
+   * The context gauge's two halves, both stated by Codex itself.
+   *
+   * `total_token_usage` above is CUMULATIVE ("last seen wins" is about which snapshot is current,
+   * not about it being a per-turn figure), so it cannot answer how full the window is — a long
+   * session sums far past any window. `last_token_usage` is the turn that just ran, and its
+   * `input_tokens` INCLUDES the cached portion (the same convention the lines above unpick for the
+   * cumulative counters), so it is the whole prompt without adding `cached_input_tokens` on top.
+   *
+   * `model_context_window` is rarer and better: the harness naming the window for the session it is
+   * running. Verified on a real rollout (2026-08-14): 258.400, with `last_token_usage.input_tokens`
+   * 9.584 against a `total_token_usage.input_tokens` of 19.140 — the two genuinely differ.
+   */
+  let contextTokens = 0
+  let contextWindow = 0
   let userMessages = 0
   let assistantMessages = 0
   let usesWebSearch = false
@@ -58,6 +73,11 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
         cacheRead = cached
         outputTokens = u.output_tokens ?? outputTokens
       }
+      const last = data.info?.last_token_usage
+      const sent = last?.input_tokens ?? 0
+      if (sent > 0) contextTokens = sent
+      const win = data.info?.model_context_window
+      if (typeof win === 'number' && win > 0) contextWindow = win
     } else if (type === 'user_message') {
       userMessages++
       if (turnEvent) turnEvent.userPrompt = true
@@ -138,6 +158,9 @@ export function parseCodexRollout(content: string, fallbackId: string): SessionM
     output_tokens: outputTokens,
     cache_read_input_tokens: cacheRead,
     cache_creation_input_tokens: 0,
+    // Both absent rather than zero — see the declarations above.
+    ...(contextTokens > 0 ? { context_tokens: contextTokens } : {}),
+    ...(contextWindow > 0 ? { context_window: contextWindow } : {}),
     first_prompt: firstPrompt,
     user_interruptions: 0,
     user_response_times: [],

@@ -13,7 +13,7 @@
  * `CliStrings`, so this module owns no copy of any sentence.
  */
 
-import { fmt, fmtCost } from '@agentistics/core'
+import { contextFraction, fmt, fmtCost } from '@agentistics/core'
 import type { ControlSession, SessionState } from '@agentistics/tui/control'
 import type { CliStrings } from '../cli-i18n'
 import { approvalFor } from './approval-spec'
@@ -66,6 +66,10 @@ export function toControlSession(
   const state = sessionState(v)
   const project = projectName(v.cwd)
   const harness = v.harness ?? ''
+  // `null` whenever either half is missing or unusable, which is the only thing that decides
+  // whether the row draws a gauge at all. Rounded to a whole percent here rather than in the
+  // renderer: the width of the cell depends on the text, so the text has to exist before layout.
+  const fraction = contextFraction(v.contextTokens, v.contextWindow)
   // A session can be named in TWO places — here, and inside the harness with its own `/rename` — and
   // the precedence between them is the pure `pickTitle`. It is not a one-liner and it is not
   // obvious: a name the harness INVENTED for itself must never win, and neither name may be thrown
@@ -138,6 +142,19 @@ export function toControlSession(
     // else it hands over — and `fmt`/`fmtCost` are the shared helpers the dashboard uses.
     ...(v.tokens !== undefined ? { tokens: fmt(v.tokens) } : {}),
     ...(v.costUSD !== undefined ? { cost: fmtCost(v.costUSD) } : {}),
+    ...(fraction !== null
+      ? {
+          context: {
+            fraction,
+            // ROUNDED DOWN, so a bar can never read `100%` on a window with room left in it. The
+            // one number on this row people will act on is "is it nearly full", and rounding 99.6%
+            // up to 100% answers that question wrongly in the direction that costs work.
+            label: `${Math.floor(fraction * 100)}%`,
+            used: fmt(v.contextTokens!),
+            window: fmt(v.contextWindow!),
+          },
+        }
+      : {}),
     searchText: v.searchText,
     attached: v.attached,
   }

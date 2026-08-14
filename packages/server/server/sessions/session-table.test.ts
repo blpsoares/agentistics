@@ -8,7 +8,7 @@ import {
 const STRINGS: SessionTableStrings = {
   cols: {
     id: 'id', state: 'state', title: 'session', age: 'started', task: 'task',
-    worktree: 'worktree', metrics: 'usage', harness: 'harness', where: 'project',
+    worktree: 'worktree', metrics: 'usage', context: 'window', harness: 'harness', where: 'project',
   },
   unknown: {
     harness: 'harness unknown', model: 'no model recorded', project: 'no directory recorded',

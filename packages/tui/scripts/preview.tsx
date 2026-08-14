@@ -411,6 +411,10 @@ const FAKE_FLEET: ControlSessions = {
       // Usage on SOME rows and not others, deliberately: the column is sized to the widest row that
       // has any, and a fixture where every row carries one would never exercise the padding.
       tokens: '51.7k', cost: '$1.24',
+      // The WARN level: far enough along to be worth acting on, not yet past the window. The three
+      // levels are on screen at once in this fixture on purpose — a palette you can only see one
+      // shade of at a time is one nobody checks.
+      context: { fraction: 0.87, label: '87%', used: '174k', window: '200k' },
       lastLines: ['applying migration 003_auth_store.sql', 'waiting for your approval'],
       // The dialog, at the width a real one is drawn at — which is the point: the confirmation has
       // to fit it into a pane that is often much narrower, and a fixture of short lines would never
@@ -451,6 +455,9 @@ const FAKE_FLEET: ControlSessions = {
       // Named in BOTH places, so the detail pane's "the other name" row is on screen: the title is
       // the one typed inside the session, and `named here` states the agentop label that lost.
       titleSource: 'harness', titleOther: 'flaky-triage',
+      // Codex states its OWN window (`model_context_window`), so this row's denominator is the
+      // harness's answer rather than a table lookup — and it is not a round number.
+      context: { fraction: 0.12, label: '12%', used: '31k', window: '258.4k' },
       note: 'reproduces only on CI', state: 'waiting', stateLabel: 'waiting',
       actionable: true, approvalBlind: 'agentop has no verified screen markers for codex, so a blocking question here shows as "waiting" like any other pause.',
       startedAt: Date.now() - 3 * 60_000, attached: false,
@@ -460,6 +467,10 @@ const FAKE_FLEET: ControlSessions = {
       cwd: '/home/dev/embark', project: 'embark', model: 'kimi-k3',
       state: 'working', stateLabel: 'working', actionable: true,
       tokens: '308.2k', cost: '$0.91',
+      // PAST the window: the bar saturates and the number keeps telling the truth. This is not a
+      // contrived case — 212.959 tokens against a 200k window is a real measurement off this
+      // machine, and a bar that silently pinned at 100% here would be the reassuring kind of wrong.
+      context: { fraction: 1.06, label: '106%', used: '212.9k', window: '200k' },
       lastLines: ['rewriting src/importer/rows.ts'],
       note: 'blocked on the CSV encoding',
       startedAt: Date.now() - 90_000, attached: true,

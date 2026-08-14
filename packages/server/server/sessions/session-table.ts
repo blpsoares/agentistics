@@ -25,14 +25,17 @@
  */
 
 import {
+  contextLevel,
   DEFAULT_ORDER,
   groupSessions,
   padCell,
   sessionColumns,
+  sessionContext,
   sessionHandle,
   sessionMetric,
   sessionRows,
   worktreeName,
+  type ContextLevel,
   type SessionColumns,
   type SessionGrouping,
   type SessionOrder,
@@ -61,6 +64,12 @@ const ESC = '\x1b'
 const RESET = `${ESC}[0m`
 const DIM = `${ESC}[2m`
 const CYAN = `${ESC}[36m`
+const YELLOW = `${ESC}[33m`
+const RED = `${ESC}[1;31m`
+
+/** The gauge's colour, by how full it is. `ok` inherits the row's dim like every other fact — a
+ *  bar that shouts at 12% has spent the attention it needs at 95%. */
+const CONTEXT_ANSI: Record<ContextLevel, string> = { ok: DIM, warn: YELLOW, full: RED }
 
 /**
  * The state palette, mirroring the cockpit's `STATE_COLOR` intent in the sixteen colours a plain
@@ -271,6 +280,7 @@ function headerSegs(c: SessionColumns, words: Record<keyof SessionColumns, strin
     [c.worktree, words.worktree],
     [c.task, words.task],
     [c.metrics, words.metrics],
+    [c.context, words.context],
     [c.harness, words.harness],
     [c.where, words.where],
   ]
@@ -306,6 +316,14 @@ function rowSegs(s: ControlSession, c: SessionColumns): Seg[] {
   if (c.worktree > 0) segs.push({ text: GAP + padCell(worktreeName(s), c.worktree), code: DIM })
   if (c.task > 0) segs.push({ text: GAP + padCell(s.task ?? '', c.task), code: DIM })
   if (c.metrics > 0) segs.push({ text: GAP + padCell(sessionMetric(s), c.metrics), code: DIM })
+  if (c.context > 0) {
+    // A row with no reading still pays its column, so the ones that DO have a gauge stay aligned —
+    // `padCell('')` is the blank, and a blank is the honest rendering of "cannot be known".
+    segs.push({
+      text: GAP + padCell(sessionContext(s), c.context),
+      code: s.context ? CONTEXT_ANSI[contextLevel(s.context.fraction)] : DIM,
+    })
+  }
   if (c.harness > 0) segs.push({ text: GAP + padCell(s.harness, c.harness), code: CYAN })
   if (c.where > 0) {
     segs.push({ text: GAP + padCell(s.projectGroup || s.project, c.where), code: DIM })

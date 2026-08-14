@@ -57,6 +57,18 @@ export interface HarnessCapabilities {
    *  `SessionMeta.active_minutes` can be computed — see `activeTime.ts` and
    *  docs/harness-contract.md. False means the UI shows only wall-clock elapsed time. */
   activeTime: boolean
+  /**
+   * The harness records how full the context window was on its LAST turn, so
+   * `SessionMeta.context_tokens` can be filled — the measurement behind the context gauge.
+   *
+   * This is a narrower question than `tokens`, and the difference is the whole trap: a cumulative
+   * total is not a context size. A long session with compaction sums to far more than was ever in
+   * the window at once, so a harness that reports only running totals gets `false` here even
+   * though `tokens` is `true`. What qualifies is a PER-TURN prompt size (or a gauge the harness
+   * measures itself), which is why codex and kimi qualify on their per-turn records while copilot,
+   * whose only token report is a cumulative one written at shutdown, does not.
+   */
+  contextWindow: boolean
 }
 
 /** Single source of truth for which metrics each harness can produce.
@@ -67,16 +79,16 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   //   codex   → `task_complete`.duration_ms (measured by Codex itself)
   //   copilot → `assistant.turn_start` → `assistant.turn_end` brackets
   //   gemini / antigravity / kimi → reconstructed from per-message timestamps (no measured field)
-  claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true,  dynamicWorkflows: true,  activeTime: true },
-  codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
+  claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true,  dynamicWorkflows: true,  activeTime: true,  contextWindow: true },
+  codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true,  contextWindow: true },
   // Gemini's chat files carry `toolCalls: [{ name, args }]` per message, and a shell call puts its
   // command in `args.command` — so tools and commits are real. `gitLines` stays false: the calls
   // name the file they touched but carry no diff counters.
-  gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
+  gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true,  contextWindow: false },
   // `tools` was false while `tool.execution_start` had been carrying the tool name and its
   // arguments all along — the flag was out of date, not the data missing. Verified against a real
   // events.jsonl before flipping it.
-  copilot: { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: true,  dynamicWorkflows: false, activeTime: true },
+  copilot: { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: true,  dynamicWorkflows: false, activeTime: true,  contextWindow: false },
   // Antigravity (agy): tokens + model come from the `gen_metadata` protobuf blobs in
   // ~/.gemini/antigravity-cli/conversations/<id>.db (decoded by adapters/antigravity-protobuf.ts)
   // and cost is derived from them via calcCost().
@@ -87,7 +99,7 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   // exactly the misleading-zero this flag exists to prevent, so the UI shows N/A instead. The
   // per-session lines_added / lines_removed fields are still populated (and files_modified, which
   // this flag does NOT gate, stays real).
-  antigravity: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
+  antigravity: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true, contextWindow: true },
   // Kimi Code CLI. Tokens and model are real (usage.record events in each agent's wire.jsonl).
   // Kimi ROUTES to other providers and stamps the provider's own model on each usage record
   // (`google/gemini-3.5-flash-lite`), so in practice the model is one MODEL_PRICING already knows
@@ -97,7 +109,7 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   // strings but no diff counters.
   // Kimi's wire carries `tool.call` with `args`, and its own tool schema declares Bash's
   // `command` — so tools and commits are both real, read from what it actually ran.
-  kimi: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true },
+  kimi: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true, contextWindow: true },
 }
 
 /** Display order for harness lists, and the single source of truth for "every harness".
@@ -145,6 +157,25 @@ export interface SessionMeta {
   /** Only populated for `_source: 'jsonl' | 'subdir'` — parsed directly from JSONL usage. */
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
+  /**
+   * How many tokens were in the context window on the session's LAST turn — the measurement behind
+   * the context gauge. Gated by `HARNESS_CAPABILITIES.contextWindow`.
+   *
+   * A GAUGE, never a sum, and that distinction is the whole reason it is its own field rather than
+   * something derived from the four counters above. Those are cumulative over the session; this is
+   * the size of one prompt. On a long session they diverge by an order of magnitude, and using the
+   * total would report a context far past full on a session that never filled it.
+   */
+  context_tokens?: number
+  /**
+   * The window that measurement should be read against, WHEN THE HARNESS ITSELF STATES IT.
+   *
+   * Codex writes `model_context_window` into every `token_count` event, and a harness naming the
+   * window for the session it is running outranks any table lookup — it knows the deployment, the
+   * tier and any per-session cap, none of which a model id can express. Absent for every other
+   * harness, where `resolveContextWindow(model)` answers instead.
+   */
+  context_window?: number
   first_prompt: string
   /** Human-readable session title. Claude writes an `ai-title` (or legacy `summary`) line into
    *  the transcript; we surface it as the session's display name. Falls back to `first_prompt`
