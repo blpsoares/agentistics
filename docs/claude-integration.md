@@ -94,7 +94,7 @@ The file carries an **ownership marker** directly under its frontmatter. `instal
 `uninstall` deletes the file only while that marker is present — delete the line and the file is
 yours, permanently.
 
-### The hook
+### The hooks
 
 ```json
 {
@@ -102,7 +102,14 @@ yours, permanently.
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "agentop hooks context --hook-version 1", "timeout": 10 }
+          { "type": "command", "command": "agentop hooks context --hook-version 2", "timeout": 10 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "agentop events emit --hook-version 2", "timeout": 5 }
         ]
       }
     ]
@@ -110,8 +117,21 @@ yours, permanently.
 }
 ```
 
-No `matcher`, so it runs on every SessionStart source (`startup`, `resume`, `clear`, `compact`) —
-all of them are moments where this state was just lost or never had.
+Two events, because they answer two different questions and cost different things.
+
+`SessionStart` has no `matcher`, so it runs on every source (`startup`, `resume`, `clear`,
+`compact`) — all of them are moments where this state was just lost or never had.
+
+`Stop` fires when this session finishes answering, and its body writes ONE line into agentop's
+[event inbox](session-events.md). It prints nothing into anybody's context and its timeout is five
+seconds rather than ten, because it runs at the end of every turn and a budget that is felt is a
+budget that is wrong. It is the EXACT half of the event channel: Claude saying it stopped, instead
+of the fleet monitor inferring it from the screen up to five seconds later. The channel's poll
+source covers the other five harnesses, which have no hook to offer, and is the only thing that can
+see a permission prompt at all — Claude Code does not fire `Stop` for one.
+
+Both are planned against the same document and written **once**, so a refusal on the second leaves
+neither installed rather than half of the integration in place.
 
 `agentop hooks context` prints either nothing, or one block:
 
@@ -144,9 +164,9 @@ Rules it follows (`packages/server/server/session-context.ts`, pure and tested):
 |---|---|
 | **The user installs it, not the installer.** | `agentop setup` prints one line suggesting the command (and only while it is not already installed). Nothing writes to `~/.claude` on its own. Same rule `autostart.ts` follows for `~/.bashrc`. |
 | **Your `settings.json` is never overwritten.** | Every key, every foreign hook and every key agentop has never heard of is preserved. The merge (`planHookInstall`) adds one entry and touches nothing else. |
-| **A file it cannot merge into is refused, not fixed.** | A `settings.json` that is not JSON, whose `hooks` is not an object, or whose `SessionStart` is not an array: agentop reports it and writes **nothing**. |
+| **A file it cannot merge into is refused, not fixed.** | A `settings.json` that is not JSON, whose `hooks` is not an object, or whose `SessionStart` or `Stop` is not an array: agentop reports it and writes **nothing**. |
 | **Installing twice changes nothing.** | The second run reports `unchanged` and does not rewrite the file. |
-| **Uninstall is the exact inverse.** | Our hook entry goes, and the containers that existed only to hold it (`SessionStart`, `hooks`, the skill directory, an empty `skills/`). A group that also carries someone else's hook keeps that hook and its group. Verified byte-for-byte in the tests. |
+| **Uninstall is the exact inverse.** | Our hook entries go, and the containers that existed only to hold them (`SessionStart`, `Stop`, `hooks`, the skill directory, an empty `skills/`). A group that also carries someone else's hook keeps that hook and its group. Verified byte-for-byte in the tests. |
 | **No Claude Code, no files.** | No `~/.claude` and no `claude` on `PATH` → the command says so, exits 1, and creates neither directory nor file. |
 | **It never starts a session by itself.** | The skill's first rule is the consent rule; the hook's block says outright not to act on it. |
 
@@ -154,9 +174,11 @@ Rules it follows (`packages/server/server/session-context.ts`, pure and tested):
 
 Claude Code's hook entry is `{ type, command, timeout }` — there is no field for "who installed
 this", and inventing an unknown key in someone else's schema is how a settings file stops validating
-on the next release. So agentop identifies its entry by **the command it runs** (the verb pair
-`hooks context`, plus either `agentop` in the command or the `--hook-version` flag it always
-writes), and the version travels in that same command. `agentop hooks status` can therefore read a
+on the next release. So agentop identifies its entry by **the command it runs** — one of its own verb
+pairs (`hooks context`, `events emit`), plus either `agentop` in the command or the `--hook-version`
+flag it always writes — and the version travels in that same command. The match is NARROWED by
+event: a `Stop` entry someone moved under `SessionStart` is not ours to delete, or the two hooks
+would become one thing that cannot be administered separately. `agentop hooks status` can therefore read a
 file it has no memory of writing — one hand-edited, or copied from another machine — with no second
 store on the side to disagree with it.
 

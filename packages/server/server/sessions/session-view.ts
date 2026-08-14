@@ -95,6 +95,16 @@ export interface SessionView {
   effort?: string
   /** The piece of work this session belongs to, when the user said. Groups the list. */
   task?: string
+  /**
+   * The harness's own conversation id this row drives, when it is known EXACTLY.
+   *
+   * Carried from `ManagedSession.conversationId`, so it is present only for a session that was
+   * reopened from a conversation — we handed the id to the CLI, so there is nothing to guess. It is
+   * deliberately NOT filled from the harness+directory inference behind `resume`: that guess is
+   * good enough to offer a verb the user confirms by title, and not good enough to be the key the
+   * event channel deduplicates on. Absent is absent.
+   */
+  conversationId?: string
   createdMs?: number
   attached: boolean
   /**
@@ -308,6 +318,7 @@ export function buildSessionViews(o: {
       ...(r.managed?.model ? { model: r.managed.model } : {}),
       ...(r.managed?.effort ? { effort: r.managed.effort } : {}),
       ...(r.managed?.task ? { task: r.managed.task } : {}),
+      ...(r.managed?.conversationId ? { conversationId: r.managed.conversationId } : {}),
       // The backend's clock when there is a backend, the REGISTRY's when there is not. A row the
       // machine lost has no tmux session left to ask, so it reported no start time at all — and a
       // session you are deciding whether to reopen is one whose age is most of the decision.

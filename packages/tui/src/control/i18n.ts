@@ -195,7 +195,15 @@ export interface ControlStrings {
   /** Said when the host does not implement the fleet at all — not the same as an empty fleet. */
   sessionsUnsupported: string
   /** The summary row: "3 sessions · 1 waiting on you". */
-  sessionsCount: (n: number) => string
+  /**
+   * How many rows are ON SCREEN, and out of how many the machine has.
+   *
+   * Two numbers, always, because one of them alone lies: with `only active` on, a fleet of 44 shows
+   * ten rows, and a header reading "44 sessions" over ten of them describes a screen nobody is
+   * looking at. `shown === total` is the case where the second number says nothing new, and that is
+   * the only case where it is dropped.
+   */
+  sessionsCount: (shown: number, total: number) => string
   sessionsWaitingCount: (n: number) => string
   sessionsGroupBy: string
   sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project' | 'task' | 'repo', string>
@@ -382,6 +390,8 @@ export interface ControlStrings {
   wizEffort: string
   wizPrompt: string
   wizPromptHint: string
+  wizName: string
+  wizNameHint: string
   wizHow: string
   /** Said while the session is being started, so `enter` is visibly doing something. */
   wizStarting: string
@@ -555,7 +565,9 @@ const EN: ControlStrings = {
   sessionsEmptyFiltered: 'nothing matches · esc clears the filter',
   sessionsLoading: 'reading…',
   sessionsUnsupported: 'session management is not available on this machine.',
-  sessionsCount: (n: number) => (n === 1 ? '1 session' : `${n} sessions`),
+  sessionsCount: (shown: number, total: number) => (shown === total
+    ? (total === 1 ? '1 session' : `${total} sessions`)
+    : `${shown} of ${total} sessions`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
   sessionsGroupBy: 'GROUP',
   sessionsGroupings: {
@@ -773,6 +785,8 @@ const EN: ControlStrings = {
   wizEffort: 'Which reasoning effort?',
   wizPrompt: 'First prompt (optional)',
   wizPromptHint: 'leave empty to start with nothing typed',
+  wizName: 'Call it what?',
+  wizNameHint: 'a name of your own — enter alone derives one from the harness and the folder',
   wizHow: 'Start it how?',
   wizStarting: 'starting…',
   wizKeptDraft: 'nothing you typed was lost — esc goes back a step, or try again',
@@ -934,7 +948,9 @@ const PT: ControlStrings = {
   sessionsEmptyFiltered: 'nada corresponde · esc limpa o filtro',
   sessionsLoading: 'lendo…',
   sessionsUnsupported: 'gerenciamento de sessões não está disponível nesta máquina.',
-  sessionsCount: (n: number) => (n === 1 ? '1 sessão' : `${n} sessões`),
+  sessionsCount: (shown: number, total: number) => (shown === total
+    ? (total === 1 ? '1 sessão' : `${total} sessões`)
+    : `${shown} de ${total} sessões`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
   sessionsGroupBy: 'AGRUPAR',
   sessionsGroupings: {
@@ -1148,6 +1164,8 @@ const PT: ControlStrings = {
   wizEffort: 'Qual nível de raciocínio?',
   wizPrompt: 'Primeiro prompt (opcional)',
   wizPromptHint: 'deixe vazio para começar sem nada digitado',
+  wizName: 'Chamar de quê?',
+  wizNameHint: 'um nome seu — enter vazio deriva um do harness e da pasta',
   wizHow: 'Iniciar como?',
   wizStarting: 'iniciando…',
   wizKeptDraft: 'nada do que você digitou foi perdido — esc volta um passo, ou tente de novo',

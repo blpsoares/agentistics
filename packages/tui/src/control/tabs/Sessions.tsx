@@ -1311,6 +1311,10 @@ export function Sessions({
           showClosed={showClosed}
           hideEmptyTask={grouping === 'task' ? hideEmptyTask : null}
           onlyActive={onlyActive}
+          // How many rows are ON SCREEN, counted from the very list being drawn. The header used to
+          // read the fleet's length, so with `only active` on it announced 44 over a screen showing
+          // ten — a number describing a screen nobody is looking at.
+          shown={rows.reduce((n, r) => n + (r.kind === 'session' ? 1 : 0), 0)}
           query={query}
           scope={projectFilter ?? taskFilter ?? ''}
           fell={fleet?.fell && fellAgo ? s.sessionsFellNote(fleet.fell.count, fellAgo) : ''}
@@ -1504,7 +1508,7 @@ export function Sessions({
  * to state the answer, so a glance tells you why the list looks the way it does.
  */
 function SummaryRow({
-  fleet, grouping, strings: s, width, showClosed, hideEmptyTask, onlyActive, query, scope, fell,
+  fleet, grouping, strings: s, width, showClosed, hideEmptyTask, onlyActive, shown, query, scope, fell,
 }: {
   fleet: ControlSessions | null | undefined
   grouping: SessionGrouping
@@ -1515,6 +1519,8 @@ function SummaryRow({
   hideEmptyTask: boolean | null
   /** The strict switch, which withholds more than the other two together. */
   onlyActive: boolean
+  /** Rows actually drawn, counted from the drawn list rather than from the fleet. */
+  shown: number
   /** The active search, or `''`. Stated HERE because a list narrowed silently reads as an empty one. */
   query: string
   /** The active task or project scope, already localized, or `''`. */
@@ -1555,7 +1561,7 @@ function SummaryRow({
   const cells = summaryCells({
     group: narrowed || `${s.sessionsGroupBy} ${s.sessionsGroupings[grouping]}`,
     hiding: hiding.length > 0 ? `− ${hiding.join(', ')}` : '',
-    count: s.sessionsCount(fleet?.sessions.length ?? 0),
+    count: s.sessionsCount(shown, fleet?.sessions.length ?? 0),
     waiting: waiting > 0 ? s.sessionsWaitingCount(waiting) : '',
     fell,
     width,
