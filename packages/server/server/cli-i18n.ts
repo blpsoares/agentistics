@@ -105,6 +105,22 @@ export interface CliStrings {
   /** Said on a session whose harness has no probed approval markers. */
   sessApprovalBlind: (harness: string) => string
   /**
+   * Said on a row whose recorded DIRECTORY no longer exists on this machine.
+   *
+   * A removed worktree is the ordinary way to get here, and the row is still worth having — it
+   * carries the name, the note and the task. What it cannot carry is a project derived from a path
+   * that resolves to nothing, and this is the sentence that says so instead.
+   */
+  sessDirGone: string
+  /**
+   * Said on a hosted row whose harness can never report which conversation it is writing.
+   *
+   * Not "no conversation was found": the point is that none can be, so what the reopen verb offers
+   * for this harness is inferred from the directory rather than recorded. See
+   * `conversationLinkable`.
+   */
+  sessConversationBlind: (harness: string) => string
+  /**
    * Said on a session that IS visibly blocked, but whose dialog nobody has read.
    *
    * A different fact from `sessApprovalBlind`, which is about not being able to SEE the block. This
@@ -371,6 +387,9 @@ const EN: CliStrings = {
   },
   sessApprovalBlind: (harness: string) =>
     `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
+  sessDirGone: 'this directory no longer exists — a removed worktree, most likely. Reopening will not work until it is back.',
+  sessConversationBlind: (harness: string) =>
+    `${harness} never reports which conversation a session it started is writing, so agentop cannot record the link — anything offered to reopen here is inferred from the directory.`,
   sessApproveBlind: (harness: string) =>
     `nobody has read ${harness}'s dialog, so agentop does not know which key answers it — attach to this session to answer it there.`,
   sessPrompted: (id: string) => `sent to ${id}.`,
@@ -595,6 +614,9 @@ const PT: CliStrings = {
   },
   sessApprovalBlind: (harness: string) =>
     `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando", como qualquer outra pausa.`,
+  sessDirGone: 'este diretório não existe mais — provavelmente uma worktree removida. Reabrir não vai funcionar enquanto ele não voltar.',
+  sessConversationBlind: (harness: string) =>
+    `o ${harness} nunca informa qual conversa uma sessão iniciada por ele está escrevendo, então o agentop não consegue registrar o vínculo — o que for oferecido para reabrir aqui é inferido pelo diretório.`,
   sessApproveBlind: (harness: string) =>
     `ninguém leu o diálogo do ${harness}, então o agentop não sabe qual tecla responde — anexe na sessão para responder lá.`,
   sessPrompted: (id: string) => `enviado para ${id}.`,

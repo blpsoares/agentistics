@@ -160,10 +160,35 @@ export interface SessionGroup {
  * blank heading across dimensions: "harness unknown" and "no model recorded" are different facts,
  * and a heading that reads as a category when it is really an absence is how a list starts lying.
  */
+/**
+ * The key rows whose DIRECTORY is gone are filed under, when nothing else names them.
+ *
+ * Unreachable as a real key by construction: every project key is `projectGroup || project`, and
+ * both are single path SEGMENTS — `projectName` splits on the separator, so no value either can
+ * take contains one. A sentinel that a folder could be named would silently merge that folder's
+ * sessions into this bucket.
+ */
+const GONE_PROJECT_KEY = '/gone'
+
 export function groupSessions(
   list: readonly ControlSession[],
   by: SessionGrouping,
-  unknownLabels: { harness: string; model: string; project: string; task: string; repo: string },
+  unknownLabels: {
+    harness: string
+    model: string
+    project: string
+    task: string
+    repo: string
+    /**
+     * Rows whose recorded directory no longer exists AND whose repository was never recorded.
+     *
+     * Its own heading rather than sharing `project`'s: "no directory recorded" and "the directory
+     * is not there any more" are different facts, and the second is the one that must not be
+     * grouped under the last segment of the path — that is how the removed worktree
+     * `member-connect-rotate` became a project standing beside `Agentistics`.
+     */
+    goneProject: string
+  },
   /** The tasks the user marked finished — a statement about the WORK, not about any session. */
   doneTasks: readonly string[] = [],
   order: SessionOrder = DEFAULT_ORDER,
@@ -177,9 +202,13 @@ export function groupSessions(
       : by === 'task' ? (s.task ?? '')
       : by === 'repo' ? (s.repo ?? '')
       // The PROJECT is what the work is called, which for anything in a repository is the main
-      // checkout — never the worktree's own directory, or one project files as three.
-      : (s.projectGroup || s.project)
-    const label = key !== '' ? key : unknownLabels[by]
+      // checkout — never the worktree's own directory, or one project files as three. And never
+      // the folder name of a directory that is GONE: that path resolves to nothing, so its last
+      // segment is a guess, and a group made out of a guess reads exactly like a real project.
+      : (s.projectGroup || (s.dirGone ? GONE_PROJECT_KEY : s.project))
+    const label = key === GONE_PROJECT_KEY ? unknownLabels.goneProject
+      : key !== '' ? key
+      : unknownLabels[by]
     const found = groups.get(key)
     if (found) found.sessions.push(s)
     else {
@@ -394,6 +423,14 @@ export function detailLines(s: ControlSession, labels: {
   /** Heads the spelled-out gauge: `45%  ·  455.4k / 1M`. */
   context: string
   /**
+   * Heads the conversation this row continues from — the id `--resume` takes.
+   *
+   * Worth a row of its own because it is the one fact that turns "this session is somewhere" into
+   * something a person can act on outside agentop, and because it is only ever shown when it was
+   * RECORDED: a row without it is a row where nobody knows, and `conversationBlind` says so.
+   */
+  conversation: string
+  /**
    * Labels for the OTHER name, when a session is named in both places.
    *
    * Two of them, because which one is the other depends on which one won — and a single label
@@ -458,6 +495,10 @@ export function detailLines(s: ControlSession, labels: {
       value: `${s.context.label}  ·  ${s.context.used} / ${s.context.window}`,
     })
   }
+  // Where it continues from. Under the metrics because it is the fact you copy rather than read.
+  if (s.conversationId) {
+    out.push({ key: 'conv', label: labels.conversation, value: s.conversationId })
+  }
   if (s.note) out.push({ key: 'note', label: labels.note, value: s.note })
   if (s.startedAt !== undefined) {
     out.push({ key: 'started', label: labels.started, value: ago(s.startedAt) })
@@ -474,7 +515,13 @@ export function detailLines(s: ControlSession, labels: {
   }
   if (s.state === 'closed') out.push({ key: 'closed', label: '', value: labels.closed, note: true })
   else if (!s.actionable) out.push({ key: 'external', label: '', value: labels.external, note: true })
+  // The directory first: it is the caveat that explains the others — a path that resolves to
+  // nothing is why the project may be a bucket and why reopening will fail.
+  if (s.dirGone) out.push({ key: 'gone', label: '', value: s.dirGone, note: true })
   if (s.approvalBlind) out.push({ key: 'blind', label: '', value: s.approvalBlind, note: true })
+  if (s.conversationBlind) {
+    out.push({ key: 'convblind', label: '', value: s.conversationBlind, note: true })
+  }
   return out
 }
 

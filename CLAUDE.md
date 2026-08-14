@@ -200,6 +200,41 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          falling back to the COMMON git dir's parent (`--show-toplevel` would
   │                          answer with the worktree, which is the one name that must not become
   │                          the key). Memoized by directory: the poll runs every five seconds.
+  │                          **A directory that is GONE is not a directory outside a repository**,
+  │                          and the discriminator is whether it EXISTS, never whether git answered.
+  │                          `ExitWorktree --remove` leaves the session registered at a path that
+  │                          names nothing, every `git -C` fails, and the grouping fell through to the
+  │                          last path segment — so the removed worktree `member-connect-rotate`
+  │                          appeared as a PROJECT standing beside `Agentistics`, the project it was
+  │                          a worktree of. A folder name is a guess there, and inventing one from a
+  │                          path that resolves to nothing is the same error as a confident `0` for a
+  │                          metric nobody can produce. So `ManagedSession.repo` records the facts AT
+  │                          SPAWN — the one moment the directory is provably there — the pure
+  │                          `resolveRepoFacts` prefers live git, then the record, then says
+  │                          `missing`, and `groupSessions` files a row with nothing left to name it
+  │                          under ONE bucket said in words (`GONE_PROJECT_KEY`, unreachable as a real
+  │                          key because every project key is a single path SEGMENT). The MEMO also
+  │                          caches POSITIVE answers only: a negative one is a fact about the moment,
+  │                          not about the directory, and caching it for the life of the process left
+  │                          a cwd first probed while its worktree was deleted repo-less forever, even
+  │                          after `agentop session open` put it back. Negatives expire
+  │                          (`NEGATIVE_TTL_MS`); a MISSING directory never spawns git at all.
+  │                          **The conversation link is recorded at SPAWN wherever the CLI accepts an
+  │                          id** — `SpawnSpec.assignId`, `claude --session-id <uuid>` and
+  │                          `copilot --session-id <uuid>`, both verified by running them and
+  │                          checking that the file the adapter reads back carries that very id.
+  │                          Before this it existed only for a REOPENED row plus, for claude alone,
+  │                          whatever `harness-sessions.ts` could read out of `~/.claude/sessions/
+  │                          <pid>.json` while the process lived — so a session started with the
+  │                          cockpit closed had nothing but the harness-and-directory guess, which
+  │                          gives every session of one repository the same conversation. Gemini
+  │                          accepts a UUID and is deliberately EXCLUDED: its id in this product is
+  │                          synthetic (`${dir}/${file}`), so a recorded UUID would resolve to
+  │                          nothing while LOOKING like an exact link. Where no link can ever exist
+  │                          (codex, kimi, gemini, agy) `conversationLinkable` is false and the row
+  │                          SAYS so. And a row that knows its conversation never falls back to the
+  │                          guess even when the store has not caught up: "not yet" and "some other
+  │                          conversation in this directory" are different answers.
   │                          **A MANAGED row now carries the conversation's metrics too** — tokens,
   │                          cost and the CONTEXT GAUGE. Only `external` and `closed` rows read them
   │                          from the store before, so on a machine whose whole fleet is

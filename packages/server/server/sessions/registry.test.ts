@@ -177,4 +177,33 @@ describe('what survives a round trip', () => {
     expect(rows[0]!.lastSeenMs).toBeUndefined()
     expect(rows[1]!.lastSeenMs).toBe(7)
   })
+
+  it('keeps the repository recorded at spawn, which is all a removed worktree leaves behind', async () => {
+    const reg = createSessionRegistry(file)
+    await reg.add({
+      ...session('a'),
+      repo: { repo: 'blpsoares/agentistics', root: 'agentistics', worktree: true },
+    })
+    expect((await reg.read())[0]!.repo)
+      .toEqual({ repo: 'blpsoares/agentistics', root: 'agentistics', worktree: true })
+  })
+
+  it('drops a recorded repo that is not SHAPED like one, keeping the session', async () => {
+    // The one nested object in this file, so it is the one place "the load-bearing fields checked
+    // out, trust the rest" does not hold. A hand-edited string would reach `resolveRepoFacts` with
+    // no `repo` on it and the row would behave as though nothing had been recorded — the failure
+    // this field exists to prevent, arriving silently.
+    await writeFile(file, JSON.stringify([
+      { ...session('a'), repo: 'agentistics' },
+      { ...session('b'), repo: { root: 'agentistics', worktree: true } },
+      { ...session('c'), repo: { repo: 'x/y', worktree: 'yes' } },
+    ]), 'utf-8')
+    const rows = await createSessionRegistry(file).read()
+    expect(rows.map(r => r.id)).toEqual(['a', 'b', 'c'])
+    expect(rows[0]!.repo).toBeUndefined()
+    // No `repo` key means nothing every reader can key on — kept out rather than half-kept.
+    expect(rows[1]!.repo).toBeUndefined()
+    // `worktree` is a claim about the directory, so anything that is not literally true is false.
+    expect(rows[2]!.repo).toEqual({ repo: 'x/y', worktree: false })
+  })
 })
