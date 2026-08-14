@@ -232,6 +232,14 @@ export function sessionRows(
   closedLabel?: string,
   /** Already-localized word marking a finished task's heading, e.g. "finished". */
   doneLabel?: string,
+  /**
+   * Already-localized word for the sessions the machine took at once, e.g. "fell together".
+   *
+   * Absent — on a machine where nothing fell, and in the tests that predate the section — leaves
+   * those rows exactly where they used to be, in the history block. The section is an addition to
+   * the reading order, never a change to which rows are listed.
+   */
+  fellLabel?: string,
 ): SessionRow[] {
   const out: SessionRow[] = []
 
@@ -248,15 +256,28 @@ export function sessionRows(
   // no idea what happened to it, so it is certainly not something you are working in.
   const isLive = (s: ControlSession) =>
     s.state !== 'closed' && s.state !== 'exited' && s.state !== 'lost'
+  // A row the machine TOOK, carved out of the history block it would otherwise sit in. It is not
+  // history: it is work that was open a moment ago and is one action away from being open again,
+  // and burying it among conversations that ended days ago is what made "reopen what I lost" a
+  // matter of reading forty rows first.
+  const hasFell = Boolean(fellLabel)
+  const isFell = (s: ControlSession) => hasFell && s.fell === true && !isLive(s)
 
   for (const g of groups) {
     const live = g.sessions.filter(isLive)
-    const closed = g.sessions.filter(s => !isLive(s))
+    const fell = g.sessions.filter(isFell)
+    const closed = g.sessions.filter(s => !isLive(s) && !isFell(s))
     // An empty KEY is an absence ("no task"), not a category, and is drawn as one. A FINISHED task
     // says so in its heading and is muted with it: the sessions are still listed and still
     // attachable, so the screen must say why they are set apart rather than merely dimming them.
     const head = g.done && doneLabel ? `${g.label} · ${doneLabel}` : g.label
     push(head, live, g.key === '' || Boolean(g.done))
+    if (fell.length > 0) {
+      // NOT muted: everything else set apart on this screen is set apart because it is over, and
+      // this block is the opposite — it is the one thing on the list asking to be acted on.
+      const label = fellLabel ?? ''
+      push(g.label !== '' && label ? `${g.label} · ${label}` : label, fell)
+    }
     if (closed.length > 0) {
       // Inside a named group the closed block still says which group it belongs to, so a heading
       // read on its own is never ambiguous.
@@ -371,6 +392,16 @@ export function detailLines(s: ControlSession, labels: {
   task: string
   metrics: string
   /**
+   * Labels for the OTHER name, when a session is named in both places.
+   *
+   * Two of them, because which one is the other depends on which one won — and a single label
+   * saying "also called" would leave a person unable to tell whether the name on the row is the one
+   * they typed here or the one they typed inside the session. That distinction is the entire point:
+   * it is what says both renames landed.
+   */
+  alsoLabel: string
+  alsoHarness: string
+  /**
    * How to LEAVE an attached session, already localized, and the real keystroke the backend
    * reported — never an assumed `Ctrl-b`.
    *
@@ -391,6 +422,17 @@ export function detailLines(s: ControlSession, labels: {
     })
   }
 
+  // The name that did NOT win, right under what it is saying and above everything else, because it
+  // answers "did my rename work" — which is the question someone has the moment they notice the row
+  // saying something other than what they typed. The label names WHICH place it came from.
+  if (s.titleOther) {
+    out.push({
+      key: 'also',
+      // `titleSource` is where the WINNER came from, so the loser is the other place.
+      label: s.titleSource === 'harness' ? labels.alsoLabel : labels.alsoHarness,
+      value: s.titleOther,
+    })
+  }
   out.push({ key: 'where', label: labels.where, value: s.cwd })
   if (s.task) out.push({ key: 'task', label: labels.task, value: s.task })
   if (s.model) out.push({ key: 'model', label: labels.model, value: s.model })
@@ -432,6 +474,46 @@ export function detailLines(s: ControlSession, labels: {
  */
 export const QUESTION_ROWS = 5
 
+/**
+ * The most of a blocked session's dialog a confirmation will show.
+ *
+ * Six lines carries a question, three options and the footer naming the key — measured against the
+ * frames `attention-rules.ts` was probed from. It is a CAP rather than a size: a shorter dialog
+ * shows whole, and the pane asks for only what it has.
+ */
+export const APPROVAL_PREVIEW_MAX = 6
+
+/**
+ * The dialog cut to the rows there are — from the TOP, so the BOTTOM survives — PURE.
+ *
+ * The bottom is where the options are, where the highlight is, and where the footer names the key.
+ * That is the part being answered; the lines above it are the context that led there, and context is
+ * what a short pane can afford to lose. Cutting the other way round would leave a question with its
+ * answers off screen, which is the one thing a confirmation may not do.
+ */
+export function fitApprovalPreview(lines: readonly string[], rows: number): string[] {
+  const keep = Math.max(0, Math.min(rows, APPROVAL_PREVIEW_MAX))
+  return lines.slice(Math.max(0, lines.length - keep))
+}
+
+/**
+ * How many rows the detail region must be given for the question that is open — PURE.
+ *
+ * A question ALWAYS outranks the facts: a prompt with nowhere to draw cannot be answered, which is
+ * why `QUESTION_ROWS` is the floor. What is new here is that one question carries evidence — the
+ * dialog a person has to read before agreeing — and those rows have to be BUDGETED rather than
+ * drawn on top of the answers. Ink composites what does not fit, so an unbudgeted preview does not
+ * crowd the two answers, it draws over whatever was under them.
+ *
+ * `+ 1` for the row that LABELS the evidence. It is not decoration: the dialog being quoted has its
+ * own numbered options, the confirmation under it has two of its own, and without a line saying
+ * which is which the pane is two menus stacked on top of each other.
+ */
+export function askRows(o: { preview: number; detail: number }): number {
+  const preview = Math.max(0, Math.min(o.preview, APPROVAL_PREVIEW_MAX))
+  return Math.max(QUESTION_ROWS + (preview > 0 ? preview + 1 : 0), Math.max(0, o.detail))
+}
+
 
 // ---------------------------------------------------------------------------
 // the visible action row
@@ -439,7 +521,8 @@ export const QUESTION_ROWS = 5
 
 /** What a verb DOES, independent of what it is called in either language. */
 export type SessionAction =
-  | 'attach' | 'resume' | 'rename' | 'note' | 'task' | 'kill' | 'openTask' | 'finishTask'
+  | 'attach' | 'resume' | 'approve' | 'prompt' | 'rename' | 'note' | 'task' | 'kill'
+  | 'openTask' | 'reopenFell' | 'finishTask'
   | 'new' | 'search' | 'group'
 
 /**
@@ -469,7 +552,11 @@ export interface OfferedAction {
  * — the cursor skips them and a click does nothing — but the screen no longer implies that renaming
  * a session stopped existing because the one you selected cannot be renamed.
  */
-export function sessionActions(selected: ControlSession | undefined): OfferedAction[] {
+export function sessionActions(
+  selected: ControlSession | undefined,
+  /** Facts about the FLEET rather than the row — what the fleet-level verbs need. */
+  fleet: { fell?: number } = {},
+): OfferedAction[] {
   // A row agentop still HOSTS: it has a registry entry, so it can be renamed, filed and stopped.
   // `exited` and `lost` are hosted — a reboot loses every backend session while the registry keeps
   // every name, and losing the verbs that edit those names is how a rename disappears.
@@ -491,10 +578,24 @@ export function sessionActions(selected: ControlSession | undefined): OfferedAct
     ...(live
       ? [{ action: 'attach' as const, enabled: true }]
       : [{ action: 'resume' as const, enabled: canReopen }]),
+    // APPROVE leads the rest because a session blocked on a question is the reason this screen
+    // exists. The host decides `canApprove`, and it is true only when the session is genuinely
+    // asking AND somebody has read this harness's dialog — a keystroke sent into a session that is
+    // not asking is a blank turn, or an option taken out of a menu nobody was looking at.
+    { action: 'approve', enabled: Boolean(selected?.canApprove) },
+    // Typing into a session needs it to be RUNNING and nothing more: a session that is working will
+    // read what it was handed when it gets there. The one case that must not go through is a
+    // session sitting on a dialog, where the prompt is a menu — and that is refused by the HOST,
+    // which re-reads the screen, rather than here from a list up to a poll old.
+    { action: 'prompt', enabled: live },
     { action: 'rename', enabled: hosted },
     { action: 'note', enabled: hosted },
     { action: 'task', enabled: hosted },
     { action: 'openTask', enabled: hosted && hasTask },
+    // A FLEET verb sitting among the row verbs, because that is where the hand already is when a
+    // reboot has just emptied the screen. Enabled only when something actually fell — offered and
+    // doing nothing is the shape this menu already refuses everywhere else.
+    { action: 'reopenFell', enabled: (fleet.fell ?? 0) > 0 },
     // Finishing needs only a TASK, not a live session: the ordinary moment to close a piece of work
     // is when its last session has already ended, and requiring a hosted row would make the verb
     // unreachable at exactly that moment.
@@ -531,17 +632,23 @@ export function enabledActionIndexes(actions: readonly OfferedAction[]): number[
  * looks like, and nothing about it says the cause was one row too wide.
  *
  * Cells are given up in the order the row can afford to lose them: the list of what is being HIDDEN
- * first (the panel one keypress away states it in full), then the waiting count, then the total.
- * The grouping is last because it is the only cell that explains why the rows are arranged as they
- * are, and it is truncated rather than dropped.
+ * first (the panel one keypress away states it in full), then the waiting count, then the total,
+ * then the fall. The grouping is last because it is the only cell that explains why the rows are
+ * arranged as they are, and it is truncated rather than dropped.
+ *
+ * The FALL outlives the other three because it is the only cell that is an OFFER: the rest describe
+ * the list, and this one names work that is one keypress from coming back. It is also the only cell
+ * that is usually absent, so it costs nothing on an ordinary machine.
  */
 export function summaryCells(o: {
   group: string
   hiding: string
   count: string
   waiting: string
+  /** "N sessions fell X ago — R reopens them", or `''` when nothing did. */
+  fell?: string
   width: number
-}): { group: string; hiding: string; count: string; waiting: string } {
+}): { group: string; hiding: string; count: string; waiting: string; fell: string } {
   const GAP = 3
   const width = Math.max(0, o.width)
   const fits = (parts: string[]) => {
@@ -549,16 +656,20 @@ export function summaryCells(o: {
     return kept.reduce((n, p) => n + p.length, 0) + GAP * Math.max(0, kept.length - 1) <= width
   }
 
-  const full = { group: o.group, hiding: o.hiding, count: o.count, waiting: o.waiting }
-  if (fits([full.group, full.hiding, full.count, full.waiting])) return full
+  const fell = o.fell ?? ''
+  const full = { group: o.group, hiding: o.hiding, count: o.count, waiting: o.waiting, fell }
+  if (fits([full.group, full.hiding, full.count, full.waiting, full.fell])) return full
 
   const noHiding = { ...full, hiding: '' }
-  if (fits([noHiding.group, noHiding.count, noHiding.waiting])) return noHiding
+  if (fits([noHiding.group, noHiding.count, noHiding.waiting, noHiding.fell])) return noHiding
 
   const noWaiting = { ...noHiding, waiting: '' }
-  if (fits([noWaiting.group, noWaiting.count])) return noWaiting
+  if (fits([noWaiting.group, noWaiting.count, noWaiting.fell])) return noWaiting
 
-  const groupOnly = { group: o.group, hiding: '', count: '', waiting: '' }
+  const noCount = { ...noWaiting, count: '' }
+  if (fits([noCount.group, noCount.fell])) return noCount
+
+  const groupOnly = { group: o.group, hiding: '', count: '', waiting: '', fell: '' }
   if (fits([groupOnly.group])) return groupOnly
 
   return { ...groupOnly, group: o.group.slice(0, Math.max(0, width)) }
@@ -1502,11 +1613,17 @@ export function sessionKeyHelp(w: {
   note: string; task: string; mark: string; onlyActive: string; closed: string
   exited: string; unfiled: string; group: string; detail: string; reset: string
   tabs: string; help: string; quit: string
+  approve: string; prompt: string; reopenFell: string
 }): KeyHelp[] {
   return [
     { keys: '↑ ↓ / j k', what: w.move },
     { keys: 'enter', what: w.menu },
     { keys: 'o', what: w.attach },
+    // The two that act on a session WITHOUT entering it, listed right under the one that enters it:
+    // they answer the same question ("this one needs me") in the two cheaper ways.
+    { keys: 'y', what: w.approve },
+    { keys: 'p', what: w.prompt },
+    { keys: 'R', what: w.reopenFell },
     { keys: 'tab', what: w.open },
     { keys: '1-9 / ← →', what: w.section },
     { keys: 'a', what: w.newSession },

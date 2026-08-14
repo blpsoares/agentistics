@@ -16,6 +16,8 @@
 import { fmt, fmtCost } from '@agentistics/core'
 import type { ControlSession, SessionState } from '@agentistics/tui/control'
 import type { CliStrings } from '../cli-i18n'
+import { approvalFor } from './approval-spec'
+import { pickTitle } from './harness-session-file'
 import type { RepoFacts } from './repo-facts'
 import type { SessionView } from './session-view'
 
@@ -64,11 +66,30 @@ export function toControlSession(
   const state = sessionState(v)
   const project = projectName(v.cwd)
   const harness = v.harness ?? ''
+  // A session can be named in TWO places — here, and inside the harness with its own `/rename` — and
+  // the precedence between them is the pure `pickTitle`. It is not a one-liner and it is not
+  // obvious: a name the harness INVENTED for itself must never win, and neither name may be thrown
+  // away when the two disagree.
+  const picked = pickTitle({
+    ...(v.label ? { label: v.label } : {}),
+    ...(v.labelSince !== undefined ? { labelSince: v.labelSince } : {}),
+    ...(v.harnessName
+      ? {
+          file: {
+            name: v.harnessName,
+            ...(v.harnessNameSince !== undefined ? { nameSince: v.harnessNameSince } : {}),
+          },
+        }
+      : {}),
+    fallback: s.sessUntitled(harness || '?', project),
+  })
   return {
     id: v.id,
-    // The user's own label wins over anything derived: naming a session is the whole point of
-    // being able to name one.
-    title: v.label ?? s.sessUntitled(harness || '?', project),
+    title: picked.title,
+    // Said only where the two sources DISAGREE — `other` is absent otherwise, so an ordinary row
+    // carries nothing extra. Without it, someone who renamed in both places sees one name and
+    // concludes the other rename silently failed, which is the complaint this answers in reverse.
+    ...(picked.other ? { titleSource: picked.source, titleOther: picked.other } : {}),
     harness,
     cwd: v.cwd,
     project,
@@ -87,8 +108,10 @@ export function toControlSession(
     ...(v.createdMs !== undefined ? { startedAt: v.createdMs } : {}),
     ...(v.task ? { task: v.task } : {}),
     // Marked BY THE USER — a label, a note or a task. `title` cannot answer this: it always has a
-    // value, because the host derives one whenever there is no label.
-    ...(v.label || v.note || v.task ? { named: true } : {}),
+    // value, because the host derives one whenever there is no label. A name typed INSIDE the
+    // session counts too: it is the same act of naming, performed one window over, and a row named
+    // there being hidden by the history switches is the same bug as one named here being hidden.
+    ...(v.label || v.harnessName || v.note || v.task ? { named: true } : {}),
     ...(facts.repo ? { repo: facts.repo } : {}),
     // Only when it differs: a session in the main checkout groups under its own folder already, and
     // a field repeating what is beside it is one more thing that can disagree.
@@ -96,6 +119,21 @@ export function toControlSession(
     ...(facts.worktree ? { worktree: true } : {}),
     ...(v.resume ? { resume: v.resume } : {}),
     ...(v.lastLines?.length ? { lastLines: v.lastLines } : {}),
+    ...(v.approvalLines?.length ? { approvalLines: v.approvalLines } : {}),
+    // The verb exists only where BOTH halves are true: the session is asking, and somebody has read
+    // this harness's dialog and recorded the key that answers it. Either missing and the action is
+    // absent rather than present and wrong — the same rule the wizard applies to a harness with no
+    // spawn spec.
+    ...(state === 'waiting-approval' && approvalFor(v.harness)
+      ? { canApprove: true as const }
+      : {}),
+    // Said only where it is TRUE, which is a narrower place than `approvalBlind`: that one explains
+    // why a blocked session may be reading as plain `waiting`, this one explains why a session that
+    // is VISIBLY blocked cannot be answered from here. A harness can have one and not the other.
+    ...(state === 'waiting-approval' && !approvalFor(v.harness) && harness
+      ? { approveBlind: s.sessApproveBlind(harness) }
+      : {}),
+    ...(v.fell ? { fell: true as const } : {}),
     // Already formatted, because formatting is a presentation concern the host owns for everything
     // else it hands over — and `fmt`/`fmtCost` are the shared helpers the dashboard uses.
     ...(v.tokens !== undefined ? { tokens: fmt(v.tokens) } : {}),

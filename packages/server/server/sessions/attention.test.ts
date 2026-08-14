@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { QUIET_MS, attentionOf, digestFrame, frameTail } from './attention'
+import { QUIET_MS, approvalTail, attentionOf, digestFrame, frameTail } from './attention'
 import type { AttentionRules } from './types'
 
 const NOW = 1_786_600_000_000
@@ -178,5 +178,60 @@ describe('a working marker that outlives the screen', () => {
       prevDigest: 'old',
       rules,
     })).toBe('working')
+  })
+})
+
+/**
+ * A real claude permission dialog, in the shape `capture-pane` hands it over: a conversation above,
+ * then the box, then the footer naming the key. Trimmed to what a 60-line capture would end on.
+ */
+const DIALOG = [
+  '● I will run the migration now.',
+  '',
+  '╭──────────────────────────────────────────╮',
+  '│ Bash command                             │',
+  '│                                          │',
+  '│   bun run db:migrate                     │',
+  '│                                          │',
+  '│ Do you want to proceed?                  │',
+  '│ ❯ 1. Yes                                 │',
+  '│   2. No, and tell Claude what to do      │',
+  '│                                          │',
+  '│ Enter to confirm · Esc to cancel         │',
+  '╰──────────────────────────────────────────╯',
+]
+
+describe('approvalTail', () => {
+  it('keeps the dialog exactly as drawn — borders, options and footer included', () => {
+    const out = approvalTail(DIALOG, 6)
+    expect(out).toHaveLength(6)
+    // The three that decide anything: which options there are, which one is highlighted, and the
+    // key that takes it. None of them survives being tidied.
+    expect(out.join('\n')).toContain('❯ 1. Yes')
+    expect(out.join('\n')).toContain('2. No')
+    expect(out.join('\n')).toContain('Enter to confirm')
+  })
+
+  it('is NOT frameTail — that one throws the dialog away and keeps what came before it', () => {
+    // The reason this function exists. `frameTail` answers "what is it SAYING", so it cuts at the
+    // last rule; on a blocked session that cut lands above the box, and the result reads perfectly
+    // plausibly under a heading saying "this is what you are confirming".
+    const said = frameTail(DIALOG, 4).join('\n')
+    expect(said).not.toContain('Do you want to proceed?')
+    expect(approvalTail(DIALOG, 6).join('\n')).toContain('Do you want to proceed?')
+  })
+
+  it('takes the BOTTOM, because that is where the answer is', () => {
+    expect(approvalTail(DIALOG, 1)).toEqual(['╰──────────────────────────────────────────╯'])
+  })
+
+  it('drops padding at either end without touching the blanks inside a dialog', () => {
+    expect(approvalTail(['', '  ', 'a', '', 'b', '  ', ''], 10)).toEqual(['a', '', 'b'])
+  })
+
+  it('survives an empty or all-blank frame rather than inventing a line', () => {
+    expect(approvalTail([], 6)).toEqual([])
+    expect(approvalTail(['', '  '], 6)).toEqual([])
+    expect(approvalTail(DIALOG, 0)).toEqual([])
   })
 })

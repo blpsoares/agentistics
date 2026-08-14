@@ -104,6 +104,33 @@ export interface CliStrings {
   }
   /** Said on a session whose harness has no probed approval markers. */
   sessApprovalBlind: (harness: string) => string
+  /**
+   * Said on a session that IS visibly blocked, but whose dialog nobody has read.
+   *
+   * A different fact from `sessApprovalBlind`, which is about not being able to SEE the block. This
+   * one is about not knowing which key answers it — and a harness can have one and not the other.
+   */
+  sessApproveBlind: (harness: string) => string
+  /** The prompt was typed in and submitted. */
+  sessPrompted: (id: string) => string
+  /** Refused: the session is sitting on a dialog, so typed text would answer the menu. */
+  sessPromptBlocked: string
+  /** Refused: nothing is running there to type into. */
+  sessNotRunning: string
+  /** Refused: nothing was typed. */
+  sessPromptEmpty: string
+  /** The backend accepted neither the text nor the key. */
+  sessSendFailed: (id: string) => string
+  /** The keystroke went in — and the sentence says what it did, not that it "approved". */
+  sessApproved: (id: string) => string
+  /** Refused: it is not asking anything at this moment, whatever the list said a poll ago. */
+  sessNotAsking: string
+  /** Refused: this harness's dialog has never been read, so there is no key to send. */
+  sessApproveUnknown: (harness: string) => string
+  /** Nothing fell, or everything that did has already been picked back up. */
+  sessNoFell: string
+  sessFellOpened: (opened: number, skipped: number) => string
+  sessFellNoneOpened: (skipped: number) => string
   /** The fallback title for a session the user never named. */
   sessUntitled: (harness: string, project: string) => string
   sessKilled: (id: string) => string
@@ -323,6 +350,25 @@ const EN: CliStrings = {
   },
   sessApprovalBlind: (harness: string) =>
     `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
+  sessApproveBlind: (harness: string) =>
+    `nobody has read ${harness}'s dialog, so agentop does not know which key answers it — attach to this session to answer it there.`,
+  sessPrompted: (id: string) => `sent to ${id}.`,
+  sessPromptBlocked:
+    'that session has a question open, so typed text would be answering its menu. Approve it, or attach and answer it there.',
+  sessNotRunning: 'nothing is running in that session to type into.',
+  sessPromptEmpty: 'nothing to send.',
+  sessSendFailed: (id: string) => `${id} did not take the keystroke — it may have just ended.`,
+  sessApproved: (id: string) => `sent the confirm key to ${id}.`,
+  sessNotAsking: 'that session is not asking anything right now — nothing was sent.',
+  sessApproveUnknown: (harness: string) =>
+    `agentop has not read ${harness}'s dialog, so it will not guess which key answers it.`,
+  sessNoFell: 'nothing fell — no session was lost with the machine still on record.',
+  sessFellOpened: (opened: number, skipped: number) =>
+    skipped > 0
+      ? `reopened ${opened} of the session(s) that fell — ${skipped} could not be reopened.`
+      : `reopened ${opened} session(s) that fell.`,
+  sessFellNoneOpened: (skipped: number) =>
+    `none of the ${skipped} session(s) that fell could be reopened.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
   sessKilled: (id: string) => `stopped ${id}.`,
   sessNoTask: 'that session has no task.',
@@ -510,6 +556,25 @@ const PT: CliStrings = {
   },
   sessApprovalBlind: (harness: string) =>
     `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando", como qualquer outra pausa.`,
+  sessApproveBlind: (harness: string) =>
+    `ninguém leu o diálogo do ${harness}, então o agentop não sabe qual tecla responde — anexe na sessão para responder lá.`,
+  sessPrompted: (id: string) => `enviado para ${id}.`,
+  sessPromptBlocked:
+    'essa sessão está com uma pergunta aberta, então o texto digitado responderia o menu dela. Aprove, ou anexe e responda lá.',
+  sessNotRunning: 'não há nada rodando nessa sessão para digitar.',
+  sessPromptEmpty: 'nada para enviar.',
+  sessSendFailed: (id: string) => `${id} não aceitou a tecla — pode ter acabado de encerrar.`,
+  sessApproved: (id: string) => `tecla de confirmação enviada para ${id}.`,
+  sessNotAsking: 'essa sessão não está perguntando nada agora — nada foi enviado.',
+  sessApproveUnknown: (harness: string) =>
+    `o agentop não leu o diálogo do ${harness}, e não vai chutar qual tecla responde.`,
+  sessNoFell: 'nada caiu — nenhuma sessão foi perdida com registro de que estava viva.',
+  sessFellOpened: (opened: number, skipped: number) =>
+    skipped > 0
+      ? `${opened} sessão(ões) que caíram reabertas — ${skipped} não puderam ser reabertas.`
+      : `${opened} sessão(ões) que caíram reabertas.`,
+  sessFellNoneOpened: (skipped: number) =>
+    `nenhuma das ${skipped} sessão(ões) que caíram pôde ser reaberta.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
   sessKilled: (id: string) => `${id} encerrada.`,
   sessNoTask: 'essa sessão não tem tarefa.',
