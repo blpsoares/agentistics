@@ -33,8 +33,9 @@
  *    the pane count and names the key.
  *
  * The screen decides nothing. Every verb is one `host` call performed through the shell's `run`, and
- * the terminal takeover behind `Attach` belongs to the host as well (Task 8): `attachCommand` hands
- * back an argv, and the refusal it can answer with is the one sentence this file words itself.
+ * the terminal takeover behind `Attach` belongs to the host as well: `attachSession` gives the whole
+ * tty away and takes it back, because performing it means spawning a child on that tty and this
+ * package spawns nothing. The refusal it can answer with is the one sentence this file words itself.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -301,21 +302,36 @@ export function Sessions({
   }, [run, back, readSessions])
 
   /**
-   * `enter` on a row — ask the host how to take over this terminal.
+   * `enter` on a row — give the whole terminal to that session, and take this screen back when the
+   * user detaches.
    *
-   * The HANDOVER is Task 8: it needs the real tty, which it can only have once Ink has been
-   * unmounted and the alternate buffer left, and `attachCommand` returns the argv rather than
-   * running it for exactly that reason. What this screen owns is the refusal — `null` carries no
-   * message of its own (see `sessionNotAttachable`), so the sentence for it is the TUI's — and,
-   * until the takeover lands, the argv itself, which is a command the user can genuinely run.
+   * ONE host call, which is the point: the handover needs the real tty AND a child process, and
+   * this package spawns nothing, so `attachSession` performs it and this screen only says when. It
+   * is deliberately not `perform`: everything else here reports into the status line and comes
+   * straight back, while this one is unresolved for as long as the user is inside the session —
+   * minutes or hours — and the two things owed on the way back are its own.
+   *
+   *  - **The refusal is this file's sentence.** `null` means the row cannot be attached to at all
+   *    (the host re-asks at the moment of the keypress, because a session can exit between two
+   *    polls) and carries no message, so `sessionNotAttachable` is worded here.
+   *  - **The fleet is re-read immediately, not at the next tick.** The session may have exited
+   *    while we were inside it, and a list five seconds stale is a list still showing it running.
+   *  - **The cursor goes back to the SESSION, never to the row number.** The poll kept running
+   *    while the terminal was gone and the host sorts attention-first, so the row that was under
+   *    the cursor can legitimately be a different session by now. Re-seating by id is a no-op in
+   *    the ordinary case and the whole fix in the case that matters; when the session really is
+   *    gone, the effect above re-seats it once more, to a row that exists.
    */
   const attach = useCallback((id: string) => {
-    perform(async () => {
-      const argv = await host.attachCommand(id).catch(() => null)
-      if (!argv) return { ok: false, message: s.sessionNotAttachable }
-      return { ok: true, message: argv.join(' ') }
-    }, s.actAttach)
-  }, [host, perform, s.sessionNotAttachable, s.actAttach])
+    void run(async () => {
+      const outcome = await host.attachSession(id)
+      return outcome ?? { ok: false, message: s.sessionNotAttachable }
+    }, s.actAttach).then(() => {
+      back()
+      setSelectedId(id)
+      void readSessions()
+    })
+  }, [host, run, back, readSessions, s.sessionNotAttachable, s.actAttach])
 
   /**
    * The verbs for the selected session — read off the ROW's own flags, never branched on its state.

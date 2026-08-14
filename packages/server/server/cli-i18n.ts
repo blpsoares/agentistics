@@ -195,6 +195,21 @@ export interface CliStrings {
   sessionNotRegistered: string
   sessionRenamed: (label: string) => string
   sessionNoted: string
+  /**
+   * What the terminal says on its way out, printed while it is still ours.
+   *
+   * `key` is the tmux PREFIX (`Ctrl-b`, or whatever the user rebound it to), read from the backend
+   * — the sentence is here rather than in `parsePrefix` because it used to be built there, which
+   * put an English "then" in the middle of the Portuguese one. A user who cannot get out is
+   * stranded in a session that hides their shell, so this is the one line an attach must print.
+   */
+  sessionAttachHint: (id: string, key: string) => string
+  /** What to call the prefix when the backend could not read it. Never a confident `Ctrl-b`. */
+  sessionDetachKeyUnknown: string
+  /** Back from a takeover. The session is still running — that is the whole point of detaching. */
+  sessionDetached: (id: string) => string
+  /** The takeover itself failed; the child's own words went to the terminal it was given. */
+  sessionAttachFailed: (id: string, code: number) => string
 
   // critical (unattended) update — printed by `agentop check-update`
   updateCriticalTitle: string
@@ -350,6 +365,11 @@ const EN: CliStrings = {
   sessionNotRegistered: 'that session has no registry entry to update — it was not started by agentop.',
   sessionRenamed: (label) => `renamed to "${label}".`,
   sessionNoted: 'note saved.',
+  sessionAttachHint: (id, key) =>
+    `Attaching to ${id}. To leave the session running and come back here, press ${key} then d.`,
+  sessionDetachKeyUnknown: 'the tmux prefix',
+  sessionDetached: (id) => `back from ${id} — it is still running.`,
+  sessionAttachFailed: (id, code) => `could not attach to ${id} (exit code ${code}).`,
 
   updateCriticalTitle: 'Critical update — installing automatically',
   updateCriticalInstalling: (v) => `v${v} is being installed in the background; your terminal is free.`,
@@ -502,6 +522,12 @@ const PT: CliStrings = {
   sessionNotRegistered: 'essa sessão não tem registro para atualizar — ela não foi iniciada pelo agentop.',
   sessionRenamed: (label) => `renomeada para "${label}".`,
   sessionNoted: 'nota salva.',
+  // "e depois", not "then": the key is read from tmux, the words around it are this table's.
+  sessionAttachHint: (id, key) =>
+    `Conectando em ${id}. Para deixar a sessão rodando e voltar para cá, aperte ${key} e depois d.`,
+  sessionDetachKeyUnknown: 'o prefixo do tmux',
+  sessionDetached: (id) => `de volta de ${id} — ela continua rodando.`,
+  sessionAttachFailed: (id, code) => `não consegui conectar em ${id} (código ${code}).`,
 
   updateCriticalTitle: 'Atualização crítica — instalando automaticamente',
   updateCriticalInstalling: (v) => `a v${v} está sendo instalada em segundo plano; seu terminal está livre.`,

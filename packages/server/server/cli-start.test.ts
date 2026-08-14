@@ -447,7 +447,7 @@ const backendOf = (over: Partial<SessionBackend> = {}): SessionBackend => ({
   capture: async () => ({ ok: true, lines: [] }),
   kill: async () => true,
   attachCommand: () => [],
-  detachHint: async () => 'Ctrl-b then d',
+  detachKey: async () => 'Ctrl-b',
   ...over,
 })
 
@@ -580,4 +580,33 @@ test('buildService says nothing about boot unless it was told', () => {
   expect(buildService('agentistics', s.svcAgentistics, runtimes, s).boot).toBeUndefined()
   expect(buildService('agentistics', s.svcAgentistics, runtimes, s, { boot: 'on' }).boot).toBe('on')
   expect(buildService('agentistics', s.svcAgentistics, runtimes, s, { boot: 'off' }).boot).toBe('off')
+})
+
+// ---------------------------------------------------------------------------
+// the attach hint — the one line a takeover prints while the terminal is still ours
+// ---------------------------------------------------------------------------
+//
+// The KEY comes from tmux and the WORDS come from this table. It used to be the other way round:
+// `parsePrefix` built the whole phrase, so the Portuguese sentence was served an English "then".
+
+test('the attach hint carries the key it was given, in each language own words', () => {
+  for (const s of [EN, PT]) {
+    expect(s.sessionAttachHint('a1b2', 'Ctrl-a')).toContain('Ctrl-a')
+    expect(s.sessionAttachHint('a1b2', 'Ctrl-a')).toContain('a1b2')
+  }
+})
+
+test('the Portuguese hint has no English left in it', () => {
+  const pt = PT.sessionAttachHint('a1b2', 'Ctrl-b')
+  expect(pt).not.toContain(' then ')
+  expect(pt).toContain(' e depois d')
+  expect(PT.sessionDetachKeyUnknown).not.toBe(EN.sessionDetachKeyUnknown)
+})
+
+// An unreadable prefix is named in words rather than guessed at — the same N/A-versus-a-confident-0
+// rule the rest of this product applies. `parsePrefix('')` is what reaches this.
+test('an unreadable prefix is never rendered as Ctrl-b', () => {
+  for (const s of [EN, PT]) {
+    expect(s.sessionAttachHint('a1b2', s.sessionDetachKeyUnknown)).not.toContain('Ctrl-b')
+  }
 })

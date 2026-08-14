@@ -127,15 +127,21 @@ export function captureFailureFor(stderr: string): 'no-session' | 'backend-error
 }
 
 /**
- * The real detach keystroke, from `show-options -g prefix` (e.g. `prefix C-b`).
+ * The real prefix KEY, from `show-options -g prefix` (e.g. `prefix C-b` -> `Ctrl-b`).
  *
  * Read rather than assumed: tmux loads the user's `~/.tmux.conf` on our socket too, so a user who
  * rebound the prefix to `C-a` would be told to press a key that does nothing. When the value is not
- * a recognisable `C-x`, the raw token is shown instead of a confident wrong answer.
+ * a recognisable `C-x`, the raw token is returned instead of a confident wrong answer.
+ *
+ * IT RETURNS THE KEY, NOT THE SENTENCE. It used to hand back `"Ctrl-b then d"`, which put an
+ * English "then" inside every sentence built from it — including the Portuguese one the control
+ * center shows. The words around the key belong to whichever front end is speaking
+ * (`sessionAttachHint` in `cli-i18n.ts`); `''` is "the prefix could not be read", which each front
+ * end words for itself rather than being told in a language it may not be speaking.
  */
 export function parsePrefix(stdout: string): string {
   const token = stdout.trim().split(/\s+/)[1] ?? ''
-  if (!token) return 'the tmux prefix then d'
+  if (!token) return ''
   const ctrl = /^C-(.)$/.exec(token)
-  return ctrl ? `Ctrl-${ctrl[1]} then d` : `${token} then d`
+  return ctrl ? `Ctrl-${ctrl[1]}` : token
 }

@@ -77,7 +77,7 @@ export const tmuxBackend: SessionBackend = {
     return attachArgs(id)
   },
 
-  async detachHint() {
+  async detachKey() {
     const { out } = await tmux(showPrefixArgs())
     return parsePrefix(out)
   },

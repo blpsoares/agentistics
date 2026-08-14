@@ -93,13 +93,17 @@ async function start(
 /**
  * Hand the terminal over. The detach key is READ from the backend and printed first — a user who
  * cannot get out is stranded in a buffer that hides their shell, and the key is not always Ctrl-b.
+ *
+ * The sentence comes from the shared table rather than being written here, so this CLI and the
+ * control center's takeover say the same thing in their own languages; the backend contributes the
+ * KEY and nothing else, and an unreadable one is named in words rather than guessed at.
  */
 async function execAttach(
   id: string,
   backend: SessionBackend,
 ): Promise<number> {
-  const hint = await backend.detachHint()
-  console.log(`Attaching to ${id}. To leave the session running and come back here, press ${hint}.`)
+  const key = await backend.detachKey()
+  console.log(EN.sessionAttachHint(id, key || EN.sessionDetachKeyUnknown))
   const [bin, ...rest] = backend.attachCommand(id)
   const p = Bun.spawn([bin!, ...rest], { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' })
   return await p.exited

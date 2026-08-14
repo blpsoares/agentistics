@@ -85,13 +85,25 @@ describe('trimCapture', () => {
 
 describe('parsePrefix', () => {
   it('turns tmux notation into the keystroke a person reads', () => {
-    expect(parsePrefix('prefix C-b')).toBe('Ctrl-b then d')
-    expect(parsePrefix('prefix C-a')).toBe('Ctrl-a then d')
+    expect(parsePrefix('prefix C-b')).toBe('Ctrl-b')
+    expect(parsePrefix('prefix C-a')).toBe('Ctrl-a')
   })
 
   it('falls back to the raw value rather than claiming Ctrl-b', () => {
-    expect(parsePrefix('prefix M-x')).toBe('M-x then d')
-    expect(parsePrefix('')).toBe('the tmux prefix then d')
+    expect(parsePrefix('prefix M-x')).toBe('M-x')
+  })
+
+  // The KEY only — no "then d", and no English word of any kind. The sentence is the front end's,
+  // and one of the two front ends speaks Portuguese.
+  it('returns only the key, never a sentence', () => {
+    for (const out of ['prefix C-b', 'prefix M-x', '']) {
+      expect(parsePrefix(out)).not.toContain(' ')
+    }
+  })
+
+  it('answers an unreadable prefix with nothing rather than with English', () => {
+    expect(parsePrefix('')).toBe('')
+    expect(parsePrefix('prefix')).toBe('')
   })
 })
 

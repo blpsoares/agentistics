@@ -128,6 +128,12 @@ export interface SessionBackend {
    * tty, which it can only have after the caller has released it.
    */
   attachCommand(id: string): string[]
-  /** The real detach keystroke, read from the backend — never assumed to be `Ctrl-b`. */
-  detachHint(): Promise<string>
+  /**
+   * The real prefix KEY a detach starts with, read from the backend — never assumed to be `Ctrl-b`,
+   * which is only the default and is the first thing a tmux user rebinds.
+   *
+   * A key, not a sentence, and `''` when it could not be read: the words around it belong to
+   * whichever front end is speaking, and one of the two speaks Portuguese.
+   */
+  detachKey(): Promise<string>
 }

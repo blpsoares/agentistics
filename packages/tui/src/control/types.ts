@@ -563,20 +563,26 @@ export interface ControlHost {
   noteSession(id: string, note: string): Promise<ActionResult>
 
   /**
-   * The argv to exec to take over the terminal, or `null` when this session cannot be attached to
-   * — the backend cannot run here, the session is gone, or its command has already exited.
+   * Hand the WHOLE terminal to this session, and take it back when the user detaches.
    *
-   * Returned rather than executed for the same reason the backend returns it: the attach needs the
-   * REAL tty, which it can only have once Ink has been unmounted and the alternate buffer left.
+   * The one action whose answer is not a repaint: the alternate buffer is given up, the real tty
+   * goes to the session's own program, and the app comes back when it lets go. It belongs to the
+   * host — not to the screen — because taking the terminal over means spawning a child on it, and
+   * this package spawns nothing. The screen owns WHEN (a keypress on a row) and the refusal's
+   * words; the host owns the handover and everything printed during it, including the detach key,
+   * which it READS rather than assuming to be `Ctrl-b`.
+   *
+   * `null` is the REFUSAL, and it is a different answer from a failed `ActionResult`: this session
+   * cannot be attached to at all — the backend cannot run here, the session is gone, or its
+   * command has already exited — and it carries no message because the sentence for it is the
+   * TUI's (`sessionNotAttachable`). A failed result means the takeover was attempted and did not
+   * work, which is the host's own sentence.
+   *
+   * Everything the app polls keeps polling while this is unresolved; nothing it draws reaches the
+   * screen, because `writeFrame` drops frames for exactly the window in which the terminal is not
+   * ours.
    */
-  attachCommand(id: string): Promise<string[] | null>
-
-  /**
-   * The real detach keystroke, read from the backend — never assumed to be `Ctrl-b`, which is only
-   * the default and is the first thing a tmux user rebinds. It has to be said BEFORE the terminal
-   * is handed over: a user who cannot get out is stranded in a session that hides their shell.
-   */
-  detachHint(): Promise<string>
+  attachSession(id: string): Promise<ActionResult | null>
 
   /**
    * Directories a new session could start in, ranked, filtered by `query`.

@@ -1205,7 +1205,44 @@ function pauseForEnter(message: string): Promise<void> {
 }
 
 /**
- * Hand the real terminal to `fn`, then pause so its output can be read.
+ * Give `fn` the REAL terminal — screen, keyboard and all — and take it back when it returns.
+ *
+ * The whole handover, and nothing about what is done with it. Three things happen, in this order,
+ * and each is undone in the reverse one:
+ *
+ *  - **stdin is borrowed.** Ink is still mounted and still listening in raw mode, so without
+ *    detaching its `data` handlers a `q` meant for the child would quit the app and every other
+ *    keystroke would be read as navigation. The handlers are put back exactly as they were, so Ink
+ *    resumes unaware anything happened.
+ *  - **the alternate screen is given up** (`altScreen.suspend`), which is also what makes
+ *    `writeFrame` drop the frames Ink keeps drawing into a buffer that is no longer on screen.
+ *  - **stdout is muted**, INSIDE the suspension: leaving and re-entering the alternate screen are
+ *    themselves stdout writes, and swallowing those would strand the terminal in one buffer. The
+ *    mute is at the JS level, so `tty()` still reaches the terminal — which is how the hint an
+ *    attach prints, and the pause below, are seen at all.
+ *
+ * Ink is NOT unmounted. It does not need to be: the two ways a frame could reach the user's real
+ * screen are both closed above, and unmounting would cost the app its state and repaint the whole
+ * frame — prefixed with a clear-scrollback — onto the terminal we just handed back.
+ */
+function makeHandover(altScreen: Suspendable): Suspend {
+  return async function handover<T>(fn: () => Promise<T>): Promise<T> {
+    const stdin = process.stdin
+    const listeners = stdin.rawListeners('data') as Array<(chunk: Buffer) => void>
+    stdin.removeAllListeners('data')
+    const wasRaw = stdin.isRaw === true
+    if (wasRaw) stdin.setRawMode(false)
+    try {
+      return await altScreen.suspend(() => muteStdout(fn))
+    } finally {
+      if (wasRaw) stdin.setRawMode(true)
+      for (const listener of listeners) stdin.on('data', listener)
+    }
+  }
+}
+
+/**
+ * A handover that PAUSES on the way back, so what the command printed can be read.
  *
  * RESERVED FOR COMMANDS THAT ASK SOMETHING. Everything whose output was merely worth watching now
  * streams into a pane instead (`streamOutput`), which is the whole point of the change: leaving the
@@ -1213,32 +1250,20 @@ function pauseForEnter(message: string): Promise<void> {
  * on this path is `central.sh init`, which reads answers from the tty and refuses without one — and
  * a prompt streamed into a pane is a question nobody can answer.
  *
- * Leaving the alternate screen is only half of it: Ink is still mounted and still listening on
- * stdin in raw mode, so without detaching its `data` handlers a `q` typed at the paused prompt
- * would quit the app and every keystroke meant for the child would be read as navigation. The
- * handlers are put back exactly as they were, so Ink resumes unaware anything happened.
+ * The pause is the ONLY difference from `makeHandover`, and it is why the two are separate: an
+ * attach hands the terminal to a session the user is already looking at and leaves nothing behind
+ * to read, so charging a keypress for it on every detach would be a prompt with no question.
  */
 function makeSuspend(altScreen: Suspendable, strings: () => CliStrings): Suspend {
+  const handover = makeHandover(altScreen)
   return async function suspend<T>(fn: () => Promise<T>): Promise<T> {
-    const stdin = process.stdin
-    const listeners = stdin.rawListeners('data') as Array<(chunk: Buffer) => void>
-    stdin.removeAllListeners('data')
-    const wasRaw = stdin.isRaw === true
-    if (wasRaw) stdin.setRawMode(false)
-    try {
-      // The mute goes INSIDE the suspension: leaving and re-entering the alternate screen are
-      // themselves stdout writes, and swallowing those would strand the terminal in one buffer.
-      return await altScreen.suspend(() => muteStdout(async () => {
-        try {
-          return await fn()
-        } finally {
-          await pauseForEnter(strings().pauseMsg)
-        }
-      }))
-    } finally {
-      if (wasRaw) stdin.setRawMode(true)
-      for (const listener of listeners) stdin.on('data', listener)
-    }
+    return handover(async () => {
+      try {
+        return await fn()
+      } finally {
+        await pauseForEnter(strings().pauseMsg)
+      }
+    })
   }
 }
 
@@ -1278,6 +1303,8 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
   const S = () => cliStrings(lang)
   // Built here so it always reports in the language the host is currently speaking.
   const suspend = makeSuspend(altScreen, S)
+  // The same handover WITHOUT the pause — see `makeSuspend`. Only `attachSession` uses it.
+  const handover = makeHandover(altScreen)
 
   // The update check is fired once and never awaited. `refresh()` runs on every action and on
   // every `r`, and a GitHub call on that path would stall the whole screen behind the network;
@@ -1823,22 +1850,57 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     },
 
     /**
-     * The argv, or `null` — and the liveness check is what makes the `null` mean something.
+     * THE TERMINAL TAKEOVER — the one action that gives the whole tty away and takes it back.
      *
-     * `SessionView.attachable` already says this, and the screen offers the verb accordingly; this
-     * is the same question asked again at the moment of the keypress, because a session can exit
-     * between two polls and handing back an argv for a session that is gone would hand the user a
-     * terminal takeover that dies immediately.
+     * It lives here, and not in the control center, for the reason every other action does: the
+     * screen owns no logic and spawns nothing. What is different is that the answer is not a
+     * sentence but the terminal itself, so the ordering matters and each step is load-bearing.
+     *
+     *  1. **The liveness check is re-asked.** `SessionView.attachable` already said this and the
+     *     screen only offers the verb accordingly, but a session can exit between two polls, and
+     *     attaching to one that is gone would hand the user a takeover that dies immediately.
+     *     `null` — not a failed `ActionResult` — because the refusal has no sentence here: it is
+     *     the TUI's (`sessionNotAttachable`), which is the surface that knows the user's language
+     *     for it.
+     *  2. **The detach key is read BEFORE the handover**, while the screen is still ours and a
+     *     `tmux show-options` costs nothing anyone can see. It is read rather than assumed: tmux
+     *     loads the user's own `~/.tmux.conf` on our socket too, so a printed `Ctrl-b` would be a
+     *     key that does nothing for anyone who rebound the prefix.
+     *  3. **The hint is printed INSIDE the handover, before the child starts** — through `tty()`,
+     *     which writes past the mute — so it lands on the real screen the user is about to lose
+     *     sight of. Printed a moment earlier it would go into the alternate buffer and be erased
+     *     by the next frame; printed a moment later the child owns the screen and would overwrite
+     *     it.
+     *  4. **The child inherits all three descriptors.** This is the one case where it must: tmux
+     *     needs a real tty on stdin and stdout or it refuses outright.
+     *  5. **A failure pauses; a detach does not.** Coming back from a session is the ordinary case
+     *     and leaves nothing on screen to read, so charging a keypress for it would be a prompt
+     *     with no question. A takeover that FAILED said why on the terminal it was given, and that
+     *     sentence is the child's own — reading it is worth the keypress, because the status line
+     *     can only report that it failed, never tmux's reason.
      */
-    async attachCommand(id: string): Promise<string[] | null> {
+    async attachSession(id: string): Promise<ActionResult | null> {
+      const s = S()
       const backend = await resolveBackend()
       if (await backend.unavailable()) return null
-      const alive = (await backend.list()).some(b => b.id === id && b.alive)
-      return alive ? backend.attachCommand(id) : null
-    },
+      if (!(await backend.list()).some(b => b.id === id && b.alive)) return null
 
-    async detachHint(): Promise<string> {
-      return (await resolveBackend()).detachHint()
+      const argv = backend.attachCommand(id)
+      const [bin, ...rest] = argv
+      if (!bin) return null
+      // Read out here, not inside: a spawn on the far side of the handover would run with the
+      // screen already given away, and its failure would have nowhere to go.
+      const key = await backend.detachKey()
+
+      return handover(async () => {
+        tty(`\n  ${s.sessionAttachHint(id, key || s.sessionDetachKeyUnknown)}\n\n`)
+        const code = await Bun.spawn([bin, ...rest], {
+          stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
+        }).exited
+        if (code === 0) return { ok: true, message: s.sessionDetached(id) }
+        await pauseForEnter(s.pauseMsg)
+        return { ok: false, message: s.sessionAttachFailed(id, code) }
+      })
     },
 
     async projectChoices(query: string, limit: number): Promise<ProjectChoice[]> {

@@ -487,11 +487,11 @@ function fakeHost(opts: Options): ControlHost {
     killSession: done,
     renameSession: done,
     noteSession: done,
-    // The argv a real backend would hand back. Nothing here execs it — the preview has no terminal
-    // to hand over — but returning it is what makes `--keys enter` show the success path as well as
-    // the refusal, and an external row is refused by its own `attachable: false` before it gets here.
-    attachCommand: async id => (id.startsWith('ext:') ? null : ['tmux', 'attach', '-t', `agentop-${id}`]),
-    detachHint: async () => 'Ctrl-b then d',
+    // NOTHING IS HANDED OVER HERE, and nothing could be: the preview renders one frame to stdout
+    // and has no terminal to give away. It reports the outcome a detach would have produced, which
+    // is what makes `--keys enter` show the success path as well as the refusal — an external row
+    // is refused by its own `attachable: false` long before it reaches this.
+    attachSession: async id => (id.startsWith('ext:') ? null : { ok: true, message: `back from ${id}` }),
     projectChoices: async () => [],
     sessionHarnesses: async () => [],
   }
