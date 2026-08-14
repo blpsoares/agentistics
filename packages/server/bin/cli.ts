@@ -62,7 +62,10 @@ Commands:
   session       Start / list / attach assistant sessions (tmux-backed; --bg detaches);
                 'session ls' prints the cockpit's table of what is running
   hooks         Teach Claude Code to run work in parallel through agentop
-                (installs a skill + a SessionStart hook; explicit, reversible)
+                (installs a skill + SessionStart/Stop hooks; explicit, reversible)
+  events        Be told when a session starts waiting, blocks on a permission prompt or
+                exits — in an inbox, in another Claude session, and on your desktop
+                ('events watch' to subscribe, 'events status' to see who is watching)
   ci-push       One-shot push of a CI runner's metrics to a central
   upgrade       Upgrade agentop to the latest version
   autostart     Start a mode with the system (systemd user service on Linux)
@@ -405,6 +408,12 @@ if (command === 'session') {
 if (command === 'hooks') {
   const { runHooks } = await import('../server/cli-hooks.ts')
   const code = await runHooks(args)
+  process.exit(code)
+}
+
+if (command === 'events') {
+  const { runEvents } = await import('../server/cli-events.ts')
+  const code = await runEvents(args)
   process.exit(code)
 }
 

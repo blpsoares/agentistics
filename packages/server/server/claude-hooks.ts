@@ -30,15 +30,58 @@
  * machine, without a second store on the side that could disagree with it.
  */
 
-/** Bumped when the hook's CONTRACT changes (the verb it calls, what that verb prints). An installed
- *  hook at a lower version is reported as stale by `status` and rewritten in place by `install`. */
-export const HOOK_VERSION = 1
+/**
+ * Bumped when the hook CONTRACT changes — the verbs called, what they print, or which events are
+ * registered. An installed hook at a lower version is reported as stale by `status` and rewritten
+ * in place by `install`.
+ *
+ * v2 added the `Stop` hook: an install that predates it carries only `SessionStart`, so it is
+ * stale by exactly the definition above and `install` brings it up to both.
+ */
+export const HOOK_VERSION = 2
 
-/** The Claude Code event we register on. See `docs/claude-integration.md` for why this one. */
+/**
+ * The two Claude Code events agentop registers on, and why there are two.
+ *
+ * They answer different questions and cost different things:
+ *
+ *  - **`SessionStart` → `hooks context`** injects the FACTS a starting session cannot know: which
+ *    sessions are running now, which is blocked, which task reopens here. It prints nothing when
+ *    the fleet is empty, so a quiet machine pays no tokens.
+ *  - **`Stop` → `events emit`** records that this session finished a turn. It is the EXACT half of
+ *    the event channel — no polling, no inference, Claude saying so itself — and it is the only
+ *    reason the channel can report the end of a Claude turn instantly rather than up to five
+ *    seconds later. It prints nothing at all: it writes one line to the inbox and exits.
+ *
+ * Registered as a table rather than two constants so `planHookInstall` / `planHookRemoval` /
+ * `readHookStatus` take an event and there is exactly ONE merge implementation. A second copy of
+ * the settings merge for the second hook would be a second set of rules about somebody else's file.
+ */
+export interface HookSpec {
+  /** The Claude Code event name — the key under `hooks` in settings.json. */
+  event: string
+  /** The agentop verb pair this hook runs. Also its identity: see below. */
+  verb: readonly [string, string]
+  /** Seconds. A hook that hangs holds up the session it was supposed to serve. */
+  timeoutSec: number
+}
+
+export const HOOK_SPECS: readonly HookSpec[] = [
+  // Talks to tmux and reads `/proc`; ten is generous and bounded.
+  { event: 'SessionStart', verb: ['hooks', 'context'], timeoutSec: 10 },
+  // Appends one line to a local file. Five is already an eternity for that, and this one runs at
+  // the end of EVERY turn — the budget has to be small enough that it is never felt.
+  { event: 'Stop', verb: ['events', 'emit'], timeoutSec: 5 },
+]
+
+export function hookSpecFor(event: string): HookSpec | undefined {
+  return HOOK_SPECS.find(s => s.event === event)
+}
+
+/** The original single hook. Kept as the DEFAULT of every function below, so nothing that already
+ *  called them changed meaning when the second hook was added. */
 export const HOOK_EVENT = 'SessionStart'
 
-/** Seconds. The hook talks to tmux and reads `/proc`; ten is generous and bounded — a hook that
- *  hangs holds up the session it was supposed to inform. */
 export const HOOK_TIMEOUT_SEC = 10
 
 // ---------------------------------------------------------------------------
@@ -67,23 +110,38 @@ export function hookInvocation(o: { onPath?: boolean; execPath: string; script?:
     : shellQuote(o.execPath)
 }
 
-/** The full command string an installed hook runs. */
-export function hookCommand(invocation: string, version = HOOK_VERSION): string {
-  return `${invocation} hooks context --hook-version ${version}`
+/** The full command string an installed hook runs, for one event. */
+export function hookCommand(
+  invocation: string,
+  version = HOOK_VERSION,
+  event = HOOK_EVENT,
+): string {
+  const spec = hookSpecFor(event)
+  if (!spec) throw new Error(`No agentop hook is defined for the ${event} event.`)
+  return `${invocation} ${spec.verb[0]} ${spec.verb[1]} --hook-version ${version}`
 }
 
 /**
  * Is this command one of ours?
  *
- * The verb pair `hooks context` is required, and then one of two corroborating marks: the word
- * `agentop` somewhere in the command, or the `--hook-version` flag every install writes. Either
- * alone would be wrong — a source checkout runs `bun …/packages/server/bin/cli.ts`, which contains
- * no `agentop` at all, and `hooks context` on its own is a verb pair another tool could plausibly
- * use. Deliberately loose about everything else: an absolute path, a quoted path, an interpreter
- * prefix and a hand-added `--lang pt` all still match, and all of them are still our hook.
+ * One of our verb PAIRS is required, and then one of two corroborating marks: the word `agentop`
+ * somewhere in the command, or the `--hook-version` flag every install writes. Either alone would
+ * be wrong — a source checkout runs `bun …/packages/server/bin/cli.ts`, which contains no
+ * `agentop` at all, and `hooks context` on its own is a verb pair another tool could plausibly use.
+ * Deliberately loose about everything else: an absolute path, a quoted path, an interpreter prefix
+ * and a hand-added `--lang pt` all still match, and all of them are still our hook.
+ *
+ * `event` NARROWS it to that event's own verb pair, and every caller passes one. Without the
+ * narrowing, removing the `SessionStart` hook would also match — and delete — a `Stop` entry a user
+ * had moved there by hand: our two hooks would become one thing that cannot be administered
+ * separately. Called with no event it matches ANY of our verbs, which is what a general "is this
+ * line ours" question means.
  */
-export function isAgentopHookCommand(command: string): boolean {
-  if (!/(^|[\s"'])hooks\s+context(\s|$|["'])/.test(command)) return false
+export function isAgentopHookCommand(command: string, event?: string): boolean {
+  const specs = event === undefined ? HOOK_SPECS : HOOK_SPECS.filter(s => s.event === event)
+  const matchesVerb = specs.some(s =>
+    new RegExp(`(^|[\\s"'])${s.verb[0]}\\s+${s.verb[1]}(\\s|$|["'])`).test(command))
+  if (!matchesVerb) return false
   return /agentop/i.test(command) || /--hook-version/.test(command)
 }
 
@@ -126,14 +184,18 @@ export interface HookStatus {
 
 /** Read-only: what is in this settings document, as far as we are concerned. Never throws — an
  *  unreadable shape simply carries no hook of ours, which is the truth. */
-export function readHookStatus(settings: unknown, version = HOOK_VERSION): HookStatus {
+export function readHookStatus(
+  settings: unknown,
+  version = HOOK_VERSION,
+  event = HOOK_EVENT,
+): HookStatus {
   const commands: string[] = []
-  if (isObj(settings) && isObj(settings.hooks) && Array.isArray(settings.hooks[HOOK_EVENT])) {
-    for (const group of settings.hooks[HOOK_EVENT] as unknown[]) {
+  if (isObj(settings) && isObj(settings.hooks) && Array.isArray(settings.hooks[event])) {
+    for (const group of settings.hooks[event] as unknown[]) {
       if (!isObj(group) || !Array.isArray(group.hooks)) continue
       for (const hook of group.hooks as unknown[]) {
         if (!isObj(hook) || typeof hook.command !== 'string') continue
-        if (isAgentopHookCommand(hook.command)) commands.push(hook.command)
+        if (isAgentopHookCommand(hook.command, event)) commands.push(hook.command)
       }
     }
   }
@@ -154,15 +216,15 @@ export function readHookStatus(settings: unknown, version = HOOK_VERSION): HookS
  * user added to it, is kept. Replacing the whole entry would quietly undo a deliberate edit, and
  * "install refreshed my hook" is not a licence to discard the rest of the line it lives on.
  */
-export function planHookInstall(settings: unknown, command: string): HookPlan {
+export function planHookInstall(settings: unknown, command: string, event = HOOK_EVENT): HookPlan {
   if (settings === undefined || settings === null) settings = {}
   if (!isObj(settings)) return { ok: false, error: { code: 'settings-not-object' } }
 
   const hooksRaw = settings.hooks ?? {}
   if (!isObj(hooksRaw)) return { ok: false, error: { code: 'hooks-not-object' } }
 
-  const eventRaw = hooksRaw[HOOK_EVENT] ?? []
-  if (!Array.isArray(eventRaw)) return { ok: false, error: { code: 'event-not-array', event: HOOK_EVENT } }
+  const eventRaw = hooksRaw[event] ?? []
+  if (!Array.isArray(eventRaw)) return { ok: false, error: { code: 'event-not-array', event } }
 
   let changed = false
   let found = false
@@ -172,7 +234,7 @@ export function planHookInstall(settings: unknown, command: string): HookPlan {
     let touched = false
     const hooks = (group.hooks as unknown[]).map(hook => {
       if (!isObj(hook) || typeof hook.command !== 'string') return hook
-      if (!isAgentopHookCommand(hook.command)) return hook
+      if (!isAgentopHookCommand(hook.command, event)) return hook
       found = true
       if (hook.command === command) return hook
       touched = true
@@ -185,9 +247,10 @@ export function planHookInstall(settings: unknown, command: string): HookPlan {
 
   if (!found) {
     groups.push({
-      // No `matcher`: every SessionStart source is one where the facts this hook reports are worth
-      // having — a fresh start, a resume and a compact have all just lost or never had them.
-      hooks: [{ type: 'command', command, timeout: HOOK_TIMEOUT_SEC }],
+      // No `matcher`: every SessionStart source is one where the facts that hook reports are worth
+      // having — a fresh start, a resume and a compact have all just lost or never had them — and
+      // Stop has no matcher dimension at all.
+      hooks: [{ type: 'command', command, timeout: hookSpecFor(event)?.timeoutSec ?? HOOK_TIMEOUT_SEC }],
     })
     changed = true
   }
@@ -198,7 +261,7 @@ export function planHookInstall(settings: unknown, command: string): HookPlan {
 
   return {
     ok: true,
-    settings: { ...settings, hooks: { ...hooksRaw, [HOOK_EVENT]: groups } },
+    settings: { ...settings, hooks: { ...hooksRaw, [event]: groups } },
     changed: true,
   }
 }
@@ -211,7 +274,7 @@ export function planHookInstall(settings: unknown, command: string): HookPlan {
  * ambiguity is a `"hooks": {}` a user wrote by hand before installing: it is indistinguishable from
  * the one an install created, and it is pruned. An empty object either way changes no behaviour.
  */
-export function planHookRemoval(settings: unknown): HookPlan {
+export function planHookRemoval(settings: unknown, event = HOOK_EVENT): HookPlan {
   if (settings === undefined || settings === null) settings = {}
   if (!isObj(settings)) return { ok: false, error: { code: 'settings-not-object' } }
 
@@ -219,16 +282,16 @@ export function planHookRemoval(settings: unknown): HookPlan {
   if (hooksRaw === undefined) return { ok: true, settings, changed: false }
   if (!isObj(hooksRaw)) return { ok: false, error: { code: 'hooks-not-object' } }
 
-  const eventRaw = hooksRaw[HOOK_EVENT]
+  const eventRaw = hooksRaw[event]
   if (eventRaw === undefined) return { ok: true, settings, changed: false }
-  if (!Array.isArray(eventRaw)) return { ok: false, error: { code: 'event-not-array', event: HOOK_EVENT } }
+  if (!Array.isArray(eventRaw)) return { ok: false, error: { code: 'event-not-array', event } }
 
   let changed = false
   const groups: unknown[] = []
   for (const group of eventRaw) {
     if (!isObj(group) || !Array.isArray(group.hooks)) { groups.push(group); continue }
     const kept = (group.hooks as unknown[]).filter(hook =>
-      !(isObj(hook) && typeof hook.command === 'string' && isAgentopHookCommand(hook.command)))
+      !(isObj(hook) && typeof hook.command === 'string' && isAgentopHookCommand(hook.command, event)))
     if (kept.length === (group.hooks as unknown[]).length) { groups.push(group); continue }
     changed = true
     // A group emptied by that removal was ours; one that still carries someone else's hook stays,
@@ -239,8 +302,8 @@ export function planHookRemoval(settings: unknown): HookPlan {
   if (!changed) return { ok: true, settings, changed: false }
 
   const hooks: Obj = { ...hooksRaw }
-  if (groups.length > 0) hooks[HOOK_EVENT] = groups
-  else delete hooks[HOOK_EVENT]
+  if (groups.length > 0) hooks[event] = groups
+  else delete hooks[event]
 
   const next: Obj = { ...settings }
   if (Object.keys(hooks).length > 0) next.hooks = hooks

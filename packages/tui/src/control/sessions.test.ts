@@ -14,6 +14,7 @@ import {
   type CardLine, type SessionRow,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
+import { controlStrings } from './i18n'
 
 /** The layout block every aside fixture carries — it is a required option, like the groupings. */
 const LAYOUT = {
@@ -1734,5 +1735,51 @@ describe('detailLines — named in two places', () => {
       labels, ago,
     )
     expect(lines.map(l => l.key).slice(0, 3)).toEqual(['say0', 'also', 'where'])
+  })
+})
+
+describe('the header count', () => {
+  const en = controlStrings('en')
+  const pt = controlStrings('pt')
+
+  it('says how many are ON SCREEN and out of how many', () => {
+    // The header read the fleet's length, so with `only active` on it announced 44 over a screen
+    // showing ten — a number describing a screen nobody is looking at.
+    expect(en.sessionsCount(10, 44)).toBe('10 of 44 sessions')
+    expect(pt.sessionsCount(10, 44)).toBe('10 de 44 sessões')
+  })
+
+  it('drops the second number when it says nothing new', () => {
+    // Nothing is being withheld, so "9 of 9" is noise where "9" is the fact.
+    expect(en.sessionsCount(9, 9)).toBe('9 sessions')
+    expect(pt.sessionsCount(9, 9)).toBe('9 sessões')
+    expect(en.sessionsCount(1, 1)).toBe('1 session')
+    expect(pt.sessionsCount(1, 1)).toBe('1 sessão')
+  })
+
+  it('is honest about an empty screen over a fleet that is not', () => {
+    // The case that matters most: the filter emptied the list, and the row must not read as an
+    // empty machine.
+    expect(en.sessionsCount(0, 44)).toBe('0 of 44 sessions')
+    expect(pt.sessionsCount(0, 44)).toBe('0 de 44 sessões')
+  })
+})
+
+describe('the wizard name step', () => {
+  const harness = { id: 'claude', supportsModel: true }
+
+  it('carries a name the user typed', () => {
+    const plan = planSubmit({
+      draft: { harness, cwd: '/r', label: 'a refatoração do token' }, hasSpawn: true, attach: false,
+    })
+    expect(plan.ok).toBe(true)
+    if (plan.ok) expect(plan.req.label).toBe('a refatoração do token')
+  })
+
+  it('carries NO name when the step was skipped', () => {
+    // Enter on an untouched field means "no name of my own", and the row derives one from the
+    // harness and the folder. An empty string is not a name called "".
+    const plan = planSubmit({ draft: { harness, cwd: '/r', label: '' }, hasSpawn: true, attach: false })
+    if (plan.ok) expect('label' in plan.req).toBe(false)
   })
 })
