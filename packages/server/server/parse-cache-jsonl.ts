@@ -20,12 +20,16 @@ export async function stampOf(filePath: string): Promise<FileStamp | null> {
  * same transcript. `sessionId` and `fallbackPath` are NOT — both are derived
  * deterministically from the path the key already carries.
  *
- * A file that cannot be stat-ed has no version to check freshness against, which is
- * exactly the state Claude's own 30-day transcript cleanup leaves a cached row in —
- * the file is deleted, but the row this build wants is still sitting in the cache
- * from before. `getAny` serves that last-known parse rather than losing it; only a
- * slot that was NEVER cached falls through to the live parser, which answers with an
- * empty session exactly as it does today.
+ * A file that cannot be stat-ed has no version to check freshness against — and this
+ * cache is never a source of truth: every value it holds must be recomputable from
+ * the file it names, so a slot cannot be served once that file is gone, no matter
+ * what was cached the last time it existed. This is exactly the state Claude's own
+ * 30-day transcript cleanup leaves a row in, but reviving a deleted transcript's
+ * metrics is not this cache's job — it is the consolidate store's
+ * (`~/.agentistics/sessions/<harness>/<id>.json`, gap-filled by `loadConsolidated()`),
+ * which exists precisely to survive that cleanup and is the one place that decision
+ * belongs. So an unstat-able file falls straight through to the live parser, which
+ * answers with an empty session exactly as it does today.
  */
 export async function cachedParseSession(
   cache: ParseCache,
@@ -36,8 +40,6 @@ export async function cachedParseSession(
 ): Promise<SessionMeta> {
   const stamp = await stampOf(filePath)
   if (!stamp) {
-    const stale = cache.getAny<SessionMeta>('session', filePath, source)
-    if (stale) return stale
     return parseSessionJsonl(filePath, sessionId, fallbackPath, source)
   }
 

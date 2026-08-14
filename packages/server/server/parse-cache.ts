@@ -12,12 +12,6 @@ export interface ParseCacheStats {
 export interface ParseCache {
   /** The cached derivation of THIS version of the file, or null to recompute. */
   get<T>(kind: ParseCacheKind, stamp: FileStamp, variant?: string): T | null
-  /** The most recently cached derivation for this slot, regardless of the version it
-   *  was derived from — for when the source file is gone and there is nothing left
-   *  to check freshness against. A slot never written returns null, exactly like
-   *  `get`. Counts identically to `get` (a hit/miss and, on a hit, keeps the slot
-   *  alive for `flush`), so callers do not need to reason about a second counter. */
-  getAny<T>(kind: ParseCacheKind, path: string, variant?: string): T | null
   /** Store a derivation, replacing any earlier version of the same slot. */
   set(kind: ParseCacheKind, stamp: FileStamp, value: unknown, variant?: string): void
   /** Mark every slot READ this build as live, in one statement. Call once per build,
@@ -35,7 +29,6 @@ export interface ParseCache {
  *  used by callers that deliberately bypass it. Every method is a safe nothing. */
 export const NOOP_PARSE_CACHE: ParseCache = {
   get: () => null,
-  getAny: () => null,
   set: () => {},
   flush: () => {},
   gc: () => 0,
@@ -119,21 +112,6 @@ export async function openParseCache(
         if (!row || row.key !== cacheKey(stamp)) { stats.misses++; return null }
         // A blob written by an older build may no longer parse or may no longer hold
         // the shape the caller expects. Both are a miss — recompute, never crash.
-        const parsed = JSON.parse(row.value) as T
-        readSlots.add(slot)
-        stats.hits++
-        return parsed
-      } catch {
-        stats.misses++
-        return null
-      }
-    },
-
-    getAny<T>(kind: ParseCacheKind, path: string, variant = ''): T | null {
-      const slot = cacheSlot(kind, path, variant)
-      try {
-        const row = selectStmt.get(slot) as { key: string; value: string } | null
-        if (!row) { stats.misses++; return null }
         const parsed = JSON.parse(row.value) as T
         readSlots.add(slot)
         stats.hits++

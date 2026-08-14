@@ -1,5 +1,5 @@
 import { describe, expect, test, afterEach } from 'bun:test'
-import { mkdtemp, rm, writeFile, utimes } from 'fs/promises'
+import { mkdtemp, rm, writeFile, utimes, stat } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { openParseCache } from './parse-cache'
@@ -53,12 +53,19 @@ describe('cachedParseSession', () => {
     const cache = await openParseCache(join(dir, 'cache.db'))
     await cachedParseSession(cache, file, 'sess-1', '/fallback', 'jsonl')
 
-    // Delete the transcript. A real hit answers from the database alone; a parse
-    // would fall back to makeEmptySession and lose every counter.
-    await rm(file)
+    // Overwrite the CONTENT with garbage of the same byte length, then restore the
+    // original mtime exactly. The version key is (truncated mtimeMs, size), so the
+    // stored row still matches this "new" version — a genuine hit answers from the
+    // database alone and returns the real counters; a re-read would return garbage
+    // (or crash the parser) instead.
+    const before = await stat(file)
+    await writeFile(file, 'x'.repeat(TRANSCRIPT.length))
+    await utimes(file, before.atime, before.mtime)
+
     const warm = await cachedParseSession(cache, file, 'sess-1', '/fallback', 'jsonl')
     expect(warm.user_message_count).toBe(2)
     expect(warm.input_tokens).toBe(10)
+    expect(cache.stats().hits).toBe(1)
     cache.close()
   })
 
