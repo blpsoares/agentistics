@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { openParseCache } from './parse-cache'
 import { cachedParseSession, cachedEnrich } from './parse-cache-jsonl'
-import { parseSessionJsonl, activeMinutesFromClaudeJsonl } from './jsonl'
+import { parseSessionJsonl, activeMinutesFromClaudeJsonl, contextTokensFromClaudeJsonl } from './jsonl'
 
 const dirs: string[] = []
 async function tempDir(): Promise<string> {
@@ -172,6 +172,38 @@ describe('cachedEnrich', () => {
     await writeFile(file, '')
     const cache = await openParseCache(join(dir, 'cache.db'))
     expect(await cachedEnrich(cache, file, '')).toBeNull()
+    cache.close()
+  })
+
+  test('the context gauge matches the live computation', async () => {
+    // context_tokens arrived on dev while this cache was being built, into the very
+    // block cachedEnrich replaced. If it were not carried here it would read as blank
+    // on every meta-backed session — which is most of them.
+    const { dir, file } = await fixture()
+    const cache = await openParseCache(join(dir, 'cache.db'))
+    const r = await cachedEnrich(cache, file, '')
+    expect(r?.contextTokens).toBe(contextTokensFromClaudeJsonl(TRANSCRIPT.split('\n')) ?? null)
+    expect(r?.contextTokens).toBeGreaterThan(0)
+    cache.close()
+  })
+
+  test('a row written under an older result shape is never served', async () => {
+    // A stored row is a JSON blob of whatever EnrichResult looked like when it was
+    // written. Without a shape marker in the variant, adding a field leaves every
+    // existing row missing it while STILL HITTING — and a finished session's transcript
+    // never changes again, so the new metric would read blank on it forever.
+    const { dir, file } = await fixture()
+    const cache = await openParseCache(join(dir, 'cache.db'))
+    const st = await stat(file)
+    const stamp = { path: file, mtimeMs: st.mtimeMs, size: st.size }
+
+    // Exactly what an older build wrote: the variant was the bare model id, no shape.
+    cache.set('enrich', stamp, { model: 'stale-model', activeMinutes: 999, agentMetrics: null }, '')
+
+    const fresh = await cachedEnrich(cache, file, '')
+    expect(fresh?.model).toBe('claude-opus-4-6')
+    expect(fresh?.model).not.toBe('stale-model')
+    expect(fresh?.contextTokens).toBeGreaterThan(0)
     cache.close()
   })
 })
