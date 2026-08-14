@@ -108,6 +108,12 @@ idêntico** — são a mesma conversa aberta em dois terminais ao mesmo tempo:
 |---|---|
 | `1da098e5cb` ≡ `44d649269a` | parse-cache sqlite |
 | `1ec25fc3d1` ≡ `e477d4e628` | cockpit-remount-flash, PR #126 |
+| `91f21d7c9f` ≡ `29ca41da44` | member-connect / rotate |
+
+> **Resolvido na frota em 2026-08-14**, pela regra "fica quem está no worktree, morre quem está no
+> checkout compartilhado" — trabalhar no `~/agentistics` compartilhado é o que o CLAUDE.md proíbe.
+> Mortas: `1da098e5cb`, `e477d4e628`, `91f21d7c9f`. **O bug no código continua de pé** e é o item 1
+> da ordem.
 
 E o próprio Claude Code detecta e avisa, nas duas:
 
@@ -126,11 +132,54 @@ aqui: a sessão do parse-cache **parou sozinha** ao perceber, e escreveu o porqu
 
 Ela estava certa: o "alguém" era o gêmeo dela.
 
-`planTaskReopen` deveria **aposentar** a linha que substitui — é o que o CLAUDE.md afirma que ele
-faz ("everything reopened RETIRES the row it replaced"). Reproduza com a frota real antes de mexer
-na aritmética: pode ser o registry, e não o planejador. E considere a defesa mais barata que
-existe — **recusar reabrir uma `conversationId` que já tem sessão viva**, dizendo qual é. Uma trava
-na porta vale mais que uma limpeza depois.
+#### A causa raiz — investigada, e são DOIS defeitos que se somam
+
+Medido em `~/.agentistics/managed-sessions.json`: **9 conversas com mais de uma linha**, uma delas
+com **seis**. Os três registros do parse-cache mostram a mecânica:
+
+```
+a675158a03  criada 14:02:04  endedAt 19:16:53.871  conversa cd118e71  cwd=worktree
+44d649269a  criada 19:16:53.868                    conversa cd118e71  cwd=worktree        ← reopen CORRETO
+1da098e5cb  criada 19:17:08.719                    conversa cd118e71  cwd=~/agentistics   ← 15s depois, MESMA conversa
+```
+
+O primeiro reopen está certo: aposentou a linha antiga (`endedAt`) e criou a nova. O segundo, 15
+segundos depois, pegou a **mesma conversa** sem aposentar nada.
+
+**Defeito 1 — `session-view.ts`, `claimResume` (linhas ~259-268).** O conjunto `claimed`, que existe
+exatamente para não entregar uma conversa a duas linhas, **só é consultado no caminho de fallback**:
+
+```ts
+const own = exact ?? (managed?.conversationId
+  ? pool.find(c => c.sessionId === managed.conversationId)   // ← não olha `claimed`
+  : undefined)
+const conv = own ?? pool.find(c => !claimed.has(c.sessionId) && …)   // ← só aqui
+```
+
+O comentário acima dele diz "uma linha que REGISTROU a conversa reivindica aquela", tratando o id
+registrado como único. **Ele não é único** — a medição acima é a prova. A trava existe e está no
+galho errado.
+
+**Defeito 2 — `task-reopen.ts:52`, e é o decisivo:**
+
+```ts
+if (o.liveIds.has(entry.id)) { plan.already.push(entry.id); continue }
+```
+
+A trava de "já está rodando" é pela **LINHA** (`entry.id`), não pela **CONVERSA**. Duas linhas sem
+`endedAt` apontando para a mesma `conversationId` entram as duas em `plan.reopen` — uma já está
+viva, e o agentop abre a segunda por cima.
+
+**A correção, nos dois lugares, e nenhum sozinho basta:**
+
+1. `planTaskReopen` deduplica por `conversationId` além de por `entry.id`: uma conversa cuja
+   sessão já está viva vira `already`, nomeando a linha que a está rodando. Testes para o caso de
+   duas linhas / uma conversa, com e sem `endedAt`.
+2. `claimResume` consulta `claimed` **também no caminho `own`** — a primeira linha leva, a segunda
+   não recebe alvo de reopen. A ordem então passa a importar, então ordene por algo estável e
+   defensável (a mais recentemente vista), não pela ordem de leitura do arquivo.
+3. Considere ainda **recusar o spawn** de um `--resume <id>` cuja conversa já tem sessão viva,
+   dizendo qual é. É a trava na porta, e é a que teria evitado todos os nove casos.
 
 ### 2.2 A frota inteira parada numa pergunta de onboarding que ninguém detecta (alta)
 
@@ -312,7 +361,68 @@ Regras que decorrem disso, e cada uma já tem precedente no repo:
   entra. Faça 2.6 **em cima** desta tabela, não antes dela, ou serão duas refatorações do mesmo
   arquivo.
 
-### 2.10 Um QUARTO diálogo do Claude, ainda não catalogado (média)
+### 2.10 O orçamento de MEMÓRIA da máquina, e quantas sessões cabem nela (alta)
+
+Uma sessão parada em pergunta de onboarding e uma sessão trabalhando custam a mesma memória, e
+ninguém tem como saber quantas a máquina aguenta. Medido aqui hoje, 15.7 GB de RAM e 4 GB de swap:
+
+| | |
+|---|---|
+| processo `claude` | **162 a 442 MB** (mediana ~250 MB) |
+| `agentop server` | 578 MB |
+| 14 sessões vivas | **~4 GB**, mais o swap a 97% — que é o que travava o notebook |
+
+**Duas coisas, e a segunda é a que você usa.**
+
+#### a) O medidor, no canto superior direito
+
+Diz quanto a MÁQUINA tem e quanto está em uso — **do sistema inteiro, não do agentop**. Isso tem de
+estar escrito, não implícito: um número no canto de uma janela é lido como sendo daquela janela, e
+alguém vai concluir que o agentop consome 10 GB. Rotule (`sistema` / `system`), e conte o SWAP
+junto ou o alarme chega tarde demais: aqui a RAM parecia folgada com 3.6 GB livres enquanto o swap
+estava em 97%, e é o swap cheio que congela a máquina.
+
+Use `available`, **nunca `free`**. `free` ignora o cache reclamável e subestima o que existe — a
+diferença aqui é 3.6 GB contra 5.2 GB, e essa distância inteira seria alarme falso.
+
+#### b) `sessões paralelas recomendadas: 11/14`
+
+O número que responde a pergunta real. Formato `usadas/máximo`:
+
+```
+máximo = piso( (memória disponível + memória já usada pelas sessões) / custo típico por sessão )
+```
+
+- **`custo típico` é MEDIDO, não constante.** Some o RSS das sessões vivas e divida pelo número
+  delas; sem nenhuma sessão viva, caia num padrão declarado (250 MB) e **diga que é estimativa**.
+  Um custo fixo compilado erra em toda máquina que não é esta.
+- **Reserve o que o sistema precisa** para não entrar em swap — o resto do desktop, o servidor, o
+  build. Um `máximo` que só cabe se nada mais rodar é um número que mente na hora que importa.
+- **Cor por distância do teto, não por percentual:**
+
+| faltam | cor |
+|---|---|
+| 4 ou mais | normal |
+| exatamente 3, 2 ou 1 | **vermelho** (`COLORS.danger`) |
+| 0 ou negativo | vermelho + o aviso |
+
+  Percentual erraria: faltar 3 em 30 é tranquilo e faltar 3 em 14 é urgente. A distância é o que
+  importa porque o que se abre é **uma sessão de cada vez**.
+- **O aviso só aparece quando começa a doer de verdade** — pedido explícito. Nada de aviso ao abrir
+  a quinta sessão numa máquina que aguenta trinta. O gatilho é o orçamento acima estourado, ou o
+  swap passando de um limiar; e o texto diz o que fazer (quais sessões estão paradas e podem ser
+  fechadas), não só que está ruim.
+- **Puro e testado**, com a leitura de `/proc/meminfo` isolada na casca impura. E `Record<>` por
+  plataforma: **não há como ler isso em toda plataforma**, então quem não sabe **não mostra
+  medidor** em vez de mostrar zero — mesma regra do `ControlService.boot` e do
+  `HARNESS_CAPABILITIES`.
+
+**Nota de honestidade que a implementação precisa carregar:** RSS de processos que compartilham
+páginas **não soma exatamente**. O número é bom para "quantas cabem", e não é contabilidade. Se a
+implementação puder usar PSS (`/proc/<pid>/smaps_rollup`), melhor; se não, diga no comentário que é
+aproximação por cima.
+
+### 2.11 Um QUARTO diálogo do Claude, ainda não catalogado (média)
 
 Visto em `29ca41da44`:
 
@@ -330,13 +440,26 @@ permission mode?" do 2.2 pode ser um quinto. Some ambos ao inventário, com vers
 que o rodapé é o mesmo `Enter to confirm · Esc to cancel` já conhecido: o problema do 2.2 **não é
 padrão faltando**, é o padrão conhecido não estar pegando.
 
-### 2.11 Senha em texto claro num título de sessão (alta, mas é decisão do usuário)
+### 2.12 Senha em texto claro num título de sessão — RESOLVIDO pelo usuário
 
-O título da sessão `15f8c5f36d` contém um e-mail e uma senha. Título e `first_prompt` **viajam**
-para a central; `redactSecrets` não pega "senha X" em prosa. Duas coisas separadas: a senha precisa
-ser trocada (decisão do usuário), e vale avaliar uma regra para `senha|password` seguido de token —
-com o cuidado de sempre: o redator é **preciso, não exaustivo**, porque `first_prompt` rotula toda
-sessão na UI.
+**A credencial já foi rotacionada e o usuário apagou a conta — nada a fazer nesse lado.** Fica
+registrado pelo que ensinou sobre o produto.
+
+Uma senha colada num prompt virou o `label` da sessão `15f8c5f36d` e o `first_prompt` de
+`~/.agentistics/sessions/antigravity/929d75e1-….json`. Esta máquina está em `mode: member` com
+endpoint configurado, e `first_prompt` é justamente a exceção documentada no CLAUDE.md: ele
+**viaja**. `redactSecrets` roda nas duas pontas e não pegou, porque é deliberadamente **preciso e
+não exaustivo** — não existe regra para "senha" em prosa.
+
+Vale avaliar uma regra para `senha|password|token` seguido de um valor, **com o cuidado que o
+CLAUDE.md já obriga**: `first_prompt` rotula toda sessão na UI, então uma regra gulosa demais
+transforma os rótulos em tarja e alguém desliga o redator inteiro. E a lição principal não é
+técnica: o redator é rede de segurança para a colagem acidental, **nunca substituto de rotacionar**
+— exatamente o que o usuário fez.
+
+Um levantamento raso encontrou **6 arquivos** no consolidate store com `senha`/`hotmail` no
+`first_prompt`. Não foram lidos, só contados. Se algum ainda carregar credencial viva, o caminho é
+rotacionar, não editar arquivo.
 
 ---
 
@@ -391,9 +514,10 @@ Só um arquivo de spec existe em worktree e não no `dev`:
 2. `limit.ts` + testes (o pedido original, e o que evita a frota parar de novo)
 3. **2.9 — a tabela de dimensões.** Vem antes do 2.6 de propósito: a banda de marcadas nasce dela.
 4. 2.5 + 2.6 + 2.7 + 2.8 — highlight (persistir, agrupar, renomear) e teclas/glifos
-5. 2.2 + 2.10 — o diálogo de onboarding que não é detectado, e o inventário de diálogos
-6. Fechar `services-setup` e `parse-cache-sqlite` (verificar e abrir PR)
-7. 2.3 e 2.4
+5. **2.10 — o orçamento de memória e as sessões paralelas recomendadas**
+6. 2.2 + 2.11 — o diálogo de onboarding que não é detectado, e o inventário de diálogos
+7. Fechar `services-setup` e `parse-cache-sqlite` (verificar e abrir PR)
+8. 2.3 e 2.4
 
 ---
 
