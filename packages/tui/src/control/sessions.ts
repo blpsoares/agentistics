@@ -1754,3 +1754,100 @@ export function cardStateCells(state: string, tail: string, width: number): {
   if (state.length <= room) return { state, tail: '' }
   return { state: truncateCell(state, room), tail: '' }
 }
+
+// ---------------------------------------------------------------------------
+// the card band, its pager, and where a click lands
+// ---------------------------------------------------------------------------
+
+/**
+ * How the list pane's rows are split between the grid and its pager — PURE.
+ *
+ * The column HEADER is reclaimed: it names cells (`state`, `task`, `harness`) that a card does not
+ * have, so drawing it over a grid would be a heading over nothing. The PAGER is a row like any
+ * other and is paid for out of the same band — a row taken without being paid for is composited
+ * onto the frame below it, which reads as a corrupted frame rather than a cramped one.
+ *
+ * The pager is given up before the grid: a page you cannot leave is worse than one you cannot
+ * count, and the keys still turn the page.
+ */
+export function cardBand(o: { listRows: number; header: boolean }): {
+  gridRows: number
+  pager: boolean
+} {
+  const available = Math.max(0, o.listRows) + (o.header ? 1 : 0)
+  const pager = available >= PANE_FRAME_Y + CARD_MIN_LINES + 1
+  return { gridRows: Math.max(0, available - (pager ? 1 : 0)), pager }
+}
+
+/**
+ * Which card a click landed on, in grid coordinates — PURE, and the SAME arithmetic that drew it.
+ *
+ * The gutter between two cards belongs to neither: rounding it into one of them answers a click
+ * the user did not make, which is worse than not answering at all.
+ */
+export function cardAt(grid: CardGrid, x: number, y: number): number | null {
+  if (x < 0 || y < 0) return null
+  const stride = grid.cardWidth + grid.gap
+  const col = Math.floor(x / stride)
+  if (col >= grid.cols) return null
+  if (x - col * stride >= grid.cardWidth) return null
+  const row = Math.floor(y / grid.cardHeight)
+  if (row >= grid.rows) return null
+  const index = row * grid.cols + col
+  return index >= grid.capacity ? null : index
+}
+
+export interface PagerCells {
+  /** `''` when the row is too narrow to carry the arrows at all. */
+  prev: string
+  next: string
+  label: string
+  /** How many of how many. The first cell given up. */
+  note: string
+  /** Column each arrow is drawn at, or `-1` when it is not drawn. */
+  prevAt: number
+  nextAt: number
+  /** What the row actually occupies — never more than the width it was measured against. */
+  width: number
+}
+
+/** The glyphs, so the drawn row and the hit test cannot disagree about their width. */
+const PAGER_PREV = '‹'
+const PAGER_NEXT = '›'
+
+/**
+ * The pager row, fitted — PURE.
+ *
+ * Cells are given up in the order the row can afford to lose them: the COUNT first (the page label
+ * already says where you are), then the arrows (the keys still work, and the footer names them),
+ * and the page label last — a pager that cannot say which page this is has stopped being a pager.
+ */
+export function pagerCells(o: { label: string; note: string; width: number }): PagerCells {
+  const width = Math.max(0, o.width)
+  const none: PagerCells = {
+    prev: '', next: '', label: '', note: '', prevAt: -1, nextAt: -1, width: 0,
+  }
+  if (width === 0) return none
+
+  const arrows = 4 + o.label.length // "‹ label ›"
+  if (arrows <= width) {
+    const nextAt = 2 + o.label.length + 1
+    const noteAt = nextAt + 3
+    const withNote = noteAt + o.note.length <= width && o.note !== ''
+    return {
+      prev: PAGER_PREV, next: PAGER_NEXT, label: o.label,
+      note: withNote ? o.note : '',
+      prevAt: 0, nextAt,
+      width: withNote ? noteAt + o.note.length : arrows,
+    }
+  }
+  const label = o.label.length <= width ? o.label : o.label.slice(0, width)
+  return { ...none, label, width: label.length }
+}
+
+/** Which arrow a click landed on, resolved against the very cells that were drawn. */
+export function pagerHit(cells: PagerCells, x: number): 'prev' | 'next' | null {
+  if (cells.prev !== '' && x === cells.prevAt) return 'prev'
+  if (cells.next !== '' && x === cells.nextAt) return 'next'
+  return null
+}

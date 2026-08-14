@@ -9,6 +9,7 @@ import {
   DEFAULT_ORDER, usageOf, planSubmit,
   cardGrid, cardPage, CARD_PAGE_MAX, CARD_MIN_WIDTH, CARD_GAP,
   cardBadges, cardLines, fitCardLines, cardStateCells,
+  cardBand, cardAt, pagerCells, pagerHit,
   type CardLine, type SessionRow,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
@@ -1375,5 +1376,78 @@ describe('cardStateCells', () => {
       .toEqual({ state: 'needs approval', tail: '' })
     expect(cardStateCells('needs approval', ' · claude', 8).tail).toBe('')
     expect(cardStateCells('needs approval', ' · claude', 8).state.length).toBeLessThanOrEqual(8)
+  })
+})
+
+describe('cardBand', () => {
+  // The column header names cells that a card does not have, so its row is reclaimed rather than
+  // drawn blank — and the pager is a ROW, which has to be paid for out of the same band or it is
+  // composited onto the frame below it.
+  it('reclaims the header row and pays for the pager', () => {
+    expect(cardBand({ listRows: 18, header: true })).toEqual({ gridRows: 18, pager: true })
+    expect(cardBand({ listRows: 18, header: false })).toEqual({ gridRows: 17, pager: true })
+  })
+
+  it('gives up the pager before it gives up the grid', () => {
+    const tight = cardBand({ listRows: 5, header: false })
+    expect(tight.pager).toBe(false)
+    expect(tight.gridRows).toBe(5)
+  })
+})
+
+describe('cardAt', () => {
+  const grid = cardGrid({ width: 100, height: 21, total: 10 })!
+
+  it('answers with the card whose own cells were clicked', () => {
+    expect(cardAt(grid, 0, 0)).toBe(0)
+    expect(cardAt(grid, grid.cardWidth - 1, grid.cardHeight - 1)).toBe(0)
+    expect(cardAt(grid, grid.cardWidth + grid.gap, 0)).toBe(1)
+    expect(cardAt(grid, 0, grid.cardHeight)).toBe(grid.cols)
+  })
+
+  // The gutter between two cards belongs to neither, and a hit test that rounds it into one of them
+  // answers a click the user did not make.
+  it('answers nothing for the gutter and for the air past the grid', () => {
+    expect(cardAt(grid, grid.cardWidth, 0)).toBeNull()
+    expect(cardAt(grid, grid.cols * (grid.cardWidth + grid.gap), 0)).toBeNull()
+    expect(cardAt(grid, 0, grid.rows * grid.cardHeight)).toBeNull()
+    expect(cardAt(grid, -1, 0)).toBeNull()
+  })
+
+  it('never answers past the page it drew', () => {
+    const small = cardGrid({ width: 200, height: 40, total: 3 })!
+    for (let y = 0; y < small.rows * small.cardHeight; y++) {
+      for (let x = 0; x < small.cols * (small.cardWidth + small.gap); x++) {
+        const hit = cardAt(small, x, y)
+        if (hit !== null) expect(hit).toBeLessThan(small.capacity)
+      }
+    }
+  })
+})
+
+describe('pagerCells', () => {
+  it('keeps the arrows and the page, and gives up the count first', () => {
+    const wide = pagerCells({ label: '2 / 5', note: 'showing 6 of 47', width: 40 })
+    expect(wide.note).toBe('showing 6 of 47')
+    const tight = pagerCells({ label: '2 / 5', note: 'showing 6 of 47', width: 12 })
+    expect(tight.note).toBe('')
+    expect(tight.label).toBe('2 / 5')
+    expect(tight.nextAt).toBeGreaterThan(tight.prevAt)
+  })
+
+  // A row wider than the pane wraps, and a wrapped row takes two of the screen's rows while the
+  // budget counted one — which pushes everything under it off the bottom.
+  it('never draws wider than the row it was measured against', () => {
+    for (let w = 0; w <= 60; w++) {
+      const c = pagerCells({ label: '10 / 10', note: 'showing 10 of 100', width: w })
+      expect(c.width).toBeLessThanOrEqual(w)
+    }
+  })
+
+  it('resolves a click to the arrow that was drawn there', () => {
+    const c = pagerCells({ label: '2 / 5', note: '', width: 20 })
+    expect(pagerHit(c, c.prevAt)).toBe('prev')
+    expect(pagerHit(c, c.nextAt)).toBe('next')
+    expect(pagerHit(c, c.prevAt + 1)).toBeNull()
   })
 })
