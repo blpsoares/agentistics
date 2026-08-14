@@ -135,7 +135,12 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   const s = controlStrings(lang)
 
   const [tab, setTab] = useState<TabId>(initial?.tab ?? 'services')
-  const [status, setStatus] = useState<ControlStatus | null>(null)
+  // Seeded from what the host already knows, so a REMOUNT does not open on the defaults. Detaching
+  // from a session remounts this app, `refresh()` takes about a second to probe systemd and docker,
+  // and for that second the sessions list was drawn with the shipped arrangement instead of the
+  // user's — the screen visibly rearranged itself under them. `null` stays the first-ever launch,
+  // where there is genuinely nothing to know yet.
+  const [status, setStatus] = useState<ControlStatus | null>(host.lastStatus?.() ?? null)
   const [busy, setBusy] = useState(true)
   const [result, setResult] = useState<ActionResult | null>(null)
   const [chrome, setChrome] = useState<ScreenChrome>({ capture: false, hints: [] })
