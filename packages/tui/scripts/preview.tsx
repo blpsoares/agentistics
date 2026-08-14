@@ -113,7 +113,8 @@ const USAGE = `
                             norepo = no checkout here, so no rebuild is offered
     --keys   k,k,…          press these first, e.g. enter,down,enter
                             names: enter esc tab shift-tab up down left right
-                            pgup pgdn space; anything else is typed literally
+                            pgup pgdn space, and ctrl-<letter>; anything else is
+                            typed literally
     --task   running|done   the next start/restart streams a build into the output pane
                             and either never finishes (running) or does (done);
                             reach it with --keys enter,enter
@@ -417,7 +418,7 @@ const FAKE_FLEET: ControlSessions = {
       id: 'aabbcc', title: 'release notes', harness: 'claude',
       cwd: '/home/dev/agentistics/.claude/worktrees/notes', project: 'notes',
       repo: 'blpsoares/agentistics', projectGroup: 'agentistics', worktree: true,
-      state: 'exited', stateLabel: 'exited', actionable: true,
+      state: 'exited', stateLabel: 'exited', actionable: true, named: true,
       startedAt: Date.now() - 4 * 60 * 60_000, attached: false,
     },
     {
@@ -491,6 +492,18 @@ function ruler(cols: number): string[] {
  * unpreviewable: they exist only after a keypress, which is exactly the state a screenshot cannot
  * reach and therefore the state that shipped wrong twice.
  */
+/**
+ * A control chord as the byte a terminal actually sends: `ctrl-a` is 0x01, `ctrl-h` is 0x08.
+ *
+ * Named rather than typed literally because there is no way to type a control byte into a shell
+ * argument, and this screen now answers three of them — a key the preview cannot press is a key no
+ * layout check ever sees.
+ */
+function ctrlByte(name: string): string | undefined {
+  const m = /^ctrl-([a-z])$/.exec(name)
+  return m ? String.fromCharCode(m[1]!.charCodeAt(0) - 96) : undefined
+}
+
 const KEYS: Record<string, string> = {
   enter: '\r',
   esc: ESC,
@@ -539,7 +552,7 @@ async function main(): Promise<void> {
   // One key per tick, with the app given time to settle between them: a question opens on a state
   // change, and a burst written in one chunk would be parsed as a single garbled sequence.
   for (const key of opts.keys) {
-    app.stdin.write(KEYS[key] ?? key)
+    app.stdin.write(KEYS[key] ?? ctrlByte(key) ?? key)
     await sleep(60)
   }
 

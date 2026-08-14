@@ -1904,6 +1904,10 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         ...(previous?.task ? { task: previous.task } : {}),
       }, s)
       if (spawned.ok) {
+        // We handed this id to the CLI, so the new row KNOWS which conversation it drives — there
+        // is no guessing left for the next reopen. Without it the fallback matches on directory
+        // alone, and every session in one repository resolves to the same conversation.
+        if (spawned.id) await patchSession(spawned.id, { conversationId: req.sessionId })
         if (previous?.note && spawned.id) await patchSession(spawned.id, { note: previous.note })
         // The old row is RETIRED rather than deleted: it is still a thing that happened, and it
         // stops standing beside its own continuation with the same name on it.
@@ -1937,10 +1941,21 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const plan = planTaskReopen({
         entries: wanted,
         liveIds: live,
-        conversationFor: m => {
-          const conv = conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
-          return conv?.resumable ? { sessionId: conv.sessionId, title: conv.title } : null
-        },
+        // CLAIMED, one per row: the directory match cannot tell two sessions of one repository
+        // apart, so reopening a task of five rows used to start five copies of one conversation.
+        conversationFor: (m => {
+          const taken = new Set<string>()
+          return (entry: typeof m) => {
+            const own = entry.conversationId
+              ? conversations.find(c => c.sessionId === entry.conversationId)
+              : undefined
+            const conv = own ?? conversations.find(c =>
+              !taken.has(c.sessionId) && c.harness === entry.harness && c.cwd === entry.cwd)
+            if (!conv?.resumable) return null
+            taken.add(conv.sessionId)
+            return { sessionId: conv.sessionId, title: conv.title }
+          }
+        })(wanted[0]!),
       })
 
       let opened = 0
@@ -1957,6 +1972,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         }, s)
         if (!r.ok) { skipped++; continue }
         opened++
+        if (r.id) await patchSession(r.id, { conversationId: row.resumeId })
         // Retired, so a laptop closed and opened twice does not leave the task holding two dead
         // twins and one live session, all under the same name.
         await patchSession(m.id, { endedAt: new Date().toISOString() })
