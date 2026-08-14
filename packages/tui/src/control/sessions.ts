@@ -589,6 +589,14 @@ export interface SessionColumns {
    */
   task: number
   /**
+   * How long ago it started, for a row that is NOT running.
+   *
+   * On the row rather than only in the detail pane, and only for what is down, because that is the
+   * one place it decides something: a live session's age is idle curiosity, while "reopen this or
+   * not" is mostly a question about how old it is. A running row spends the column on nothing.
+   */
+  age: number
+  /**
    * The worktree's own folder name. `0` when no row on screen is one — never a column of blanks.
    *
    * The NAME rather than the word "worktree": with the list grouped by project, the heading already
@@ -601,6 +609,17 @@ export interface SessionColumns {
   metrics: number
   harness: number
   where: number
+}
+
+/**
+ * How long ago a row that is not running began — PURE, and EMPTY for one that is.
+ *
+ * `now` is passed in rather than read: this is called on every repaint and a clock inside it would
+ * make the column's width depend on the second it was measured in.
+ */
+export function sessionAge(s: ControlSession, now: number, ago: (seconds: number) => string): string {
+  if (sessionRunning(s) || s.startedAt === undefined) return ''
+  return ago(Math.max(0, Math.round((now - s.startedAt) / 1000)))
 }
 
 /** How much of a session id a row shows. Enough to be unambiguous in practice, and to type. */
@@ -660,6 +679,8 @@ export function sessionColumns(
   o: {
     /** True while the HEADING above each row already names the task, so the cell would repeat it. */
     groupedByTask?: boolean
+    /** Already-localized age per row, keyed by session id — see `sessionAge`. */
+    ages?: ReadonlyMap<string, string>
     /**
      * The column HEADINGS, when a header row is being drawn.
      *
@@ -682,6 +703,7 @@ export function sessionColumns(
   const state = widest('state', s => s.stateLabel)
   const task = o.groupedByTask ? 0 : widest('task', s => s.task ?? '')
   const worktree = widest('worktree', worktreeName)
+  const age = widest('age', s => o.ages?.get(s.id) ?? '')
   const metrics = widest('metrics', sessionMetric)
   const harness = widest('harness', s => s.harness)
   // The PROJECT, not the directory: once the grouping keys on the main checkout, a folder cell
@@ -697,9 +719,9 @@ export function sessionColumns(
    * no session reports usage draws no metrics column, and paying its gap anyway would narrow every
    * title on the screen to reserve a space nothing occupies.
    */
-  const overhead = (wt: number, k: number, m: number, h: number, w: number) => {
-    const drawn = [id, state, 1, wt, k, m, h, w].filter(n => n > 0).length
-    return 2 + id + state + wt + k + m + h + w + GAP * (drawn - 1)
+  const overhead = (a: number, wt: number, k: number, m: number, h: number, w: number) => {
+    const drawn = [id, state, 1, a, wt, k, m, h, w].filter(n => n > 0).length
+    return 2 + id + state + a + wt + k + m + h + w + GAP * (drawn - 1)
   }
 
   // The fewest columns a title is worth. Below it the row has a state word and an ellipsis, which
@@ -710,28 +732,29 @@ export function sessionColumns(
   // STATE and the NAME are what a row cannot lose — the state because nothing else on the frame
   // says whether this session is waiting for you, the name because a row you cannot identify is not
   // a row you can act on.
-  const ladder: Array<[number, number, number, number, number]> = [
-    [worktree, task, metrics, harness, where],
-    [worktree, task, metrics, harness, 0],
-    [worktree, task, metrics, 0, 0],
-    [worktree, task, 0, 0, 0],
-    [worktree, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0],
+  const ladder: Array<[number, number, number, number, number, number]> = [
+    [age, worktree, task, metrics, harness, where],
+    [age, worktree, task, metrics, harness, 0],
+    [age, worktree, task, metrics, 0, 0],
+    [age, worktree, task, 0, 0, 0],
+    [age, worktree, 0, 0, 0, 0],
+    [age, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0],
   ]
-  for (const [wt, k, m, h, w] of ladder) {
-    const room = width - overhead(wt, k, m, h, w)
+  for (const [a, wt, k, m, h, w] of ladder) {
+    const room = width - overhead(a, wt, k, m, h, w)
     // The title takes what it NEEDS, not what is left: stretching it to the full remainder pushed
     // the trailing cells to the far edge with a field of blank between, which is the old
     // misalignment wearing a different shape.
-    if (room >= MIN_TITLE || (wt === 0 && k === 0 && m === 0 && h === 0 && w === 0)) {
+    if (room >= MIN_TITLE || (a === 0 && wt === 0 && k === 0 && m === 0 && h === 0 && w === 0)) {
       return {
         id, state, title: Math.max(1, Math.min(title, room)),
-        worktree: wt, task: k, metrics: m, harness: h, where: w,
+        age: a, worktree: wt, task: k, metrics: m, harness: h, where: w,
       }
     }
   }
   /* c8 ignore next */
-  return { id: 0, state: 1, title: 1, worktree: 0, task: 0, metrics: 0, harness: 0, where: 0 }
+  return { id: 0, state: 1, title: 1, age: 0, worktree: 0, task: 0, metrics: 0, harness: 0, where: 0 }
 }
 
 /** Pad or truncate a cell to exactly `w` columns. `0` means the column is not drawn. */
@@ -1432,4 +1455,64 @@ export function planSubmit(o: {
       ...(o.draft.task ? { task: o.draft.task } : {}),
     },
   }
+}
+
+// ---------------------------------------------------------------------------
+// what every key on this screen does
+// ---------------------------------------------------------------------------
+
+export interface KeyHelp {
+  /** The keystroke as a person types it. */
+  keys: string
+  /** Already-localized: what it does. */
+  what: string
+}
+
+/**
+ * Every key the sessions screen answers, in one place — PURE.
+ *
+ * One place because there were already two and they were drifting: the footer names a handful of
+ * keys chosen for width, and the keys themselves live in a long if-chain. Neither is a list anyone
+ * can read. This is the list, and `ctrl+h` prints it.
+ *
+ * It is grouped in the order someone learns them — move, act, filter, arrange — rather than
+ * alphabetically, because a reference sorted by character is a reference you can only use if you
+ * already know what you are looking for.
+ */
+export function sessionKeyHelp(w: {
+  move: string; open: string; attach: string; menu: string; section: string
+  newSession: string; search: string; clear: string; kill: string; rename: string
+  note: string; task: string; mark: string; onlyActive: string; closed: string
+  exited: string; unfiled: string; group: string; detail: string; reset: string
+  tabs: string; help: string; quit: string
+}): KeyHelp[] {
+  return [
+    { keys: '↑ ↓ / j k', what: w.move },
+    { keys: 'enter', what: w.menu },
+    { keys: 'o', what: w.attach },
+    { keys: 'tab', what: w.open },
+    { keys: '1-9 / ← →', what: w.section },
+    { keys: 'a', what: w.newSession },
+    { keys: '/', what: w.search },
+    { keys: 'esc', what: w.clear },
+    { keys: 'x', what: w.kill },
+    { keys: 'n', what: w.rename },
+    { keys: 't', what: w.note },
+    { keys: 'space', what: w.mark },
+    { keys: 'ctrl+a / l', what: w.onlyActive },
+    { keys: 'c', what: w.closed },
+    { keys: 'e', what: w.exited },
+    { keys: 'u', what: w.unfiled },
+    { keys: 'v', what: w.group },
+    { keys: 'd', what: w.detail },
+    { keys: 'ctrl+r', what: w.reset },
+    { keys: '[ ]', what: w.tabs },
+    { keys: '?', what: w.help },
+    { keys: 'q', what: w.quit },
+  ]
+}
+
+/** The width the keystroke column needs, so the descriptions line up — PURE. */
+export function keyHelpColumn(rows: readonly KeyHelp[]): number {
+  return rows.reduce((n, r) => Math.max(n, r.keys.length), 0)
 }

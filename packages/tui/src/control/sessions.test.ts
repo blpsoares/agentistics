@@ -5,6 +5,7 @@ import {
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
   projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
   sessionHandle, worktreeName, sessionRunning, asideRowKey, resolveAsideCursor,
+  sessionAge, sessionKeyHelp, keyHelpColumn,
   DEFAULT_ORDER, usageOf, planSubmit,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
@@ -1176,5 +1177,62 @@ describe('planSubmit', () => {
       draft: { harness, cwd: '/r', prompt: 'p' }, hasSpawn: true, attach: false,
     })
     if (plan.ok) expect(plan.req.prompt).toBe('p')
+  })
+})
+
+describe('sessionAge', () => {
+  const ago = (s: number) => `${s}s`
+
+  it('says nothing for a row that is running', () => {
+    // A live session's age is idle curiosity; the column exists for the "reopen this or not"
+    // decision, and a running row spends it on nothing.
+    const live = session('a', { state: 'waiting' as SessionState, startedAt: 0 })
+    expect(sessionAge(live, 60_000, ago)).toBe('')
+  })
+
+  it('says how long ago a row that is DOWN began', () => {
+    const down = session('a', { state: 'lost' as SessionState, startedAt: 0 })
+    expect(sessionAge(down, 60_000, ago)).toBe('60s')
+  })
+
+  it('says nothing when nobody recorded a start', () => {
+    // Absent is absent. A start time nobody has is not "1970", and rendering it as fifty-six years
+    // is worse than a blank.
+    const down = session('a', { state: 'lost' as SessionState })
+    expect(sessionAge(down, 60_000, ago)).toBe('')
+  })
+
+  it('never reports a negative age', () => {
+    const down = session('a', { state: 'exited' as SessionState, startedAt: 90_000 })
+    expect(sessionAge(down, 60_000, ago)).toBe('0s')
+  })
+})
+
+describe('sessionKeyHelp', () => {
+  const words = Object.fromEntries(
+    ['move', 'open', 'attach', 'menu', 'section', 'newSession', 'search', 'clear', 'kill',
+      'rename', 'note', 'task', 'mark', 'onlyActive', 'closed', 'exited', 'unfiled', 'group',
+      'detail', 'reset', 'tabs', 'help', 'quit'].map(k => [k, `does ${k}`]),
+  ) as Parameters<typeof sessionKeyHelp>[0]
+
+  it('describes every key it lists, with no blanks', () => {
+    const rows = sessionKeyHelp(words)
+    expect(rows.length).toBeGreaterThan(15)
+    for (const r of rows) {
+      expect(r.keys.length).toBeGreaterThan(0)
+      expect(r.what.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('names each keystroke once', () => {
+    // Two rows claiming the same key is the reference disagreeing with itself.
+    const keys = sessionKeyHelp(words).map(r => r.keys)
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  it('sizes the keystroke column to its widest row', () => {
+    const rows = sessionKeyHelp(words)
+    expect(keyHelpColumn(rows)).toBe(Math.max(...rows.map(r => r.keys.length)))
+    expect(keyHelpColumn([])).toBe(0)
   })
 })

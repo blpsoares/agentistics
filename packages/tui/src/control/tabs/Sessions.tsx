@@ -56,6 +56,7 @@ import {
   enabledActionIndexes, filterSessions,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
   taskCounts, projectCounts, sessionMetric, sessionHandle, worktreeName, sessionRunning,
+  sessionAge, sessionKeyHelp, keyHelpColumn,
   DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder,
   asideSections, asideFold, scrollBar, THUMB,
   sessionNamed,
@@ -90,6 +91,8 @@ type Ask =
   /** Everything about WHAT the list shows, in one vertical panel. */
   | { kind: 'view' }
   | { kind: 'search' }
+  /** The whole key list. Its own kind because it answers nothing and acts on nothing. */
+  | { kind: 'keys' }
   /** Finishing or reopening a TASK — the session is only how the task was named. */
   | { kind: 'finishTask'; session: ControlSession }
   | { kind: 'task'; session: ControlSession }
@@ -625,6 +628,15 @@ export function Sessions({
     // you fiddled with three weeks ago follow you around — and finding your way out of it one
     // toggle at a time means knowing what the defaults were.
     if (key.ctrl && input === 'r') { resetView(); return }
+    // `ctrl+a` beside `l`, and `ctrl+h` for the list of everything. Two keys for one switch is not
+    // duplication here: `l` is what the footer has room to name, and a chord is what someone
+    // reaches for without having read the footer at all.
+    if (key.ctrl && input === 'a') { setOnlyActive(v => !v); setCursor(0); return }
+    // `?` is the key, and `ctrl+h` is accepted where the terminal can tell it apart from backspace.
+    // It usually cannot: `ctrl+h` IS ASCII 8, which is the backspace byte, so Ink reports it as
+    // `key.backspace` and a binding on it would either never fire or fire on backspace. Measured
+    // here, not assumed. `?` has no such collision and is what every list-shaped TUI already uses.
+    if (input === '?' || (key.ctrl && input === 'h')) { setAsk({ kind: 'keys' }); return }
     if (input === 'v') return runAction('group')
     if (input === 'c') { setShowClosed(v => !v); setCursor(0); return }
     if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
@@ -837,6 +849,23 @@ export function Sessions({
     }
   }, { isActive })
 
+  /**
+   * How long ago each row that is NOT running began, already localized.
+   *
+   * Computed here because the clock lives here: the host reports the INSTANT a session started and
+   * this pane repaints far more often than the poll runs, so a duration computed upstream would
+   * freeze at whatever it was when the host last looked.
+   */
+  const ages = useMemo(() => {
+    const now = Date.now()
+    const out = new Map<string, string>()
+    for (const v of fleet?.sessions ?? []) {
+      const age = sessionAge(v, now, secs => s.sessionsAgo(secs))
+      if (age) out.set(v.id, age)
+    }
+    return out
+  }, [fleet?.sessions, s])
+
   const offset = windowOffset(at < 0 ? 0 : selectable[at]!, rows.length, cockpit.listRows)
   const visible = rows.slice(offset, offset + cockpit.listRows)
   /**
@@ -881,10 +910,11 @@ export function Sessions({
       listBody,
       {
         groupedByTask: grouping === 'task',
+        ages,
         ...(cockpit.header ? { headings: s.sessionsCols } : {}),
       },
     ),
-    [visible, listBody, grouping, cockpit.header, s],
+    [visible, listBody, grouping, cockpit.header, ages, s],
   )
 
   // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
@@ -906,6 +936,14 @@ export function Sessions({
           onHideEmptyTask={v => { setHideEmptyTask(v); setCursor(0) }}
           onClose={() => setAsk(null)}
         />
+      </Box>
+    )
+  }
+
+  if (ask?.kind === 'keys') {
+    return (
+      <Box flexDirection="column" width={width} flexShrink={0}>
+        <KeyHelpScreen strings={s} width={width} height={height} onClose={() => setAsk(null)} />
       </Box>
     )
   }
@@ -1050,6 +1088,7 @@ export function Sessions({
           {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')
             + padCell(s.sessionsCols.state, columns.state)}
           {columns.title > 0 ? '  ' + padCell(s.sessionsCols.title, columns.title) : ''}
+          {columns.age > 0 ? '  ' + padCell(s.sessionsCols.age, columns.age) : ''}
           {columns.worktree > 0 ? '  ' + padCell(s.sessionsCols.worktree, columns.worktree) : ''}
           {columns.task > 0 ? '  ' + padCell(s.sessionsCols.task, columns.task) : ''}
           {columns.metrics > 0 ? '  ' + padCell(s.sessionsCols.metrics, columns.metrics) : ''}
@@ -1102,6 +1141,7 @@ export function Sessions({
                 session={row.session}
                 selected={selected?.id === row.session.id}
                 marked={marked.has(row.session.id)}
+                ages={ages}
                 columns={columns}
                 width={listBody}
               />
@@ -1144,7 +1184,7 @@ export function Sessions({
         >
           {ask ? (
             <Question
-              ask={ask as Exclude<Ask, { kind: 'new' } | { kind: 'view' }>}
+              ask={ask as Exclude<Ask, { kind: 'new' } | { kind: 'view' } | { kind: 'keys' }>}
               strings={s}
               width={paneBody(width)}
               onClose={() => setAsk(null)}
@@ -1262,9 +1302,11 @@ function SummaryRow({
   )
 }
 
-function SessionRowView({ session, selected, marked, columns, width }: {
+function SessionRowView({ session, selected, marked, ages, columns, width }: {
   session: ControlSession
   selected: boolean
+  /** Already-localized ages by session id — this component owns no clock and no strings. */
+  ages: ReadonlyMap<string, string>
   /** The user's own highlight. Survives re-sorting, and outlives the cursor moving away. */
   marked: boolean
   columns: SessionColumns
@@ -1303,6 +1345,11 @@ function SessionRowView({ session, selected, marked, columns, width }: {
           {gap + padCell(session.title, columns.title)}
         </Text>
       ) : null}
+      {/* How long ago it started, on rows that are NOT running — the age is most of the "reopen
+          this or not" decision, and it lived only in the detail pane. */}
+      {columns.age > 0 ? (
+        <Text dimColor>{gap + padCell(ages.get(session.id) ?? '', columns.age)}</Text>
+      ) : null}
       {/* A linked WORKTREE says so, because it changes what the row IS: three rows of one repo in
           three directories are three checkouts, and without the word they read as three projects.
           The word, never a glyph alone — a distinction announced in a symbol is one that has to be
@@ -1330,6 +1377,39 @@ function SessionRowView({ session, selected, marked, columns, width }: {
         <Text dimColor>{gap + padCell(session.projectGroup || session.project, columns.where)}</Text>
       ) : null}
     </Text>
+  )
+}
+
+/**
+ * Every key this screen answers, on one screen.
+ *
+ * The footer names the handful that fit; this is the rest. It reads the SAME list the pure module
+ * owns, so a key that exists and is not here would have to be left out of that list deliberately.
+ */
+function KeyHelpScreen({ strings: s, width, height, onClose }: {
+  strings: ControlStrings
+  width: number
+  height: number
+  onClose: () => void
+}) {
+  useInput((_i, key) => { if (key.escape || key.return) onClose() })
+
+  const rows = useMemo(() => sessionKeyHelp(s.sessionsKeyWhat), [s])
+  const keyCol = keyHelpColumn(rows)
+  // Two rows of chrome: the title and the blank under it. Budgeted, because Ink composites what
+  // does not fit rather than clipping it.
+  const page = Math.max(1, height - 3)
+
+  return (
+    <Pane title={s.sessionsPaneKeys} focused width={width} height={height}>
+      {rows.slice(0, page).map(r => (
+        <Text key={r.keys} wrap="truncate">
+          <Text color={COLORS.accent}>{padCell(r.keys, keyCol)}</Text>
+          <Text dimColor>{'  ' + truncate(r.what, Math.max(1, paneBody(width) - keyCol - 2))}</Text>
+        </Text>
+      ))}
+      {rows.length > page ? <Text dimColor>{`… +${rows.length - page}`}</Text> : null}
+    </Pane>
   )
 }
 
@@ -1381,7 +1461,7 @@ function Detail({ lines, width, rows }: {
  */
 function Question({ ask, strings: s, width, onClose, onRun, host, query, onQuery, fleet }: {
   /** Never `new` — the wizard takes the whole screen and is rendered before this is reached. */
-  ask: Exclude<Ask, { kind: 'new' } | { kind: 'view' }>
+  ask: Exclude<Ask, { kind: 'new' } | { kind: 'view' } | { kind: 'keys' }>
   strings: ControlStrings
   width: number
   onClose: () => void
