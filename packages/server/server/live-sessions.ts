@@ -83,7 +83,116 @@ export function harnessOf(comm: string, exePath: string | undefined): HarnessId 
   if (byComm) return byComm
   if (!exePath) return undefined
   const base = exePath.slice(exePath.lastIndexOf('/') + 1)
-  return PROCESS_HARNESS[base]
+  const byBase = PROCESS_HARNESS[base]
+  if (byBase) return byBase
+  return harnessOfPath(exePath)
+}
+
+/**
+ * Install PATHS whose executable is named after the VERSION rather than the tool.
+ *
+ * Claude Code installs to `~/.local/share/claude/versions/<version>`, so both `comm` and the exe
+ * basename can come back as `2.1.233` — a string in no table, and one that changes every release.
+ *
+ * Measured on this machine on 2026-08-15, and this is why it is a real bug rather than a tidy-up:
+ * TWO processes running THAT VERY BINARY, one seen and one not.
+ *
+ * ```
+ * pid 3137032  comm=claude    exe=…/share/claude/versions/2.1.233   ← listed
+ * pid  508665  comm=2.1.233   exe=…/share/claude/versions/2.1.233   ← invisible
+ * ```
+ *
+ * Same executable, same install, and the only difference is what the process happened to set `comm`
+ * to. Matching the DIRECTORY is the identity that survives an upgrade; the basename never could.
+ *
+ * A `Record`, so a harness added to `HarnessId` fails the build until somebody decides. `null` is
+ * "this one is not installed that way", which is the ordinary case.
+ */
+const VERSIONED_INSTALL: Record<HarnessId, RegExp | null> = {
+  // Anchored on the whole segment run, not a bare `includes`: `/share/claude/versions/` is specific
+  // enough that a user directory happening to contain the word `claude` cannot match it.
+  claude: /(^|\/)\.local\/share\/claude\/versions\/[^/]+$/,
+  codex: null,
+  gemini: null,
+  copilot: null,
+  antigravity: null,
+  kimi: null,
+}
+
+/** The harness an executable PATH belongs to, for installs named after their version — PURE. */
+export function harnessOfPath(exePath: string): HarnessId | undefined {
+  for (const [id, re] of Object.entries(VERSIONED_INSTALL) as [HarnessId, RegExp | null][]) {
+    if (re && re.test(exePath)) return id
+  }
+  return undefined
+}
+
+/**
+ * A harness process that is INFRASTRUCTURE rather than a conversation — PURE.
+ *
+ * Recognising the versioned install path (above) correctly found the session that was invisible,
+ * and dragged in its plumbing with it. Measured on this machine, all running the same binary:
+ *
+ * ```
+ * claude daemon run --json-path …/daemon.json      ← the daemon
+ * claude bg-pty-host --bg-pty-host …/581deab7.sock ← a pty host for a session
+ * claude bg-pty-host --bg-pty-host …/spare/…       ← a pre-warmed spare
+ * ```
+ *
+ * None is a session, and listing them as assistants is the false positive that teaches people to
+ * ignore this list.
+ *
+ * **The gate is on the SUBCOMMAND, and that is the whole care in it.** The obvious rule — "drop
+ * what carries a session id" — is exactly backwards: a `bg-pty-host` argv carries the id of the
+ * REAL session it serves, so that rule keeps the helper and hides the conversation. What separates
+ * them is the verb, which says what the process IS.
+ *
+ * Absent from the table means "not known to be infrastructure", so a harness nobody has looked at
+ * behaves exactly as it does today rather than being filtered on a guess.
+ */
+const NOT_A_SESSION: Record<HarnessId, readonly string[] | null> = {
+  claude: ['daemon', 'bg-pty-host', 'bg-spare'],
+  codex: null,
+  gemini: null,
+  copilot: null,
+  antigravity: null,
+  kimi: null,
+}
+
+/**
+ * How many leading tokens may name a subcommand.
+ *
+ * Bounded on purpose: a socket path, a flag value or a PROMPT later in the argv may legitimately
+ * contain any of these words, and a session whose first message mentioned "daemon" must not vanish
+ * from the list. Three is enough for `claude daemon run` and one token more.
+ */
+const SUBCOMMAND_TOKENS = 3
+
+/**
+ * Whether this argv is the harness's plumbing rather than a session — PURE.
+ *
+ * **`argv[0]` is split on whitespace, and that is not a nicety.** Measured: a pty host's first argv
+ * element is the single string `"claude bg-pty-host"` — the process rewrote its own `argv[0]` to a
+ * descriptive label, so there is no argv[1] subcommand to find. A rule that looked only past
+ * `argv[0]` (the first thing written here) matched the daemon and missed every pty host, which is
+ * the majority of the plumbing.
+ *
+ * ```
+ * argv[0]="claude daemon run"?  no — ['claude','daemon','run']       three elements
+ * argv[0]="claude bg-pty-host"  yes — one element, verb inside it
+ * ```
+ *
+ * So the head is TOKENISED rather than indexed, and the flag form is skipped: `--bg-pty-host` is a
+ * flag on that very process, and matching flags would be a second way to say the same thing that
+ * could disagree with the first.
+ */
+export function isHarnessInfrastructure(harness: HarnessId, argv: readonly string[]): boolean {
+  const verbs = NOT_A_SESSION[harness]
+  if (!verbs) return false
+  const head = argv.slice(0, SUBCOMMAND_TOKENS).join(' ').split(/\s+/).filter(Boolean)
+  // argv[0]'s own first token is the program name; everything after it, up to the bound, may be a
+  // subcommand. Flags are skipped rather than matched — see the header.
+  return head.slice(1, SUBCOMMAND_TOKENS).some(t => !t.startsWith('-') && verbs.includes(t))
 }
 
 /** Interpreters a harness may be installed as a script for. Their `comm` and their exe basename
@@ -123,7 +232,11 @@ export function harnessOfProcess(
   argv: readonly string[],
 ): HarnessId | undefined {
   const direct = harnessOf(comm, exePath)
-  if (direct) return direct
+  // Identified, but is it a CONVERSATION? Recognising the versioned install path found the session
+  // that was invisible and brought its plumbing with it — the daemon and the pty hosts run the same
+  // binary. See `isHarnessInfrastructure` for why the gate is on the subcommand and not on the
+  // session id the plumbing also carries.
+  if (direct) return isHarnessInfrastructure(direct, argv) ? undefined : direct
   const exeBase = exePath ? exePath.slice(exePath.lastIndexOf('/') + 1) : ''
   if (!JS_RUNTIMES.has(comm) && !JS_RUNTIMES.has(exeBase)) return undefined
   // argv[0] is the runtime; the script is what follows. Scan the rest so a `node --flag script`
