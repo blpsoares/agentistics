@@ -1,7 +1,7 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { GitBranch, Users, Zap, GitCommit, Clock, Link2Off, EyeOff } from 'lucide-react'
-import { fmt, fmtCost, formatProjectName, NO_REPO_KEY } from '@agentistics/core'
+import { fmt, fmtCost, formatProjectName, NO_REPO_KEY, totalTokens, totalTokensExplained } from '@agentistics/core'
 import type { RepoStat } from '../hooks/useData'
 import { canonicalRepoKey } from '../lib/shareRepos'
 import { PLURAL_COPY, interpolate, plural } from './team/copy'
@@ -93,9 +93,9 @@ function Sparkline({ byDay, color }: { byDay: Record<string, number>; color: str
   )
 }
 
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
+function Metric({ label, value, title }: { label: string; value: React.ReactNode; title?: string }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }} title={title}>
       <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
       <span style={{ fontSize: 9.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
     </div>
@@ -208,7 +208,11 @@ export function RepositoriesList({ repos, isCentral, currency = 'USD', brlRate =
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
               <Metric label={pt ? 'sessões' : 'sessions'} value={r.sessions} />
               <Metric label={pt ? 'custo' : 'cost'} value={fmtCost(r.costUSD, currency, brlRate)} />
-              <Metric label="tokens" value={fmt(r.inputTokens + r.outputTokens)} />
+              <Metric
+                label="tokens"
+                value={fmt(totalTokens(r.tokens))}
+                title={totalTokensExplained(r.tokens, pt ? 'pt' : 'en')}
+              />
             </div>
 
             {/* Footer chips: commits, members (central), actions, last active */}

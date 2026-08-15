@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useOutletContext } from 'react-router-dom'
 import { Plus, Trash2, X, CalendarRange } from 'lucide-react'
-import { fmt, fmtCost, formatProjectName, canonicalProjectPath } from '@agentistics/core'
+import { fmt, fmtCost, formatProjectName, canonicalProjectPath, totalTokens, totalTokensExplained } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
+import type { TokenBreakdown } from '@agentistics/core'
 import { HARNESS_LABELS } from '../lib/harness'
 import { Drawer } from './settings/Drawer'
 import { Section, Select, TabSelect, MultiPicker } from './settings/primitives'
@@ -16,8 +17,11 @@ interface TagSource { type: TagSourceType; value: string }
 interface TagAggregate {
   sessions: number
   costUSD: number
+  /** The two conversational counters. NOT the total — read `tokens`. */
   inputTokens: number
   outputTokens: number
+  /** All four billed counters, as the server's `TagAggregate` now sends them. */
+  tokens: TokenBreakdown
   topProject: string | null
   topModel: string | null
   topHarness: string | null
@@ -53,9 +57,9 @@ const LOCAL_MACHINE_ID = 'local'
 /** Source types that only exist where there is IAM. Hidden off a central, and refused there too. */
 
 /** A label/value pair inside a grid card. */
-function MiniStat({ label, value }: { label: string; value: string }) {
+function MiniStat({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <span style={{ minWidth: 0 }}>
+    <span style={{ minWidth: 0 }} title={title}>
       <span style={{ display: 'block', fontSize: 9.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
       <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
     </span>
@@ -579,7 +583,7 @@ export default function TagsPage() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 10px' }}>
                 <MiniStat label={pt ? 'Sessões' : 'Sessions'} value={t.aggregate.sessions.toLocaleString()} />
-                <MiniStat label="Tokens" value={fmt(t.aggregate.inputTokens + t.aggregate.outputTokens)} />
+                <MiniStat label="Tokens" value={fmt(totalTokens(t.aggregate.tokens))} title={totalTokensExplained(t.aggregate.tokens, pt ? 'pt' : 'en')} />
                 <MiniStat label={pt ? 'Entrada' : 'Input'} value={fmt(t.aggregate.inputTokens)} />
                 <MiniStat label={pt ? 'Saída' : 'Output'} value={fmt(t.aggregate.outputTokens)} />
               </div>

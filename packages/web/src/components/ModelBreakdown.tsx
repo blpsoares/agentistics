@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import type { ModelUsage } from '@agentistics/core'
-import { formatModel, calcCost, getModelColor, fmtCost } from '@agentistics/core'
+import { formatModel, calcCost, getModelColor, fmtCost, usageTokenTotal } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { resolveProvider, providerOrder } from '@agentistics/core'
 
@@ -47,7 +47,9 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
   const [sortKey, setSortKey] = useState<SortKey>('cost')
   const [byProvider, setByProvider] = useState(false)
 
-  const allEntries = Object.entries(modelUsage).filter(([, u]) => u && (u.inputTokens + u.outputTokens) > 0)
+  // A model whose whole volume is cache is still a model that ran. Filtering on the two
+  // conversational counters dropped rows that had real spend behind them.
+  const allEntries = Object.entries(modelUsage).filter(([, u]) => u && usageTokenTotal(u) > 0)
 
   /** Search matches the model id or the company that bills it, so "opus" and "anthropic" both work.
    *  Sorting is by spend by default — the question this table is opened with. */

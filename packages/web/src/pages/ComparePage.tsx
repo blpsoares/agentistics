@@ -2,8 +2,8 @@ import React, { useMemo } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { GitCompare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
-import type { HarnessId, Lang } from '@agentistics/core'
-import { fmt, fmtCost, formatModel, t } from '@agentistics/core'
+import type { HarnessId, Lang, TokenBreakdown } from '@agentistics/core'
+import { EMPTY_TOKENS, fmt, fmtCost, formatModel, t, totalTokens } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 import { computeFilteredHarnessSummaries } from '../hooks/useData'
 import { fmtDateLocalized } from '../lib/dateFormat'
@@ -15,6 +15,8 @@ interface HarnessAgg {
   messages: number
   inputTokens: number
   outputTokens: number
+  /** All four billed counters — what the "Tokens" row compares. See `tokens.ts` in the core. */
+  tokens: TokenBreakdown
   costUSD: number
   lastActive: string | null
 }
@@ -307,13 +309,15 @@ function CompareByHarness() {
 
   const aggs = useMemo<HarnessAgg[]>(() => {
     return activeHarnesses.map(harness => {
-      const s = summaries[harness] ?? { sessions: 0, messages: 0, inputTokens: 0, outputTokens: 0, costUSD: 0 }
+      const s = summaries[harness]
+        ?? { sessions: 0, messages: 0, inputTokens: 0, outputTokens: 0, tokens: EMPTY_TOKENS, costUSD: 0 }
       return {
         harness,
         sessions: s.sessions,
         messages: s.messages,
         inputTokens: capable(harness, 'tokens') ? s.inputTokens : 0,
         outputTokens: capable(harness, 'tokens') ? s.outputTokens : 0,
+        tokens: capable(harness, 'tokens') ? s.tokens : EMPTY_TOKENS,
         costUSD: capable(harness, 'cost') ? s.costUSD : 0,
         lastActive: lastActive[harness] ?? null,
       }
@@ -339,7 +343,7 @@ function CompareByHarness() {
 
   const tokensValues = aggs.map(a => ({
     harness: a.harness,
-    value: capable(a.harness, 'tokens') ? a.inputTokens + a.outputTokens : null,
+    value: capable(a.harness, 'tokens') ? totalTokens(a.tokens) : null,
   }))
   const costValues = aggs.map(a => ({
     harness: a.harness,
@@ -568,7 +572,9 @@ function CompareByHarness() {
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {models.map(m => {
-                      const totalTok = m.inputTokens + m.outputTokens
+                      // Every billed counter: a rate per million computed over the non-cached 4 %
+                      // of the volume reads tens of times higher than what is actually charged.
+                      const totalTok = totalTokens(m.tokens)
                       const perM = totalTok > 0 ? m.costUSD / (totalTok / 1e6) : null
                       return (
                         <div key={m.model} style={{

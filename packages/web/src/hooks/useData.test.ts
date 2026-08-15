@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats } from './useData'
-import { mergeStatsCaches } from '@agentistics/core'
+import { EMPTY_TOKENS, mergeStatsCaches } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
 import type { SessionMeta } from '@agentistics/core'
 import { format, subDays } from 'date-fns'
@@ -1014,7 +1014,8 @@ describe('computeHarnessSummaries — models[] and costPerMTokens', () => {
 function repo(p: Partial<RepoStat>): RepoStat {
   return {
     id: 'x', remote: '', linked: true, name: 'x', path: '', sessions: 0, messages: 0, tools: 0,
-    costUSD: 0, inputTokens: 0, outputTokens: 0, gitCommits: 0, linesAdded: 0, linesRemoved: 0,
+    costUSD: 0, inputTokens: 0, outputTokens: 0, tokens: EMPTY_TOKENS,
+    gitCommits: 0, linesAdded: 0, linesRemoved: 0,
     filesModified: 0, ciSessions: 0, members: [], harnesses: ['claude'], firstActive: '', lastActive: '',
     activityByDay: {}, _users: new Set(), _harnesses: new Set(), _paths: {}, ...p,
   }

@@ -11,7 +11,7 @@
  */
 
 import type { AppData, HarnessId, ModelUsage, SessionMeta, StatsCache } from '@agentistics/core'
-import { calcCost, sessionCostUSD, sessionModelUsage, sessionLabel, HARNESS_ORDER } from '@agentistics/core'
+import { calcCost, sessionCostUSD, sessionModelUsage, sessionLabel, sessionTokenTotal, usageTokenTotal, HARNESS_ORDER } from '@agentistics/core'
 
 export interface HarnessRow {
   harness: HarnessId
@@ -62,22 +62,20 @@ export function sessionHarness(s: SessionMeta): HarnessId {
   return (s.harness as HarnessId | undefined) ?? 'claude'
 }
 
+/**
+ * Both delegate to `@agentistics/core/tokens`, which is the single definition of what the word
+ * "tokens" means in this product.
+ *
+ * The arithmetic here was already right — all four counters — while several web surfaces were
+ * summing two. Keeping a private copy of a rule that other files got wrong is how the two drift
+ * apart again, and this way `tokens.lint.test.ts` covers the terminal as well.
+ */
 function usageTokens(u: ModelUsage): number {
-  return (
-    (u.inputTokens ?? 0) +
-    (u.outputTokens ?? 0) +
-    (u.cacheReadInputTokens ?? 0) +
-    (u.cacheCreationInputTokens ?? 0)
-  )
+  return usageTokenTotal(u)
 }
 
 export function sessionTokens(s: SessionMeta): number {
-  return (
-    (s.input_tokens ?? 0) +
-    (s.output_tokens ?? 0) +
-    (s.cache_read_input_tokens ?? 0) +
-    (s.cache_creation_input_tokens ?? 0)
-  )
+  return sessionTokenTotal(s)
 }
 
 function agentCount(sessions: SessionMeta[]): number {

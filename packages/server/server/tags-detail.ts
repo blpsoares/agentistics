@@ -11,7 +11,7 @@
  *
  * No Mongo, no auth, no I/O.
  */
-import { calcCost, sessionCostUSD, type SessionMeta } from '@agentistics/core'
+import { calcCost, sessionCostUSD, sessionTokenTotal, type SessionMeta } from '@agentistics/core'
 
 export interface TagBucket {
   key: string
@@ -64,8 +64,9 @@ function sessionCost(s: SessionMeta): number {
   }, '')
 }
 
-function sessionTokens(s: SessionMeta): number {
-  return (s.input_tokens ?? 0) + (s.output_tokens ?? 0)
+/** Every billed counter — the buckets this feeds are labelled "tokens" on the tag detail page. */
+function tokensOf(s: SessionMeta): number {
+  return sessionTokenTotal(s)
 }
 
 /** Accumulate one session into a keyed bucket map. Empty keys are skipped by the caller. */
@@ -74,7 +75,7 @@ function bump(map: Map<string, TagBucket>, key: string, s: SessionMeta): void {
   if (!b) { b = { key, sessions: 0, costUSD: 0, tokens: 0 }; map.set(key, b) }
   b.sessions += 1
   b.costUSD += sessionCost(s)
-  b.tokens += sessionTokens(s)
+  b.tokens += tokensOf(s)
 }
 
 /** Highest cost first, then most sessions — the order a reader scans for "where did it go". */
@@ -115,7 +116,7 @@ export function aggregateTagDetail(sessions: SessionMeta[]): TagDetailStats {
       if (!p) { p = { date: day, sessions: 0, costUSD: 0, tokens: 0 }; days.set(day, p) }
       p.sessions += 1
       p.costUSD += sessionCost(s)
-      p.tokens += sessionTokens(s)
+      p.tokens += tokensOf(s)
       if (!first || day < first) first = day
       if (!last || day > last) last = day
     }

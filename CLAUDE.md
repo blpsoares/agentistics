@@ -905,6 +905,36 @@ boundary.
 
 **All layers** use the same functions from `packages/core/src/types.ts` via `@agentistics/core`. Never inline pricing calculations.
 
+### "Tokens" means all four counters — `packages/core/src/tokens.ts`
+
+A session carries four billed counters and **`tokens` is always their sum**: `input + output +
+cacheRead + cacheWrite`. Measured on one real machine across 123 Claude sessions, `input + output`
+alone is **0,34 %** of the volume — so a surface summing two of the four is not slightly low, it is
+off by ~300×, and the cost beside it (which priced the cache) disagrees by ~10×.
+
+This was found as a session-drawer bug and turned out to be 19 call sites: the Compare page's
+Tokens row and its cost-per-1M, the tag cards and tag detail, the repositories list and its sort,
+the repo-detail CI and member tiles, the model breakdown's filter, five points in the PDF export,
+the header's `N tok` counter, `data.ts` and `tags-detail.ts` on the server, and the session drawer
+and recent-sessions list. Rules:
+
+- **Count through `tokens.ts`** — `sessionTokens` / `usageTokens` / `sessionTokenTotal` /
+  `usageTokenTotal` / `totalTokens` / `addTokens` / `sumTokens`. Never write the sum by hand.
+- **An aggregate type carries `tokens: TokenBreakdown`**, not just `inputTokens`/`outputTokens`
+  (`HarnessSummary`, `RepoStat`, `TagAggregate`, `derived.tokenTotals`). The conversational pair is
+  kept for surfaces that legitimately want it and is **never** the thing labelled "tokens".
+- **`calcCost` gets the real cache counters.** Hardcoding `cacheReadInputTokens: 0` prices the
+  cheap 4 % of the volume. For a session with no model, `blendedSessionCost` applies each of the
+  four blended rates — pricing cache as fresh input is the opposite error, ~10× too high.
+- **A label may not exist without its explanation.** `TOKEN_KINDS` carries label + one-sentence
+  `help` in EN/PT, and `totalTokensExplained()` is the sentence that goes under any headline
+  figure. These numbers reach the billions; a total with no account of what it contains reads as a
+  fault, and an unexplained alarming number is how a dashboard loses the right to be believed.
+- **`tokens.lint.test.ts` is the enforcement** — it greps the repo (core / server / web / tui) for
+  two-term token sums and for `calcCost` arguments with the cache zeroed, and fails the build.
+  Comments and per-field `+=` accumulation are exempt; a genuinely intentional two-term reading
+  needs `@tokens-intentional` **with a reason** on the same or a preceding line.
+
 ### `MODEL_PRICING` — pricing table (USD per 1M tokens)
 
 ```

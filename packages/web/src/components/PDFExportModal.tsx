@@ -5,8 +5,8 @@ import {
 import { format, parseISO, subDays } from 'date-fns'
 import type { AppData, Filters, Lang, ModelUsage, SessionMeta, HarnessId } from '@agentistics/core'
 import { sessionTime } from '../lib/sessionTime'
-import { formatModel, formatProjectName, repoShortName, calcCost, sessionLabel, fmt, fmtCost, fmtFull } from '@agentistics/core'
-import { useDerivedStats, blendedCostPerToken, type HarnessSummary } from '../hooks/useData'
+import { formatModel, formatProjectName, repoShortName, calcCost, sessionLabel, fmt, fmtCost, fmtFull, EMPTY_TOKENS, totalTokens } from '@agentistics/core'
+import { useDerivedStats, blendedCostPerToken, blendedSessionCost, type BlendedRates, type HarnessSummary } from '../hooks/useData'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 
 // Types
@@ -463,7 +463,7 @@ function MiniProjectsList({ projectStats, c, lang }: {
 
 function MiniSessionsTable({ sessions, c, lang, currency, brlRate, blendedRates }: {
   sessions: SessionMeta[]; c: Colors; lang: Lang; currency: 'USD' | 'BRL'; brlRate: number
-  blendedRates: { input: number; output: number }
+  blendedRates: BlendedRates
 }) {
   // The duration column carries "3h 12m ativo · 958h decorrido", so it needs real width.
   const cols = '84px 1fr 150px 40px 40px 62px'
@@ -486,7 +486,7 @@ function MiniSessionsTable({ sessions, c, lang, currency, brlRate, blendedRates 
               webSearchRequests: 0,
               costUSD: 0,
             }, s.model)
-          : ((s.input_tokens ?? 0) / 1_000_000) * blendedRates.input + ((s.output_tokens ?? 0) / 1_000_000) * blendedRates.output
+          : blendedSessionCost(s, blendedRates)
         return (
           <div key={i} style={{ display: 'grid', gridTemplateColumns: cols, gap: 6, padding: '4px 0', borderBottom: `1px solid ${c.border}40`, alignItems: 'center' }}>
             <div style={{ color: c.textSec }}>{s.start_time ? format(parseISO(s.start_time), 'MM/dd HH:mm') : '—'}</div>
@@ -908,7 +908,7 @@ function CompareSectionContent({ summaries, harnesses, c, pt, currency, brlRate 
                   <div>
                     <div style={{ fontSize: 8, color: c.textTer, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{pt ? 'Tokens' : 'Tokens'}</div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: capable(h, 'tokens') ? c.blue : c.textTer }}>
-                      {capable(h, 'tokens') ? fmt((s?.inputTokens ?? 0) + (s?.outputTokens ?? 0)) : 'N/A'}
+                      {capable(h, 'tokens') ? fmt(totalTokens(s?.tokens ?? EMPTY_TOKENS)) : 'N/A'}
                     </div>
                   </div>
                   <div>
@@ -938,7 +938,7 @@ function CompareSectionContent({ summaries, harnesses, c, pt, currency, brlRate 
         {[
           { label: pt ? 'Sessões' : 'Sessions', getValue: (h: HarnessId) => ({ val: fmt(summaries[h]?.sessions ?? 0), na: false }) },
           { label: pt ? 'Mensagens' : 'Messages', getValue: (h: HarnessId) => ({ val: fmt(summaries[h]?.messages ?? 0), na: false }) },
-          { label: pt ? 'Total de tokens' : 'Total tokens', getValue: (h: HarnessId) => capable(h, 'tokens') ? { val: fmt((summaries[h]?.inputTokens ?? 0) + (summaries[h]?.outputTokens ?? 0)), na: false } : { val: 'N/A', na: true } },
+          { label: pt ? 'Total de tokens' : 'Total tokens', getValue: (h: HarnessId) => capable(h, 'tokens') ? { val: fmt(totalTokens(summaries[h]?.tokens ?? EMPTY_TOKENS)), na: false } : { val: 'N/A', na: true } },
           { label: pt ? 'Custo estimado' : 'Estimated cost', getValue: (h: HarnessId) => capable(h, 'cost') ? { val: fmtCostInline(summaries[h]?.costUSD ?? 0), na: false } : { val: 'N/A', na: true } },
           { label: pt ? 'Custo / 1M tokens' : 'Cost / 1M tokens', getValue: (h: HarnessId) => (capable(h, 'cost') && capable(h, 'tokens') && summaries[h]?.costPerMTokens != null) ? { val: `${fmtCostInline(summaries[h]!.costPerMTokens!)}`, na: false } : { val: 'N/A', na: true } },
         ].map(row => (
@@ -1128,8 +1128,8 @@ function CompareSectionContent({ summaries, harnesses, c, pt, currency, brlRate 
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {models.map(m => {
-                      const totalTok = m.inputTokens + m.outputTokens
-                      const maxTok = Math.max(...models.map(x => x.inputTokens + x.outputTokens), 1)
+                      const totalTok = totalTokens(m.tokens)
+                      const maxTok = Math.max(...models.map(x => totalTokens(x.tokens)), 1)
                       return (
                         <div key={m.model}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
@@ -1163,7 +1163,7 @@ export interface PDFContentProps {
   lang: Lang
   currency: 'USD' | 'BRL'
   brlRate: number
-  blendedRates: { input: number; output: number }
+  blendedRates: BlendedRates
   chartMetric: ChartMetric
   chartOverlay: ChartMetric | null
   chartOverlayAll: boolean
