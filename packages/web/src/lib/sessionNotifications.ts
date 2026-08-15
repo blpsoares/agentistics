@@ -18,7 +18,7 @@ export interface NotificationSettings {
     'working': boolean
     'exited': boolean
   }
-  eventSounds?: {
+  eventSounds: {
     'waiting-approval': SoundPreset
     'waiting': SoundPreset
     'working': SoundPreset
