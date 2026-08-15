@@ -16,6 +16,7 @@ import {
   dimensionWordBook,
   GROUPINGS,
   CLOSE_CELL,
+  buildSessionTree,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 import { PANE_FRAME_Y } from './chrome.ts'
@@ -222,6 +223,97 @@ describe('sessionRows / selectableIndexes', () => {
   it('marks an absence bucket as muted, so it does not read as a category', () => {
     const rows = sessionRows(groupSessions([session('a')], 'task', UNKNOWN), 'closed')
     expect(rows.find(r => r.kind === 'heading')).toMatchObject({ label: 'no task', muted: true })
+  })
+})
+
+describe('the CASCADE arrangement', () => {
+  const ROOT = '/home/d/agentistics'
+  const inRepo = (id: string, cwd: string, over: Partial<ControlSession> = {}) => session(id, {
+    cwd, project: cwd.split('/').pop() ?? cwd, projectGroup: 'agentistics', projectRoot: ROOT,
+    ...over,
+  })
+
+  it('is served by the tree module, so there is ONE cascade', () => {
+    // `groupSessions` special-cases `none` in its first line; `tree` joins it there rather than
+    // being dispatched by each of the three callers that arrange a fleet.
+    const list = [inRepo('a', `${ROOT}/packages/tui`), inRepo('b', ROOT)]
+    expect(groupSessions(list, 'tree', UNKNOWN)).toEqual(buildSessionTree(list, UNKNOWN))
+  })
+
+  it('draws a heading for a branch that holds no session of its own', () => {
+    // `push` skips a group with no sessions, which would silently delete the branch names the
+    // cascade IS. The count is what is actually drawn beneath it, never a stored subtree total.
+    const rows = sessionRows(groupSessions(
+      [inRepo('a', `${ROOT}/packages/tui`), inRepo('b', `${ROOT}/packages/server`)],
+      'tree',
+      UNKNOWN,
+    ))
+    // An absent depth reads as zero — the root indents by nothing, exactly like every flat band.
+    expect(rows.filter(r => r.kind === 'heading').map(r => [r.label, r.count, r.depth ?? 0])).toEqual([
+      ['agentistics', 2, 0],
+      ['packages', 2, 1],
+      ['server', 1, 2],
+      ['tui', 1, 2],
+    ])
+  })
+
+  it('counts only what is drawn under it, so a marked band never inflates a branch', () => {
+    // The marked band takes rows out of every group. A heading claiming two over one row is the
+    // same class of lie as a confident zero.
+    const rows = sessionRows(
+      groupSessions(
+        [inRepo('a', `${ROOT}/packages/tui`), inRepo('b', `${ROOT}/packages/server`)],
+        'tree',
+        UNKNOWN,
+      ),
+      undefined, undefined, undefined,
+      { ids: new Set(['a']), label: 'marked' },
+    )
+    expect(rows.filter(r => r.kind === 'heading').map(r => [r.label, r.count])).toEqual([
+      ['marked', 1],
+      ['agentistics', 1],
+      ['packages', 1],
+      ['server', 1],
+    ])
+  })
+
+  it('draws no heading for a branch whose whole subtree was taken by the marked band', () => {
+    const rows = sessionRows(
+      groupSessions([inRepo('a', `${ROOT}/packages/tui`)], 'tree', UNKNOWN),
+      undefined, undefined, undefined,
+      { ids: new Set(['a']), label: 'marked' },
+    )
+    expect(rows.filter(r => r.kind === 'heading').map(r => r.label)).toEqual(['marked'])
+  })
+
+  it('carries the breadcrumb path onto the heading row, for the card band', () => {
+    const rows = sessionRows(groupSessions(
+      [inRepo('a', `${ROOT}/packages/tui`)], 'tree', UNKNOWN,
+    ))
+    expect(rows.filter(r => r.kind === 'heading').map(r => r.path)).toEqual([
+      ['agentistics'],
+      ['agentistics', 'packages/tui'],
+    ])
+  })
+
+  it('keeps a closed block inside the branch it belongs to, breadcrumb included', () => {
+    const rows = sessionRows(groupSessions(
+      [inRepo('a', `${ROOT}/packages/tui`, { state: 'closed', stateLabel: 'closed' })],
+      'tree',
+      UNKNOWN,
+    ), 'closed')
+    const head = rows.filter(r => r.kind === 'heading')
+    expect(head.map(r => r.label)).toEqual(['agentistics', 'packages/tui · closed'])
+    // The crumb ends on the SAME words the heading reads, or the card band and the list would name
+    // one branch two different ways.
+    expect(head[1]!.path).toEqual(['agentistics', 'packages/tui · closed'])
+  })
+
+  it('never lets the cursor land on a branch heading', () => {
+    const rows = sessionRows(groupSessions(
+      [inRepo('a', `${ROOT}/packages/tui`)], 'tree', UNKNOWN,
+    ))
+    for (const i of selectableIndexes(rows)) expect(rows[i]!.kind).toBe('session')
   })
 })
 
@@ -591,7 +683,7 @@ describe('asideRows', () => {
     finishTask: 'Finish task', approve: 'Answer', prompt: 'Send',
     new: 'New', search: 'Search', group: 'Group',
   }
-  const groupWords = { repo: 'repo', none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project', status: 'state', marked: 'marked' }
+  const groupWords = { repo: 'repo', none: 'flat', tree: 'cascade', task: 'tasks', harness: 'harness', model: 'model', project: 'project', status: 'state', marked: 'marked' }
   const toggleWords = { history: 'closed', named: 'named', done: 'done tasks', active: 'only active', detail: 'detail' }
   const headings = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
 
@@ -1103,7 +1195,7 @@ describe('the only-active toggle', () => {
     },
     grouping: 'project',
     groupWords: {
-      repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
+      repo: 'repository', none: 'flat', tree: 'cascade', task: 'task', harness: 'harness', model: 'model',
       project: 'project', status: 'state', marked: 'marked',
     },
     layout: LAYOUT,
@@ -1906,7 +1998,7 @@ describe('asideRows — the layout section', () => {
     },
     grouping: 'project',
     groupWords: {
-      repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
+      repo: 'repository', none: 'flat', tree: 'cascade', task: 'task', harness: 'harness', model: 'model',
       project: 'project', status: 'state', marked: 'marked',
     },
     layout: { ...LAYOUT, value },

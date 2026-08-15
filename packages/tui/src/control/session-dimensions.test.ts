@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   ACTIVE_STATES,
+  ARRANGEMENTS,
   OFF_STATE,
   DIMENSION_ORDER,
   FILTERS_VERSION,
@@ -84,8 +85,19 @@ describe('the table', () => {
     expect([...DIMENSION_ORDER].sort()).toEqual(Object.keys(SESSION_DIMENSIONS).sort() as SessionDimensionId[])
   })
 
-  it('offers every dimension as a grouping, plus the flat one', () => {
-    expect(GROUPINGS).toEqual(['none', ...DIMENSION_ORDER])
+  it('offers every dimension as a grouping, plus the arrangements that are not dimensions', () => {
+    expect(GROUPINGS).toEqual([...ARRANGEMENTS, ...DIMENSION_ORDER])
+  })
+
+  it('keeps the CASCADE an arrangement and refuses to make it a dimension', () => {
+    // A tree node is not a bucket on a dimension: a session belongs to EVERY node on its path, so
+    // "filter to `packages`" and "the band `packages`" could never be made to agree. The cross-check
+    // below asserts exactly that agreement for every id in `DIMENSION_ORDER`, so promoting `tree`
+    // would either break it or force a false answer into it. It is offered as an arrangement, like
+    // `none`, and this test is what stops it drifting.
+    expect(GROUPINGS).toContain('tree')
+    expect(DIMENSION_ORDER).not.toContain('tree' as SessionDimensionId)
+    expect(Object.keys(SESSION_DIMENSIONS)).not.toContain('tree')
   })
 
   it('folds every absence into ONE named bucket per dimension', () => {
