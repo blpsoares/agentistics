@@ -13,6 +13,8 @@ import {
   contextBar, contextLevel, sessionContext,
   askRows, fitApprovalPreview, APPROVAL_PREVIEW_MAX, QUESTION_ROWS, CARD_MIN_LINES,
   type CardBand, type CardLine, type SessionRow,
+  dimensionWordBook,
+  GROUPINGS,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 import { PANE_FRAME_Y } from './chrome.ts'
@@ -25,11 +27,22 @@ const LAYOUT = {
   value: 'list' as const,
 }
 
-const UNKNOWN = {
-  harness: 'harness unknown', model: 'no model recorded', project: 'no directory', task: 'no task',
+const UNKNOWN = dimensionWordBook({
+  labels: {
+    status: 'state', harness: 'harness', model: 'model', project: 'project', repo: 'repository',
+    task: 'task', marked: 'marked',
+  },
+  unfiled: {
+    status: 'state unrecorded', harness: 'harness unknown', model: 'no model recorded',
+    project: 'no directory', task: 'no task', repo: 'no repository', marked: 'not marked',
+  },
+  states: {
+    working: 'working', waiting: 'waiting', 'waiting-approval': 'needs approval',
+    exited: 'ended', lost: 'lost', closed: 'closed', unknown: 'unknown',
+  },
   goneProject: 'directory no longer exists',
-  repo: 'no repository',
-}
+  marked: 'marked',
+})
 
 const session = (id: string, over: Partial<ControlSession> = {}): ControlSession => ({
   id,
@@ -577,8 +590,8 @@ describe('asideRows', () => {
     finishTask: 'Finish task', approve: 'Answer', prompt: 'Send',
     new: 'New', search: 'Search', group: 'Group',
   }
-  const groupWords = { repo: 'repo', none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project' }
-  const toggleWords = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks', active: 'only active', detail: 'detail' }
+  const groupWords = { repo: 'repo', none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project', status: 'state', marked: 'marked' }
+  const toggleWords = { closed: 'closed', exited: 'finished', named: 'named', done: 'done tasks', active: 'only active', detail: 'detail' }
   const headings = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
 
   const build = (o: Partial<Parameters<typeof asideRows>[0]> = {}) => asideRows({
@@ -586,11 +599,10 @@ describe('asideRows', () => {
     actionWords: words,
     grouping: 'none',
     groupWords,
-    toggles: { closed: false, exited: false, unfiled: false, done: false, active: false, detail: false },
+    toggles: { closed: false, exited: false, named: false, done: false, active: false, detail: false },
     toggleWords,
     headings,
     layout: LAYOUT,
-    showUnfiled: false,
     ...o,
   })
 
@@ -604,15 +616,19 @@ describe('asideRows', () => {
   })
 
   it('states every row own state, so nothing must be pressed to be discovered', () => {
-    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, unfiled: false, done: false, active: false, detail: false } })
+    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, named: false, done: false, active: false, detail: false } })
     expect(rows.find(r => r.kind === 'group' && r.value === 'task')).toMatchObject({ on: true })
     expect(rows.find(r => r.kind === 'group' && r.value === 'none')).toMatchObject({ on: false })
     expect(rows.find(r => r.kind === 'toggle' && r.toggle === 'closed')).toMatchObject({ on: true })
   })
 
-  it('offers the unfiled switch only where it means something', () => {
-    expect(build().some(r => r.kind === 'toggle' && r.toggle === 'unfiled')).toBe(false)
-    expect(build({ showUnfiled: true }).some(r => r.kind === 'toggle' && r.toggle === 'unfiled')).toBe(true)
+  it('offers the named-row switch under every grouping', () => {
+    // It replaced `unfiled`, which was offered only while grouping by task — a switch that appeared
+    // and disappeared for one dimension. The task-less bucket is a row in the task section now, and
+    // this one is about a widening that applies whatever the list is arranged by.
+    for (const grouping of GROUPINGS) {
+      expect(build({ grouping }).some(r => r.kind === 'toggle' && r.toggle === 'named')).toBe(true)
+    }
   })
 
   it('never lets the cursor land on a heading, a rule, or a disabled verb', () => {
@@ -1074,17 +1090,24 @@ describe('the only-active toggle', () => {
     grouping: 'project',
     groupWords: {
       repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
-      project: 'project',
+      project: 'project', status: 'state', marked: 'marked',
     },
     layout: LAYOUT,
-    toggles: { closed: false, exited: false, unfiled: false, done: false, active: true, detail: false },
+    toggles: { closed: false, exited: false, named: false, done: false, active: true, detail: false },
     toggleWords: {
-      closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks',
+      closed: 'closed', exited: 'finished', named: 'named', done: 'done tasks',
       active: 'only active', detail: 'detail',
     },
     headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
-    showUnfiled,
+    ...(showUnfiled ? { tasks: TASK_SECTION } : {}),
   })
+  const TASK_SECTION = {
+    counts: [{ name: 't', count: 1 }],
+    active: null,
+    heading: 'TASKS',
+    allLabel: 'all',
+    unfiled: 'no task',
+  }
 
   it('leads the SHOW block, because it overrides the three under it', () => {
     // A switch that appears to do nothing is one people conclude is broken. Listed first it reads
@@ -1870,16 +1893,15 @@ describe('asideRows — the layout section', () => {
     grouping: 'project',
     groupWords: {
       repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
-      project: 'project',
+      project: 'project', status: 'state', marked: 'marked',
     },
     layout: { ...LAYOUT, value },
-    toggles: { closed: false, exited: false, unfiled: false, done: false, active: true, detail: false },
+    toggles: { closed: false, exited: false, named: false, done: false, active: true, detail: false },
     toggleWords: {
-      closed: 'closed', exited: 'exited', unfiled: 'unfiled', done: 'done', active: 'active',
+      closed: 'closed', exited: 'exited', named: 'named', done: 'done', active: 'active',
       detail: 'detail',
     },
     headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
-    showUnfiled: false,
   })
 
   it('offers both layouts and marks the one in force', () => {

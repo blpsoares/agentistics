@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
 import { sessionRunning } from '@agentistics/tui/control/sessions'
-import { controlStrings } from '@agentistics/tui/control/i18n'
+import { controlStrings, sessionWordBook } from '@agentistics/tui/control/i18n'
 import { wrapText } from '@agentistics/tui/control/surface'
 import { parseSessionArgs, LS_DEFAULT, type SessionCommand } from './cli-parse'
 import { cliStrings } from '../cli-i18n'
@@ -466,14 +466,7 @@ async function ls(
     doneTasks: finishedTasks,
     strings: {
       cols: c.sessionsCols,
-      unknown: {
-        harness: c.sessionsUnknownHarness,
-        model: c.sessionsUnknownModel,
-        project: c.sessionsUnknownProject,
-        task: c.sessionsUnknownTask,
-        repo: c.sessionsUnknownRepo,
-        goneProject: c.sessionsGoneProject,
-      },
+      words: sessionWordBook(c),
       closed: c.sessionsClosedWord,
       done: c.sessionsDoneWord,
     },

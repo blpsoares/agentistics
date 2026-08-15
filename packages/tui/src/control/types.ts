@@ -8,6 +8,9 @@
  */
 
 import type { CliLang } from './lang'
+// The default ARRANGEMENT is derived from the dimension vocabulary rather than written out beside
+// it. `session-dimensions.ts` imports this file for TYPES only, so this is the one value direction.
+import { DEFAULT_FILTERS, DEFAULT_SHOW_NAMED, storedFilters } from './session-dimensions'
 
 export type TabId =
   | 'services'
@@ -532,7 +535,39 @@ export interface ControlSession {
  * its own rather than as a setting that was never stored.
  */
 export interface SessionViewPrefs {
-  grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo'
+  /**
+   * Which dimension the list is arranged by, BY ID.
+   *
+   * An id and never a position: an index records "the third dimension" and becomes a different
+   * question the moment someone reorders the menu. See `session-dimensions.ts`.
+   */
+  grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo' | 'status' | 'marked'
+  /**
+   * What the list is narrowed to, per dimension — the ONE stored source for every filter.
+   *
+   * One source on purpose. The state section and the show switches used to be two, and the state
+   * section silently won: the switches drew their own on/off while changing nothing. Written by
+   * `storedFilters`, read by `migrateSessionFilters`, and gated by `filtersVersion`.
+   */
+  filters?: Record<string, string[]>
+  /** Marks a `filters` written under the current model. See `FILTERS_VERSION`. */
+  filtersVersion?: number
+  /**
+   * Whether a row the user NAMED survives a status filter that would otherwise drop it.
+   *
+   * Off as it ships. The exception itself is old and has a real reason — a reboot turns every
+   * managed session `lost`, and without it the default list came back empty, taking the names with
+   * it — but it used to be unwritten, so a strict filter quietly kept rows it did not name. Now it is
+   * a switch: a widening someone chose and can see.
+   */
+  showNamed?: boolean
+  /**
+   * DERIVED ON WRITE, and read back only by `migrateSessionFilters`.
+   *
+   * Kept so a machine that downgrades to an older binary does not come up with every filter lifted.
+   * Same pattern, and the same reason, as `deniedRepos` in the sharing rules: anything that still
+   * READS these as the live answer is a bug.
+   */
   showClosed: boolean
   showExited: boolean
   /** Only meaningful while grouping by task, but stored either way so it survives a detour. */
@@ -600,8 +635,14 @@ export interface SessionViewPrefs {
  * one arrangement and reset to another.
  *
  * Only ACTIVE conversations, grouped by project. The list opens as what is happening rather than as
- * everything that ever has — and `onlyActive` means that strictly, named rows included, which is
- * the whole reason it exists.
+ * everything that ever has — and it means that STRICTLY, named rows included: `showNamed` is off, so
+ * nothing slips past the status selection unannounced.
+ *
+ * "Only active" is no longer a switch of its own. It is a SELECTION on the status dimension, spelled
+ * out here as the states it keeps, and the switch that used to carry the name is one of the
+ * shortcuts that writes into that selection. The two can no longer disagree — see
+ * `session-dimensions.ts`. `onlyActive`/`showClosed`/`showExited` below are the derived-on-write
+ * copies an older binary reads.
  *
  * The consequence is deliberate and has to be stated somewhere the user can see it: when nothing is
  * running, this default shows an EMPTY list. It is not empty because the fleet is — the sessions
@@ -611,13 +652,12 @@ export interface SessionViewPrefs {
  */
 export const DEFAULT_SESSION_VIEW: SessionViewPrefs = {
   grouping: 'project',
-  showClosed: false,
-  showExited: false,
-  showUnfiled: true,
+  ...storedFilters({ filters: DEFAULT_FILTERS, showNamed: DEFAULT_SHOW_NAMED }),
   showDone: false,
-  onlyActive: true,
   layout: 'list',
-}
+  // Derived-on-write, like the three `storedFilters` writes above: only an older binary reads it.
+  showUnfiled: true,
+} as SessionViewPrefs
 
 /**
  * A session the machine lost that could be started again — see `planRestore`.

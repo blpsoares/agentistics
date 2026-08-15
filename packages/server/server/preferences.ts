@@ -65,7 +65,17 @@ export interface Preferences {
    * threw away the arrangement someone chose, which reads as the screen forgetting on its own.
    */
   sessionView?: {
-    grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo'
+    grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo' | 'status' | 'marked'
+    /**
+     * What the list is narrowed to, per dimension — the ONE stored source for every filter.
+     *
+     * See `session-dimensions.ts`. The five fields under it are DERIVED ON WRITE and read back only
+     * by that module's migration, so an older binary still comes up filtered; anything that reads
+     * them as the live answer is a bug.
+     */
+    filters?: Record<string, string[]>
+    filtersVersion?: number
+    showNamed?: boolean
     showClosed: boolean
     showExited: boolean
     showUnfiled: boolean
