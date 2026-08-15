@@ -58,6 +58,7 @@ export async function liveConversationHolders(
     if (!conversationId) continue
     claims.push({
       id: m.id,
+      kind: 'managed',
       alive: alive.has(m.id),
       conversationId,
       ...(m.label ? { label: m.label } : {}),
@@ -71,7 +72,14 @@ export async function liveConversationHolders(
       ? harnessSessions.byPid.get(p.pid)?.sessionId
       : undefined
     if (!conversationId) continue
-    claims.push({ id: externalId(p), alive: true, conversationId, label: p.cwd })
+    claims.push({
+      id: externalId(p),
+      kind: 'process',
+      ...(p.pid !== undefined ? { pid: p.pid } : {}),
+      alive: true,
+      conversationId,
+      label: p.cwd,
+    })
   }
   // The harness's OWN list of live sessions — the only source that sees a BACKGROUND agent, which
   // has no tty, no tmux and nothing in the registry.
@@ -86,6 +94,8 @@ export async function liveConversationHolders(
     if (a.pid === undefined || !pidAlive(a.pid)) continue
     claims.push({
       id: `agent:${a.sessionId}`,
+      kind: 'process',
+      pid: a.pid,
       alive: true,
       conversationId: a.sessionId,
       ...(a.name ? { label: a.name } : {}),

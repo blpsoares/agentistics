@@ -1462,6 +1462,47 @@ async function spawnManaged(req: {
  * that is replaced — is `planTaskReopen`, and writing it twice is exactly the drift that module was
  * extracted to end.
  */
+/**
+ * End the assistant process holding a conversation, so the same conversation can be reopened under
+ * tmux. Returns whether it is actually gone.
+ *
+ * `SIGTERM` first and only: a CLI asked to stop writes out what it is holding, and the whole point
+ * of the takeover is that the CONVERSATION survives it. `SIGKILL` is the escalation, taken only
+ * after the polite request has been ignored for `ADOPT_TERM_MS` — an assistant mid-turn can take a
+ * moment, and killing it a millisecond after asking would make the gentle signal decorative.
+ *
+ * **The return value is a fact, not an intention.** The caller spawns a second assistant into this
+ * conversation the moment this says yes, so "we sent a signal" is not good enough — the pid is
+ * polled until the kernel says it is gone. If it will not die, this returns false and NOTHING is
+ * spawned: leaving the user with the process they already had is much better than handing them the
+ * twin this whole module exists to prevent.
+ */
+const ADOPT_TERM_MS = 4000
+const ADOPT_KILL_MS = 2000
+const ADOPT_POLL_MS = 100
+
+async function endProcess(pid: number): Promise<boolean> {
+  const gone = () => {
+    try { process.kill(pid, 0); return false } catch { return true }
+  }
+  if (gone()) return true
+
+  const waitFor = async (ms: number): Promise<boolean> => {
+    const until = Date.now() + ms
+    while (Date.now() < until) {
+      if (gone()) return true
+      await new Promise(r => setTimeout(r, ADOPT_POLL_MS))
+    }
+    return gone()
+  }
+
+  try { process.kill(pid, 'SIGTERM') } catch { return gone() }
+  if (await waitFor(ADOPT_TERM_MS)) return true
+
+  try { process.kill(pid, 'SIGKILL') } catch { return gone() }
+  return waitFor(ADOPT_KILL_MS)
+}
+
 async function reopenEntries(
   entries: readonly ManagedSession[],
   s: CliStrings,
@@ -2372,17 +2413,38 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const previous = req.replaces
         ? (await readRegistry()).find(m => m.id === req.replaces)
         : undefined
-      // THE LOCK ON THE DOOR. Refused before anything is spawned, and NAMING the session that
-      // already has this conversation, because a refusal the user cannot act on is a dead end: the
-      // next thing they want is to go and look at it. This is the cheapest defence there is against
-      // the worst thing this feature has done — two assistants typing into one transcript and one
-      // working tree — and it is deliberately a refusal rather than a tidy-up afterwards.
+      // THE LOCK ON THE DOOR — and, for one kind of holder, the door opening instead.
+      //
+      // Two assistants in one transcript and one working tree is the worst thing this feature has
+      // done, so nothing is spawned before asking who holds the conversation. But WHO holds it
+      // decides what the answer means:
+      //
+      //  - a MANAGED row is somewhere to go. It has a pane, `o` attaches to it, and "open it there"
+      //    is an instruction the user can follow. Still refused, unchanged.
+      //  - a PROCESS is not somewhere to go. An assistant started by hand has no pane to attach to,
+      //    and the refusal named its DIRECTORY — which is not a place. There was no verb that could
+      //    do anything with it either, so the row was a dead end: visible, and inert. Reported.
+      //
+      // For that second case the conversation is on DISK, so ending the process and reopening the
+      // same id under tmux costs the turn in flight and nothing else — and puts the work back under
+      // every verb this screen has. That is a takeover, and it is what `resume` now does rather
+      // than a verb of its own: the user already pressed the key that means "put this conversation
+      // in front of me".
       const holder = conversationHeldBy(
         await liveConversationHolders(await resolveBackend()),
         req.sessionId,
         req.replaces,
       )
-      if (holder) return { ok: false, message: s.sessResumeInUse(holder.label) }
+      if (holder?.kind === 'managed') return { ok: false, message: s.sessResumeInUse(holder.label) }
+      if (holder?.kind === 'process') {
+        // A holder with no pid cannot be ended, and spawning beside it would create the very twin
+        // the lock exists to prevent. Refuse, saying so — never spawn on a maybe.
+        if (holder.pid === undefined) {
+          return { ok: false, message: s.sessResumeInUse(holder.label) }
+        }
+        const ended = await endProcess(holder.pid)
+        if (!ended) return { ok: false, message: s.sessAdoptFailed(holder.label) }
+      }
       const spawned = await spawnManaged({
         harness: req.harness as HarnessId,
         cwd: req.cwd,

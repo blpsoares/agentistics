@@ -381,6 +381,16 @@ export interface ControlStrings {
   taskCurrent: string
   sessionsOpenTaskConfirm: (task: string, n: number) => string
   sessionsResumeConfirm: (title: string) => string
+  /**
+   * The caveat on a row that is RUNNING — and it is now a statement of what will happen, not a
+   * warning to go and do it yourself.
+   *
+   * It used to read "the assistant already running there is NOT stopped — close it first", which
+   * described the only behaviour available at the time and left the user holding a row they could
+   * see and could not use. The process is ended and the same conversation reopened under tmux; the
+   * turn in flight is the only thing lost, and the sentence has to say so, because a confirmation
+   * that hides a kill is worse than one that refuses.
+   */
   sessionsResumeRunning: string
   sessionsSearchLabel: string
   sessionsSearchEmpty: string
@@ -836,7 +846,7 @@ const EN: ControlStrings = {
     `Reopen all ${n} session(s) of "${task}" in the background?`,
   sessionsResumeConfirm: (title: string) => `Reopen "${title}" as a session agentop manages?`,
   sessionsResumeRunning:
-    'the assistant already running there is NOT stopped — close it first, or you will have two on one conversation.',
+    'the assistant running it will be STOPPED and the conversation reopened here — the turn in flight is lost, the conversation is not.',
   sessionsSearchLabel: 'Search sessions and closed conversations',
   sessionsSearchEmpty: 'nothing matches.',
   sessionsClosedWord: 'off',
@@ -1248,7 +1258,7 @@ const PT: ControlStrings = {
     `Reabrir todas as ${n} sessão(ões) de "${task}" em background?`,
   sessionsResumeConfirm: (title: string) => `Reabrir "${title}" como sessão gerenciada pelo agentop?`,
   sessionsResumeRunning:
-    'o assistente que já roda ali NÃO é encerrado — feche ele antes, ou você fica com dois na mesma conversa.',
+    'o assistente que roda ela vai ser ENCERRADO e a conversa reaberta aqui — perde-se o turno em andamento, não a conversa.',
   sessionsSearchLabel: 'Buscar sessões e conversas fechadas',
   sessionsSearchEmpty: 'nada corresponde.',
   sessionsClosedWord: 'desligada',

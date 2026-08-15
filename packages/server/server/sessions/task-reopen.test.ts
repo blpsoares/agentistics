@@ -75,12 +75,12 @@ describe('a conversation another live session already has', () => {
       entries: [entry('a')],
       liveIds: new Set(),
       conversationFor: conv('c1'),
-      inUse: new Map([['c1', { id: 'twin', label: 'the one already running it' }]]),
+      inUse: new Map([['c1', { id: 'twin', label: 'the one already running it', kind: 'managed' as const }]]),
     })
     expect(plan.reopen).toEqual([])
     expect(plan.skipped).toEqual([])
     expect(plan.heldElsewhere).toEqual([
-      { id: 'a', holder: { id: 'twin', label: 'the one already running it' } },
+      { id: 'a', holder: { id: 'twin', label: 'the one already running it', kind: 'managed' as const } },
     ])
   })
 
@@ -91,7 +91,7 @@ describe('a conversation another live session already has', () => {
       entries: [entry('a')],
       liveIds: new Set(),
       conversationFor: conv('c1'),
-      inUse: new Map([['c1', { id: 'twin', label: 'twin' }]]),
+      inUse: new Map([['c1', { id: 'twin', label: 'twin', kind: 'managed' as const }]]),
     })
     expect(taskReopenSucceeded(plan, 0)).toBe(true)
   })
@@ -103,7 +103,7 @@ describe('a conversation another live session already has', () => {
       entries: [entry('a', { conversationId: 'stale' })],
       liveIds: new Set(),
       conversationFor: conv('c1'),
-      inUse: new Map([['stale', { id: 'twin', label: 'twin' }]]),
+      inUse: new Map([['stale', { id: 'twin', label: 'twin', kind: 'managed' as const }]]),
     })
     expect(plan.reopen.map(r => r.resumeId)).toEqual(['c1'])
     expect(plan.heldElsewhere).toEqual([])
@@ -114,7 +114,7 @@ describe('a conversation another live session already has', () => {
       entries: [entry('a')],
       liveIds: new Set(),
       conversationFor: conv('c1'),
-      inUse: new Map([['c1', { id: 'a', label: 'itself' }]]),
+      inUse: new Map([['c1', { id: 'a', label: 'itself', kind: 'managed' as const }]]),
     })
     expect(plan.reopen.map(r => r.entry.id)).toEqual(['a'])
     expect(plan.heldElsewhere).toEqual([])
