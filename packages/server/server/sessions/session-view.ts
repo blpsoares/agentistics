@@ -12,8 +12,9 @@ import type { HarnessId } from '@agentistics/core'
 import { type HarnessProcess, sessionAtCwd } from '../live-sessions'
 import { rulesFor } from './attention-rules'
 import type { DialogOption } from './dialog-choice'
-import { chosenName, type HarnessSessionFile } from './harness-session-file'
+import { chosenName, tmuxSessionName, type HarnessSessionFile } from './harness-session-file'
 import type { HarnessSessionIndex } from './harness-sessions'
+import { idFromTmuxName } from './tmux-cli'
 import type { RepoFacts } from './repo-facts'
 import type { ReconciledSession } from './session-ref'
 import type { Conversation } from './conversations'
@@ -187,6 +188,32 @@ function rankOf(v: SessionView): number {
  */
 export function externalId(p: HarnessProcess): string {
   return `external:${p.harness}:${p.cwd}:${p.startedMs ?? 0}`
+}
+
+/**
+ * The managed row a running process PROVES it belongs to, or `undefined` — PURE.
+ *
+ * The one identity claim in this file that is not an inference. A harness records the tmux session
+ * it is running inside, and for a session agentop started that is `agentop-<our id>`; the process
+ * is therefore naming our row itself. Nothing it does afterwards — `cd`, a worktree, `/add-dir` —
+ * can invalidate it, which is exactly what a directory comparison cannot say.
+ *
+ * `undefined` means NO CLAIM, not "no row": a tmux session that is not ours, a harness that writes
+ * no record, a claude too old to carry the field. The caller then falls back to the directory
+ * guess, which is all there ever was.
+ *
+ * Looked up by pid first (the key a scanned process arrives with) and then by conversation id (the
+ * key a process synthesised from a record arrives with) — the same order, and the same reason, as
+ * the name lookup below it.
+ */
+export function managedIdOfProcess(
+  p: Pick<HarnessProcess, 'pid' | 'sessionId'>,
+  index: HarnessSessionIndex | undefined,
+): string | undefined {
+  const file = (p.pid !== undefined ? index?.byPid.get(p.pid) : undefined)
+    ?? (p.sessionId ? index?.byConversation.get(p.sessionId) : undefined)
+  const tmux = tmuxSessionName(file)
+  return (tmux ? idFromTmuxName(tmux) : null) ?? undefined
 }
 
 /** Everything a row can be found by, in one lowercased blob. */
@@ -389,22 +416,45 @@ export function buildSessionViews(o: {
     }
   })
 
-  // An assistant already accounted for by a managed row must not appear twice. Matched through the
-  // same `sessionAtCwd` predicate the live panel uses, so the two surfaces cannot disagree about
-  // whether one running assistant is one row or two.
+  // An assistant already accounted for by a managed row must not appear twice.
   //
-  // A row whose harness is unknown covers NOTHING: it might be that process or might not, and
-  // silently swallowing an external session on a maybe is the worse of the two errors — a duplicate
-  // row is visible and self-correcting, a missing one is not.
-  // Only a row that is actually RUNNING can account for a running process. `!== 'lost'` was too
-  // wide: an `exited` row accounts for a process that is GONE, and letting it cover swallows a live
-  // session that happens to share its directory. Measured on this machine — three exited rows sat in
-  // the worktree of a background agent that was alive, and the agent was hidden behind them and
-  // listed as a closed conversation instead.
-  const covered = (p: HarnessProcess): boolean => managed.some(m =>
-    m.harness === p.harness &&
-    (m.status === 'running' || m.status === 'unregistered') &&
-    sessionAtCwd({ current_cwd: m.cwd, project_path: m.cwd }, p.cwd))
+  // ## A DIRECTORY IS NOT AN IDENTITY
+  //
+  // This was harness-and-directory alone, so a session that CHANGED DIRECTORY stopped matching the
+  // row hosting it and was drawn a second time as `external`. Measured on this machine: one claude,
+  // started by agentop in the repo root, entered a worktree — its kernel cwd moved to
+  // `.claude/worktrees/token-truth` while the managed row kept the directory it was spawned in, and
+  // the fleet showed one conversation twice, `working` on the row and `external` beside it. Its own
+  // record read `"cwd":"…/worktrees/token-truth","tmux":"agentop-e3e4fc2ce6"` — naming the very row
+  // it was being listed apart from. Any `cd`, `/add-dir` or worktree reproduces it, and the
+  // duplicate is not cosmetic: the external twin offers REOPEN, which would put a second assistant
+  // on one transcript.
+  //
+  // So the EXACT link is asked first. `identifiesManagedRow` reads the tmux session the harness
+  // wrote about ITSELF — `agentop-<our id>` for a session we started — which is a fact the process
+  // stated, immune to whatever it does with its working directory afterwards. `status` is
+  // deliberately not consulted on that path: the link is proof that this process IS that row, and a
+  // row reconciled to `lost` while its process is demonstrably alive is a reconciliation fault to
+  // be shown as one, never a licence to draw the session twice.
+  //
+  // The directory guess still answers everything the link cannot — another harness, a tmux session
+  // that is not ours, a claude too old to write the field. There:
+  //  - a row whose harness is unknown covers NOTHING: it might be that process or might not, and
+  //    silently swallowing an external session on a maybe is the worse of the two errors — a
+  //    duplicate row is visible and self-correcting, a missing one is not;
+  //  - only a row that is actually RUNNING can account for a running process. `!== 'lost'` was too
+  //    wide: an `exited` row accounts for a process that is GONE, and letting it cover swallows a
+  //    live session that happens to share its directory. Measured — three exited rows sat in the
+  //    worktree of a background agent that was alive, and the agent was hidden behind them and
+  //    listed as a closed conversation instead.
+  const covered = (p: HarnessProcess): boolean => {
+    const exact = managedIdOfProcess(p, o.harnessSessions)
+    if (exact !== undefined) return managed.some(m => m.id === exact)
+    return managed.some(m =>
+      m.harness === p.harness &&
+      (m.status === 'running' || m.status === 'unregistered') &&
+      sessionAtCwd({ current_cwd: m.cwd, project_path: m.cwd }, p.cwd))
+  }
 
   const conversations = o.conversations ?? []
 

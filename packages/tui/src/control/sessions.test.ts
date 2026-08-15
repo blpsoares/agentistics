@@ -2349,11 +2349,16 @@ describe('the header count', () => {
   const en = controlStrings('en')
   const pt = controlStrings('pt')
 
-  it('says how many are ON SCREEN and out of how many', () => {
+  it('says how many are ON SCREEN and out of how many, NAMING both', () => {
     // The header read the fleet's length, so with `only active` on it announced 44 over a screen
     // showing ten — a number describing a screen nobody is looking at.
-    expect(en.sessionsCount(10, 44)).toBe('10 of 44 sessions')
-    expect(pt.sessionsCount(10, 44)).toBe('10 de 44 sessões')
+    //
+    // `N of M sessions` then read as "N of your M OPEN sessions", which neither number is: M counts
+    // every session this machine has a record of, closed ones included. With the header's memory
+    // budget (`▤ 4/18`) on the same screen, a machine looked like it was contradicting itself about
+    // how many sessions were open. Both numbers are named now.
+    expect(en.sessionsCount(10, 44)).toBe('10 on screen · 44 known')
+    expect(pt.sessionsCount(10, 44)).toBe('10 na tela · 44 conhecidas')
   })
 
   it('drops the second number when it says nothing new', () => {
@@ -2367,8 +2372,8 @@ describe('the header count', () => {
   it('is honest about an empty screen over a fleet that is not', () => {
     // The case that matters most: the filter emptied the list, and the row must not read as an
     // empty machine.
-    expect(en.sessionsCount(0, 44)).toBe('0 of 44 sessions')
-    expect(pt.sessionsCount(0, 44)).toBe('0 de 44 sessões')
+    expect(en.sessionsCount(0, 44)).toBe('0 on screen · 44 known')
+    expect(pt.sessionsCount(0, 44)).toBe('0 na tela · 44 conhecidas')
   })
 })
 

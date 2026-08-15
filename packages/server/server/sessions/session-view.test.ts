@@ -443,3 +443,93 @@ describe('a row that KNOWS which conversation it drives', () => {
     expect(v!.recordedRepo).toEqual(repo)
   })
 })
+
+describe('a session that CHANGED DIRECTORY is still the row hosting it', () => {
+  // Reported from a real machine on 2026-08-15. One claude, started by agentop in the repo root,
+  // entered a git worktree: its kernel cwd moved while the managed row kept the directory it was
+  // spawned in, and the fleet drew the same conversation twice — `working` on the row, `external`
+  // beside it. Its own record read:
+  //
+  //   {"pid":36044,"cwd":"…/agentistics/.claude/worktrees/token-truth",
+  //    "tmux":"agentop-e3e4fc2ce6:@2.%2", …}
+  //
+  // naming the very row it was being listed apart from. The duplicate is not cosmetic: the external
+  // twin offers REOPEN, which would put a second assistant on one transcript.
+  const index = (over: {
+    byPid?: Record<number, Record<string, unknown>>
+    byConversation?: Record<string, Record<string, unknown>>
+  }) => ({
+    byManagedId: new Map(),
+    byPid: new Map(Object.entries(over.byPid ?? {}).map(([k, v]) => [Number(k), v])),
+    byConversation: new Map(Object.entries(over.byConversation ?? {})),
+  }) as never
+
+  const spawnedAt = '/home/padawan/agentistics'
+  const movedTo = '/home/padawan/agentistics/.claude/worktrees/token-truth'
+  const working = new Map<string, SessionActivity>([['e3e4fc2ce6', 'working']])
+  const hostRow = (over: Partial<ReconciledSession> = {}) =>
+    row('e3e4fc2ce6', { managed: managed('e3e4fc2ce6', { cwd: spawnedAt }), ...over })
+
+  it('draws ONE row when the process names the managed session it runs in', () => {
+    const views = buildSessionViews({
+      reconciled: [hostRow()],
+      activity: working,
+      processes: [proc({ pid: 36044, cwd: movedTo })],
+      harnessSessions: index({ byPid: { 36044: { pid: 36044, tmux: 'agentop-e3e4fc2ce6:@2.%2' } } }),
+    })
+    expect(views.filter(v => v.status === 'external')).toHaveLength(0)
+    expect(views).toHaveLength(1)
+    expect(views[0]!.id).toBe('e3e4fc2ce6')
+  })
+
+  it('covers by the link even when the row reconciled to a state the guess would reject', () => {
+    // `lost` while the process is demonstrably alive is a reconciliation fault to be SHOWN as one,
+    // never a licence to draw the session twice. The directory path deliberately keeps rejecting a
+    // non-running row; this is the exact path, where the link is proof.
+    const views = buildSessionViews({
+      reconciled: [hostRow({ status: 'lost', backend: undefined })],
+      activity: new Map(),
+      processes: [proc({ pid: 36044, cwd: movedTo })],
+      harnessSessions: index({ byPid: { 36044: { pid: 36044, tmux: 'agentop-e3e4fc2ce6:@2.%2' } } }),
+    })
+    expect(views.filter(v => v.status === 'external')).toHaveLength(0)
+  })
+
+  it('matches by conversation id for a process the /proc scan never reported', () => {
+    // A row synthesised from a record arrives with no pid the scan has seen. It must resolve the
+    // same way, or the background-agent path re-opens the duplicate by another door.
+    const views = buildSessionViews({
+      reconciled: [hostRow()],
+      activity: working,
+      processes: [proc({ cwd: movedTo, sessionId: '7ee6e39f' })],
+      harnessSessions: index({
+        byConversation: { '7ee6e39f': { tmux: 'agentop-e3e4fc2ce6:@2.%2' } },
+      }),
+    })
+    expect(views.filter(v => v.status === 'external')).toHaveLength(0)
+  })
+
+  it('still lists a process whose tmux session is NOT ours', () => {
+    // A user's own tmux names nothing of ours, so there is no claim and the directory guess decides
+    // — which for a different directory means: a genuine external session, listed.
+    const views = buildSessionViews({
+      reconciled: [hostRow()],
+      activity: working,
+      processes: [proc({ pid: 999, cwd: '/somewhere/else' })],
+      harnessSessions: index({ byPid: { 999: { pid: 999, tmux: 'my-own-tmux:@0.%0' } } }),
+    })
+    expect(views.filter(v => v.status === 'external')).toHaveLength(1)
+  })
+
+  it('does not let a claim on an UNKNOWN row swallow the process', () => {
+    // The record names an agentop session the registry no longer holds. That is an orphan, and an
+    // orphan is external — never silently absent.
+    const views = buildSessionViews({
+      reconciled: [hostRow()],
+      activity: working,
+      processes: [proc({ pid: 777, cwd: movedTo })],
+      harnessSessions: index({ byPid: { 777: { pid: 777, tmux: 'agentop-gonefromregistry:@0.%0' } } }),
+    })
+    expect(views.filter(v => v.status === 'external')).toHaveLength(1)
+  })
+})
