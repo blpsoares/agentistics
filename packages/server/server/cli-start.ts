@@ -1481,6 +1481,30 @@ const ADOPT_TERM_MS = 4000
 const ADOPT_KILL_MS = 2000
 const ADOPT_POLL_MS = 100
 
+/**
+ * Is this pid, RIGHT NOW, an assistant process on this machine?
+ *
+ * Asked immediately before signalling, and the takeover is abandoned when the answer is no.
+ *
+ * A pid alone is not an identity. `claude agents --json` states a pid and carries no `procStart`, so
+ * a record left behind by a finished agent names a number the kernel is free to hand to anything —
+ * and while that number was only ever used to REFUSE a reopen, a stale one cost nothing. It is now
+ * used to send SIGKILL, which turns the same staleness into killing an unrelated process of the
+ * user's. The pid is therefore checked against the live assistant scan, which is the one source that
+ * knows what an assistant process looks like on this machine.
+ *
+ * A machine that cannot be scanned answers NO, not yes: the takeover is refused and the user keeps
+ * the assistant they had. Being unable to confirm is not permission.
+ */
+async function isAssistantPid(pid: number): Promise<boolean> {
+  try {
+    const { procs } = await scanProcesses()
+    return procs.some(p => p.pid === pid)
+  } catch {
+    return false
+  }
+}
+
 async function endProcess(pid: number): Promise<boolean> {
   const gone = () => {
     try { process.kill(pid, 0); return false } catch { return true }
@@ -2440,6 +2464,12 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         // A holder with no pid cannot be ended, and spawning beside it would create the very twin
         // the lock exists to prevent. Refuse, saying so — never spawn on a maybe.
         if (holder.pid === undefined) {
+          return { ok: false, message: s.sessResumeInUse(holder.label) }
+        }
+        // A pid is not an identity — see `isAssistantPid`. Confirmed against the live scan in the
+        // moment before signalling, or the takeover is abandoned: the cost of being wrong here is
+        // SIGKILL on somebody else's process.
+        if (!await isAssistantPid(holder.pid)) {
           return { ok: false, message: s.sessResumeInUse(holder.label) }
         }
         const ended = await endProcess(holder.pid)
