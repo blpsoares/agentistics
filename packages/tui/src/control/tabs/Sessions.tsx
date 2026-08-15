@@ -1660,7 +1660,11 @@ export function Sessions({
               }}
               host={host}
               query={query}
-              onQuery={setQuery}
+              // The cursor goes home on every change. That is the actual answer to the objection
+              // that stopped this being live: a narrowing list moves rows out from under the
+              // selection, so keeping the old index points at whatever slid into that slot. Row 0
+              // is the best match to look at anyway.
+              onQuery={q => { setQuery(q); setCursor(0) }}
               fleet={fleet}
             />
           ) : (
@@ -2205,8 +2209,13 @@ function Question({
         placeholder={query}
         width={width}
         onCancel={onClose}
-        // Applied on submit rather than per keystroke: the list under it is re-grouped and re-sorted
-        // on every change, and a cursor that jumps while someone is still typing is unusable.
+        // LIVE, as it is typed. It used to apply on submit, on the reasoning that re-grouping under
+        // a moving cursor is unusable — but that reasoning was about the CURSOR, and the fix for a
+        // jumping cursor is to reset it, not to make the user type blind. A search whose result you
+        // cannot see until you commit is a search you run twice.
+        onChange={value => onQuery(value.trim())}
+        // Enter closes the field and KEEPS what is already applied. Cancel is what undoes it, and
+        // the empty-submit case is why `placeholder` is used above instead of `defaultValue`.
         onSubmit={value => { onQuery(value.trim()); onClose() }}
       />
       </Box>
