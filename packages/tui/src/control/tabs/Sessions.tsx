@@ -112,6 +112,8 @@ const CONTEXT_COLOR: Record<ContextLevel, string | undefined> = {
   full: COLORS.danger,
 }
 
+const SESSION_FOCUS_ACCENT = COLORS.info
+
 /** The colour each state wears. Paired with a WORD everywhere it is drawn — a fleet state announced
  *  in colour alone is unreadable on a terminal with a flattened palette, and this is the one screen
  *  whose whole purpose is that single fact. */
@@ -1551,15 +1553,15 @@ export function Sessions({
           same measured widths so the heading can never sit over the wrong column. */}
       {cockpit.header && rows.length > 0 && !grid ? (
         <Text dimColor wrap="truncate">
-          {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')
-            + padCell(s.sessionsCols.state, columns.state)}
+          {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')}
+          {columns.harness > 0 ? padCell(s.sessionsCols.harness, columns.harness) + '  ' : ''}
+          {padCell(s.sessionsCols.state, columns.state)}
           {columns.title > 0 ? '  ' + padCell(s.sessionsCols.title, columns.title) : ''}
           {columns.age > 0 ? '  ' + padCell(s.sessionsCols.age, columns.age) : ''}
           {columns.worktree > 0 ? '  ' + padCell(s.sessionsCols.worktree, columns.worktree) : ''}
           {columns.task > 0 ? '  ' + padCell(s.sessionsCols.task, columns.task) : ''}
           {columns.metrics > 0 ? '  ' + padCell(s.sessionsCols.metrics, columns.metrics) : ''}
           {columns.context > 0 ? '  ' + padCell(s.sessionsCols.context, columns.context) : ''}
-          {columns.harness > 0 ? '  ' + padCell(s.sessionsCols.harness, columns.harness) : ''}
           {columns.where > 0 ? '  ' + padCell(s.sessionsCols.where, columns.where) : ''}
         </Text>
       ) : null}
@@ -1856,7 +1858,7 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           the one moment you are looking straight at it. The bar is `info` rather than the accent
           on purpose — the accent means focus everywhere else in this app, and a highlight that
           wore it would read as "this is selected" on four rows at once. */}
-      <Text color={selected ? COLORS.accent : undefined}>{selected ? '❯' : ' '}</Text>
+      <Text color={selected ? COLORS.info : undefined} underline={selected}>{selected ? '❯' : ' '}</Text>
       <Text color={marked ? COLORS.info : undefined} bold={marked}>{marked ? '▌' : ' '}</Text>
       {/* Colour AND word, always paired — and PADDED, so every title starts in the same column.
           Two spaces between unpadded cells is what made this read as a jumble of words: the state
@@ -1864,19 +1866,27 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
       {/* The HANDLE. `agentop session attach 3f5f` takes a prefix, so this is the one thing on the
           row that names the session to anything but this screen. */}
       {columns.id > 0 ? (
-        <Text color={selected ? COLORS.accent : undefined} dimColor={!selected}>
+        <Text color={selected ? COLORS.info : undefined} underline={selected} dimColor={!selected} bold={selected}>
           {padCell(sessionHandle(session), columns.id) + gap}
         </Text>
       ) : null}
+      {/* Harness column is placed right after id, and retains its harness color when selected while taking underline. */}
+      {columns.harness > 0 ? (
+        <Text color={harnessColor} underline={selected} bold={selected}>
+          {padCell(session.harness, columns.harness) + gap}
+        </Text>
+      ) : null}
       <Text
-        color={selected ? COLORS.accent : STATE_COLOR[session.state]}
+        color={selected ? COLORS.info : STATE_COLOR[session.state]}
+        underline={selected}
         bold={selected || session.state === 'waiting-approval'}
       >
         {padCell(session.stateLabel, columns.state)}
       </Text>
       {columns.title > 0 ? (
         <Text
-          color={selected ? COLORS.accent : marked ? COLORS.info : undefined}
+          color={selected ? COLORS.info : marked ? COLORS.info : undefined}
+          underline={selected}
           bold={selected || marked}
         >
           {gap + padCell(session.title, columns.title)}
@@ -1885,7 +1895,7 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
       {/* How long ago it started, on rows that are NOT running — the age is most of the "reopen
           this or not" decision, and it lived only in the detail pane. */}
       {columns.age > 0 ? (
-        <Text color={selected ? COLORS.accent : undefined} dimColor={!selected}>
+        <Text color={selected ? COLORS.info : undefined} underline={selected} dimColor={!selected}>
           {gap + padCell(ages.get(session.id) ?? '', columns.age)}
         </Text>
       ) : null}
@@ -1894,14 +1904,14 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           The word, never a glyph alone — a distinction announced in a symbol is one that has to be
           taught before the screen can be read. */}
       {columns.worktree > 0 ? (
-        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>{gap + padCell(worktreeName(session), columns.worktree)}</Text>
+        <Text color={selected ? COLORS.info : COLORS.secondary} underline={selected} bold={selected}>{gap + padCell(worktreeName(session), columns.worktree)}</Text>
       ) : null}
       {/* The TASK, right of the name. Filing a session under a task and then not being able to see
           which task it is in is the feature not working — the fact only existed in the detail pane
           and in a grouping you had to switch to. `sessionColumns` drops the cell while grouping BY
           task, where the heading over the row already says it. */}
       {columns.task > 0 ? (
-        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>
+        <Text color={selected ? COLORS.info : COLORS.secondary} underline={selected} bold={selected}>
           {gap + padCell(session.task ?? '', columns.task)}
         </Text>
       ) : null}
@@ -1909,7 +1919,7 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           a row you are deciding whether to close is one whose cost you want beside its name rather
           than one selection away in the detail pane. */}
       {columns.metrics > 0 ? (
-        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>{gap + padCell(sessionMetric(session), columns.metrics)}</Text>
+        <Text color={selected ? COLORS.info : COLORS.secondary} underline={selected} bold={selected}>{gap + padCell(sessionMetric(session), columns.metrics)}</Text>
       ) : null}
       {/* How full the context window is. Beside the usage because it is the same kind of fact and
           the opposite reading of it: usage is what this session has spent, this is what it has
@@ -1918,20 +1928,16 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
       {columns.context > 0 ? (
         <Text
           color={selected
-            ? COLORS.accent
+            ? COLORS.info
             : session.context ? CONTEXT_COLOR[contextLevel(session.context.fraction)] : undefined}
+          underline={selected}
           dimColor={!selected && (!session.context || contextLevel(session.context.fraction) === 'ok')}
         >
           {gap + padCell(sessionContext(session), columns.context)}
         </Text>
       ) : null}
-      {columns.harness > 0 ? (
-        <Text color={selected ? COLORS.accent : harnessColor} bold={selected}>
-          {gap + padCell(session.harness, columns.harness)}
-        </Text>
-      ) : null}
       {columns.where > 0 ? (
-        <Text dimColor>{gap + padCell(session.projectGroup || session.project, columns.where)}</Text>
+        <Text color={selected ? COLORS.info : undefined} underline={selected} dimColor={!selected}>{gap + padCell(session.projectGroup || session.project, columns.where)}</Text>
       ) : null}
       {/* The close control, at the right edge and only on a row that can take it. It asks before
           it acts — the same confirmation `x` opens, because a one-click stop on a list that
@@ -2150,7 +2156,7 @@ function CardLineView({ line, width, labelWidth, marked, selected, stateColor, b
   }
   if (line.kind === 'title') {
     return (
-      <Text wrap="truncate" color={selected ? COLORS.accent : marked ? COLORS.info : undefined} bold>
+      <Text wrap="truncate" color={selected ? SESSION_FOCUS_ACCENT : marked ? COLORS.info : undefined} bold>
         {truncate(line.text, width)}
       </Text>
     )
