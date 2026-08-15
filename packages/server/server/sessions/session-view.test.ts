@@ -5,7 +5,7 @@ import type { HarnessProcess } from '../live-sessions'
 import type { ManagedSession, SessionActivity } from './types'
 import type { ReconciledSession } from './session-ref'
 import {
-  attentionCount, bellTransitions, buildSessionViews, groupSessions, needsAttention,
+  attentionCount, bellTransitions, buildSessionViews, needsAttention,
 } from './session-view'
 
 const managed = (id: string, over: Partial<ManagedSession> = {}): ManagedSession => ({
@@ -133,54 +133,6 @@ describe('attentionCount', () => {
       ['a', 'waiting-approval'], ['b', 'working'], ['c', 'waiting'],
     ])
     expect(attentionCount(buildSessionViews({ reconciled, activity, processes: [] }))).toBe(2)
-  })
-})
-
-describe('groupSessions', () => {
-  const views = buildSessionViews({
-    reconciled: [
-      row('a', { managed: managed('a', { harness: 'claude', model: 'opus', cwd: '/repo/x' }) }),
-      row('b', { managed: managed('b', { harness: 'codex', model: 'gpt', cwd: '/repo/x' }) }),
-      row('c', { managed: managed('c', { harness: 'claude', cwd: '/repo/y' }) }),
-    ],
-    activity: new Map(),
-    processes: [],
-  })
-
-  it('groups by harness', () => {
-    const g = groupSessions(views, 'harness')
-    expect(g.map(x => x.key).sort()).toEqual(['claude', 'codex'])
-    expect(g.find(x => x.key === 'claude')!.sessions).toHaveLength(2)
-  })
-
-  it('groups by model, with an honest bucket for the ones that never named one', () => {
-    const g = groupSessions(views, 'model')
-    expect(g.find(x => x.key === '')!.label).toBe('no model recorded')
-  })
-
-  it('groups by project on the directory name', () => {
-    const g = groupSessions(views, 'project')
-    expect(g.map(x => x.label).sort()).toEqual(['x', 'y'])
-  })
-
-  it('returns one unnamed group when grouping is off', () => {
-    const g = groupSessions(views, 'none')
-    expect(g).toHaveLength(1)
-    expect(g[0]!.sessions).toHaveLength(3)
-  })
-
-  it('gives an unknown harness its own stated bucket rather than folding it into one', () => {
-    const unknown = buildSessionViews({
-      reconciled: [{
-        id: 'u',
-        backend: { id: 'u', createdMs: 1, attached: false, alive: true, lastActivityMs: 1 },
-        status: 'unregistered',
-      }],
-      activity: new Map(),
-      processes: [],
-    })
-    const g = groupSessions(unknown, 'harness')
-    expect(g[0]!.label).toBe('harness unknown')
   })
 })
 
