@@ -18,6 +18,17 @@ export interface NotificationSettings {
     'working': boolean
     'exited': boolean
   }
+  /**
+   * REQUIRED, because it always exists.
+   *
+   * It was declared optional while `getNotificationSettings` fills it from the defaults on every
+   * read — so the `?` described a state the code cannot produce, and made `keyof` on it resolve to
+   * `never`. That is what broke the typecheck on `dev`: three errors in the settings screen, all of
+   * them the type disagreeing with its own reader rather than a real absence.
+   *
+   * A stored blob written before this field existed is still handled — the reader spreads the
+   * defaults under whatever it parsed, which is where the guarantee comes from.
+   */
   eventSounds: {
     'waiting-approval': SoundPreset
     'waiting': SoundPreset
@@ -261,7 +272,12 @@ export function handleSessionStateTransitions(
     const folderName = session?.project_path ? (session.project_path.split('/').filter(Boolean).pop() || '') : ''
     const sessionSubject = sessionTitle || folderName || id.slice(0, 8)
     const harnessName = session?.harness ? (HARNESS_LABELS[session.harness] || session.harness.toUpperCase()) : ''
-    const locationInfo = folderName ? ` (${harnessName} em ${folderName})` : harnessName ? ` (${harnessName})` : ''
+    // The connector is LOCALIZED. It was a hardcoded Portuguese `em` used by both branches, so an
+    // English notification read "Session X (CLAUDE CODE em agentistics) is waiting for your
+    // response" — one Portuguese word in the middle of an English sentence, on the surface a user
+    // reads at a glance while doing something else.
+    const inWord = lang === 'pt' ? 'em' : 'in'
+    const locationInfo = folderName ? ` (${harnessName} ${inWord} ${folderName})` : harnessName ? ` (${harnessName})` : ''
 
     let title = ''
     let body = ''

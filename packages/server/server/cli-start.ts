@@ -95,6 +95,7 @@ import { resolveLang } from './cli-lang'
 import { scanProcesses } from './live-sessions'
 import { resolveBackend } from './sessions'
 import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
+import { planTakeover } from './sessions/takeover'
 import { findProjects } from './sessions/project-source'
 import { candidatePath } from './sessions/project-search'
 import { recordedRepo, repoFacts } from './sessions/repo-facts'
@@ -2547,26 +2548,44 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // every verb this screen has. That is a takeover, and it is what `resume` now does rather
       // than a verb of its own: the user already pressed the key that means "put this conversation
       // in front of me".
+      // THE DECISION IS `planTakeover`, which already existed and which this code did not use.
+      //
+      // `cli-session.ts` had been taking a conversation over since the CLI gained the verb, through
+      // that pure planner. This method grew its own copy of the same gesture — the exact drift
+      // `task-reopen.ts` was extracted to end — and the copy was WORSE in a way that costs work: it
+      // killed the holder and then tried to resume, so a harness that cannot reopen by id would
+      // have had its assistant closed for nothing. The planner refuses `resume-unsupported` BEFORE
+      // anything is signalled, which is the whole reason it is a plan rather than an action.
       const holder = conversationHeldBy(
         await liveConversationHolders(await resolveBackend()),
         req.sessionId,
         req.replaces,
       )
+      // A managed row is somewhere to go: it has a pane and `o` attaches to it, so "open it there"
+      // is an instruction the user can follow. It never becomes a takeover.
       if (holder?.kind === 'managed') return { ok: false, message: s.sessResumeInUse(holder.label) }
-      if (holder?.kind === 'process') {
-        // A holder with no pid cannot be ended, and spawning beside it would create the very twin
-        // the lock exists to prevent. Refuse, saying so — never spawn on a maybe.
-        if (holder.pid === undefined) {
-          return { ok: false, message: s.sessResumeInUse(holder.label) }
-        }
+
+      const harness = req.harness as HarnessId
+      const plan = planTakeover({
+        conversationId: req.sessionId,
+        harness,
+        resumable: planSpawn({ harness, cwd: req.cwd, resumeId: req.sessionId }).ok,
+        ...(holder?.kind === 'process'
+          ? { holder: { ...(holder.pid !== undefined ? { pid: holder.pid } : {}), label: holder.label, cwd: req.cwd } }
+          : {}),
+        cwd: req.cwd,
+      })
+      if (plan.kind === 'refuse') return { ok: false, message: s.sessTakeoverRefused(plan.reason) }
+      if (plan.kind === 'takeover') {
         // A pid is not an identity — see `isAssistantPid`. Confirmed against the live scan in the
         // moment before signalling, or the takeover is abandoned: the cost of being wrong here is
-        // SIGKILL on somebody else's process.
-        if (!await isAssistantPid(holder.pid)) {
-          return { ok: false, message: s.sessResumeInUse(holder.label) }
+        // SIGKILL on somebody else's process. The planner cannot do this: it is pure, and this is a
+        // question only the machine can answer, in the instant before the signal.
+        if (plan.holder.pid === undefined || !await isAssistantPid(plan.holder.pid)) {
+          return { ok: false, message: s.sessResumeInUse(plan.holder.label ?? req.sessionId) }
         }
-        const ended = await endProcess(holder.pid)
-        if (!ended) return { ok: false, message: s.sessAdoptFailed(holder.label) }
+        const ended = await endProcess(plan.holder.pid)
+        if (!ended) return { ok: false, message: s.sessAdoptFailed(plan.holder.label ?? req.sessionId) }
       }
       const spawned = await spawnManaged({
         harness: req.harness as HarnessId,

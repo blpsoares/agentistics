@@ -56,3 +56,36 @@ describe('planTakeover', () => {
     expect(plan.holder.pid).toBeUndefined()
   })
 })
+
+describe('one planner, both entrances', () => {
+  // `cli-session.ts` (the command line) and `cli-start.ts` (the cockpit) are the SAME gesture
+  // written twice, which is the drift `task-reopen.ts` was extracted to end. The cockpit grew its
+  // own inline copy of this decision, and the copy was worse: it killed the holder and THEN tried
+  // to resume, so a harness that cannot reopen by id would have had its assistant closed for
+  // nothing. This pins that both surfaces reach the pure planner.
+  const CALLERS = [
+    'packages/server/server/sessions/cli-session.ts',
+    'packages/server/server/cli-start.ts',
+  ]
+
+  it('is reached by every surface that can take a conversation over', async () => {
+    const root = new URL('../../../../', import.meta.url).pathname
+    for (const rel of CALLERS) {
+      const src = await Bun.file(root + rel).text()
+      // Phrased so a failure NAMES the file that stopped using it.
+      expect(`${rel}: ${src.includes('planTakeover(')}`).toBe(`${rel}: true`)
+    }
+  })
+
+  it('refuses before signalling, which is the only ordering that cannot lose work', () => {
+    // Restated beside the caller check, because the two facts together are the guarantee: one
+    // decision, and that decision happens before anything is killed.
+    const plan = planTakeover({
+      conversationId: 'c1',
+      harness: 'gemini',
+      resumable: false,
+      holder: { pid: 999, cwd: '/repo' },
+    })
+    expect(plan.kind).toBe('refuse')
+  })
+})
