@@ -107,6 +107,7 @@ import { needsChoice, parseDialogOptions } from './sessions/dialog-choice'
 import { rulesFor } from './sessions/attention-rules'
 import { planCrashGroup, planFellOffer } from './sessions/crash-group'
 import { loadHarnessSessions } from './sessions/harness-sessions'
+import { idleServers, isServerCommand } from './idle-servers'
 // The lock on the door: one conversation, one live session. See `conversation-claim.ts` for the
 // measurement that made it necessary, and `live-claims.ts` for the evidence it is allowed to use.
 import { conversationHeldBy } from './sessions/conversation-claim'
@@ -511,6 +512,8 @@ export function buildService(
     bootOptions?: BootOption[]
     rebuild?: RebuildAbility
     centralPlan?: CentralStartPlan
+    /** Pids of extra copies of this service that hold no port — see `idle-servers.ts`. */
+    idlePids?: number[]
   } = {},
 ): ControlService {
   const up = runtimes.filter(r => r.state === 'up')
@@ -529,6 +532,9 @@ export function buildService(
     bootOptions: facts.bootOptions ?? [],
     // Named, not merely coloured, and never reduced to whichever copy we happened to find first.
     conflict: up.length > 1 ? s.svcConflict(up.map(r => r.kind)) : undefined,
+    // Two processes of the ONE runtime — invisible to every runtime probe, because they all ask
+    // which pid holds the port. See `idle-servers.ts` for the seventy-minute incident.
+    idle: facts.idlePids?.length ? s.svcIdleServer(facts.idlePids) : undefined,
     reason,
     // The single most important line in the model: while anything is up there is nothing to start.
     startOptions: up.length > 0
@@ -746,6 +752,31 @@ async function nativeServerFacts(): Promise<ProcessFacts> {
   const pid = Number((await listeningServerPids())[0])
   if (!Number.isInteger(pid) || pid <= 0) return {}
   return { pid, startedAt: await processStartedAt(pid) }
+}
+
+/**
+ * Server processes that hold NO port — the copies every runtime probe is blind to.
+ *
+ * `lsof -sTCP:LISTEN` can only ever find the process that won the port, so a second server is
+ * invisible to `nativeServerFacts` by construction while it burns a core on the file watcher. This
+ * asks the process table instead and subtracts the listener and ourselves.
+ *
+ * Empty on any failure, including a platform with no `ps`: an unreadable process table is "cannot
+ * tell", and a warning invented out of one would appear on machines nobody could ask.
+ */
+async function idleServerPids(): Promise<number[]> {
+  try {
+    const ps = await sh(['ps', '-eo', 'pid=,args='])
+    const processes = ps.out.split('\n')
+      .map(line => /^\s*(\d+)\s+(.*)$/.exec(line.trim()))
+      .filter((m): m is RegExpExecArray => m !== null)
+      .map(m => ({ pid: Number(m[1]), command: m[2]! }))
+      .filter(p => isServerCommand(p.command))
+    const listening = (await listeningServerPids()).map(Number).filter(n => Number.isInteger(n) && n > 0)
+    return idleServers({ processes, listening, self: process.pid }).idle.map(p => p.pid)
+  } catch {
+    return []
+  }
 }
 
 async function stopLocal(s: CliStrings): Promise<void> {
@@ -1611,6 +1642,10 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // native start option even exists (see `StartFacts.centralPlan`).
       centralStartPlan(),
     ])
+    // Asked whatever the runtime state says: the case this exists for is a second server running
+    // while the row reads perfectly healthy, so gating it on `local` would skip exactly the machine
+    // that needs it — and it is worth asking even when nothing holds the port at all.
+    const idlePids = await idleServerPids()
     const [nativeFacts, centralFacts, machineFacts] = await Promise.all([
       local ? nativeServerFacts() : Promise.resolve<ProcessFacts>({}),
       central.state === 'up' ? containerFacts(CENTRAL_FILTER) : Promise.resolve<ContainerFacts>({}),
@@ -1685,6 +1720,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
           },
         ], s, bootSupported, s.svcAgentistics),
         rebuild: { local: repo, machine: machineCompose },
+        idlePids,
       }),
       // The central's rebuild always works: `central.sh up` inside a checkout, and the published
       // image outside one — `cli-central.ts` picks between them, and a central that is RUNNING

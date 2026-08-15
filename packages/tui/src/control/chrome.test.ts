@@ -806,6 +806,31 @@ describe('detailContent', () => {
     expect(c.alert).toBe('')
   })
 
+  test('names a second copy that is running and serving nothing', () => {
+    // The seventy-minute incident: a second `agentop server` could not bind the ports and kept the
+    // file watcher going anyway, burning a core for nobody. Every runtime probe asks
+    // `lsof -sTCP:LISTEN` and therefore CANNOT see it, so the service row read perfectly healthy.
+    const c = detailContent(
+      service({ idle: 'a second server (pid 3189270) is running and serving nothing — kill 3189270' }),
+      s,
+      NOW,
+    )
+    expect(texts(c).join(' ')).toContain('3189270')
+  })
+
+  test('says the conflict AND the idle copy when both are true', () => {
+    // Different faults with different answers — one asks which runtime to stop, the other names a
+    // pid doing work for nobody. Folding them into one sentence would lose an instruction.
+    const c = detailContent(
+      service({ conflict: 'conflict: native + docker both running — stop one', idle: 'a second server (pid 7) …' }),
+      s,
+      NOW,
+    )
+    const said = texts(c).join(' ')
+    expect(said).toContain('conflict')
+    expect(said).toContain('pid 7')
+  })
+
   test('says nothing about a pid the box would not give up — never `pid 0`', () => {
     const c = detailContent(service(), s, NOW)
     expect(texts(c)).toEqual(['native'])

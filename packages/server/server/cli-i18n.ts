@@ -89,6 +89,8 @@ export interface CliStrings {
    * the services row can say least, a red line that named one runtime.
    */
   svcConflict: (runtimes: string[]) => string
+  /** A second copy under the SAME runtime, serving nothing. Names the pid — see ControlService.idle. */
+  svcIdleServer: (pids: number[]) => string
   /** A stop/restart named something that is not running. */
   svcNotRunning: string
 
@@ -404,6 +406,9 @@ const EN: CliStrings = {
   svcAgentistics: 'agentistics',
   svcCentral: 'agentistics central',
   svcConflict: (runtimes) => `conflict: ${runtimes.join(' + ')} both running — stop one`,
+  svcIdleServer: pids => pids.length === 1
+    ? `a second server (pid ${pids[0]}) is running and serving nothing — kill ${pids[0]}`
+    : `${pids.length} extra servers are running and serving nothing — kill ${pids.join(' ')}`,
   svcNotRunning: 'that service is not running.',
 
   sessState: {
@@ -643,6 +648,9 @@ const PT: CliStrings = {
   svcAgentistics: 'agentistics',
   svcCentral: 'agentistics central',
   svcConflict: (runtimes) => `conflito: ${runtimes.join(' + ')} rodando juntos — pare um`,
+  svcIdleServer: pids => pids.length === 1
+    ? `um segundo servidor (pid ${pids[0]}) está rodando sem servir nada — encerre ${pids[0]}`
+    : `${pids.length} servidores extras rodando sem servir nada — encerre ${pids.join(' ')}`,
   svcNotRunning: 'esse serviço não está rodando.',
 
   sessState: {

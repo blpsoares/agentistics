@@ -297,6 +297,23 @@ export interface ControlService {
    * the flag; pair it with a word as well as a colour, and offer `stopOptions`.
    */
   conflict?: string
+  /**
+   * A SECOND copy of this service running under the SAME runtime, serving nothing — already
+   * localized and naming the pid.
+   *
+   * Deliberately not folded into `conflict`, which is about two RUNTIMES and offers a per-runtime
+   * stop. This one is two processes of the one runtime, and the two cases need different sentences:
+   * "it is running natively and in docker, stop one" is a choice, while "a second one is running and
+   * answering nothing" is waste with a pid on it.
+   *
+   * It exists because the runtime probe cannot see this by construction — it asks
+   * `lsof -sTCP:LISTEN`, which only ever finds the process that WON the port. Measured: two
+   * `agentop server`s ran for seventy minutes, the loser burning 72% of a core and 1.1 GB on the
+   * file watcher, and every screen in the product said the service was healthy.
+   *
+   * The pid is the point. "Something is wrong" that cannot be acted on is a worse message than none.
+   */
+  idle?: string
   /** Why the state is `unknown`, already localized. */
   reason?: string
   /**
