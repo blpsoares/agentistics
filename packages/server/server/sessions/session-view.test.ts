@@ -292,6 +292,53 @@ describe("what the harness says about its OWN session", () => {
     expect(views[0]!.searchText).toContain('cockpit')
   })
 
+  it('a conversation whose record is ALIVE is running, not closed', () => {
+    // The other half of the report. A background agent alive for 38 minutes sat in the closed block
+    // under a title from another week, offering to "reopen" a conversation that had never stopped.
+    // It is synthesised into the SAME external path a scanned process takes, so it inherits every
+    // rule already written there rather than getting a parallel branch.
+    const views = buildSessionViews({
+      reconciled: [],
+      activity: new Map(),
+      processes: [],
+      conversations: [{
+        sessionId: '581deab7', title: 'a title from another week', lastActivityMs: 1,
+        harness: 'claude' as const, cwd: '/repo/a', resumable: true, firstPrompt: '',
+      }],
+      harnessSessions: index({
+        byConversation: {
+          '581deab7': {
+            name: 'MAIN', pid: 508665, cwd: '/repo/a', sessionId: '581deab7',
+            harness: 'claude', alive: true,
+          },
+        },
+      }),
+    })
+    expect(views.map(v => v.status)).toContain('external')
+    expect(views.find(v => v.status === 'external')?.harnessName).toBe('MAIN')
+    // …and it is not ALSO sitting in the closed block under the old title.
+    expect(views.filter(v => v.status === 'closed')).toHaveLength(0)
+  })
+
+  it('synthesises nothing when liveness could not be determined', () => {
+    // `alive: undefined` means no /proc — not Linux, or a uid that may not read it. Unknown must
+    // never become a claim, so the row stays exactly as it was today.
+    const views = buildSessionViews({
+      reconciled: [],
+      activity: new Map(),
+      processes: [],
+      conversations: [{
+        sessionId: 'c1', title: 'stored title', lastActivityMs: 1,
+        harness: 'claude' as const, cwd: '/repo/a', resumable: true, firstPrompt: '',
+      }],
+      harnessSessions: index({
+        byConversation: { c1: { name: 'MAIN', pid: 1, cwd: '/repo/a', harness: 'claude' } },
+      }),
+    })
+    expect(views).toHaveLength(1)
+    expect(views[0]!.status).toBe('closed')
+  })
+
   it('never lets a DERIVED name displace a real store title', () => {
     // `agentistics-84` is what the harness invents from the folder when nobody has said anything.
     const views = buildSessionViews({
