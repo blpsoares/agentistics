@@ -24,6 +24,9 @@ import {
   attentionCount, bellTransitions, buildSessionViews, type SessionView,
 } from './session-view'
 import type { ManagedSession, SessionActivity, SessionBackend } from './types'
+import { calculateProcCpu, type ProcStatSample } from '../hardware-pure'
+import { readProcRss, readProcStat } from '../hardware-probe'
+import { procAvailable } from './proc-liveness'
 
 /** How often the cockpit refreshes. Five seconds is the interval the feature was specified at. */
 export const SESSION_POLL_MS = Number(process.env.AGENTISTICS_SESSION_POLL_MS) > 0
@@ -126,6 +129,7 @@ export function createSessionsPoller(o: {
   // first is how movement is detected; the second is what makes the bell a transition.
   let prevDigest = new Map<string, string>()
   let prevActivity = new Map<string, SessionActivity>()
+  const prevProcStats = new Map<number, ProcStatSample>()
   let last: SessionSnapshot | null = null
   /**
    * When the heartbeat last wrote. `-Infinity` so the FIRST poll always stamps.
@@ -234,6 +238,27 @@ export function createSessionsPoller(o: {
       const backendIds = new Set(backendSessions.map(b => b.id))
       const fell = planCrashGroup({ entries: registry, backendIds })
 
+      const canReadProc = await procAvailable()
+      const sessionHardware = new Map<string, { pid?: number; cpuPercent?: number | null; rssBytes?: number | null }>()
+      if (canReadProc) {
+        const panePids = await o.backend.listPanePids?.().catch(() => new Map<string, number>())
+        for (const r of reconciled) {
+          const own = harnessSessions.byManagedId.get(r.id)
+          const pid = own?.pid ?? panePids?.get(r.id)
+          if (pid && Number.isFinite(pid) && pid > 0) {
+            const currStat = await readProcStat(pid, nowMs)
+            const rssBytes = await readProcRss(pid)
+            let cpuPercent: number | null = null
+            if (currStat) {
+              const prevStat = prevProcStats.get(pid)
+              cpuPercent = calculateProcCpu(prevStat, currStat)
+              prevProcStats.set(pid, currStat)
+            }
+            sessionHardware.set(r.id, { pid, cpuPercent, rssBytes })
+          }
+        }
+      }
+
       const sessions = buildSessionViews({
         reconciled,
         activity,
@@ -243,6 +268,7 @@ export function createSessionsPoller(o: {
         processes,
         conversations,
         harnessSessions,
+        sessionHardware,
         ...(fell ? { fell: new Set(fell.entries.map(e => e.id)) } : {}),
       })
       const rang = bellTransitions(prevActivity, sessions)

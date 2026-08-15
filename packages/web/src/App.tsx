@@ -11,7 +11,7 @@ import {
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Workflow as WorkflowIcon,
   GitBranch, Users, LogOut, Server, KeyRound, Tag as TagIcon,
-  ShieldCheck,
+  ShieldCheck, Cpu,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import { usePlanBasis } from './hooks/usePlanBasis'
@@ -697,6 +697,7 @@ function MobileBottomNav({
     { key: 'top', label: pt ? 'Top' : 'Top', icon: Trophy, onClick: () => { closeSheet(); navigate('/top') }, active: location.pathname.startsWith('/top') },
     { key: 'tags', label: 'Tags', icon: TagIcon, onClick: () => { closeSheet(); navigate('/tags') }, active: location.pathname.startsWith('/tags') },
     { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { closeSheet(); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
+    { key: 'hardware', label: pt ? 'Hardware' : 'Hardware', icon: Cpu, onClick: () => { closeSheet(); navigate('/hardware') }, active: location.pathname.startsWith('/hardware') },
     { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { closeSheet(); navigate('/export') }, active: location.pathname.startsWith('/export') },
     // Unconditional: the page's filter mode compares two SCOPES and needs no second harness.
     // Only the by-harness mode inside it stays gated.
@@ -1005,6 +1006,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
     { to: '/tags',      labelPt: 'Tags',         labelEn: 'Tags',         icon: <TagIcon size={17} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={17} /> },
+    { to: '/hardware',  labelPt: 'Hardware',     labelEn: 'Hardware',     icon: <Cpu size={17} /> },
     // Unconditional — see the mobile tile: comparing two filter scopes needs no second harness.
     { to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={17} /> },
   ]
