@@ -108,6 +108,8 @@ import { rulesFor } from './sessions/attention-rules'
 import { planCrashGroup, planFellOffer } from './sessions/crash-group'
 import { loadHarnessSessions } from './sessions/harness-sessions'
 import { idleServers, isServerCommand } from './idle-servers'
+import { memoryBudget } from './sessions/memory-budget'
+import { readMemory, readRss } from './sessions/memory-probe'
 // The lock on the door: one conversation, one live session. See `conversation-claim.ts` for the
 // measurement that made it necessary, and `live-claims.ts` for the evidence it is allowed to use.
 import { conversationHeldBy } from './sessions/conversation-claim'
@@ -1601,6 +1603,35 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     }
   }
 
+  /**
+   * The parallel-sessions budget, or `{}` when this machine cannot be measured.
+   *
+   * Spread into the status, so an unreadable machine contributes NO `memory` key at all and the
+   * header draws no gauge — the same absence-is-absence rule as `ControlService.boot`. A zero here
+   * would read as "no room left" on precisely the machines that could not be asked.
+   *
+   * The pids come from the harness records, which is the set this budget is about: assistants. It
+   * deliberately does not try to price the whole machine — `MemAvailable` already accounts for
+   * everything else, and RESERVED_BYTES holds room back for it.
+   */
+  const memoryStatus = async (): Promise<{ memory?: { used: number; max: number; red: boolean } }> => {
+    try {
+      const sample = await readMemory()
+      if (!sample) return {}
+      const index = await loadHarnessSessions()
+      const pids = [...index.byConversation.values()]
+        .filter(f => f.alive === true && f.pid !== undefined)
+        .map(f => f.pid!)
+      const { bytes, read } = await readRss(pids)
+      const b = memoryBudget({ sample, sessionBytes: bytes, sessions: read })
+      return { memory: { used: b.used, max: b.max, red: b.red } }
+    } catch {
+      // Best-effort, exactly like every other reader on this object: a gauge that throws must not
+      // take the whole status down with it.
+      return {}
+    }
+  }
+
   /** The setting in force, for the Setup tab to state. `undefined` while it is still unanswered. */
   const currentArchiveMode = async (): Promise<ArchiveMode | undefined> => {
     try {
@@ -1785,6 +1816,11 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         services,
         version: CURRENT_VERSION,
         latestVersion,
+        // The parallel-sessions budget. Computed HERE and not in the TUI, like every other decision
+        // on this object: the arithmetic lives in the pure `memory-budget.ts` and the two `/proc`
+        // reads in `memory-probe.ts`, and the answer arrives already decided — including `red`,
+        // which depends on swap pressure the screen has no way to know about.
+        ...(await memoryStatus()),
         archiveMode: await currentArchiveMode(),
         // The setup wizard is a question the cockpit asks, so what it may offer is decided here,
         // beside the very service states that decide it. `central` is the only mode that

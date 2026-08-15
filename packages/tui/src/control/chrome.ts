@@ -184,6 +184,14 @@ export interface HeaderMetaInput {
    * cannot tell you to navigate there.
    */
   attention?: number
+  /**
+   * How many assistants are up out of how many this MACHINE can hold, when it could be measured.
+   *
+   * Absent means nobody could read the memory (not Linux, no `/proc`) and the gauge is simply not
+   * drawn. `red` is decided by the host, from the distance to the ceiling and from swap pressure —
+   * the TUI owns no logic, here as everywhere.
+   */
+  memory?: { used: number; max: number; red: boolean }
   width: number
 }
 
@@ -197,12 +205,23 @@ export interface HeaderMeta {
   /** The waiting-sessions counter, e.g. `⏳ 2`. */
   alert: string
   update: string
+  /**
+   * The parallel-sessions budget, e.g. `▤ 3/17` — how many assistants are up, out of how many this
+   * MACHINE can hold. Empty where memory could not be read at all.
+   *
+   * It answers the question actually asked before opening one, which "10 GB used" does not. The
+   * glyph is there so it cannot be misread as a session count on its own.
+   */
+  memory: string
+  /** True when the budget is inside its warning distance — the caller colours it. */
+  memoryRed?: boolean
 }
 
 /** What the pieces cost together, separators included — the number the caller budgets against. */
 export function headerMetaWidth(meta: HeaderMeta): number {
   return meta.text.length
     + (meta.alert ? SEP.length + meta.alert.length : 0)
+    + (meta.memory ? SEP.length + meta.memory.length : 0)
     + (meta.update ? SEP.length + meta.update.length : 0)
 }
 
@@ -222,25 +241,41 @@ export function headerMetaWidth(meta: HeaderMeta): number {
  * and it is the piece that must survive a narrow terminal.
  */
 export function headerMeta(input: HeaderMetaInput): HeaderMeta {
-  const { mode, version, latestVersion, attention, width } = input
-  if (width <= 0) return { text: '', alert: '', update: '' }
+  const { mode, version, latestVersion, attention, memory, width } = input
+  if (width <= 0) return { text: '', alert: '', update: '', memory: '' }
 
   const outdated = Boolean(latestVersion && latestVersion !== version)
   const text = version ? `${mode}${SEP}v${version}` : mode
   const alert = attention && attention > 0 ? `⏳ ${attention}` : ''
   const update = outdated ? `● ${latestVersion}` : ''
+  // Absent memory renders nothing at all — a machine whose `/proc` cannot be read shows no gauge
+  // rather than a zero, the same rule the boot row and the harness capabilities follow.
+  const mem = memory ? `▤ ${memory.used}/${memory.max}` : ''
+  const red = memory?.red === true
 
-  const full = { text, alert, update }
+  const full = { text, alert, update, memory: mem, memoryRed: red }
   if (headerMetaWidth(full) <= width) return full
 
-  const withoutUpdate = { text, alert, update: '' }
+  // Dropped least-actionable first, exactly as before. The budget sits between the update notice
+  // and the version: it is more actionable than "there is a new release" and less than the waiting
+  // counter, which stays the last thing standing after the mode token.
+  const withoutUpdate = { ...full, update: '' }
   if (headerMetaWidth(withoutUpdate) <= width) return withoutUpdate
 
-  const withoutVersion = { text: mode, alert, update: '' }
+  // …unless it is RED. A budget about to run out is the most actionable thing on the row, so it
+  // outranks the version and keeps its place — dropping the warning to keep a version number would
+  // be the wrong trade at exactly the moment it matters.
+  const withoutMemory = { ...full, update: '', memory: red ? mem : '' }
+  if (headerMetaWidth(withoutMemory) <= width) return withoutMemory
+
+  const withoutVersion = { text: mode, alert, update: '', memory: red ? mem : '', memoryRed: red }
   if (headerMetaWidth(withoutVersion) <= width) return withoutVersion
 
-  if (mode.length <= width) return { text: mode, alert: '', update: '' }
-  return { text: truncate(mode, width), alert: '', update: '' }
+  const modeAndAlert = { text: mode, alert, update: '', memory: '' }
+  if (headerMetaWidth(modeAndAlert) <= width) return modeAndAlert
+
+  if (mode.length <= width) return { text: mode, alert: '', update: '', memory: '' }
+  return { text: truncate(mode, width), alert: '', update: '', memory: '' }
 }
 
 // ---------------------------------------------------------------------------
