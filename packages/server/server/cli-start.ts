@@ -1680,7 +1680,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
    * deliberately does not try to price the whole machine — `MemAvailable` already accounts for
    * everything else, and RESERVED_BYTES holds room back for it.
    */
-  const memoryStatus = async (): Promise<{ memory?: { used: number; max: number; red: boolean } }> => {
+  const memoryStatus = async (): Promise<Pick<ControlStatus, 'memory'>> => {
     try {
       const sample = await readMemory()
       if (!sample) return {}
@@ -1690,10 +1690,40 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         .map(f => f.pid!)
       const { bytes, read } = await readRss(pids)
       const b = memoryBudget({ sample, sessionBytes: bytes, sessions: read })
-      return { memory: { used: b.used, max: b.max, red: b.red } }
+      return { memory: { used: b.used, max: b.max, red: b.red, percent: b.percent } }
     } catch {
       // Best-effort, exactly like every other reader on this object: a gauge that throws must not
       // take the whole status down with it.
+      return {}
+    }
+  }
+
+  /**
+   * The machine's name on its central and the last push's round trip, or `{}`.
+   *
+   * Read from the LOCAL server's `/api/team/status`, which is the process that actually pushes —
+   * this one only draws. Best-effort and short-timeout on purpose: the cockpit must open on a
+   * machine whose server is down, and a header fact is never worth a hang. Absent beats wrong here
+   * as everywhere: no name is drawn rather than a hostname standing in for one.
+   */
+  const centralIdentity = async (): Promise<Pick<ControlStatus, 'machineName' | 'pushMs'>> => {
+    try {
+      const res = await fetch(`http://localhost:${PORT}/api/team/status`, {
+        signal: AbortSignal.timeout(1200),
+      })
+      if (!res.ok) return {}
+      const body = await res.json() as {
+        connections?: Array<{ machineName?: unknown; latencyMs?: unknown }>
+      }
+      // The FIRST connection: a machine with several centrals has one name per central, and a header
+      // cell cannot carry a list. The connection card shows them all.
+      const first = body.connections?.[0]
+      const name = typeof first?.machineName === 'string' && first.machineName ? first.machineName : undefined
+      const ms = typeof first?.latencyMs === 'number' && Number.isFinite(first.latencyMs)
+        ? Math.max(0, Math.round(first.latencyMs))
+        : undefined
+      return { ...(name ? { machineName: name } : {}), ...(ms !== undefined ? { pushMs: ms } : {}) }
+    } catch {
       return {}
     }
   }
@@ -1896,6 +1926,12 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         services,
         version: CURRENT_VERSION,
         latestVersion,
+        // WHICH machine this is on its central, and how long the last push took. Both come from the
+        // running server's own status route rather than being re-derived here: the uploader already
+        // resolves the name from `whoami` and already times its round trips, and a second
+        // implementation of either would be a second answer that can disagree with the one the
+        // connection card shows.
+        ...(await centralIdentity()),
         // The parallel-sessions budget. Computed HERE and not in the TUI, like every other decision
         // on this object: the arithmetic lives in the pure `memory-budget.ts` and the two `/proc`
         // reads in `memory-probe.ts`, and the answer arrives already decided — including `red`,

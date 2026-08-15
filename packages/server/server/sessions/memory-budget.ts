@@ -76,6 +76,18 @@ export interface MemoryBudget {
   /** `max - used`, floored at zero. */
   left: number
   cost: SessionCost
+  /**
+   * How much of the machine is IN USE, 0-100 — RAM and swap together.
+   *
+   * Asked for and missing from the first cut, which shipped only `used/max`. That number answers
+   * "can I open another one" and says nothing about how close the machine is to the edge: two
+   * sessions of the seventeen it can hold is comfortable, and two of seventeen on a box already
+   * swapping is not. Both readings are wanted and neither implies the other.
+   *
+   * Swap counts as used, because a page that had to be swapped out is pressure whatever the RAM
+   * figure says — the freeze this whole feature exists for read 3.6 GB of free RAM at 97% swap.
+   */
+  percent: number
   /** True once `left` is inside `RED_WITHIN`, or the swap alarm has tripped. */
   red: boolean
   /**
@@ -122,7 +134,18 @@ export function memoryBudget(o: {
   // Swap is named FIRST when both trip: it is the more urgent fact and the one closing a session
   // may not fix.
   const alarm = swapping ? 'swap' as const : left <= RED_WITHIN ? 'sessions' as const : undefined
-  return { max, used: o.sessions, left, cost, red: alarm !== undefined, ...(alarm ? { alarm } : {}) }
+
+  // RAM and swap as ONE pool: everything the machine has, minus everything still free. A box whose
+  // RAM is nominally fine while its swap is full is not a box with room, and reporting the two
+  // separately lets the calm half of the pair carry the headline.
+  const capacity = o.sample.total + o.sample.swapTotal
+  const free = Math.max(0, o.sample.available) + Math.max(0, o.sample.swapTotal - o.sample.swapUsed)
+  const percent = capacity > 0 ? Math.min(100, Math.max(0, Math.round((1 - free / capacity) * 100))) : 0
+
+  return {
+    max, used: o.sessions, left, cost, percent,
+    red: alarm !== undefined, ...(alarm ? { alarm } : {}),
+  }
 }
 
 /**
