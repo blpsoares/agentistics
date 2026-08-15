@@ -33,7 +33,7 @@ import type { TuiStrings } from '../i18n'
  * archive setting preserves (`archiveMode`, the config pane's `history` row), and what it preserves
  * is precisely the rows this screen lists.
  */
-export type DashboardScreenId = 'overview' | 'projects' | 'history' | 'costs' | 'harnesses'
+export type DashboardScreenId = 'overview' | 'projects' | 'history' | 'costs' | 'harnesses' | 'hardware'
 
 export const DASHBOARD_SCREENS: readonly DashboardScreenId[] = [
   'overview',
@@ -41,6 +41,7 @@ export const DASHBOARD_SCREENS: readonly DashboardScreenId[] = [
   'history',
   'costs',
   'harnesses',
+  'hardware',
 ] as const
 
 /**
@@ -87,6 +88,7 @@ export function screenLabels(s: TuiStrings): Record<DashboardScreenId, string> {
     history: s.history,
     costs: s.costs,
     harnesses: s.harnesses,
+    hardware: s.hardware,
   }
 }
 

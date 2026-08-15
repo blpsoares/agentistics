@@ -81,6 +81,7 @@ export function App({ apiBase, lang }: { apiBase: string; lang: TuiLang }) {
       <Box flexDirection="column" marginTop={1}>
         <DashboardView
           data={data}
+          apiBase={apiBase}
           s={s}
           width={bodyWidth}
           height={bodyHeight}

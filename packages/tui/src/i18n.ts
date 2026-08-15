@@ -30,6 +30,7 @@ export interface TuiStrings {
   history: string
   costs: string
   harnesses: string
+  hardware: string
   /** The word naming the screen strip, like the log viewer's `SOURCE`. */
   viewLabel: string
 
@@ -95,6 +96,7 @@ const en: TuiStrings = {
   history: 'History',
   costs: 'Costs',
   harnesses: 'Harnesses',
+  hardware: 'Hardware',
   viewLabel: 'VIEW',
 
   cost: 'cost',
@@ -124,7 +126,7 @@ const en: TuiStrings = {
   filter: 'filter',
   nav: 'switch screen',
   helpTitle: 'Keyboard',
-  helpNav: '1-5 / tab   switch screen',
+  helpNav: '1-6 / tab   switch screen',
   helpFilter: 'f           filter by harness',
   helpQuit: 'q / ctrl+c  quit',
   helpClose: 'esc         close this panel',
@@ -150,6 +152,7 @@ const pt: TuiStrings = {
   history: 'Histórico',
   costs: 'Custos',
   harnesses: 'Assistentes',
+  hardware: 'Hardware',
   viewLabel: 'TELA',
 
   cost: 'custo',
@@ -179,7 +182,7 @@ const pt: TuiStrings = {
   filter: 'filtrar',
   nav: 'trocar de tela',
   helpTitle: 'Teclado',
-  helpNav: '1-5 / tab   trocar de tela',
+  helpNav: '1-6 / tab   trocar de tela',
   helpFilter: 'f           filtrar por assistente',
   helpQuit: 'q / ctrl+c  sair',
   helpClose: 'esc         fechar este painel',
