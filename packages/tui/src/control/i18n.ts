@@ -271,8 +271,8 @@ export interface ControlStrings {
   sessionsKeyWhat: {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
-    note: string; task: string; mark: string; onlyActive: string; closed: string
-    exited: string; group: string; layout: string; detail: string; menuFold: string
+    note: string; task: string; mark: string; onlyActive: string
+    group: string; layout: string; detail: string; menuFold: string
     reset: string
     tabs: string; help: string; quit: string
     approve: string; prompt: string; reopenFell: string
@@ -402,6 +402,14 @@ export interface ControlStrings {
   viewTitle: string
   viewGroupBy: string
   viewShow: string
+  /**
+   * The summary row's word for the strict selection, printed after a `−`.
+   *
+   * It read `− everything but active`, which is a double negative over a minus sign: the row was
+   * SHOWING only the active sessions and the cell appeared to say the opposite. Reported as
+   * "completamente contra intuitiva". It names what is being WITHHELD, which is what the `−` in
+   * front of it already promised.
+   */
   viewActiveOn: string
   viewClosedOn: string
   viewClosedOff: string
@@ -726,9 +734,7 @@ const EN: ControlStrings = {
     note: 'write a note on it',
     task: 'file it under a task',
     mark: 'mark this row, and keep it marked',
-    onlyActive: 'show only what is running',
-    closed: 'show closed conversations',
-    exited: 'show sessions that ended',
+    onlyActive: 'show what is not running too — closed, ended and lost',
     layout: 'list or cards',
     group: 'change the grouping',
     detail: 'hide the detail pane',
@@ -854,7 +860,7 @@ const EN: ControlStrings = {
   viewTitle: 'What this list shows',
   viewGroupBy: 'Group by',
   viewShow: 'Show',
-  viewActiveOn: 'everything but active',
+  viewActiveOn: 'not running',
   viewClosedOn: 'closed conversations',
   viewClosedOff: 'closed conversations',
   viewUnfiledOn: 'sessions with no task',
@@ -1137,9 +1143,7 @@ const PT: ControlStrings = {
     note: 'escreve uma nota nela',
     task: 'arquiva sob uma tarefa',
     mark: 'marca esta linha, e mantém marcada',
-    onlyActive: 'mostra só o que está rodando',
-    closed: 'mostra conversas fechadas',
-    exited: 'mostra sessões encerradas',
+    onlyActive: 'mostra também o que não está rodando — fechadas, encerradas e perdidas',
     layout: 'lista ou cards',
     group: 'muda o agrupamento',
     detail: 'oculta o painel de detalhe',
@@ -1266,7 +1270,7 @@ const PT: ControlStrings = {
   viewTitle: 'O que esta lista mostra',
   viewGroupBy: 'Agrupar por',
   viewShow: 'Mostrar',
-  viewActiveOn: 'tudo menos as ativas',
+  viewActiveOn: 'as que não estão rodando',
   viewClosedOn: 'conversas fechadas',
   viewClosedOff: 'conversas fechadas',
   viewUnfiledOn: 'sessões sem tarefa',

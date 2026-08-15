@@ -1814,8 +1814,8 @@ export interface KeyHelp {
 export function sessionKeyHelp(w: {
   move: string; open: string; attach: string; menu: string; section: string
   newSession: string; search: string; clear: string; kill: string; rename: string
-  note: string; task: string; mark: string; onlyActive: string; closed: string
-  exited: string; group: string; layout: string; detail: string; menuFold: string
+  note: string; task: string; mark: string; onlyActive: string
+  group: string; layout: string; detail: string; menuFold: string
   reset: string; tabs: string; help: string; quit: string
   approve: string; prompt: string; reopenFell: string
 }): KeyHelp[] {
@@ -1837,9 +1837,9 @@ export function sessionKeyHelp(w: {
     { keys: 'n', what: w.rename },
     { keys: 't', what: w.note },
     { keys: 'space', what: w.mark },
-    { keys: 'ctrl+a / l', what: w.onlyActive },
-    { keys: 'c', what: w.closed },
-    { keys: 'e', what: w.exited },
+    // One row, three keys, ONE question. `c` and `e` called the same function and `l` was the same
+    // boolean read from the other end, so the help listed three controls where the screen has one.
+    { keys: 'l / c / e', what: w.onlyActive },
     { keys: 'v', what: w.group },
     { keys: 'ctrl+g', what: w.layout },
     { keys: 'd', what: w.detail },
