@@ -18,6 +18,12 @@ export interface NotificationSettings {
     'working': boolean
     'exited': boolean
   }
+  eventSounds?: {
+    'waiting-approval': SoundPreset
+    'waiting': SoundPreset
+    'working': SoundPreset
+    'exited': SoundPreset
+  }
   soundEnabled: boolean
   soundPreset: SoundPreset
   soundVolume: number // 0.0 to 1.0
@@ -33,6 +39,12 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     'waiting': true,
     'working': false,
     'exited': true,
+  },
+  eventSounds: {
+    'waiting-approval': 'alert',
+    'waiting': 'chime',
+    'working': 'soft',
+    'exited': 'ping',
   },
   soundEnabled: true,
   soundPreset: 'chime',
@@ -50,6 +62,10 @@ export function getNotificationSettings(): NotificationSettings {
       events: {
         ...DEFAULT_NOTIFICATION_SETTINGS.events,
         ...(parsed.events || {}),
+      },
+      eventSounds: {
+        ...DEFAULT_NOTIFICATION_SETTINGS.eventSounds,
+        ...(parsed.eventSounds || {}),
       },
     }
   } catch {
