@@ -36,6 +36,15 @@ export interface TeamConnection {
   /** Display name resolved from GET /api/team/whoami — never user-typed. Per connection,
    *  because each central mints its own token and resolves its own name. */
   user: string
+  /**
+   * What the CENTRAL calls this machine, resolved from `whoami` alongside `user`.
+   *
+   * Per connection, for the same reason `user` is: each central mints its own token and names the
+   * machine itself. Optional because an older central does not send one and a connection that has
+   * never completed a handshake has not learned it yet — absent means unknown, never a hostname
+   * substituted for it.
+   */
+  machineName?: string
   /** Bearer secret (never logged). May be '' against an open/legacy central. */
   token: string
   /** LEGACY MIRROR of `sources`, DERIVED on every write by `normalizeTeamConfig` — never edited

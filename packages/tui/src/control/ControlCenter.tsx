@@ -369,6 +369,10 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
     // zero. The host decides `red`, from the distance to the ceiling AND from swap pressure; the
     // TUI owns no logic here either.
     ...(status?.memory ? { memory: status.memory } : {}),
+    // WHICH machine, and whether its link is alive. Absent in solo mode and on a machine that has
+    // never completed a handshake — no name is drawn rather than a hostname standing in for one.
+    ...(status?.machineName ? { machineName: status.machineName } : {}),
+    ...(status?.pushMs !== undefined ? { pushMs: status.pushMs } : {}),
     width,
   })
   const height = bodyHeight(rows, header.rows)

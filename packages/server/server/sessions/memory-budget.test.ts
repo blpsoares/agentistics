@@ -46,6 +46,41 @@ describe('parseMeminfo', () => {
   })
 })
 
+describe('memoryBudget — how loaded the machine is', () => {
+  it('reports RAM and SWAP as one pool', () => {
+    // Two readings are wanted and neither implies the other: `used/max` answers "can I open
+    // another one", this answers "how close is this box to the edge". Two of seventeen is
+    // comfortable; two of seventeen while swapping is not.
+    const half = memoryBudget({
+      sample: { total: 8 * GB, available: 4 * GB, swapTotal: 0, swapUsed: 0 },
+      sessionBytes: 0, sessions: 0,
+    })
+    expect(half.percent).toBe(50)
+  })
+
+  it('counts swap as USED, so a full swap cannot hide behind free RAM', () => {
+    // The freeze this exists for: 3.6 GB of free RAM at 97% swap. Reading RAM alone called that
+    // machine healthy at the moment it stopped responding.
+    const swapping = memoryBudget({
+      sample: { total: 16 * GB, available: 3.6 * GB, swapTotal: 4 * GB, swapUsed: 3.9 * GB },
+      sessionBytes: 0, sessions: 0,
+    })
+    const ramOnly = Math.round((1 - 3.6 / 16) * 100)
+    expect(swapping.percent).toBeGreaterThan(ramOnly)
+  })
+
+  it('is bounded, and answers 0 for a machine it could not measure', () => {
+    const none = memoryBudget({
+      sample: { total: 0, available: 0, swapTotal: 0, swapUsed: 0 }, sessionBytes: 0, sessions: 0,
+    })
+    expect(none.percent).toBe(0)
+    const over = memoryBudget({
+      sample: { total: 1 * GB, available: 0, swapTotal: 0, swapUsed: 0 }, sessionBytes: 0, sessions: 0,
+    })
+    expect(over.percent).toBeLessThanOrEqual(100)
+  })
+})
+
 describe('memoryBudget', () => {
   it('measures the cost from what is running, rather than assuming', () => {
     const b = memoryBudget({ sample: sample(), sessionBytes: 1200 * MB, sessions: 4 })
