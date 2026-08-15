@@ -1820,9 +1820,14 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
       {/* The HANDLE. `agentop session attach 3f5f` takes a prefix, so this is the one thing on the
           row that names the session to anything but this screen. */}
       {columns.id > 0 ? (
-        <Text dimColor>{padCell(sessionHandle(session), columns.id) + gap}</Text>
+        <Text color={selected ? COLORS.accent : undefined} dimColor={!selected}>
+          {padCell(sessionHandle(session), columns.id) + gap}
+        </Text>
       ) : null}
-      <Text color={STATE_COLOR[session.state]} bold={session.state === 'waiting-approval'}>
+      <Text
+        color={selected ? COLORS.accent : STATE_COLOR[session.state]}
+        bold={selected || session.state === 'waiting-approval'}
+      >
         {padCell(session.stateLabel, columns.state)}
       </Text>
       {columns.title > 0 ? (
@@ -1836,14 +1841,16 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
       {/* How long ago it started, on rows that are NOT running — the age is most of the "reopen
           this or not" decision, and it lived only in the detail pane. */}
       {columns.age > 0 ? (
-        <Text dimColor>{gap + padCell(ages.get(session.id) ?? '', columns.age)}</Text>
+        <Text color={selected ? COLORS.accent : undefined} dimColor={!selected}>
+          {gap + padCell(ages.get(session.id) ?? '', columns.age)}
+        </Text>
       ) : null}
       {/* A linked WORKTREE says so, because it changes what the row IS: three rows of one repo in
           three directories are three checkouts, and without the word they read as three projects.
           The word, never a glyph alone — a distinction announced in a symbol is one that has to be
           taught before the screen can be read. */}
       {columns.worktree > 0 ? (
-        <Text color={COLORS.secondary}>{gap + padCell(worktreeName(session), columns.worktree)}</Text>
+        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>{gap + padCell(worktreeName(session), columns.worktree)}</Text>
       ) : null}
       {/* The TASK, right of the name. Filing a session under a task and then not being able to see
           which task it is in is the feature not working — the fact only existed in the detail pane
@@ -1856,20 +1863,26 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           a row you are deciding whether to close is one whose cost you want beside its name rather
           than one selection away in the detail pane. */}
       {columns.metrics > 0 ? (
-        <Text color={COLORS.secondary}>{gap + padCell(sessionMetric(session), columns.metrics)}</Text>
+        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>{gap + padCell(sessionMetric(session), columns.metrics)}</Text>
       ) : null}
       {/* How full the context window is. Beside the usage because it is the same kind of fact and
           the opposite reading of it: usage is what this session has spent, this is what it has
           left. A row with no reading draws a BLANK of the same width rather than a `0%` — the
           column exists because some rows can answer, not because all of them can. */}
       {columns.context > 0 ? (
-        <Text color={session.context ? CONTEXT_COLOR[contextLevel(session.context.fraction)] : undefined}
-              dimColor={!session.context || contextLevel(session.context.fraction) === 'ok'}>
+        <Text
+          color={selected
+            ? COLORS.accent
+            : session.context ? CONTEXT_COLOR[contextLevel(session.context.fraction)] : undefined}
+          dimColor={!selected && (!session.context || contextLevel(session.context.fraction) === 'ok')}
+        >
           {gap + padCell(sessionContext(session), columns.context)}
         </Text>
       ) : null}
       {columns.harness > 0 ? (
-        <Text color={harnessColor}>{gap + padCell(session.harness, columns.harness)}</Text>
+        <Text color={selected ? COLORS.accent : harnessColor} bold={selected}>
+          {gap + padCell(session.harness, columns.harness)}
+        </Text>
       ) : null}
       {columns.where > 0 ? (
         <Text dimColor>{gap + padCell(session.projectGroup || session.project, columns.where)}</Text>

@@ -868,11 +868,24 @@ describe('sessionHandle', () => {
     expect(sessionHandle(session('3f5f4dd461'))).toBe('3f5f4')
   })
 
-  it('is EMPTY for a row agentop did not name', () => {
-    // An external process and a closed conversation are named by the harness. Showing five
-    // characters of a synthetic id offers a handle the CLI cannot resolve.
-    expect(sessionHandle(session('external:claude:/repo:0'))).toBe('')
-    expect(sessionHandle(session('closed:abc-def'))).toBe('')
+  it('names EVERY row, because every session has an id', () => {
+    // This used to be empty for external and closed rows, protecting `attach` from a handle it
+    // cannot resolve. It protected one command at the cost of the column: a table where some rows
+    // have no id reads as data missing, and those rows cannot be referred to at all.
+    //
+    // A row that names a CONVERSATION shows the conversation's id — not attachable, but exactly
+    // what reopening resolves, which is the one verb such a row offers.
+    expect(sessionHandle(session('closed:abcdef-1234', {
+      resume: { sessionId: 'abcdef-1234', title: 'x' },
+    }))).toBe('abcde')
+
+    // With nothing else to go on, the trailing distinguishing part of the synthetic id. It resolves
+    // no command and still tells two rows apart, which is the column's other job — and for two
+    // assistants open in ONE directory the start time is the only thing that does.
+    const a = sessionHandle(session('external:claude:/repo:1786770001'))
+    const b = sessionHandle(session('external:claude:/repo:1786770002'))
+    expect(a).not.toBe('')
+    expect(a).not.toBe(b)
   })
 })
 
