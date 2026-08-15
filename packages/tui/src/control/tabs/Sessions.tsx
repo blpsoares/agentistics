@@ -445,11 +445,12 @@ export function Sessions({
   // The one question that carries EVIDENCE. Its rows are BUDGETED here rather than drawn on top of
   // the answers: Ink composites what does not fit, so an unbudgeted preview would not crowd the two
   // answers, it would draw over whatever sits under them.
-  const askPreview = ask?.kind === 'approve' ? (ask.session.approvalLines?.length ?? 0) : 0
+  const askDetail = ask !== null && ask.kind !== 'keys' ? ask : null
+  const askPreview = askDetail?.kind === 'approve' ? (askDetail.session.approvalLines?.length ?? 0) : 0
   // A picker needs a row per option on top of the evidence, or the answers are composited over
   // whatever sits under the pane — the same reason the evidence itself is budgeted.
-  const askChoices = ask?.kind === 'approve' ? (ask.session.dialogOptions?.length ?? 0) : 0
-  const detailWanted = ask
+  const askChoices = askDetail?.kind === 'approve' ? (askDetail.session.dialogOptions?.length ?? 0) : 0
+  const detailWanted = askDetail
     ? askRows({ preview: askPreview, detail: detail.length, choices: askChoices })
     : layout === 'cards' || hideDetail ? 0 : detail.length
 
@@ -1092,7 +1093,21 @@ export function Sessions({
       : focus === 'aside' && cockpit.aside > 0
         // The menu is a vertical list, so it answers ↑↓ and enter — and `esc` is the way back to the
         // sessions. A hint for a key that does nothing here is the one bug this footer prevents.
-        ? { capture: false, claimArrows: true, hints: [s.keyQuit, s.keyAsideSection, s.keyMove, s.keyRun, s.keyBack, s.keyTabsAlt] }
+        ? {
+            capture: false,
+            claimArrows: true,
+            hints: [
+              s.keyQuit,
+              s.keyAsideSection,
+              s.keyMove,
+              s.keyRun,
+              ...(asideList[asideRow]?.kind === 'task' && !asideList[asideRow].all && asideList[asideRow].name
+                ? [s.keySessionsDeleteTask]
+                : []),
+              s.keyBack,
+              s.keyTabsAlt,
+            ],
+          }
       : actionsFocused
         // While the action row has the keyboard it is a horizontal list, so it claims the arrows —
         // and the footer stops saying they change screen for exactly as long as that is true.
@@ -1122,7 +1137,7 @@ export function Sessions({
             ],
           })
   }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping,
-      selected?.canApprove, selected?.canChoose, canPrompt, menuHidden, restoring])
+      selected?.canApprove, selected?.canChoose, canPrompt, menuHidden, restoring, asideList, asideRow])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
@@ -1403,7 +1418,7 @@ export function Sessions({
     )
   }
 
-  if (ask?.kind === 'keys') {
+  if (ask?.kind === 'keys' && cockpit.aside === 0) {
     return (
       <Box flexDirection="column" width={width} flexShrink={0}>
         <KeyHelpScreen strings={s} width={width} height={height} onClose={() => setAsk(null)} />
@@ -1443,7 +1458,14 @@ export function Sessions({
       <Box flexDirection="row" width={width} flexShrink={0}>
       {cockpit.aside > 0 ? (
         <>
-          {foldRows ? (
+          {ask?.kind === 'keys' ? (
+            <KeyHelpScreen
+              strings={s}
+              width={cockpit.aside}
+              height={cockpit.band}
+              onClose={() => setAsk(null)}
+            />
+          ) : foldRows ? (
             // Each block its OWN framed pane, titled with its own heading. One scrolling pane
             // titled "menu" showed its first section and nothing else, so every switch and every
             // task sat below the fold — and the honest reading of that screen is that all of it
@@ -1681,20 +1703,20 @@ export function Sessions({
 
       {/* The third pane: what you selected, or the question you were just asked. A question owns the
           keyboard, so the frame says so — the accent is where the keys go, everywhere, always. */}
-      {cockpit.detail > 0 && (ask || (!hideDetail && detail.length > 0)) ? (
+      {cockpit.detail > 0 && (askDetail || (!hideDetail && detail.length > 0)) ? (
         <Pane
-          title={ask ? s.sessionsPaneAsk : s.sessionsPaneDetail}
+          title={askDetail ? s.sessionsPaneAsk : s.sessionsPaneDetail}
           // The key that puts this pane away, written ON the pane. It lives as a row in the `show`
           // block too, but that block is collapsed by default and five rows deep — a control for a
           // thing you are looking straight at belongs on the thing.
-          badge={ask ? '' : s.sessionsDetailHide}
-          focused={Boolean(ask)}
+          badge={askDetail ? '' : s.sessionsDetailHide}
+          focused={Boolean(askDetail)}
           width={width}
           height={cockpit.detail}
         >
-          {ask ? (
+          {askDetail ? (
             <Question
-              ask={ask as Exclude<Ask, { kind: 'new' } | { kind: 'view' } | { kind: 'keys' }>}
+              ask={askDetail as Exclude<Ask, { kind: 'new' } | { kind: 'view' } | { kind: 'keys' }>}
               strings={s}
               width={paneBody(width)}
               rows={paneRows(cockpit.detail)}
