@@ -119,6 +119,9 @@ async function readCwdFromJsonl(filePath: string): Promise<string | null> {
 // Start file watching and optionally spawn the OTel watcher daemon
 // ---------------------------------------------------------------------------
 
+import type { ProcStatSample } from './hardware-pure'
+const serverProcStatsMap = new Map<number, ProcStatSample>()
+
 // Preserve history before Claude's next cleanup (transcripts > cleanupPeriodDays,
 // default 30 days). 'full' mirrors raw files; both modes warm a build that persists
 // the consolidated per-session metrics store.
@@ -526,6 +529,24 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       try {
         const info = await getVersionInfo()
         return new Response(JSON.stringify(info), {
+          status: 200,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        const safe = safeError(err, { verbose: PROFILE === 'local' })
+        console.error(safe.logLine)
+        return new Response(JSON.stringify(safe.body), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    if (url.pathname === '/api/hardware-resources' && req.method === 'GET') {
+      try {
+        const { getHardwareSnapshot } = await import('./hardware-probe')
+        const snapshot = await getHardwareSnapshot(serverProcStatsMap)
+        return new Response(JSON.stringify(snapshot), {
           status: 200,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })

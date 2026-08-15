@@ -192,5 +192,8 @@ export function toControlSession(
       : {}),
     searchText: v.searchText,
     attached: v.attached,
+    ...(v.pid !== undefined ? { pid: v.pid } : {}),
+    ...(v.cpuPercent !== undefined ? { cpuPercent: v.cpuPercent } : {}),
+    ...(v.rssBytes !== undefined ? { rssBytes: v.rssBytes } : {}),
   }
 }

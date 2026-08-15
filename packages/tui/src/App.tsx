@@ -81,6 +81,7 @@ export function App({ apiBase, lang }: { apiBase: string; lang: TuiLang }) {
       <Box flexDirection="column" marginTop={1}>
         <DashboardView
           data={data}
+          apiBase={apiBase}
           s={s}
           width={bodyWidth}
           height={bodyHeight}
@@ -93,7 +94,7 @@ export function App({ apiBase, lang }: { apiBase: string; lang: TuiLang }) {
 
       <Box marginTop={1}>
         <Text dimColor>
-          1-5/tab {s.nav}  ·  f {s.filter}  ·  ? {s.help}  ·  q {s.quit}
+          1-6/tab {s.nav}  ·  f {s.filter}  ·  ? {s.help}  ·  q {s.quit}
         </Text>
       </Box>
     </Box>

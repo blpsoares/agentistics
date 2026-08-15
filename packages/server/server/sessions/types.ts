@@ -290,4 +290,6 @@ export interface SessionBackend {
   attachCommand(id: string): string[]
   /** The real detach keystroke, read from the backend — never assumed to be `Ctrl-b`. */
   detachHint(): Promise<string>
+  /** Map of managed session ID to OS pane process ID, where available. */
+  listPanePids?(): Promise<Map<string, number>>
 }

@@ -18,6 +18,7 @@ const ComparePage = lazy(() => import('./pages/ComparePage'))
 const ExportPage = lazy(() => import('./pages/ExportPage'))
 const SessionsPage = lazy(() => import('./pages/SessionsPage'))
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'))
+const HardwarePage = lazy(() => import('./pages/HardwarePage').then(m => ({ default: m.HardwarePage })))
 const SettingsPage = lazy(() => import('./pages/settings/SettingsPage'))
 const PreferencesSettings = lazy(() => import('./pages/settings/PreferencesSettings'))
 const NotificationsSettings = lazy(() => import('./pages/settings/NotificationsSettings'))
@@ -67,6 +68,7 @@ export default function AppRouter() {
           <Route path="tags/:id" element={<Suspense fallback={<PageFallback />}><TagDetailPage /></Suspense>} />
           <Route path="tools" element={<Suspense fallback={<PageFallback />}><ToolsPage /></Suspense>} />
           <Route path="custom" element={<Suspense fallback={<PageFallback />}><CustomPage /></Suspense>} />
+          <Route path="hardware" element={<Suspense fallback={<PageFallback />}><HardwarePage /></Suspense>} />
           <Route path="compare" element={<Suspense fallback={<PageFallback />}><ComparePage /></Suspense>} />
           <Route path="export" element={<Suspense fallback={<PageFallback />}><ExportPage /></Suspense>} />
           <Route path="settings" element={<Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>}>

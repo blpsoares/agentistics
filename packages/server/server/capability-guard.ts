@@ -31,6 +31,7 @@ const EXACT: ReadonlyMap<string, keyof Capabilities> = new Map<string, keyof Cap
   // capability as the transcript routes rather than getting one of its own: there is no
   // deployment that should read a transcript but not this.
   ['/api/billing/detect', 'localTranscripts'],
+  ['/api/hardware-resources', 'localProcesses'],
 ])
 
 /** Prefix (no trailing slash) → capability. Matches `<prefix>` and `<prefix>/…` only. */

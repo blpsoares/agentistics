@@ -20,6 +20,7 @@ export type TabId =
   | 'sessions'
   /** The metrics dashboard — the whole of what `agentop tui` shows, as a screen of this app. */
   | 'dashboard'
+  | 'hardware'
   | 'logs'
   | 'cheatsheet'
   | 'help'
@@ -39,6 +40,7 @@ export const TAB_ORDER: readonly TabId[] = [
   'services',
   'sessions',
   'dashboard',
+  'hardware',
   'logs',
   'cheatsheet',
   'help',
@@ -624,6 +626,12 @@ export interface ControlSession {
   /** When it started, epoch ms. An instant rather than a duration — see `ServiceRuntimeState`. */
   startedAt?: number
   attached: boolean
+  /** Process ID for live process monitoring. */
+  pid?: number
+  /** Process CPU load percentage. */
+  cpuPercent?: number | null
+  /** Resident Set Size memory usage in bytes. */
+  rssBytes?: number | null
 }
 
 /**
