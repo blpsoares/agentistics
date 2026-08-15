@@ -396,17 +396,55 @@ export function buildSessionViews(o: {
   // A row whose harness is unknown covers NOTHING: it might be that process or might not, and
   // silently swallowing an external session on a maybe is the worse of the two errors — a duplicate
   // row is visible and self-correcting, a missing one is not.
+  // Only a row that is actually RUNNING can account for a running process. `!== 'lost'` was too
+  // wide: an `exited` row accounts for a process that is GONE, and letting it cover swallows a live
+  // session that happens to share its directory. Measured on this machine — three exited rows sat in
+  // the worktree of a background agent that was alive, and the agent was hidden behind them and
+  // listed as a closed conversation instead.
   const covered = (p: HarnessProcess): boolean => managed.some(m =>
     m.harness === p.harness &&
-    m.status !== 'lost' &&
+    (m.status === 'running' || m.status === 'unregistered') &&
     sessionAtCwd({ current_cwd: m.cwd, project_path: m.cwd }, p.cwd))
 
   const conversations = o.conversations ?? []
 
-  const external: SessionView[] = o.processes.filter(p => !covered(p)).map(p => {
+  /**
+   * Sessions the harness's OWN records prove are running, which the `/proc` scan did not report.
+   *
+   * Synthesised as processes rather than special-cased downstream, deliberately: they then travel
+   * the very same `external` path as a scanned one and inherit every rule already written there —
+   * the `covered` de-duplication, the exact-name lookup, the resume target, the tokens and the
+   * context gauge. A parallel branch would be a second set of rules for one kind of row.
+   *
+   * Two things had to be true before this was sound, and both now are: the record carries
+   * `procStart`, so `alive` is a fact about THIS process and not about whoever inherited its pid;
+   * and `alive` is `undefined` wherever nobody could tell, so a machine with no `/proc` synthesises
+   * nothing and behaves exactly as it did.
+   *
+   * This is what stops a live session being listed as `closed`. Measured: a background agent alive
+   * for 38 minutes — no tmux, missed by the scan — sat in the closed block under a title from
+   * another week, offering to "reopen" a conversation that had never stopped.
+   */
+  const scannedPids = new Set(o.processes.map(p => p.pid).filter((v): v is number => v !== undefined))
+  const fromRecords: HarnessProcess[] = [...(o.harnessSessions?.byConversation.values() ?? [])]
+    .filter(f => f.alive === true && f.pid !== undefined && !scannedPids.has(f.pid)
+      && f.cwd !== undefined && f.harness !== undefined)
+    .map(f => ({
+      harness: f.harness!,
+      cwd: f.cwd!,
+      pid: f.pid!,
+      ...(f.sessionId ? { sessionId: f.sessionId } : {}),
+    }))
+
+  const external: SessionView[] = [...o.processes, ...fromRecords].filter(p => !covered(p)).map(p => {
     // What the harness says about ITSELF, keyed on the pid `/proc` reported. Exact where every other
     // reading of an external process is an inference from its directory.
-    const own = p.pid !== undefined ? o.harnessSessions?.byPid.get(p.pid) : undefined
+    // By pid first — that is the key a SCANNED process arrives with. Falling back to the
+    // conversation removes a hidden coupling rather than papering over one: a row synthesised from
+    // a record already knows the conversation exactly, and making its name depend on a second
+    // lookup succeeding would leave it correctly listed and anonymously labelled.
+    const own = (p.pid !== undefined ? o.harnessSessions?.byPid.get(p.pid) : undefined)
+      ?? (p.sessionId ? o.harnessSessions?.byConversation.get(p.sessionId) : undefined)
     const ownName = chosenName(own)
     // What this process appears to be driving. The harness's own `sessionId` outranks the argv one
     // and the directory guess alike: it is what the process is writing to, said by the process.

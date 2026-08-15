@@ -834,14 +834,29 @@ export function sessionAge(s: ControlSession, now: number, ago: (seconds: number
 export const ID_CELL = 5
 
 /**
- * The handle: the leading characters of the id, which is what the CLI resolves a prefix against.
+ * The handle: the leading characters of whatever identity this row actually has.
  *
- * Empty for a row that has no id of ours — an external process and a closed conversation are named
- * by the harness, not by agentop, and showing five characters of a synthetic id would offer a
- * handle that `agentop session attach` cannot resolve.
+ * **Every session has an id, so every row shows one.** This returned `''` for external and closed
+ * rows, reasoning that a synthetic id is a handle `agentop session attach` cannot resolve. That
+ * protected one command at the cost of the column: a table where some rows have no id reads as data
+ * missing, and the reader cannot refer to those rows at all — not in a note, not out loud, not to
+ * an assistant.
+ *
+ * The identity is taken in order of how resolvable it is:
+ *
+ *  1. **A row agentop hosts** — its own id. `attach`, `kill` and `rename` take a prefix of it.
+ *  2. **A row naming a CONVERSATION** (`resume`) — the conversation id. Not attachable, but it is
+ *     exactly what reopening resolves, so it is a handle for the one verb the row offers.
+ *  3. **Anything else** — the trailing distinguishing part of the synthetic id. It resolves no
+ *     command and still tells two rows apart, which is the column's other job.
  */
 export function sessionHandle(s: ControlSession): string {
-  return s.id.startsWith('external:') || s.id.startsWith('closed:') ? '' : s.id.slice(0, ID_CELL)
+  if (!s.id.startsWith('external:') && !s.id.startsWith('closed:')) return s.id.slice(0, ID_CELL)
+  const conversation = s.resume?.sessionId
+  if (conversation) return conversation.slice(0, ID_CELL)
+  // `external:<harness>:<cwd>:<startedMs>` — the start time is what separates two assistants open in
+  // one directory, which is precisely the pair a reader needs to tell apart.
+  return s.id.slice(s.id.lastIndexOf(':') + 1).slice(-ID_CELL)
 }
 
 /**
@@ -1189,7 +1204,13 @@ export type AsideRow =
  * `named` replaces it, and is the opposite kind of change — it makes an EXISTING hidden behaviour
  * visible. A row the user named used to survive the history switches unconditionally, unwritten.
  */
-export type SessionToggle = 'closed' | 'exited' | 'named' | 'done' | 'active' | 'detail'
+/**
+ * The switches the menu draws.
+ *
+ * `closed` and `exited` were two of these and asked ONE question — "is it not running" — so ticking
+ * either while the other was on appeared to do nothing. They are now `history`.
+ */
+export type SessionToggle = 'history' | 'named' | 'done' | 'active' | 'detail'
 
 /**
  * The aside's rows, in reading order — PURE, so what is drawn and what a click resolves against are
@@ -1279,7 +1300,7 @@ export function asideRows(o: {
   // so ticking `closed` while `active` is on widens the list and turns `active` off — a switch is
   // never lit over a list it does not describe. `named` sits with them because it is the same kind
   // of thing, and because it used to be the one widening nobody could see.
-  const toggles: SessionToggle[] = ['active', 'closed', 'exited', 'named', 'done', 'detail']
+  const toggles: SessionToggle[] = ['active', 'history', 'named', 'done', 'detail']
   for (const t of toggles) {
     rows.push({ kind: 'toggle', toggle: t, label: o.toggleWords[t], on: o.toggles[t] })
   }
@@ -2532,18 +2553,20 @@ export const CLOSE_CELL = '[x]'
 /**
  * Columns reserved at the right edge of the list for the per-row close control — PURE.
  *
- * A gap plus the control itself, DERIVED from `CLOSE_CELL` rather than written as a number beside
- * it: the two were `'✕'` and `2`, and changing the glyph without changing the reservation is how a
- * control ends up drawn on top of the last cell. Reserved from the width BEFORE the columns are
- * measured, for the same reason.
+ * **Always zero: the control is gone.** Kept as a function rather than deleted so the width
+ * arithmetic still has one place that says what the right edge costs, and so a future control there
+ * has somewhere to declare itself instead of being sprinkled through the callers.
  *
- * Zero when nothing on screen can be closed, and zero on a list too narrow to spare it — the
- * keyboard's `x` still works there, and a table squeezed to make room for a button is a worse
- * trade than a button that is only on the wider terminal.
+ * Removed because it did not make sense where it sat. Every other verb on this screen is reached
+ * from the menu or a key, and a table's last column is where a VALUE goes — so a control parked
+ * there reads as a truncated cell until you happen to click it. It also put the most destructive
+ * question on the screen exactly where a reader's eye lands after skimming a row.
+ *
+ * Nothing was taken away but the button: `x` still closes the selected session, and the menu still
+ * offers it in words.
  */
-export function closeCellWidth(rows: readonly ControlSession[], width: number): number {
-  const NEEDS = 40
-  return width >= NEEDS && rows.some(canClose) ? CLOSE_CELL.length + 1 : 0
+export function closeCellWidth(_rows: readonly ControlSession[], _width: number): number {
+  return 0
 }
 
 /**

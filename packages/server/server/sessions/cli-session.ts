@@ -30,6 +30,7 @@ import { createSessionsPoller, type SessionSnapshot } from './sessions-host'
 import { needsAttention, type SessionView } from './session-view'
 import { planTaskReopen, taskReopenSucceeded } from './task-reopen'
 import { liveConversationHolders } from './live-claims'
+import { POLL_MS, SETTLE_MS, spawnOutcome } from './spawn-outcome'
 import type { SessionBackend, SpawnPlanError } from './types'
 
 /** Derived from the specs, never a second hand-written list — the two could not then disagree. */
@@ -120,6 +121,37 @@ export async function runSession(argv: string[]): Promise<number> {
   }
 }
 
+/**
+ * Whether the session we just started is already GONE, and what it said on the way out.
+ *
+ * Returns the sentence to show, or `undefined` when it is running. One helper for all three spawn
+ * sites — `start`, `batch` and the reopen — because the failure is identical at each and a check in
+ * only one of them is the same bug surviving in the other two.
+ *
+ * The deadline is `SETTLE_MS`, and it is MEASURED rather than guessed — see that constant. The
+ * first version waited 700ms on the reasoning that a refusal must be immediate; the real one lands
+ * between 1.5s and 3s, so that check would have reported "started" for the very session it exists
+ * to catch.
+ */
+async function spawnFailure(backend: SessionBackend, id: string): Promise<string | undefined> {
+  // POLLED, not slept. Measured: the refusal lands between 1.5s and 3s — the harness loads and
+  // resolves the conversation before deciding — so a fixed short wait reports "started" for a
+  // session that is about to die. Polling ends the moment it dies, so a refusal costs what it
+  // costs and only a healthy session waits out the deadline.
+  const deadline = Date.now() + SETTLE_MS
+  let outcome = spawnOutcome([])
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, POLL_MS))
+    outcome = spawnOutcome(await backend.capture(id, 40).catch(() => [] as string[]))
+    if (outcome.died) break
+  }
+  if (!outcome.died) return undefined
+  // The harness's own words, because they are the only actionable part. A status with no message is
+  // still better than "it did not start".
+  return outcome.message
+    || `the session exited immediately${outcome.status !== undefined ? ` (status ${outcome.status})` : ''}`
+}
+
 async function start(
   cmd: Extract<SessionCommand, { kind: 'start' }>,
   backend: SessionBackend,
@@ -140,6 +172,16 @@ async function start(
     await backend.spawn({ id, cwd, argv: planned.plan.argv, ...(planned.plan.sendKeys ? { sendKeys: planned.plan.sendKeys } : {}) })
   } catch (e) {
     console.error(`Could not start the session: ${e instanceof Error ? e.message : String(e)}`)
+    return 1
+  }
+
+  // `spawn` returning is not evidence anything is RUNNING — tmux's contract is "I made you a
+  // session". A harness that refuses its arguments has already exited by now, and registering a row
+  // for it is what produced three dead rows called MAIN. See `spawn-outcome.ts`.
+  const failed = await spawnFailure(backend, id)
+  if (failed) {
+    console.error(failed)
+    await backend.kill(id).catch(() => {})
     return 1
   }
 
@@ -231,6 +273,15 @@ async function batch(
       failed.push({ harness: spec.harness, reason: e instanceof Error ? e.message : String(e) })
       continue
     }
+    // Same check as `start`: a harness that refused its arguments is already gone, and a batch that
+    // reports N started when N exited is worse than one that reports the refusal — the whole point
+    // of a batch is that nobody is watching each one come up.
+    const died = await spawnFailure(backend, id)
+    if (died) {
+      failed.push({ harness: spec.harness, reason: died })
+      await backend.kill(id).catch(() => {})
+      continue
+    }
     await addSession({
       id,
       harness: spec.harness,
@@ -308,6 +359,16 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
     try {
       await backend.spawn({ id, cwd: m.cwd, argv: planned.plan.argv })
     } catch { skipped.push(m.id); continue }
+    // The path the report came from. Claude refuses to resume a conversation that is already open
+    // as a background agent, and the refusal is instant — so this reopen wrote a row for a process
+    // that no longer existed, and pressing it again wrote another. The old row must NOT be retired
+    // either: retiring it on a reopen that failed would lose the only row that still names the work.
+    const died = await spawnFailure(backend, id)
+    if (died) {
+      skipped.push(m.id)
+      await backend.kill(id).catch(() => {})
+      continue
+    }
     await addSession({
       id, harness: m.harness, cwd: m.cwd, createdAt: new Date().toISOString(), task,
       label: row.label,

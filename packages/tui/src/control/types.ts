@@ -297,6 +297,23 @@ export interface ControlService {
    * the flag; pair it with a word as well as a colour, and offer `stopOptions`.
    */
   conflict?: string
+  /**
+   * A SECOND copy of this service running under the SAME runtime, serving nothing — already
+   * localized and naming the pid.
+   *
+   * Deliberately not folded into `conflict`, which is about two RUNTIMES and offers a per-runtime
+   * stop. This one is two processes of the one runtime, and the two cases need different sentences:
+   * "it is running natively and in docker, stop one" is a choice, while "a second one is running and
+   * answering nothing" is waste with a pid on it.
+   *
+   * It exists because the runtime probe cannot see this by construction — it asks
+   * `lsof -sTCP:LISTEN`, which only ever finds the process that WON the port. Measured: two
+   * `agentop server`s ran for seventy minutes, the loser burning 72% of a core and 1.1 GB on the
+   * file watcher, and every screen in the product said the service was healthy.
+   *
+   * The pid is the point. "Something is wrong" that cannot be acted on is a worse message than none.
+   */
+  idle?: string
   /** Why the state is `unknown`, already localized. */
   reason?: string
   /**
@@ -819,6 +836,21 @@ export interface ControlStatus {
   version: string
   /** Set when a newer release exists; drives the update dot in the header. */
   latestVersion?: string
+  /**
+   * How many assistants are running out of how many this MACHINE can hold — the header's `▤ 3/17`.
+   *
+   * **This is about the SYSTEM, not about agentop**, and the surface has to say so: a number in the
+   * corner of a window is read as belonging to that window, and someone would otherwise conclude
+   * agentop eats 10 GB. Measured: agentop's own server was 578 MB of a 4 GB total, and the rest was
+   * one Node process per assistant CLI.
+   *
+   * **Absent when the memory could not be read at all** (not Linux, no `/proc`), and then no gauge
+   * is drawn — never a zero. `red` is the host's decision, taken from the DISTANCE to the ceiling
+   * rather than a percentage (three left of thirty is comfortable, three of fourteen is the last
+   * warning) and from swap pressure, which is what actually freezes a machine: the incident this
+   * exists for read 3.6 GB of free RAM while swap sat at 97%.
+   */
+  memory?: { used: number; max: number; red: boolean }
   /** The history-preservation setting in force, or `undefined` while it is still unanswered. */
   archiveMode?: ArchiveMode
   /**

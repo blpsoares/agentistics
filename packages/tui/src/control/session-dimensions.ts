@@ -326,15 +326,25 @@ export function toggleValue(
 // the status shortcuts — a coarse vocabulary for the same selection
 // ---------------------------------------------------------------------------
 
-export type StatusShortcut = 'active' | 'closed' | 'exited'
+export type StatusShortcut = 'active' | 'history'
 
-/** Which states each shortcut names. `Record`, so a new shortcut cannot be half-declared. */
+/**
+ * Which states each shortcut names. `Record`, so a new shortcut cannot be half-declared.
+ *
+ * **There were three, and two of them asked the same question.** `closed` named a conversation that
+ * is not running; `exited` named a session that finished, plus `lost`, a session the backend can no
+ * longer find. Internally those differ and the difference matters — they carry different verbs, and
+ * `lost` is a fact about the backend rather than about the work. But from the chair of the person
+ * reading the screen all three answer *it is not running*, so the list offered one question twice:
+ * ticking either while the other was on appeared to do nothing, which is a control that lies.
+ *
+ * The vocabulary is now the honest pair — what is RUNNING and what is not. The states keep their
+ * distinction and each row still shows its own; it is the FILTER that stopped pretending two
+ * switches were two questions.
+ */
 export const SHORTCUT_STATES: Record<StatusShortcut, readonly SessionState[]> = {
   active: ACTIVE_STATES,
-  closed: ['closed'],
-  // Two states under one switch: the backend has no idea what happened to a `lost` row, so it is
-  // over in the only sense this switch is asking about.
-  exited: ['exited', 'lost'],
+  history: ['closed', 'exited', 'lost'],
 }
 
 const sameSet = (a: readonly string[], b: readonly string[]): boolean =>
@@ -508,7 +518,10 @@ export function storedFilters(state: SessionFilterState): Partial<SessionViewPre
     marked: [...state.marked],
     states: [...status],
     onlyActive: shortcutOn(status, 'active'),
-    showClosed: shortcutOn(status, 'closed'),
-    showExited: shortcutOn(status, 'exited'),
+    // Both legacy switches are derived from the ONE that replaced them. An older binary reading
+    // this file gets them lifted or lowered together, which is what `history` means there too —
+    // and is strictly better than a downgrade that comes up with half the history hidden.
+    showClosed: shortcutOn(status, 'history'),
+    showExited: shortcutOn(status, 'history'),
   }
 }

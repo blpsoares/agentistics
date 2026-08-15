@@ -592,7 +592,7 @@ describe('asideRows', () => {
     new: 'New', search: 'Search', group: 'Group',
   }
   const groupWords = { repo: 'repo', none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project', status: 'state', marked: 'marked' }
-  const toggleWords = { closed: 'closed', exited: 'finished', named: 'named', done: 'done tasks', active: 'only active', detail: 'detail' }
+  const toggleWords = { history: 'closed', named: 'named', done: 'done tasks', active: 'only active', detail: 'detail' }
   const headings = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
 
   const build = (o: Partial<Parameters<typeof asideRows>[0]> = {}) => asideRows({
@@ -600,7 +600,7 @@ describe('asideRows', () => {
     actionWords: words,
     grouping: 'none',
     groupWords,
-    toggles: { closed: false, exited: false, named: false, done: false, active: false, detail: false },
+    toggles: { history: false, named: false, done: false, active: false, detail: false },
     toggleWords,
     headings,
     layout: LAYOUT,
@@ -617,10 +617,10 @@ describe('asideRows', () => {
   })
 
   it('states every row own state, so nothing must be pressed to be discovered', () => {
-    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, named: false, done: false, active: false, detail: false } })
+    const rows = build({ grouping: 'task', toggles: { history: true, named: false, done: false, active: false, detail: false } })
     expect(rows.find(r => r.kind === 'group' && r.value === 'task')).toMatchObject({ on: true })
     expect(rows.find(r => r.kind === 'group' && r.value === 'none')).toMatchObject({ on: false })
-    expect(rows.find(r => r.kind === 'toggle' && r.toggle === 'closed')).toMatchObject({ on: true })
+    expect(rows.find(r => r.kind === 'toggle' && r.toggle === 'history')).toMatchObject({ on: true })
   })
 
   it('offers the named-row switch under every grouping', () => {
@@ -868,11 +868,24 @@ describe('sessionHandle', () => {
     expect(sessionHandle(session('3f5f4dd461'))).toBe('3f5f4')
   })
 
-  it('is EMPTY for a row agentop did not name', () => {
-    // An external process and a closed conversation are named by the harness. Showing five
-    // characters of a synthetic id offers a handle the CLI cannot resolve.
-    expect(sessionHandle(session('external:claude:/repo:0'))).toBe('')
-    expect(sessionHandle(session('closed:abc-def'))).toBe('')
+  it('names EVERY row, because every session has an id', () => {
+    // This used to be empty for external and closed rows, protecting `attach` from a handle it
+    // cannot resolve. It protected one command at the cost of the column: a table where some rows
+    // have no id reads as data missing, and those rows cannot be referred to at all.
+    //
+    // A row that names a CONVERSATION shows the conversation's id — not attachable, but exactly
+    // what reopening resolves, which is the one verb such a row offers.
+    expect(sessionHandle(session('closed:abcdef-1234', {
+      resume: { sessionId: 'abcdef-1234', title: 'x' },
+    }))).toBe('abcde')
+
+    // With nothing else to go on, the trailing distinguishing part of the synthetic id. It resolves
+    // no command and still tells two rows apart, which is the column's other job — and for two
+    // assistants open in ONE directory the start time is the only thing that does.
+    const a = sessionHandle(session('external:claude:/repo:1786770001'))
+    const b = sessionHandle(session('external:claude:/repo:1786770002'))
+    expect(a).not.toBe('')
+    expect(a).not.toBe(b)
   })
 })
 
@@ -1094,9 +1107,9 @@ describe('the only-active toggle', () => {
       project: 'project', status: 'state', marked: 'marked',
     },
     layout: LAYOUT,
-    toggles: { closed: false, exited: false, named: false, done: false, active: true, detail: false },
+    toggles: { history: false, named: false, done: false, active: true, detail: false },
     toggleWords: {
-      closed: 'closed', exited: 'finished', named: 'named', done: 'done tasks',
+      history: 'closed', named: 'named', done: 'done tasks',
       active: 'only active', detail: 'detail',
     },
     headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
@@ -1897,9 +1910,9 @@ describe('asideRows — the layout section', () => {
       project: 'project', status: 'state', marked: 'marked',
     },
     layout: { ...LAYOUT, value },
-    toggles: { closed: false, exited: false, named: false, done: false, active: true, detail: false },
+    toggles: { history: false, named: false, done: false, active: true, detail: false },
     toggleWords: {
-      closed: 'closed', exited: 'exited', named: 'named', done: 'done', active: 'active',
+      history: 'closed', named: 'named', done: 'done', active: 'active',
       detail: 'detail',
     },
     headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
@@ -2402,14 +2415,18 @@ describe('the per-row close control', () => {
     expect(CLOSE_CELL.codePointAt(0)!).toBeLessThan(128)
   })
 
-  it('costs nothing when nothing on screen can be closed', () => {
-    expect(closeCellWidth([closed, gone], 120)).toBe(0)
-    expect(closeCellWidth([live], 120)).toBe(CLOSE_CELL.length + 1)
-  })
-
-  it('gives up on a narrow list rather than squeezing the table for a button', () => {
-    // The keyboard's `x` still works there, and a table squeezed to make room is the worse trade.
-    expect(closeCellWidth([live], 30)).toBe(0)
-    expect(closeCellWidth([live], 40)).toBe(CLOSE_CELL.length + 1)
+  it('costs the table NOTHING, at any width and whatever is on screen', () => {
+    // The control is gone. It did not make sense where it sat: every other verb on this screen is
+    // reached from the menu or a key, and a table's last column is where a VALUE goes — so a button
+    // parked there reads as a truncated cell, and it put the most destructive question on the row
+    // exactly where the eye lands after skimming it.
+    //
+    // Asserted across the whole range rather than at one width, so the reservation cannot creep back
+    // for "just the wide terminal".
+    for (const width of [0, 30, 40, 120, 400]) {
+      expect(closeCellWidth([live], width)).toBe(0)
+      expect(closeCellWidth([closed, gone], width)).toBe(0)
+      expect(closeCellWidth([], width)).toBe(0)
+    }
   })
 })

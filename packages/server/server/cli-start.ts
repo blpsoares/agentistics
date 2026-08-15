@@ -107,6 +107,9 @@ import { needsChoice, parseDialogOptions } from './sessions/dialog-choice'
 import { rulesFor } from './sessions/attention-rules'
 import { planCrashGroup, planFellOffer } from './sessions/crash-group'
 import { loadHarnessSessions } from './sessions/harness-sessions'
+import { idleServers, isServerCommand } from './idle-servers'
+import { memoryBudget } from './sessions/memory-budget'
+import { readMemory, readRss } from './sessions/memory-probe'
 // The lock on the door: one conversation, one live session. See `conversation-claim.ts` for the
 // measurement that made it necessary, and `live-claims.ts` for the evidence it is allowed to use.
 import { conversationHeldBy } from './sessions/conversation-claim'
@@ -511,6 +514,8 @@ export function buildService(
     bootOptions?: BootOption[]
     rebuild?: RebuildAbility
     centralPlan?: CentralStartPlan
+    /** Pids of extra copies of this service that hold no port — see `idle-servers.ts`. */
+    idlePids?: number[]
   } = {},
 ): ControlService {
   const up = runtimes.filter(r => r.state === 'up')
@@ -529,6 +534,9 @@ export function buildService(
     bootOptions: facts.bootOptions ?? [],
     // Named, not merely coloured, and never reduced to whichever copy we happened to find first.
     conflict: up.length > 1 ? s.svcConflict(up.map(r => r.kind)) : undefined,
+    // Two processes of the ONE runtime — invisible to every runtime probe, because they all ask
+    // which pid holds the port. See `idle-servers.ts` for the seventy-minute incident.
+    idle: facts.idlePids?.length ? s.svcIdleServer(facts.idlePids) : undefined,
     reason,
     // The single most important line in the model: while anything is up there is nothing to start.
     startOptions: up.length > 0
@@ -746,6 +754,31 @@ async function nativeServerFacts(): Promise<ProcessFacts> {
   const pid = Number((await listeningServerPids())[0])
   if (!Number.isInteger(pid) || pid <= 0) return {}
   return { pid, startedAt: await processStartedAt(pid) }
+}
+
+/**
+ * Server processes that hold NO port — the copies every runtime probe is blind to.
+ *
+ * `lsof -sTCP:LISTEN` can only ever find the process that won the port, so a second server is
+ * invisible to `nativeServerFacts` by construction while it burns a core on the file watcher. This
+ * asks the process table instead and subtracts the listener and ourselves.
+ *
+ * Empty on any failure, including a platform with no `ps`: an unreadable process table is "cannot
+ * tell", and a warning invented out of one would appear on machines nobody could ask.
+ */
+async function idleServerPids(): Promise<number[]> {
+  try {
+    const ps = await sh(['ps', '-eo', 'pid=,args='])
+    const processes = ps.out.split('\n')
+      .map(line => /^\s*(\d+)\s+(.*)$/.exec(line.trim()))
+      .filter((m): m is RegExpExecArray => m !== null)
+      .map(m => ({ pid: Number(m[1]), command: m[2]! }))
+      .filter(p => isServerCommand(p.command))
+    const listening = (await listeningServerPids()).map(Number).filter(n => Number.isInteger(n) && n > 0)
+    return idleServers({ processes, listening, self: process.pid }).idle.map(p => p.pid)
+  } catch {
+    return []
+  }
 }
 
 async function stopLocal(s: CliStrings): Promise<void> {
@@ -1570,6 +1603,35 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     }
   }
 
+  /**
+   * The parallel-sessions budget, or `{}` when this machine cannot be measured.
+   *
+   * Spread into the status, so an unreadable machine contributes NO `memory` key at all and the
+   * header draws no gauge — the same absence-is-absence rule as `ControlService.boot`. A zero here
+   * would read as "no room left" on precisely the machines that could not be asked.
+   *
+   * The pids come from the harness records, which is the set this budget is about: assistants. It
+   * deliberately does not try to price the whole machine — `MemAvailable` already accounts for
+   * everything else, and RESERVED_BYTES holds room back for it.
+   */
+  const memoryStatus = async (): Promise<{ memory?: { used: number; max: number; red: boolean } }> => {
+    try {
+      const sample = await readMemory()
+      if (!sample) return {}
+      const index = await loadHarnessSessions()
+      const pids = [...index.byConversation.values()]
+        .filter(f => f.alive === true && f.pid !== undefined)
+        .map(f => f.pid!)
+      const { bytes, read } = await readRss(pids)
+      const b = memoryBudget({ sample, sessionBytes: bytes, sessions: read })
+      return { memory: { used: b.used, max: b.max, red: b.red } }
+    } catch {
+      // Best-effort, exactly like every other reader on this object: a gauge that throws must not
+      // take the whole status down with it.
+      return {}
+    }
+  }
+
   /** The setting in force, for the Setup tab to state. `undefined` while it is still unanswered. */
   const currentArchiveMode = async (): Promise<ArchiveMode | undefined> => {
     try {
@@ -1611,6 +1673,10 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // native start option even exists (see `StartFacts.centralPlan`).
       centralStartPlan(),
     ])
+    // Asked whatever the runtime state says: the case this exists for is a second server running
+    // while the row reads perfectly healthy, so gating it on `local` would skip exactly the machine
+    // that needs it — and it is worth asking even when nothing holds the port at all.
+    const idlePids = await idleServerPids()
     const [nativeFacts, centralFacts, machineFacts] = await Promise.all([
       local ? nativeServerFacts() : Promise.resolve<ProcessFacts>({}),
       central.state === 'up' ? containerFacts(CENTRAL_FILTER) : Promise.resolve<ContainerFacts>({}),
@@ -1665,12 +1731,26 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
 
     return [
       buildService('agentistics', s.svcAgentistics, [nativeRuntime, machineRuntime], s, {
-        // Two distinct boot mechanisms now exist for this one service (native `agentop-server` vs
-        // Docker `agentop-machine`); the detail pane can only state one, so it states the one that
-        // matches whichever runtime is actually up — the native unit otherwise, matching this
-        // field's behavior before the Docker runtime had a boot mechanism of its own at all.
-        boot: machine.state === 'up' ? bootMachine : bootAgentistics,
-        bootUnit: unitName(machine.state === 'up' ? 'machine' : 'server'),
+        // Two distinct boot mechanisms exist for this ONE service — the native `agentop-server` and
+        // the Docker `agentop-machine` — and BOTH can be registered at once. The row used to name
+        // whichever matched the runtime that happened to be up, so on a machine that had registered
+        // both, the other one was invisible: something would bring the service back after a reboot
+        // and the pane named a unit that was not it. That is the same class of half-truth
+        // `ControlService.conflict` exists to prevent for the running state.
+        //
+        // So: registered if EITHER is, and the unit cell names every one that actually is. `boot`
+        // stays `undefined` when the host could not tell at all (no user systemd) — absence is
+        // absence, and a row with no answer draws nothing rather than claiming `off`.
+        boot: bootAgentistics === undefined && bootMachine === undefined
+          ? undefined
+          : bootAgentistics === 'on' || bootMachine === 'on' ? 'on' : 'off',
+        bootUnit: [
+          bootAgentistics === 'on' ? unitName('server') : '',
+          bootMachine === 'on' ? unitName('machine') : '',
+        ].filter(Boolean).join(' + ')
+          // Nothing registered: name the unit the switch on this row would WRITE, so "off" still
+          // says what it is off about.
+          || unitName(machine.state === 'up' ? 'machine' : 'server'),
         // BOTH mechanisms get a verb, whichever runtime happens to be up: the row states one and
         // the switch has to reach either, or a machine that registered the container at boot could
         // never turn that off while running natively.
@@ -1685,6 +1765,7 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
           },
         ], s, bootSupported, s.svcAgentistics),
         rebuild: { local: repo, machine: machineCompose },
+        idlePids,
       }),
       // The central's rebuild always works: `central.sh up` inside a checkout, and the published
       // image outside one — `cli-central.ts` picks between them, and a central that is RUNNING
@@ -1749,6 +1830,11 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         services,
         version: CURRENT_VERSION,
         latestVersion,
+        // The parallel-sessions budget. Computed HERE and not in the TUI, like every other decision
+        // on this object: the arithmetic lives in the pure `memory-budget.ts` and the two `/proc`
+        // reads in `memory-probe.ts`, and the answer arrives already decided — including `red`,
+        // which depends on swap pressure the screen has no way to know about.
+        ...(await memoryStatus()),
         archiveMode: await currentArchiveMode(),
         // The setup wizard is a question the cockpit asks, so what it may offer is decided here,
         // beside the very service states that decide it. `central` is the only mode that

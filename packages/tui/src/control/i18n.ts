@@ -384,6 +384,8 @@ export interface ControlStrings {
   sessionsResumeRunning: string
   sessionsSearchLabel: string
   sessionsSearchEmpty: string
+  /** The word on a HISTORY band. Must agree with `sessionsStates` — a row saying `off` under a
+   *  band called `closed` is the same vocabulary split this collapse exists to remove. */
   sessionsClosedWord: string
   sessionsShowClosed: string
   /** The view panel: one vertical list of every choice about what the list shows. */
@@ -402,8 +404,8 @@ export interface ControlStrings {
   asideShow: string
   asideTasks: string
   asideAllTasks: string
-  toggleClosed: string
-  toggleExited: string
+  /** ONE switch for "not running". `toggleClosed`/`toggleExited` were two names for one question. */
+  toggleHistory: string
   /**
    * The named-row widening, made visible.
    *
@@ -773,9 +775,11 @@ const EN: ControlStrings = {
     'waiting-approval': 'needs approval',
     waiting: 'waiting',
     working: 'working',
-    exited: 'exited',
-    lost: 'lost',
-    closed: 'closed',
+    // ONE word for every way a session is not running — see `cli-i18n.ts`'s `sessState`, which this
+    // table has to agree with or a row reads `off` under a band called `closed`.
+    exited: 'off',
+    lost: 'off',
+    closed: 'off',
     unknown: 'external',
   },
   sessionsSearching: q => `search: ${q} · esc clears`,
@@ -829,7 +833,7 @@ const EN: ControlStrings = {
     'the assistant already running there is NOT stopped — close it first, or you will have two on one conversation.',
   sessionsSearchLabel: 'Search sessions and closed conversations',
   sessionsSearchEmpty: 'nothing matches.',
-  sessionsClosedWord: 'closed',
+  sessionsClosedWord: 'off',
   sessionsShowClosed: 'closed: shown',
   viewTitle: 'What this list shows',
   viewGroupBy: 'Group by',
@@ -845,8 +849,7 @@ const EN: ControlStrings = {
   asideShow: 'SHOW',
   asideTasks: 'TASKS',
   asideAllTasks: 'every task',
-  toggleClosed: 'closed conversations',
-  toggleExited: 'finished sessions',
+  toggleHistory: 'not running',
   toggleNamed: 'always keep named sessions',
   keySessionsAside: 'tab menu',
   manageTitle: (title: string) => `Managing "${title}"`,
@@ -1184,9 +1187,9 @@ const PT: ControlStrings = {
     // `aguardando resposta` under a band called `aguardando`.
     waiting: 'aguardando resposta',
     working: 'trabalhando',
-    exited: 'encerrada',
-    lost: 'perdida',
-    closed: 'fechada',
+    exited: 'desligada',
+    lost: 'desligada',
+    closed: 'desligada',
     unknown: 'externa',
   },
   sessionsSearching: q => `busca: ${q} · esc limpa`,
@@ -1240,7 +1243,7 @@ const PT: ControlStrings = {
     'o assistente que já roda ali NÃO é encerrado — feche ele antes, ou você fica com dois na mesma conversa.',
   sessionsSearchLabel: 'Buscar sessões e conversas fechadas',
   sessionsSearchEmpty: 'nada corresponde.',
-  sessionsClosedWord: 'fechada',
+  sessionsClosedWord: 'desligada',
   sessionsShowClosed: 'fechadas: visíveis',
   viewTitle: 'O que esta lista mostra',
   viewGroupBy: 'Agrupar por',
@@ -1256,8 +1259,7 @@ const PT: ControlStrings = {
   asideShow: 'MOSTRAR',
   asideTasks: 'TAREFAS',
   asideAllTasks: 'todas as tarefas',
-  toggleClosed: 'conversas fechadas',
-  toggleExited: 'sessões encerradas',
+  toggleHistory: 'não estão rodando',
   toggleNamed: 'sempre manter sessões nomeadas',
   keySessionsAside: 'tab menu',
   manageTitle: (title: string) => `Gerenciando "${title}"`,

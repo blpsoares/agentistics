@@ -241,8 +241,9 @@ export function Sessions({
   // describes is a switch that can disagree with the list.
   const status = filters.status ?? ACTIVE_STATES
   const onlyActive = shortcutOn(status, 'active')
-  const showClosed = shortcutOn(status, 'closed')
-  const showExited = shortcutOn(status, 'exited')
+  // ONE switch, because there was one question. `closed` and `exited` both meant "it is not
+  // running", so ticking either while the other was on appeared to do nothing.
+  const showHistory = shortcutOn(status, 'history')
   const taskFilter = filters.task?.[0] ?? null
   const projectFilter = filters.project?.[0] ?? null
   const pressShortcut = useCallback((k: StatusShortcut) => {
@@ -461,11 +462,11 @@ export function Sessions({
     groupWords: s.sessionsGroupings,
     layout: { heading: s.asideLayout, words: s.sessionsLayouts, value: layout },
     toggles: {
-      closed: showClosed, exited: showExited, done: showDone,
+      history: showHistory, done: showDone,
       active: onlyActive, named: showNamed, detail: !hideDetail,
     },
     toggleWords: {
-      closed: s.toggleClosed, exited: s.toggleExited, done: s.toggleDone,
+      history: s.toggleHistory, done: s.toggleDone,
       active: s.toggleActive, named: s.toggleNamed, detail: s.toggleDetail,
     },
     headings: { actions: s.asideActions, view: s.asideView, show: s.asideShow },
@@ -500,7 +501,7 @@ export function Sessions({
       allLabel: s.asideAllProjects,
     },
   }), [
-    actions, grouping, layout, showClosed, showExited, showDone, onlyActive, showNamed, hideDetail,
+    actions, grouping, layout, showHistory, showDone, onlyActive, showNamed, hideDetail,
     status, stateCounts, order, taskFilter,
     projectFilter, fleet?.sessions, fleet?.finishedTasks, s,
   ])
@@ -770,8 +771,7 @@ export function Sessions({
       return
     }
     if (row.kind !== 'toggle') return
-    if (row.toggle === 'closed') return pressShortcut('closed')
-    if (row.toggle === 'exited') return pressShortcut('exited')
+    if (row.toggle === 'history') return pressShortcut('history')
     if (row.toggle === 'active') return pressShortcut('active')
     setCursor(0)
     if (row.toggle === 'done') return setShowDone(v => !v)
@@ -889,8 +889,8 @@ export function Sessions({
     // here, not assumed. `?` has no such collision and is what every list-shaped TUI already uses.
     if (input === '?' || (key.ctrl && input === 'h')) { setAsk({ kind: 'keys' }); return }
     if (input === 'v') return runAction('group')
-    if (input === 'c') { pressShortcut('closed'); return }
-    if (input === 'e') { pressShortcut('exited'); return }
+    // One key, because there is one switch. `c` and `e` toggled two halves of the same question.
+    if (input === 'c' || input === 'e') { pressShortcut('history'); return }
     if (input === 'l') { pressShortcut('active'); return }
     if (input === 'd') { setHideDetail(v => !v); return }
     // `ctrl+g` for the GRID, not `g`: `g` is "top of the list" two lines down and in
@@ -1319,13 +1319,13 @@ export function Sessions({
         <ViewOptions
           strings={s}
           grouping={grouping}
-          showClosed={showClosed}
+          showHistory={showHistory}
           showNamed={showNamed}
           width={width}
           height={height}
           isActive={isActive}
           onGrouping={g => { setGrouping(g); setCursor(0) }}
-          onShowClosed={() => pressShortcut('closed')}
+          onShowClosed={() => pressShortcut('history')}
           onShowNamed={() => { setShowNamed(v => !v); setCursor(0) }}
           onClose={() => setAsk(null)}
         />
@@ -1493,7 +1493,7 @@ export function Sessions({
           grouping={grouping}
           strings={s}
           width={listBody}
-          showClosed={showClosed}
+          showHistory={showHistory}
           showNamed={showNamed}
           onlyActive={onlyActive}
           // How many rows are ON SCREEN, counted from the very list being drawn. The header used to
@@ -1660,7 +1660,11 @@ export function Sessions({
               }}
               host={host}
               query={query}
-              onQuery={setQuery}
+              // The cursor goes home on every change. That is the actual answer to the objection
+              // that stopped this being live: a narrowing list moves rows out from under the
+              // selection, so keeping the old index points at whatever slid into that slot. Row 0
+              // is the best match to look at anyway.
+              onQuery={q => { setQuery(q); setCursor(0) }}
               fleet={fleet}
             />
           ) : (
@@ -1697,13 +1701,13 @@ export function Sessions({
  * to state the answer, so a glance tells you why the list looks the way it does.
  */
 function SummaryRow({
-  fleet, grouping, strings: s, width, showClosed, showNamed, onlyActive, shown, query, scope, fell,
+  fleet, grouping, strings: s, width, showHistory, showNamed, onlyActive, shown, query, scope, fell,
 }: {
   fleet: ControlSessions | null | undefined
   grouping: SessionGrouping
   strings: ControlStrings
   width: number
-  showClosed: boolean
+  showHistory: boolean
   /** The one widening on this block — stated because it changes what a strict filter means. */
   showNamed: boolean
   /** The strict selection: exactly the states that mean something is alive. */
@@ -1737,7 +1741,7 @@ function SummaryRow({
   // still matters, and `showNamed` is named whenever it is on because it is the one thing that puts
   // rows BACK into a list the sentence above says is strict.
   if (onlyActive) hiding.push(s.viewActiveOn)
-  else if (!showClosed) hiding.push(s.viewClosedOn)
+  else if (!showHistory) hiding.push(s.viewClosedOn)
   if (showNamed) hiding.push(s.toggleNamed)
 
   // MEASURED, never left to Yoga: a row that wraps takes two of the screen's rows while its budget
@@ -1816,9 +1820,14 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
       {/* The HANDLE. `agentop session attach 3f5f` takes a prefix, so this is the one thing on the
           row that names the session to anything but this screen. */}
       {columns.id > 0 ? (
-        <Text dimColor>{padCell(sessionHandle(session), columns.id) + gap}</Text>
+        <Text color={selected ? COLORS.accent : undefined} dimColor={!selected}>
+          {padCell(sessionHandle(session), columns.id) + gap}
+        </Text>
       ) : null}
-      <Text color={STATE_COLOR[session.state]} bold={session.state === 'waiting-approval'}>
+      <Text
+        color={selected ? COLORS.accent : STATE_COLOR[session.state]}
+        bold={selected || session.state === 'waiting-approval'}
+      >
         {padCell(session.stateLabel, columns.state)}
       </Text>
       {columns.title > 0 ? (
@@ -1832,14 +1841,16 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
       {/* How long ago it started, on rows that are NOT running — the age is most of the "reopen
           this or not" decision, and it lived only in the detail pane. */}
       {columns.age > 0 ? (
-        <Text dimColor>{gap + padCell(ages.get(session.id) ?? '', columns.age)}</Text>
+        <Text color={selected ? COLORS.accent : undefined} dimColor={!selected}>
+          {gap + padCell(ages.get(session.id) ?? '', columns.age)}
+        </Text>
       ) : null}
       {/* A linked WORKTREE says so, because it changes what the row IS: three rows of one repo in
           three directories are three checkouts, and without the word they read as three projects.
           The word, never a glyph alone — a distinction announced in a symbol is one that has to be
           taught before the screen can be read. */}
       {columns.worktree > 0 ? (
-        <Text color={COLORS.secondary}>{gap + padCell(worktreeName(session), columns.worktree)}</Text>
+        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>{gap + padCell(worktreeName(session), columns.worktree)}</Text>
       ) : null}
       {/* The TASK, right of the name. Filing a session under a task and then not being able to see
           which task it is in is the feature not working — the fact only existed in the detail pane
@@ -1852,20 +1863,26 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           a row you are deciding whether to close is one whose cost you want beside its name rather
           than one selection away in the detail pane. */}
       {columns.metrics > 0 ? (
-        <Text color={COLORS.secondary}>{gap + padCell(sessionMetric(session), columns.metrics)}</Text>
+        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>{gap + padCell(sessionMetric(session), columns.metrics)}</Text>
       ) : null}
       {/* How full the context window is. Beside the usage because it is the same kind of fact and
           the opposite reading of it: usage is what this session has spent, this is what it has
           left. A row with no reading draws a BLANK of the same width rather than a `0%` — the
           column exists because some rows can answer, not because all of them can. */}
       {columns.context > 0 ? (
-        <Text color={session.context ? CONTEXT_COLOR[contextLevel(session.context.fraction)] : undefined}
-              dimColor={!session.context || contextLevel(session.context.fraction) === 'ok'}>
+        <Text
+          color={selected
+            ? COLORS.accent
+            : session.context ? CONTEXT_COLOR[contextLevel(session.context.fraction)] : undefined}
+          dimColor={!selected && (!session.context || contextLevel(session.context.fraction) === 'ok')}
+        >
           {gap + padCell(sessionContext(session), columns.context)}
         </Text>
       ) : null}
       {columns.harness > 0 ? (
-        <Text color={harnessColor}>{gap + padCell(session.harness, columns.harness)}</Text>
+        <Text color={selected ? COLORS.accent : harnessColor} bold={selected}>
+          {gap + padCell(session.harness, columns.harness)}
+        </Text>
       ) : null}
       {columns.where > 0 ? (
         <Text dimColor>{gap + padCell(session.projectGroup || session.project, columns.where)}</Text>
@@ -2205,8 +2222,13 @@ function Question({
         placeholder={query}
         width={width}
         onCancel={onClose}
-        // Applied on submit rather than per keystroke: the list under it is re-grouped and re-sorted
-        // on every change, and a cursor that jumps while someone is still typing is unusable.
+        // LIVE, as it is typed. It used to apply on submit, on the reasoning that re-grouping under
+        // a moving cursor is unusable — but that reasoning was about the CURSOR, and the fix for a
+        // jumping cursor is to reset it, not to make the user type blind. A search whose result you
+        // cannot see until you commit is a search you run twice.
+        onChange={value => onQuery(value.trim())}
+        // Enter closes the field and KEEPS what is already applied. Cancel is what undoes it, and
+        // the empty-submit case is why `placeholder` is used above instead of `defaultValue`.
         onSubmit={value => { onQuery(value.trim()); onClose() }}
       />
       </Box>
@@ -2517,12 +2539,12 @@ function Question({
  * squeezing it under the list is what made it unreadable the first time.
  */
 function ViewOptions({
-  strings: s, grouping, showClosed, showNamed, width, height, isActive,
+  strings: s, grouping, showHistory, showNamed, width, height, isActive,
   onGrouping, onShowClosed, onShowNamed, onClose,
 }: {
   strings: ControlStrings
   grouping: SessionGrouping
-  showClosed: boolean
+  showHistory: boolean
   showNamed: boolean
   width: number
   height: number
@@ -2583,7 +2605,7 @@ function ViewOptions({
         // The dot means ON, always — for every row on this panel.
         const on = row.kind === 'group'
           ? row.value === grouping
-          : row.kind === 'closed' ? showClosed : showNamed
+          : row.kind === 'closed' ? showHistory : showNamed
         const label = row.kind === 'group'
           ? s.sessionsGroupings[row.value]
           : row.kind === 'closed' ? s.viewClosedOn

@@ -89,6 +89,8 @@ export interface CliStrings {
    * the services row can say least, a red line that named one runtime.
    */
   svcConflict: (runtimes: string[]) => string
+  /** A second copy under the SAME runtime, serving nothing. Names the pid — see ControlService.idle. */
+  svcIdleServer: (pids: number[]) => string
   /** A stop/restart named something that is not running. */
   svcNotRunning: string
 
@@ -404,16 +406,24 @@ const EN: CliStrings = {
   svcAgentistics: 'agentistics',
   svcCentral: 'agentistics central',
   svcConflict: (runtimes) => `conflict: ${runtimes.join(' + ')} both running — stop one`,
+  svcIdleServer: pids => pids.length === 1
+    ? `a second server (pid ${pids[0]}) is running and serving nothing — kill ${pids[0]}`
+    : `${pids.length} extra servers are running and serving nothing — kill ${pids.join(' ')}`,
   svcNotRunning: 'that service is not running.',
 
   sessState: {
     working: 'working',
     waitingApproval: 'needs approval',
     waiting: 'waiting',
-    exited: 'exited',
-    lost: 'lost',
+    // ONE word for every way a session is not running. `exited`, `lost` and `closed` are three
+    // internal facts and were three words on the row — but a reader has one question here ("is it
+    // running?") and one move available ("reopen it"), so three answers to it was noise dressed as
+    // precision. The distinction still exists in the state and is still said by the DETAIL pane;
+    // the column stops spending three vocabularies on one bit.
+    exited: 'off',
+    lost: 'off',
+    closed: 'off',
     external: 'external',
-    closed: 'closed',
   },
   sessApprovalBlind: (harness: string) =>
     `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
@@ -643,6 +653,9 @@ const PT: CliStrings = {
   svcAgentistics: 'agentistics',
   svcCentral: 'agentistics central',
   svcConflict: (runtimes) => `conflito: ${runtimes.join(' + ')} rodando juntos — pare um`,
+  svcIdleServer: pids => pids.length === 1
+    ? `um segundo servidor (pid ${pids[0]}) está rodando sem servir nada — encerre ${pids[0]}`
+    : `${pids.length} servidores extras rodando sem servir nada — encerre ${pids.join(' ')}`,
   svcNotRunning: 'esse serviço não está rodando.',
 
   sessState: {
@@ -653,10 +666,10 @@ const PT: CliStrings = {
     // keeps `waiting`: there it is already the intransitive answer, and "waiting for a reply" would
     // be longer without saying more.
     waiting: 'aguardando resposta',
-    exited: 'encerrada',
-    lost: 'perdida',
+    exited: 'desligada',
+    lost: 'desligada',
+    closed: 'desligada',
     external: 'externa',
-    closed: 'fechada',
   },
   sessApprovalBlind: (harness: string) =>
     `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando resposta", como qualquer outra pausa.`,
