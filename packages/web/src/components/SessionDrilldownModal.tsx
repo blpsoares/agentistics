@@ -13,7 +13,7 @@ import {
 } from '@agentistics/core'
 import { blendedCostPerToken, blendedSessionCost } from '../hooks/useData'
 import { buildWorkflowSteps } from '../lib/workflowSteps'
-import { fmtFull, workflowTokens } from '@agentistics/core'
+import { fmt as fmtShort, fmtFull, workflowTokens } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -32,11 +32,15 @@ interface Props {
   onClose: () => void
 }
 
+/**
+ * The drawer's own wrapper: the precision toggle swaps the compact reading for the exact one.
+ *
+ * The compact side delegates to the shared `fmt`, which knows about billions. The local copy this
+ * replaced stopped at millions, so a cached session rendered as `9809.8M` — a number nobody can
+ * read at a glance, which is the entire job of a compact format.
+ */
 function fmt(n: number, full = false): string {
-  if (full) return fmtFull(n)
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
+  return full ? fmtFull(n) : fmtShort(n)
 }
 
 

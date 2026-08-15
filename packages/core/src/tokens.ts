@@ -232,6 +232,24 @@ const TERMS: Record<TokenKind, Record<Lang, TokenTerm>> = {
   },
 }
 
+/**
+ * A share as a percentage STRING, which never prints `0%` for a quantity that exists.
+ *
+ * Found by opening the panel: with a real machine's 17.8B total, output — 64.2M tokens and the most
+ * expensive counter there is — rendered as `0%`, and the explanatory sentence read "output, the most
+ * expensive token, is 0%". That is the confident-zero this codebase forbids everywhere else, applied
+ * to the exact number the reader is least able to check.
+ *
+ * `<1%` is the honest answer, and it is also the interesting one: it says the cache has grown so
+ * large that the expensive tokens have become a rounding error, which is the actual finding.
+ */
+export function tokenSharePct(part: number, total: number): string {
+  if (total <= 0 || part <= 0) return '0%'
+  const pct = (part / total) * 100
+  if (pct < 0.5) return '<1%'
+  return `${Math.round(pct)}%`
+}
+
 export function tokenTerm(kind: TokenKind, lang: Lang): TokenTerm {
   return TERMS[kind][lang]
 }
@@ -270,7 +288,7 @@ export function totalTokensExplained(b: TokenBreakdown, lang: Lang): string {
       ? 'Nenhum token registrado neste recorte.'
       : 'No tokens recorded in this scope.'
   }
-  const pct = (n: number) => `${Math.round((n / t) * 100)}%`
+  const pct = (n: number) => tokenSharePct(n, t)
   return lang === 'pt'
     ? `Soma dos quatro contadores. Leitura de cache é ${pct(b.cacheRead)} do total — é a conversa sendo relida a cada turno, e custa cerca de 1/10 da entrada nova. Saída, o token mais caro, é ${pct(b.output)}.`
     : `All four counters added up. Cache read is ${pct(b.cacheRead)} of it — the conversation being re-read every turn, at roughly 1/10 the price of fresh input. Output, the most expensive token, is ${pct(b.output)}.`

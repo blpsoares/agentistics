@@ -4,6 +4,7 @@ import { Trophy, Cpu, Boxes, FolderOpen, GitBranch, Users, Monitor } from 'lucid
 import { fmt, fmtCost, formatProjectName, planAllocation, repoShortName } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { Section } from '../components/Section'
+import { MetricNote } from '../components/MetricNote'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../lib/harness'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { rankTop, rankTopFromCaches, cacheTotalsUsable, shareOf, type TopDimension, type TopMetric, type TopEntry } from '../lib/topUsage'
@@ -136,6 +137,16 @@ export default function TopUsagePage() {
           ))}
         </div>
       </div>
+
+      {/* Stated ONCE for the whole page rather than on each of its cards: every board below ranks
+          the same measurement, and repeating the sentence six times would train people to skip it. */}
+      {metric === 'tokens' && (
+        <MetricNote style={{ marginTop: 0, marginBottom: 4 }}>
+          {pt
+            ? 'Tokens aqui são todos os contadores cobrados — entrada nova, saída, leitura e escrita de cache. A leitura de cache costuma ser a maior parte do volume (é a conversa relida a cada turno, a cerca de 1/10 do preço da entrada nova), então o ranking por tokens e o ranking por custo discordam com frequência. É por isso que os dois existem.'
+            : 'Tokens here are every billed counter — fresh input, output, cache read and cache write. Cache read is usually most of the volume (the conversation re-read every turn, at roughly 1/10 the price of fresh input), so ranking by tokens and ranking by cost routinely disagree. That is why both are offered.'}
+        </MetricNote>
+      )}
 
       <div className="ag-grid cols-2">
         {dimensions.map(dim => {

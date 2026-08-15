@@ -2,6 +2,43 @@
 
 All cost and token calculations use a single source of truth: `packages/core/src/types.ts` (imported as `@agentistics/core`). No layer duplicates the pricing logic.
 
+## What the word "tokens" means
+
+**A token figure is always all four billed counters:** `input + output + cacheRead + cacheWrite`.
+Counting lives in `packages/core/src/tokens.ts` — `sessionTokens` / `usageTokens` /
+`sessionTokenTotal` / `usageTokenTotal` / `totalTokens` / `addTokens` / `sumTokens`. Never write the
+sum by hand.
+
+This is not a stylistic preference. Measured on one real machine across its 123 stored Claude
+sessions:
+
+```
+input + output + cacheRead + cacheWrite   8,856,436,865
+input + output                               30,247,005   ← 0.34% of it
+```
+
+A surface that summed two of the four was not slightly low, it was off by ~300×, and the cost beside
+it (which had always priced the cache) disagreed by ~10×. It was found as a session-drawer bug and
+turned out to be 19 call sites across the web app, the server and the exports.
+
+Consequences that are easy to get wrong:
+
+- **An aggregate type carries `tokens: TokenBreakdown`**, not just `inputTokens`/`outputTokens` —
+  `HarnessSummary`, `RepoStat`, `TagAggregate`, `derived.tokenTotals`. The conversational pair is
+  kept for surfaces that legitimately want it (an "Input" card, an "Output" card) and is **never**
+  the thing labelled "tokens".
+- **A rate per million is over the total**, not over the conversational pair. Computing cost/1M
+  against the non-cached ~4% reports a figure tens of times higher than what is charged, and ranks
+  harnesses by how much they cache.
+- **`calcCost` gets the real cache counters.** For a session with no model, `blendedSessionCost`
+  applies each of the four blended rates — pricing cache as fresh input is the opposite error.
+- **A label may not ship without its explanation.** `TOKEN_KINDS` in `tokens.ts` carries a label
+  and a one-sentence `help` per counter in EN/PT, and `totalTokensExplained()` is the sentence that
+  goes under a headline figure. At these magnitudes an unexplained total reads as a fault.
+- **`tokens.lint.test.ts` enforces it** — it greps core/server/web/tui for two-term sums and for
+  `calcCost` arguments with the cache zeroed, and fails the build. Comments and per-field `+=` are
+  exempt; a deliberate two-term reading needs `@tokens-intentional` **and a reason**.
+
 ## Pricing table
 
 All prices are in USD per **1 million tokens**:
@@ -41,10 +78,15 @@ avg_input_rate  = Σ(model_input_tokens  × model_input_price)  / Σ input_token
 avg_output_rate = Σ(model_output_tokens × model_output_price) / Σ output_tokens
 (same for cache read and write)
 
-Estimated Session Cost = session_input_tokens  × avg_input_rate
-                       + session_output_tokens × avg_output_rate
-                       + ...
+Estimated Session Cost = session_input_tokens      × avg_input_rate
+                       + session_output_tokens     × avg_output_rate
+                       + session_cache_read_tokens  × avg_cache_read_rate
+                       + session_cache_write_tokens × avg_cache_write_rate
 ```
+
+Implemented **once**, in `blendedSessionCost` (`packages/web/src/hooks/useData.ts`). Two call sites
+— the session drawer and the PDF's per-session column — each wrote their own version over `input`
+and `output` only, which priced a session on the ~4% of its volume that is not cache.
 
 ## Token types
 
@@ -57,7 +99,12 @@ Estimated Session Cost = session_input_tokens  × avg_input_rate
 
 ### Cache efficiency
 
-Cache hit rate = `cacheRead / (cacheRead + input)`
+Cache hit rate = `cacheRead / (input + cacheRead + cacheWrite)`
+
+The denominator is everything the model READ, however it was served — cache writes included, since
+a write is input that had to be read to be written. Output is not in it: output is produced, not
+read, so including it would dilute the rate on an output-heavy session. See `readTokens()` in
+`packages/core/src/tokens.ts`, which is the same function the panel uses.
 
 Color coding: red < 30% · yellow 30–60% · green ≥ 60%
 

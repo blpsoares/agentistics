@@ -3,11 +3,12 @@ import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { GitCompare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import type { HarnessId, Lang, TokenBreakdown } from '@agentistics/core'
-import { EMPTY_TOKENS, fmt, fmtCost, formatModel, t, totalTokens } from '@agentistics/core'
+import { EMPTY_TOKENS, fmt, fmtCost, formatModel, t, tokenSharePct, totalTokens } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 import { computeFilteredHarnessSummaries } from '../hooks/useData'
 import { fmtDateLocalized } from '../lib/dateFormat'
 import { CompareByFilter } from './compare/CompareByFilter'
+import { MetricNote } from '../components/MetricNote'
 
 interface HarnessAgg {
   harness: HarnessId
@@ -501,8 +502,21 @@ function CompareByHarness() {
         </table>
       </div>
 
+      {/* Three token rows sit above each other and only one of them is the total. Without this the
+          obvious reading is that input + output should equal it, and it is off by ~300x. */}
+      <MetricNote>
+        {lang === 'pt'
+          ? 'A linha de tokens totais soma os quatro contadores cobrados. As linhas de entrada e saída abaixo dela são só dois deles — o resto é leitura e escrita de cache, que costumam ser a maior parte do volume. Por isso entrada + saída NÃO fecha com o total.'
+          : 'The total-tokens row adds all four billed counters. The input and output rows under it are only two of them — the rest is cache read and cache write, usually most of the volume. That is why input + output does NOT add up to the total.'}
+      </MetricNote>
+
       {/* Cost per 1M tokens (blended) — highlights the cheapest harness */}
       <SectionCard title={t('compare.costPerMTokens', lang)}>
+        <MetricNote style={{ marginTop: 0, marginBottom: 12 }}>
+          {lang === 'pt'
+            ? 'Custo dividido por TODOS os tokens cobrados, cache incluído. Dividir só pela conversa daria um valor dezenas de vezes maior que o cobrado, e ordenaria os assistentes por quanto cada um usa cache em vez de por quanto custa.'
+            : 'Cost divided by ALL billed tokens, cache included. Dividing by the conversation alone would report a figure tens of times higher than what is charged, and would rank assistants by how much each one caches rather than by what it costs.'}
+        </MetricNote>
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
@@ -625,6 +639,12 @@ function CompareByHarness() {
           {aggs.map(a => {
             const totalSessions = aggs.reduce((s, x) => s + x.sessions, 0)
             const pct = totalSessions > 0 ? Math.round((a.sessions / totalSessions) * 100) : 0
+            // A harness with real sessions must never read `0%`. Found in the browser: Codex CLI
+            // and Kimi Code, one session each against 352, both rendered as `0%` beside a bar with
+            // visible width — the label contradicting the chart next to it. The bar keeps the raw
+            // `pct` (a 0-width bar is the honest picture of a rounding error); only the LABEL is
+            // corrected, because a label is read as a claim.
+            const pctLabel = tokenSharePct(a.sessions, totalSessions)
             return (
               <div key={a.harness}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -645,7 +665,7 @@ function CompareByHarness() {
                       {a.sessions.toLocaleString()} {t('compare.sessionsLower', lang)}
                     </span>
                     <span style={{ fontSize: 12, fontWeight: 700, color: colors[a.harness], minWidth: 36, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                      {pct}%
+                      {pctLabel}
                     </span>
                   </div>
                 </div>

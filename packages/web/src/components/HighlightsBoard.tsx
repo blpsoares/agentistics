@@ -1,17 +1,12 @@
 import React, { useState } from 'react'
 import { Clock, Download, Upload, MessageSquare, Wrench, FolderOpen } from 'lucide-react'
 import type { SessionMeta, Project, HarnessId } from '@agentistics/core'
-import { formatProjectName, sessionLabel } from '@agentistics/core'
+import { fmt, formatProjectName, sessionLabel } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { NAtag } from './NAtag'
 import { capable } from '../lib/harness'
 import { sessionTime } from '../lib/sessionTime'
 
-function fmt(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
 
 function fmtDuration(minutes: number): string {
   const h = Math.floor(minutes / 60)

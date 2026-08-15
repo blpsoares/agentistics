@@ -20,6 +20,7 @@ import { Section } from '../components/Section'
 import { ModelBreakdown } from '../components/ModelBreakdown'
 import { ActivityChart } from '../components/ActivityChart'
 import { RecentSessions } from '../components/RecentSessions'
+import { MetricNote } from '../components/MetricNote'
 
 type Tab = 'overview' | 'members' | 'compare' | 'actions' | 'sessions' | 'workflows'
 
@@ -221,6 +222,11 @@ export default function RepoDetailPage() {
                 <StatTile label={pt ? 'Tokens' : 'Tokens'} value={fmt(ciSessions.reduce((a, s) => a + sessionTokenTotal(s), 0))} />
                 <StatTile label="Commits" value={String(ciSessions.reduce((a, s) => a + (s.git_commits ?? 0), 0))} />
               </div>
+              <MetricNote style={{ marginTop: 0, marginBottom: 12 }}>
+                {pt
+                  ? 'Tokens somam os quatro contadores cobrados: entrada nova, saída, leitura e escrita de cache.'
+                  : 'Tokens add all four billed counters: fresh input, output, cache read and cache write.'}
+              </MetricNote>
               <RecentSessions sessions={ciSessions} lang={lang} onSelect={setSelectedSession} />
             </>
           )}

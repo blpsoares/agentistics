@@ -6,6 +6,7 @@ import type { RepoStat, RepoSortKey } from '../hooks/useData'
 import { sortRepos } from '../hooks/useData'
 import { Section } from '../components/Section'
 import { RepositoriesList } from '../components/RepositoriesList'
+import { MetricNote } from '../components/MetricNote'
 import { SortControl } from '../components/SortControl'
 
 export default function RepositoriesPage() {
@@ -130,6 +131,11 @@ export default function RepositoriesPage() {
           onOpen={openRepo}
           deniedRepoLabels={deniedRepoLabels}
         />
+        <MetricNote>
+          {lang === 'pt'
+            ? 'O número de tokens de cada card soma os quatro contadores cobrados — entrada nova, saída, leitura e escrita de cache — e é por ele que a ordenação por tokens ranqueia. Um repositório com poucas sessões longas pode ter volume maior que um com muitas sessões curtas: cada turno relê a conversa inteira do cache.'
+            : "Each card's token figure adds all four billed counters — fresh input, output, cache read and cache write — and it is what the tokens sort ranks by. A repository with a few long sessions can carry more volume than one with many short ones: every turn re-reads the whole conversation from cache."}
+        </MetricNote>
       </Section>
     </>
   )

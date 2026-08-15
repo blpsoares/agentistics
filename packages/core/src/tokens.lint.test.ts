@@ -102,12 +102,23 @@ describe('no surface may add up two of the four token counters and call it "toke
   // that this guard cries wolf.
   const SUM = /input_?[Tt]okens[^;\n]{0,120}?\+(?!=)[^;]{0,160}?output_?[Tt]okens/g
 
+  /**
+   * The same sum written with the words the other way round: `tokensIn + tokensOut`.
+   *
+   * This guard shipped matching only `inputTokens`/`input_tokens`, and MISSED a live one — the CI
+   * grouping on the Actions page accumulated into fields called `tokensIn`/`tokensOut`, so its
+   * "Tokens" column and its sort were both two-counter and the lint reported the file clean. A rule
+   * that only recognises one naming convention is a rule with a blind spot the size of whatever
+   * somebody names things next.
+   */
+  const SUM_REVERSED = /tokens_?[Ii]n\b[^;\n]{0,120}?\+(?!=)[^;]{0,160}?tokens_?[Oo]ut\b/g
+
   it('finds no unexplained two-term token sum anywhere in the product', () => {
     const offences: string[] = []
     for (const dir of SCAN) {
       for (const file of sourceFiles(dir)) {
         const src = readFileSync(file, 'utf-8')
-        for (const m of src.matchAll(SUM)) {
+        for (const m of [...src.matchAll(SUM), ...src.matchAll(SUM_REVERSED)]) {
           const from = m.index!
           // The cache counters have to appear in the SAME expression. 260 characters is enough to
           // span the four-line form every correct call site in this repo is written in.

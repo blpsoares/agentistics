@@ -1,9 +1,10 @@
 import React from 'react'
 import { Zap, Lightbulb, TrendingDown, TrendingUp, Info } from 'lucide-react'
-import { formatModel, getModelColor, fmtCost } from '@agentistics/core'
+import { fmt, formatModel, getModelColor, fmtCost } from '@agentistics/core'
 import type { Lang, HarnessId } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { NAtag } from './NAtag'
+import { MetricNote } from './MetricNote'
 import { capable } from '../lib/harness'
 
 interface Props {
@@ -30,11 +31,6 @@ interface Props {
   harness?: HarnessId
 }
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
-  return String(n)
-}
 
 type Tier = 'low' | 'medium' | 'high'
 
@@ -210,8 +206,8 @@ export function CacheHitRatePanel({
           </div>
           <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
             {pt
-              ? `${fmtTokens(cacheTotals.cacheReadInputTokens)} de ${fmtTokens(totalRelevant)} tokens do cache`
-              : `${fmtTokens(cacheTotals.cacheReadInputTokens)} of ${fmtTokens(totalRelevant)} tokens from cache`}
+              ? `${fmt(cacheTotals.cacheReadInputTokens)} de ${fmt(totalRelevant)} tokens do cache`
+              : `${fmt(cacheTotals.cacheReadInputTokens)} of ${fmt(totalRelevant)} tokens from cache`}
           </div>
         </div>
 
@@ -298,6 +294,14 @@ export function CacheHitRatePanel({
           })}
         </div>
       )}
+
+      {/* The denominator is the thing people get wrong here, and it is the reason the rate can look
+          high on a session whose bill is mostly output. */}
+      <MetricNote>
+        {pt
+          ? 'A taxa é leitura de cache dividida por tudo que o modelo LEU — entrada nova + leitura + escrita de cache. A saída fica de fora porque saída é produzida, não lida; incluí-la diluiria a taxa numa sessão que escreveu muito. Este painel é sempre em preço de API: cache não reduz uma assinatura, ele estica o limite de uso.'
+          : 'The rate is cache reads over everything the model READ — fresh input + cache read + cache write. Output is excluded because output is produced, not read; including it would dilute the rate on a session that wrote a lot. This panel is always in API prices: cache does not reduce a subscription, it extends a rate limit.'}
+      </MetricNote>
 
       {/* Tips — show only first 2 */}
       <div style={{
