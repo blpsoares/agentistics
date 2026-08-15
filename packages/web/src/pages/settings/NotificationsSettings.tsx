@@ -11,6 +11,7 @@ import {
   DEFAULT_NOTIFICATION_SETTINGS,
   type NotificationSettings,
   type SoundPreset,
+  type SessionActivity,
 } from '../../lib/sessionNotifications'
 import { SectionHeader, Divider, PrefRow, Toggle } from './primitives'
 import { Bell, Volume2, VolumeX, ShieldAlert, Sparkles, CheckCircle2, AlertCircle, Clock, Activity, XCircle } from 'lucide-react'
@@ -37,8 +38,9 @@ export default function NotificationsSettings() {
     update({ events: nextEvents })
   }
 
-  function updateEventSound(eventKey: keyof NotificationSettings['eventSounds'], value: SoundPreset) {
-    const nextSounds = { ...(settings.eventSounds || DEFAULT_NOTIFICATION_SETTINGS.eventSounds), [eventKey]: value }
+  function updateEventSound(eventKey: SessionActivity, value: SoundPreset) {
+    const base = settings.eventSounds || DEFAULT_NOTIFICATION_SETTINGS.eventSounds!
+    const nextSounds: NonNullable<NotificationSettings['eventSounds']> = { ...base, [eventKey]: value }
     update({ eventSounds: nextSounds })
   }
 
@@ -231,7 +233,7 @@ export default function NotificationsSettings() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
         {EVENT_CONFIGS.map(evt => {
           const events = settings.events || DEFAULT_NOTIFICATION_SETTINGS.events
-          const eventSounds = settings.eventSounds || DEFAULT_NOTIFICATION_SETTINGS.eventSounds
+          const eventSounds = settings.eventSounds || DEFAULT_NOTIFICATION_SETTINGS.eventSounds!
           const enabled = events[evt.key] ?? true
           const currentSound = eventSounds[evt.key] ?? 'chime'
 
