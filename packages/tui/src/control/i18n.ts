@@ -629,7 +629,7 @@ const EN: ControlStrings = {
   // `N of M sessions` read as "N of your M open sessions", which is not what either number is: the
   // second is every session this machine KNOWS, closed conversations and lost rows included, and
   // the first is only what the current view draws. Two counts of different kinds joined by "of" is
-  // an invitation to read them as one kind — and the header's memory budget (`▤ 4/18`) sits on the
+  // an invitation to read them as one kind — and the header's memory budget (`ram 4/18`) sits on the
   // same screen, so a machine showing `4/18` above `5 of 29` looked like it was contradicting
   // itself. Naming what each number counts costs three characters and removes the reading.
   sessionsCount: (shown: number, total: number) => (shown === total
@@ -1047,7 +1047,7 @@ const PT: ControlStrings = {
   sessionsLoading: 'lendo…',
   sessionsUnsupported: 'gerenciamento de sessões não está disponível nesta máquina.',
   // Ver a nota na versão em inglês: dois números de espécies diferentes ligados por "de" são lidos
-  // como um só, e o medidor de memória do cabeçalho (`▤ 4/18`) está na mesma tela.
+  // como um só, e o medidor de memória do cabeçalho (`ram 4/18`) está na mesma tela.
   sessionsCount: (shown: number, total: number) => (shown === total
     ? (total === 1 ? '1 sessão' : `${total} sessões`)
     : `${shown} na tela · ${total} conhecidas`),

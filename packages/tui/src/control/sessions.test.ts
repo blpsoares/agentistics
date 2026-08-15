@@ -2355,7 +2355,7 @@ describe('the header count', () => {
     //
     // `N of M sessions` then read as "N of your M OPEN sessions", which neither number is: M counts
     // every session this machine has a record of, closed ones included. With the header's memory
-    // budget (`▤ 4/18`) on the same screen, a machine looked like it was contradicting itself about
+    // budget (`ram 4/18`) on the same screen, a machine looked like it was contradicting itself about
     // how many sessions were open. Both numbers are named now.
     expect(en.sessionsCount(10, 44)).toBe('10 on screen · 44 known')
     expect(pt.sessionsCount(10, 44)).toBe('10 na tela · 44 conhecidas')
