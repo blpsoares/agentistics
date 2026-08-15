@@ -18,7 +18,18 @@ export interface NotificationSettings {
     'working': boolean
     'exited': boolean
   }
-  eventSounds?: {
+  /**
+   * REQUIRED, because it always exists.
+   *
+   * It was declared optional while `getNotificationSettings` fills it from the defaults on every
+   * read — so the `?` described a state the code cannot produce, and made `keyof` on it resolve to
+   * `never`. That is what broke the typecheck on `dev`: three errors in the settings screen, all of
+   * them the type disagreeing with its own reader rather than a real absence.
+   *
+   * A stored blob written before this field existed is still handled — the reader spreads the
+   * defaults under whatever it parsed, which is where the guarantee comes from.
+   */
+  eventSounds: {
     'waiting-approval': SoundPreset
     'waiting': SoundPreset
     'working': SoundPreset
