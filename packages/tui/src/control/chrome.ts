@@ -934,6 +934,12 @@ export function detailContent(
   const alert = service.conflict ?? ''
   if (alert) lines.push({ kind: 'text', label: '', value: alert, tone: 'bad' })
 
+  // A second copy under the SAME runtime, holding no port. Its own line rather than folded into the
+  // conflict sentence: the two are different faults with different answers — a conflict asks which
+  // runtime to stop, this one names a pid that is doing work for nobody. Both can be true at once,
+  // and then both are said.
+  if (service.idle) lines.push({ kind: 'text', label: '', value: service.idle, tone: 'bad' })
+
   const summary = summaryOf(service, s, now)
   if (summary) lines.push({ kind: 'text', label: '', value: summary, tone: 'muted' })
 
