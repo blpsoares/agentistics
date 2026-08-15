@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { BillingSettings, ComparisonSide, Filters } from '@agentistics/core'
 import type { AppData } from '@agentistics/core'
+import { totalTokens } from '@agentistics/core'
 import { computeDerivedStats } from '../../hooks/useData'
 import { computePlanBasisView } from '../../hooks/usePlanBasis'
 import type { CompareSide } from '../../lib/compareMetrics'
@@ -58,7 +59,10 @@ function deriveSide(
     costUSD: derived.totalCostUSD,
     planCostUSD: usable ? usable.planCostUSD : null,
     planMultiple: usable?.multiple ?? null,
-    tokens: derived.inputTokens + derived.outputTokens,
+    // Every billed counter. Two of the four made each side of the comparison report ~0,3 % of its
+    // real volume — and unequally, since how much a harness caches varies, so the comparison was
+    // not even wrong by a constant factor.
+    tokens: totalTokens(derived.tokenTotals),
     sessions: derived.totalSessions,
     messages: derived.totalMessages,
     cacheHitRate: derived.cacheHitRate,

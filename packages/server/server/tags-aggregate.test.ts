@@ -1,6 +1,7 @@
 import { test, expect } from 'bun:test'
 import { aggregateSessions } from './tags-aggregate'
 import type { SessionMeta } from '@agentistics/core'
+import { EMPTY_TOKENS, totalTokens } from '@agentistics/core'
 
 function s(over: Partial<SessionMeta>): SessionMeta {
   return {
@@ -12,9 +13,21 @@ function s(over: Partial<SessionMeta>): SessionMeta {
 
 test('empty input yields zeroes and null tops', () => {
   expect(aggregateSessions([])).toEqual({
-    sessions: 0, costUSD: 0, inputTokens: 0, outputTokens: 0,
+    sessions: 0, costUSD: 0, inputTokens: 0, outputTokens: 0, tokens: EMPTY_TOKENS,
     topProject: null, topModel: null, topHarness: null,
   })
+})
+
+test('the tokens total carries the cache counters, not just the conversation', () => {
+  // The regression the whole `tokens` field exists for: a tag's "Tokens" card summed two of the
+  // four and reported a fraction of a percent of the real volume on any cached workload.
+  const out = aggregateSessions([
+    s({ input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 900_000, cache_creation_input_tokens: 5_000 }),
+  ])
+  expect(out.tokens).toEqual({ input: 100, output: 10, cacheRead: 900_000, cacheWrite: 5_000 })
+  expect(totalTokens(out.tokens)).toBe(905_110)
+  // The conversational pair is still reported, and is still not the total.
+  expect(out.inputTokens + out.outputTokens).toBe(110)
 })
 
 test('sums tokens and counts sessions', () => {

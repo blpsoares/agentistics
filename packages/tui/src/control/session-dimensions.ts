@@ -56,6 +56,15 @@ import type { ControlSession, SessionState, SessionViewPrefs } from './types'
 // ---------------------------------------------------------------------------
 
 /**
+ * Declared FIRST because the lists below are derived from them, and a `const` referenced before its
+ * declaration is a runtime error the type checker does not see — the derived list threw at import
+ * time while `tsc` stayed clean.
+ */
+const ACTIVE_STATES_RAW: readonly SessionState[] =
+  ['working', 'waiting', 'waiting-approval', 'unknown'] as const
+const OFF_STATE_RAW: SessionState = 'closed'
+
+/**
  * Every state a row can wear, in the order the menu lists them: most urgent first, history last.
  *
  * Exhaustive on purpose — `Record`-shaped elsewhere, a plain array here — so a state added to
@@ -66,6 +75,22 @@ export const SESSION_STATES: readonly SessionState[] =
   ['waiting-approval', 'waiting', 'working', 'exited', 'lost', 'closed', 'unknown'] as const
 
 /**
+ * The states as the MENU offers them — one row per CHOICE, not one per internal state.
+ *
+ * `SESSION_STATES` stays exhaustive because it is what a stored selection is validated against and
+ * what `statusKey` maps into. This is the shorter list a person picks from, and the difference
+ * between the two is the whole of the "3 desligados, wtf" report: collapsing the word left three
+ * rows all reading `desligada`, which is worse than three different words — one choice offered
+ * three times, with nothing on screen saying why.
+ *
+ * Derived by filtering the exhaustive list rather than written beside it, so a state added to
+ * `SessionState` appears here automatically if it is active, and folds into the off bucket if it is
+ * not. A second hand-written array is the pattern this module exists to remove.
+ */
+export const SESSION_STATE_CHOICES: readonly SessionState[] =
+  SESSION_STATES.filter(v => ACTIVE_STATES_RAW.includes(v) || v === OFF_STATE_RAW)
+
+/**
  * The states that mean something is ALIVE on the other end — what the `active` shortcut keeps.
  *
  * `unknown` is in the list, and that is not a hedge. It is the state of an EXTERNAL session, and an
@@ -73,8 +98,25 @@ export const SESSION_STATES: readonly SessionState[] =
  * cannot be read is its ACTIVITY, never whether it is running. Leaving it out hid exactly the
  * sessions someone opened outside agentop and is in the middle of.
  */
-export const ACTIVE_STATES: readonly SessionState[] =
-  ['working', 'waiting', 'waiting-approval', 'unknown'] as const
+export const ACTIVE_STATES: readonly SessionState[] = ACTIVE_STATES_RAW
+
+/**
+ * The one bucket every not-running state falls into.
+ *
+ * `exited`, `lost` and `closed` are three internal facts — a session that finished, one the backend
+ * can no longer find, and a conversation that was never ours. They are real and the detail pane
+ * still tells them apart. But as a CHOICE they are one: "is it running?" has two answers, and a
+ * menu that offers the third one twice more is a menu where two rows do nothing you can see.
+ *
+ * A `SessionState` and not a new string, so it needs no vocabulary of its own — the word tables
+ * already map all three to the same label.
+ */
+export const OFF_STATE: SessionState = OFF_STATE_RAW
+
+/** The status BUCKET a row belongs to — PURE. See `OFF_STATE`. */
+export function statusKey(state: SessionState): SessionState {
+  return ACTIVE_STATES.includes(state) ? state : OFF_STATE
+}
 
 /** Is this session RUNNING right now — PURE. */
 export function sessionRunning(s: ControlSession): boolean {
@@ -156,7 +198,11 @@ export interface SessionDimension {
  * surface has not been told. Same reason as `HARNESS_SORT`, `SPAWN_SPECS` and `ATTENTION_RULES`.
  */
 export const SESSION_DIMENSIONS: Record<SessionDimensionId, SessionDimension> = {
-  status: { id: 'status', keyOf: s => s.state },
+  // `OFF_STATE` and not `s.state`, and this is the whole of the fix for "3 desligados, wtf".
+  // Collapsing the WORDS left three menu rows all reading `desligada` — which is worse than three
+  // different words, because now the list offers one choice three times and nothing on screen says
+  // why. The bucket has to collapse, not just its label.
+  status: { id: 'status', keyOf: s => statusKey(s.state) },
   // `''` is what the registry records for a session whose harness it has forgotten, and that is an
   // absence rather than a harness called nothing.
   harness: { id: 'harness', keyOf: s => s.harness || undefined },
@@ -490,9 +536,13 @@ export function migrateSessionFilters(
   // cannot be imported back without a value cycle.
   if (p.onlyActive ?? true) return { filters: { status: [...ACTIVE_STATES] }, showNamed, marked }
 
+  // The two legacy switches migrate through the SAME bucket the rest of the module uses. They were
+  // independent — `showClosed` for conversations, `showExited` for finished and lost sessions — and
+  // the bucket is now one, so EITHER of them on means history is shown. Mapping only one of the two
+  // would leave a stored `showExited: true` filtering for states that no longer key to themselves,
+  // and the rows it was meant to reveal would vanish instead.
   const status = [...ACTIVE_STATES]
-  if (p.showClosed) status.push('closed')
-  if (p.showExited) status.push('exited', 'lost')
+  if (p.showClosed || p.showExited) status.push(OFF_STATE)
   return { filters: { status }, showNamed, marked }
 }
 

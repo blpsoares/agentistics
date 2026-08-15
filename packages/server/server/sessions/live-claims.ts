@@ -17,6 +17,7 @@ import { conversationsInUse, type ClaimingSession, type ConversationHolder } fro
 import { emptyHarnessSessionIndex, loadHarnessSessions } from './harness-sessions'
 import { readRegistry } from './registry'
 import { externalId } from './session-view'
+import { parseHarnessAgents, type HarnessAgent } from './harness-agents'
 import type { ManagedSession, SessionBackend } from './types'
 
 /**
@@ -57,6 +58,7 @@ export async function liveConversationHolders(
     if (!conversationId) continue
     claims.push({
       id: m.id,
+      kind: 'managed',
       alive: alive.has(m.id),
       conversationId,
       ...(m.label ? { label: m.label } : {}),
@@ -70,7 +72,49 @@ export async function liveConversationHolders(
       ? harnessSessions.byPid.get(p.pid)?.sessionId
       : undefined
     if (!conversationId) continue
-    claims.push({ id: externalId(p), alive: true, conversationId, label: p.cwd })
+    claims.push({
+      id: externalId(p),
+      kind: 'process',
+      ...(p.pid !== undefined ? { pid: p.pid } : {}),
+      alive: true,
+      conversationId,
+      label: p.cwd,
+    })
+  }
+  // The harness's OWN list of live sessions — the only source that sees a BACKGROUND agent, which
+  // has no tty, no tmux and nothing in the registry.
+  //
+  // A record is a claim only when it names a pid AND that pid exists. Measured on this machine:
+  // `claude agents --json` returned 8 records and only 2 carried one; the other six were
+  // `background`/`blocked` with no process at all — conversations the daemon still knows and
+  // nothing is running. Counting those as held is what made the cockpit refuse to reopen a
+  // conversation nothing was holding, and answer "open it where it already is" about a place that
+  // did not exist. Those six are precisely what reopen is FOR.
+  for (const a of await readHarnessAgents()) {
+    if (a.pid === undefined || !pidAlive(a.pid)) continue
+    claims.push({
+      id: `agent:${a.sessionId}`,
+      kind: 'process',
+      pid: a.pid,
+      alive: true,
+      conversationId: a.sessionId,
+      ...(a.name ? { label: a.name } : {}),
+    })
   }
   return conversationsInUse(claims)
+}
+
+/** `claude agents --json`, or nothing. Best-effort: a machine without the CLI behaves as before. */
+async function readHarnessAgents(): Promise<HarnessAgent[]> {
+  try {
+    const out = Bun.spawnSync(['claude', 'agents', '--json'])
+    return out.success ? parseHarnessAgents(out.stdout.toString()) : []
+  } catch {
+    return []
+  }
+}
+
+/** Signal 0 asks the kernel whether the pid exists without touching the process. */
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch { return false }
 }

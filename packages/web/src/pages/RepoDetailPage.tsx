@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import type { AppContext, } from '../lib/app-context'
 import type { SessionMeta, MemberPresence, HarnessId, WorkflowRun, WorkflowAgent } from '@agentistics/core'
-import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionCostUSD, sessionLabel, workflowTokens, NO_REPO_KEY } from '@agentistics/core'
+import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionCostUSD, sessionLabel, workflowTokens, NO_REPO_KEY, sessionTokenTotal, totalTokens } from '@agentistics/core'
 import { capable, HARNESS_LABELS, HARNESS_COLORS, DYNAMIC_WORKFLOWS_DOC } from '../lib/harness'
 import { canonicalRepoKey } from '../lib/shareRepos'
 import { PLURAL_COPY, interpolate, plural } from '../components/team/copy'
@@ -218,7 +218,7 @@ export default function RepoDetailPage() {
             <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10, marginBottom: 14 }}>
                 <StatTile label={pt ? 'Runs' : 'Runs'} value={String(ciSessions.length)} />
-                <StatTile label={pt ? 'Tokens' : 'Tokens'} value={fmt(ciSessions.reduce((a, s) => a + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0))} />
+                <StatTile label={pt ? 'Tokens' : 'Tokens'} value={fmt(ciSessions.reduce((a, s) => a + sessionTokenTotal(s), 0))} />
                 <StatTile label="Commits" value={String(ciSessions.reduce((a, s) => a + (s.git_commits ?? 0), 0))} />
               </div>
               <RecentSessions sessions={ciSessions} lang={lang} onSelect={setSelectedSession} />
@@ -282,7 +282,8 @@ function MemberComparePanel({ sessions, lang, currency, brlRate }: {
     return <div style={{ fontSize: 13, color: 'var(--text-tertiary)', padding: '8px 2px' }}>{pt ? 'Só há um membro neste repositório.' : 'Only one member on this repository.'}</div>
   }
 
-  const tok = (m: MemberSummary) => m.summary.inputTokens + m.summary.outputTokens
+  // Every billed counter — the row is labelled "Tokens" and members are ranked by it.
+  const tok = (m: MemberSummary) => totalTokens(m.summary.tokens)
   const rows: { label: string; val: (m: MemberSummary) => number; display: (m: MemberSummary) => string }[] = [
     { label: pt ? 'Sessões' : 'Sessions', val: m => m.summary.sessions, display: m => String(m.summary.sessions) },
     { label: pt ? 'Mensagens' : 'Messages', val: m => m.summary.messages, display: m => fmt(m.summary.messages) },

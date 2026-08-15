@@ -67,6 +67,15 @@ export interface TuiStrings {
   helpFilter: string
   helpQuit: string
   helpClose: string
+  /**
+   * What the `tokens` column counts.
+   *
+   * The terminal has always summed all four counters, and the figure it prints is therefore in the
+   * billions on a cached workload — which reads as a fault unless something says why. There is no
+   * room for a sentence beside a right-aligned column, so it lives here, one keypress away.
+   */
+  helpTokens: string
+  helpTokensCache: string
   filterTitle: string
   filterAll: string
   filterHint: string
@@ -119,6 +128,9 @@ const en: TuiStrings = {
   helpFilter: 'f           filter by harness',
   helpQuit: 'q / ctrl+c  quit',
   helpClose: 'esc         close this panel',
+  helpTokens: 'tokens      every billed counter: input + output + cache read + cache write',
+  helpTokensCache: '            cache read is usually most of it: the conversation, re-read every turn',
+
   filterTitle: 'Filter by harness',
   filterAll: 'All harnesses',
   filterHint: '↑↓ choose · enter apply · esc cancel',
@@ -171,6 +183,9 @@ const pt: TuiStrings = {
   helpFilter: 'f           filtrar por assistente',
   helpQuit: 'q / ctrl+c  sair',
   helpClose: 'esc         fechar este painel',
+  helpTokens: 'tokens      todos os contadores cobrados: entrada + saída + leitura + escrita de cache',
+  helpTokensCache: '            leitura de cache costuma ser a maior parte: a conversa, relida a cada turno',
+
   filterTitle: 'Filtrar por assistente',
   filterAll: 'Todos os assistentes',
   filterHint: '↑↓ escolher · enter aplicar · esc cancelar',

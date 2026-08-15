@@ -166,6 +166,13 @@ export interface CliStrings {
    * prevents were only found by reading two screens side by side and noticing identical text.
    */
   sessResumeInUse: (holder: string) => string
+  /**
+   * A takeover that could not end the process holding the conversation.
+   *
+   * Said instead of spawning: leaving the user with the assistant they already had beats handing
+   * them a second one in the same transcript, which is what this whole lock exists to prevent.
+   */
+  sessAdoptFailed: (holder: string) => string
   /** The fallback title for a session the user never named. */
   sessUntitled: (harness: string, project: string) => string
   sessKilled: (id: string) => string
@@ -175,6 +182,10 @@ export interface CliStrings {
   sessRestoreFailed: (skipped: number) => string
   sessNoTask: string
   sessTaskFinished: (task: string) => string
+  /** The task named nothing — no session wears it and it is not in the finished list. */
+  sessTaskUnknown: (task: string) => string
+  /** Removed. Says how many sessions were UNFILED, because they were kept, not deleted. */
+  sessTaskDeleted: (task: string, freed: number) => string
   sessTaskReopened: (task: string) => string
   sessKillUnconfirmed: (id: string) => string
   sessRenamed: string
@@ -460,6 +471,8 @@ const EN: CliStrings = {
     `none of the ${skipped} session(s) that fell could be reopened.`,
   sessResumeInUse: (holder: string) =>
     `that conversation is already open in ${holder} — open it there instead of starting a second assistant in it.`,
+  sessAdoptFailed: (holder: string) =>
+    `the assistant running that conversation (${holder}) would not stop, so it was left alone — nothing was opened.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
   sessKilled: (id: string) => `stopped ${id}.`,
   sessRestoreNone: 'those sessions are no longer in the registry.',
@@ -471,6 +484,10 @@ const EN: CliStrings = {
     `nothing could be restored${skipped ? ` — ${skipped} had no conversation to reopen` : ''}.`,
   sessNoTask: 'that session has no task.',
   sessTaskFinished: (task: string) => `"${task}" marked finished.`,
+  sessTaskUnknown: (task: string) => `no session is filed under "${task}", and it is not a finished task.`,
+  sessTaskDeleted: (task: string, freed: number) => freed === 0
+    ? `"${task}" removed.`
+    : `"${task}" removed — ${freed} session(s) kept, now unfiled.`,
   sessTaskReopened: (task: string) => `"${task}" reopened.`,
   sessKillUnconfirmed: (id: string) =>
     `could not confirm ${id} was stopped — it may still be running, so its record was kept.`,
@@ -706,6 +723,8 @@ const PT: CliStrings = {
     `nenhuma das ${skipped} sessão(ões) que caíram pôde ser reaberta.`,
   sessResumeInUse: (holder: string) =>
     `essa conversa já está aberta em ${holder} — abra ela por lá, em vez de colocar um segundo assistente dentro dela.`,
+  sessAdoptFailed: (holder: string) =>
+    `o assistente que roda essa conversa (${holder}) não encerrou, então foi deixado como estava — nada foi aberto.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
   sessKilled: (id: string) => `${id} encerrada.`,
   sessRestoreNone: 'essas sessões não estão mais no registro.',
@@ -717,6 +736,10 @@ const PT: CliStrings = {
     `nada pôde ser restaurado${skipped ? ` — ${skipped} sem conversa para reabrir` : ''}.`,
   sessNoTask: 'essa sessão não tem tarefa.',
   sessTaskFinished: (task: string) => `"${task}" marcada como finalizada.`,
+  sessTaskUnknown: (task: string) => `nenhuma sessão está sob "${task}", e ela não está na lista de finalizadas.`,
+  sessTaskDeleted: (task: string, freed: number) => freed === 0
+    ? `"${task}" removida.`
+    : `"${task}" removida — ${freed} sessão(ões) mantida(s), agora sem tarefa.`,
   sessTaskReopened: (task: string) => `"${task}" reaberta.`,
   sessKillUnconfirmed: (id: string) =>
     `não deu para confirmar que ${id} foi encerrada — ela pode continuar rodando, então o registro dela foi mantido.`,

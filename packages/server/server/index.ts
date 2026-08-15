@@ -42,6 +42,7 @@ import { routeCapability, capabilityDenied } from './capability-guard'
 async function readLocalLiveSnapshot(sessions: SessionMeta[]): Promise<{
   liveSessionIds: string[]
   liveProcesses: LiveProcess[]
+  liveSessionActivities?: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'>
   liveUnavailable?: LiveUnavailableReason
 }> {
   if (!CAPS.localProcesses) {
@@ -1261,6 +1262,10 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             const team = collectMemberLive(visibleUsers)
             snapshot.liveSessionIds = [...new Set([...snapshot.liveSessionIds, ...team.liveSessionIds])]
             snapshot.liveProcesses = [...snapshot.liveProcesses, ...team.liveProcesses]
+            snapshot.liveSessionActivities = {
+              ...(snapshot.liveSessionActivities ?? {}),
+              ...(team.liveSessionActivities ?? {}),
+            }
           } catch { /* best-effort — the local snapshot still stands */ }
         }
         return new Response(JSON.stringify(snapshot), {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   ACTIVE_STATES,
+  OFF_STATE,
   DIMENSION_ORDER,
   FILTERS_VERSION,
   GONE_PROJECT_KEY,
@@ -255,12 +256,25 @@ describe('migrateSessionFilters', () => {
     expect(ids(kept)).toEqual(['a', 'b', 'f', 'g'])
   })
 
-  it('honours the legacy widening switches when only-active was off', () => {
-    const closed = migrateSessionFilters({ onlyActive: false, showClosed: true, showExited: false })
-    expect(closed.filters.status).toContain('closed')
-    expect(closed.filters.status).not.toContain('exited')
-    const exited = migrateSessionFilters({ onlyActive: false, showClosed: false, showExited: true })
-    expect(exited.filters.status).toEqual([...ACTIVE_STATES, 'exited', 'lost'])
+  it('migrates EITHER legacy widening switch into the one history bucket', () => {
+    // They were independent — `showClosed` for conversations, `showExited` for finished and lost
+    // sessions. The bucket is now one, because to the person reading the list all three states
+    // answer "it is not running" and a menu offering that three times had two rows doing nothing
+    // visible. So either switch on means history is shown.
+    //
+    // Mapping only one of the two would be worse than not migrating: a stored `showExited: true`
+    // would filter for states that no longer key to themselves, and the rows it was meant to reveal
+    // would vanish.
+    for (const legacy of [
+      { onlyActive: false, showClosed: true, showExited: false },
+      { onlyActive: false, showClosed: false, showExited: true },
+      { onlyActive: false, showClosed: true, showExited: true },
+    ]) {
+      expect(migrateSessionFilters(legacy).filters.status).toEqual([...ACTIVE_STATES, OFF_STATE])
+    }
+    // Neither on stays exactly the active set.
+    expect(migrateSessionFilters({ onlyActive: false, showClosed: false, showExited: false })
+      .filters.status).toEqual([...ACTIVE_STATES])
   })
 
   it('is idempotent, and never yields an empty status', () => {
@@ -277,19 +291,20 @@ describe('migrateSessionFilters', () => {
   it('matches the OLD predicate everywhere except the exception that is now a switch', () => {
     // What proves nothing was changed by accident: only the collision was removed. The old chain,
     // verbatim, minus the named-row clause — which is `showNamed`, and is asserted separately.
-    const old = (v: ControlSession, o: { onlyActive: boolean; showClosed: boolean; showExited: boolean }) =>
+    // The old chain, verbatim — except that its two history switches are now ONE, so it is compared
+    // only where they agreed. A mixed setting ("show closed but not exited") is no longer
+    // expressible, and that is the change, not a regression: the two rows it drew both said "not
+    // running" and the user could not tell them apart. The mixed case migrates to the union, which
+    // the test above pins.
+    const old = (v: ControlSession, o: { onlyActive: boolean; history: boolean }) =>
       (o.onlyActive
         ? (ACTIVE_STATES as readonly string[]).includes(v.state)
-        : ((o.showClosed || v.state !== 'closed')
-          && (o.showExited || (v.state !== 'exited' && v.state !== 'lost'))))
+        : (o.history || (v.state !== 'closed' && v.state !== 'exited' && v.state !== 'lost')))
     for (const onlyActive of [false, true]) {
-      for (const showClosed of [false, true]) {
-        for (const showExited of [false, true]) {
-          const state = migrateSessionFilters({ onlyActive, showClosed, showExited })
-          for (const s of FLEET) {
-            expect(sessionKept(s, { filters: state.filters }))
-              .toBe(old(s, { onlyActive, showClosed, showExited }))
-          }
+      for (const history of [false, true]) {
+        const state = migrateSessionFilters({ onlyActive, showClosed: history, showExited: history })
+        for (const s of FLEET) {
+          expect(sessionKept(s, { filters: state.filters })).toBe(old(s, { onlyActive, history }))
         }
       }
     }

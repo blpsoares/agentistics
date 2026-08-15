@@ -27,6 +27,11 @@ export function HelpOverlay({ s }: { s: TuiStrings }) {
       <Text dimColor>{s.helpFilter}</Text>
       <Text dimColor>{s.helpQuit}</Text>
       <Text dimColor>{s.helpClose}</Text>
+      {/* What the numbers MEAN, not just which key does what. The token total is the one figure on
+          these screens that is routinely misread as a fault. */}
+      <Text> </Text>
+      <Text dimColor>{s.helpTokens}</Text>
+      <Text dimColor>{s.helpTokensCache}</Text>
     </Panel>
   )
 }

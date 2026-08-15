@@ -271,8 +271,8 @@ export interface ControlStrings {
   sessionsKeyWhat: {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
-    note: string; task: string; mark: string; onlyActive: string; closed: string
-    exited: string; group: string; layout: string; detail: string; menuFold: string
+    note: string; task: string; mark: string; onlyActive: string
+    group: string; layout: string; detail: string; menuFold: string
     reset: string
     tabs: string; help: string; quit: string
     approve: string; prompt: string; reopenFell: string
@@ -293,6 +293,12 @@ export interface ControlStrings {
   sessionsFellNote: (count: number, ago: string) => string
   /** The confirmation, naming how many and when. */
   sessionsFellConfirm: (count: number, ago: string) => string
+  /**
+   * Removing a task NAME. The count is in the question because the answer turns on it — and the
+   * sentence says the sessions are KEPT, because a delete that sounded like it took them with it is
+   * one nobody would press.
+   */
+  sessionsDeleteTaskAsk: (task: string, count: number) => string
   /** The prompt field, and the sentence above it saying where the text is going. */
   sessionsPromptLabel: (title: string) => string
   sessionsPromptHint: string
@@ -371,6 +377,8 @@ export interface ControlStrings {
     openTask: string
     reopenFell: string
     finishTask: string
+    /** Removing a task NAME — the sessions under it survive, unfiled. */
+    deleteTask: string
     newSession: string
     search: string
     group: string
@@ -381,6 +389,16 @@ export interface ControlStrings {
   taskCurrent: string
   sessionsOpenTaskConfirm: (task: string, n: number) => string
   sessionsResumeConfirm: (title: string) => string
+  /**
+   * The caveat on a row that is RUNNING — and it is now a statement of what will happen, not a
+   * warning to go and do it yourself.
+   *
+   * It used to read "the assistant already running there is NOT stopped — close it first", which
+   * described the only behaviour available at the time and left the user holding a row they could
+   * see and could not use. The process is ended and the same conversation reopened under tmux; the
+   * turn in flight is the only thing lost, and the sentence has to say so, because a confirmation
+   * that hides a kill is worse than one that refuses.
+   */
   sessionsResumeRunning: string
   sessionsSearchLabel: string
   sessionsSearchEmpty: string
@@ -392,6 +410,14 @@ export interface ControlStrings {
   viewTitle: string
   viewGroupBy: string
   viewShow: string
+  /**
+   * The summary row's word for the strict selection, printed after a `−`.
+   *
+   * It read `− everything but active`, which is a double negative over a minus sign: the row was
+   * SHOWING only the active sessions and the cell appeared to say the opposite. Reported as
+   * "completamente contra intuitiva". It names what is being WITHHELD, which is what the `−` in
+   * front of it already promised.
+   */
   viewActiveOn: string
   viewClosedOn: string
   viewClosedOff: string
@@ -626,9 +652,15 @@ const EN: ControlStrings = {
   sessionsEmptyFiltered: 'nothing matches · esc clears the filter',
   sessionsLoading: 'reading…',
   sessionsUnsupported: 'session management is not available on this machine.',
+  // `N of M sessions` read as "N of your M open sessions", which is not what either number is: the
+  // second is every session this machine KNOWS, closed conversations and lost rows included, and
+  // the first is only what the current view draws. Two counts of different kinds joined by "of" is
+  // an invitation to read them as one kind — and the header's memory budget (`ram 4/18`) sits on the
+  // same screen, so a machine showing `4/18` above `5 of 29` looked like it was contradicting
+  // itself. Naming what each number counts costs three characters and removes the reading.
   sessionsCount: (shown: number, total: number) => (shown === total
     ? (total === 1 ? '1 session' : `${total} sessions`)
-    : `${shown} of ${total} sessions`),
+    : `${shown} on screen · ${total} known`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
   sessionsGroupBy: 'GROUP',
   sessionsGroupings: {
@@ -710,9 +742,7 @@ const EN: ControlStrings = {
     note: 'write a note on it',
     task: 'file it under a task',
     mark: 'mark this row, and keep it marked',
-    onlyActive: 'show only what is running',
-    closed: 'show closed conversations',
-    exited: 'show sessions that ended',
+    onlyActive: 'show what is not running too — closed, ended and lost',
     layout: 'list or cards',
     group: 'change the grouping',
     detail: 'hide the detail pane',
@@ -742,6 +772,10 @@ const EN: ControlStrings = {
   sessionsFellConfirm: (count, ago) =>
     `Reopen the ${count} session${count === 1 ? '' : 's'} that fell ${ago}? `
     + 'Each comes back as a new session resuming its own conversation; anything still running is left alone.',
+  sessionsDeleteTaskAsk: (task, count) => count === 0
+    ? `Remove the task "${task}"? No session is filed under it.`
+    : `Remove the task "${task}"? The ${count} session${count === 1 ? '' : 's'} filed under it `
+      + `${count === 1 ? 'is' : 'are'} KEPT — only the label goes.`,
   sessionsPromptLabel: (title: string) => `Send to "${title}"`,
   sessionsPromptHint: 'typed straight into the session — it reads it when it gets there',
   sessionsApproveConfirm: (title: string) => `Send the confirm key to "${title}"?`,
@@ -818,6 +852,7 @@ const EN: ControlStrings = {
     openTask: 'Open whole task',
     reopenFell: 'Reopen what fell',
     finishTask: 'Finish task',
+    deleteTask: 'Delete task',
     newSession: 'New session',
     search: 'Search',
     group: 'Group',
@@ -830,7 +865,7 @@ const EN: ControlStrings = {
     `Reopen all ${n} session(s) of "${task}" in the background?`,
   sessionsResumeConfirm: (title: string) => `Reopen "${title}" as a session agentop manages?`,
   sessionsResumeRunning:
-    'the assistant already running there is NOT stopped — close it first, or you will have two on one conversation.',
+    'the assistant running it will be STOPPED and the conversation reopened here — the turn in flight is lost, the conversation is not.',
   sessionsSearchLabel: 'Search sessions and closed conversations',
   sessionsSearchEmpty: 'nothing matches.',
   sessionsClosedWord: 'off',
@@ -838,7 +873,7 @@ const EN: ControlStrings = {
   viewTitle: 'What this list shows',
   viewGroupBy: 'Group by',
   viewShow: 'Show',
-  viewActiveOn: 'everything but active',
+  viewActiveOn: 'not running',
   viewClosedOn: 'closed conversations',
   viewClosedOff: 'closed conversations',
   viewUnfiledOn: 'sessions with no task',
@@ -1040,9 +1075,11 @@ const PT: ControlStrings = {
   sessionsEmptyFiltered: 'nada corresponde · esc limpa o filtro',
   sessionsLoading: 'lendo…',
   sessionsUnsupported: 'gerenciamento de sessões não está disponível nesta máquina.',
+  // Ver a nota na versão em inglês: dois números de espécies diferentes ligados por "de" são lidos
+  // como um só, e o medidor de memória do cabeçalho (`ram 4/18`) está na mesma tela.
   sessionsCount: (shown: number, total: number) => (shown === total
     ? (total === 1 ? '1 sessão' : `${total} sessões`)
-    : `${shown} de ${total} sessões`),
+    : `${shown} na tela · ${total} conhecidas`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
   sessionsGroupBy: 'AGRUPAR',
   sessionsGroupings: {
@@ -1119,9 +1156,7 @@ const PT: ControlStrings = {
     note: 'escreve uma nota nela',
     task: 'arquiva sob uma tarefa',
     mark: 'marca esta linha, e mantém marcada',
-    onlyActive: 'mostra só o que está rodando',
-    closed: 'mostra conversas fechadas',
-    exited: 'mostra sessões encerradas',
+    onlyActive: 'mostra também o que não está rodando — fechadas, encerradas e perdidas',
     layout: 'lista ou cards',
     group: 'muda o agrupamento',
     detail: 'oculta o painel de detalhe',
@@ -1150,6 +1185,10 @@ const PT: ControlStrings = {
       ? `Reabrir a sessão que caiu ${ago}? `
       : `Reabrir as ${count} sessões que caíram ${ago}? `)
     + 'Cada uma volta como uma sessão nova retomando a própria conversa; o que ainda estiver rodando fica como está.',
+  sessionsDeleteTaskAsk: (task, count) => count === 0
+    ? `Remover a tarefa "${task}"? Nenhuma sessão está sob ela.`
+    : `Remover a tarefa "${task}"? ${count === 1 ? 'A sessão' : `As ${count} sessões`} sob ela `
+      + `${count === 1 ? 'é MANTIDA' : 'são MANTIDAS'} — some só o rótulo.`,
   sessionsPromptLabel: (title: string) => `Enviar para "${title}"`,
   sessionsPromptHint: 'digitado direto na sessão — ela lê quando chegar lá',
   sessionsApproveConfirm: (title: string) => `Enviar a tecla de confirmação para "${title}"?`,
@@ -1228,6 +1267,7 @@ const PT: ControlStrings = {
     openTask: 'Abrir tarefa toda',
     reopenFell: 'Reabrir o que caiu',
     finishTask: 'Finalizar tarefa',
+    deleteTask: 'Apagar tarefa',
     newSession: 'Nova sessão',
     search: 'Buscar',
     group: 'Agrupar',
@@ -1240,7 +1280,7 @@ const PT: ControlStrings = {
     `Reabrir todas as ${n} sessão(ões) de "${task}" em background?`,
   sessionsResumeConfirm: (title: string) => `Reabrir "${title}" como sessão gerenciada pelo agentop?`,
   sessionsResumeRunning:
-    'o assistente que já roda ali NÃO é encerrado — feche ele antes, ou você fica com dois na mesma conversa.',
+    'o assistente que roda ela vai ser ENCERRADO e a conversa reaberta aqui — perde-se o turno em andamento, não a conversa.',
   sessionsSearchLabel: 'Buscar sessões e conversas fechadas',
   sessionsSearchEmpty: 'nada corresponde.',
   sessionsClosedWord: 'desligada',
@@ -1248,7 +1288,7 @@ const PT: ControlStrings = {
   viewTitle: 'O que esta lista mostra',
   viewGroupBy: 'Agrupar por',
   viewShow: 'Mostrar',
-  viewActiveOn: 'tudo menos as ativas',
+  viewActiveOn: 'as que não estão rodando',
   viewClosedOn: 'conversas fechadas',
   viewClosedOff: 'conversas fechadas',
   viewUnfiledOn: 'sessões sem tarefa',

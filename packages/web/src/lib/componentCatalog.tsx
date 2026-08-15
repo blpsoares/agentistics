@@ -3,7 +3,7 @@ import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, FileCode, TrendingUp, BarChart2,
   Download, Upload, Trophy, Bot, Target, FolderOpen, Layers,
-  Activity, CalendarDays, CalendarClock, Gauge,
+  Activity, CalendarDays, CalendarClock, Gauge, Crown, Sigma,
 } from 'lucide-react'
 import type { AppContext } from './app-context'
 import { sessionTime } from './sessionTime'
@@ -23,6 +23,8 @@ import { TagCloud } from '../components/TagCloud'
 import { ToolMetricsPanel } from '../components/ToolMetricsPanel'
 import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
 import { RecentSessions } from '../components/RecentSessions'
+import { TopBoards } from '../components/TopBoards'
+import { TokenTotalsPanel } from '../components/TokenTotalsPanel'
 import { Section } from '../components/Section'
 
 /**
@@ -426,6 +428,30 @@ export const CATALOG: CatalogItem[] = [
     render: ({ derived, setSelectedSession, lang }) => (
       <Section title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
         <RecentSessions sessions={derived.filteredSessions} lang={lang} onSelect={setSelectedSession} />
+      </Section>
+    ),
+  },
+  {
+    id: 'sessions.top-boards', labelPt: 'Quem lidera', labelEn: 'Who leads', category: 'sessions',
+    icon: Crown, defaultW: 12, defaultH: 10, minW: 6, minH: 6,
+    render: ({ derived, currency, brlRate, setSelectedSession, lang }) => (
+      <Section title={<><Crown size={14} /> {lang === 'pt' ? 'Quem lidera' : 'Who leads'}</>}>
+        <TopBoards
+          sessions={derived.filteredSessions}
+          lang={lang}
+          currency={currency}
+          brlRate={brlRate}
+          onSelectSession={setSelectedSession}
+        />
+      </Section>
+    ),
+  },
+  {
+    id: 'costs.token-totals', labelPt: 'Totais de tokens', labelEn: 'Token totals', category: 'costs',
+    icon: Sigma, defaultW: 12, defaultH: 8, minW: 6, minH: 5,
+    render: ({ derived, filters, lang }) => (
+      <Section title={<><Sigma size={14} /> {lang === 'pt' ? 'Totais de tokens' : 'Token totals'}</>}>
+        <TokenTotalsPanel tokens={derived.tokenTotals} filters={filters} lang={lang} />
       </Section>
     ),
   },

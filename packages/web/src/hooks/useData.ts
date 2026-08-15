@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta } from '@agentistics/core'
-import { calcStreak, calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, resolveMachineCacheScope, distinctHarnesses, mergeStatsCaches, repoShortName, HARNESS_ORDER } from '@agentistics/core'
+import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMeta, TokenBreakdown } from '@agentistics/core'
+import { calcStreak, calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, resolveMachineCacheScope, distinctHarnesses, mergeStatsCaches, repoShortName, HARNESS_ORDER, EMPTY_TOKENS, addTokens, sessionTokens, sessionTokenTotal, sumTokens, totalTokens, usageTokenTotal, usageTokens } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 import { makeTagFilter, type TagDef } from '../lib/tagMatch'
 
@@ -46,6 +46,9 @@ export function apportionModelUsage(
       costUSD: 0,
     }
   }
+  // @tokens-intentional — this SPLITS a known total, it does not sum one. Claiming no cache is the
+  // conservative half of the guess: cache reads are the cheapest rate in the table, so inventing a
+  // cache share here would move tokens onto it and understate the day's cost. See the header.
   return {
     inputTokens: Math.round(totalTokens * 0.7),
     outputTokens: Math.round(totalTokens * 0.3),
@@ -113,8 +116,11 @@ export interface RepoStat {
   messages: number
   tools: number
   costUSD: number
+  /** The two conversational counters. NOT the total — print `tokens` for that. */
   inputTokens: number
   outputTokens: number
+  /** All four billed counters — what the card's "tokens" metric and the tokens sort read. */
+  tokens: TokenBreakdown
   gitCommits: number
   linesAdded: number
   linesRemoved: number
@@ -142,7 +148,9 @@ export function sortRepos(repos: RepoStat[], key: RepoSortKey, dir: 'asc' | 'des
     switch (key) {
       case 'cost': return r.costUSD
       case 'sessions': return r.sessions
-      case 'tokens': return r.inputTokens + r.outputTokens
+      // Every billed counter, so the "tokens" column and the order it sorts in agree. Ranking by
+      // the non-cached 4 % put a repository with one huge cached session below a chattier one.
+      case 'tokens': return totalTokens(r.tokens)
       case 'commits': return r.gitCommits
       case 'lastActive': return r.lastActive ? new Date(r.lastActive).getTime() : 0
       case 'name': return r.name.toLowerCase()
@@ -385,6 +393,24 @@ export function blendedCostPerToken(modelUsage: Record<string, { inputTokens: nu
   }
 }
 
+export type BlendedRates = ReturnType<typeof blendedCostPerToken>
+
+/**
+ * Cost of one session at blended rates — the fallback for a session that names no model.
+ *
+ * Each counter at ITS OWN rate. Two call sites (the session drawer and the PDF's per-session
+ * column) wrote this by hand over `input` and `output` only, so a session with no model was priced
+ * on the 4 % of its volume that is not cache. Pricing the cache as fresh input would be the
+ * opposite error — about tenfold too high — which is why the four rates exist separately.
+ */
+export function blendedSessionCost(s: Parameters<typeof sessionTokens>[0], rates: BlendedRates): number {
+  const b = sessionTokens(s)
+  return (b.input / 1_000_000) * rates.input
+    + (b.output / 1_000_000) * rates.output
+    + (b.cacheRead / 1_000_000) * rates.cacheRead
+    + (b.cacheWrite / 1_000_000) * rates.cacheWrite
+}
+
 export function filterByHarness<T extends { harness?: HarnessId }>(sessions: T[], harness?: HarnessId): T[] {
   if (!harness) return sessions
   return sessions.filter(s => (s.harness ?? 'claude') === harness)
@@ -393,8 +419,19 @@ export function filterByHarness<T extends { harness?: HarnessId }>(sessions: T[]
 export interface HarnessSummary {
   sessions: number
   messages: number
+  /**
+   * The two conversational counters, kept because several surfaces legitimately want THEM — an
+   * "Input" card and an "Output" card, each saying what it is.
+   *
+   * They are NOT the total, and anything printing the word "tokens" must read `tokens` below. On a
+   * real machine these two are 0,34 % of the volume, so a headline built from them under-reports by
+   * about 300× — which is exactly what the Compare page, the tag cards, the repository list and the
+   * header counter were all doing.
+   */
   inputTokens: number
   outputTokens: number
+  /** All four billed counters. THE token figure — see `tokens.ts` in @agentistics/core. */
+  tokens: TokenBreakdown
   costUSD: number
   hourCounts: number[]       // length 24, index = hour-of-day (0-23)
   peakHour: number | null    // hour with max count, null if all zero
@@ -404,8 +441,15 @@ export interface HarnessSummary {
   peakTokenDay: { date: string; tokens: number } | null  // null if no token data
   peakSessionCost: number | null  // null if no cost data / claude
   /** Per-model token + cost breakdown, sorted by costUSD desc. Empty when no model data. */
-  models: { model: string; inputTokens: number; outputTokens: number; costUSD: number }[]
-  /** Blended cost per 1M tokens (input+output). null when tokens are 0 or harness lacks cost capability. */
+  models: { model: string; inputTokens: number; outputTokens: number; tokens: TokenBreakdown; costUSD: number }[]
+  /**
+   * Blended cost per 1M tokens, over ALL FOUR counters.
+   *
+   * It was over `input + output`, which is a rate per million of the 4 % of the volume that is not
+   * cache — so a heavily cached harness (every long agentic session) reported a cost per million
+   * tens of times higher than it charges, and the Compare page ranked harnesses by how much they
+   * cache rather than by what they cost. `null` when tokens are 0 or the harness has no cost.
+   */
   costPerMTokens: number | null
 }
 
@@ -447,6 +491,7 @@ export function summarizeSessions(list: SessionMeta[], hasCost: boolean, hasToke
   let messages = 0
   let inputTokens = 0
   let outputTokens = 0
+  let tokens: TokenBreakdown = EMPTY_TOKENS
   let costUSD = 0
 
   const hourCounts = Array.from({ length: 24 }, () => 0)
@@ -461,6 +506,7 @@ export function summarizeSessions(list: SessionMeta[], hasCost: boolean, hasToke
     messages += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
     inputTokens += s.input_tokens ?? 0
     outputTokens += s.output_tokens ?? 0
+    tokens = addTokens(tokens, sessionTokens(s))
 
     // hour-of-day
     for (const h of s.message_hours ?? []) {
@@ -475,8 +521,7 @@ export function summarizeSessions(list: SessionMeta[], hasCost: boolean, hasToke
       dailyMap[day] = (dailyMap[day] ?? 0) + 1
 
       if (hasTokens) {
-        const sessionTokens = (s.input_tokens ?? 0) + (s.output_tokens ?? 0)
-        tokensByDay[day] = (tokensByDay[day] ?? 0) + sessionTokens
+        tokensByDay[day] = (tokensByDay[day] ?? 0) + sessionTokenTotal(s)
       }
     }
 
@@ -530,12 +575,13 @@ export function summarizeSessions(list: SessionMeta[], hasCost: boolean, hasToke
       model,
       inputTokens: u.inputTokens,
       outputTokens: u.outputTokens,
+      tokens: usageTokens(u),
       costUSD: hasCost ? calcCost(u, model) : 0,
     }))
     .sort((a, b) => b.costUSD - a.costUSD)
 
-  // blended cost per 1M tokens (input + output)
-  const tokensM = (inputTokens + outputTokens) / 1e6
+  // Blended cost per 1M tokens over EVERY billed counter — see `costPerMTokens` on the interface.
+  const tokensM = totalTokens(tokens) / 1e6
   const costPerMTokens = hasCost && tokensM > 0 ? costUSD / tokensM : null
 
   return {
@@ -543,6 +589,7 @@ export function summarizeSessions(list: SessionMeta[], hasCost: boolean, hasToke
     messages,
     inputTokens,
     outputTokens,
+    tokens,
     costUSD,
     hourCounts,
     peakHour: peakIndex(hourCounts),
@@ -623,6 +670,9 @@ export function claudeSummaryFromStatsCache(
   const modelUsage = sc.modelUsage ?? {}
   const inputTokens = Object.values(modelUsage).reduce((s, u) => s + (u.inputTokens ?? 0), 0)
   const outputTokens = Object.values(modelUsage).reduce((s, u) => s + (u.outputTokens ?? 0), 0)
+  // All four counters, so Claude's side of the Compare page is the same measurement as everyone
+  // else's. The cache lives in `modelUsage` and was simply never read here.
+  const tokens = sumTokens(Object.values(modelUsage).map(usageTokens))
   const costUSD = Object.entries(modelUsage).reduce((s, [modelId, u]) => s + calcCost(u, modelId), 0)
 
   // Claude: per-model breakdown from sc.modelUsage
@@ -633,12 +683,13 @@ export function claudeSummaryFromStatsCache(
       model,
       inputTokens: u.inputTokens ?? 0,
       outputTokens: u.outputTokens ?? 0,
+      tokens: usageTokens(u),
       costUSD: calcCost(u, model),
     }))
     .sort((a, b) => b.costUSD - a.costUSD)
 
-  // Claude: blended cost per 1M tokens (input + output)
-  const claudeTokensM = (inputTokens + outputTokens) / 1e6
+  // Claude: blended cost per 1M tokens over EVERY billed counter — see the interface.
+  const claudeTokensM = totalTokens(tokens) / 1e6
   const claudeCostPerMTokens = claudeTokensM > 0 ? costUSD / claudeTokensM : null
 
   // Claude: hour-of-day from sc.hourCounts
@@ -672,6 +723,7 @@ export function claudeSummaryFromStatsCache(
     messages: messageBase + claudeGapMessages,
     inputTokens,
     outputTokens,
+    tokens,
     costUSD,
     hourCounts: claudeHourCounts,
     peakHour: peakIndex(claudeHourCounts),
@@ -1390,8 +1442,6 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
     }
     const dayOf = (s: { start_time?: string }): string | null =>
       isDateStr(s.start_time) ? s.start_time.slice(0, 10) : null
-    const sessionTokens = (u: { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number }) =>
-      u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens
 
     let totalCostUSD = 0
     let totalTokensAll = 0
@@ -1419,7 +1469,7 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
       }
     } else {
       totalCostUSD = Object.entries(filteredModelUsage).reduce((s, [id, u]) => s + calcCost(u, id), 0)
-      totalTokensAll = Object.values(filteredModelUsage).reduce((s, u) => s + sessionTokens(u), 0)
+      totalTokensAll = Object.values(filteredModelUsage).reduce((s, u) => s + usageTokenTotal(u), 0)
 
       // Claude's half. `dailyModelTokens` is the ONLY day series Claude has, and it carries a
       // per-model total with no input/output/cache split — so the split is apportioned from the
@@ -1483,7 +1533,7 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
         for (const [m, u] of sessionModelUsage(sess)) {
           if (modelSet && !modelSet.has(m)) continue
           sessCost += calcCost(u, m)
-          tokens += sessionTokens(u)
+          tokens += usageTokenTotal(u)
         }
         addDayCost(sess.harness ?? 'claude', day, sessCost, tokens, 1)
       }
@@ -1610,7 +1660,7 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
         r = repoStatsMap[key] = {
           id: key, remote: linked ? s.git_remote! : '', linked, name: '', path: '',
           sessions: 0, messages: 0, tools: 0, costUSD: 0,
-          inputTokens: 0, outputTokens: 0,
+          inputTokens: 0, outputTokens: 0, tokens: EMPTY_TOKENS,
           gitCommits: 0, linesAdded: 0, linesRemoved: 0, filesModified: 0,
           ciSessions: 0, members: [], harnesses: [],
           firstActive: '', lastActive: '', activityByDay: {},
@@ -1624,6 +1674,7 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
       r.costUSD += repoSessionCostUSD(s)
       r.inputTokens += s.input_tokens ?? 0
       r.outputTokens += s.output_tokens ?? 0
+      r.tokens = addTokens(r.tokens, sessionTokens(s))
       r.gitCommits += s.git_commits ?? 0
       r.linesAdded += s.lines_added ?? 0
       r.linesRemoved += s.lines_removed ?? 0
@@ -1692,6 +1743,17 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
     )
     const cacheDenominator = cacheTotals.inputTokens + cacheTotals.cacheReadInputTokens + cacheTotals.cacheCreationInputTokens
     const cacheHitRate = cacheDenominator > 0 ? cacheTotals.cacheReadInputTokens / cacheDenominator : 0
+
+    /**
+     * The four billed counters for the CURRENT filter — the one place any surface should read a
+     * token total from.
+     *
+     * Built from `filteredModelUsage`, which is the same source `totalCostUSD` is priced from, so
+     * the token figure and the money beside it always describe the same set of turns. Everything
+     * that used to write `derived.inputTokens + derived.outputTokens` — the header counter, the
+     * comparison sides, the totals panel — reads this instead.
+     */
+    const tokenTotals: TokenBreakdown = sumTokens(Object.values(filteredModelUsage).map(usageTokens))
 
     const blended = blendedCostPerToken(globalModelUsage)
     // What cacheRead tokens would have cost as plain input
@@ -1788,6 +1850,7 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
       sessionSpanDays,
       cacheHitRate,
       cacheTotals,
+      tokenTotals,
       cacheGrossSavedUSD,
       cacheWriteOverheadUSD,
       cacheNetSavedUSD,

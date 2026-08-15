@@ -10,7 +10,7 @@
 
 import { PANE_FRAME_Y } from './chrome.ts'
 import {
-  ACTIVE_STATES, GROUPINGS, SESSION_STATES, SESSION_DIMENSIONS, UNFILED,
+  ACTIVE_STATES, GROUPINGS, SESSION_STATES, SESSION_STATE_CHOICES, SESSION_DIMENSIONS, UNFILED,
   bucketKey, dimensionValueLabel, sessionNamed, sessionRunning,
   type DimensionContext, type DimensionWordBook, type SessionDimensionId, type SessionGroupingId,
 } from './session-dimensions'
@@ -1320,7 +1320,9 @@ export function asideRows(o: {
 
   if (o.states) {
     rows.push({ kind: 'rule' }, { kind: 'heading', label: o.states.heading })
-    for (const value of SESSION_STATES) {
+    // The CHOICES, not every internal state: `exited`, `lost` and `closed` all mean "not running"
+    // and drew three rows that read the same word. See `SESSION_STATE_CHOICES`.
+    for (const value of SESSION_STATE_CHOICES) {
       const count = o.states.counts[value] ?? 0
       // A state nothing on this machine wears is not a filter, it is a row that does nothing.
       if (count === 0 && !o.states.kept.includes(value)) continue
@@ -1814,8 +1816,8 @@ export interface KeyHelp {
 export function sessionKeyHelp(w: {
   move: string; open: string; attach: string; menu: string; section: string
   newSession: string; search: string; clear: string; kill: string; rename: string
-  note: string; task: string; mark: string; onlyActive: string; closed: string
-  exited: string; group: string; layout: string; detail: string; menuFold: string
+  note: string; task: string; mark: string; onlyActive: string
+  group: string; layout: string; detail: string; menuFold: string
   reset: string; tabs: string; help: string; quit: string
   approve: string; prompt: string; reopenFell: string
 }): KeyHelp[] {
@@ -1837,9 +1839,9 @@ export function sessionKeyHelp(w: {
     { keys: 'n', what: w.rename },
     { keys: 't', what: w.note },
     { keys: 'space', what: w.mark },
-    { keys: 'ctrl+a / l', what: w.onlyActive },
-    { keys: 'c', what: w.closed },
-    { keys: 'e', what: w.exited },
+    // One row, three keys, ONE question. `c` and `e` called the same function and `l` was the same
+    // boolean read from the other end, so the help listed three controls where the screen has one.
+    { keys: 'l / c / e', what: w.onlyActive },
     { keys: 'v', what: w.group },
     { keys: 'ctrl+g', what: w.layout },
     { keys: 'd', what: w.detail },

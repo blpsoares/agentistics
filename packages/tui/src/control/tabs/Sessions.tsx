@@ -13,6 +13,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { getSessionsMenuHidden, setSessionsMenuHidden } from '../ephemeral'
 import { Box, Text, useInput } from 'ink'
 import type {
   ActionResult, ControlExit, ControlHost, ControlSession, ControlSessions, RestoreCandidate,
@@ -154,6 +155,7 @@ type Ask =
   | { kind: 'keys' }
   /** Finishing or reopening a TASK — the session is only how the task was named. */
   | { kind: 'finishTask'; session: ControlSession }
+  | { kind: 'deleteTask'; name: string; count: number }
   | { kind: 'task'; session: ControlSession }
   | { kind: 'openTask'; session: ControlSession }
   | { kind: 'resume'; session: ControlSession }
@@ -273,12 +275,23 @@ export function Sessions({
   /**
    * Whether the menu is folded away entirely, for when the list is what you came to read.
    *
-   * NOT persisted, unlike every other part of the arrangement: it is a gesture you make to look at
-   * something, not a setting. A menu that was still hidden three days later would be a feature
-   * nobody could find their way back out of — and the keys that open it (`1`-`9`) are the same ones
-   * that jump to a section, so opening it is never a thing you have to remember how to do.
+   * Not persisted to disk, unlike the rest of the arrangement: it is a gesture you make to look at
+   * something, not a setting, and a menu still hidden three days later is a feature nobody can find
+   * their way back out of. But "not forever" was implemented as "not at all", and that cost the one
+   * round trip people make dozens of times an hour: attaching to a session REMOUNTS this app, so
+   * folding the menu, entering a session and leaving it found the menu open again, every time.
+   *
+   * It lives in module state (`ephemeral.ts`) — the lifetime that was missing. Survives the
+   * remount, gone when you quit agentop.
    */
-  const [menuHidden, setMenuHidden] = useState(false)
+  const [menuHidden, setMenuHiddenState] = useState(getSessionsMenuHidden)
+  const setMenuHidden = useCallback((next: boolean | ((v: boolean) => boolean)) => {
+    setMenuHiddenState(prev => {
+      const value = typeof next === 'function' ? next(prev) : next
+      setSessionsMenuHidden(value)
+      return value
+    })
+  }, [])
   /** Ids the user has already been asked about this run, so the offer is made once. */
   const [restoreAsked, setRestoreAsked] = useState(false)
   /**
@@ -813,6 +826,18 @@ export function Sessions({
     if (focus === 'aside' && cockpit.aside > 0) {
       if (key.escape) { setFocus('list'); return }
       if (key.return) return runAside(asideRow)
+      // `x` on a TASK row removes the name. The list grows without bound otherwise — reported with
+      // dozens of entries, some naming work that is over and some whose sessions no longer exist —
+      // and `finishTask` only hides them. Same key as closing a session, because it is the same
+      // gesture applied to whatever the cursor is on; `all` is refused, since "every task" names no
+      // task to remove.
+      if (input === 'x') {
+        const row = asideList[asideRow]
+        if (row?.kind === 'task' && !row.all && row.name) {
+          setAsk({ kind: 'deleteTask', name: row.name, count: row.count })
+          return
+        }
+      }
       // `←`/`→` JUMP between sections. Reaching the next one by pressing down through every row of
       // this one is the whole of what made the menu tedious — and with the accordion it is also the
       // gesture that opens a section, so the arrows that do nothing else here are the right keys
@@ -890,8 +915,14 @@ export function Sessions({
     if (input === '?' || (key.ctrl && input === 'h')) { setAsk({ kind: 'keys' }); return }
     if (input === 'v') return runAction('group')
     // One key, because there is one switch. `c` and `e` toggled two halves of the same question.
-    if (input === 'c' || input === 'e') { pressShortcut('history'); return }
-    if (input === 'l') { pressShortcut('active'); return }
+    // ONE key for one question. `active` and `history` partition `SESSION_STATES`, so the two
+    // shortcuts are one boolean read from either end — and it had THREE keys: `l` narrowed to the
+    // active states, while `c` and `e` (literally the same call) widened back. Pressing any of them
+    // did the same visible thing, which is a keyboard that lies about how many controls exist.
+    if (input === 'l' || input === 'c' || input === 'e') {
+      pressShortcut(onlyActive ? 'history' : 'active')
+      return
+    }
     if (input === 'd') { setHideDetail(v => !v); return }
     // `ctrl+g` for the GRID, not `g`: `g` is "top of the list" two lines down and in
     // `resolveListKey`'s menus, and a key answered by the screen AND by the list does two things at
@@ -1857,7 +1888,9 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           and in a grouping you had to switch to. `sessionColumns` drops the cell while grouping BY
           task, where the heading over the row already says it. */}
       {columns.task > 0 ? (
-        <Text color={COLORS.secondary}>{gap + padCell(session.task ?? '', columns.task)}</Text>
+        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>
+          {gap + padCell(session.task ?? '', columns.task)}
+        </Text>
       ) : null}
       {/* Usage sits right of the name and left of the harness — it is a number about THIS row, and
           a row you are deciding whether to close is one whose cost you want beside its name rather
@@ -2252,6 +2285,29 @@ function Question({
           const reopen = host.reopenFell
           if (!yes || !reopen) return onClose()
           onRun(() => reopen.call(host), s.actSessions.reopenFell)
+        }}
+      />
+    )
+  }
+
+  // Answered BEFORE `session` is destructured, because it names a TASK and not a session — the same
+  // reason `reopenFell` sits above.
+  if (ask.kind === 'deleteTask') {
+    return (
+      <ConfirmPrompt
+        // The count is in the question because the answer turns on it: removing a name that files
+        // eleven sessions is a different act from removing one that files none, and the sessions
+        // are KEPT either way. A confirmation that hid the number would be asking for a blank yes.
+        label={s.sessionsDeleteTaskAsk(ask.name, ask.count)}
+        yesLabel={s.yes}
+        noLabel={s.no}
+        width={width}
+        onAnswer={yes => {
+          const del = host.deleteTask
+          if (!yes || !del) return onClose()
+          const name = ask.name
+          onClose()
+          onRun(() => del.call(host, name), s.actSessions.deleteTask)
         }}
       />
     )

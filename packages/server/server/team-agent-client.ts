@@ -226,6 +226,7 @@ function startLiveReporting(connId: string, socket: WebSocket): void {
         type: 'live-sessions',
         sessionIds: shared.liveSessionIds,
         processes: shared.liveProcesses,
+        sessionActivities: snap.liveSessionActivities ?? {},
       }))
     } catch { /* transient — the next tick retries */ }
   }

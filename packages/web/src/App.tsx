@@ -23,7 +23,7 @@ import type { TagDef } from './lib/tagMatch'
 import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
 import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, SavedComparison, TeamConfig } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { billingReadiness, monthlyCommitment, normalizeBillingSettings, normalizeComparisons, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections } from '@agentistics/core'
+import { billingReadiness, monthlyCommitment, normalizeBillingSettings, normalizeComparisons, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections, totalTokens, totalTokensExplained } from '@agentistics/core'
 import { buildDeniedRepoLabels } from './lib/shareRepos'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
@@ -1762,6 +1762,19 @@ export default function AppLayout() {
       ].filter(Boolean).join(' · ')
     : (lang === 'pt' ? 'Estimativa a preços de API' : 'API-price estimate')
 
+  /**
+   * The header's token figure and the sentence explaining it.
+   *
+   * It read `inputTokens + outputTokens` — the two conversational counters — so the number beside
+   * the cost described 0,34 % of the tokens the cost was charged on. Now it is every billed
+   * counter, and it carries its own explanation on hover: at these magnitudes a bare "8,7B tok"
+   * reads as a fault until you know that most of it is the cache being re-read.
+   */
+  const headerTokens = derived ? totalTokens(derived.tokenTotals) : 0
+  const headerTokensTitle = derived
+    ? totalTokensExplained(derived.tokenTotals, lang === 'pt' ? 'pt' : 'en')
+    : ''
+
   const models = useMemo(() => {
     if (!data) return []
     const set = new Set<string>()
@@ -2493,7 +2506,7 @@ export default function AppLayout() {
                 <span style={{ opacity: 0.35 }}>·</span>
                 <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
                 <span style={{ opacity: 0.35 }}>·</span>
-                <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(derived.inputTokens + derived.outputTokens)}</strong> tok</span>
+                <span title={headerTokensTitle}><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(headerTokens)}</strong> tok</span>
                 <ChevronDown size={16} style={{ marginLeft: 'auto', opacity: 0.6, transform: fleetOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
               </button>
               {fleetOpen && (() => {
@@ -2573,7 +2586,7 @@ export default function AppLayout() {
                 <span style={{ opacity: 0.35 }}>·</span>
                 <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
                 <span style={{ opacity: 0.35 }}>·</span>
-                <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(derived.inputTokens + derived.outputTokens)}</strong> tok</span>
+                <span title={headerTokensTitle}><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(headerTokens)}</strong> tok</span>
               </div>
               {data?.healthIssues && data.healthIssues.length > 0 && (
                 <HealthWarnings issues={data.healthIssues} lang={lang} />

@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import type { SessionMeta } from '@agentistics/core'
 import { sessionTime } from '../lib/sessionTime'
-import { formatProjectName, sessionLabel } from '@agentistics/core'
+import { formatProjectName, sessionLabel, sessionTokenTotal } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { format, parseISO } from 'date-fns'
 import {
@@ -75,8 +75,9 @@ function fmt(n: number): string {
   return String(n)
 }
 
+/** Every billed counter — the column header says "tokens", so it must be all of them. */
 function totalTokens(s: SessionMeta): number {
-  return s.input_tokens + s.output_tokens
+  return sessionTokenTotal(s)
 }
 
 function totalMessages(s: SessionMeta): number {
