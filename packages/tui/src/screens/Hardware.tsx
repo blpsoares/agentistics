@@ -13,6 +13,8 @@ export interface HostMetricsSnapshot {
   totalMemoryBytes: number | null
   freeMemoryBytes: number | null
   usedMemoryBytes: number | null
+  swapTotalBytes?: number | null
+  swapUsedBytes?: number | null
   disk?: {
     totalBytes: number | null
     usedBytes: number | null
@@ -42,6 +44,7 @@ export interface HardwareResourcesSnapshot {
   agentop: {
     server: ProcessMetrics
     otelWatcher: ProcessMetrics
+    services?: ProcessMetrics[]
     dockerContainers: ContainerMetrics[]
   }
 }
@@ -71,12 +74,14 @@ function fmtPercent(val: number | null | undefined): string {
 
 export function Hardware({
   data,
+  fleetSessions,
   apiBase,
   s,
   width,
   height,
 }: {
   data: AppData
+  fleetSessions?: any[]
   apiBase: string | null
   s: TuiStrings
   width: number
@@ -134,15 +139,33 @@ export function Hardware({
   const ramVal = host?.totalMemoryBytes
     ? `${fmtBytes(host.usedMemoryBytes)} / ${fmtBytes(host.totalMemoryBytes)}`
     : 'N/A'
+  const swapVal =
+    host?.swapTotalBytes && host.swapTotalBytes > 0
+      ? `${fmtBytes(host.swapUsedBytes ?? 0)} / ${fmtBytes(host.swapTotalBytes)}`
+      : 'N/A'
   const diskVal =
     host?.disk?.available && host.disk.totalBytes
       ? `${fmtBytes(host.disk.usedBytes)} / ${fmtBytes(host.disk.totalBytes)}`
       : 'N/A'
 
-  // Extract active managed sessions from AppData
-  const activeSessions = ((data.sessions as unknown as SessionItem[]) ?? []).filter(
-    s => s.activity && s.activity !== 'exited',
+  // Extract active managed sessions from fleetSessions or AppData
+  const activeFleetSessions: SessionItem[] = (fleetSessions ?? [])
+    .filter(s => s.state !== 'closed' && s.state !== 'exited' && s.state !== 'lost' && s.state !== 'unknown')
+    .map(s => ({
+      id: s.id,
+      label: s.title || s.id,
+      harness: s.harness as HarnessId,
+      pid: s.pid,
+      activity: s.stateLabel || s.state,
+      cpuPercent: s.cpuPercent ?? null,
+      rssBytes: s.rssBytes ?? null,
+    }))
+
+  const activeAppDataSessions = ((data.sessions as unknown as SessionItem[]) ?? []).filter(
+    s => s.activity && s.activity !== 'exited' && s.activity !== 'closed',
   )
+
+  const activeSessions = fleetSessions ? activeFleetSessions : activeAppDataSessions
 
   const columns: Column<SessionItem>[] = [
     {
@@ -189,67 +212,88 @@ export function Hardware({
     {
       key: 'status',
       header: 'Status',
-      width: 12,
+      width: 14,
       render: r => r.activity ?? 'active',
-      color: r => (r.activity === 'working' ? COLORS.success : COLORS.muted),
+      color: r => {
+        const act = (r.activity ?? '').toLowerCase()
+        if (act.includes('trabalhando') || act.includes('working') || act.includes('active') || act.includes('running')) {
+          return COLORS.success
+        }
+        if (act.includes('aguardando') || act.includes('waiting') || act.includes('approval')) {
+          return COLORS.accent
+        }
+        if (act.includes('desligada') || act.includes('closed') || act.includes('exited') || act.includes('off')) {
+          return COLORS.muted
+        }
+        return COLORS.info
+      },
     },
   ]
+
+  // Active services to display (only services that are actually running)
+  const activeServices: ProcessMetrics[] = agentop?.services?.filter((s: ProcessMetrics) => s.running) ?? [
+    ...(agentop?.server ? [agentop.server] : []),
+    ...(agentop?.otelWatcher?.running ? [agentop.otelWatcher] : []),
+  ]
+
+  const activeContainers = agentop?.dockerContainers ?? []
 
   return (
     <Box flexDirection="column">
       {/* Host Metrics KPIs */}
       <KpiRow>
-        <Kpi label={`CPU Load (${coresVal})`} value={loadVal} color={COLORS.accent} width={22} />
-        <Kpi label="System RAM" value={ramVal} color={COLORS.info} width={24} />
-        <Kpi label="Disk Usage (Home)" value={diskVal} color={COLORS.text} width={24} />
+        <Kpi label={`WSL CPU (${coresVal})`} value={loadVal} color={COLORS.accent} width={22} />
+        <Kpi label="WSL RAM (Apps)" value={ramVal} color={COLORS.info} width={24} />
+        <Kpi label="Swap (Virtual)" value={swapVal} color={COLORS.muted} width={22} />
+        <Kpi label="Disk (/home VHDX)" value={diskVal} color={COLORS.text} width={22} />
       </KpiRow>
 
-      {/* Agentop Services Section */}
+      {/* Agentop Services Section (Only Running Services) */}
       <Section title="Agentop Services">
         <Box flexDirection="column" gap={0}>
-          <Box flexDirection="row">
-            <Box width={20}>
-              <Text bold>agentop server</Text>
+          {activeServices.map((svc: ProcessMetrics) => (
+            <Box key={svc.name} flexDirection="row">
+              <Box width={20}>
+                <Text bold>{svc.name}</Text>
+              </Box>
+              <Box width={12}>
+                <Text color={COLORS.success}>● Active</Text>
+              </Box>
+              <Box width={12}>
+                <Text dimColor>{svc.pid ? `PID ${svc.pid}` : '-'}</Text>
+              </Box>
+              <Box width={14}>
+                <Text>
+                  CPU: <Text color={COLORS.accent}>{fmtPercent(svc.cpuPercent)}</Text>
+                </Text>
+              </Box>
+              <Box width={18}>
+                <Text>RAM: {fmtBytes(svc.rssBytes)}</Text>
+              </Box>
             </Box>
-            <Box width={12}>
-              <Text color={COLORS.success}>● Active</Text>
-            </Box>
-            <Box width={12}>
-              <Text dimColor>PID {agentop?.server.pid ?? 'N/A'}</Text>
-            </Box>
-            <Box width={14}>
-              <Text>
-                CPU: <Text color={COLORS.accent}>{fmtPercent(agentop?.server.cpuPercent)}</Text>
-              </Text>
-            </Box>
-            <Box width={18}>
-              <Text>RAM: {fmtBytes(agentop?.server.rssBytes)}</Text>
-            </Box>
-          </Box>
+          ))}
 
-          <Box flexDirection="row" marginTop={0}>
-            <Box width={20}>
-              <Text bold>otel-watcher</Text>
+          {activeContainers.map(c => (
+            <Box key={c.id} flexDirection="row">
+              <Box width={20}>
+                <Text bold>{c.name}</Text>
+              </Box>
+              <Box width={12}>
+                <Text color={COLORS.info}>● Docker</Text>
+              </Box>
+              <Box width={12}>
+                <Text dimColor>{c.id.slice(0, 8)}</Text>
+              </Box>
+              <Box width={14}>
+                <Text>
+                  CPU: <Text color={COLORS.accent}>{fmtPercent(c.cpuPercent)}</Text>
+                </Text>
+              </Box>
+              <Box width={18}>
+                <Text>RAM: {fmtBytes(c.memUsageBytes)}</Text>
+              </Box>
             </Box>
-            <Box width={12}>
-              {agentop?.otelWatcher.running ? (
-                <Text color={COLORS.info}>● Running</Text>
-              ) : (
-                <Text dimColor>○ Off</Text>
-              )}
-            </Box>
-            <Box width={12}>
-              <Text dimColor>{agentop?.otelWatcher.pid ? `PID ${agentop.otelWatcher.pid}` : '-'}</Text>
-            </Box>
-            <Box width={14}>
-              <Text>
-                CPU: <Text color={COLORS.accent}>{fmtPercent(agentop?.otelWatcher.cpuPercent)}</Text>
-              </Text>
-            </Box>
-            <Box width={18}>
-              <Text>RAM: {fmtBytes(agentop?.otelWatcher.rssBytes)}</Text>
-            </Box>
-          </Box>
+          ))}
         </Box>
       </Section>
 

@@ -218,6 +218,8 @@ const SCRIPT_HARNESS: ReadonlyArray<readonly [string, HarnessId]> = [
   ['/@anthropic-ai/claude-code', 'claude'],
   ['/kimi-code', 'kimi'],
   ['/@moonshotai/kimi', 'kimi'],
+  ['/antigravity-cli', 'antigravity'],
+  ['/agy', 'antigravity'],
 ]
 
 /**
@@ -282,6 +284,8 @@ export function detectionUnavailable(o: {
 const FD_SESSION_PATTERNS: Partial<Record<HarnessId, RegExp>> = {
   copilot: /\/\.copilot\/session-state\/([0-9a-f-]{36})\//i,
   codex: /\/rollout-[^/]*?-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i,
+  antigravity: /\/\.gemini\/antigravity-cli\/(?:brain|conversations)\/([0-9a-f-]{8,36})/i,
+  claude: /\/\.claude\/(?:sessions|transcripts|worktrees)\/([0-9a-f-]{8,36})/i,
 }
 
 /** Boot time in epoch seconds, read once — it cannot change while the process runs. */

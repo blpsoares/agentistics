@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import type { ControlStatus } from '../types'
+import type { ControlSessions, ControlStatus } from '../types'
 import type { CliLang } from '../lang'
 import type { ControlStrings } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
@@ -8,8 +8,9 @@ import { Hardware } from '../../screens/Hardware'
 import { dashboardSource } from '../../dashboard/view'
 import { strings } from '../../i18n'
 
-export function HardwareTab({ status, strings: s, lang, width, height, isActive, nonce, onChrome }: {
+export function HardwareTab({ status, fleet, strings: s, lang, width, height, isActive, nonce, onChrome }: {
   status: ControlStatus | null
+  fleet?: ControlSessions | null
   strings: ControlStrings
   lang: CliLang
   width: number
@@ -36,6 +37,7 @@ export function HardwareTab({ status, strings: s, lang, width, height, isActive,
   return (
     <Hardware
       data={data ?? ({ sessions: [] } as any)}
+      fleetSessions={fleet?.sessions}
       apiBase={apiBase}
       s={t}
       width={width}

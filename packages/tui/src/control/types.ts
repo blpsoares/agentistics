@@ -609,6 +609,12 @@ export interface ControlSession {
   /** When it started, epoch ms. An instant rather than a duration — see `ServiceRuntimeState`. */
   startedAt?: number
   attached: boolean
+  /** Process ID for live process monitoring. */
+  pid?: number
+  /** Process CPU load percentage. */
+  cpuPercent?: number | null
+  /** Resident Set Size memory usage in bytes. */
+  rssBytes?: number | null
 }
 
 /**

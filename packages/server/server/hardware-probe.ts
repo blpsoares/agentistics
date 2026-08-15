@@ -43,12 +43,18 @@ export interface HostMetricsSnapshot {
   totalMemoryBytes: number | null
   freeMemoryBytes: number | null
   usedMemoryBytes: number | null
+  memAvailableBytes?: number | null
+  buffersBytes?: number | null
+  cachedBytes?: number | null
+  swapTotalBytes?: number | null
+  swapUsedBytes?: number | null
   disk: DiskUsage
 }
 
 export interface AgentopMetricsSnapshot {
   server: ProcessMetrics
   otelWatcher: ProcessMetrics
+  services: ProcessMetrics[]
   dockerContainers: ContainerMetrics[]
   dockerAvailable: boolean
 }
@@ -110,12 +116,73 @@ export async function readHostMetrics(): Promise<HostMetricsSnapshot> {
     const validFree = Number.isFinite(free) && free >= 0 ? free : null
     const validUsed = validTotal !== null && validFree !== null ? Math.max(0, validTotal - validFree) : null
 
+    let swapTotalBytes: number | null = null
+    let swapUsedBytes: number | null = null
+    let memAvailableBytes: number | null = null
+    let buffersBytes: number | null = null
+    let cachedBytes: number | null = null
+
+    try {
+      const meminfo = await readFile('/proc/meminfo', 'utf8')
+      let sTotalKb: number | null = null
+      let sFreeKb: number | null = null
+      let availKb: number | null = null
+      let bufKb: number | null = null
+      let cacheKb: number | null = null
+      let reclKb: number | null = null
+
+      for (const line of meminfo.split('\n')) {
+        if (line.startsWith('SwapTotal:')) {
+          const parts = line.split(/\s+/)
+          if (parts[1]) sTotalKb = Number(parts[1])
+        } else if (line.startsWith('SwapFree:')) {
+          const parts = line.split(/\s+/)
+          if (parts[1]) sFreeKb = Number(parts[1])
+        } else if (line.startsWith('MemAvailable:')) {
+          const parts = line.split(/\s+/)
+          if (parts[1]) availKb = Number(parts[1])
+        } else if (line.startsWith('Buffers:')) {
+          const parts = line.split(/\s+/)
+          if (parts[1]) bufKb = Number(parts[1])
+        } else if (line.startsWith('Cached:')) {
+          const parts = line.split(/\s+/)
+          if (parts[1]) cacheKb = Number(parts[1])
+        } else if (line.startsWith('SReclaimable:')) {
+          const parts = line.split(/\s+/)
+          if (parts[1]) reclKb = Number(parts[1])
+        }
+      }
+      if (sTotalKb !== null && Number.isFinite(sTotalKb) && sTotalKb > 0) {
+        swapTotalBytes = sTotalKb * 1024
+        if (sFreeKb !== null && Number.isFinite(sFreeKb)) {
+          swapUsedBytes = Math.max(0, (sTotalKb - sFreeKb) * 1024)
+        }
+      }
+      if (availKb !== null && Number.isFinite(availKb)) {
+        memAvailableBytes = availKb * 1024
+      }
+      if (bufKb !== null && Number.isFinite(bufKb)) {
+        buffersBytes = bufKb * 1024
+      }
+      if (cacheKb !== null && Number.isFinite(cacheKb)) {
+        const totalCache = cacheKb + (reclKb ?? 0)
+        cachedBytes = totalCache * 1024
+      }
+    } catch {
+      /* no /proc/meminfo */
+    }
+
     return {
       loadavg: validLoads,
       cpuCores: Number.isFinite(cores) && cores! > 0 ? cores : null,
       totalMemoryBytes: validTotal,
       freeMemoryBytes: validFree,
       usedMemoryBytes: validUsed,
+      memAvailableBytes,
+      buffersBytes,
+      cachedBytes,
+      swapTotalBytes,
+      swapUsedBytes,
       disk,
     }
   } catch {
@@ -157,11 +224,11 @@ async function findOtelWatcherPid(serverPid: number): Promise<number | null> {
 const CENTRAL_FILTER = 'label=com.docker.compose.project=team-mode'
 const MACHINE_FILTER = 'ancestor=agentistics-machine'
 
-/** Read Docker container metrics for agentistics central/machine containers. */
+/** Read Docker container metrics for agentistics central/machine/mcp containers. */
 async function readDockerMetrics(): Promise<{ containers: ContainerMetrics[]; available: boolean }> {
   try {
     const proc = Bun.spawn(
-      ['docker', 'ps', '--format', '{{.ID}}\t{{.Names}}\t{{.Image}}', '-f', CENTRAL_FILTER, '-f', MACHINE_FILTER],
+      ['docker', 'ps', '--format', '{{.ID}}\t{{.Names}}\t{{.Image}}'],
       { stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' },
     )
     const exitCode = await proc.exited
@@ -169,7 +236,17 @@ async function readDockerMetrics(): Promise<{ containers: ContainerMetrics[]; av
       return { containers: [], available: false }
     }
     const stdout = await new Response(proc.stdout).text()
-    const lines = stdout.split('\n').map(l => l.trim()).filter(Boolean)
+    const allLines = stdout.split('\n').map(l => l.trim()).filter(Boolean)
+    const lines = allLines.filter(l => {
+      const lower = l.toLowerCase()
+      return (
+        lower.includes('agentop') ||
+        lower.includes('agentistics') ||
+        lower.includes('team-mode') ||
+        lower.includes('central') ||
+        lower.includes('machine')
+      )
+    })
     if (lines.length === 0) {
       return { containers: [], available: true }
     }
@@ -271,23 +348,34 @@ export async function readAgentopMetrics(
     }
   }
 
+  const serverProc: ProcessMetrics = {
+    pid: serverPid,
+    name: 'agentop server',
+    running: true,
+    cpuPercent: serverCpuPercent,
+    rssBytes: serverRss,
+  }
+
+  const watcherProc: ProcessMetrics = {
+    pid: watcherPid,
+    name: 'otel-watcher',
+    running: watcherPid !== null,
+    cpuPercent: watcherCpuPercent,
+    rssBytes: watcherRss,
+  }
+
   const { containers, available: dockerAvailable } = await readDockerMetrics()
 
+  // Collect ONLY running services (never list inactive ones to avoid clutter)
+  const activeServices: ProcessMetrics[] = [serverProc]
+  if (watcherProc.running) {
+    activeServices.push(watcherProc)
+  }
+
   return {
-    server: {
-      pid: serverPid,
-      name: 'agentop server',
-      running: true,
-      cpuPercent: serverCpuPercent,
-      rssBytes: serverRss,
-    },
-    otelWatcher: {
-      pid: watcherPid,
-      name: 'otel-watcher',
-      running: watcherPid !== null,
-      cpuPercent: watcherCpuPercent,
-      rssBytes: watcherRss,
-    },
+    server: serverProc,
+    otelWatcher: watcherProc,
+    services: activeServices,
     dockerContainers: containers,
     dockerAvailable,
   }
@@ -301,11 +389,14 @@ export async function getHardwareSnapshot(
   const sampledAtMs = Date.now()
 
   const host = await readHostMetrics()
+  const serverFallback: ProcessMetrics = { pid: process.pid, name: 'agentop server', running: true, cpuPercent: null, rssBytes: null }
+  const watcherFallback: ProcessMetrics = { pid: null, name: 'otel-watcher', running: false, cpuPercent: null, rssBytes: null }
   const agentop = canReadProc
     ? await readAgentopMetrics(prevStatsMap, sampledAtMs)
     : {
-        server: { pid: process.pid, name: 'agentop server', running: true, cpuPercent: null, rssBytes: null },
-        otelWatcher: { pid: null, name: 'otel-watcher', running: false, cpuPercent: null, rssBytes: null },
+        server: serverFallback,
+        otelWatcher: watcherFallback,
+        services: [serverFallback],
         dockerContainers: [],
         dockerAvailable: false,
       }

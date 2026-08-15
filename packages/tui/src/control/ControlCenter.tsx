@@ -632,6 +632,7 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
           <Pane title={s.tabsShort.hardware} width={width} height={height}>
             <HardwareTab
               status={status}
+              fleet={fleet}
               strings={s}
               lang={lang}
               width={bodyWidth}

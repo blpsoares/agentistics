@@ -244,7 +244,17 @@ export function createSessionsPoller(o: {
         const panePids = await o.backend.listPanePids?.().catch(() => new Map<string, number>())
         for (const r of reconciled) {
           const own = harnessSessions.byManagedId.get(r.id)
-          const pid = own?.pid ?? panePids?.get(r.id)
+          const harness = r.managed?.harness
+          const cwd = r.managed?.cwd
+          const liveProc = processes.find(
+            p =>
+              p.sessionId === r.id ||
+              (Boolean(harness) &&
+                Boolean(cwd) &&
+                p.harness === harness &&
+                (p.cwd === cwd || p.cwd.startsWith(cwd! + '/') || cwd!.startsWith(p.cwd + '/'))),
+          )
+          const pid = own?.pid ?? panePids?.get(r.id) ?? liveProc?.pid
           if (pid && Number.isFinite(pid) && pid > 0) {
             const currStat = await readProcStat(pid, nowMs)
             const rssBytes = await readProcRss(pid)
