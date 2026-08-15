@@ -189,6 +189,29 @@ export interface CliStrings {
   sessTaskReopened: (task: string) => string
   sessKillUnconfirmed: (id: string) => string
   sessRenamed: string
+  /**
+   * A rename that landed in BOTH places — agentop's label and the harness's own name.
+   *
+   * Separate from `sessRenamed` because the two claims differ, and the difference is the feature:
+   * one says a row was relabelled, the other says the session now calls itself that too.
+   */
+  sessRenamedBoth: string
+  /**
+   * The agentop label was written and the harness was NOT told — with the reason, in words.
+   *
+   * The label is never withheld over this: a rename that refuses outright would make a `lost` row
+   * unnameable, and naming those rows is most of what the verb is for. But a rename that only half
+   * happened and says nothing is indistinguishable from one that failed, which is the complaint this
+   * whole feature answers in reverse.
+   */
+  sessRenamedLocalOnly: (why: string) => string
+  /** A fact about the TOOL, not about this session: it publishes no rename channel at all. */
+  sessRenameWhyUnsupported: (harness: string) => string
+  sessRenameWhyExternal: string
+  sessRenameWhyNotRunning: string
+  sessRenameWhyDialog: string
+  sessRenameWhyUntypable: string
+  sessRenameWhyFailed: string
   /** Printed on the way into an attach, with the REAL detach key. */
   sessAttaching: (title: string, detach: string) => string
   sessNoted: string
@@ -492,6 +515,18 @@ const EN: CliStrings = {
   sessKillUnconfirmed: (id: string) =>
     `could not confirm ${id} was stopped — it may still be running, so its record was kept.`,
   sessRenamed: 'session renamed.',
+  sessRenamedBoth: 'renamed here and inside the session.',
+  sessRenamedLocalOnly: (why: string) => `renamed in agentop only — ${why}`,
+  sessRenameWhyUnsupported: (harness: string) =>
+    `${harness} publishes no way to rename a session from outside, so it keeps its own name.`,
+  sessRenameWhyExternal:
+    'agentop did not start this session, so there is no pane to type into — it keeps its own name.',
+  sessRenameWhyNotRunning:
+    'nothing is running, so the harness could not be told — it will keep the name it had.',
+  sessRenameWhyDialog:
+    'that session has a question open, and typing now would answer it. Answer it, then rename again to carry the name across.',
+  sessRenameWhyUntypable: 'the name has a line break, which cannot be typed as a single command.',
+  sessRenameWhyFailed: 'the session did not take the keystroke — it may have just ended.',
   sessAttaching: (title: string, detach: string) =>
     `Attaching to ${title}. To leave it running and come back here, press ${detach}.`,
   sessNoted: 'note saved.',
@@ -744,6 +779,18 @@ const PT: CliStrings = {
   sessKillUnconfirmed: (id: string) =>
     `não deu para confirmar que ${id} foi encerrada — ela pode continuar rodando, então o registro dela foi mantido.`,
   sessRenamed: 'sessão renomeada.',
+  sessRenamedBoth: 'renomeada aqui e dentro da sessão.',
+  sessRenamedLocalOnly: (why: string) => `renomeada só no agentop — ${why}`,
+  sessRenameWhyUnsupported: (harness: string) =>
+    `o ${harness} não publica nenhuma forma de renomear uma sessão de fora, então ele mantém o nome dele.`,
+  sessRenameWhyExternal:
+    'o agentop não iniciou essa sessão, então não há painel onde digitar — ela mantém o nome dela.',
+  sessRenameWhyNotRunning:
+    'não há nada rodando, então não deu para avisar o harness — ele vai manter o nome que tinha.',
+  sessRenameWhyDialog:
+    'essa sessão está com uma pergunta aberta, e digitar agora responderia ela. Responda e renomeie de novo para levar o nome adiante.',
+  sessRenameWhyUntypable: 'o nome tem quebra de linha, o que não dá para digitar como um comando só.',
+  sessRenameWhyFailed: 'a sessão não aceitou a tecla — ela pode ter acabado de terminar.',
   sessAttaching: (title: string, detach: string) =>
     `Anexando a ${title}. Para deixá-la rodando e voltar aqui, aperte ${detach}.`,
   sessNoted: 'nota salva.',
