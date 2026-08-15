@@ -9,7 +9,11 @@
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
-import { sessionRunning } from '@agentistics/tui/control/sessions'
+// `GROUPINGS` and never a list typed into the usage text: the help is the only place a person can
+// read what `--group` accepts, and a second copy of that list drifts silently — the CLI would go on
+// accepting an arrangement its own help says nothing about. Same rule `cli-parse.ts` already applies
+// to its error message.
+import { GROUPINGS, sessionRunning } from '@agentistics/tui/control/sessions'
 import { controlStrings, sessionWordBook } from '@agentistics/tui/control/i18n'
 import { wrapText } from '@agentistics/tui/control/surface'
 import { parseSessionArgs, LS_DEFAULT, type SessionCommand } from './cli-parse'
@@ -40,7 +44,7 @@ const STARTABLE: HarnessId[] = HARNESS_ORDER.filter(h => SPAWN_SPECS[h] !== null
 
 const USAGE = `Usage:
   agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"]
-  agentop session ls     [--all] [--group repo|project|task|harness|model|none] [--json]
+  agentop session ls     [--all] [--group ${GROUPINGS.join('|')}] [--json]
   agentop session list
   agentop session attach <id|name>
   agentop session kill   <id|name>

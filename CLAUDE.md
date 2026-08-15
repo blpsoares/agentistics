@@ -1090,6 +1090,27 @@ packages/tui/src/
     Output.tsx       the pane a streaming task owns — the detail region, auto-following its tail
     sessions.ts      PURE arithmetic for the sessions tab: its row budget, the cell fit, the
                      grouping and the ordering (tested in sessions.test.ts)
+    session-order.ts PURE: what a fleet is ordered BY, and the ranking every surface breaks ties
+                     on. Below `sessions.ts` so `session-tree.ts` can read it without the two
+                     importing each other — `sessions.ts` re-exports every name
+    session-tree.ts  PURE: the CASCADE arrangement (`tree`) — the project as the root and the
+                     segments of each session's `cwd` below it as branches, single-child chains
+                     compressed. It returns the SAME `SessionGroup[]` the flat arrangements return,
+                     already in reading order, with `depth` and `path` on top — which is what lets
+                     `sessionRows`, `cardPages`, `selectableIndexes`, the cursor, the row budget,
+                     the marked band and the search keep working without knowing a tree exists.
+                     `groupSessions` dispatches it in the one line that already special-cases
+                     `none`. `tree` is an ARRANGEMENT and stays OUT of `DIMENSION_ORDER`: a session
+                     belongs to EVERY node on its path, so "filter to `packages`" and "the band
+                     `packages`" could never agree, and `session-dimensions.test.ts` cross-checks
+                     exactly that agreement for every id in there. Branches are measured against
+                     `ControlSession.projectRoot` — the main checkout's PATH, from
+                     `decideRepoFacts`, recorded at spawn — because deriving them by
+                     string-matching the project's NAME against the cwd goes wrong wherever a
+                     segment repeats along the path. **No `projectRoot` = no branch** (outside a
+                     repository, or gone with nothing recorded; `GONE_PROJECT_KEY` is left intact)
+                     and **a worktree outside the main checkout gets ONE branch named after its own
+                     folder** — a relative path that cannot be established is never synthesised
     tabs/            Services (the cockpit — and the SETUP wizard, as a question in its detail
                      region), Sessions (+ SessionWizard), Dashboard, Logs,
                      Static (Help / Cheat sheet / Contribute)
