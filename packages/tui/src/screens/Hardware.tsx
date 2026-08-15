@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Box, Text } from 'ink'
 import type { AppData, HarnessId } from '@agentistics/core'
 import { Kpi, KpiRow, Section, Empty, DataTable, type Column } from '../components/Primitives'
 import { COLORS, HARNESS_COLOR, HARNESS_LABEL } from '../theme'
 import type { TuiStrings } from '../i18n'
+import { getHardwareSnapshot } from '../../../server/server/hardware-probe'
+import type { ProcStatSample } from '../../../server/server/hardware-pure'
 
 export interface HostMetricsSnapshot {
   loadavg: number[] | null
@@ -82,12 +84,15 @@ export function Hardware({
 }) {
   const [snapshot, setSnapshot] = useState<HardwareResourcesSnapshot | null>(null)
 
+  const statsMapRef = useRef<Map<number, ProcStatSample>>(new Map())
+
   useEffect(() => {
     let alive = true
     const defaultUrl = `http://localhost:${process.env.PORT || '47291'}`
     const baseUrl = (apiBase || defaultUrl).replace(/\/$/, '')
 
     const fetchHardware = async () => {
+      let fetched = false
       try {
         let res = await fetch(`${baseUrl}/api/hardware-resources`)
         if (!res.ok && baseUrl !== defaultUrl) {
@@ -95,19 +100,21 @@ export function Hardware({
         }
         if (res.ok) {
           const json = (await res.json()) as HardwareResourcesSnapshot
-          if (alive) setSnapshot(json)
+          if (alive) {
+            setSnapshot(json)
+            fetched = true
+          }
         }
       } catch {
-        if (baseUrl !== defaultUrl) {
-          try {
-            const fallbackRes = await fetch(`${defaultUrl}/api/hardware-resources`)
-            if (fallbackRes.ok && alive) {
-              const json = (await fallbackRes.json()) as HardwareResourcesSnapshot
-              setSnapshot(json)
-            }
-          } catch {
-            /* fallback to N/A */
-          }
+        /* HTTP fetch failed, fallback to direct local probe */
+      }
+
+      if (!fetched && alive) {
+        try {
+          const directSnap = await getHardwareSnapshot(statsMapRef.current)
+          if (alive) setSnapshot(directSnap)
+        } catch {
+          /* ignore */
         }
       }
     }
