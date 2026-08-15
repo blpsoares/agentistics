@@ -58,6 +58,17 @@ export interface RepoFacts {
    * which is the same split the repository dimension exists to avoid.
    */
   root?: string
+  /**
+   * The main checkout's DIRECTORY — `/home/d/agentistics` even when asked from inside one of its
+   * worktrees. Absent outside a repository, exactly like `root`, whose basename it is.
+   *
+   * Separate from `root` because a name cannot be measured against a path. The cascade arrangement
+   * files a session under the segments of its `cwd` BELOW the project, and deriving those by
+   * string-matching the project's NAME against the cwd is a guess that goes wrong wherever a
+   * segment repeats along the path. This is the fact that guess was standing in for — it was
+   * already computed here, to take the basename off, and then thrown away.
+   */
+  rootPath?: string
   /** True only for a LINKED worktree — the main checkout of a repo is not one. */
   worktree: boolean
 }
@@ -168,10 +179,15 @@ export function decideRepoFacts(o: {
   // The COMMON git dir's parent is the main checkout even when asked from a worktree, which is the
   // whole reason it is read instead of `--show-toplevel`. Computed always, not only as a fallback:
   // it is what the project is CALLED here, and a repository with no remote still has a name.
-  const root = basename(dirname(o.commonDir.replace(/[/\\]+$/, '')))
+  const rootPath = dirname(o.commonDir.replace(/[/\\]+$/, ''))
+  const root = basename(rootPath)
+  // The two travel together or not at all: `root` is this path's basename, so a row carrying one
+  // without the other would let the cascade measure branches against a directory the project is not
+  // actually named after.
+  const at = root ? { root, rootPath } : {}
   const named = normalizeGitRemote(o.remote)
-  if (named) return { repo: repoShortName(named), worktree, ...(root ? { root } : {}) }
-  return root ? { repo: root, root, worktree } : { worktree }
+  if (named) return { repo: repoShortName(named), worktree, ...at }
+  return root ? { repo: root, ...at, worktree } : { worktree }
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -248,6 +264,7 @@ export async function recordedRepo(cwd: string): Promise<{ repo?: RepoFacts }> {
     repo: {
       repo: facts.repo,
       ...(facts.root ? { root: facts.root } : {}),
+      ...(facts.rootPath ? { rootPath: facts.rootPath } : {}),
       worktree: facts.worktree,
     },
   }

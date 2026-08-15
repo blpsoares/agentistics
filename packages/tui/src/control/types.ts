@@ -445,6 +445,20 @@ export interface ControlSession {
    */
   projectGroup?: string
   /**
+   * The project's own DIRECTORY — the main checkout, even for a session inside one of its worktrees.
+   *
+   * What the CASCADE arrangement measures a session's branches against: the segments of `cwd` below
+   * this path are the nodes it hangs under. It is a path where `projectGroup` is a name, and the two
+   * are not interchangeable — deriving the branches by string-matching the name against the cwd is a
+   * guess that goes wrong wherever a segment repeats along the path.
+   *
+   * Absent whenever no repository names one — outside a repository, or for a directory that is gone
+   * with nothing recorded at spawn. The tree then hangs the session directly off its project root
+   * with no branch, which is the honest answer: a relative path that cannot be established is never
+   * synthesised.
+   */
+  projectRoot?: string
+  /**
    * Already-localized: this row's directory does not exist on this machine any more.
    *
    * Present whether or not the repository was recovered from what the registry recorded, because
