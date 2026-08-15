@@ -15,6 +15,7 @@ import {
   type CardBand, type CardLine, type SessionRow,
   dimensionWordBook,
   GROUPINGS,
+  CLOSE_CELL,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 import { PANE_FRAME_Y } from './chrome.ts'
@@ -1299,7 +1300,7 @@ describe('sessionAge', () => {
 describe('sessionKeyHelp', () => {
   const words = Object.fromEntries(
     ['move', 'open', 'attach', 'menu', 'section', 'newSession', 'search', 'clear', 'kill',
-      'rename', 'note', 'task', 'mark', 'onlyActive', 'closed', 'exited', 'unfiled', 'group',
+      'rename', 'note', 'task', 'mark', 'onlyActive', 'closed', 'exited', 'group', 'layout',
       'detail', 'menuFold', 'reset', 'tabs', 'help', 'quit',
       'approve', 'prompt', 'reopenFell'].map(k => [k, `does ${k}`]),
   ) as Parameters<typeof sessionKeyHelp>[0]
@@ -2391,14 +2392,24 @@ describe('the per-row close control', () => {
     expect(canClose(session('d', { state: 'unknown' as SessionState, actionable: false }))).toBe(false)
   })
 
+  it('is measurable ASCII, because this package counts code units and not columns', () => {
+    // `truncate` counts `s.length` — UTF-16 code UNITS — and nothing here measures display width.
+    // A wastebasket is a surrogate pair (`.length === 2`) whose column width is 1 or 2 depending on
+    // the terminal, so it cannot be reserved correctly; the reservation would be wrong by one and
+    // shear every row under it. Bracketed ASCII is three of each.
+    expect(CLOSE_CELL).toBe('[x]')
+    expect([...CLOSE_CELL].length).toBe(CLOSE_CELL.length)
+    expect(CLOSE_CELL.codePointAt(0)!).toBeLessThan(128)
+  })
+
   it('costs nothing when nothing on screen can be closed', () => {
     expect(closeCellWidth([closed, gone], 120)).toBe(0)
-    expect(closeCellWidth([live], 120)).toBe(2)
+    expect(closeCellWidth([live], 120)).toBe(CLOSE_CELL.length + 1)
   })
 
   it('gives up on a narrow list rather than squeezing the table for a button', () => {
     // The keyboard's `x` still works there, and a table squeezed to make room is the worse trade.
     expect(closeCellWidth([live], 30)).toBe(0)
-    expect(closeCellWidth([live], 40)).toBe(2)
+    expect(closeCellWidth([live], 40)).toBe(CLOSE_CELL.length + 1)
   })
 })

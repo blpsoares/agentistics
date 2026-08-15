@@ -73,6 +73,7 @@ import {
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
   applyShortcut,
+  DEFAULT_MARKED,
   migrateSessionFilters,
   sessionKept,
   shortcutOn,
@@ -265,7 +266,9 @@ export function Sessions({
    * Kept by session id rather than by position, because the list re-sorts under it every five
    * seconds: a mark that meant "the third row" would be on someone else's session by the next poll.
    */
-  const [marked, setMarked] = useState<ReadonlySet<string>>(new Set(view?.marked ?? []))
+  const [marked, setMarked] = useState<ReadonlySet<string>>(
+    () => new Set(migrateSessionFilters(view).marked),
+  )
   /**
    * Whether the menu is folded away entirely, for when the list is what you came to read.
    *
@@ -334,9 +337,11 @@ export function Sessions({
     // The heading is passed only when something ACTUALLY fell. `sessionRows` treats an absent word
     // as "there is no such section", so on an ordinary machine the reading order is unchanged
     // rather than carrying an empty block that exists to say nothing.
-  ), s.sessionsClosedWord, s.sessionsDoneWord, fleet?.fell ? s.sessionsFellWord : undefined), [
+  ), s.sessionsClosedWord, s.sessionsDoneWord, fleet?.fell ? s.sessionsFellWord : undefined,
+     // Absent when nothing is marked, so the band is not merely empty — it does not exist.
+     marked.size > 0 ? { ids: marked, label: s.sessionsMarkedBand } : undefined), [
     fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, query, filters, showNamed,
-    showDone, taskFilter, dimensionCtx, order, words,
+    showDone, taskFilter, dimensionCtx, order, words, marked,
   ])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
@@ -735,7 +740,7 @@ export function Sessions({
     setOrder(DEFAULT_ORDER)
     setHideDetail(false)
     setLayout(DEFAULT_SESSION_VIEW.layout ?? 'list')
-    setMarked(new Set())
+    setMarked(new Set(DEFAULT_MARKED))
     setQuery('')
     setCursor(0)
   }, [])
@@ -888,7 +893,11 @@ export function Sessions({
     if (input === 'e') { pressShortcut('exited'); return }
     if (input === 'l') { pressShortcut('active'); return }
     if (input === 'd') { setHideDetail(v => !v); return }
-    if (input === 'f') { setLayout(l => (l === 'list' ? 'cards' : 'list')); return }
+    // `ctrl+g` for the GRID, not `g`: `g` is "top of the list" two lines down and in
+    // `resolveListKey`'s menus, and a key answered by the screen AND by the list does two things at
+    // once. `v` — the design's fallback — is already the grouping picker. The chord keeps the
+    // mnemonic, collides with nothing, and pairs with `ctrl+f` beside it.
+    if (key.ctrl && input === 'g') { setLayout(l => (l === 'list' ? 'cards' : 'list')); return }
     // The HIGHLIGHTER. `space` because it is the mark key of every list that has one, and because
     // it is the only unclaimed key on this screen that a person reaches for without being told.
     if (input === ' ') {
@@ -909,7 +918,9 @@ export function Sessions({
     // the menu, which is what made every other verb reachable, and the cost of that was three
     // keystrokes for the thing this screen is most often opened to do.
     if (input === 'o') return runAction('attach')
-    if (input === '/') return runAction('search')
+    // `ctrl+f` is what people already type for find; `/` stays as an alias for the vi hands, and is
+    // deliberately not in the key help — the footer names ONE key per verb or it stops being read.
+    if ((key.ctrl && input === 'f') || input === '/') return runAction('search')
     // `k` is deliberately NOT the kill key — it is `up` in this list, and a key that moves the
     // cursor on one screen and destroys work on another is the shape of a real accident.
     if (input === 'x') return runAction('kill')
@@ -973,12 +984,15 @@ export function Sessions({
     const restoredFilters = migrateSessionFilters(view)
     setFilters(restoredFilters.filters)
     setShowNamed(restoredFilters.showNamed)
+    // Through the SAME seam, so "nothing is marked" is a value the restore can carry. It used to be
+    // read straight off `view.marked`, whose absence the persist below could not tell apart from an
+    // empty set — see `SessionFilterState.marked`.
+    setMarked(new Set(restoredFilters.marked))
     setOrder((view.sort as SessionOrder | undefined) ?? DEFAULT_ORDER)
     setHideDetail(view.hideDetail ?? false)
     // The DEFAULT, never a literal — same rule, same reason as `onlyActive` above.
     setLayout(view.layout ?? DEFAULT_SESSION_VIEW.layout ?? 'list')
     setCardAnchor(view.cardAnchor)
-    setMarked(new Set(view.marked ?? []))
   }, [view])
 
   /**
@@ -1012,13 +1026,12 @@ export function Sessions({
       grouping,
       // The filters and their derived-on-write copies, in one place — an older binary reading this
       // file still comes up filtered rather than with everything lifted.
-      ...storedFilters({ filters, showNamed }),
+      ...storedFilters({ filters, showNamed, marked: [...marked] }),
       showUnfiled: true,
       showDone,
       hideDetail,
       layout,
       ...(cardAnchor ? { cardAnchor } : {}),
-      ...(marked.size > 0 ? { marked: [...marked] } : {}),
       sort: order,
     } as SessionViewPrefs)
   }, [grouping, filters, showNamed, showDone, hideDetail,
@@ -1181,7 +1194,10 @@ export function Sessions({
       // The X at the right edge. It SELECTS the row first and then asks — so the confirmation names
       // the session under the pointer, never the one that happened to be selected before.
       const entry = rows[row]
-      const onClose = closeCell > 0 && p.x >= listX + PANE_EDGE_X + listBody - 1
+      // The whole control, not its last column: the cell is `CLOSE_CELL` wide, and a hit area of
+      // one column under a three-column button is a button that mostly does nothing.
+      const onClose = closeCell > 0
+        && p.x >= listX + PANE_EDGE_X + listBody - CLOSE_CELL.length
       if (onClose && entry?.kind === 'session' && canClose(entry.session)) {
         setAsk({ kind: 'kill', session: entry.session })
       }

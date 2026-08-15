@@ -272,7 +272,7 @@ export interface ControlStrings {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
     note: string; task: string; mark: string; onlyActive: string; closed: string
-    exited: string; unfiled: string; group: string; detail: string; menuFold: string
+    exited: string; group: string; layout: string; detail: string; menuFold: string
     reset: string
     tabs: string; help: string; quit: string
     approve: string; prompt: string; reopenFell: string
@@ -711,7 +711,7 @@ const EN: ControlStrings = {
     onlyActive: 'show only what is running',
     closed: 'show closed conversations',
     exited: 'show sessions that ended',
-    unfiled: 'show sessions under no task',
+    layout: 'list or cards',
     group: 'change the grouping',
     detail: 'hide the detail pane',
     menuFold: 'fold the menu away — any digit brings it back',
@@ -761,7 +761,7 @@ const EN: ControlStrings = {
   sessionsShowing: (shown, total) => `${shown} of ${total}`,
   sessionsCardAttached: 'attached',
   sessionsCardBlind: 'approval unknown',
-  keySessionsLayout: 'f list/cards',
+  keySessionsLayout: 'ctrl+g list/cards',
   keySessionsCard: '←→ card',
   keySessionsPage: 'pgup/pgdn page',
   asideSort: 'ORDER',
@@ -794,7 +794,7 @@ const EN: ControlStrings = {
   keySessionsRename: 'n name',
   keySessionsNote: 't note',
   keySessionsNew: 'a new',
-  keySessionsSearch: '/ search',
+  keySessionsSearch: 'ctrl+f search',
   keySessionsActions: 'tab actions',
   keySessionsApprove: 'y approve',
   keySessionsPrompt: 'p send',
@@ -1119,7 +1119,7 @@ const PT: ControlStrings = {
     onlyActive: 'mostra só o que está rodando',
     closed: 'mostra conversas fechadas',
     exited: 'mostra sessões encerradas',
-    unfiled: 'mostra sessões sem tarefa',
+    layout: 'lista ou cards',
     group: 'muda o agrupamento',
     detail: 'oculta o painel de detalhe',
     menuFold: 'recolhe o menu — qualquer dígito traz de volta',
@@ -1168,7 +1168,7 @@ const PT: ControlStrings = {
   sessionsShowing: (shown, total) => `${shown} de ${total}`,
   sessionsCardAttached: 'anexada',
   sessionsCardBlind: 'aprovação incerta',
-  keySessionsLayout: 'f lista/cards',
+  keySessionsLayout: 'ctrl+g lista/cards',
   keySessionsCard: '←→ card',
   keySessionsPage: 'pgup/pgdn página',
   asideSort: 'ORDENAR',
@@ -1178,7 +1178,11 @@ const PT: ControlStrings = {
   },
   sessionsStates: {
     'waiting-approval': 'precisa aprovação',
-    waiting: 'aguardando',
+    // The same word the state COLUMN shows (`cli-i18n.ts`'s `sessState.waiting`). Two tables of one
+    // vocabulary, and the sessions screen draws from both at once — the column from the host, the
+    // band heading and the filter row from here. They have to say the same thing or the row reads
+    // `aguardando resposta` under a band called `aguardando`.
+    waiting: 'aguardando resposta',
     working: 'trabalhando',
     exited: 'encerrada',
     lost: 'perdida',
@@ -1201,7 +1205,7 @@ const PT: ControlStrings = {
   keySessionsRename: 'n nomear',
   keySessionsNote: 't nota',
   keySessionsNew: 'a nova',
-  keySessionsSearch: '/ buscar',
+  keySessionsSearch: 'ctrl+f buscar',
   keySessionsActions: 'tab ações',
   keySessionsApprove: 'y aprovar',
   keySessionsPrompt: 'p enviar',

@@ -10,7 +10,7 @@
 import type { CliLang } from './lang'
 // The default ARRANGEMENT is derived from the dimension vocabulary rather than written out beside
 // it. `session-dimensions.ts` imports this file for TYPES only, so this is the one value direction.
-import { DEFAULT_FILTERS, DEFAULT_SHOW_NAMED, storedFilters } from './session-dimensions'
+import { DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED, storedFilters } from './session-dimensions'
 
 export type TabId =
   | 'services'
@@ -718,7 +718,7 @@ export interface SessionViewPrefs {
  */
 export const DEFAULT_SESSION_VIEW: SessionViewPrefs = {
   grouping: 'project',
-  ...storedFilters({ filters: DEFAULT_FILTERS, showNamed: DEFAULT_SHOW_NAMED }),
+  ...storedFilters({ filters: DEFAULT_FILTERS, showNamed: DEFAULT_SHOW_NAMED, marked: DEFAULT_MARKED }),
   showDone: false,
   layout: 'list',
   // Derived-on-write, like the three `storedFilters` writes above: only an older binary reads it.
