@@ -1,8 +1,9 @@
 import React, { useState } from 'react'
 import { FileText, ArrowDownWideNarrow } from 'lucide-react'
 import type { Lang } from '@agentistics/core'
-import { t } from '@agentistics/core'
+import { fmt, t } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { MetricNote } from './MetricNote'
 
 interface Props {
   toolCounts: Record<string, number>
@@ -17,14 +18,10 @@ interface Props {
 
 type ViewMode = 'calls' | 'tokens'
 
-function fmt(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
 
 export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads, lang, forcedMode, hideAgentReads }: Props) {
   const isMobile = useIsMobile()
+  const pt = lang === 'pt'
   const [viewMode, setViewMode] = useState<ViewMode>(forcedMode ?? 'calls')
   const effectiveMode: ViewMode = forcedMode ?? viewMode
   const showToggle = forcedMode === undefined
@@ -158,6 +155,16 @@ export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads,
             )
           })}
         </div>
+      )}
+
+      {/* The token mode is an ATTRIBUTION, not a measurement, and the difference matters here more
+          than almost anywhere: a "villain" badge is an accusation built on a fair split. */}
+      {effectiveMode === 'tokens' && entries.length > 0 && (
+        <MetricNote tone="warn">
+          {pt
+            ? 'Estimativa, não medição: só os tokens de SAÍDA são atribuídos aqui, e um turno que chamou várias ferramentas divide a saída dele em partes iguais entre elas. O que uma ferramenta fez o modelo LER depois — o resultado dela — é cobrado como entrada e cache do turno seguinte, e não aparece nesta barra.'
+            : 'An estimate, not a measurement: only OUTPUT tokens are attributed here, and a turn that called several tools splits its output equally between them. What a tool then made the model READ — its result — is billed as the next turn\u2019s input and cache, and does not appear in this bar.'}
+        </MetricNote>
       )}
 
       {/* Agent file reads section */}

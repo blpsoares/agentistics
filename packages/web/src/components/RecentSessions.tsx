@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import type { SessionMeta } from '@agentistics/core'
 import { sessionTime } from '../lib/sessionTime'
-import { formatProjectName, sessionLabel, sessionTokenTotal } from '@agentistics/core'
+import { fmt, formatProjectName, sessionLabel, sessionTokenTotal } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { format, parseISO } from 'date-fns'
 import {
@@ -69,11 +69,6 @@ const T = {
 
 // Helpers
 
-function fmt(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
-  return String(n)
-}
 
 /** Every billed counter — the column header says "tokens", so it must be all of them. */
 function totalTokens(s: SessionMeta): number {
