@@ -36,6 +36,7 @@ import {
   sessionRows,
   worktreeName,
   type ContextLevel,
+  type DimensionWordBook,
   type SessionColumns,
   type SessionGrouping,
   type SessionOrder,
@@ -49,14 +50,8 @@ import type { ControlSession, SessionState } from '@agentistics/tui/control'
  */
 export interface SessionTableStrings {
   cols: Record<keyof SessionColumns, string>
-  unknown: {
-    harness: string
-    model: string
-    project: string
-    task: string
-    repo: string
-    goneProject: string
-  }
+  /** Every dimension's bucket names — built once by `sessionWordBook`, never assembled here. */
+  words: DimensionWordBook
   /** Heads the block of conversations that are not running. */
   closed: string
   /** Marks a task the user finished, on its heading. */
@@ -227,7 +222,7 @@ export function renderSessionTable(o: SessionTableOptions): string[] {
   const groups = groupSessions(
     o.sessions,
     o.grouping,
-    o.strings.unknown,
+    o.strings.words,
     o.doneTasks ?? [],
     o.order ?? DEFAULT_ORDER,
   )

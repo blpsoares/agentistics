@@ -19,6 +19,7 @@ import type {
   SessionState, SessionViewPrefs,
 } from '../types'
 import type { ControlStrings } from '../i18n'
+import { sessionWordBook } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
 import { DEFAULT_SESSION_VIEW } from '../types'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
@@ -71,6 +72,15 @@ import {
   sessionNamed,
   type AsideRow, type OfferedAction, type SessionColumns, type SessionToggle,
   type DetailLine, type SessionAction, type SessionGrouping, type SessionRow,
+  applyShortcut,
+  migrateSessionFilters,
+  sessionKept,
+  shortcutOn,
+  storedFilters,
+  toggleValue,
+  type SessionDimensionId,
+  type SessionFilters,
+  type StatusShortcut,
 } from '../sessions'
 import { isActivation, wheelDelta } from '../mouse'
 import { usePointer } from '../pointer'
@@ -207,25 +217,47 @@ export function Sessions({
   const [cursor, setCursor] = useState(0)
   const [ask, setAsk] = useState<Ask | null>(null)
   const [query, setQuery] = useState('')
-  // A second scope beside the task one. Both are RUNTIME scopes rather than stored arrangement:
-  // "which project am I looking through right now" is not something a restart should remember.
-  const [projectFilter, setProjectFilter] = useState<string | null>(null)
   const [showDone, setShowDone] = useState(view?.showDone ?? DEFAULT_SESSION_VIEW.showDone ?? false)
-  // The strict switch: only what is running, and it OVERRIDES the "a row you named is never hidden"
-  // rule rather than widening alongside the others. That rule is right by default — it is what
-  // stops a reboot emptying the list — but on a machine with months of named work it shows all of
-  // it, and someone who wants the four things they are actually doing had no way to say so.
-  const [onlyActive, setOnlyActive] = useState(
-    view?.onlyActive ?? DEFAULT_SESSION_VIEW.onlyActive ?? false,
-  )
-  // `null` means "the two switches above decide", which is the ordinary case. A Set means the user
-  // narrowed it further, and then it is the whole answer.
-  const [states, setStates] = useState<ReadonlySet<SessionState> | null>(
-    view?.states ? new Set(view.states as SessionState[]) : null,
-  )
+  /**
+   * What the list is narrowed to, per dimension — the ONE source, and the whole answer.
+   *
+   * There used to be four independent pieces of state for one question: `onlyActive`, `states`,
+   * `showClosed` and `showExited`, of which `states` silently won whenever it was present. The
+   * switches went on drawing their own on/off while changing nothing — the screen said "only
+   * active" over 62 of 65 sessions, nearly all of them closed or ended. Ordering the switches
+   * differently does not fix a control that lies; having one source does.
+   *
+   * The switches below are SHORTCUTS derived from it, both ways: they write into it, and they read
+   * their own state back OUT of it. See `session-dimensions.ts`.
+   */
+  const [filters, setFilters] = useState<SessionFilters>(() => migrateSessionFilters(view).filters)
+  /** Whether a row the user NAMED survives a status filter that would otherwise drop it. */
+  const [showNamed, setShowNamed] = useState(() => migrateSessionFilters(view).showNamed)
   const [order, setOrder] = useState<SessionOrder>(
     (view?.sort as SessionOrder | undefined) ?? DEFAULT_ORDER,
   )
+  // Derived, never stored beside the selection: a switch that keeps its own copy of what it
+  // describes is a switch that can disagree with the list.
+  const status = filters.status ?? ACTIVE_STATES
+  const onlyActive = shortcutOn(status, 'active')
+  const showClosed = shortcutOn(status, 'closed')
+  const showExited = shortcutOn(status, 'exited')
+  const taskFilter = filters.task?.[0] ?? null
+  const projectFilter = filters.project?.[0] ?? null
+  const pressShortcut = useCallback((k: StatusShortcut) => {
+    setFilters(f => ({ ...f, status: applyShortcut(f.status ?? ACTIVE_STATES, k) }))
+    setCursor(0)
+  }, [])
+  /** Pick ONE value on a dimension, or clear it — the task and project sections' gesture. */
+  const scopeTo = useCallback((id: SessionDimensionId, value: string | null) => {
+    setFilters(f => {
+      const next = { ...f }
+      if (value === null) delete next[id]
+      else next[id] = [value]
+      return next
+    })
+    setCursor(0)
+  }, [])
   const [hideDetail, setHideDetail] = useState(view?.hideDetail ?? false)
   /**
    * The rows the user MARKED — a highlighter, not a selection.
@@ -259,27 +291,8 @@ export function Sessions({
    * order of magnitude bigger than the fleet — it buried the live rows the first time it shipped on.
    * One keypress and one visible toggle bring it back, and search reaches it either way.
    */
-  const [showClosed, setShowClosed] = useState(view?.showClosed ?? DEFAULT_SESSION_VIEW.showClosed)
-  /** Whether the "no task" bucket is listed while grouping by task. Hidden by default: the point of
-   *  grouping by task is seeing the tasks, and everything unfiled is the biggest group there is. */
-  const [hideEmptyTask, setHideEmptyTask] = useState(!(view?.showUnfiled ?? DEFAULT_SESSION_VIEW.showUnfiled))
   const [actionsFocused, setActionsFocused] = useState(false)
   const [actionIndex, setActionIndex] = useState(0)
-  /**
-   * Whether a FINISHED session is listed.
-   *
-   * Its own switch rather than sharing the closed one: a session that ran here and ended is a
-   * different thing from a conversation that was never ours, and someone who wants yesterday's
-   * conversations back does not necessarily want every pane that exited today.
-   */
-  const [showExited, setShowExited] = useState(view?.showExited ?? DEFAULT_SESSION_VIEW.showExited)
-  /**
-   * The task the list is scoped to, or `null` for the whole fleet.
-   *
-   * Scoping rather than navigating away: a task is a place you work out of, so picking one narrows
-   * the list you are already looking at and every verb keeps working on the rows inside it.
-   */
-  const [taskFilter, setTaskFilter] = useState<string | null>(null)
   /** Which pane has the keyboard. The aside is a real pane, not a strip of hints. */
   const [focus, setFocus] = useState<'list' | 'aside'>('list')
   /**
@@ -293,56 +306,37 @@ export function Sessions({
   const [asideKey, setAsideKey] = useState('action:attach')
 
   const done = useMemo(() => new Set(fleet?.finishedTasks ?? []), [fleet?.finishedTasks])
+  // The bucket names, resolved ONCE. Grouping and the filter chips read the same book, so a band
+  // and the row that selects it can never be called different things.
+  const words = useMemo(() => sessionWordBook(s), [s])
+  // The only fact a `keyOf` needs that is not on the session itself.
+  const dimensionCtx = useMemo(() => ({ marked }), [marked])
   const rows = useMemo(() => sessionRows(groupSessions(
     filterSessions(
       (fleet?.sessions ?? []).filter(v =>
-        // ONLY ACTIVE is absolute: it answers the whole question above on its own, named rows
-        // included. Everything else here can only ever widen, and the point of this switch is that
-        // there is finally one that does not.
-        // An explicit STATE set is the whole answer, ahead of both switches: it is the more
-        // specific thing the user said, and letting a switch widen past it would make ticking a
-        // box add rows it does not name.
-        (states ? states.has(v.state)
-          : onlyActive
-          ? sessionRunning(v)
-          // What you NAMED, you keep seeing. A machine restart makes every managed session `lost`,
-          // and with the history switches off — which is how they ship — the list came back empty:
-          // the session you had renamed and filed under a task was gone, and so was the name. A row
-          // someone deliberately marked is their work, not anonymous history, so the two switches
-          // withhold everything EXCEPT that.
-          : sessionNamed(v)
-            || ((showClosed || v.state !== 'closed')
-              && (showExited || (v.state !== 'exited' && v.state !== 'lost'))))
-        // Scoped to one task: every verb still works, on the rows inside it.
-        && (taskFilter === null || v.task === taskFilter)
-        // The project drill-down. Exact, never a prefix — two projects can share a first word.
-        && (projectFilter === null || v.project === projectFilter)
+        // ONE predicate over ONE filter model, reading the very `keyOf` the bands are built from.
+        // What used to be here was a precedence chain over four booleans and two scopes, in which
+        // the state set silently outranked the switches beside it.
+        sessionKept(v, { filters, showNamed, ctx: dimensionCtx })
         // A FINISHED task's sessions are withheld, not removed: the work is over and it stops
-        // competing for the screen with the work that is not. Scoping TO that task overrides the
-        // switch, or picking a finished task from the menu would empty the list.
-        && (showDone || taskFilter !== null || !(v.task && done.has(v.task)))
-        // Only ever applies while grouping by task: everywhere else an unfiled session is simply a
-        // session, and hiding it would make the list lie about how many there are.
-        && !(hideEmptyTask && grouping === 'task' && !v.task)),
+        // competing for the screen with the work that is not. Scoping TO a task overrides the
+        // switch, or picking a finished task from the menu would empty the list. It stays outside
+        // the dimension model on purpose: "finished" is a fact about the TASK, not a bucket any
+        // session falls in — every session of a finished task still wears its own state.
+        && (showDone || taskFilter !== null || !(v.task && done.has(v.task)))),
       query,
     ),
     grouping,
-    {
-      harness: s.sessionsUnknownHarness,
-      model: s.sessionsUnknownModel,
-      project: s.sessionsUnknownProject,
-      task: s.sessionsUnknownTask,
-      repo: s.sessionsUnknownRepo,
-      goneProject: s.sessionsGoneProject,
-    },
+    words,
     fleet?.finishedTasks ?? [],
     order,
+    dimensionCtx,
     // The heading is passed only when something ACTUALLY fell. `sessionRows` treats an absent word
     // as "there is no such section", so on an ordinary machine the reading order is unchanged
     // rather than carrying an empty block that exists to say nothing.
   ), s.sessionsClosedWord, s.sessionsDoneWord, fleet?.fell ? s.sessionsFellWord : undefined), [
-    fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, query, showClosed,
-    showExited, hideEmptyTask, showDone, onlyActive, states, order, taskFilter, projectFilter, s,
+    fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, query, filters, showNamed,
+    showDone, taskFilter, dimensionCtx, order, words,
   ])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
@@ -462,19 +456,22 @@ export function Sessions({
     groupWords: s.sessionsGroupings,
     layout: { heading: s.asideLayout, words: s.sessionsLayouts, value: layout },
     toggles: {
-      closed: showClosed, exited: showExited, unfiled: !hideEmptyTask, done: showDone,
-      active: onlyActive, detail: !hideDetail,
+      closed: showClosed, exited: showExited, done: showDone,
+      active: onlyActive, named: showNamed, detail: !hideDetail,
     },
     toggleWords: {
-      closed: s.toggleClosed, exited: s.toggleExited, unfiled: s.toggleUnfiled, done: s.toggleDone,
-      active: s.toggleActive, detail: s.toggleDetail,
+      closed: s.toggleClosed, exited: s.toggleExited, done: s.toggleDone,
+      active: s.toggleActive, named: s.toggleNamed, detail: s.toggleDetail,
     },
     headings: { actions: s.asideActions, view: s.asideView, show: s.asideShow },
-    showUnfiled: grouping === 'task',
     tasks: {
       // Counted over the WHOLE fleet: the count is what says a task has work in it, and counting
       // after the filters would report the number the filter left.
       counts: taskCounts(fleet?.sessions ?? []),
+      // The "no task" bucket is a row here like any other value, which is what the `unfiled` switch
+      // used to be — a hidden exception that only existed while grouping by task, for one dimension.
+      unfiled: s.sessionsUnfiled.task,
+      unfiledCount: (fleet?.sessions ?? []).filter(v => !v.task).length,
       active: taskFilter,
       heading: s.asideTasks,
       allLabel: s.asideAllTasks,
@@ -487,7 +484,7 @@ export function Sessions({
       // Counted over the WHOLE fleet: counting after the filter reports the number the filter left,
       // which for an unselected state is always zero — a row that can never be turned back on.
       counts: stateCounts,
-      kept: [...(states ?? ACTIVE_STATES)],
+      kept: [...status] as SessionState[],
     },
     // The other half of the drill-down: a task is something you declared, a project is something
     // every session already has — which makes it the scope that can find a session you never filed.
@@ -498,8 +495,8 @@ export function Sessions({
       allLabel: s.asideAllProjects,
     },
   }), [
-    actions, grouping, layout, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
-    states, stateCounts, order, taskFilter,
+    actions, grouping, layout, showClosed, showExited, showDone, onlyActive, showNamed, hideDetail,
+    status, stateCounts, order, taskFilter,
     projectFilter, fleet?.sessions, fleet?.finishedTasks, s,
   ])
 
@@ -730,18 +727,15 @@ export function Sessions({
    */
   const resetView = useCallback(() => {
     setGrouping(DEFAULT_SESSION_VIEW.grouping)
-    setShowClosed(DEFAULT_SESSION_VIEW.showClosed)
-    setShowExited(DEFAULT_SESSION_VIEW.showExited)
     setShowDone(DEFAULT_SESSION_VIEW.showDone ?? false)
-    setOnlyActive(DEFAULT_SESSION_VIEW.onlyActive ?? false)
-    setStates(null)
+    // The DEFAULT's own filters, read back through the same migration the restore uses — so the
+    // arrangement the app opens on and the one `ctrl+r` returns to are one answer, not two.
+    setFilters(migrateSessionFilters(DEFAULT_SESSION_VIEW).filters)
+    setShowNamed(migrateSessionFilters(DEFAULT_SESSION_VIEW).showNamed)
     setOrder(DEFAULT_ORDER)
     setHideDetail(false)
     setLayout(DEFAULT_SESSION_VIEW.layout ?? 'list')
     setMarked(new Set())
-    setHideEmptyTask(!DEFAULT_SESSION_VIEW.showUnfiled)
-    setTaskFilter(null)
-    setProjectFilter(null)
     setQuery('')
     setCursor(0)
   }, [])
@@ -753,8 +747,8 @@ export function Sessions({
     if (row.kind === 'action') { if (row.enabled) runAction(row.action); return }
     if (row.kind === 'group') { setGrouping(row.value); setCursor(0); return }
     if (row.kind === 'layout') { setLayout(row.value); return }
-    if (row.kind === 'task') { setTaskFilter(row.name || null); setCursor(0); return }
-    if (row.kind === 'project') { setProjectFilter(row.name || null); setCursor(0); return }
+    if (row.kind === 'task') { scopeTo('task', row.all ? null : row.name); return }
+    if (row.kind === 'project') { scopeTo('project', row.name || null); return }
     if (row.kind === 'sort') {
       // Picking the order already in force FLIPS it, which is the gesture every table has and the
       // only one that does not need a second control for the direction.
@@ -765,25 +759,20 @@ export function Sessions({
       return
     }
     if (row.kind === 'state') {
-      setStates(prev => {
-        const next = new Set(prev ?? ACTIVE_STATES)
-        if (next.has(row.value)) next.delete(row.value)
-        else next.add(row.value)
-        // Emptying it would show nothing at all, which is never what unticking the last box means.
-        return next.size === 0 ? null : next
-      })
+      // The never-empty rule lives in `toggleValue` now, where the keyboard reaches it too.
+      setFilters(f => ({ ...f, status: toggleValue(f.status ?? ACTIVE_STATES, row.value) }))
       setCursor(0)
       return
     }
     if (row.kind !== 'toggle') return
+    if (row.toggle === 'closed') return pressShortcut('closed')
+    if (row.toggle === 'exited') return pressShortcut('exited')
+    if (row.toggle === 'active') return pressShortcut('active')
     setCursor(0)
-    if (row.toggle === 'closed') return setShowClosed(v => !v)
-    if (row.toggle === 'exited') return setShowExited(v => !v)
     if (row.toggle === 'done') return setShowDone(v => !v)
-    if (row.toggle === 'active') return setOnlyActive(v => !v)
-    if (row.toggle === 'detail') return setHideDetail(v => !v)
-    return setHideEmptyTask(v => !v)
-  }, [asideList, runAction, resetView])
+    if (row.toggle === 'named') return setShowNamed(v => !v)
+    return setHideDetail(v => !v)
+  }, [asideList, runAction, resetView, pressShortcut, scopeTo])
 
   useInput((input, key) => {
     const nav: NavKey = {
@@ -864,8 +853,8 @@ export function Sessions({
     // query on an empty enter — so a typo in the search box was a list that could not be got back.
     if (key.escape) {
       if (query) { setQuery(''); setCursor(0); return }
-      if (projectFilter !== null) { setProjectFilter(null); setCursor(0); return }
-      if (taskFilter !== null) { setTaskFilter(null); setCursor(0); return }
+      if (projectFilter !== null) { scopeTo('project', null); return }
+      if (taskFilter !== null) { scopeTo('task', null); return }
       return
     }
     // `ctrl+r` puts the arrangement back to how the app opens on a fresh machine. Every switch on
@@ -876,7 +865,7 @@ export function Sessions({
     // `ctrl+a` beside `l`, and `ctrl+h` for the list of everything. Two keys for one switch is not
     // duplication here: `l` is what the footer has room to name, and a chord is what someone
     // reaches for without having read the footer at all.
-    if (key.ctrl && input === 'a') { setOnlyActive(v => !v); setCursor(0); return }
+    if (key.ctrl && input === 'a') { pressShortcut('active'); return }
     // Folding the menu answers TWO keys, and the second one is not a convenience.
     //
     // `ctrl+b` is tmux's DEFAULT PREFIX. Run in a plain terminal the cockpit receives it and this
@@ -895,9 +884,9 @@ export function Sessions({
     // here, not assumed. `?` has no such collision and is what every list-shaped TUI already uses.
     if (input === '?' || (key.ctrl && input === 'h')) { setAsk({ kind: 'keys' }); return }
     if (input === 'v') return runAction('group')
-    if (input === 'c') { setShowClosed(v => !v); setCursor(0); return }
-    if (input === 'e') { setShowExited(v => !v); setCursor(0); return }
-    if (input === 'l') { setOnlyActive(v => !v); setCursor(0); return }
+    if (input === 'c') { pressShortcut('closed'); return }
+    if (input === 'e') { pressShortcut('exited'); return }
+    if (input === 'l') { pressShortcut('active'); return }
     if (input === 'd') { setHideDetail(v => !v); return }
     if (input === 'f') { setLayout(l => (l === 'list' ? 'cards' : 'list')); return }
     // The HIGHLIGHTER. `space` because it is the mark key of every list that has one, and because
@@ -912,7 +901,9 @@ export function Sessions({
       })
       return
     }
-    if (input === 'u' && grouping === 'task') { setHideEmptyTask(v => !v); setCursor(0); return }
+    // `u` used to hide the unfiled band while grouping by task. That is now the task section's own
+    // "no task" row, selectable like every other value on every dimension, so the key is gone with
+    // the switch — a key whose control no longer exists is a key nothing on screen explains.
     if (input === 'a') return runAction('new')
     // Attaching has its OWN key because `enter` deliberately does not do it any more: enter opens
     // the menu, which is what made every other verb reachable, and the cost of that was three
@@ -975,19 +966,13 @@ export function Sessions({
     if (restored.current || !view) return
     restored.current = true
     setGrouping(view.grouping)
-    setShowClosed(view.showClosed)
-    setShowExited(view.showExited)
-    setHideEmptyTask(!view.showUnfiled)
-    // Absent reads as OFF, which is the point of finishing a task at all — and it is the same rule
-    // the stored `showClosed` follows, so a preferences file written before this existed opens with
-    // finished work put away rather than with the switch inverted.
+    // Absent reads as OFF, which is the point of finishing a task at all.
     setShowDone(view.showDone ?? false)
-    // The DEFAULT, not `false`. `showDone` above defaults to false so its `?? false` is right; this
-    // one defaults to TRUE, and copying the rule across turned the strict filter off on every
-    // preferences file written before it existed — then the persist effect wrote that off to disk,
-    // making it permanent. Reported from a real machine.
-    setOnlyActive(view.onlyActive ?? DEFAULT_SESSION_VIEW.onlyActive ?? false)
-    setStates(view.states ? new Set(view.states as SessionState[]) : null)
+    // ONE read of the stored filters, through the migration that decides what a file written by an
+    // older build means. It is the only place the four legacy switches are still consulted.
+    const restoredFilters = migrateSessionFilters(view)
+    setFilters(restoredFilters.filters)
+    setShowNamed(restoredFilters.showNamed)
     setOrder((view.sort as SessionOrder | undefined) ?? DEFAULT_ORDER)
     setHideDetail(view.hideDetail ?? false)
     // The DEFAULT, never a literal — same rule, same reason as `onlyActive` above.
@@ -1024,16 +1009,20 @@ export function Sessions({
     // answers, so an absent `view` means "not loaded yet" and nothing else.
     if (!restored.current) return
     onView({
-      grouping, showClosed, showExited, showUnfiled: !hideEmptyTask, showDone, onlyActive,
+      grouping,
+      // The filters and their derived-on-write copies, in one place — an older binary reading this
+      // file still comes up filtered rather than with everything lifted.
+      ...storedFilters({ filters, showNamed }),
+      showUnfiled: true,
+      showDone,
       hideDetail,
       layout,
       ...(cardAnchor ? { cardAnchor } : {}),
       ...(marked.size > 0 ? { marked: [...marked] } : {}),
-      ...(states ? { states: [...states] } : {}),
       sort: order,
-    })
-  }, [grouping, showClosed, showExited, hideEmptyTask, showDone, onlyActive, hideDetail,
-      layout, cardAnchor, states, order, marked, onView, view])
+    } as SessionViewPrefs)
+  }, [grouping, filters, showNamed, showDone, hideDetail,
+      layout, cardAnchor, order, marked, onView, view])
 
   useEffect(() => {
     if (!isActive) return
@@ -1315,13 +1304,13 @@ export function Sessions({
           strings={s}
           grouping={grouping}
           showClosed={showClosed}
-          hideEmptyTask={hideEmptyTask}
+          showNamed={showNamed}
           width={width}
           height={height}
           isActive={isActive}
           onGrouping={g => { setGrouping(g); setCursor(0) }}
-          onShowClosed={v => { setShowClosed(v); setCursor(0) }}
-          onHideEmptyTask={v => { setHideEmptyTask(v); setCursor(0) }}
+          onShowClosed={() => pressShortcut('closed')}
+          onShowNamed={() => { setShowNamed(v => !v); setCursor(0) }}
           onClose={() => setAsk(null)}
         />
       </Box>
@@ -1489,7 +1478,7 @@ export function Sessions({
           strings={s}
           width={listBody}
           showClosed={showClosed}
-          hideEmptyTask={grouping === 'task' ? hideEmptyTask : null}
+          showNamed={showNamed}
           onlyActive={onlyActive}
           // How many rows are ON SCREEN, counted from the very list being drawn. The header used to
           // read the fleet's length, so with `only active` on it announced 44 over a screen showing
@@ -1692,16 +1681,16 @@ export function Sessions({
  * to state the answer, so a glance tells you why the list looks the way it does.
  */
 function SummaryRow({
-  fleet, grouping, strings: s, width, showClosed, hideEmptyTask, onlyActive, shown, query, scope, fell,
+  fleet, grouping, strings: s, width, showClosed, showNamed, onlyActive, shown, query, scope, fell,
 }: {
   fleet: ControlSessions | null | undefined
   grouping: SessionGrouping
   strings: ControlStrings
   width: number
   showClosed: boolean
-  /** `null` when the setting does not apply — grouping by anything but task. */
-  hideEmptyTask: boolean | null
-  /** The strict switch, which withholds more than the other two together. */
+  /** The one widening on this block — stated because it changes what a strict filter means. */
+  showNamed: boolean
+  /** The strict selection: exactly the states that mean something is alive. */
   onlyActive: boolean
   /** Rows actually drawn, counted from the drawn list rather than from the fleet. */
   shown: number
@@ -1726,13 +1715,14 @@ function SummaryRow({
   // Only the filters that are actually HIDING something are named. A row that lists every setting
   // at its default is noise; one that names what is being withheld is an explanation.
   const hiding: string[] = []
-  // The strict switch is stated FIRST and alone: it withholds everything the other two do and more,
-  // so listing them beside it would describe a filter that is not the one in force.
+  // The strict selection is stated FIRST and alone: it withholds everything the other two do and
+  // more, so listing them beside it would describe a filter that is not the one in force. It can no
+  // longer be true at the same time as them — all three read one selection — but the reading order
+  // still matters, and `showNamed` is named whenever it is on because it is the one thing that puts
+  // rows BACK into a list the sentence above says is strict.
   if (onlyActive) hiding.push(s.viewActiveOn)
-  else {
-    if (!showClosed) hiding.push(s.viewClosedOn)
-    if (hideEmptyTask) hiding.push(s.viewUnfiledOn)
-  }
+  else if (!showClosed) hiding.push(s.viewClosedOn)
+  if (showNamed) hiding.push(s.toggleNamed)
 
   // MEASURED, never left to Yoga: a row that wraps takes two of the screen's rows while its budget
   // counted one, and everything below it — the action row, the detail pane, the footer — is pushed
@@ -2511,19 +2501,19 @@ function Question({
  * squeezing it under the list is what made it unreadable the first time.
  */
 function ViewOptions({
-  strings: s, grouping, showClosed, hideEmptyTask, width, height, isActive,
-  onGrouping, onShowClosed, onHideEmptyTask, onClose,
+  strings: s, grouping, showClosed, showNamed, width, height, isActive,
+  onGrouping, onShowClosed, onShowNamed, onClose,
 }: {
   strings: ControlStrings
   grouping: SessionGrouping
   showClosed: boolean
-  hideEmptyTask: boolean
+  showNamed: boolean
   width: number
   height: number
   isActive: boolean
   onGrouping: (g: SessionGrouping) => void
-  onShowClosed: (v: boolean) => void
-  onHideEmptyTask: (v: boolean) => void
+  onShowClosed: () => void
+  onShowNamed: () => void
   onClose: () => void
 }) {
   // One flat list of rows so the cursor moves over exactly what is drawn — the same reason the
@@ -2532,15 +2522,16 @@ function ViewOptions({
     | { kind: 'heading'; label: string }
     | { kind: 'group'; value: SessionGrouping }
     | { kind: 'closed' }
-    | { kind: 'unfiled' }
+    | { kind: 'named' }
 
   const rows: Row[] = [
     { kind: 'heading', label: s.viewGroupBy },
     ...GROUPINGS.map(g => ({ kind: 'group' as const, value: g })),
     { kind: 'heading', label: s.viewShow },
     { kind: 'closed' },
-    // Only meaningful while grouping by task, so it is ABSENT otherwise rather than inert.
-    ...(grouping === 'task' ? [{ kind: 'unfiled' as const }] : []),
+    // Was the unfiled switch, which only meant anything while grouping by task. That bucket is now
+    // a row in the task section, on every grouping; this is the widening that had no control at all.
+    { kind: 'named' },
   ]
   const selectable = rows.map((r, i) => (r.kind === 'heading' ? -1 : i)).filter(i => i >= 0)
 
@@ -2556,8 +2547,8 @@ function ViewOptions({
     const row = rows[cursorRow]
     if (!row) return
     if (row.kind === 'group') return onGrouping(row.value)
-    if (row.kind === 'closed') return onShowClosed(!showClosed)
-    if (row.kind === 'unfiled') return onHideEmptyTask(!hideEmptyTask)
+    if (row.kind === 'closed') return onShowClosed()
+    if (row.kind === 'named') return onShowNamed()
   }, { isActive })
 
   const body = Math.max(1, height - 2)
@@ -2573,16 +2564,14 @@ function ViewOptions({
         const active = i === cursorRow
         // Every row states BOTH what it is and whether it is on. A list of options that shows only
         // the cursor makes you press things to find out what they already were.
-        // The dot means SHOWN, always — for every row on this panel. It read the other way round
-        // for the unfiled toggle, whose state is stored as "hidden": a filled dot beside "sessions
-        // with no task" said they were visible while they were the one thing being withheld.
+        // The dot means ON, always — for every row on this panel.
         const on = row.kind === 'group'
           ? row.value === grouping
-          : row.kind === 'closed' ? showClosed : !hideEmptyTask
+          : row.kind === 'closed' ? showClosed : showNamed
         const label = row.kind === 'group'
           ? s.sessionsGroupings[row.value]
           : row.kind === 'closed' ? s.viewClosedOn
-          : s.viewUnfiledOn
+          : s.toggleNamed
         return (
           <Text key={`r${i}`} wrap="truncate">
             <Text color={active ? COLORS.accent : undefined}>{active ? '  ❯ ' : '    '}</Text>
@@ -2690,7 +2679,10 @@ function AsideMenu({
         // A STATE row carries its count for the same reason a task does — it is what says the
         // filter has anything behind it. The ORDER row carries its direction instead, because
         // picking the order already in force flips it and the arrow is what says which way.
+        // A task row that is not the "every task" one carries its count, INCLUDING the unfiled
+        // bucket — whose name is empty, which is why this cannot be keyed on the name.
         const count = row.kind === 'state' ? ` ${row.count}`
+          : row.kind === 'task' ? (row.all ? '' : ` ${row.count}`)
           : scoped && row.name ? ` ${row.count}`
           : row.kind === 'sort' && row.on ? (row.dir === 'desc' ? ' ↓' : ' ↑')
           : ''
@@ -2698,7 +2690,10 @@ function AsideMenu({
         // A finished task wears a tick, so the menu states what it already knows rather than making
         // someone select it to find out.
         const tick = row.kind === 'task' && row.done ? '✓ ' : ''
-        const label = scoped ? tick + (row.name || allLabel) : row.label
+        // A task row states its OWN name; only a project row is still rebuilt from `name`, and it
+        // has no unfiled bucket to collide with (`projectCounts` skips sessions with no project).
+        const label = row.kind === 'task' ? tick + row.label
+          : scoped ? tick + (row.name || allLabel) : row.label
         return (
           <Text key={`${row.kind}${i}`} wrap="truncate" dimColor={!enabled}>
             <Text color={active ? COLORS.accent : undefined}>{active ? '❯' : ' '}</Text>

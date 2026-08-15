@@ -8,6 +8,7 @@
  */
 
 import type { CliLang } from './lang'
+import { dimensionWordBook, type DimensionWordBook, type SessionDimensionId, type SessionGroupingId } from './session-dimensions'
 import type { TabId, TeamMode } from './types'
 
 export interface ControlStrings {
@@ -218,7 +219,17 @@ export interface ControlStrings {
   sessionsCount: (shown: number, total: number) => string
   sessionsWaitingCount: (n: number) => string
   sessionsGroupBy: string
-  sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project' | 'task' | 'repo', string>
+  /**
+   * Every dimension's name, plus the flat arrangement.
+   *
+   * `Record<SessionGroupingId, …>` on purpose: a dimension added to `session-dimensions.ts` breaks
+   * the build here until it has a word, rather than appearing in the menu under its internal id.
+   */
+  sessionsGroupings: Record<SessionGroupingId, string>
+  /** What each dimension's 'no value' bucket is called. Same reason it is a `Record`. */
+  sessionsUnfiled: Record<SessionDimensionId, string>
+  /** The band of rows the user MARKED — the filled side of the `marked` dimension. */
+  sessionsMarkedBand: string
   sessionsUnknownHarness: string
   sessionsUnknownModel: string
   sessionsUnknownProject: string
@@ -393,7 +404,13 @@ export interface ControlStrings {
   asideAllTasks: string
   toggleClosed: string
   toggleExited: string
-  toggleUnfiled: string
+  /**
+   * The named-row widening, made visible.
+   *
+   * It replaced `toggleUnfiled`, which hid the task-less band only while grouping by task — that is
+   * now the task section's own "no task" row, on every dimension.
+   */
+  toggleNamed: string
   keySessionsAside: string
   /** The management view a session opens into. */
   manageTitle: (title: string) => string
@@ -619,7 +636,21 @@ const EN: ControlStrings = {
     harness: 'harness',
     model: 'model',
     project: 'project',
+    status: 'state',
+    marked: 'marked',
   },
+  sessionsUnfiled: {
+    harness: 'harness unknown',
+    model: 'no model recorded',
+    project: 'no directory recorded',
+    task: 'no task',
+    repo: 'no repository',
+    // Unreachable in practice — every row wears a state — but a bucket without a name is a heading
+    // the screen cannot draw, so it is named rather than left to render blank.
+    status: 'state unrecorded',
+    marked: 'not marked',
+  },
+  sessionsMarkedBand: 'marked',
   sessionsUnknownHarness: 'harness unknown',
   sessionsUnknownModel: 'no model recorded',
   sessionsUnknownProject: 'no directory recorded',
@@ -816,7 +847,7 @@ const EN: ControlStrings = {
   asideAllTasks: 'every task',
   toggleClosed: 'closed conversations',
   toggleExited: 'finished sessions',
-  toggleUnfiled: 'sessions with no task',
+  toggleNamed: 'always keep named sessions',
   keySessionsAside: 'tab menu',
   manageTitle: (title: string) => `Managing "${title}"`,
   manageHint: '↑↓ move · enter run · esc back to the list',
@@ -1018,7 +1049,19 @@ const PT: ControlStrings = {
     harness: 'harness',
     model: 'modelo',
     project: 'projeto',
+    status: 'estado',
+    marked: 'marcadas',
   },
+  sessionsUnfiled: {
+    harness: 'harness desconhecido',
+    model: 'sem modelo registrado',
+    project: 'sem diretório registrado',
+    task: 'sem tarefa',
+    repo: 'sem repositório',
+    status: 'estado não registrado',
+    marked: 'não marcadas',
+  },
+  sessionsMarkedBand: 'marcadas',
   sessionsUnknownHarness: 'harness desconhecido',
   sessionsUnknownModel: 'sem modelo registrado',
   sessionsUnknownProject: 'sem diretório registrado',
@@ -1211,7 +1254,7 @@ const PT: ControlStrings = {
   asideAllTasks: 'todas as tarefas',
   toggleClosed: 'conversas fechadas',
   toggleExited: 'sessões encerradas',
-  toggleUnfiled: 'sessões sem tarefa',
+  toggleNamed: 'sempre manter sessões nomeadas',
   keySessionsAside: 'tab menu',
   manageTitle: (title: string) => `Gerenciando "${title}"`,
   manageHint: '↑↓ mover · enter executar · esc voltar à lista',
@@ -1275,4 +1318,29 @@ const TABLE: Record<CliLang, ControlStrings> = { en: EN, pt: PT }
 
 export function controlStrings(lang: CliLang): ControlStrings {
   return TABLE[lang] ?? EN
+}
+
+/**
+ * The dimension word book for one language — the ONE place the strings are wired to the table.
+ *
+ * Every surface that groups or filters (the cockpit, `agentop session ls`) calls this rather than
+ * assembling its own: two assemblies is two chances for a band and the chip that selects it to be
+ * called different things, which is the whole defect the dimension table exists to remove.
+ */
+export function sessionWordBook(c: ControlStrings): DimensionWordBook {
+  return dimensionWordBook({
+    labels: {
+      status: c.sessionsGroupings.status,
+      harness: c.sessionsGroupings.harness,
+      model: c.sessionsGroupings.model,
+      project: c.sessionsGroupings.project,
+      repo: c.sessionsGroupings.repo,
+      task: c.sessionsGroupings.task,
+      marked: c.sessionsGroupings.marked,
+    },
+    unfiled: c.sessionsUnfiled,
+    states: c.sessionsStates,
+    goneProject: c.sessionsGoneProject,
+    marked: c.sessionsMarkedBand,
+  })
 }
