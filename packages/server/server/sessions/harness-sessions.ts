@@ -87,6 +87,21 @@ export interface HarnessSessionIndex {
   byManagedId: Map<string, HarnessSessionFile>
   /** Keyed by OS pid — how an EXTERNAL session found in `/proc` is matched. Exact. */
   byPid: Map<number, HarnessSessionFile>
+  /**
+   * Keyed by the harness's own CONVERSATION id. Exact, and the only key that needs nothing else.
+   *
+   * The other two both require a second fact to be true: `byManagedId` needs the session to have
+   * been started under tmux, and `byPid` needs the `/proc` scan to have surfaced the process. A
+   * session that satisfies neither was invisible — and one that satisfies neither is not exotic, it
+   * is a **background agent**: no tmux, and nothing in the scan.
+   *
+   * Measured on this machine on 2026-08-15: a session alive for 38 minutes, whose record held
+   * `sessionId 581deab7…`, `name 'MAIN'` (typed, `nameSource` absent) and `tmux` NONE, was listed by
+   * agentop as `closed`, under a title from the conversation store that predated the rename by days.
+   * The file naming both the conversation and the live pid was read, indexed, and then never asked
+   * for — because there was no key that fit it.
+   */
+  byConversation: Map<string, HarnessSessionFile>
 }
 
 /**
@@ -109,11 +124,13 @@ interface Keyed {
   mtimeMs: number
 }
 
-const EMPTY: HarnessSessionIndex = { byManagedId: new Map(), byPid: new Map() }
+const EMPTY: HarnessSessionIndex = {
+  byManagedId: new Map(), byPid: new Map(), byConversation: new Map(),
+}
 
 /** An empty index, for a caller that has nothing to look up. */
 export function emptyHarnessSessionIndex(): HarnessSessionIndex {
-  return { byManagedId: new Map(), byPid: new Map() }
+  return { byManagedId: new Map(), byPid: new Map(), byConversation: new Map() }
 }
 
 /**
@@ -151,6 +168,21 @@ export async function loadHarnessSessions(
       if (!read) continue
       const { file, mtimeMs } = read
       if (file.pid !== undefined) out.byPid.set(file.pid, file)
+
+      // Indexed BEFORE the tmux gate below, and that placement is the fix: everything past that
+      // `continue` is skipped for a session that was not started under tmux, which is exactly the
+      // case that had no key at all. Newest-wins for the same reason `byManagedId` needs it — a
+      // conversation resumed several times leaves a record per run, and `readdir` order deciding
+      // which name is current is no decision.
+      const conversation = file.sessionId
+      if (conversation) {
+        const key = `c:${conversation}`
+        if (mtimeMs >= (seenAt.get(key) ?? -Infinity)) {
+          seenAt.set(key, mtimeMs)
+          out.byConversation.set(conversation, file)
+        }
+      }
+
       const tmux = tmuxSessionName(file)
       const managedId = tmux ? idFromTmuxName(tmux) : null
       // `idFromTmuxName` returns null for a tmux session that is not ours, which is the ordinary
