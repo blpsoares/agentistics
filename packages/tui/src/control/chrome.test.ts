@@ -776,6 +776,7 @@ describe('detailContent', () => {
       startOptions: [],
       restartOptions: [],
       stopOptions: [],
+      bootOptions: [],
       ...over,
     }
   }
@@ -904,6 +905,23 @@ describe('detailContent', () => {
 
     const unknown = detailContent(service(), s, NOW)
     expect(rowsUnder(unknown, s.sectionMachine).map(r => r.label)).not.toContain(s.bootLabel)
+  })
+
+  test('the boot row NAMES the unit, which is the only thing a user can go and look at', () => {
+    // "starts at boot" on its own tells someone that SOMETHING will bring their central back and
+    // gives them nowhere to go. With the unit named, `systemctl --user status <unit>` answers, and
+    // the verb that removes it is on the same pane.
+    const named = detailContent(service({ boot: 'on', bootUnit: 'agentop-central.service' }), s, NOW)
+    const row = rowsUnder(named, s.sectionMachine).find(r => r.label === s.bootLabel)
+    expect(row?.value).toContain(s.bootOn)
+    expect(row?.value).toContain('agentop-central.service')
+  })
+
+  test('a unit with no boot state is not stated at all', () => {
+    // The unit is a detail OF the state. Printing it where the state is unknown would answer a
+    // question the pane has just declined to answer.
+    const c = detailContent(service({ bootUnit: 'agentop-server.service' }), s, NOW)
+    expect(rowsUnder(c, s.sectionMachine).map(r => r.value).join(' ')).not.toContain('agentop-server')
   })
 
   test("the machine's own facts land under their own rule, in the order they were given", () => {

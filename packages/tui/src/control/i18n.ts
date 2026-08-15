@@ -9,7 +9,7 @@
 
 import type { CliLang } from './lang'
 import { dimensionWordBook, type DimensionWordBook, type SessionDimensionId, type SessionGroupingId } from './session-dimensions'
-import type { TabId } from './types'
+import type { TabId, TeamMode } from './types'
 
 export interface ControlStrings {
   tagline: string
@@ -137,8 +137,13 @@ export interface ControlStrings {
   actHistory: string
   actLanguage: string
   actMouse: string
-  /** Install the boot unit for the selected service — offered beside its start options. */
-  actBoot: string
+  /**
+   * Open the setup wizard — what `enter` on the config pane's mode row does.
+   *
+   * There is no `actBoot` beside it any more: the boot VERBS are composed by the host, both
+   * positions of the switch, because which unit brings a service back is a fact about the box.
+   */
+  actSetup: string
 
   stateUp: string
   stateDown: string
@@ -159,14 +164,17 @@ export interface ControlStrings {
   /** Services tab. */
   killQuestion: string
 
-  /** Setup tab. */
-  setupIntro: string
-  setupSolo: string
-  setupSoloHint: string
-  setupCentral: string
-  setupCentralHint: string
-  setupMember: string
-  setupMemberHint: string
+  /**
+   * THE SETUP WIZARD — a question the cockpit asks, not a screen of its own any more.
+   *
+   * Keyed by `TeamMode` rather than spelled out one constant per mode: `ControlStatus.setupBlocked`
+   * is keyed the same way and the menu maps over `SETUP_MODES`, so a mode added to the product
+   * fails the build here instead of compiling clean and being missing from the wizard — the same
+   * rule `HARNESS_CAPABILITIES` enforces for harnesses.
+   */
+  setupQuestion: string
+  setupMode: Record<TeamMode, string>
+  setupModeHint: Record<TeamMode, string>
   archiveUnset: string
   archiveQuestion: string
   archiveWhy: string
@@ -491,7 +499,6 @@ const EN: ControlStrings = {
     services: 'Services',
     sessions: 'Sessions',
     dashboard: 'Dashboard',
-    setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Cheat sheet',
     help: 'Help',
@@ -502,7 +509,6 @@ const EN: ControlStrings = {
     services: 'services',
     sessions: 'sessions',
     dashboard: 'dashboard',
-    setup: 'setup',
     logs: 'logs',
     cheatsheet: 'commands',
     help: 'help',
@@ -571,7 +577,7 @@ const EN: ControlStrings = {
   actHistory: 'Change',
   actLanguage: 'Switch',
   actMouse: 'Switch',
-  actBoot: 'Start at boot',
+  actSetup: 'Change…',
 
   stateUp: 'up',
   stateDown: 'stopped',
@@ -584,13 +590,13 @@ const EN: ControlStrings = {
 
   killQuestion: 'A server is already running here — stop it and start a new one?',
 
-  setupIntro: 'How this machine tracks usage, and what leaves it.',
-  setupSolo: 'solo',
-  setupSoloHint: 'local only — nothing leaves this machine',
-  setupCentral: 'central',
-  setupCentralHint: 'host the team central (Docker) here',
-  setupMember: 'member',
-  setupMemberHint: 'everything solo does, plus push metrics (never chat) to a central',
+  setupQuestion: 'How should this machine track usage, and what may leave it?',
+  setupMode: { solo: 'solo', central: 'central', member: 'member' },
+  setupModeHint: {
+    solo: 'local only — nothing leaves this machine',
+    central: 'host the team central (Docker) here',
+    member: 'everything solo does, plus push metrics (never chat) to a central',
+  },
   archiveUnset: 'not chosen yet',
   archiveQuestion: 'Preserve session history?',
   archiveWhy: 'Claude deletes session transcripts older than 30 days.',
@@ -908,7 +914,6 @@ const PT: ControlStrings = {
     services: 'Serviços',
     sessions: 'Sessões',
     dashboard: 'Dashboard',
-    setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Comandos',
     help: 'Ajuda',
@@ -919,7 +924,6 @@ const PT: ControlStrings = {
     services: 'serviços',
     sessions: 'sessões',
     dashboard: 'dashboard',
-    setup: 'setup',
     logs: 'logs',
     cheatsheet: 'comandos',
     help: 'ajuda',
@@ -986,7 +990,7 @@ const PT: ControlStrings = {
   actHistory: 'Mudar',
   actLanguage: 'Trocar',
   actMouse: 'Trocar',
-  actBoot: 'Iniciar no boot',
+  actSetup: 'Mudar…',
 
   stateUp: 'no ar',
   stateDown: 'parado',
@@ -999,13 +1003,13 @@ const PT: ControlStrings = {
 
   killQuestion: 'Já existe um servidor rodando aqui — parar e iniciar outro?',
 
-  setupIntro: 'Como esta máquina registra o uso, e o que sai dela.',
-  setupSolo: 'solo',
-  setupSoloHint: 'só local — nada sai desta máquina',
-  setupCentral: 'central',
-  setupCentralHint: 'hospedar a central do time (Docker) aqui',
-  setupMember: 'member',
-  setupMemberHint: 'tudo que o solo faz, e ainda envia métricas (nunca chat) para uma central',
+  setupQuestion: 'Como esta máquina deve registrar o uso, e o que pode sair dela?',
+  setupMode: { solo: 'solo', central: 'central', member: 'member' },
+  setupModeHint: {
+    solo: 'só local — nada sai desta máquina',
+    central: 'hospedar a central do time (Docker) aqui',
+    member: 'tudo que o solo faz, e ainda envia métricas (nunca chat) para uma central',
+  },
   archiveUnset: 'ainda não escolhido',
   archiveQuestion: 'Preservar o histórico de sessões?',
   archiveWhy: 'O Claude apaga transcrições de sessão com mais de 30 dias.',

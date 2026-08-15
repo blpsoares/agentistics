@@ -92,7 +92,7 @@ describe('the screen strip', () => {
 describe('dashboardSource', () => {
   const service = (over: Partial<ControlService>): ControlService => ({
     id: 'agentistics', label: 'agentistics', state: 'down', runtimes: [], running: [],
-    startOptions: [], restartOptions: [], stopOptions: [], ...over,
+    startOptions: [], restartOptions: [], stopOptions: [], bootOptions: [], ...over,
   })
 
   test('a status that has not landed is loading, never "nothing is running"', () => {
