@@ -16,6 +16,9 @@ import type { ControlStrings } from './i18n'
 // the function that turns a `CockpitLayout` into one, beside the function that produced the layout.
 import type { Rect } from './hit'
 import { truncate } from '../components/Primitives'
+// The SAME bar the session rows draw for the context window. One gauge shape per application: two
+// drawn differently read as two different kinds of measurement.
+import { contextBar } from './sessions'
 import { MARK_WIDTH, WORDMARK_ART, WORDMARK_WIDTH } from '../components/Wordmark'
 
 export interface TabSpec {
@@ -224,6 +227,15 @@ export interface HeaderMeta {
   /** True when the budget is inside its warning distance — the caller colours it. */
   memoryRed?: boolean
   /**
+   * How full the machine is, as a LEVEL — what the caller colours the bar by.
+   *
+   * Separate from `memoryRed`, which is the SESSION budget's alarm ("no room for another
+   * assistant"). A machine can be at 95% with room for three more sessions, and it can have room
+   * for none while sitting at 40% because the sessions running are enormous. Two facts, two
+   * colours, and collapsing them would make one of the two lie.
+   */
+  memoryLevel?: 'ok' | 'warn' | 'full'
+  /**
    * The machine's name on its central, and the last push's round trip.
    *
    * One cell, because they are one fact: WHICH machine this is and whether its link is alive.
@@ -234,6 +246,35 @@ export interface HeaderMeta {
 }
 
 /** What the pieces cost together, separators included — the number the caller budgets against. */
+/**
+ * Columns the load bar takes. Short on purpose: it shares a row with the mode, the version, the
+ * machine, the waiting counter and the update notice, and every column it takes is one of theirs.
+ * Eight is enough to read a half from a quarter at a glance, which is all a bar has to do.
+ */
+export const LOAD_BAR = 8
+
+/** How full the machine is, as a bar — the same shape the context gauge uses. */
+export function loadBar(percent: number): string {
+  return contextBar(Math.max(0, Math.min(100, percent)) / 100, LOAD_BAR)
+}
+
+/**
+ * What the bar is SAYING, so the caller can colour it — the same three-level vocabulary the context
+ * gauge uses, and for the same reason: a machine at 90% and a context window at 90% are the same
+ * warning to the person reading them.
+ *
+ * The thresholds are the memory's own, not the context window's. A context window at 80% is worth
+ * noticing; a machine at 80% is already slow, and one at 90% is minutes from swapping.
+ */
+export const LOAD_WARN = 75
+export const LOAD_HIGH = 90
+
+export function loadLevel(percent: number): 'ok' | 'warn' | 'full' {
+  if (percent >= LOAD_HIGH) return 'full'
+  if (percent >= LOAD_WARN) return 'warn'
+  return 'ok'
+}
+
 export function headerMetaWidth(meta: HeaderMeta): number {
   return meta.text.length
     + (meta.machine ? SEP.length + meta.machine.length : 0)
@@ -278,7 +319,13 @@ export function headerMeta(input: HeaderMetaInput): HeaderMeta {
   // Sessions AND load, because they answer different questions: `3/17` is how many more assistants
   // fit, `62%` is how hard the box is already working — a machine at 90% for reasons unrelated to
   // agentop reads comfortable on the ratio alone. Reported as missing after the first pass.
-  const mem = memory ? `ram ${memory.used}/${memory.max} ${memory.percent}%` : ''
+  // A BAR, like htop, because a bare `62%` does not say what is 62% full. The shape is what gets
+  // read at a glance and the number is what gets acted on, so both are drawn — and the bar is the
+  // SAME `contextBar` the session rows use for the context window rather than a second one: two
+  // gauges drawn differently in one application read as two different kinds of measurement.
+  const mem = memory
+    ? `ram ${loadBar(memory.percent)} ${memory.percent}% · ${memory.used}/${memory.max}`
+    : ''
   const red = memory?.red === true
   // Which machine this is, and whether its link is alive. Two SSH'd terminals running identical
   // cockpits are otherwise indistinguishable — the name already existed and was simply never shown.
@@ -286,7 +333,11 @@ export function headerMeta(input: HeaderMetaInput): HeaderMeta {
     ? (pushMs !== undefined ? `${machineName} ${pushMs}ms` : machineName)
     : ''
 
-  const full = { text, machine, alert, update, memory: mem, memoryRed: red }
+  const level = memory ? loadLevel(memory.percent) : undefined
+  const full = {
+    text, machine, alert, update, memory: mem, memoryRed: red,
+    ...(level ? { memoryLevel: level } : {}),
+  }
   if (headerMetaWidth(full) <= width) return full
 
   // Dropped least-actionable first, exactly as before. The budget sits between the update notice
@@ -304,13 +355,13 @@ export function headerMeta(input: HeaderMetaInput): HeaderMeta {
   // The version goes before the machine NAME: a version is one `agentop --version` away, while the
   // name is the answer to "which box am I looking at" — the whole reason it is on the row, and
   // unanswerable from anywhere else in a terminal SSH'd into somewhere.
-  const withoutVersion = { text: mode, machine, alert, update: '', memory: red ? mem : '', memoryRed: red }
+  const withoutVersion = { text: mode, machine, alert, update: '', memory: red ? mem : '', memoryRed: red, ...(level ? { memoryLevel: level } : {}) }
   if (headerMetaWidth(withoutVersion) <= width) return withoutVersion
 
   // Then the latency, keeping the bare name. Knowing WHICH machine survives longer than knowing how
   // fast it answered.
   const bareName = machineName ?? ''
-  const withoutLatency = { text: mode, machine: bareName, alert, update: '', memory: red ? mem : '', memoryRed: red }
+  const withoutLatency = { text: mode, machine: bareName, alert, update: '', memory: red ? mem : '', memoryRed: red, ...(level ? { memoryLevel: level } : {}) }
   if (headerMetaWidth(withoutLatency) <= width) return withoutLatency
 
   const modeAndAlert = { text: mode, machine: '', alert, update: '', memory: '' }

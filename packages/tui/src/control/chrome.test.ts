@@ -21,6 +21,11 @@ import {
   headerLayout,
   headerMeta,
   headerMetaWidth,
+  loadBar,
+  loadLevel,
+  LOAD_BAR,
+  LOAD_WARN,
+  LOAD_HIGH,
   HINT_SEP,
   LEFT_MAX_SHARE,
   LEFT_MIN,
@@ -208,6 +213,33 @@ describe('footerHints', () => {
   })
 })
 
+describe('the load bar', () => {
+  test('fills in proportion, and rounds DOWN like the number beside it', () => {
+    // A bar showing full while the label says 99% is one of them being wrong, and it would be the
+    // bar — the shape is what gets believed at a glance.
+    expect(loadBar(0)).toBe('░'.repeat(LOAD_BAR))
+    expect(loadBar(100)).toBe('█'.repeat(LOAD_BAR))
+    expect(loadBar(50)).toBe('████░░░░')
+    expect(loadBar(99)).not.toBe('█'.repeat(LOAD_BAR))
+  })
+
+  test('is bounded by a machine that reports nonsense', () => {
+    expect(loadBar(-5)).toBe('░'.repeat(LOAD_BAR))
+    expect(loadBar(9999)).toBe('█'.repeat(LOAD_BAR))
+  })
+
+  test('changes level as it climbs — the whole point of the colour', () => {
+    // The thresholds are the MEMORY's, not the context window's: a context window at 80% is worth
+    // noticing, a machine at 80% is already slow and one at 90% is minutes from swapping.
+    expect(loadLevel(10)).toBe('ok')
+    expect(loadLevel(LOAD_WARN - 1)).toBe('ok')
+    expect(loadLevel(LOAD_WARN)).toBe('warn')
+    expect(loadLevel(LOAD_HIGH - 1)).toBe('warn')
+    expect(loadLevel(LOAD_HIGH)).toBe('full')
+    expect(loadLevel(100)).toBe('full')
+  })
+})
+
 describe('headerMeta', () => {
   test('states the mode, the version and the update dot when there is room', () => {
     const meta = headerMeta({ mode: 'member', version: '1.7.3', latestVersion: '1.7.4', width: 60 })
@@ -222,7 +254,9 @@ describe('headerMeta', () => {
     // Sessions AND load: `3/17` says how many more fit, `62%` says how hard the box is already
     // working. A machine at 90% for reasons unrelated to agentop reads comfortable on the ratio
     // alone, which is why the percentage was asked for after the first pass shipped only the ratio.
-    expect(with_.memory).toBe('ram 3/17 62%')
+    // A BAR, like htop, because a bare `62%` does not say what is 62% full. Both are drawn: the
+    // shape is what gets read at a glance, the number is what gets acted on.
+    expect(with_.memory).toBe('ram ████░░░░ 62% · 3/17')
     expect(with_.memoryRed).toBe(false)
     // A machine whose memory cannot be read draws no gauge at all — never a zero, which would read
     // as "no room left" on precisely the machines nobody could ask.
@@ -254,11 +288,12 @@ describe('headerMeta', () => {
     const narrow = { mode: 'solo', version: '1.7.4', latestVersion: '1.9.0', attention: 2 }
     // Widened with the cell: it now carries the percentage too, so the row it has to survive on is
     // wider than it was. The ASSERTION is the ordering, not the number of columns.
-    const red = headerMeta({ ...narrow, memory: { used: 14, max: 15, red: true, percent: 91 }, width: 30 })
-    expect(red.memory).toBe('ram 14/15 91%')
+    // Wider than before, because the cell now carries a bar too. The ASSERTION is the ordering.
+    const red = headerMeta({ ...narrow, memory: { used: 14, max: 15, red: true, percent: 91 }, width: 44 })
+    expect(red.memory).toContain('91%')
     expect(red.text).toBe('solo')            // the version went first
     // …while a calm budget gives way instead, because it is only informational.
-    const calm = headerMeta({ ...narrow, memory: { used: 3, max: 17, red: false, percent: 62 }, width: 30 })
+    const calm = headerMeta({ ...narrow, memory: { used: 3, max: 17, red: false, percent: 62 }, width: 44 })
     expect(calm.memory).toBe('')
   })
 

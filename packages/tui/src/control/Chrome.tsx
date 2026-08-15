@@ -87,6 +87,19 @@ export function Header({ layout, width }: { layout: HeaderLayout; width: number 
  * version: a bare accent-coloured digit beside a dim one says nothing on a terminal that drops
  * colour, and this is the piece a user is meant to act on.
  */
+/**
+ * The load bar's colours, by level.
+ *
+ * `undefined` for `ok` so a healthy machine stays DIM like the rest of the tag — a permanently
+ * green bar in the corner is a light nobody looks at, and the whole value of this cell is that a
+ * change in it is noticeable.
+ */
+const LOAD_COLOR: Record<'ok' | 'warn' | 'full', string | undefined> = {
+  ok: undefined,
+  warn: COLORS.accent,
+  full: COLORS.danger,
+}
+
 function HeaderTag({ meta }: { meta: HeaderMeta }) {
   return (
     <Text>
@@ -99,12 +112,18 @@ function HeaderTag({ meta }: { meta: HeaderMeta }) {
       {/* The parallel-sessions budget. Dim while there is room, `danger` once the ceiling is close
           or the machine is already swapping — but the NUMBERS are always drawn, so a reader who
           cannot tell the two shades apart still has the whole message. Colour never carries it. */}
+      {/* Coloured by how FULL the machine is, htop-style — green while there is room, amber as it
+          tightens, red near the top. The session-budget alarm (`memoryRed`) still wins when it
+          trips, because "no room for another assistant" is the more actionable of the two and they
+          are genuinely different facts: a box can sit at 95% with room for three more sessions, or
+          have room for none at 40% because the ones running are enormous. The NUMBERS are always
+          drawn, so colour never carries the message alone. */}
       {meta.memory
         ? (
           <Text
-            color={meta.memoryRed ? COLORS.danger : undefined}
-            dimColor={!meta.memoryRed}
-            bold={meta.memoryRed}
+            color={meta.memoryRed ? COLORS.danger : LOAD_COLOR[meta.memoryLevel ?? 'ok']}
+            dimColor={!meta.memoryRed && (meta.memoryLevel ?? 'ok') === 'ok'}
+            bold={meta.memoryRed || meta.memoryLevel === 'full'}
           >
             {` · ${meta.memory}`}
           </Text>
