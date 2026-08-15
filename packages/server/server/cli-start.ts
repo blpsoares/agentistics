@@ -1696,12 +1696,26 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
 
     return [
       buildService('agentistics', s.svcAgentistics, [nativeRuntime, machineRuntime], s, {
-        // Two distinct boot mechanisms now exist for this one service (native `agentop-server` vs
-        // Docker `agentop-machine`); the detail pane can only state one, so it states the one that
-        // matches whichever runtime is actually up — the native unit otherwise, matching this
-        // field's behavior before the Docker runtime had a boot mechanism of its own at all.
-        boot: machine.state === 'up' ? bootMachine : bootAgentistics,
-        bootUnit: unitName(machine.state === 'up' ? 'machine' : 'server'),
+        // Two distinct boot mechanisms exist for this ONE service — the native `agentop-server` and
+        // the Docker `agentop-machine` — and BOTH can be registered at once. The row used to name
+        // whichever matched the runtime that happened to be up, so on a machine that had registered
+        // both, the other one was invisible: something would bring the service back after a reboot
+        // and the pane named a unit that was not it. That is the same class of half-truth
+        // `ControlService.conflict` exists to prevent for the running state.
+        //
+        // So: registered if EITHER is, and the unit cell names every one that actually is. `boot`
+        // stays `undefined` when the host could not tell at all (no user systemd) — absence is
+        // absence, and a row with no answer draws nothing rather than claiming `off`.
+        boot: bootAgentistics === undefined && bootMachine === undefined
+          ? undefined
+          : bootAgentistics === 'on' || bootMachine === 'on' ? 'on' : 'off',
+        bootUnit: [
+          bootAgentistics === 'on' ? unitName('server') : '',
+          bootMachine === 'on' ? unitName('machine') : '',
+        ].filter(Boolean).join(' + ')
+          // Nothing registered: name the unit the switch on this row would WRITE, so "off" still
+          // says what it is off about.
+          || unitName(machine.state === 'up' ? 'machine' : 'server'),
         // BOTH mechanisms get a verb, whichever runtime happens to be up: the row states one and
         // the switch has to reach either, or a machine that registered the container at boot could
         // never turn that off while running natively.
