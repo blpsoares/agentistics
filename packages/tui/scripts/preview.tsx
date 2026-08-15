@@ -287,11 +287,14 @@ function fakeStatus(opts: Options, apiUrl?: string): ControlStatus {
     modeLabel: opts.mode === 'member' ? s.configMemberBare : opts.mode === 'central' ? s.configCentral : s.configSolo,
     endpoint: opts.mode === 'member' ? LONG_ENDPOINT : undefined,
     services: services(opts.mode, s, apiUrl),
+    // A member machine carries a NAME and a latency; the sweep has to see the header at its widest,
+    // or the fit is only ever checked in the shape that happens to be shortest.
+    ...(opts.mode === 'member' ? { machineName: 'wsl-mithrandir', pushMs: 468 } : {}),
     version: '1.7.3',
     latestVersion: '1.7.4',
     // The parallel-sessions budget, so the width sweep exercises the header WITH it. A calm one:
     // the red case gives way later than this does, so a frame that fits this fits that too.
-    memory: { used: 3, max: 17, red: false },
+    memory: { used: 3, max: 17, red: false, percent: 62 },
     archiveMode: 'consolidate',
     // The wizard's blocked row, stated whenever the fake central is up: it is the case the fold
     // exists for, and a preview that only ever drew three selectable modes would never show it.

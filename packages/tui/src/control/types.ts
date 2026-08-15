@@ -850,7 +850,43 @@ export interface ControlStatus {
    * warning) and from swap pressure, which is what actually freezes a machine: the incident this
    * exists for read 3.6 GB of free RAM while swap sat at 97%.
    */
-  memory?: { used: number; max: number; red: boolean }
+  memory?: {
+    used: number
+    max: number
+    red: boolean
+    /**
+     * How much of the MACHINE is in use, 0-100.
+     *
+     * Beside `used/max` rather than instead of it: they answer different questions, and the first
+     * alone was not enough. `3/17` says how many more assistants fit; it says nothing about a box
+     * already at 90% for reasons that have nothing to do with agentop. Reported as missing after
+     * the first pass shipped only the ratio.
+     *
+     * Counts SWAP as used, like the alarm does — the freeze this warns about read 3.6 GB of free
+     * RAM at 97% swap, so a RAM-only figure would print a comfortable number at the worst moment.
+     */
+    percent: number
+  }
+  /**
+   * What this machine is CALLED on the central it pushes to.
+   *
+   * Reported: "uso 1 computador e acesso mais 1 via ssh, e daí não lembro qual agentop é de qual
+   * máquina". Two identical cockpits in two terminals are indistinguishable, and the name already
+   * exists — the central mints it onto the token and the member reads it back from `whoami`. It was
+   * simply never shown.
+   *
+   * Absent in solo mode: there is no central to have named it, and substituting a hostname would be
+   * a different fact wearing the same label.
+   */
+  machineName?: string
+  /**
+   * Round trip of the last successful contact with the central, in milliseconds.
+   *
+   * `undefined` before the first one and wherever nothing is pushed — never `0`, which would read
+   * as an instant round trip rather than as no measurement. It is the number that says the link is
+   * WORKING rather than merely configured.
+   */
+  pushMs?: number
   /** The history-preservation setting in force, or `undefined` while it is still unanswered. */
   archiveMode?: ArchiveMode
   /**

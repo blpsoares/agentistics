@@ -91,6 +91,10 @@ function HeaderTag({ meta }: { meta: HeaderMeta }) {
   return (
     <Text>
       <Text dimColor>{meta.text}</Text>
+      {/* WHICH machine, and whether its link is alive. In `secondary` rather than dim: it is the
+          thing a person scans for when two terminals look identical, so it has to be findable at a
+          glance without competing with the waiting counter's accent. */}
+      {meta.machine ? <Text color={COLORS.secondary}>{` · ${meta.machine}`}</Text> : null}
       {meta.alert ? <Text color={COLORS.accent} bold>{` · ${meta.alert}`}</Text> : null}
       {/* The parallel-sessions budget. Dim while there is room, `danger` once the ceiling is close
           or the machine is already swapping — but the NUMBERS are always drawn, so a reader who

@@ -191,7 +191,11 @@ export interface HeaderMetaInput {
    * drawn. `red` is decided by the host, from the distance to the ceiling and from swap pressure —
    * the TUI owns no logic, here as everywhere.
    */
-  memory?: { used: number; max: number; red: boolean }
+  memory?: { used: number; max: number; red: boolean; percent: number }
+  /** What this machine is called on its central, when it has one. */
+  machineName?: string
+  /** Round trip of the last successful push, ms. */
+  pushMs?: number
   width: number
 }
 
@@ -219,11 +223,20 @@ export interface HeaderMeta {
   memory: string
   /** True when the budget is inside its warning distance — the caller colours it. */
   memoryRed?: boolean
+  /**
+   * The machine's name on its central, and the last push's round trip.
+   *
+   * One cell, because they are one fact: WHICH machine this is and whether its link is alive.
+   * Split in two they would compete for the same corner and drop independently, leaving a latency
+   * belonging to no named machine.
+   */
+  machine: string
 }
 
 /** What the pieces cost together, separators included — the number the caller budgets against. */
 export function headerMetaWidth(meta: HeaderMeta): number {
   return meta.text.length
+    + (meta.machine ? SEP.length + meta.machine.length : 0)
     + (meta.alert ? SEP.length + meta.alert.length : 0)
     + (meta.memory ? SEP.length + meta.memory.length : 0)
     + (meta.update ? SEP.length + meta.update.length : 0)
@@ -245,8 +258,8 @@ export function headerMetaWidth(meta: HeaderMeta): number {
  * and it is the piece that must survive a narrow terminal.
  */
 export function headerMeta(input: HeaderMetaInput): HeaderMeta {
-  const { mode, version, latestVersion, attention, memory, width } = input
-  if (width <= 0) return { text: '', alert: '', update: '', memory: '' }
+  const { mode, version, latestVersion, attention, memory, machineName, pushMs, width } = input
+  if (width <= 0) return { text: '', machine: '', alert: '', update: '', memory: '' }
 
   const outdated = Boolean(latestVersion && latestVersion !== version)
   const text = version ? `${mode}${SEP}v${version}` : mode
@@ -262,10 +275,18 @@ export function headerMeta(input: HeaderMetaInput): HeaderMeta {
   // process and no row of its own) while the list counts ROWS after its filter — so no arithmetic
   // fix is available or wanted. What was missing is that the gauge never said what it measures. A
   // word costs one column over the glyph and is the same in both languages.
-  const mem = memory ? `ram ${memory.used}/${memory.max}` : ''
+  // Sessions AND load, because they answer different questions: `3/17` is how many more assistants
+  // fit, `62%` is how hard the box is already working — a machine at 90% for reasons unrelated to
+  // agentop reads comfortable on the ratio alone. Reported as missing after the first pass.
+  const mem = memory ? `ram ${memory.used}/${memory.max} ${memory.percent}%` : ''
   const red = memory?.red === true
+  // Which machine this is, and whether its link is alive. Two SSH'd terminals running identical
+  // cockpits are otherwise indistinguishable — the name already existed and was simply never shown.
+  const machine = machineName
+    ? (pushMs !== undefined ? `${machineName} ${pushMs}ms` : machineName)
+    : ''
 
-  const full = { text, alert, update, memory: mem, memoryRed: red }
+  const full = { text, machine, alert, update, memory: mem, memoryRed: red }
   if (headerMetaWidth(full) <= width) return full
 
   // Dropped least-actionable first, exactly as before. The budget sits between the update notice
@@ -280,14 +301,23 @@ export function headerMeta(input: HeaderMetaInput): HeaderMeta {
   const withoutMemory = { ...full, update: '', memory: red ? mem : '' }
   if (headerMetaWidth(withoutMemory) <= width) return withoutMemory
 
-  const withoutVersion = { text: mode, alert, update: '', memory: red ? mem : '', memoryRed: red }
+  // The version goes before the machine NAME: a version is one `agentop --version` away, while the
+  // name is the answer to "which box am I looking at" — the whole reason it is on the row, and
+  // unanswerable from anywhere else in a terminal SSH'd into somewhere.
+  const withoutVersion = { text: mode, machine, alert, update: '', memory: red ? mem : '', memoryRed: red }
   if (headerMetaWidth(withoutVersion) <= width) return withoutVersion
 
-  const modeAndAlert = { text: mode, alert, update: '', memory: '' }
+  // Then the latency, keeping the bare name. Knowing WHICH machine survives longer than knowing how
+  // fast it answered.
+  const bareName = machineName ?? ''
+  const withoutLatency = { text: mode, machine: bareName, alert, update: '', memory: red ? mem : '', memoryRed: red }
+  if (headerMetaWidth(withoutLatency) <= width) return withoutLatency
+
+  const modeAndAlert = { text: mode, machine: '', alert, update: '', memory: '' }
   if (headerMetaWidth(modeAndAlert) <= width) return modeAndAlert
 
-  if (mode.length <= width) return { text: mode, alert: '', update: '', memory: '' }
-  return { text: truncate(mode, width), alert: '', update: '', memory: '' }
+  if (mode.length <= width) return { text: mode, machine: '', alert: '', update: '', memory: '' }
+  return { text: truncate(mode, width), machine: '', alert: '', update: '', memory: '' }
 }
 
 // ---------------------------------------------------------------------------

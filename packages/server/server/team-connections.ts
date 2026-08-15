@@ -898,6 +898,11 @@ export function buildConnectionStatusEntry(
     endpoint: conn.endpoint,
     org: conn.org,
     user: conn.user,
+    // The name the CENTRAL gave this machine. Already resolved from `whoami` and already stored on
+    // the connection; it simply had no way out of this process. The cockpit's header draws it so
+    // two SSH'd terminals running identical cockpits can be told apart — which was reported as
+    // impossible, and was.
+    ...(conn.machineName ? { machineName: conn.machineName } : {}),
     ...(conn.label ? { label: conn.label } : {}),
     lastSuccessAt: uploaderStatus.lastSuccessAt,
     errKind,
