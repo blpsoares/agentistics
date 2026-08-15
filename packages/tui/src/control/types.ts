@@ -17,6 +17,7 @@ export type TabId =
   | 'sessions'
   /** The metrics dashboard — the whole of what `agentop tui` shows, as a screen of this app. */
   | 'dashboard'
+  | 'hardware'
   | 'logs'
   | 'cheatsheet'
   | 'help'
@@ -36,6 +37,7 @@ export const TAB_ORDER: readonly TabId[] = [
   'services',
   'sessions',
   'dashboard',
+  'hardware',
   'logs',
   'cheatsheet',
   'help',

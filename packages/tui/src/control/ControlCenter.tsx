@@ -38,6 +38,7 @@ import { Logs } from './tabs/Logs'
 import { Services } from './tabs/Services'
 import { Sessions } from './tabs/Sessions'
 import { Dashboard } from './tabs/Dashboard'
+import { HardwareTab } from './tabs/HardwareTab'
 import { writeFrame } from './altScreen'
 
 /**
@@ -621,6 +622,21 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
               width={bodyWidth}
               height={bodyRows}
               isActive={tab === 'dashboard'}
+              nonce={nonce}
+              onChrome={reportChrome}
+            />
+          </Pane>
+        </Screen>
+
+        <Screen visible={tab === 'hardware'}>
+          <Pane title={s.tabsShort.hardware} width={width} height={height}>
+            <HardwareTab
+              status={status}
+              strings={s}
+              lang={lang}
+              width={bodyWidth}
+              height={bodyRows}
+              isActive={tab === 'hardware'}
               nonce={nonce}
               onChrome={reportChrome}
             />

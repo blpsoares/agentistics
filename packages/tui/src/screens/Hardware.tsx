@@ -83,17 +83,32 @@ export function Hardware({
   const [snapshot, setSnapshot] = useState<HardwareResourcesSnapshot | null>(null)
 
   useEffect(() => {
-    if (!apiBase) return
     let alive = true
+    const defaultUrl = `http://localhost:${process.env.PORT || '47291'}`
+    const baseUrl = (apiBase || defaultUrl).replace(/\/$/, '')
+
     const fetchHardware = async () => {
       try {
-        const res = await fetch(`${apiBase}/api/hardware-resources`)
+        let res = await fetch(`${baseUrl}/api/hardware-resources`)
+        if (!res.ok && baseUrl !== defaultUrl) {
+          res = await fetch(`${defaultUrl}/api/hardware-resources`)
+        }
         if (res.ok) {
           const json = (await res.json()) as HardwareResourcesSnapshot
           if (alive) setSnapshot(json)
         }
       } catch {
-        /* fallback to N/A state */
+        if (baseUrl !== defaultUrl) {
+          try {
+            const fallbackRes = await fetch(`${defaultUrl}/api/hardware-resources`)
+            if (fallbackRes.ok && alive) {
+              const json = (await fallbackRes.json()) as HardwareResourcesSnapshot
+              setSnapshot(json)
+            }
+          } catch {
+            /* fallback to N/A */
+          }
+        }
       }
     }
     void fetchHardware()
