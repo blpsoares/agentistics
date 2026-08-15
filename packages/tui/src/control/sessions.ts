@@ -2030,7 +2030,20 @@ export function cardGrid(o: {
  */
 export type CardBand =
   /** `muted` is the list's own reading: an absent key, a finished task, the history section. */
-  | { kind: 'heading'; label: string; count: number; muted: boolean }
+  | {
+      kind: 'heading'
+      label: string
+      count: number
+      muted: boolean
+      /**
+       * The cascade's node path, when there is one — what the band's title is BREADCRUMBED from.
+       *
+       * The grid has no indentation to spend, so where the list draws `session-monitor` two levels
+       * in, the band draws `agentistics › .claude/worktrees › session-monitor`. Carried on the row
+       * rather than re-derived, so the two layouts cannot name one branch different things.
+       */
+      path?: readonly string[]
+    }
   /**
    * Indexes into the flat card sequence — at most `cols` of them, all from one group — and the rows
    * this band occupies, FRAME INCLUDED.
@@ -2113,7 +2126,7 @@ export function cardPages(o: {
     return Math.min(cardHeight, Math.max(PANE_FRAME_Y + CARD_MIN_LINES, PANE_FRAME_Y + most))
   }
 
-  type Head = { label: string; count: number; muted: boolean }
+  type Head = { label: string; count: number; muted: boolean; path?: readonly string[] }
   const sections: Array<{ head: Head | null; items: number[] }> = []
   let index = 0
   for (const row of o.rows) {
@@ -2121,7 +2134,16 @@ export function cardPages(o: {
     if (row.kind === 'heading') {
       // Unheaded, every row joins ONE nameless section, so nothing wraps early and the layout is
       // byte-for-byte the one this screen drew before groups reached it.
-      if (o.headed) sections.push({ head: { label: row.label, count: row.count, muted: row.muted === true }, items: [] })
+      if (o.headed) {
+        sections.push({
+          head: {
+            label: row.label, count: row.count, muted: row.muted === true,
+            // Travels with the name, so a branch that crosses a page break repeats the WHOLE crumb.
+            ...(row.path ? { path: row.path } : {}),
+          },
+          items: [],
+        })
+      }
       continue
     }
     const last = sections[sections.length - 1]

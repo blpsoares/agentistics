@@ -1536,6 +1536,36 @@ describe('cardPages', () => {
     ] satisfies CardBand[])
   })
 
+  it('carries a cascade branch PATH onto its band, so the card grid can breadcrumb it', () => {
+    // The band title is the whole path in the grid, where the list indents instead. It travels on
+    // the row rather than being re-derived, for the same reason `cardBadges` reads the heading: a
+    // second derivation of the arrangement disagrees with the first the moment either changes.
+    const rows: SessionRow[] = [
+      { kind: 'heading', label: 'session-monitor', count: 1, depth: 2, path: ['agentistics', '.claude/worktrees', 'session-monitor'] },
+      { kind: 'session', session: session('a') },
+    ]
+    expect(pack(rows)[0]!.bands[0]).toEqual({
+      kind: 'heading',
+      label: 'session-monitor',
+      count: 1,
+      muted: false,
+      path: ['agentistics', '.claude/worktrees', 'session-monitor'],
+    })
+  })
+
+  it('repeats the whole crumb when a branch crosses a page break', () => {
+    // A card under no name does not say what it belongs to, and half a crumb says it wrongly.
+    const rows: SessionRow[] = [
+      { kind: 'heading', label: 'tui', count: 4, depth: 1, path: ['agentistics', 'packages/tui'] },
+      ...Array.from({ length: 4 }, (_, i) => ({ kind: 'session' as const, session: session(`s${i}`) })),
+    ]
+    const pages = pack(rows, { cols: 2, gridRows: 8, capacity: 2 })
+    expect(pages.length).toBeGreaterThan(1)
+    for (const page of pages) {
+      expect(page.bands[0]).toMatchObject({ path: ['agentistics', 'packages/tui'] })
+    }
+  })
+
   // A group wider than the grid wraps into more bands of its OWN — never into the next group's.
   it('wraps a long group into further bands under one name', () => {
     const [page] = pack(grouped(['agentistics', 7]), { gridRows: 40, capacity: 9 })

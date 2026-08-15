@@ -10,7 +10,10 @@
 import type { CliLang } from './lang'
 // The default ARRANGEMENT is derived from the dimension vocabulary rather than written out beside
 // it. `session-dimensions.ts` imports this file for TYPES only, so this is the one value direction.
-import { DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED, storedFilters } from './session-dimensions'
+import {
+  DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED, storedFilters,
+  type SessionGroupingId,
+} from './session-dimensions'
 
 export type TabId =
   | 'services'
@@ -633,12 +636,18 @@ export interface ControlSession {
  */
 export interface SessionViewPrefs {
   /**
-   * Which dimension the list is arranged by, BY ID.
+   * How the list is arranged, BY ID.
    *
    * An id and never a position: an index records "the third dimension" and becomes a different
    * question the moment someone reorders the menu. See `session-dimensions.ts`.
+   *
+   * `SessionGroupingId` and never a union written out here: this was a hand-copied list of the
+   * arrangements, which is the pattern CLAUDE.md forbids for harnesses and for the same reason —
+   * TypeScript accepts a union with a member missing, so an arrangement added to `GROUPINGS` would
+   * be offered by the menu, accepted by the CLI, and then refused by the type of the file it is
+   * persisted to.
    */
-  grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo' | 'status' | 'marked'
+  grouping: SessionGroupingId
   /**
    * What the list is narrowed to, per dimension — the ONE stored source for every filter.
    *

@@ -44,7 +44,9 @@ import {
   type ControlStatus,
   type ServiceRuntimeState,
   type TabId,
+  DEFAULT_SESSION_VIEW,
 } from '../src/control/types'
+import { GROUPINGS, type SessionGroupingId } from '../src/control/sessions'
 import type { CliLang } from '../src/control/lang'
 // The real string table, not a copy of it. Every label on this screen arrives from the host already
 // localized, so a preview that invented its own words would be previewing a different screen —
@@ -90,6 +92,8 @@ interface Options {
   keys: string[]
   /** Stream a build into the output channel: `running` (unfinished) or `done`. */
   task: TaskState
+  /** Open the sessions list on this arrangement, as a stored preference would. */
+  group?: SessionGroupingId
   /**
    * Pretend the history consent has never been answered.
    *
@@ -137,6 +141,8 @@ const USAGE = `
                             path is drawn: --fail-spawn --keys a,enter,enter,enter,enter,enter,enter
     --restore               the machine lost its fleet, so the "start these again?"
                             offer is drawn in front of the list
+    --group <arrangement>   open the sessions list already arranged this way, e.g.
+                            \`--screen sessions --group tree\` for the cascade
 `
 
 function parseArgs(argv: string[]): Options {
@@ -152,6 +158,16 @@ function parseArgs(argv: string[]): Options {
       case '--rows': opts.rows = Math.max(10, Number(value) || opts.rows); i++; break
       case '--lang': opts.lang = value === 'pt' ? 'pt' : 'en'; i++; break
       case '--keys': opts.keys = value.split(',').filter(Boolean); i++; break
+      case '--group': {
+        const found = GROUPINGS.find(g => g === value)
+        if (!found) {
+          process.stderr.write(`unknown grouping: ${value} (${GROUPINGS.join(', ')})\n${USAGE}`)
+          process.exit(2)
+        }
+        opts.group = found
+        i++
+        break
+      }
       case '--pending': opts.pending = true; break
       case '--fail-spawn': opts.failSpawn = true; break
       case '--restore': opts.restore = true; break
@@ -296,6 +312,11 @@ function fakeStatus(opts: Options, apiUrl?: string): ControlStatus {
     // The wizard's blocked row, stated whenever the fake central is up: it is the case the fold
     // exists for, and a preview that only ever drew three selectable modes would never show it.
     setupBlocked: opts.mode === 'central' ? { central: s.setupBlockedCentralUp } : {},
+    // `--group` arrives as a stored arrangement, exactly as a real machine's preferences would —
+    // the screen reads its own default otherwise. It is the only way to LOOK at an arrangement
+    // without driving the menu by keystroke, and the cascade is the one arrangement whose whole
+    // point is what it looks like.
+    ...(opts.group ? { sessionView: { ...DEFAULT_SESSION_VIEW, grouping: opts.group } } : {}),
   }
 }
 
@@ -462,7 +483,7 @@ const FAKE_FLEET: ControlSessions = {
     {
       id: 'a1b2c3', title: 'migrate the auth store', harness: 'claude',
       cwd: '/home/dev/agentistics', project: 'agentistics', model: 'opus', task: 'auth store',
-      repo: 'blpsoares/agentistics',
+      repo: 'blpsoares/agentistics', projectRoot: '/home/dev/agentistics',
       // NOT under `billing`, deliberately: that task is finished in this fixture, so a row filed
       // under it is hidden by default — and the one row this preview exists to reach is the blocked
       // one. `f00d01` carries `billing` instead, which keeps the finished-task case covered.
@@ -527,6 +548,7 @@ const FAKE_FLEET: ControlSessions = {
     {
       id: 'f00d01', title: 'ledger reconciliation', harness: 'claude',
       cwd: '/home/dev/agentistics', project: 'agentistics', repo: 'blpsoares/agentistics',
+      projectRoot: '/home/dev/agentistics',
       task: 'billing', named: true, fell: true,
       state: 'lost', stateLabel: 'lost', actionable: true,
       resume: { sessionId: 'r1', title: 'ledger reconciliation' },
@@ -570,6 +592,7 @@ const FAKE_FLEET: ControlSessions = {
       id: 'aabbcc', title: 'release notes', harness: 'claude',
       cwd: '/home/dev/agentistics/.claude/worktrees/notes', project: 'notes',
       repo: 'blpsoares/agentistics', projectGroup: 'agentistics', worktree: true,
+      projectRoot: '/home/dev/agentistics',
       state: 'exited', stateLabel: 'exited', actionable: true, named: true,
       startedAt: Date.now() - 4 * 60 * 60_000, attached: false,
     },
@@ -582,13 +605,15 @@ const FAKE_FLEET: ControlSessions = {
     {
       id: 'closed:1', title: 'wire up the billing basis', harness: 'claude',
       cwd: '/home/dev/agentistics', project: 'agentistics', task: 'billing',
+      projectRoot: '/home/dev/agentistics',
       state: 'closed', stateLabel: 'closed', actionable: false,
       resume: { sessionId: 'c1', title: 'wire up the billing basis' },
       startedAt: Date.now() - 26 * 60 * 60_000, attached: false,
     },
     {
       id: 'closed:2', title: 'billing: reconcile the ledger', harness: 'codex',
-      cwd: '/home/dev/agentistics', project: 'agentistics', task: 'billing',
+      cwd: '/home/dev/agentistics/packages/server', project: 'server',
+      projectGroup: 'agentistics', projectRoot: '/home/dev/agentistics', task: 'billing',
       state: 'closed', stateLabel: 'closed', actionable: false,
       resume: { sessionId: 'c2', title: 'billing: reconcile the ledger' },
       startedAt: Date.now() - 30 * 60 * 60_000, attached: false,
