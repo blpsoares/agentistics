@@ -834,14 +834,29 @@ export function sessionAge(s: ControlSession, now: number, ago: (seconds: number
 export const ID_CELL = 5
 
 /**
- * The handle: the leading characters of the id, which is what the CLI resolves a prefix against.
+ * The handle: the leading characters of whatever identity this row actually has.
  *
- * Empty for a row that has no id of ours — an external process and a closed conversation are named
- * by the harness, not by agentop, and showing five characters of a synthetic id would offer a
- * handle that `agentop session attach` cannot resolve.
+ * **Every session has an id, so every row shows one.** This returned `''` for external and closed
+ * rows, reasoning that a synthetic id is a handle `agentop session attach` cannot resolve. That
+ * protected one command at the cost of the column: a table where some rows have no id reads as data
+ * missing, and the reader cannot refer to those rows at all — not in a note, not out loud, not to
+ * an assistant.
+ *
+ * The identity is taken in order of how resolvable it is:
+ *
+ *  1. **A row agentop hosts** — its own id. `attach`, `kill` and `rename` take a prefix of it.
+ *  2. **A row naming a CONVERSATION** (`resume`) — the conversation id. Not attachable, but it is
+ *     exactly what reopening resolves, so it is a handle for the one verb the row offers.
+ *  3. **Anything else** — the trailing distinguishing part of the synthetic id. It resolves no
+ *     command and still tells two rows apart, which is the column's other job.
  */
 export function sessionHandle(s: ControlSession): string {
-  return s.id.startsWith('external:') || s.id.startsWith('closed:') ? '' : s.id.slice(0, ID_CELL)
+  if (!s.id.startsWith('external:') && !s.id.startsWith('closed:')) return s.id.slice(0, ID_CELL)
+  const conversation = s.resume?.sessionId
+  if (conversation) return conversation.slice(0, ID_CELL)
+  // `external:<harness>:<cwd>:<startedMs>` — the start time is what separates two assistants open in
+  // one directory, which is precisely the pair a reader needs to tell apart.
+  return s.id.slice(s.id.lastIndexOf(':') + 1).slice(-ID_CELL)
 }
 
 /**

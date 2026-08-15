@@ -415,10 +415,15 @@ const EN: CliStrings = {
     working: 'working',
     waitingApproval: 'needs approval',
     waiting: 'waiting',
-    exited: 'exited',
-    lost: 'lost',
+    // ONE word for every way a session is not running. `exited`, `lost` and `closed` are three
+    // internal facts and were three words on the row — but a reader has one question here ("is it
+    // running?") and one move available ("reopen it"), so three answers to it was noise dressed as
+    // precision. The distinction still exists in the state and is still said by the DETAIL pane;
+    // the column stops spending three vocabularies on one bit.
+    exited: 'off',
+    lost: 'off',
+    closed: 'off',
     external: 'external',
-    closed: 'closed',
   },
   sessApprovalBlind: (harness: string) =>
     `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
@@ -661,10 +666,10 @@ const PT: CliStrings = {
     // keeps `waiting`: there it is already the intransitive answer, and "waiting for a reply" would
     // be longer without saying more.
     waiting: 'aguardando resposta',
-    exited: 'encerrada',
-    lost: 'perdida',
+    exited: 'desligada',
+    lost: 'desligada',
+    closed: 'desligada',
     external: 'externa',
-    closed: 'fechada',
   },
   sessApprovalBlind: (harness: string) =>
     `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando resposta", como qualquer outra pausa.`,
