@@ -648,14 +648,18 @@ const PT: CliStrings = {
   sessState: {
     working: 'trabalhando',
     waitingApproval: 'precisa de aprovação',
-    waiting: 'aguardando',
+    // "aguardando" alone does not say aguardando WHAT, and the state next to it is
+    // `waitingApproval` — with both spelled out the pair reads as the distinction it is. English
+    // keeps `waiting`: there it is already the intransitive answer, and "waiting for a reply" would
+    // be longer without saying more.
+    waiting: 'aguardando resposta',
     exited: 'encerrada',
     lost: 'perdida',
     external: 'externa',
     closed: 'fechada',
   },
   sessApprovalBlind: (harness: string) =>
-    `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando", como qualquer outra pausa.`,
+    `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando resposta", como qualquer outra pausa.`,
   sessDirGone: 'este diretório não existe mais — provavelmente uma worktree removida. Reabrir não vai funcionar enquanto ele não voltar.',
   sessConversationBlind: (harness: string) =>
     `o ${harness} nunca informa qual conversa uma sessão iniciada por ele está escrevendo, então o agentop não consegue registrar o vínculo — o que for oferecido para reabrir aqui é inferido pelo diretório.`,
@@ -733,7 +737,7 @@ const PT: CliStrings = {
     waiting: (n: number, names: string) =>
       `${n} ${n === 1 ? 'sessão esperando' : 'sessões esperando'} por você: ${names}`,
     blind: (harnesses: string) =>
-      `Detecção de aprovação não está disponível para: ${harnesses} — essas sessões aparecem como "aguardando" de qualquer jeito.`,
+      `Detecção de aprovação não está disponível para: ${harnesses} — essas sessões aparecem como "aguardando resposta" de qualquer jeito.`,
   },
 
   dockerMissing: 'docker não instalado',

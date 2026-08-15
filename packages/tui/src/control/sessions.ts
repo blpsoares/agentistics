@@ -21,7 +21,8 @@ import type { ControlSession, SessionState } from './types'
 // rest of the control center imports from, and moving a name is not a reason to touch nine files.
 export {
   ACTIVE_STATES, SESSION_STATES, SESSION_DIMENSIONS, DIMENSION_ORDER, GROUPINGS, UNFILED,
-  GONE_PROJECT_KEY, FILTERS_VERSION, DEFAULT_FILTERS, DEFAULT_SHOW_NAMED, SHORTCUT_STATES,
+  GONE_PROJECT_KEY, FILTERS_VERSION, DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED,
+  SHORTCUT_STATES,
   applyShortcut, bucketKey, dimensionValueLabel, dimensionWordBook, migrateSessionFilters,
   sessionKept, sessionNamed,
   sessionRunning, shortcutOn, storedFilters, toggleValue,
@@ -250,8 +251,28 @@ export function sessionRows(
    * the reading order, never a change to which rows are listed.
    */
   fellLabel?: string,
+  /**
+   * The rows the user MARKED, and what to call their band.
+   *
+   * Marking a row exists for exactly one purpose — finding it again — and a glyph on a line that
+   * stays wherever the ordering left it does not serve it. So marked rows become a BAND AT THE TOP,
+   * in the same shape as every other band here.
+   *
+   * Three rules, and the third is the one that makes the feature work:
+   *  - the band is absent when nothing is marked (a band with a title and no rows is a box with a
+   *    name in it);
+   *  - it applies under EVERY arrangement, `none` included — marking is the user's, and it outranks
+   *    the grouping;
+   *  - a marked row appears in the band and NOWHERE ELSE. The same session in two places is the
+   *    reason someone was hunting for it.
+   *
+   * It lives here rather than in a component because `cardPages` walks these very rows: the card
+   * grid gets the band for free, and cannot disagree with the list about which group a row is in.
+   */
+  marked?: { ids: ReadonlySet<string>; label: string },
 ): SessionRow[] {
   const out: SessionRow[] = []
+  const isMarked = (s: ControlSession) => marked?.ids.has(s.id) ?? false
 
   const push = (label: string, sessions: readonly ControlSession[], muted?: boolean) => {
     if (sessions.length === 0) return
@@ -273,10 +294,21 @@ export function sessionRows(
   const hasFell = Boolean(fellLabel)
   const isFell = (s: ControlSession) => hasFell && s.fell === true && !isLive(s)
 
+  // The marked band leads, drawn from every group so a mark outranks the arrangement. It is ONE
+  // band rather than the live/fell/closed split the groups get: a marked conversation that is over
+  // is still the one you marked, and filing it under history is putting it back where it was hard
+  // to find.
+  if (marked) {
+    push(marked.label, groups.flatMap(g => g.sessions.filter(isMarked)))
+  }
+
   for (const g of groups) {
-    const live = g.sessions.filter(isLive)
-    const fell = g.sessions.filter(isFell)
-    const closed = g.sessions.filter(s => !isLive(s) && !isFell(s))
+    // Everything the band above took is gone from here — the same row twice is the bug, not the
+    // feature. A group left empty by this simply draws nothing: `push` skips it.
+    const rest = g.sessions.filter(s => !isMarked(s))
+    const live = rest.filter(isLive)
+    const fell = rest.filter(isFell)
+    const closed = rest.filter(s => !isLive(s) && !isFell(s))
     // An empty KEY is an absence ("no task"), not a category, and is drawn as one. A FINISHED task
     // says so in its heading and is muted with it: the sessions are still listed and still
     // attachable, so the screen must say why they are set apart rather than merely dimming them.
@@ -1762,7 +1794,7 @@ export function sessionKeyHelp(w: {
   move: string; open: string; attach: string; menu: string; section: string
   newSession: string; search: string; clear: string; kill: string; rename: string
   note: string; task: string; mark: string; onlyActive: string; closed: string
-  exited: string; unfiled: string; group: string; detail: string; menuFold: string
+  exited: string; group: string; layout: string; detail: string; menuFold: string
   reset: string; tabs: string; help: string; quit: string
   approve: string; prompt: string; reopenFell: string
 }): KeyHelp[] {
@@ -1778,7 +1810,7 @@ export function sessionKeyHelp(w: {
     { keys: 'tab', what: w.open },
     { keys: '1-9 / ← →', what: w.section },
     { keys: 'a', what: w.newSession },
-    { keys: '/', what: w.search },
+    { keys: 'ctrl+f', what: w.search },
     { keys: 'esc', what: w.clear },
     { keys: 'x', what: w.kill },
     { keys: 'n', what: w.rename },
@@ -1787,8 +1819,8 @@ export function sessionKeyHelp(w: {
     { keys: 'ctrl+a / l', what: w.onlyActive },
     { keys: 'c', what: w.closed },
     { keys: 'e', what: w.exited },
-    { keys: 'u', what: w.unfiled },
     { keys: 'v', what: w.group },
+    { keys: 'ctrl+g', what: w.layout },
     { keys: 'd', what: w.detail },
     // `b` leads: `ctrl+b` is tmux's default prefix, so inside a tmux the chord never reaches this
     // app at all. The plain letter is the one that always works, and the one the footer names.
@@ -2480,15 +2512,30 @@ export function pagerHit(cells: PagerCells, x: number): 'prev' | 'next' | null {
 // closing a session from its own row
 // ---------------------------------------------------------------------------
 
-/** The glyph that closes a session from its own row. */
-export const CLOSE_CELL = '✕'
+/**
+ * The control that closes a session from its own row.
+ *
+ * A bare `✕` at the end of a table reads as a TRUNCATION mark, not as a verb — which is what it was
+ * reported as. A wastebasket would say it plainly, and it is what the design asked for, but it
+ * cannot be measured here: `truncate` counts `s.length`, which is UTF-16 code UNITS, and there is no
+ * width dependency anywhere in this package. `🗑` is a surrogate pair, so `.length` is 2, while its
+ * DISPLAY width is 1 or 2 depending on the terminal and on whether it is given emoji presentation.
+ * Neither number is reliably the other, and a glyph whose measure is wrong by one shears every row
+ * under it.
+ *
+ * So it is bracketed ASCII: three characters, `.length === 3`, three columns, on every terminal.
+ * The design named this trade itself — a pretty glyph that shears the table is worse than a plain
+ * one that does not. Revisit it the day this package measures display width.
+ */
+export const CLOSE_CELL = '[x]'
 
 /**
  * Columns reserved at the right edge of the list for the per-row close control — PURE.
  *
- * Two: a gap and the glyph. Reserved from the width BEFORE the columns are measured, because a
- * control drawn after a table that already spent the full width is a control drawn on top of the
- * last cell.
+ * A gap plus the control itself, DERIVED from `CLOSE_CELL` rather than written as a number beside
+ * it: the two were `'✕'` and `2`, and changing the glyph without changing the reservation is how a
+ * control ends up drawn on top of the last cell. Reserved from the width BEFORE the columns are
+ * measured, for the same reason.
  *
  * Zero when nothing on screen can be closed, and zero on a list too narrow to spare it — the
  * keyboard's `x` still works there, and a table squeezed to make room for a button is a worse
@@ -2496,7 +2543,7 @@ export const CLOSE_CELL = '✕'
  */
 export function closeCellWidth(rows: readonly ControlSession[], width: number): number {
   const NEEDS = 40
-  return width >= NEEDS && rows.some(canClose) ? 2 : 0
+  return width >= NEEDS && rows.some(canClose) ? CLOSE_CELL.length + 1 : 0
 }
 
 /**

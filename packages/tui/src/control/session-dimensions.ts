@@ -392,6 +392,19 @@ export const FILTERS_VERSION = 2
 export interface SessionFilterState {
   filters: SessionFilters
   showNamed: boolean
+  /**
+   * The session ids the user MARKED, so a row can be found again without searching for it.
+   *
+   * Persisted here with the filters rather than beside them, because the bug it fixes was exactly a
+   * hand-written persist: the component wrote `...(marked.size > 0 ? { marked: [...marked] } : {})`,
+   * so UNMARKING EVERYTHING removed the key instead of writing an empty list — and the next restore
+   * read absence, fell back to whatever was stored before, and resurrected marks the user had just
+   * cleared. A conditional spread cannot express "the answer is nothing".
+   *
+   * So this is always written and always read, and the empty set is a value. `session-dimensions.
+   * test.ts` round-trips it INCLUDING empty, which is the case that was broken.
+   */
+  marked: string[]
 }
 
 /**
@@ -412,6 +425,14 @@ export const DEFAULT_FILTERS: SessionFilters = { status: [...ACTIVE_STATES] }
  * did not name, and the screen said "only active" over 62 of 65 sessions.
  */
 export const DEFAULT_SHOW_NAMED = false
+
+/**
+ * Nothing is marked on a machine that has never chosen — an empty LIST, never `undefined`.
+ *
+ * Stated here so absence has one meaning. It is the half of the round-trip that was missing: with
+ * no default, "no marks" and "not loaded yet" were the same value.
+ */
+export const DEFAULT_MARKED: string[] = []
 
 const knownStates = (values: readonly string[]): string[] =>
   values.filter(v => (SESSION_STATES as readonly string[]).includes(v))
@@ -439,6 +460,7 @@ export function migrateSessionFilters(
 ): SessionFilterState {
   const p = prefs ?? {}
   const showNamed = p.showNamed ?? DEFAULT_SHOW_NAMED
+  const marked = [...(p.marked ?? DEFAULT_MARKED)]
 
   if (p.filtersVersion === FILTERS_VERSION && p.filters) {
     const filters: SessionFilters = {}
@@ -450,18 +472,18 @@ export function migrateSessionFilters(
     // A status selection that survived nothing recognisable is not a filter, it is a list that shows
     // nothing — and the never-empty rule applies to a file just as it applies to a keypress.
     if (!filters.status || filters.status.length === 0) filters.status = [...ACTIVE_STATES]
-    return { filters, showNamed }
+    return { filters, showNamed, marked }
   }
 
   // Absent switches read as the default arrangement's own answer: only active. Stated as a literal
   // here rather than read off `DEFAULT_SESSION_VIEW`, which is now DERIVED from this module and
   // cannot be imported back without a value cycle.
-  if (p.onlyActive ?? true) return { filters: { status: [...ACTIVE_STATES] }, showNamed }
+  if (p.onlyActive ?? true) return { filters: { status: [...ACTIVE_STATES] }, showNamed, marked }
 
   const status = [...ACTIVE_STATES]
   if (p.showClosed) status.push('closed')
   if (p.showExited) status.push('exited', 'lost')
-  return { filters: { status }, showNamed }
+  return { filters: { status }, showNamed, marked }
 }
 
 /**
@@ -482,6 +504,8 @@ export function storedFilters(state: SessionFilterState): Partial<SessionViewPre
     filtersVersion: FILTERS_VERSION,
     filters,
     showNamed: state.showNamed,
+    // ALWAYS written, empty list included — see `SessionFilterState.marked`.
+    marked: [...state.marked],
     states: [...status],
     onlyActive: shortcutOn(status, 'active'),
     showClosed: shortcutOn(status, 'closed'),

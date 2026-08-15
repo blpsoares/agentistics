@@ -20,7 +20,7 @@ import {
   toggleValue,
   type SessionDimensionId,
 } from './session-dimensions'
-import { groupSessions } from './sessions'
+import { groupSessions, sessionRows } from './sessions'
 import type { ControlSession, SessionState } from './types'
 
 const session = (id: string, over: Partial<ControlSession> = {}): ControlSession => ({
@@ -293,22 +293,123 @@ describe('migrateSessionFilters', () => {
 
 describe('storedFilters', () => {
   it('round-trips every dimension, empty selections included', () => {
-    const state = { filters: { status: ['closed'], task: [UNFILED] }, showNamed: true }
+    const state = { filters: { status: ['closed'], task: [UNFILED] }, showNamed: true, marked: ['a'] }
     expect(migrateSessionFilters(storedFilters(state))).toEqual(state)
+  })
+
+  it('round-trips the MARKS, and the empty set is a value', () => {
+    // The reported bug: the component wrote `...(marked.size > 0 ? { marked: [...marked] } : {})`,
+    // so unmarking everything removed the key rather than writing an empty list — and the next
+    // restore read absence, fell back, and resurrected the marks that had just been cleared. A
+    // conditional spread cannot express "the answer is nothing", which is why this seam always
+    // writes the field.
+    const withMarks = { filters: { status: ['closed'] }, showNamed: false, marked: ['a', 'b'] }
+    expect(migrateSessionFilters(storedFilters(withMarks)).marked).toEqual(['a', 'b'])
+
+    const cleared = { ...withMarks, marked: [] }
+    const stored = storedFilters(cleared)
+    expect(stored.marked).toEqual([])
+    expect(migrateSessionFilters(stored).marked).toEqual([])
+
+    // And the clearing SURVIVES a second trip, which is where the old bug actually bit: the first
+    // write looked fine and the read after it brought the old marks back.
+    expect(migrateSessionFilters(storedFilters(migrateSessionFilters(stored))).marked).toEqual([])
+  })
+
+  it('reads absence as no marks, never as not-loaded', () => {
+    expect(migrateSessionFilters({}).marked).toEqual([])
+    expect(migrateSessionFilters(undefined).marked).toEqual([])
   })
 
   it('writes the legacy switches so an older binary still comes up filtered', () => {
     // Derived on write and never read back except by the migration — same pattern, and the same
     // reason, as `deniedRepos` in the sharing rules. A downgrade must not lift every filter.
-    const stored = storedFilters({ filters: { status: [...ACTIVE_STATES] }, showNamed: false })
+    const stored = storedFilters({ filters: { status: [...ACTIVE_STATES] }, showNamed: false, marked: [] })
     expect(stored.onlyActive).toBe(true)
     expect(stored.showClosed).toBe(false)
     expect(stored.showExited).toBe(false)
     expect(stored.states).toEqual([...ACTIVE_STATES])
 
-    const wide = storedFilters({ filters: { status: [...SESSION_STATES] }, showNamed: false })
+    const wide = storedFilters({ filters: { status: [...SESSION_STATES] }, showNamed: false, marked: [] })
     expect(wide.onlyActive).toBe(false)
     expect(wide.showClosed).toBe(true)
     expect(wide.showExited).toBe(true)
+  })
+})
+
+describe('the marked band', () => {
+  const band = (grouping: 'none' | SessionDimensionId, ids: string[]) => sessionRows(
+    groupSessions(FLEET, grouping, WORDS, [], undefined, CTX),
+    'closed', 'finished', undefined,
+    ids.length > 0 ? { ids: new Set(ids), label: 'marked' } : undefined,
+  )
+  const sessionsUnder = (rows: ReturnType<typeof band>, heading: string) => {
+    const at = rows.findIndex(r => r.kind === 'heading' && r.label === heading)
+    if (at < 0) return null
+    const out: string[] = []
+    for (let i = at + 1; i < rows.length; i++) {
+      const r = rows[i]!
+      if (r.kind !== 'session') break
+      out.push(r.session.id)
+    }
+    return out.sort()
+  }
+
+  it('leads the list, whatever the arrangement', () => {
+    // Marking is the user's and outranks the grouping — `none` included, which is the case a band
+    // built inside a group could not have covered.
+    for (const grouping of ['none', ...DIMENSION_ORDER] as const) {
+      const rows = band(grouping, ['a', 'g'])
+      const first = rows.find(r => r.kind === 'heading')
+      expect(first).toMatchObject({ label: 'marked', count: 2 })
+      expect(sessionsUnder(rows, 'marked')).toEqual(['a', 'g'])
+    }
+  })
+
+  it('puts a marked row in the band and NOWHERE ELSE', () => {
+    // The whole point. The same session in two places is the reason someone was hunting for it in
+    // the first place, and a band that merely COPIES the rows makes the list longer and no easier.
+    for (const grouping of ['none', ...DIMENSION_ORDER] as const) {
+      const rows = band(grouping, ['a', 'g'])
+      const appearances = rows.filter(r => r.kind === 'session' && (r.session.id === 'a' || r.session.id === 'g'))
+      expect(appearances).toHaveLength(2)
+      // And nothing else was dropped on the way.
+      expect(rows.filter(r => r.kind === 'session')).toHaveLength(FLEET.length)
+    }
+  })
+
+  it('takes a marked row out of HISTORY too, not just out of the live block', () => {
+    // `c` is closed and `e` is lost. Both would otherwise sit under the history heading, which is
+    // exactly where a marked row is hardest to find.
+    const rows = band('project', ['c', 'e'])
+    expect(sessionsUnder(rows, 'marked')).toEqual(['c', 'e'])
+    // A history band still exists — `d` is exited and unmarked — so the assertion is about WHERE
+    // the marked two ended up, not about the band being gone.
+    const closedHeadings = rows
+      .map((r, i) => (r.kind === 'heading' && r.label.includes('closed') ? i : -1))
+      .filter(i => i >= 0)
+    expect(closedHeadings.length).toBeGreaterThan(0)
+    for (const at of closedHeadings) {
+      for (let i = at + 1; i < rows.length; i++) {
+        const r = rows[i]!
+        if (r.kind !== 'session') break
+        expect(['c', 'e']).not.toContain(r.session.id)
+      }
+    }
+  })
+
+  it('does not exist at all when nothing is marked', () => {
+    // Not an empty band — no band. A heading with no rows under it is a box with a name in it.
+    const rows = band('project', [])
+    expect(rows.some(r => r.kind === 'heading' && r.label === 'marked')).toBe(false)
+    expect(rows.filter(r => r.kind === 'session')).toHaveLength(FLEET.length)
+  })
+
+  it('leaves a group EMPTIED by the band drawing nothing, rather than a bare heading', () => {
+    // `f` is the only session in project `solo`; marking it must not leave `solo` standing with a
+    // count of zero.
+    const rows = band('project', ['f'])
+    expect(rows.some(r => r.kind === 'heading' && r.label === 'solo')).toBe(false)
+    expect(sessionsUnder(rows, 'marked')).toEqual(['f'])
   })
 })
