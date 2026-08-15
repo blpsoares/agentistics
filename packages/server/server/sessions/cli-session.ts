@@ -109,7 +109,13 @@ export async function runSession(argv: string[]): Promise<number> {
     case 'ls': return ls(cmd, backend)
     case 'attach': return attach(cmd.ref, backend)
     case 'kill': return kill(cmd.ref, backend)
-    case 'rename': return patch(cmd.ref, { label: cmd.label }, 'renamed', backend)
+    // `labelSince` travels WITH the label, always. `pickTitle` settles a disagreement between the
+    // name typed here and the one the harness holds by RECENCY, and it can only do that when both
+    // sides say when — so a rename written without a timestamp can never win, whatever the user
+    // typed and however recently. Measured on this machine: every one of twelve live rows had
+    // `labelSince: undefined`, because the cockpit's rename verb stamped it and this one did not.
+    // The comparison had therefore never once run in production, and the harness took every row.
+    case 'rename': return patch(cmd.ref, { label: cmd.label, labelSince: Date.now() }, 'renamed', backend)
     case 'note': return patch(cmd.ref, { note: cmd.text }, 'annotated', backend)
   }
 }
@@ -562,7 +568,9 @@ async function kill(ref: string, backend: SessionBackend): Promise<number> {
 
 async function patch(
   ref: string,
-  fields: { label?: string; note?: string },
+  // `labelSince` is here rather than stamped inside because it belongs to `label` and to nothing
+  // else — a note carries no timestamp and must not acquire one by passing through this helper.
+  fields: { label?: string; labelSince?: number; note?: string },
   verb: string,
   backend: SessionBackend,
 ): Promise<number> {

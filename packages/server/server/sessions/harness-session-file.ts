@@ -184,6 +184,15 @@ export function pickTitle(o: {
       ? { title: label, source: 'label', other: harness }
       : { title: harness, source: 'harness', other: label }
   }
+
+  // A `collision` name is not a competing name. It is the user's OWN name with a suffix the harness
+  // appended because two sessions asked for the same one — `Principal` came back as
+  // `principal do cockpit-zippy-conway`. With no timestamps to compare, handing the row to the
+  // harness shows a mangled copy in preference to the original, which is exactly the complaint:
+  // "the real name still isn't prevailing in the listing". A genuine `/rename` inside the session
+  // carries NO `nameSource` at all, so it is untouched by this and still wins below.
+  if (o.file?.nameSource === 'collision') return { title: label, source: 'label', other: harness }
+
   return { title: harness, source: 'harness', other: label }
 }
 
