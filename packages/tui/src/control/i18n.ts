@@ -353,6 +353,7 @@ export interface ControlStrings {
   /** How to put the arrangement back to how the app opens on a fresh machine. */
   keySessionsReset: string
   keySessionsKill: string
+  keySessionsDeleteTask: string
   keySessionsRename: string
   keySessionsNote: string
   keySessionsNew: string
@@ -830,6 +831,7 @@ const EN: ControlStrings = {
   keySessionsAttach: 'o attach',
   keySessionsReset: '^r reset view',
   keySessionsKill: 'x kill',
+  keySessionsDeleteTask: 'x delete task',
   keySessionsRename: 'n name',
   keySessionsNote: 't note',
   keySessionsNew: 'a new',
@@ -1246,6 +1248,7 @@ const PT: ControlStrings = {
   keySessionsAttach: 'o anexar',
   keySessionsReset: '^r restaurar view',
   keySessionsKill: 'x encerrar',
+  keySessionsDeleteTask: 'x apagar tarefa',
   keySessionsRename: 'n nomear',
   keySessionsNote: 't nota',
   keySessionsNew: 'a nova',

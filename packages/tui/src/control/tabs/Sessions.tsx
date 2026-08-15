@@ -1092,7 +1092,21 @@ export function Sessions({
       : focus === 'aside' && cockpit.aside > 0
         // The menu is a vertical list, so it answers ↑↓ and enter — and `esc` is the way back to the
         // sessions. A hint for a key that does nothing here is the one bug this footer prevents.
-        ? { capture: false, claimArrows: true, hints: [s.keyQuit, s.keyAsideSection, s.keyMove, s.keyRun, s.keyBack, s.keyTabsAlt] }
+        ? {
+            capture: false,
+            claimArrows: true,
+            hints: [
+              s.keyQuit,
+              s.keyAsideSection,
+              s.keyMove,
+              s.keyRun,
+              ...(asideList[asideRow]?.kind === 'task' && !asideList[asideRow].all && asideList[asideRow].name
+                ? [s.keySessionsDeleteTask]
+                : []),
+              s.keyBack,
+              s.keyTabsAlt,
+            ],
+          }
       : actionsFocused
         // While the action row has the keyboard it is a horizontal list, so it claims the arrows —
         // and the footer stops saying they change screen for exactly as long as that is true.
@@ -1122,7 +1136,7 @@ export function Sessions({
             ],
           })
   }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping,
-      selected?.canApprove, selected?.canChoose, canPrompt, menuHidden, restoring])
+      selected?.canApprove, selected?.canChoose, canPrompt, menuHidden, restoring, asideList, asideRow])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
