@@ -3,6 +3,7 @@ import type { ModelUsage } from '@agentistics/core'
 import { formatModel, calcCost, getModelColor, fmtCost, usageTokenTotal } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { resolveProvider, providerOrder } from '@agentistics/core'
+import { MetricNote } from './MetricNote'
 
 type SortKey = 'cost' | 'tokens' | 'model'
 
@@ -333,6 +334,15 @@ export function ModelBreakdown({ modelUsage, note, currency = 'USD', brlRate = 1
           {note}
         </div>
       )}
+
+      {/* The token column here is the model's whole billed volume, and the money beside it is
+          priced from the same four counters — which is exactly why a cheap-looking model can carry
+          a large number. */}
+      <MetricNote style={{ padding: '0 14px 10px' }}>
+        {lang === 'pt'
+          ? 'A coluna de tokens soma os quatro contadores cobrados deste modelo — entrada nova, saída, leitura e escrita de cache — e o custo ao lado é calculado sobre os mesmos quatro, cada um ao seu preço. Um modelo pode aparecer com volume enorme e custo baixo: leitura de cache vale cerca de 1/10 da entrada nova.'
+          : "The tokens column adds this model's four billed counters — fresh input, output, cache read and cache write — and the cost beside it is priced from those same four, each at its own rate. A model can show a huge volume and a small cost: cache reads are worth roughly 1/10 of fresh input."}
+      </MetricNote>
     </div>
     )}
     </>

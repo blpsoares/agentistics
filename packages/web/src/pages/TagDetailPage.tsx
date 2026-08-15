@@ -8,6 +8,7 @@ import { ArrowLeft, Pencil, Trash2, CalendarRange } from 'lucide-react'
 import { fmt, fmtCost, formatModel, formatProjectName, repoShortName, totalTokens as totalTokensOf } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import type { TokenBreakdown } from '@agentistics/core'
+import { MetricNote } from '../components/MetricNote'
 import { HARNESS_LABELS } from '../lib/harness'
 import { ConfirmModal, SectionHeader } from './settings/primitives'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -420,6 +421,13 @@ export default function TagDetailPage() {
           <StatTile label={pt ? 'Membros' : 'Members'} value={(detail?.stats.distinctMembers ?? 0).toLocaleString()} />
           <StatTile label={pt ? 'Máquinas' : 'Machines'} value={(detail?.stats.distinctMachines ?? 0).toLocaleString()} />
         </div>
+        {/* Three token tiles side by side and only the first is the total — without this the
+            obvious reading is that the other two should add up to it. */}
+        <MetricNote>
+          {pt
+            ? '"Tokens" soma os quatro contadores cobrados. As duas caixas ao lado — entrada e saída — são só dois deles; o resto é leitura e escrita de cache, normalmente a maior parte do volume. Por isso entrada + saída não fecha com o total.'
+            : '"Tokens" adds all four billed counters. The two tiles beside it — in and out — are only two of them; the rest is cache read and cache write, usually most of the volume. That is why in + out does not add up to the total.'}
+        </MetricNote>
         {/* A tag whose sources resolve to nothing is a real, common state (a brand-new grouping, or
             one whose machines have not pushed yet) — say so instead of showing five zeros. */}
         {empty && (

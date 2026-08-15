@@ -3,6 +3,7 @@ import { CheckCircle, XCircle, ChevronDown, ChevronUp, Bot } from 'lucide-react'
 import { fmtCost } from '@agentistics/core'
 import type { AgentInvocation, HarnessId } from '@agentistics/core'
 import type { Lang } from '@agentistics/core'
+import { MetricNote } from './MetricNote'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { capable } from '../lib/harness'
 import { NAtag } from './NAtag'
@@ -164,6 +165,15 @@ export function AgentMetricsPanel({
           accent="var(--accent-green)"
         />
       </div>
+
+      {/* What these numbers ARE. An agent's token figure is the harness's own rollup for that
+          invocation, which is a different measurement from the session totals elsewhere — saying so
+          is cheaper than the question "why don't these add up to my session". */}
+      <MetricNote>
+        {pt
+          ? 'Tokens e custo por invocação vêm do que o próprio Claude Code reporta ao encerrar cada agente — já incluem leitura e escrita de cache. Um agente é cobrado dentro da sessão que o chamou, então estes valores são uma FATIA do total da sessão, não uma soma à parte.'
+          : "Tokens and cost per invocation come from what Claude Code itself reports when each agent finishes — cache reads and writes included. An agent is billed inside the session that called it, so these figures are a SLICE of that session's total, not something to add on top."}
+      </MetricNote>
 
       {/* Agent type breakdown */}
       {sortedTypes.length > 0 && (

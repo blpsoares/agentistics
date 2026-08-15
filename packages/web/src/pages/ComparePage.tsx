@@ -8,6 +8,7 @@ import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 import { computeFilteredHarnessSummaries } from '../hooks/useData'
 import { fmtDateLocalized } from '../lib/dateFormat'
 import { CompareByFilter } from './compare/CompareByFilter'
+import { MetricNote } from '../components/MetricNote'
 
 interface HarnessAgg {
   harness: HarnessId
@@ -501,8 +502,21 @@ function CompareByHarness() {
         </table>
       </div>
 
+      {/* Three token rows sit above each other and only one of them is the total. Without this the
+          obvious reading is that input + output should equal it, and it is off by ~300x. */}
+      <MetricNote>
+        {lang === 'pt'
+          ? 'A linha de tokens totais soma os quatro contadores cobrados. As linhas de entrada e saída abaixo dela são só dois deles — o resto é leitura e escrita de cache, que costumam ser a maior parte do volume. Por isso entrada + saída NÃO fecha com o total.'
+          : 'The total-tokens row adds all four billed counters. The input and output rows under it are only two of them — the rest is cache read and cache write, usually most of the volume. That is why input + output does NOT add up to the total.'}
+      </MetricNote>
+
       {/* Cost per 1M tokens (blended) — highlights the cheapest harness */}
       <SectionCard title={t('compare.costPerMTokens', lang)}>
+        <MetricNote style={{ marginTop: 0, marginBottom: 12 }}>
+          {lang === 'pt'
+            ? 'Custo dividido por TODOS os tokens cobrados, cache incluído. Dividir só pela conversa daria um valor dezenas de vezes maior que o cobrado, e ordenaria os assistentes por quanto cada um usa cache em vez de por quanto custa.'
+            : 'Cost divided by ALL billed tokens, cache included. Dividing by the conversation alone would report a figure tens of times higher than what is charged, and would rank assistants by how much each one caches rather than by what it costs.'}
+        </MetricNote>
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',

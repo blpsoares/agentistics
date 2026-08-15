@@ -2,8 +2,12 @@ import React, { useMemo, useState } from 'react'
 import { useOutletContext, useNavigate } from 'react-router-dom'
 import { Zap, ArrowLeft, GitCommit, ExternalLink } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
-import { repoShortName, fmt, fmtCost, calcCost, sessionCostUSD, type SessionMeta } from '@agentistics/core'
+import {
+  repoShortName, fmt, fmtCost, calcCost, sessionCostUSD, EMPTY_TOKENS, addTokens, sessionTokens,
+  totalTokens, type SessionMeta, type TokenBreakdown,
+} from '@agentistics/core'
 import { Section } from '../components/Section'
+import { MetricNote } from '../components/MetricNote'
 import { SortControl } from '../components/SortControl'
 
 type ActSortKey = 'cost' | 'runs' | 'tokens' | 'commits' | 'members' | 'name'
@@ -16,15 +20,17 @@ export default function ActionsPage() {
   const pt = lang === 'pt'
 
   const groups = useMemo(() => {
-    const byRepo: Record<string, { remote: string; runs: number; tokensIn: number; tokensOut: number; commits: number; costUSD: number; users: Set<string> }> = {}
+    const byRepo: Record<string, { remote: string; runs: number; tokensIn: number; tokensOut: number; tokens: TokenBreakdown; commits: number; costUSD: number; users: Set<string> }> = {}
     for (const s of derived.filteredSessions) {
       if (!s.ci) continue
       const key = s.git_remote || ''
       let g = byRepo[key]
-      if (!g) g = byRepo[key] = { remote: key, runs: 0, tokensIn: 0, tokensOut: 0, commits: 0, costUSD: 0, users: new Set() }
+      if (!g) g = byRepo[key] = { remote: key, runs: 0, tokensIn: 0, tokensOut: 0, tokens: EMPTY_TOKENS, commits: 0, costUSD: 0, users: new Set() }
       g.runs++
       g.tokensIn += s.input_tokens ?? 0
       g.tokensOut += s.output_tokens ?? 0
+      // Every billed counter — the column says "tok" and the sort ranks by it.
+      g.tokens = addTokens(g.tokens, sessionTokens(s))
       g.commits += s.git_commits ?? 0
       g.costUSD += sessionCost(s)
       if (s.user) g.users.add(s.user)
@@ -39,7 +45,7 @@ export default function ActionsPage() {
       switch (sortKey) {
         case 'cost': return g.costUSD
         case 'runs': return g.runs
-        case 'tokens': return g.tokensIn + g.tokensOut
+        case 'tokens': return totalTokens(g.tokens)
         case 'commits': return g.commits
         case 'members': return g.users.size
         case 'name': return (g.remote ? repoShortName(g.remote) : '').toLowerCase()
@@ -117,7 +123,7 @@ export default function ActionsPage() {
                     {linked && <ExternalLink size={11} color="var(--text-tertiary)" />}
                   </span>
                   <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{g.runs} runs</span>
-                  <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{fmt(g.tokensIn + g.tokensOut)} tok</span>
+                  <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{fmt(totalTokens(g.tokens))} tok</span>
                   <span style={{ fontSize: 12, color: 'var(--text-tertiary)', display: 'inline-flex', alignItems: 'center', gap: 3 }}><GitCommit size={11} />{g.commits}</span>
                   <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--anthropic-orange)', width: 90, textAlign: 'right' }}>{fmtCost(g.costUSD, currency, brlRate)}</span>
                 </div>
@@ -125,6 +131,11 @@ export default function ActionsPage() {
             })}
           </div>
         )}
+        <MetricNote>
+          {pt
+            ? 'Tokens somam os quatro contadores cobrados — entrada nova, saída, leitura e escrita de cache. Runners de CI são efêmeros e reaproveitam pouco cache entre execuções, então aqui a fatia de leitura de cache costuma ser bem menor que numa sessão sua.'
+            : 'Tokens add all four billed counters — fresh input, output, cache read and cache write. CI runners are ephemeral and reuse little cache between runs, so the cache-read share here is usually far smaller than in one of your own sessions.'}
+        </MetricNote>
       </Section>
     </>
   )

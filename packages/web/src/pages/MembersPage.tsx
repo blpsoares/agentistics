@@ -8,6 +8,7 @@ import type { AppContext } from '../lib/app-context'
 import { fmt, fmtCost, formatModel, repoShortName, type HarnessId } from '@agentistics/core'
 import { aggregateMemberMetrics, withStatsCacheTotals, LOCAL_KEY, type MemberGroupBy, type MemberMetrics } from '../lib/member-metrics'
 import { cacheTotalsUsable } from '../lib/topUsage'
+import { MetricNote } from '../components/MetricNote'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { Section } from '../components/Section'
 import { SortControl } from '../components/SortControl'
@@ -192,6 +193,7 @@ export default function MembersPage() {
         <Kpi label="Tokens" value={fmt(totalTokens)} />
         <Kpi label={pt ? 'Custo' : 'Cost'} value={fmtCost(totalCost, currency, brlRate)} accent />
       </div>
+      <MetricNote>{pt ? 'Tokens somam os quatro contadores cobrados: entrada nova, saída, leitura e escrita de cache. A leitura de cache é a maior fatia do volume na maioria das máquinas — é a conversa relida a cada turno, a cerca de 1/10 do preço da entrada nova.' : 'Tokens add all four billed counters: fresh input, output, cache read and cache write. Cache read is the largest share of the volume on most machines — the conversation re-read every turn, at roughly 1/10 the price of fresh input.'}</MetricNote>
 
       {/* Comparative charts. The cards below rank one row at a time; a chart is what makes the
           SPREAD visible — who is an outlier and by how much. The metric is switchable because
