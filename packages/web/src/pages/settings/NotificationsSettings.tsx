@@ -37,8 +37,9 @@ export default function NotificationsSettings() {
     update({ events: nextEvents })
   }
 
-  function updateEventSound(eventKey: keyof NotificationSettings['eventSounds'], value: SoundPreset) {
-    const nextSounds = { ...(settings.eventSounds || DEFAULT_NOTIFICATION_SETTINGS.eventSounds), [eventKey]: value }
+  function updateEventSound(eventKey: keyof NotificationSettings['events'], value: SoundPreset) {
+    const eventSounds = settings.eventSounds ?? DEFAULT_NOTIFICATION_SETTINGS.eventSounds
+    const nextSounds = { ...eventSounds, [eventKey]: value }
     update({ eventSounds: nextSounds })
   }
 
