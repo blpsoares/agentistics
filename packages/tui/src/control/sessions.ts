@@ -14,11 +14,22 @@ import {
   bucketKey, dimensionValueLabel, sessionNamed, sessionRunning,
   type DimensionContext, type DimensionWordBook, type SessionDimensionId, type SessionGroupingId,
 } from './session-dimensions'
+import {
+  DEFAULT_ORDER, SESSION_SORTS, sessionRank, sortSessions,
+  type SessionOrder, type SessionSort,
+} from './session-order'
+import { buildSessionTree } from './session-tree'
 import type { ControlSession, SessionState } from './types'
 
-// The status vocabulary and the two row predicates live in `session-dimensions.ts`, because `keyOf`
-// needs them and the dependency has to run one way. Re-exported here because this is the module the
-// rest of the control center imports from, and moving a name is not a reason to touch nine files.
+// The status vocabulary and the two row predicates live in `session-dimensions.ts`, and the ordering
+// in `session-order.ts`, because `keyOf` and `buildSessionTree` need them and the dependency has to
+// run one way. Re-exported here because this is the module the rest of the control center imports
+// from, and moving a name is not a reason to touch nine files.
+export {
+  DEFAULT_ORDER, SESSION_SORTS, sessionRank, sortSessions, usageOf,
+  type SessionOrder, type SessionSort,
+} from './session-order'
+export { breadcrumb, buildSessionTree, CRUMB_SEP } from './session-tree'
 export {
   ACTIVE_STATES, SESSION_STATES, SESSION_DIMENSIONS, DIMENSION_ORDER, GROUPINGS, UNFILED,
   GONE_PROJECT_KEY, FILTERS_VERSION, DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED,
@@ -30,95 +41,6 @@ export {
   type SessionFilters,
   type SessionFilterState, type SessionGroupingId, type StatusShortcut,
 } from './session-dimensions'
-
-// ---------------------------------------------------------------------------
-// ordering
-// ---------------------------------------------------------------------------
-
-/** What is waiting on a person first, then what is running, then what is done, then what cannot be
- *  acted on at all. The same ranking the server-side view uses, restated here because the screen
- *  re-sorts within a group. */
-const RANK: Record<SessionState, number> = {
-  'waiting-approval': 0,
-  waiting: 1,
-  working: 2,
-  exited: 3,
-  lost: 4,
-  unknown: 5,
-  closed: 6,
-}
-
-export function sessionRank(s: ControlSession): number {
-  return RANK[s.state]
-}
-
-/**
- * What a list can be ordered BY.
- *
- * `state` is the default and is not merely one option among the others: it puts what is blocked on
- * you at the top, which is the reason this screen exists. Every other order is a way of ANSWERING a
- * question ("what is costing me", "where was I an hour ago"), and each keeps state as its tiebreak
- * so a run of equal values still surfaces the blocked one first.
- */
-export type SessionSort = 'state' | 'name' | 'started' | 'usage' | 'project'
-
-export const SESSION_SORTS: readonly SessionSort[] = ['state', 'name', 'started', 'usage', 'project'] as const
-
-export interface SessionOrder {
-  by: SessionSort
-  /** `desc` is newest / largest / most-urgent first — the direction each key is useful in. */
-  dir: 'asc' | 'desc'
-}
-
-export const DEFAULT_ORDER: SessionOrder = { by: 'state', dir: 'desc' }
-
-/**
- * Tokens as a NUMBER for ordering, from the already-formatted string the host sent.
- *
- * The host formats `51.7k` because every other surface wants it formatted, and re-deriving the
- * number here beats asking it to send both — but it must parse the SUFFIX, or `9.9k` sorts above
- * `1.2M` and the column that exists to show what is expensive points at the cheapest row.
- */
-export function usageOf(s: ControlSession): number {
-  const raw = (s.tokens ?? '').trim()
-  const n = Number.parseFloat(raw)
-  if (!Number.isFinite(n)) return 0
-  const unit = raw.replace(/[\d.,\s]/g, '').toUpperCase()
-  return n * (unit.startsWith('M') ? 1e6 : unit.startsWith('K') ? 1e3 : 1)
-}
-
-/**
- * Order a list — PURE.
- *
- * STATE is every key's tiebreak, not only its own: a screen sorted by name that buries a session
- * waiting on approval among nine idle ones has lost the thing it is for. The direction flips the
- * primary key only, so `asc` by name still puts the blocked session first among equal names.
- */
-export function sortSessions(
-  list: readonly ControlSession[],
-  order: SessionOrder = DEFAULT_ORDER,
-): ControlSession[] {
-  // `primary` returns negative when `a` belongs FIRST in the direction the key is useful in, which
-  // `desc` names: most urgent, A to Z, largest, newest. `asc` is that flipped. One convention for
-  // every key, rather than a per-key argument about which way round its "descending" runs.
-  const primary = (a: ControlSession, b: ControlSession): number => {
-    switch (order.by) {
-      case 'state': return sessionRank(a) - sessionRank(b)
-      case 'name': return a.title.localeCompare(b.title)
-      case 'project': return (a.projectGroup || a.project).localeCompare(b.projectGroup || b.project)
-      case 'usage': return usageOf(b) - usageOf(a)
-      case 'started': return (b.startedAt ?? 0) - (a.startedAt ?? 0)
-    }
-  }
-  const sign = order.dir === 'asc' ? -1 : 1
-  return [...list].sort((a, b) => {
-    const byPrimary = primary(a, b) * sign
-    if (byPrimary !== 0) return byPrimary
-    const byRank = sessionRank(a) - sessionRank(b)
-    if (byRank !== 0) return byRank
-    return (b.startedAt ?? 0) - (a.startedAt ?? 0)
-  })
-}
 
 /**
  * The rows matching what was typed — the SAME predicate for every kind of row.
@@ -157,6 +79,17 @@ export interface SessionGroup {
   sessions: ControlSession[]
   /** A TASK the user has marked finished. Only ever set while grouping by task. */
   done?: boolean
+  /**
+   * How far to INDENT this group's heading. Only the cascade sets it; every flat arrangement is
+   * one level deep by construction, and an absent depth reads as zero.
+   */
+  depth?: number
+  /**
+   * The node labels from the root down to this group — what a card band's breadcrumb is built from.
+   *
+   * Only the cascade sets it. A flat band is named by one word and has nothing to trace back to.
+   */
+  path?: readonly string[]
 }
 
 /**
@@ -184,6 +117,11 @@ export function groupSessions(
   ctx: DimensionContext = {},
 ): SessionGroup[] {
   if (by === 'none') return [{ key: '', label: '', sessions: sortSessions(list, order) }]
+  // The CASCADE returns the same shape, already in reading order, with `depth` and `path` on top —
+  // which is what lets every consumer below keep working without knowing a tree exists. Dispatched
+  // here rather than by each caller, for the same reason `none` is: three surfaces arrange a fleet,
+  // and an arrangement one of them has not been told about is one that silently does not exist.
+  if (by === 'tree') return buildSessionTree(list, words, doneTasks, order, ctx)
 
   const groups = new Map<string, SessionGroup>()
   for (const s of list) {
@@ -217,7 +155,22 @@ export function groupSessions(
  * until the first group boundary.
  */
 export type SessionRow =
-  | { kind: 'heading'; label: string; count: number; muted?: boolean }
+  | {
+      kind: 'heading'
+      label: string
+      count: number
+      muted?: boolean
+      /** How far to indent — the cascade's branch depth. Absent is flat, which is every other
+       *  arrangement. */
+      depth?: number
+      /**
+       * The node labels from the root down to this heading, for the card band's breadcrumb.
+       *
+       * Its LAST element is whatever this heading actually reads, suffix included — so the grid and
+       * the list can never name one branch two different ways.
+       */
+      path?: readonly string[]
+    }
   /** A blank line between sections. Air INSIDE a list is what makes its sections readable. */
   | { kind: 'spacer' }
   | { kind: 'session'; session: ControlSession }
@@ -274,10 +227,30 @@ export function sessionRows(
   const out: SessionRow[] = []
   const isMarked = (s: ControlSession) => marked?.ids.has(s.id) ?? false
 
-  const push = (label: string, sessions: readonly ControlSession[], muted?: boolean) => {
+  /**
+   * The cascade's extras for a heading, if this group has any.
+   *
+   * The crumb's last element is replaced by the heading's ACTUAL words, so a suffixed block
+   * (`packages/tui · closed`) reads the same in the card band as it does in the list.
+   */
+  const branch = (g: SessionGroup | undefined, head: string) => (g?.path
+    ? { ...(g.depth ? { depth: g.depth } : {}), path: [...g.path.slice(0, -1), head] }
+    : {})
+
+  const push = (
+    label: string,
+    sessions: readonly ControlSession[],
+    muted?: boolean,
+    group?: SessionGroup,
+  ) => {
     if (sessions.length === 0) return
     if (out.length > 0) out.push({ kind: 'spacer' })
-    if (label !== '') out.push({ kind: 'heading', label, count: sessions.length, ...(muted ? { muted } : {}) })
+    if (label !== '') {
+      out.push({
+        kind: 'heading', label, count: sessions.length, ...(muted ? { muted } : {}),
+        ...branch(group, label),
+      })
+    }
     for (const session of sessions) out.push({ kind: 'session', session })
   }
 
@@ -302,7 +275,27 @@ export function sessionRows(
     push(marked.label, groups.flatMap(g => g.sessions.filter(isMarked)))
   }
 
-  for (const g of groups) {
+  /**
+   * How many sessions this BRANCH will actually draw beneath it — the cascade's heading-only count.
+   *
+   * Counted over the descendants that follow, and only the ones surviving the marked band, rather
+   * than read off a subtree total stored at build time. A heading claiming two over one drawn row is
+   * the same class of lie as a confident zero, and the band above takes rows out of every group.
+   *
+   * Depth-first order is what makes this local: the descendants of a node are exactly the groups
+   * following it until one comes back up to its own level.
+   */
+  const drawnBelow = (at: number): number => {
+    const depth = groups[at]!.depth ?? 0
+    let n = 0
+    for (let i = at + 1; i < groups.length; i++) {
+      if ((groups[i]!.depth ?? 0) <= depth) break
+      n += groups[i]!.sessions.filter(s => !isMarked(s)).length
+    }
+    return n
+  }
+
+  groups.forEach((g, at) => {
     // Everything the band above took is gone from here — the same row twice is the bug, not the
     // feature. A group left empty by this simply draws nothing: `push` skips it.
     const rest = g.sessions.filter(s => !isMarked(s))
@@ -313,20 +306,33 @@ export function sessionRows(
     // says so in its heading and is muted with it: the sessions are still listed and still
     // attachable, so the screen must say why they are set apart rather than merely dimming them.
     const head = g.done && doneLabel ? `${g.label} · ${doneLabel}` : g.label
-    push(head, live, g.key === '' || Boolean(g.done))
+    // A cascade BRANCH holding no session of its own is still a row: it is the name of the branch,
+    // and `push` — which skips an empty group, correctly, for every flat arrangement — would delete
+    // exactly the structure this arrangement is. Its count is what is drawn below it.
+    if (rest.length === 0 && g.path && head !== '') {
+      const below = drawnBelow(at)
+      // Nothing left under it either: the branch is not merely empty, it is not there. A heading
+      // with a name and nothing named is the box-with-a-name-in-it the marked band already refuses.
+      if (below > 0) {
+        if (out.length > 0) out.push({ kind: 'spacer' })
+        out.push({ kind: 'heading', label: head, count: below, ...branch(g, head) })
+      }
+      return
+    }
+    push(head, live, g.key === '' || Boolean(g.done), g)
     if (fell.length > 0) {
       // NOT muted: everything else set apart on this screen is set apart because it is over, and
       // this block is the opposite — it is the one thing on the list asking to be acted on.
       const label = fellLabel ?? ''
-      push(g.label !== '' && label ? `${g.label} · ${label}` : label, fell)
+      push(g.label !== '' && label ? `${g.label} · ${label}` : label, fell, undefined, g)
     }
     if (closed.length > 0) {
       // Inside a named group the closed block still says which group it belongs to, so a heading
       // read on its own is never ambiguous.
       const label = closedLabel ?? ''
-      push(g.label !== '' && label ? `${g.label} · ${label}` : label, closed, true)
+      push(g.label !== '' && label ? `${g.label} · ${label}` : label, closed, true, g)
     }
-  }
+  })
   return out
 }
 
@@ -2024,7 +2030,20 @@ export function cardGrid(o: {
  */
 export type CardBand =
   /** `muted` is the list's own reading: an absent key, a finished task, the history section. */
-  | { kind: 'heading'; label: string; count: number; muted: boolean }
+  | {
+      kind: 'heading'
+      label: string
+      count: number
+      muted: boolean
+      /**
+       * The cascade's node path, when there is one — what the band's title is BREADCRUMBED from.
+       *
+       * The grid has no indentation to spend, so where the list draws `session-monitor` two levels
+       * in, the band draws `agentistics › .claude/worktrees › session-monitor`. Carried on the row
+       * rather than re-derived, so the two layouts cannot name one branch different things.
+       */
+      path?: readonly string[]
+    }
   /**
    * Indexes into the flat card sequence — at most `cols` of them, all from one group — and the rows
    * this band occupies, FRAME INCLUDED.
@@ -2107,7 +2126,7 @@ export function cardPages(o: {
     return Math.min(cardHeight, Math.max(PANE_FRAME_Y + CARD_MIN_LINES, PANE_FRAME_Y + most))
   }
 
-  type Head = { label: string; count: number; muted: boolean }
+  type Head = { label: string; count: number; muted: boolean; path?: readonly string[] }
   const sections: Array<{ head: Head | null; items: number[] }> = []
   let index = 0
   for (const row of o.rows) {
@@ -2115,7 +2134,16 @@ export function cardPages(o: {
     if (row.kind === 'heading') {
       // Unheaded, every row joins ONE nameless section, so nothing wraps early and the layout is
       // byte-for-byte the one this screen drew before groups reached it.
-      if (o.headed) sections.push({ head: { label: row.label, count: row.count, muted: row.muted === true }, items: [] })
+      if (o.headed) {
+        sections.push({
+          head: {
+            label: row.label, count: row.count, muted: row.muted === true,
+            // Travels with the name, so a branch that crosses a page break repeats the WHOLE crumb.
+            ...(row.path ? { path: row.path } : {}),
+          },
+          items: [],
+        })
+      }
       continue
     }
     const last = sections[sections.length - 1]

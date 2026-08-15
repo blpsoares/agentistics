@@ -56,6 +56,23 @@ describe('a directory that no longer exists', () => {
   })
 })
 
+describe('where the session sits INSIDE its project', () => {
+  it('carries the main checkout path, so the cascade measures branches against a fact', () => {
+    const c = toControlSession(view(), S, {
+      ...LIVE, rootPath: '/home/d/agentistics',
+    })
+    expect(c.projectRoot).toBe('/home/d/agentistics')
+  })
+
+  it('carries none when nothing names a repository, so the row hangs at its project root', () => {
+    // The honesty rule: outside a repository, and for a directory that is gone with nothing
+    // recorded, there is no path to measure against. A branch synthesised from the cwd alone would
+    // be a guess drawn as a fact.
+    expect(toControlSession(view(), S, GONE).projectRoot).toBeUndefined()
+    expect(toControlSession(view(), S, RECOVERED).projectRoot).toBeUndefined()
+  })
+})
+
 describe('which conversation a row continues from', () => {
   it('carries a RECORDED id, and only a recorded one', () => {
     const c = toControlSession(view({ conversationId: 'c-1' }), S, LIVE)

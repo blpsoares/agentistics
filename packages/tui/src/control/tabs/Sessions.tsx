@@ -33,6 +33,15 @@ import { Pane, paneBody, paneRows } from '../Pane'
 const PANE_EDGE_X = 2
 
 /**
+ * What one level of the CASCADE indents a heading by.
+ *
+ * Two columns: enough to read as a level, cheap enough that a deep branch does not eat the width
+ * its own name needs. The rows under a heading are NOT indented — the cursor moves over them and a
+ * row that shifts sideways with its branch is a column that stops lining up.
+ */
+const INDENT = '  '
+
+/**
  * How far down a scrolling region is, one cell per drawn row.
  *
  * A window with no bar is a list whose length is a secret: you cannot tell whether the row under
@@ -57,7 +66,7 @@ import { Question as WrappedText } from '../Surface'
 import { SessionWizard } from './SessionWizard'
 import { TaskChoice } from '../TaskChoice'
 import {
-  GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
+  GROUPINGS, breadcrumb, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, askRows, fitApprovalPreview, actionLabels, asideRows, asideSelectable,
   asideRowKey, resolveAsideCursor,
   enabledActionIndexes, filterSessions,
@@ -1618,7 +1627,11 @@ export function Sessions({
               // A heading is drawn as a HEADING: accented, bold, with a rule running out to the
               // edge. Dim grey at the same weight as its rows is not a hierarchy — it is a list that
               // happens to be sorted, which is what this screen was.
-              const head = `${row.label}  ${row.count}`
+              //
+              // The cascade indents by its branch DEPTH, which is the whole of what the list has to
+              // learn about the tree — the rest of this screen never finds out one exists. The card
+              // grid, which has no indentation to spend, breadcrumbs the same branch instead.
+              const head = `${INDENT.repeat(row.depth ?? 0)}${row.label}  ${row.count}`
               const rule = Math.max(0, listBody - head.length - 3)
               return (
                 <Text key={`h${index}`} wrap="truncate">
@@ -2023,7 +2036,12 @@ function GroupHeading({ band, width }: {
   band: Extract<CardBand, { kind: 'heading' }>
   width: number
 }) {
-  const head = `${band.label}  ${band.count}`
+  // A cascade branch is titled with its whole PATH — the grid has no indentation to spend, so
+  // `session-monitor` alone would say nothing about where it sits. Cut from the LEFT, because the
+  // last segment is what identifies the node and so is the last thing given up.
+  const count = `  ${band.count}`
+  const name = band.path ? breadcrumb(band.path, Math.max(0, width - count.length)) : band.label
+  const head = `${name}${count}`
   const rule = Math.max(0, width - head.length - 3)
   return (
     <Text wrap="truncate">

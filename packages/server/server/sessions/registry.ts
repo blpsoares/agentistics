@@ -136,6 +136,10 @@ function sanitizeRepo(raw: unknown): { repo?: ManagedSession['repo'] } {
     repo: {
       repo: r.repo,
       ...(typeof r.root === 'string' && r.root ? { root: r.root } : {}),
+      // The directory the cascade measures a session's branches from. Kept independently of `root`
+      // — a file written by an older build carries the name and not the path, and the tree simply
+      // hangs that session at its project's root rather than refusing the whole record.
+      ...(typeof r.rootPath === 'string' && r.rootPath ? { rootPath: r.rootPath } : {}),
       worktree: r.worktree === true,
     },
   }

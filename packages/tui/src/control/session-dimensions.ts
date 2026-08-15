@@ -230,12 +230,30 @@ export const SESSION_DIMENSIONS: Record<SessionDimensionId, SessionDimension> = 
 export const DIMENSION_ORDER: readonly SessionDimensionId[] =
   ['status', 'repo', 'project', 'task', 'harness', 'model', 'marked'] as const
 
-/** How the list is arranged. `none` is one flat run, and is not a dimension. */
-export type SessionGroupingId = 'none' | SessionDimensionId
+/**
+ * How the list is arranged, where the arrangement is NOT one of the dimensions.
+ *
+ * `none` is one flat run. `tree` is the CASCADE: the project as the root and the segments of each
+ * session's `cwd` below it as branches.
+ *
+ * Neither may become a dimension, and `tree` is the one worth stating. Every id in
+ * `DIMENSION_ORDER` has a `keyOf` that grouping and filtering BOTH read, and
+ * `session-dimensions.test.ts` cross-checks that filtering to one bucket returns exactly the rows
+ * that bucket's band contains. A tree NODE is not a bucket: a session belongs to every node on its
+ * path, so "filter to `packages`" and "the band `packages`" could never be made to agree. Declaring
+ * it a dimension would either break that cross-check or force a false answer into it.
+ */
+export type SessionArrangementId = 'none' | 'tree'
+
+/** The arrangements that are not dimensions, in menu order. See `SessionArrangementId`. */
+export const ARRANGEMENTS: readonly SessionArrangementId[] = ['none', 'tree'] as const
+
+/** How the list is arranged — an arrangement, or any dimension. */
+export type SessionGroupingId = SessionArrangementId | SessionDimensionId
 
 /** The groupings in menu order — `repo` leads because it is the default arrangement's neighbour. */
 export const GROUPINGS: readonly SessionGroupingId[] =
-  ['none', ...DIMENSION_ORDER] as const
+  [...ARRANGEMENTS, ...DIMENSION_ORDER] as const
 
 /** This row's bucket, with the absence folded into its own named key — PURE. */
 export function bucketKey(

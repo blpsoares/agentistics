@@ -188,6 +188,21 @@ describe('what survives a round trip', () => {
       .toEqual({ repo: 'blpsoares/agentistics', root: 'agentistics', worktree: true })
   })
 
+  it('keeps the main checkout PATH too, which is what the cascade measures branches from', async () => {
+    // Recorded at spawn for the same reason `root` is: it is the one moment the directory is
+    // provably there. Dropping it here would leave a removed worktree keeping its project and
+    // losing its place inside it.
+    const reg = createSessionRegistry(file)
+    const repo = {
+      repo: 'blpsoares/agentistics',
+      root: 'agentistics',
+      rootPath: '/home/d/agentistics',
+      worktree: true,
+    }
+    await reg.add({ ...session('a'), repo })
+    expect((await reg.read())[0]!.repo).toEqual(repo)
+  })
+
   it('drops a recorded repo that is not SHAPED like one, keeping the session', async () => {
     // The one nested object in this file, so it is the one place "the load-bearing fields checked
     // out, trust the rest" does not hold. A hand-edited string would reach `resolveRepoFacts` with

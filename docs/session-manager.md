@@ -20,7 +20,7 @@ nothing else changes.
 
     agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>]
                               [--cwd <path>] [--name "label"] [--task "<name>"]
-    agentop session ls     [--all] [--group repo|project|task|harness|model|none]
+    agentop session ls     [--all] [--group none|tree|status|repo|project|task|harness|model|marked]
                            [--json] [--width <n>] [--no-color]
     agentop session list   [--json]
     agentop session attach <id|name>
@@ -36,6 +36,7 @@ closed conversations, `--group` changes the sections.
 
     agentop session ls                    # what is running, by project
     agentop session ls --all --group repo # everything, by repository
+    agentop session ls --group tree       # the CASCADE: project as root, directories as branches
     agentop session ls --json             # exactly what `list --json` prints
 
 It draws by CONSUMING the cockpit's own arithmetic (`packages/tui/src/control/sessions.ts`) rather
@@ -183,6 +184,27 @@ and falls back to the main checkout's folder name.
 says which checkout it is. Keying on the directory name filed three checkouts of one project as
 three projects, which is the split the repository dimension exists to avoid — and since this is the
 default grouping, it was the first thing anyone saw.
+
+**The cascade** (`tree`) is the middle between those two. Grouping by project puts every worktree and
+every package of one repository in one undifferentiated run, so the band says *which* project and
+nothing about *where*; grouping by directory files one project as N unrelated names. The cascade
+takes the project as the root and the segments of each session's directory below it as branches,
+joining any chain that never forks — `.claude/worktrees/session-monitor` is one row while it is the
+only worktree, and a second one splits `.claude/worktrees` out as a node with two children under it.
+The list indents each branch; the card grid, which has no indentation to spend, titles each band with
+the whole crumb (`agentistics › packages/server`), cut from the LEFT so the segment that identifies
+the node is the last thing given up.
+
+It is an **arrangement, never a dimension** — it groups and cannot filter. Every other grouping is
+also a filter, and the two read the same rule, so a chip and its band always show the same rows. A
+tree node cannot honour that: a session belongs to every node on its path, so "filter to `packages`"
+and "the band `packages`" could never agree.
+
+Its branches come from a fact rather than from string-matching: the main checkout's own PATH, read
+from the common git dir and recorded at spawn beside the repository. Where there is none — outside a
+repository, or a directory that is gone with nothing recorded — the session hangs straight off its
+root with no branch, and a worktree created *outside* the main checkout gets one branch named after
+its own folder. A relative path that cannot be established is never invented.
 
 **A directory that no longer exists** is its own case, and not the same one as a directory outside a
 repository. Removing a worktree leaves the session registered at a path that names nothing: git
