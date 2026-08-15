@@ -2402,14 +2402,18 @@ describe('the per-row close control', () => {
     expect(CLOSE_CELL.codePointAt(0)!).toBeLessThan(128)
   })
 
-  it('costs nothing when nothing on screen can be closed', () => {
-    expect(closeCellWidth([closed, gone], 120)).toBe(0)
-    expect(closeCellWidth([live], 120)).toBe(CLOSE_CELL.length + 1)
-  })
-
-  it('gives up on a narrow list rather than squeezing the table for a button', () => {
-    // The keyboard's `x` still works there, and a table squeezed to make room is the worse trade.
-    expect(closeCellWidth([live], 30)).toBe(0)
-    expect(closeCellWidth([live], 40)).toBe(CLOSE_CELL.length + 1)
+  it('costs the table NOTHING, at any width and whatever is on screen', () => {
+    // The control is gone. It did not make sense where it sat: every other verb on this screen is
+    // reached from the menu or a key, and a table's last column is where a VALUE goes — so a button
+    // parked there reads as a truncated cell, and it put the most destructive question on the row
+    // exactly where the eye lands after skimming it.
+    //
+    // Asserted across the whole range rather than at one width, so the reservation cannot creep back
+    // for "just the wide terminal".
+    for (const width of [0, 30, 40, 120, 400]) {
+      expect(closeCellWidth([live], width)).toBe(0)
+      expect(closeCellWidth([closed, gone], width)).toBe(0)
+      expect(closeCellWidth([], width)).toBe(0)
+    }
   })
 })

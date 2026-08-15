@@ -2532,18 +2532,20 @@ export const CLOSE_CELL = '[x]'
 /**
  * Columns reserved at the right edge of the list for the per-row close control — PURE.
  *
- * A gap plus the control itself, DERIVED from `CLOSE_CELL` rather than written as a number beside
- * it: the two were `'✕'` and `2`, and changing the glyph without changing the reservation is how a
- * control ends up drawn on top of the last cell. Reserved from the width BEFORE the columns are
- * measured, for the same reason.
+ * **Always zero: the control is gone.** Kept as a function rather than deleted so the width
+ * arithmetic still has one place that says what the right edge costs, and so a future control there
+ * has somewhere to declare itself instead of being sprinkled through the callers.
  *
- * Zero when nothing on screen can be closed, and zero on a list too narrow to spare it — the
- * keyboard's `x` still works there, and a table squeezed to make room for a button is a worse
- * trade than a button that is only on the wider terminal.
+ * Removed because it did not make sense where it sat. Every other verb on this screen is reached
+ * from the menu or a key, and a table's last column is where a VALUE goes — so a control parked
+ * there reads as a truncated cell until you happen to click it. It also put the most destructive
+ * question on the screen exactly where a reader's eye lands after skimming a row.
+ *
+ * Nothing was taken away but the button: `x` still closes the selected session, and the menu still
+ * offers it in words.
  */
-export function closeCellWidth(rows: readonly ControlSession[], width: number): number {
-  const NEEDS = 40
-  return width >= NEEDS && rows.some(canClose) ? CLOSE_CELL.length + 1 : 0
+export function closeCellWidth(_rows: readonly ControlSession[], _width: number): number {
+  return 0
 }
 
 /**
