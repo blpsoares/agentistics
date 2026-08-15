@@ -3,7 +3,7 @@ import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { GitCompare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import type { HarnessId, Lang, TokenBreakdown } from '@agentistics/core'
-import { EMPTY_TOKENS, fmt, fmtCost, formatModel, t, totalTokens } from '@agentistics/core'
+import { EMPTY_TOKENS, fmt, fmtCost, formatModel, t, tokenSharePct, totalTokens } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 import { computeFilteredHarnessSummaries } from '../hooks/useData'
 import { fmtDateLocalized } from '../lib/dateFormat'
@@ -639,6 +639,12 @@ function CompareByHarness() {
           {aggs.map(a => {
             const totalSessions = aggs.reduce((s, x) => s + x.sessions, 0)
             const pct = totalSessions > 0 ? Math.round((a.sessions / totalSessions) * 100) : 0
+            // A harness with real sessions must never read `0%`. Found in the browser: Codex CLI
+            // and Kimi Code, one session each against 352, both rendered as `0%` beside a bar with
+            // visible width — the label contradicting the chart next to it. The bar keeps the raw
+            // `pct` (a 0-width bar is the honest picture of a rounding error); only the LABEL is
+            // corrected, because a label is read as a claim.
+            const pctLabel = tokenSharePct(a.sessions, totalSessions)
             return (
               <div key={a.harness}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -659,7 +665,7 @@ function CompareByHarness() {
                       {a.sessions.toLocaleString()} {t('compare.sessionsLower', lang)}
                     </span>
                     <span style={{ fontSize: 12, fontWeight: 700, color: colors[a.harness], minWidth: 36, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                      {pct}%
+                      {pctLabel}
                     </span>
                   </div>
                 </div>

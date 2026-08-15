@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { FileText, ArrowDownWideNarrow } from 'lucide-react'
 import type { Lang } from '@agentistics/core'
-import { t } from '@agentistics/core'
+import { fmt, t } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { MetricNote } from './MetricNote'
 
@@ -18,11 +18,6 @@ interface Props {
 
 type ViewMode = 'calls' | 'tokens'
 
-function fmt(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
 
 export function ToolMetricsPanel({ toolCounts, toolOutputTokens, agentFileReads, lang, forcedMode, hideAgentReads }: Props) {
   const isMobile = useIsMobile()

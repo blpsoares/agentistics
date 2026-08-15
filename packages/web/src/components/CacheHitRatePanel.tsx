@@ -1,6 +1,6 @@
 import React from 'react'
 import { Zap, Lightbulb, TrendingDown, TrendingUp, Info } from 'lucide-react'
-import { formatModel, getModelColor, fmtCost } from '@agentistics/core'
+import { fmt, formatModel, getModelColor, fmtCost } from '@agentistics/core'
 import type { Lang, HarnessId } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { NAtag } from './NAtag'
@@ -31,11 +31,6 @@ interface Props {
   harness?: HarnessId
 }
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
-  return String(n)
-}
 
 type Tier = 'low' | 'medium' | 'high'
 
@@ -211,8 +206,8 @@ export function CacheHitRatePanel({
           </div>
           <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
             {pt
-              ? `${fmtTokens(cacheTotals.cacheReadInputTokens)} de ${fmtTokens(totalRelevant)} tokens do cache`
-              : `${fmtTokens(cacheTotals.cacheReadInputTokens)} of ${fmtTokens(totalRelevant)} tokens from cache`}
+              ? `${fmt(cacheTotals.cacheReadInputTokens)} de ${fmt(totalRelevant)} tokens do cache`
+              : `${fmt(cacheTotals.cacheReadInputTokens)} of ${fmt(totalRelevant)} tokens from cache`}
           </div>
         </div>
 

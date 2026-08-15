@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import type { ModelUsage } from '@agentistics/core'
-import { formatModel, calcCost, getModelColor, fmtCost, usageTokenTotal } from '@agentistics/core'
+import { fmt, formatModel, calcCost, getModelColor, fmtCost, usageTokenTotal } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { resolveProvider, providerOrder } from '@agentistics/core'
 import { MetricNote } from './MetricNote'
@@ -30,11 +30,6 @@ interface Props {
   lang?: 'en' | 'pt'
 }
 
-function fmt(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
-  return String(n)
-}
 
 
 const COL: React.CSSProperties = { fontSize: 11, color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }

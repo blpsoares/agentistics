@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { CheckCircle, XCircle, ChevronDown, ChevronUp, Bot } from 'lucide-react'
-import { fmtCost } from '@agentistics/core'
+import { fmt, fmtCost } from '@agentistics/core'
 import type { AgentInvocation, HarnessId } from '@agentistics/core'
 import type { Lang } from '@agentistics/core'
 import { MetricNote } from './MetricNote'
@@ -25,11 +25,6 @@ interface AgentMetricsPanelProps {
   harness?: HarnessId
 }
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
 
 
 function fmtDuration(ms: number): string {
@@ -143,8 +138,8 @@ export function AgentMetricsPanel({
         />
         <SummaryCard
           label={pt ? 'Tokens de agentes' : 'Agent tokens'}
-          value={fmtTokens(totalTokens)}
-          sub={`avg ${fmtTokens(Math.round(avgTokens))} / ${pt ? 'chamada' : 'call'}`}
+          value={fmt(totalTokens)}
+          sub={`avg ${fmt(Math.round(avgTokens))} / ${pt ? 'chamada' : 'call'}`}
           accent="var(--accent-blue)"
         />
         {/* Agents are a Claude-only capability, so the allocation uses CLAUDE's own C/A — never
@@ -198,7 +193,7 @@ export function AgentMetricsPanel({
                   {stats.count}×
                 </span>
                 {!isMobile && <span style={{ color: 'var(--text-secondary)', textAlign: 'right' }}>
-                  {fmtTokens(stats.tokens)} tok
+                  {fmt(stats.tokens)} tok
                 </span>}
                 {!isMobile && <span style={{ color: 'var(--anthropic-orange)', textAlign: 'right' }}>
                   {fmtCost(stats.costUSD, currency, brlRate)}
@@ -271,7 +266,7 @@ export function AgentMetricsPanel({
                 </span>
               </div>
               <span style={{ fontSize: 11, color: 'var(--text-primary)', textAlign: 'right' }}>
-                {fmtTokens(inv.totalTokens)}
+                {fmt(inv.totalTokens)}
               </span>
               <span style={{ fontSize: 11, color: 'var(--text-secondary)', textAlign: 'right' }}>
                 {inv.totalToolUseCount}

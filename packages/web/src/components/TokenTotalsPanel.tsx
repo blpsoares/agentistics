@@ -1,8 +1,8 @@
 import React from 'react'
 import type { Filters, Lang, TokenBreakdown } from '@agentistics/core'
 import {
-  TOKEN_COLORS, TOKEN_PARTS, fmt, fmtFull, readTokens, tokenHelp, tokenLabel, tokenShares,
-  totalTokens, totalTokensExplained,
+  TOKEN_COLORS, TOKEN_PARTS, fmt, fmtFull, readTokens, tokenHelp, tokenLabel,
+  tokenSharePct, totalTokens, totalTokensExplained,
 } from '@agentistics/core'
 import { scopeSentence } from '../lib/scopeSentence'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -39,7 +39,6 @@ export function TokenTotalsPanel({ tokens, filters, lang }: Props) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
   const [full, setFull] = React.useState(false)
-  const shares = tokenShares(tokens)
   const total = totalTokens(tokens)
   const read = readTokens(tokens)
   const conversation = tokens.input + tokens.output
@@ -104,7 +103,7 @@ export function TokenTotalsPanel({ tokens, filters, lang }: Props) {
                 </td>
                 <td style={{ ...num, color: 'var(--text-primary)' }}>{n(tokens[part])}</td>
                 <td style={{ ...num, color: 'var(--text-tertiary)', fontWeight: 600, width: 56 }}>
-                  {Math.round(shares[part] * 100)}%
+                  {tokenSharePct(tokens[part], total)}
                 </td>
               </tr>
             ))}
@@ -149,7 +148,7 @@ export function TokenTotalsPanel({ tokens, filters, lang }: Props) {
                   {n(d.value)}
                 </td>
                 <td style={{ ...num, borderBottom: 'none', paddingTop: 12, color: 'var(--text-tertiary)', fontWeight: 600 }}>
-                  {total > 0 ? `${Math.round((d.value / total) * 100)}%` : '—'}
+                  {total > 0 ? tokenSharePct(d.value, total) : '—'}
                 </td>
               </tr>
             ))}

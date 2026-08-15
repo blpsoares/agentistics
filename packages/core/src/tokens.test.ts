@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   EMPTY_TOKENS, TOKEN_PARTS, addTokens, readTokens, sessionTokenTotal, sessionTokens,
   sumTokens, tokenHelp, tokenLabel, tokenShares, totalTokens, totalTokensExplained,
-  usageTokenTotal, usageTokens,
+  tokenSharePct, usageTokenTotal, usageTokens,
 } from './tokens'
 import type { Lang } from './i18n'
 import type { SessionMeta } from './types'
@@ -76,6 +76,20 @@ describe('the vocabulary', () => {
         expect(tokenHelp(kind, lang).length).toBeGreaterThan(40)
       }
     }
+  })
+
+  it('never prints 0% for a quantity that exists', () => {
+    // Found by opening the panel on a real machine: output was 64.2M of a 17.8B total and rendered
+    // as `0%`, with the sentence reading "output, the most expensive token, is 0%". A confident zero
+    // over a real number is the exact lie this whole module exists to remove.
+    expect(tokenSharePct(64_200_000, 17_800_000_000)).toBe('<1%')
+    expect(tokenSharePct(1, 1_000_000)).toBe('<1%')
+    // A true zero still reads as zero — `<1%` there would invent a quantity.
+    expect(tokenSharePct(0, 1000)).toBe('0%')
+    expect(tokenSharePct(0, 0)).toBe('0%')
+    // And the ordinary case is unchanged.
+    expect(tokenSharePct(96, 100)).toBe('96%')
+    expect(tokenSharePct(1, 100)).toBe('1%')
   })
 
   it('explains a headline total by naming what dominates it', () => {
