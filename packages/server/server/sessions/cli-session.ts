@@ -9,7 +9,11 @@
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
-import { sessionRunning } from '@agentistics/tui/control/sessions'
+// `GROUPINGS` and never a list typed into the usage text: the help is the only place a person can
+// read what `--group` accepts, and a second copy of that list drifts silently — the CLI would go on
+// accepting an arrangement its own help says nothing about. Same rule `cli-parse.ts` already applies
+// to its error message.
+import { GROUPINGS, sessionRunning } from '@agentistics/tui/control/sessions'
 import { controlStrings, sessionWordBook } from '@agentistics/tui/control/i18n'
 import { wrapText } from '@agentistics/tui/control/surface'
 import { parseSessionArgs, LS_DEFAULT, type SessionCommand } from './cli-parse'
@@ -20,6 +24,8 @@ import { toControlSession } from './control-session'
 import { recordedRepo, repoFacts } from './repo-facts'
 import { emptyReason, renderSessionTable, resolveWidth } from './session-table'
 import { SPAWN_SPECS, planSpawn } from './spawn-spec'
+// The harness half of a rename. Shared with the cockpit's Rename verb — see `rename.ts`.
+import { renameInHarness, renameMessage } from './rename'
 import { reconcileSessions, resolveSessionRef, type ReconciledSession, type RefCandidate } from './session-ref'
 import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './registry'
 import { conversationForProcess, loadConversations } from './conversations'
@@ -33,14 +39,14 @@ import { liveConversationHolders } from './live-claims'
 import { POLL_MS, SETTLE_MS, spawnOutcome } from './spawn-outcome'
 import { parseHarnessAgents } from './harness-agents'
 import { planTakeover, type TakeoverRefusal } from './takeover'
-import type { SessionBackend, SpawnPlanError } from './types'
+import type { ManagedSession, SessionBackend, SpawnPlanError } from './types'
 
 /** Derived from the specs, never a second hand-written list — the two could not then disagree. */
 const STARTABLE: HarnessId[] = HARNESS_ORDER.filter(h => SPAWN_SPECS[h] !== null)
 
 const USAGE = `Usage:
   agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"]
-  agentop session ls     [--all] [--group repo|project|task|harness|model|none] [--json]
+  agentop session ls     [--all] [--group ${GROUPINGS.join('|')}] [--json]
   agentop session list
   agentop session attach <id|name>
   agentop session kill   <id|name>
@@ -118,7 +124,22 @@ export async function runSession(argv: string[]): Promise<number> {
     // typed and however recently. Measured on this machine: every one of twelve live rows had
     // `labelSince: undefined`, because the cockpit's rename verb stamped it and this one did not.
     // The comparison had therefore never once run in production, and the harness took every row.
-    case 'rename': return patch(cmd.ref, { label: cmd.label, labelSince: Date.now() }, 'renamed', backend)
+    // A rename lands in BOTH places a session can be named: the registry, and the harness's own
+    // record. The second half is the shared `renameInHarness` — the cockpit's Rename verb runs the
+    // very same function, because one gesture implemented twice is the bug `task-reopen.ts` exists
+    // to have fixed once. It never blocks the registry write: whatever became of the harness half is
+    // reported in a sentence instead.
+    case 'rename': return patch(
+      cmd.ref,
+      { label: cmd.label, labelSince: Date.now() },
+      'renamed',
+      backend,
+      async session => {
+        const s = cliStrings(await resolveLang())
+        const outcome = await renameInHarness(session, cmd.label.trim(), backend)
+        return `${session.id} ${renameMessage(outcome, session.harness, s)}`
+      },
+    )
     case 'note': return patch(cmd.ref, { note: cmd.text }, 'annotated', backend)
   }
 }
@@ -673,13 +694,43 @@ async function takeOver(ref: string, backend: SessionBackend): Promise<number | 
   const died = await spawnFailure(backend, id)
   if (died) { console.error(died); await backend.kill(id).catch(() => {}); return 1 }
 
-  await addSession({
+  const record: ManagedSession = {
     id, harness: live.harness, cwd: plan.cwd, createdAt: new Date().toISOString(),
     ...(live.name ? { label: live.name, labelSince: Date.now() } : {}),
     conversationId: plan.conversationId,
     ...(await recordedRepo(plan.cwd)),
-  })
+  }
+  // The write is READ BACK, and that is not belt-and-braces — it is the failure this path actually
+  // had. `registry.ts` serialises writes within ONE process; agentop runs as several (the cockpit,
+  // the daemon, every one-shot command), all read-modify-writing the same file. A record added here
+  // was observed erased by a longer-lived process that had read the file just before, and the
+  // session it lost was the one the user was about to sit in: running, unregistered, and beyond
+  // every verb the cockpit offers. One retry closes the ordinary interleaving; a loss that survives
+  // it is SAID rather than left for the user to discover when a rename stops working.
+  if (!await addVerified(record)) {
+    console.error(
+      `${id} is running but its registry record could not be kept — another agentop process is `
+      + 'writing the same registry. The cockpit will take it back on its next poll; if it does not, '
+      + `run \`agentop session attach ${id}\` again.`,
+    )
+  }
   return execAttach(id, backend)
+}
+
+/**
+ * Add a session and confirm it survived. `false` when it did not, after one retry.
+ *
+ * Deliberately not inside `registry.ts`: the retry is a statement about CONCURRENCY between
+ * processes, and the registry module's own contract ("one in-process writer") is honest about not
+ * covering that. Hiding a cross-process retry inside `add` would make every caller believe a
+ * guarantee that still does not exist.
+ */
+async function addVerified(record: ManagedSession): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await addSession(record)
+    if ((await readRegistry()).some(s => s.id === record.id)) return true
+  }
+  return false
 }
 
 /** Already-localized refusal — the harness's limitation said in words, never a silent no-op. */
@@ -755,6 +806,13 @@ async function patch(
   fields: { label?: string; labelSince?: number; note?: string },
   verb: string,
   backend: SessionBackend,
+  /**
+   * What to print once the registry write has landed, when the plain `<id> <verb>.` is not the whole
+   * story. `rename` uses it to report what became of the HARNESS half; `note` has no second half and
+   * passes nothing. It runs only after `patchSession` succeeded, so it can never announce work done
+   * on a session the write did not find.
+   */
+  then?: (session: ManagedSession) => Promise<string>,
 ): Promise<number> {
   const registry = await readRegistry()
   const found = resolveSessionRef(registry, ref)
@@ -780,7 +838,7 @@ async function patch(
   // remove the session in between, so the patch itself is the only source of truth on success.
   const applied = await patchSession(found.session.id, fields)
   if (!applied) { console.error(refError(ref, 'not-found', [])); return 1 }
-  console.log(`${found.session.id} ${verb}.`)
+  console.log(then ? await then(found.session) : `${found.session.id} ${verb}.`)
   return 0
 }
 

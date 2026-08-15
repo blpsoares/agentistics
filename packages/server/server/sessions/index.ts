@@ -56,8 +56,7 @@ export {
   CRASH_WINDOW_MS, HEARTBEAT_MS, planCrashGroup, type CrashGroup,
 } from './crash-group'
 export {
-  attentionCount, bellTransitions, buildSessionViews, groupSessions, needsAttention,
-  type SessionGroup, type SessionGrouping, type SessionView,
+  attentionCount, bellTransitions, buildSessionViews, needsAttention, type SessionView,
 } from './session-view'
 export { ATTENTION_RULES, rulesFor } from './attention-rules'
 export { QUIET_MS, approvalTail, attentionOf, digestFrame } from './attention'

@@ -18,6 +18,12 @@ export interface NotificationSettings {
     'working': boolean
     'exited': boolean
   }
+  eventSounds?: {
+    'waiting-approval': SoundPreset
+    'waiting': SoundPreset
+    'working': SoundPreset
+    'exited': SoundPreset
+  }
   soundEnabled: boolean
   soundPreset: SoundPreset
   soundVolume: number // 0.0 to 1.0
@@ -33,6 +39,12 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     'waiting': true,
     'working': false,
     'exited': true,
+  },
+  eventSounds: {
+    'waiting-approval': 'alert',
+    'waiting': 'chime',
+    'working': 'soft',
+    'exited': 'ping',
   },
   soundEnabled: true,
   soundPreset: 'chime',
@@ -50,6 +62,10 @@ export function getNotificationSettings(): NotificationSettings {
       events: {
         ...DEFAULT_NOTIFICATION_SETTINGS.events,
         ...(parsed.events || {}),
+      },
+      eventSounds: {
+        ...DEFAULT_NOTIFICATION_SETTINGS.eventSounds,
+        ...(parsed.eventSounds || {}),
       },
     }
   } catch {
@@ -257,29 +273,29 @@ export function handleSessionStateTransitions(
 
     if (nextState === 'waiting-approval') {
       title = lang === 'pt'
-        ? `🔴 Precisa de Aprovação: ${sessionSubject}`
-        : `🔴 Needs Approval: ${sessionSubject}`
+        ? `[Precisa de Aprovação] ${sessionSubject}`
+        : `[Needs Approval] ${sessionSubject}`
       body = lang === 'pt'
         ? `A sessão "${sessionSubject}"${locationInfo} está aguardando sua autorização para continuar.`
         : `Session "${sessionSubject}"${locationInfo} is waiting for your authorization to proceed.`
     } else if (nextState === 'waiting') {
       title = lang === 'pt'
-        ? `🟡 Aguardando Resposta: ${sessionSubject}`
-        : `🟡 Waiting Input: ${sessionSubject}`
+        ? `[Aguardando Resposta] ${sessionSubject}`
+        : `[Waiting Input] ${sessionSubject}`
       body = lang === 'pt'
         ? `A sessão "${sessionSubject}"${locationInfo} concluiu o turno e aguarda sua resposta.`
         : `Session "${sessionSubject}"${locationInfo} finished its turn and is waiting for your response.`
     } else if (nextState === 'working') {
       title = lang === 'pt'
-        ? `🟢 Em Andamento: ${sessionSubject}`
-        : `🟢 Working: ${sessionSubject}`
+        ? `[Em Andamento] ${sessionSubject}`
+        : `[Working] ${sessionSubject}`
       body = lang === 'pt'
         ? `A sessão "${sessionSubject}"${locationInfo} iniciou o processamento.`
         : `Session "${sessionSubject}"${locationInfo} started working.`
     } else if (nextState === 'exited') {
       title = lang === 'pt'
-        ? `⚪ Sessão Encerrada: ${sessionSubject}`
-        : `⚪ Session Closed: ${sessionSubject}`
+        ? `[Sessão Encerrada] ${sessionSubject}`
+        : `[Session Closed] ${sessionSubject}`
       body = lang === 'pt'
         ? `A sessão "${sessionSubject}"${locationInfo} foi finalizada.`
         : `Session "${sessionSubject}"${locationInfo} was closed.`

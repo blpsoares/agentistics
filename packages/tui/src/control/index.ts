@@ -188,4 +188,7 @@ export type {
   TeamMode,
 } from './types'
 export { TAB_ORDER, DEFAULT_SESSION_VIEW } from './types'
+// The arrangements are declared once, in `session-dimensions.ts`. Re-exported here so the SERVER —
+// which persists whichever one was chosen — names that type rather than keeping a copy of the list.
+export type { SessionGroupingId } from './session-dimensions'
 export type { CliLang } from './lang'

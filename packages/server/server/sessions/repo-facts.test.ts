@@ -46,13 +46,35 @@ describe('decideRepoFacts', () => {
     expect(decideRepoFacts({
       remote: '', gitDir: '/home/d/agentistics/.git/worktrees/session-monitor',
       commonDir: '/home/d/agentistics/.git',
-    })).toEqual({ repo: 'agentistics', root: 'agentistics', worktree: true })
+    })).toEqual({
+      repo: 'agentistics', root: 'agentistics', rootPath: '/home/d/agentistics', worktree: true,
+    })
   })
 
   it('ignores a remote git cannot key on, rather than inventing a name from it', () => {
     expect(decideRepoFacts({
       remote: '/some/local/path', gitDir: '/r/.git', commonDir: '/r/.git',
     }).repo).toBe('r')
+  })
+
+  it('keeps the main checkout PATH, not only its folder name', () => {
+    // The cascade needs the directory the branches are measured from. `root` is a NAME, and
+    // string-matching a name back against a cwd is a guess that goes wrong the moment a segment
+    // repeats along the path (`~/agentistics/packages/agentistics`). The path is already computed
+    // here to take the basename off — it was simply thrown away.
+    const wt = decideRepoFacts({
+      remote: 'git@github.com:blpsoares/agentistics.git',
+      gitDir: '/home/d/agentistics/.git/worktrees/session-monitor',
+      commonDir: '/home/d/agentistics/.git',
+    })
+    // The COMMON git dir's parent, so a linked worktree resolves to the MAIN checkout — exactly
+    // what `root` already does, and the whole reason the branches are relative to it.
+    expect(wt.rootPath).toBe('/home/d/agentistics')
+    expect(wt.root).toBe('agentistics')
+  })
+
+  it('has no root PATH outside a repository', () => {
+    expect(decideRepoFacts({ remote: '', gitDir: '', commonDir: '' }).rootPath).toBeUndefined()
   })
 })
 

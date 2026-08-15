@@ -404,7 +404,7 @@ with your own tmux sessions.
 
 ```bash
 agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"] [--task "<name>"]
-agentop session ls     [--all] [--group repo|project|task|harness|model|none] [--json] [--width <n>] [--no-color]
+agentop session ls     [--all] [--group none|tree|status|repo|project|task|harness|model|marked] [--json] [--width <n>] [--no-color]
 agentop session list   [--json]
 agentop session attach <id|name>
 agentop session kill   <id|name>
@@ -435,11 +435,43 @@ apresentacao  1  ─────────────────────
 | Flag | Effect |
 |------|--------|
 | `--all`, `-a` | Also list what is **not** running: finished, lost and closed conversations |
-| `--group`, `-g` | `project` (default), `repo`, `task`, `harness`, `model`, `none` |
+| `--group`, `-g` | `project` (default), `tree` (the cascade), `repo`, `task`, `harness`, `model`, `status`, `marked`, `none` |
 | `--json` | The same JSON `list --json` prints — one machine-readable shape, not two |
 | `--width <n>` | Fit this many columns instead of asking the terminal |
 | `COLUMNS` (env) | Read **only when stdout is not a tty** — how wide the reader is when there is no terminal to ask (`ls \| less -S`) |
 | `--no-color` | Never colour, whatever the terminal says (`NO_COLOR` does the same) |
+
+#### `--group tree` — the cascade
+
+`tree` is not a dimension, it is an **arrangement**: the project as the root, and the segments of
+each session's directory below it as branches. It answers the question grouping by project cannot —
+*where* in the project — without filing one project as N unrelated folder names.
+
+```
+agentistics  4  ───────────────────────────────────────────────────────────
+  3328b  waiting       cockpit colours                        antigravity
+  8157f  working       live session notifications             antigravity
+
+  .claude/worktrees  26  ───────────────────────────────────────────────────
+
+    sessions-cascade  1  ─────────────────────────────────────────────────
+  106d0  waiting       cockpit: cascade view                  claude
+
+    session-monitor  1  ──────────────────────────────────────────────────
+  a2157  working       MAIN                                   claude
+```
+
+Chains that never branch are joined into one node (`.claude/worktrees/session-monitor` is one row
+while it is the only worktree; a second one splits `.claude/worktrees` out as a node of its own).
+Two things it will never do, because both would draw a directory that is not there:
+
+- a session **outside any repository**, or one whose directory is **gone** with nothing recorded at
+  spawn, hangs straight off its own root with no branch;
+- a worktree created **outside** the main checkout gets ONE branch named after its own folder — a
+  relative path that does not exist is not synthesised.
+
+It is not offered as a **filter**, and cannot be: a session belongs to every node on its path, so
+"filter to `packages`" and "the band `packages`" could never be made to agree.
 
 It is a **separate command from `list`**, not a flag on it: `list` is the tab-separated dump scripts
 already read line by line, and widening it into columns underneath them would break those scripts

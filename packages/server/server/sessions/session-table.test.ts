@@ -71,6 +71,30 @@ describe('renderSessionTable', () => {
     }
   })
 
+  test('indents a cascade branch, so `session ls --group tree` IS the cockpit table', () => {
+    // The same rows, drawn by the same functions: a tree that came out flat on the command line
+    // would be a different arrangement wearing one name, which is the defect `session-table.ts`
+    // exists to have fixed once.
+    const ROOT = '/home/dev/agentistics'
+    const lines = renderSessionTable({
+      sessions: [
+        session({ id: 'aaaa1', cwd: `${ROOT}/packages/tui`, projectGroup: 'agentistics', projectRoot: ROOT }),
+        session({ id: 'bbbb2', cwd: `${ROOT}/packages/server`, projectGroup: 'agentistics', projectRoot: ROOT }),
+      ],
+      width: NATURAL_WIDTH,
+      grouping: 'tree',
+      strings: STRINGS,
+      color: false,
+    })
+    const headings = lines.map(stripAnsi).filter(l => /^\s*\S.*\s{2}\d/.test(l) && !l.includes('claude'))
+    expect(headings.map(l => l.replace(/\s\s+\d.*$/, ''))).toEqual([
+      'agentistics',
+      '  packages',
+      '    server',
+      '    tui',
+    ])
+  })
+
   test('a piped run at the natural width truncates nothing', () => {
     const lines = renderSessionTable({
       sessions: FLEET, width: NATURAL_WIDTH, grouping: 'project', strings: STRINGS, color: false,

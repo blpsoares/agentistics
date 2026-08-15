@@ -16,6 +16,8 @@ import type { HarnessProcess } from '../live-sessions'
 import { rulesFor } from './attention-rules'
 import { approvalTail, attentionOf, digestFrame, frameTail } from './attention'
 import { parseDialogOptions, type DialogOption } from './dialog-choice'
+// Taking a running session back when its registry record is gone. See `session-adopt.ts`.
+import { planAdoptions } from './session-adopt'
 import { loadConversations, type Conversation } from './conversations'
 import { HEARTBEAT_MS, planCrashGroup, type CrashGroup } from './crash-group'
 import { emptyHarnessSessionIndex, type HarnessSessionIndex } from './harness-sessions'
@@ -112,6 +114,14 @@ export function createSessionsPoller(o: {
    * conversation.
    */
   recordConversation?: (id: string, conversationId: string) => Promise<unknown>
+  /**
+   * Write registry records for sessions the backend is running and the registry has lost.
+   *
+   * Injected and optional for the same reason the two above are: it writes to disk. Called only with
+   * a non-empty list, so a fleet with nothing to adopt — the ordinary case — never touches the file.
+   * What may be adopted at all is the pure `planAdoptions`.
+   */
+  adoptSessions?: (records: readonly ManagedSession[]) => Promise<unknown>
   now?: () => number
   captureLines?: number
   /** Overridable so a test can drive several heartbeats without waiting a minute for each. */
@@ -167,6 +177,24 @@ export function createSessionsPoller(o: {
 
       const reconciled = reconcileSessions(registry, backendSessions)
       const harnessOf = new Map(registry.map(r => [r.id, r.harness]))
+
+      // Take back any session the backend is running that the registry has lost. It is not a
+      // theoretical case: the registry's write queue is per PROCESS, several agentop processes write
+      // the same file, and a record added by a short-lived one has been observed erased by a
+      // longer-lived one — leaving the user sitting in a session the cockpit could no longer name,
+      // attach to, rename or kill. Adoption never invents anything: see `session-adopt.ts`. It is
+      // idempotent by construction (an adopted row stops being `unregistered`), so it writes once.
+      if (o.adoptSessions) {
+        const adopt = planAdoptions({
+          rows: reconciled,
+          byManagedId: harnessSessions.byManagedId,
+          harness: 'claude',
+          nowIso: new Date(nowMs).toISOString(),
+        })
+        // Best effort, exactly like the heartbeat: a registry that cannot be written costs the
+        // adoption, never the fleet on screen.
+        if (adopt.length > 0) await o.adoptSessions(adopt).catch(() => undefined)
+      }
 
       const nextDigest = new Map<string, string>()
       const activity = new Map<string, SessionActivity>()
