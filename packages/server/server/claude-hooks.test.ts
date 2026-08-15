@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  HOOK_SPECS,
   HOOK_EVENT,
   HOOK_VERSION,
   explainHookPlanError,
@@ -255,5 +256,69 @@ describe('parseHooksArgs', () => {
 
   test('context accepts the version the installed hook passes back to it', () => {
     expect(parseHooksArgs(['context', '--hook-version', '1'])).toEqual({ kind: 'context' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Two events, one merge implementation
+// ---------------------------------------------------------------------------
+
+describe('the Stop hook alongside SessionStart', () => {
+  const START = 'agentop hooks context --hook-version 2'
+  const STOP = 'agentop events emit --hook-version 2'
+
+  test('installing both leaves both, under their own event keys', () => {
+    const a = planHookInstall({}, START, 'SessionStart')
+    expect(a.ok).toBe(true)
+    const b = planHookInstall((a as { settings: any }).settings, STOP, 'Stop')
+    expect(b.ok).toBe(true)
+    const hooks = (b as { settings: any }).settings.hooks
+    expect(hooks.SessionStart[0].hooks[0].command).toBe(START)
+    expect(hooks.Stop[0].hooks[0].command).toBe(STOP)
+  })
+
+  test('each hook carries its OWN timeout — a per-turn hook may not cost ten seconds', () => {
+    const a = planHookInstall({}, START, 'SessionStart') as { settings: any }
+    const b = planHookInstall(a.settings, STOP, 'Stop') as { settings: any }
+    expect(b.settings.hooks.SessionStart[0].hooks[0].timeout).toBe(10)
+    expect(b.settings.hooks.Stop[0].hooks[0].timeout).toBe(5)
+  })
+
+  test('removing one leaves the other completely alone', () => {
+    const a = planHookInstall({}, START, 'SessionStart') as { settings: any }
+    const b = planHookInstall(a.settings, STOP, 'Stop') as { settings: any }
+    const removed = planHookRemoval(b.settings, 'SessionStart') as { settings: any; changed: boolean }
+    expect(removed.changed).toBe(true)
+    expect(removed.settings.hooks.SessionStart).toBeUndefined()
+    expect(removed.settings.hooks.Stop[0].hooks[0].command).toBe(STOP)
+  })
+
+  test('the matcher is NARROWED by event — a Stop entry moved under SessionStart is not ours to delete', () => {
+    expect(isAgentopHookCommand(STOP, 'SessionStart')).toBe(false)
+    expect(isAgentopHookCommand(STOP, 'Stop')).toBe(true)
+    expect(isAgentopHookCommand(START, 'Stop')).toBe(false)
+    expect(isAgentopHookCommand(START, 'SessionStart')).toBe(true)
+    // With no event named, either of ours matches.
+    expect(isAgentopHookCommand(STOP)).toBe(true)
+    expect(isAgentopHookCommand(START)).toBe(true)
+  })
+
+  test('a v1 install (SessionStart only) reads as stale, so `install` brings it up to both', () => {
+    const v1 = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'agentop hooks context --hook-version 1' }] }] } }
+    expect(readHookStatus(v1, HOOK_VERSION, 'SessionStart').stale).toBe(true)
+    expect(readHookStatus(v1, HOOK_VERSION, 'Stop').installed).toBe(false)
+  })
+
+  test('every spec has a distinct event and a distinct verb pair', () => {
+    expect(new Set(HOOK_SPECS.map(s => s.event)).size).toBe(HOOK_SPECS.length)
+    expect(new Set(HOOK_SPECS.map(s => s.verb.join(' '))).size).toBe(HOOK_SPECS.length)
+    for (const spec of HOOK_SPECS) {
+      expect(hookCommand('agentop', HOOK_VERSION, spec.event))
+        .toBe(`agentop ${spec.verb[0]} ${spec.verb[1]} --hook-version ${HOOK_VERSION}`)
+    }
+  })
+
+  test('an event agentop has no hook for is refused rather than fabricated', () => {
+    expect(() => hookCommand('agentop', HOOK_VERSION, 'PreToolUse')).toThrow()
   })
 })

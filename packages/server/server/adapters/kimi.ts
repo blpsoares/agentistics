@@ -58,7 +58,7 @@ export const kimiAdapter: HarnessAdapter = {
       for (const agentId of kimiAgentIds(state)) {
         const wire = join(dir, 'agents', agentId, 'wire.jsonl')
         if (!existsSync(wire)) continue
-        accumulateKimiWire(await readFile(wire, 'utf-8').catch(() => ''), totals)
+        accumulateKimiWire(await readFile(wire, 'utf-8').catch(() => ''), totals, { main: agentId === 'main' })
       }
 
       // The directory is `session_<uuid>`; the uuid alone is the id the CLI resumes by.

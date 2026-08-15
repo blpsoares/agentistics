@@ -65,7 +65,17 @@ export interface Preferences {
    * threw away the arrangement someone chose, which reads as the screen forgetting on its own.
    */
   sessionView?: {
-    grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo'
+    grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo' | 'status' | 'marked'
+    /**
+     * What the list is narrowed to, per dimension — the ONE stored source for every filter.
+     *
+     * See `session-dimensions.ts`. The five fields under it are DERIVED ON WRITE and read back only
+     * by that module's migration, so an older binary still comes up filtered; anything that reads
+     * them as the live answer is a bug.
+     */
+    filters?: Record<string, string[]>
+    filtersVersion?: number
+    showNamed?: boolean
     showClosed: boolean
     showExited: boolean
     showUnfiled: boolean
@@ -75,6 +85,11 @@ export interface Preferences {
     sort?: { by: string; dir: 'asc' | 'desc' }
     hideDetail?: boolean
     marked?: string[]
+    /** How the fleet is arranged — a list of rows, or a grid of cards. */
+    layout?: 'list' | 'cards'
+    /** The session at the top of the open card page: a page number would name other sessions by
+     *  the next poll, so the page is remembered by identity. */
+    cardAnchor?: string
   }
   /**
    * The session TASKS the user has marked finished.

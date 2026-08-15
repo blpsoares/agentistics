@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { QUIET_MS, attentionOf, digestFrame, frameTail } from './attention'
+import { QUIET_MS, approvalTail, attentionOf, digestFrame, frameTail } from './attention'
 import type { AttentionRules } from './types'
 
 const NOW = 1_786_600_000_000
@@ -178,5 +178,131 @@ describe('a working marker that outlives the screen', () => {
       prevDigest: 'old',
       rules,
     })).toBe('working')
+  })
+})
+
+/**
+ * A real claude permission dialog, in the shape `capture-pane` hands it over: a conversation above,
+ * then the box, then the footer naming the key. Trimmed to what a 60-line capture would end on.
+ */
+const DIALOG = [
+  '● I will run the migration now.',
+  '',
+  '╭──────────────────────────────────────────╮',
+  '│ Bash command                             │',
+  '│                                          │',
+  '│   bun run db:migrate                     │',
+  '│                                          │',
+  '│ Do you want to proceed?                  │',
+  '│ ❯ 1. Yes                                 │',
+  '│   2. No, and tell Claude what to do      │',
+  '│                                          │',
+  '│ Enter to confirm · Esc to cancel         │',
+  '╰──────────────────────────────────────────╯',
+]
+
+describe('approvalTail', () => {
+  it('keeps the dialog exactly as drawn — borders, options and footer included', () => {
+    const out = approvalTail(DIALOG, 6)
+    expect(out).toHaveLength(6)
+    // The three that decide anything: which options there are, which one is highlighted, and the
+    // key that takes it. None of them survives being tidied.
+    expect(out.join('\n')).toContain('❯ 1. Yes')
+    expect(out.join('\n')).toContain('2. No')
+    expect(out.join('\n')).toContain('Enter to confirm')
+  })
+
+  it('is NOT frameTail — that one throws the dialog away and keeps what came before it', () => {
+    // The reason this function exists. `frameTail` answers "what is it SAYING", so it cuts at the
+    // last rule; on a blocked session that cut lands above the box, and the result reads perfectly
+    // plausibly under a heading saying "this is what you are confirming".
+    const said = frameTail(DIALOG, 4).join('\n')
+    expect(said).not.toContain('Do you want to proceed?')
+    expect(approvalTail(DIALOG, 6).join('\n')).toContain('Do you want to proceed?')
+  })
+
+  it('takes the BOTTOM, because that is where the answer is', () => {
+    expect(approvalTail(DIALOG, 1)).toEqual(['╰──────────────────────────────────────────╯'])
+  })
+
+  it('drops padding at either end without touching the blanks inside a dialog', () => {
+    expect(approvalTail(['', '  ', 'a', '', 'b', '  ', ''], 10)).toEqual(['a', '', 'b'])
+  })
+
+  it('survives an empty or all-blank frame rather than inventing a line', () => {
+    expect(approvalTail([], 6)).toEqual([])
+    expect(approvalTail(['', '  '], 6)).toEqual([])
+    expect(approvalTail(DIALOG, 0)).toEqual([])
+  })
+})
+
+describe('a footer is the BOTTOM of the screen, not any line on it', () => {
+  const rules: AttentionRules = {
+    probed: 'test',
+    approval: [/Esc to cancel · Tab to amend/],
+    working: [/esc to interrupt/],
+  }
+  const read = (frame: string[]) => attentionOf({
+    alive: true,
+    // Quiet and unmoving, so the frame is the only thing that can decide.
+    lastActivityMs: NOW - 30_000,
+    nowMs: NOW,
+    frame,
+    frameDigest: 'same',
+    prevDigest: 'same',
+    rules,
+  })
+
+  /**
+   * VERBATIM in shape from the session that was misreported on 2026-08-14: it had spent the morning
+   * WRITING the approval rules, so the footer string was on its screen as source code while it was
+   * plainly working — spinner running, `esc to interrupt` in the real footer.
+   */
+  const QUOTING_THE_FOOTER = [
+    '● Editing attention-rules.ts',
+    '   approval: [',
+    '     /Esc to cancel · Tab to amend/,',
+    '   ],',
+    '✻ Leavening… (18m 20s · ↓ 23.0k tokens)',
+    '❯ ',
+    '⏵⏵ auto mode on (shift+tab to cycle) · PR #108 · esc to interrupt · ← 6 agents',
+  ]
+
+  it('does not call a session blocked because it QUOTED a dialog footer', () => {
+    // The bug this fixes, and in this repository it is guaranteed rather than unlikely: agentop is
+    // developed with agentop. The user was offered a destructive key over a question nobody asked.
+    expect(read(QUOTING_THE_FOOTER)).toBe('working')
+  })
+
+  it('still sees the footer when it is where a footer actually is', () => {
+    expect(read([
+      '● I will write the file',
+      ' Do you want to create x.txt?',
+      ' ❯ 1. Yes',
+      '   2. No',
+      ' Esc to cancel · Tab to amend',
+    ])).toBe('waiting-approval')
+  })
+
+  it('does not read a footer that has scrolled up out of the footer region', () => {
+    // Six lines of conversation below it: whatever that string is, it is not this screen's footer.
+    expect(read([
+      ' Esc to cancel · Tab to amend',
+      '● one', '● two', '● three', '● four', '● five', '● six',
+    ])).not.toBe('waiting-approval')
+  })
+
+  it('vetoes on the FOOTER only, so background agents cannot hide a real prompt', () => {
+    // claude prints `esc to interrupt` whenever anything is interruptible, background subagents
+    // included. A whole-frame veto would therefore suppress a genuine permission prompt on a busy
+    // session — suppressing a real block is worse than the false positive being fixed.
+    expect(read([
+      '  ⏵⏵ auto mode on · esc to interrupt · ← 6 agents',
+      '● main',
+      ' Do you want to proceed?',
+      ' ❯ 1. Yes',
+      '   2. No',
+      ' Esc to cancel · Tab to amend',
+    ])).toBe('waiting-approval')
   })
 })

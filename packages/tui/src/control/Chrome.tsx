@@ -92,6 +92,20 @@ function HeaderTag({ meta }: { meta: HeaderMeta }) {
     <Text>
       <Text dimColor>{meta.text}</Text>
       {meta.alert ? <Text color={COLORS.accent} bold>{` · ${meta.alert}`}</Text> : null}
+      {/* The parallel-sessions budget. Dim while there is room, `danger` once the ceiling is close
+          or the machine is already swapping — but the NUMBERS are always drawn, so a reader who
+          cannot tell the two shades apart still has the whole message. Colour never carries it. */}
+      {meta.memory
+        ? (
+          <Text
+            color={meta.memoryRed ? COLORS.danger : undefined}
+            dimColor={!meta.memoryRed}
+            bold={meta.memoryRed}
+          >
+            {` · ${meta.memory}`}
+          </Text>
+        )
+        : null}
       {/* Glyph plus version, in accent: the dot alone would carry the whole message in color. */}
       {meta.update ? <Text color={COLORS.accent}>{` · ${meta.update}`}</Text> : null}
     </Text>

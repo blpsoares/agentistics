@@ -40,7 +40,7 @@ import { Box, Text, useInput } from 'ink'
 import { truncate } from '../../components/Primitives'
 import { COLORS } from '../../theme'
 import { ActionRow, ConfigLine, CONFLICT_GLYPH, ServiceLine, STATE_GLYPH, stateWord } from '../Chrome'
-import { SectionHeader } from '../Surface'
+import { Question, questionRows, SectionHeader } from '../Surface'
 // The same position label the log viewer wears, from the same pure helper: two screens showing a
 // window into a longer list must not describe it differently.
 import { windowLabel } from '../surface.ts'
@@ -88,6 +88,7 @@ import type { CliLang } from '../lang'
 import type {
   ActionTarget,
   ArchiveMode,
+  BootOption,
   ControlExit,
   ControlHost,
   ControlService,
@@ -96,6 +97,7 @@ import type {
   RuntimeId,
   ServiceId,
   StartOption,
+  TeamMode,
 } from '../types'
 import type { RunAction, TabChrome, TaskView } from '../ControlCenter'
 
@@ -177,13 +179,34 @@ type View =
   /** `gate` marks the one nobody asked for: the question raised on OPEN, because a machine enabled
    *  at boot never crosses the start path that used to be the only place it was asked. Only that
    *  one may be skipped — see `archive-gate.ts`. */
-  | { kind: 'archive'; suggested: ArchiveMode; then: StartOption | null; gate?: boolean }
+  /** `thenBoot` is the wizard's tail: after the consent, member and central offer the boot unit. */
+  | { kind: 'archive'; suggested: ArchiveMode; then: StartOption | null; gate?: boolean; thenBoot?: ServiceId }
   | { kind: 'connect'; step: ConnectStep; endpoint: string; token: string }
   | { kind: 'disconnect' }
   /** `runtime` is the one that just started, when this came from a fresh start's boot question —
    *  `enableBoot` needs it to write the matching unit. Absent for the manual "enable boot" action
    *  row (offered while the service is down, with nothing running yet to name). */
   | { kind: 'boot'; service: ServiceId; runtime?: RuntimeId }
+  /**
+   * A boot registration being turned ON or OFF from the action row, or the question raised right
+   * after a stop that worked.
+   *
+   * It carries the host's own `BootOption` rather than a service and a direction, because the
+   * SENTENCE is what makes this safe: it names the unit, and writing or removing a systemd user
+   * unit is a change to the machine that outlives this session. A generic "are you sure?" over a
+   * verb called "boot" would be the same prompt for two opposite acts.
+   */
+  | { kind: 'bootSwitch'; service: ServiceId; option: BootOption; afterStop?: boolean }
+  /**
+   * THE WIZARD — solo / central / member, the whole of what the Setup tab used to be.
+   *
+   * A question here rather than a screen of its own because it is a question ABOUT these services:
+   * you cannot re-run `central.sh init` on a central that is up, and the only way to know that is to
+   * be looking at whether it is up. The host says which modes are withheld and WHY
+   * (`ControlStatus.setupBlocked`); this file draws the menu and routes each answer into the flow
+   * that already existed here — the three connect prompts, the archive consent, the boot offer.
+   */
+  | { kind: 'setup' }
 
 /**
  * What the detail region is showing instead of the facts: a question, or a task's output.
@@ -255,15 +278,23 @@ export interface ServicesProps {
   mouseOn?: boolean
   /** Absent when there is no mouse at all, and then the config pane has no row for one. */
   onMouse?: () => void
+  /**
+   * Open with the wizard already asking — a machine that has never been configured.
+   *
+   * This is what "bare `agentop` opens on Setup" became when Setup stopped being a tab. It is read
+   * ONCE, as the initial state, rather than watched: a prop that re-opened the question on every
+   * render would put it back in front of someone who had just answered it.
+   */
+  initialSetup?: boolean
 }
 
 export function Services({
   host, status, strings: s, lang, width, height, isActive, run, task, onDismissTask,
-  onChrome, onExit, onLang, mouseOn, onMouse,
+  onChrome, onExit, onLang, mouseOn, onMouse, initialSetup,
 }: ServicesProps) {
   const l = launcherStrings(lang)
 
-  const [view, setView] = useState<View>({ kind: 'cockpit' })
+  const [view, setView] = useState<View>(initialSetup ? { kind: 'setup' } : { kind: 'cockpit' })
   const [wantFocus, setWantFocus] = useState<PaneId>('services')
   const [serviceIndex, setServiceIndex] = useState(0)
   const [configIndex, setConfigIndex] = useState(0)
@@ -367,6 +398,23 @@ export function Services({
    * it matters most: nothing later in the session will ask, so a machine started this way would run
    * for weeks preserving nothing while the user believes they were never asked.
    */
+  /**
+   * The consent gate at the END of the wizard — `ensureArchiveModeChosen()`'s rule, enforced by the
+   * host: `pendingArchiveMode()` answers `null` when there is nothing left to ask, and we move
+   * straight on rather than putting the same question in front of someone who already answered it.
+   *
+   * `thenBoot` is what follows it, when there is one: the wizard's last step offers to bring the
+   * machine back on boot. Carried through the view rather than held in a ref, so a question the user
+   * escapes out of takes its tail with it.
+   */
+  const askArchive = useCallback(async (thenBoot?: ServiceId) => {
+    const pending = await host.pendingArchiveMode().catch(() => null)
+    if (pending === null) {
+      return setView(thenBoot ? { kind: 'boot', service: thenBoot } : { kind: 'cockpit' })
+    }
+    setView({ kind: 'archive', suggested: pending, then: null, thenBoot })
+  }, [host])
+
   const archiveThen = useCallback(async (option: StartOption) => {
     if (!option.asksArchive) return startNow(option)
     const pending = await host.pendingArchiveMode().catch(() => null)
@@ -417,6 +465,28 @@ export function Services({
   const target = useCallback((id: ActionTarget, action: 'stop' | 'restart', label: string) => {
     void run(() => (action === 'stop' ? host.stop(id) : host.restart(id)), label).then(back)
   }, [host, run, back])
+
+  /**
+   * Stopping a WHOLE service — and, when it worked, asking about the boot registration.
+   *
+   * The moment of the stop is the only moment the person knows the answer. Someone stopping their
+   * central because they are finished with it wants it to stay stopped; someone stopping it to
+   * restart it does not — and nothing on this screen can tell those two apart, which is exactly why
+   * it is a question rather than a rule. Asked ONLY when there is something to turn off: a service
+   * with no registration, or on a box with no user systemd, has no such option and is never asked.
+   *
+   * The option is read from the snapshot taken BEFORE the stop, deliberately. A boot registration is
+   * not affected by stopping anything, so the pre-stop answer is the post-stop answer, and reading
+   * it back off a refresh would make the question depend on a poll landing in time.
+   */
+  const stopService = useCallback((service: ControlService, label: string) => {
+    const off = service.bootOptions.find(o => !o.enable)
+    void run(() => host.stop(service.id), label).then(res => {
+      setView(res.ok && off
+        ? { kind: 'bootSwitch', service: service.id, option: off, afterStop: true }
+        : { kind: 'cockpit' })
+    })
+  }, [host, run])
 
   /**
    * One restart the host offered, taken.
@@ -485,7 +555,7 @@ export function Services({
           out.push({ label: option.label, run: () => target(option.runtime, 'stop', option.label) })
         }
       } else {
-        out.push({ label: s.actStop, run: () => target(selected.id, 'stop', s.actStop) })
+        out.push({ label: s.actStop, run: () => stopService(selected, s.actStop) })
       }
       const url = selected.active?.webUrl
       if (host.openUrl && url) out.push({ label: s.actOpen, run: () => open(url) })
@@ -493,12 +563,24 @@ export function Services({
       for (const option of selected.startOptions) {
         out.push({ label: option.label, run: () => onStart(option) })
       }
-      // Only beside a start that could actually work. Offering to install a boot unit for something
-      // this box cannot run — a central with no docker — is a verb that fails on principle, and the
-      // detail pane's note is already saying why the starts are missing.
-      if (selected.startOptions.length > 0) {
-        out.push({ label: s.actBoot, run: () => setView({ kind: 'boot', service: selected.id }) })
-      }
+    }
+
+    /**
+     * The BOOT switch — both positions, and offered whatever the service's state.
+     *
+     * It used to be one verb (`Start at boot`) offered only beside a start, which made it a switch
+     * with a single position: the unit it wrote could be turned off by nothing in this product. A
+     * user who stopped their central because they were done with it got it back on the next boot —
+     * and on the next login that starts the user's systemd manager — with nothing on screen naming
+     * what had brought it back or offering to stop it. That is the whole complaint.
+     *
+     * The host composes these: which mechanisms exist is a fact about this box (`agentistics` has
+     * two, the central has one), and a box with no user systemd gets an EMPTY list rather than a
+     * verb that refuses on principle. Placed AFTER the state verbs because `fitActionRow` drops
+     * from the right and stopping a service outranks scheduling one.
+     */
+    for (const option of selected.bootOptions) {
+      out.push({ label: option.label, run: () => setView({ kind: 'bootSwitch', service: selected.id, option }) })
     }
 
     // The submenu's `Everything`, kept as an explicit verb. Only worth offering when there is more
@@ -519,7 +601,7 @@ export function Services({
       out.push({ label: s.actUpgrade(status.latestVersion), run: () => void run(() => host.upgrade(), s.actUpgrade(status.latestVersion!)) })
     }
     return out
-  }, [selected, s, host, running.length, target, restartNow, open, onStart, status?.latestVersion, run])
+  }, [selected, s, host, running.length, target, stopService, restartNow, open, onStart, status?.latestVersion, run])
 
   // -------------------------------------------------------------------------
   // the config pane
@@ -541,7 +623,11 @@ export function Services({
         value: status?.modeLabel ?? status?.mode ?? '—',
         // "member — sends metrics to a central" degrades to "member", never to "member — sen…".
         short: status?.mode ?? '—',
-        action: connectAction,
+        // THE SETUP TAB'S DOOR. The mode row is what the wizard changes, so the wizard is what
+        // `enter` on it opens — the three modes, with whichever the host has withheld greyed and
+        // explained. `Connect` used to live here and is now what the `member` item does, which is
+        // the same three prompts in the same order: one implementation, one entrance.
+        action: { label: s.actSetup, run: () => setView({ kind: 'setup' }) },
       },
     ]
     if (status?.endpoint) {
@@ -775,8 +861,8 @@ export function Services({
   // not offer — and `R` would bounce both and leave the conflict standing. `enter` reaches the
   // per-runtime stops, which are the only stops that resolve anything.
   const stopSelected = useCallback(() => {
-    if (selected && selected.state === 'up' && !conflicted) target(selected.id, 'stop', s.actStop)
-  }, [selected, conflicted, target, s.actStop])
+    if (selected && selected.state === 'up' && !conflicted) stopService(selected, s.actStop)
+  }, [selected, conflicted, stopService, s.actStop])
 
   /** `R` is the PLAIN bounce — the option the host always offers, never a rebuild by accident. */
   const restartSelected = useCallback(() => {
@@ -1192,7 +1278,7 @@ export function Services({
             <ArchiveChoice
               strings={s}
               suggested={view.suggested}
-              onPick={mode => onArchive(mode, view.then)}
+              onPick={mode => onArchive(mode, view.then, view.thenBoot)}
               onSkip={view.gate ? onArchiveSkip : undefined}
               onCancel={view.gate ? onArchiveSkip : back}
               width={body}
@@ -1260,6 +1346,60 @@ export function Services({
             />
           ),
         }
+
+      case 'bootSwitch':
+        return {
+          title: s.bootLabel,
+          node: (
+            <ConfirmPrompt
+              // The HOST's sentence, which names the unit. Rule of this screen and of this pane:
+              // an act that writes or removes a systemd user unit must say which one, because the
+              // change outlives the session and "are you sure?" would read identically for the two
+              // opposite directions of the same switch.
+              label={(view.afterStop ? view.option.confirmAfterStop : undefined) ?? view.option.confirm}
+              yesLabel={s.yes}
+              noLabel={s.no}
+              onAnswer={yes => onBootSwitch(view.service, view.option, yes)}
+              onCancel={back}
+              width={body}
+              isActive={questionsLive}
+              origin={origin}
+            />
+          ),
+        }
+
+      case 'setup': {
+        // MEASURED, never assumed: the question wraps to three rows at forty columns, and a menu
+        // budgeted for one would draw its last option on top of the pane's bottom border — Ink
+        // composites an overflow rather than clipping it. The blank under the question is the `+ 1`.
+        const asked = questionRows(s.setupQuestion, body) + 1
+        return {
+          title: s.setupLabel,
+          node: (
+            <>
+              <Question text={s.setupQuestion} width={body} />
+              <Text> </Text>
+              <Menu
+                items={SETUP_MODES.map(mode => ({
+                  label: s.setupMode[mode],
+                  value: mode,
+                  // The BLOCKED reason replaces the ordinary hint rather than joining it: a row that
+                  // cannot be picked has one thing worth saying, and it is why. The host decides —
+                  // it is the only side that knows what is running.
+                  hint: status?.setupBlocked?.[mode] ?? s.setupModeHint[mode],
+                  disabled: Boolean(status?.setupBlocked?.[mode]),
+                }))}
+                onSelect={value => onSetupMode(value as TeamMode)}
+                onCancel={back}
+                width={body}
+                height={Math.max(1, rows - asked)}
+                isActive={questionsLive}
+                origin={{ x: origin.x, y: origin.y + asked }}
+              />
+            </>
+          ),
+        }
+      }
     }
   }
 
@@ -1273,8 +1413,16 @@ export function Services({
     })
   }
 
-  function onArchive(mode: ArchiveMode, then: StartOption | null) {
-    void run(() => host.setArchiveMode(mode)).then(() => (then ? startNow(then) : back()))
+  /**
+   * The consent answered. What follows it is whatever raised it: a start that was waiting, the
+   * wizard's boot offer, or nothing at all.
+   */
+  function onArchive(mode: ArchiveMode, then: StartOption | null, thenBoot?: ServiceId) {
+    void run(() => host.setArchiveMode(mode)).then(() => {
+      if (then) return startNow(then)
+      if (thenBoot) return setView({ kind: 'boot', service: thenBoot })
+      return back()
+    })
   }
 
   /** Skipping the opening gate. It writes NOTHING — the setting stays unanswered on purpose — and
@@ -1287,14 +1435,69 @@ export function Services({
   function onConnect(step: ConnectStep, endpoint: string, token: string, value: string) {
     if (step === 'endpoint') return setView({ kind: 'connect', step: 'token', endpoint: value, token: '' })
     if (step === 'token') return setView({ kind: 'connect', step: 'org', endpoint, token: value })
-    return void run(() => host.connect({ endpoint, token, org: value })).then(back)
+    // The wizard's tail, and only after a connect that WORKED: a consent written for a machine that
+    // never joined would be a preference recorded about nothing. `cli-setup.ts` asks in this order.
+    return void run(() => host.connect({ endpoint, token, org: value })).then(res => {
+      if (res.ok) void askArchive('agentistics')
+      else back()
+    })
   }
 
   function onBoot(service: ServiceId, runtime: RuntimeId | undefined, yes: boolean) {
     if (!yes) return back()
     return void run(() => host.enableBoot(service, runtime)).then(back)
   }
+
+  /** Either direction of the switch, and the only place either is performed. */
+  function onBootSwitch(service: ServiceId, option: BootOption, yes: boolean) {
+    if (!yes) return back()
+    return void run(
+      () => (option.enable
+        ? host.enableBoot(service, option.runtime)
+        : host.disableBoot(service, option.runtime)),
+      option.label,
+    ).then(back)
+  }
+
+  /**
+   * The wizard's answer, routed into the flow that already lived on this screen.
+   *
+   * Order preserved from `cli-setup.ts` exactly: solo persists the mode and then asks the archive
+   * consent; central runs `central.sh init` and only offers boot when the init SUCCEEDED; member
+   * gathers endpoint → token → org, connects, and only then asks the consent and the boot question.
+   * Anything that ran before a successful connect would be a preference written for a machine that
+   * never joined.
+   *
+   * `solo` on a machine that IS a member goes through the confirmed disconnect rather than straight
+   * to `setMode`, because there it is a leave: it surrenders the member tokens, which are minted on
+   * the central and stored nowhere else on this box.
+   */
+  function onSetupMode(mode: TeamMode) {
+    if (mode === 'central') {
+      return void run(() => host.initCentral(), s.setupMode.central).then(res => {
+        setView(res.ok ? { kind: 'boot', service: 'central' } : { kind: 'cockpit' })
+      })
+    }
+    if (mode === 'member') {
+      return setView({ kind: 'connect', step: 'endpoint', endpoint: '', token: '' })
+    }
+    if (status?.mode === 'member') return setView({ kind: 'disconnect' })
+    return void run(() => host.setMode('solo'), s.setupMode.solo).then(res => {
+      if (res.ok) void askArchive()
+      else back()
+    })
+  }
 }
+
+/**
+ * The three modes, in the order `cli-setup.ts` asks them.
+ *
+ * A `readonly` tuple rather than a literal written at the call site: the menu, the string table and
+ * `ControlStatus.setupBlocked` all key on these, and a hardcoded list is what CLAUDE.md forbids for
+ * harnesses for exactly the reason it would fail here — a mode added to the product would compile
+ * clean and be missing from the wizard.
+ */
+const SETUP_MODES: readonly TeamMode[] = ['solo', 'central', 'member'] as const
 
 /** Tone → colour. The one place a `DetailTone` becomes a colour, so the mapping cannot drift. */
 const TONE_COLOR: Record<DetailTone, string | undefined> = {

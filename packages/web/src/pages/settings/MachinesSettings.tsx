@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X } from 'lucide-react'
+import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X, Loader2 } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { ConnectionsPanel } from '../../components/team/ConnectionsPanel'
 import { SectionHeader, Section, Select, Checkbox, ConfirmModal, RecordCard, RecordCardAction, SaveBar, runSaveSteps } from './primitives'
@@ -120,7 +120,15 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   const [copied, setCopied] = useState<string | null>(null)
   const [copyFailed, setCopyFailed] = useState<string | null>(null)
 
-  // Rotate state
+  // Rotate state.
+  // `rotateConfirmId` gates the act (a rotation invalidates the token the machine is using RIGHT
+  // NOW — that is a question, not a toolbar toggle) and `rotatingId` is the in-flight guard. The
+  // button used to fire on click with no confirmation and no visible state, so an impatient second
+  // click sent a second rotation of the same machine — which the central then turned into a second
+  // MACHINE. The server refuses the overlap now (rotate-claim.ts); this is what stops it being
+  // asked in the first place.
+  const [rotateConfirmId, setRotateConfirmId] = useState<string | null>(null)
+  const [rotatingId, setRotatingId] = useState<string | null>(null)
   const [rotateId, setRotateId] = useState<string | null>(null)
   const [rotatedToken, setRotatedToken] = useState<string | null>(null)
 
@@ -355,20 +363,37 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
     }
   }
 
+  /** One rotation at a time, and never two of the same machine: a rotation mints a NEW identity
+   *  (the machine id is the token's hash), so a second one fired before the first answered is a
+   *  second identity for one machine — which is exactly how the fleet list grew duplicate rows. */
   async function rotateMachine(id: string) {
+    if (rotatingId) return
+    setRotatingId(id)
+    setErr(null)
     try {
       const res = await fetch('/api/iam/machines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rotateId: id }),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        // 409 is the central saying this id was rotated out from under us (another tab, another
+        // admin) — a stale row, not a failure of the machine, so it asks for a reload by name.
+        if (res.status === 409) {
+          throw new Error(pt
+            ? 'Esta máquina já foi rotacionada em outro lugar. Recarregue a lista e tente de novo.'
+            : 'This machine was already rotated elsewhere. Reload the list and try again.')
+        }
+        throw new Error(`HTTP ${res.status}`)
+      }
       const d = await res.json() as { token: string }
       setRotateId(id)
       setRotatedToken(d.token)
       void load()
     } catch (e) {
-      setErr(String(e))
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRotatingId(null)
     }
   }
 
@@ -748,8 +773,14 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                           <Pencil size={14} /> {pt ? 'Editar' : 'Edit'}
                         </RecordCardAction>
                       )}
-                      <RecordCardAction label="Rotate token" onClick={() => void rotateMachine(m.id)}>
-                        <RotateCw size={14} /> {pt ? 'Rotacionar' : 'Rotate'}
+                      <RecordCardAction
+                        label="Rotate token"
+                        disabled={rotatingId !== null}
+                        onClick={() => setRotateConfirmId(m.id)}
+                      >
+                        {rotatingId === m.id
+                          ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> {pt ? 'Rotacionando…' : 'Rotating…'}</>
+                          : <><RotateCw size={14} /> {pt ? 'Rotacionar' : 'Rotate'}</>}
                       </RecordCardAction>
                       <RecordCardAction label="Revoke machine" danger onClick={() => setRevokeConfirmId(m.id)}>
                         <Trash2 size={14} /> {pt ? 'Revogar' : 'Revoke'}
@@ -850,11 +881,20 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                           </button>
                         )}
                         <button
-                          style={{ ...ghostBtn, padding: '4px 8px' }}
-                          onClick={e => { e.stopPropagation(); void rotateMachine(m.id) }}
-                          title={pt ? 'Rotacionar token' : 'Rotate token'}
+                          style={{
+                            ...ghostBtn, padding: '4px 8px',
+                            cursor: rotatingId ? 'not-allowed' : 'pointer', opacity: rotatingId ? 0.5 : 1,
+                          }}
+                          disabled={rotatingId !== null}
+                          aria-busy={rotatingId === m.id || undefined}
+                          onClick={e => { e.stopPropagation(); setRotateConfirmId(m.id) }}
+                          title={rotatingId === m.id
+                            ? (pt ? 'Rotacionando…' : 'Rotating…')
+                            : (pt ? 'Rotacionar token' : 'Rotate token')}
                         >
-                          <RotateCw size={12} />
+                          {rotatingId === m.id
+                            ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                            : <RotateCw size={12} />}
                         </button>
                         <button
                           style={{ ...ghostBtn, padding: '4px 8px', color: '#ef4444' }}
@@ -1356,6 +1396,28 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         </div>
       </Drawer>
 
+      {/* Rotate token confirm — the act is not undoable and it disconnects a working machine, so
+          it is asked rather than fired. Closing on confirm is also the first of the two guards
+          against a second rotation (the second is `rotatingId`, which disables every Rotate). */}
+      <ConfirmModal
+        open={rotateConfirmId !== null}
+        title={pt ? 'Rotacionar o token?' : 'Rotate the token?'}
+        message={(() => {
+          const name = machines.find(m => m.id === rotateConfirmId)?.machineName ?? ''
+          return pt
+            ? `O token atual de "${name}" para de valer imediatamente. A máquina só volta a enviar dados depois de reconectar com o novo token (mostrado uma única vez). O histórico é preservado.`
+            : `The current token for "${name}" stops working immediately. The machine only reports again once it reconnects with the new token (shown once). Its history is preserved.`
+        })()}
+        confirmLabel={pt ? 'Rotacionar' : 'Rotate'}
+        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        onConfirm={() => {
+          const id = rotateConfirmId
+          setRotateConfirmId(null)
+          if (id) void rotateMachine(id)
+        }}
+        onCancel={() => setRotateConfirmId(null)}
+      />
+
       {/* Revoke machine confirm */}
       <ConfirmModal
         open={revokeConfirmId !== null}
@@ -1384,6 +1446,8 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
         onConfirm={() => void bulkDelete()}
         onCancel={() => setBulkDeleteConfirm(false)}
       />
+
+      <style>{'@keyframes spin { to { transform: rotate(360deg); } }'}</style>
     </>
   )
 }

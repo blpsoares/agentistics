@@ -20,6 +20,7 @@ const SessionsPage = lazy(() => import('./pages/SessionsPage'))
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'))
 const SettingsPage = lazy(() => import('./pages/settings/SettingsPage'))
 const PreferencesSettings = lazy(() => import('./pages/settings/PreferencesSettings'))
+const NotificationsSettings = lazy(() => import('./pages/settings/NotificationsSettings'))
 const SessionsSettings = lazy(() => import('./pages/settings/SessionsSettings'))
 const DataSourcesSettings = lazy(() => import('./pages/settings/DataSourcesSettings'))
 const HarnessesSettings = lazy(() => import('./pages/settings/HarnessesSettings'))
@@ -71,6 +72,7 @@ export default function AppRouter() {
           <Route path="settings" element={<Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>}>
             <Route index element={<Navigate to="preferences" replace />} />
             <Route path="preferences" element={<Suspense fallback={<PageFallback />}><PreferencesSettings /></Suspense>} />
+            <Route path="notifications" element={<Suspense fallback={<PageFallback />}><NotificationsSettings /></Suspense>} />
             <Route path="sessions" element={<Suspense fallback={<PageFallback />}><SessionsSettings /></Suspense>} />
             <Route path="data-sources" element={<Suspense fallback={<PageFallback />}><DataSourcesSettings /></Suspense>} />
             <Route path="harnesses" element={<Suspense fallback={<PageFallback />}><HarnessesSettings /></Suspense>} />

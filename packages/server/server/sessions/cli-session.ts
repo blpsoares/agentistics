@@ -6,17 +6,18 @@
  * `reconcileSessions` says what exists. This file does I/O and prints.
  */
 
+import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
 import { sessionRunning } from '@agentistics/tui/control/sessions'
-import { controlStrings } from '@agentistics/tui/control/i18n'
+import { controlStrings, sessionWordBook } from '@agentistics/tui/control/i18n'
 import { wrapText } from '@agentistics/tui/control/surface'
 import { parseSessionArgs, LS_DEFAULT, type SessionCommand } from './cli-parse'
 import { cliStrings } from '../cli-i18n'
 import { resolveLang } from '../cli-lang'
 import { readPreferences } from '../preferences'
 import { toControlSession } from './control-session'
-import { repoFacts } from './repo-facts'
+import { recordedRepo, repoFacts } from './repo-facts'
 import { emptyReason, renderSessionTable, resolveWidth } from './session-table'
 import { SPAWN_SPECS, planSpawn } from './spawn-spec'
 import { reconcileSessions, resolveSessionRef, type ReconciledSession, type RefCandidate } from './session-ref'
@@ -24,9 +25,14 @@ import { addSession, newSessionId, patchSession, readRegistry, removeSession } f
 import { conversationForProcess, loadConversations } from './conversations'
 import { resolveBackend } from './index'
 import { scanProcesses } from '../live-sessions'
+import { loadHarnessSessions } from './harness-sessions'
 import { createSessionsPoller, type SessionSnapshot } from './sessions-host'
 import { needsAttention, type SessionView } from './session-view'
 import { planTaskReopen, taskReopenSucceeded } from './task-reopen'
+import { liveConversationHolders } from './live-claims'
+import { POLL_MS, SETTLE_MS, spawnOutcome } from './spawn-outcome'
+import { parseHarnessAgents } from './harness-agents'
+import { planTakeover, type TakeoverRefusal } from './takeover'
 import type { SessionBackend, SpawnPlanError } from './types'
 
 /** Derived from the specs, never a second hand-written list — the two could not then disagree. */
@@ -106,9 +112,46 @@ export async function runSession(argv: string[]): Promise<number> {
     case 'ls': return ls(cmd, backend)
     case 'attach': return attach(cmd.ref, backend)
     case 'kill': return kill(cmd.ref, backend)
-    case 'rename': return patch(cmd.ref, { label: cmd.label }, 'renamed', backend)
+    // `labelSince` travels WITH the label, always. `pickTitle` settles a disagreement between the
+    // name typed here and the one the harness holds by RECENCY, and it can only do that when both
+    // sides say when — so a rename written without a timestamp can never win, whatever the user
+    // typed and however recently. Measured on this machine: every one of twelve live rows had
+    // `labelSince: undefined`, because the cockpit's rename verb stamped it and this one did not.
+    // The comparison had therefore never once run in production, and the harness took every row.
+    case 'rename': return patch(cmd.ref, { label: cmd.label, labelSince: Date.now() }, 'renamed', backend)
     case 'note': return patch(cmd.ref, { note: cmd.text }, 'annotated', backend)
   }
+}
+
+/**
+ * Whether the session we just started is already GONE, and what it said on the way out.
+ *
+ * Returns the sentence to show, or `undefined` when it is running. One helper for all three spawn
+ * sites — `start`, `batch` and the reopen — because the failure is identical at each and a check in
+ * only one of them is the same bug surviving in the other two.
+ *
+ * The deadline is `SETTLE_MS`, and it is MEASURED rather than guessed — see that constant. The
+ * first version waited 700ms on the reasoning that a refusal must be immediate; the real one lands
+ * between 1.5s and 3s, so that check would have reported "started" for the very session it exists
+ * to catch.
+ */
+async function spawnFailure(backend: SessionBackend, id: string): Promise<string | undefined> {
+  // POLLED, not slept. Measured: the refusal lands between 1.5s and 3s — the harness loads and
+  // resolves the conversation before deciding — so a fixed short wait reports "started" for a
+  // session that is about to die. Polling ends the moment it dies, so a refusal costs what it
+  // costs and only a healthy session waits out the deadline.
+  const deadline = Date.now() + SETTLE_MS
+  let outcome = spawnOutcome([])
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, POLL_MS))
+    outcome = spawnOutcome(await backend.capture(id, 40).catch(() => [] as string[]))
+    if (outcome.died) break
+  }
+  if (!outcome.died) return undefined
+  // The harness's own words, because they are the only actionable part. A status with no message is
+  // still better than "it did not start".
+  return outcome.message
+    || `the session exited immediately${outcome.status !== undefined ? ` (status ${outcome.status})` : ''}`
 }
 
 async function start(
@@ -122,6 +165,7 @@ async function start(
   const cwd = cmd.cwd ? resolve(cmd.cwd) : process.cwd()
   const planned = planSpawn({
     harness: cmd.harness, cwd, prompt: cmd.prompt, model: cmd.model, effort: cmd.effort,
+    conversationId: randomUUID(),
   })
   if (!planned.ok) { console.error(explainPlanError(planned.error)); return 1 }
 
@@ -130,6 +174,16 @@ async function start(
     await backend.spawn({ id, cwd, argv: planned.plan.argv, ...(planned.plan.sendKeys ? { sendKeys: planned.plan.sendKeys } : {}) })
   } catch (e) {
     console.error(`Could not start the session: ${e instanceof Error ? e.message : String(e)}`)
+    return 1
+  }
+
+  // `spawn` returning is not evidence anything is RUNNING — tmux's contract is "I made you a
+  // session". A harness that refuses its arguments has already exited by now, and registering a row
+  // for it is what produced three dead rows called MAIN. See `spawn-outcome.ts`.
+  const failed = await spawnFailure(backend, id)
+  if (failed) {
+    console.error(failed)
+    await backend.kill(id).catch(() => {})
     return 1
   }
 
@@ -142,6 +196,8 @@ async function start(
     ...(cmd.effort ? { effort: cmd.effort } : {}),
     ...(cmd.label ? { label: cmd.label } : {}),
     ...(cmd.task ? { task: cmd.task } : {}),
+    ...(planned.plan.conversationId ? { conversationId: planned.plan.conversationId } : {}),
+    ...(await recordedRepo(cwd)),
   })
 
   if (cmd.background) {
@@ -205,6 +261,7 @@ async function batch(
       ...(spec.prompt ? { prompt: spec.prompt } : {}),
       ...(spec.model ? { model: spec.model } : {}),
       ...(spec.effort ? { effort: spec.effort } : {}),
+      conversationId: randomUUID(),
     })
     if (!planned.ok) { failed.push({ harness: spec.harness, reason: explainPlanError(planned.error) }); continue }
 
@@ -218,6 +275,15 @@ async function batch(
       failed.push({ harness: spec.harness, reason: e instanceof Error ? e.message : String(e) })
       continue
     }
+    // Same check as `start`: a harness that refused its arguments is already gone, and a batch that
+    // reports N started when N exited is worse than one that reports the refusal — the whole point
+    // of a batch is that nobody is watching each one come up.
+    const died = await spawnFailure(backend, id)
+    if (died) {
+      failed.push({ harness: spec.harness, reason: died })
+      await backend.kill(id).catch(() => {})
+      continue
+    }
     await addSession({
       id,
       harness: spec.harness,
@@ -227,6 +293,8 @@ async function batch(
       ...(spec.model ? { model: spec.model } : {}),
       ...(spec.effort ? { effort: spec.effort } : {}),
       ...(spec.name ? { label: spec.name } : {}),
+      ...(planned.plan.conversationId ? { conversationId: planned.plan.conversationId } : {}),
+      ...(await recordedRepo(cwd)),
     })
     started.push({ id, harness: spec.harness, cwd })
   }
@@ -251,15 +319,34 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
   }
   const conversations = await loadConversations()
   const live = new Set((await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id))
+  // What is already being driven, so this cannot put a second assistant into a conversation that has
+  // one. `live` above cannot answer it: it is keyed by ROW, and the twin case is a row that is down
+  // while a DIFFERENT row drives its conversation. Same collector the cockpit's verb uses.
+  const inUse = await liveConversationHolders(backend)
+  // Claimed within this batch too. The cockpit's copy of this loop has had this set for a while and
+  // this one never did, so `conversationForProcess` — which matches on harness and directory, and
+  // therefore answers with the FIRST conversation of a repository — handed the same one to every row
+  // of a task filed in that repository. The drift `planTaskReopen` was extracted to end, met again
+  // one layer out.
+  const taken = new Set<string>()
   // The DECISION is the pure `planTaskReopen`, shared with the cockpit's verb. The two used to be
   // separate implementations and had drifted: only one retired the row it replaced, so the same
   // gesture left a different registry depending on where you pressed it.
   const plan = planTaskReopen({
     entries: wanted,
     liveIds: live,
+    inUse,
     conversationFor: m => {
-      const conv = conversationForProcess(conversations, { harness: m.harness, cwd: m.cwd })
-      return conv?.resumable ? { sessionId: conv.sessionId, title: conv.title } : null
+      const own = m.conversationId
+        ? conversations.find(c => c.sessionId === m.conversationId)
+        : undefined
+      const conv = own ?? conversationForProcess(
+        conversations.filter(c => !taken.has(c.sessionId)),
+        { harness: m.harness, cwd: m.cwd },
+      )
+      if (!conv?.resumable) return null
+      taken.add(conv.sessionId)
+      return { sessionId: conv.sessionId, title: conv.title }
     },
   })
 
@@ -274,10 +361,29 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
     try {
       await backend.spawn({ id, cwd: m.cwd, argv: planned.plan.argv })
     } catch { skipped.push(m.id); continue }
+    // The path the report came from. Claude refuses to resume a conversation that is already open
+    // as a background agent, and the refusal is instant — so this reopen wrote a row for a process
+    // that no longer existed, and pressing it again wrote another. The old row must NOT be retired
+    // either: retiring it on a reopen that failed would lose the only row that still names the work.
+    const died = await spawnFailure(backend, id)
+    if (died) {
+      skipped.push(m.id)
+      await backend.kill(id).catch(() => {})
+      continue
+    }
     await addSession({
       id, harness: m.harness, cwd: m.cwd, createdAt: new Date().toISOString(), task,
       label: row.label,
       ...(m.note ? { note: m.note } : {}),
+      // The conversation is known EXACTLY here — we just handed its id to the CLI. The cockpit's
+      // reopen verb has recorded it since it was written; this path had not, so the same gesture
+      // left a row that knew which conversation it drove or one that did not, depending on where it
+      // was pressed. `planTaskReopen` exists to stop precisely that kind of drift.
+      ...(planned.plan.conversationId ? { conversationId: planned.plan.conversationId } : {}),
+      // The REPLACEMENT re-measures rather than copying `m.repo`: a reopen is the moment to notice
+      // that the worktree came back, and copying a recorded value would carry one stale answer
+      // through every session ever reopened from it.
+      ...(await recordedRepo(m.cwd)),
     })
     // The old row is RETIRED, not deleted: it is still a thing that happened, and it stops standing
     // beside its own continuation with the same name on it.
@@ -286,13 +392,22 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
   }
 
   if (json) {
-    console.log(JSON.stringify({ task, started, skipped, already: plan.already }, null, 2))
+    console.log(JSON.stringify({
+      task, started, skipped, already: plan.already,
+      // Each one NAMES the session that already has the conversation, because a machine reader is
+      // exactly who needs to be told where the work is rather than that something did not happen.
+      heldElsewhere: plan.heldElsewhere.map(h => ({ id: h.id, heldBy: h.holder.id, label: h.holder.label })),
+    }, null, 2))
   } else {
     for (const id of started) console.log(id)
     // Reported, never silent: a partial reopen presented as a success leaves someone believing they
     // have their whole task back.
+    for (const h of plan.heldElsewhere) {
+      console.log(`${h.id}\talready open in ${h.holder.label}`)
+    }
     const alreadyUp = plan.already.length ? `, ${plan.already.length} already running` : ''
-    console.log(`\n${started.length} reopened${skipped.length ? `, ${skipped.length} could not be` : ''}${alreadyUp}.`)
+    const held = plan.heldElsewhere.length ? `, ${plan.heldElsewhere.length} already open elsewhere` : ''
+    console.log(`\n${started.length} reopened${skipped.length ? `, ${skipped.length} could not be` : ''}${alreadyUp}${held}.`)
   }
   return taskReopenSucceeded(plan, started.length) ? 0 : 1
 }
@@ -311,15 +426,36 @@ function fleetJson(snap: SessionSnapshot): unknown {
       label: v.label ?? null,
       task: v.task ?? null,
       resumeId: v.resume?.sessionId ?? null,
+      // The RECORDED conversation, kept apart from `resumeId` above rather than folded into it.
+      // They answer different questions: this one is what the row provably drives, that one is a
+      // target the reopen verb OFFERS and will fall back to a harness-and-directory guess for. A
+      // caller reading one field could not tell which of the two it had been given.
+      conversationId: v.conversationId ?? null,
     })),
     attention: snap.attention,
     unavailable: snap.unavailable ?? null,
   }
 }
 
-/** The whole fleet, from the registry, the backend, `/proc` and the conversation store. */
+/**
+ * The whole fleet, from the registry, the backend, `/proc`, the conversation store and what each
+ * harness records about its own sessions.
+ *
+ * It reads the SAME sources the cockpit's poller does, and that is the point rather than a detail:
+ * `session ls` is the cockpit's table printed, so a source wired into one and not the other is how
+ * one session ends up wearing two different names depending on where you look at it. It was missing
+ * `loadHarnessSessions` for exactly one commit, and the row a user had renamed inside the session
+ * read correctly in the cockpit and stale on the command line.
+ *
+ * There is deliberately NO heartbeat here: a one-shot command must not stamp `lastSeenMs`. It runs
+ * once and exits, so a run that happened to be the last thing before a reboot would be indistinguish-
+ * able from a fleet that was alive — and `crash-group.ts` would be reading a write nobody made a
+ * claim with.
+ */
 async function pollFleet(backend: SessionBackend): Promise<SessionSnapshot> {
-  const poller = createSessionsPoller({ backend, readRegistry, scanProcesses, loadConversations })
+  const poller = createSessionsPoller({
+    backend, readRegistry, scanProcesses, loadConversations, loadHarnessSessions,
+  })
   return await poller.poll()
 }
 
@@ -351,7 +487,7 @@ async function ls(
 
   // Resolved per session and memoized by directory — the same read the cockpit does, and what makes
   // three worktrees of one repository group under the project rather than under three names.
-  const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd)))
+  const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd, v.recordedRepo)))
   // A preferences file that cannot be read costs the "finished" mark on a task heading, never the
   // table: the fleet is what the command is for.
   const finishedTasks = await readPreferences().then(p => p.finishedTasks ?? []).catch(() => [])
@@ -399,13 +535,7 @@ async function ls(
     doneTasks: finishedTasks,
     strings: {
       cols: c.sessionsCols,
-      unknown: {
-        harness: c.sessionsUnknownHarness,
-        model: c.sessionsUnknownModel,
-        project: c.sessionsUnknownProject,
-        task: c.sessionsUnknownTask,
-        repo: c.sessionsUnknownRepo,
-      },
+      words: sessionWordBook(c),
       closed: c.sessionsClosedWord,
       done: c.sessionsDoneWord,
     },
@@ -472,8 +602,127 @@ async function list(backend: SessionBackend, json = false): Promise<number> {
 async function attach(ref: string, backend: SessionBackend): Promise<number> {
   const reconciled = reconcileSessions(await readRegistry(), await backend.list())
   const found = resolveSessionRef(reconciled.map(toRefCandidate), ref)
-  if (!found.ok) { console.error(refError(ref, found.reason, found.matches)); return 1 }
-  return execAttach(found.session.id, backend)
+  if (found.ok) return execAttach(found.session.id, backend)
+
+  // Not a row agentop hosts — but it may be a conversation that is RUNNING somewhere, and the user
+  // asked to get into it. This is the case the product had no answer for: it refused with "open it
+  // where it already is", which names a place that for a background agent does not exist.
+  //
+  // The answer is to CLOSE the assistant holding it and reopen the conversation here. The lock
+  // exists to stop two assistants in one conversation, and closing the first satisfies it exactly;
+  // refusing satisfies it by leaving the user with none. The decision is the pure `planTakeover` —
+  // it checks that the harness can resume by id BEFORE anything is killed.
+  const took = await takeOver(ref, backend)
+  if (took !== null) return took
+
+  console.error(refError(ref, found.reason, found.matches))
+  return 1
+}
+
+/**
+ * Close whatever is holding a live conversation and reopen it under agentop.
+ *
+ * `null` when `ref` names no live conversation — the caller then reports the ordinary lookup error.
+ *
+ * Not claude-specific: the two steps are the same everywhere, and `planSpawn` already knows which
+ * harnesses can resume by id at all. Today only claude publishes a live-session list to search
+ * (`claude agents --json`); the day another does, it joins the search and nothing else changes.
+ */
+async function takeOver(ref: string, backend: SessionBackend): Promise<number | null> {
+  const live = await liveAgentFor(ref)
+  if (!live) return null
+
+  const planned = planSpawn({ harness: live.harness, cwd: live.cwd, resumeId: live.sessionId })
+  const plan = planTakeover({
+    conversationId: live.sessionId,
+    harness: live.harness,
+    resumable: planned.ok,
+    holder: { pid: live.pid, cwd: live.cwd, label: live.name },
+    cwd: live.cwd,
+  })
+
+  if (plan.kind === 'refuse') {
+    console.error(explainTakeover(plan.reason))
+    return 1
+  }
+  if (plan.kind === 'free' || !planned.ok) return null
+
+  // Ending somebody's running assistant loses whatever it was mid-turn, so it is stated before it
+  // happens rather than reported after.
+  console.log(`Closing ${plan.holder.label ?? plan.conversationId.slice(0, 8)} (pid ${plan.holder.pid}) to reopen it here…`)
+  try {
+    process.kill(plan.holder.pid!, 'SIGTERM')
+  } catch (e) {
+    console.error(`Could not close it: ${e instanceof Error ? e.message : String(e)}`)
+    return 1
+  }
+  // Wait for it to actually go. Resuming while the old one is still shutting down is the very race
+  // the harness refuses on, and it would land as another dead row.
+  for (let i = 0; i < 40; i++) {
+    await new Promise(r => setTimeout(r, 100))
+    try { process.kill(plan.holder.pid!, 0) } catch { break }
+  }
+
+  const id = newSessionId()
+  try {
+    await backend.spawn({ id, cwd: plan.cwd, argv: planned.plan.argv })
+  } catch (e) {
+    console.error(`Closed it, but could not reopen: ${e instanceof Error ? e.message : String(e)}`)
+    return 1
+  }
+  const died = await spawnFailure(backend, id)
+  if (died) { console.error(died); await backend.kill(id).catch(() => {}); return 1 }
+
+  await addSession({
+    id, harness: live.harness, cwd: plan.cwd, createdAt: new Date().toISOString(),
+    ...(live.name ? { label: live.name, labelSince: Date.now() } : {}),
+    conversationId: plan.conversationId,
+    ...(await recordedRepo(plan.cwd)),
+  })
+  return execAttach(id, backend)
+}
+
+/** Already-localized refusal — the harness's limitation said in words, never a silent no-op. */
+function explainTakeover(reason: TakeoverRefusal): string {
+  switch (reason.code) {
+    case 'resume-unsupported':
+      return `${reason.harness} cannot reopen a conversation by id, so the assistant holding it was left alone.`
+    case 'holder-unreachable':
+      return `something is holding this conversation${reason.label ? ` (${reason.label})` : ''} and agentop cannot close it.`
+    case 'no-cwd':
+      return 'this conversation has no directory to reopen in — a removed worktree, most likely.'
+  }
+}
+
+/**
+ * The LIVE conversation matching what the user typed, when there is exactly one.
+ *
+ * Matched on a prefix of the conversation id or on the session's NAME, because those are the two
+ * things on screen. Ambiguity resolves to nothing rather than to a guess: taking over the wrong
+ * conversation closes the wrong assistant.
+ */
+async function liveAgentFor(ref: string): Promise<
+  { sessionId: string; harness: HarnessId; cwd: string; pid?: number; name?: string } | null
+> {
+  try {
+    const out = Bun.spawnSync(['claude', 'agents', '--json'])
+    if (!out.success) return null
+    const needle = ref.trim().toLowerCase()
+    const hits = parseHarnessAgents(out.stdout.toString()).filter(a =>
+      a.sessionId.toLowerCase().startsWith(needle)
+      || (a.name ?? '').toLowerCase() === needle)
+    const only = hits.length === 1 ? hits[0]! : undefined
+    if (!only?.cwd) return null
+    return {
+      sessionId: only.sessionId,
+      harness: 'claude',
+      cwd: only.cwd,
+      ...(only.pid !== undefined ? { pid: only.pid } : {}),
+      ...(only.name ? { name: only.name } : {}),
+    }
+  } catch {
+    return null
+  }
 }
 
 async function kill(ref: string, backend: SessionBackend): Promise<number> {
@@ -501,7 +750,9 @@ async function kill(ref: string, backend: SessionBackend): Promise<number> {
 
 async function patch(
   ref: string,
-  fields: { label?: string; note?: string },
+  // `labelSince` is here rather than stamped inside because it belongs to `label` and to nothing
+  // else — a note carries no timestamp and must not acquire one by passing through this helper.
+  fields: { label?: string; labelSince?: number; note?: string },
   verb: string,
   backend: SessionBackend,
 ): Promise<number> {

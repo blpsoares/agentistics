@@ -8,7 +8,8 @@
  */
 
 import type { CliLang } from './lang'
-import type { TabId } from './types'
+import { dimensionWordBook, type DimensionWordBook, type SessionDimensionId, type SessionGroupingId } from './session-dimensions'
+import type { TabId, TeamMode } from './types'
 
 export interface ControlStrings {
   tagline: string
@@ -48,6 +49,10 @@ export interface ControlStrings {
   keyEnds: string
   keyRefresh: string
   keyLogSource: string
+  /** The dashboard's own two keys. Its screens are digits and `tab`, never the arrows — see
+   *  `resolveDashboardScreen` for why the shell's `←→ screens` had to survive this tab. */
+  dashView: string
+  dashFilter: string
   /**
    * The mouse's two hints, said only while there IS a mouse.
    *
@@ -132,8 +137,13 @@ export interface ControlStrings {
   actHistory: string
   actLanguage: string
   actMouse: string
-  /** Install the boot unit for the selected service — offered beside its start options. */
-  actBoot: string
+  /**
+   * Open the setup wizard — what `enter` on the config pane's mode row does.
+   *
+   * There is no `actBoot` beside it any more: the boot VERBS are composed by the host, both
+   * positions of the switch, because which unit brings a service back is a fact about the box.
+   */
+  actSetup: string
 
   stateUp: string
   stateDown: string
@@ -154,14 +164,17 @@ export interface ControlStrings {
   /** Services tab. */
   killQuestion: string
 
-  /** Setup tab. */
-  setupIntro: string
-  setupSolo: string
-  setupSoloHint: string
-  setupCentral: string
-  setupCentralHint: string
-  setupMember: string
-  setupMemberHint: string
+  /**
+   * THE SETUP WIZARD — a question the cockpit asks, not a screen of its own any more.
+   *
+   * Keyed by `TeamMode` rather than spelled out one constant per mode: `ControlStatus.setupBlocked`
+   * is keyed the same way and the menu maps over `SETUP_MODES`, so a mode added to the product
+   * fails the build here instead of compiling clean and being missing from the wizard — the same
+   * rule `HARNESS_CAPABILITIES` enforces for harnesses.
+   */
+  setupQuestion: string
+  setupMode: Record<TeamMode, string>
+  setupModeHint: Record<TeamMode, string>
   archiveUnset: string
   archiveQuestion: string
   archiveWhy: string
@@ -195,10 +208,28 @@ export interface ControlStrings {
   /** Said when the host does not implement the fleet at all — not the same as an empty fleet. */
   sessionsUnsupported: string
   /** The summary row: "3 sessions · 1 waiting on you". */
-  sessionsCount: (n: number) => string
+  /**
+   * How many rows are ON SCREEN, and out of how many the machine has.
+   *
+   * Two numbers, always, because one of them alone lies: with `only active` on, a fleet of 44 shows
+   * ten rows, and a header reading "44 sessions" over ten of them describes a screen nobody is
+   * looking at. `shown === total` is the case where the second number says nothing new, and that is
+   * the only case where it is dropped.
+   */
+  sessionsCount: (shown: number, total: number) => string
   sessionsWaitingCount: (n: number) => string
   sessionsGroupBy: string
-  sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project' | 'task' | 'repo', string>
+  /**
+   * Every dimension's name, plus the flat arrangement.
+   *
+   * `Record<SessionGroupingId, …>` on purpose: a dimension added to `session-dimensions.ts` breaks
+   * the build here until it has a word, rather than appearing in the menu under its internal id.
+   */
+  sessionsGroupings: Record<SessionGroupingId, string>
+  /** What each dimension's 'no value' bucket is called. Same reason it is a `Record`. */
+  sessionsUnfiled: Record<SessionDimensionId, string>
+  /** The band of rows the user MARKED — the filled side of the `marked` dimension. */
+  sessionsMarkedBand: string
   sessionsUnknownHarness: string
   sessionsUnknownModel: string
   sessionsUnknownProject: string
@@ -206,7 +237,7 @@ export interface ControlStrings {
   sessionsUnknownRepo: string
   sessionsWorktreeTag: string
   /** The sessions list's column headings — an unlabelled column is one you have to learn. */
-  sessionsCols: Record<'id' | 'state' | 'age' | 'title' | 'task' | 'worktree' | 'metrics' | 'harness' | 'where', string>
+  sessionsCols: Record<'id' | 'state' | 'age' | 'title' | 'task' | 'worktree' | 'metrics' | 'context' | 'harness' | 'where', string>
   /** Detail-pane field labels. */
   sessionsWhere: string
   sessionsModel: string
@@ -215,6 +246,15 @@ export interface ControlStrings {
   sessionsDoing: string
   sessionsTask: string
   sessionsMetrics: string
+  /** Detail-pane label for the context gauge spelled out. */
+  sessionsContext: string
+  /** Detail-pane label for the conversation id this row continues from. */
+  sessionsConversation: string
+  /** Grouping heading for rows whose recorded directory no longer exists on this machine. */
+  sessionsGoneProject: string
+  /** The name that did NOT win, when a session is named in agentop AND inside the harness. */
+  sessionsAlsoLabel: string
+  sessionsAlsoHarness: string
   /** Label of the detail line stating how to LEAVE an attached session. */
   sessionsDetach: string
   /** Marks a finished task's heading, and the word the toggle uses. */
@@ -224,16 +264,55 @@ export interface ControlStrings {
   sessionsPaneDetail: string
   sessionsPaneAsk: string
   sessionsPaneKeys: string
+  sessionsPaneRestore: string
+  restoreTitle: (n: number) => string
+  restoreAnswer: string
   /** What each key on the sessions screen does — the one list `ctrl+h` prints. */
   sessionsKeyWhat: {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
     note: string; task: string; mark: string; onlyActive: string; closed: string
-    exited: string; unfiled: string; group: string; detail: string; reset: string
+    exited: string; group: string; layout: string; detail: string; menuFold: string
+    reset: string
     tabs: string; help: string; quit: string
+    approve: string; prompt: string; reopenFell: string
   }
-  sessionsFinishConfirm: (task: string, count: number) => string
+  /**
+   * The finish-task confirmation.
+   *
+   * It states what finishing a task ACTUALLY does, which is hide its sessions behind a switch —
+   * nothing is stopped and nothing is deleted, and `running` is called out separately because a
+   * warning that implied otherwise would be worse than no warning at all. See `finishTask` in
+   * `cli-start.ts`.
+   */
+  sessionsFinishConfirm: (task: string, count: number, running: number) => string
   sessionsReopenConfirm: (task: string) => string
+  /** The heading over the sessions the machine took at once. */
+  sessionsFellWord: string
+  /** Said on the summary row and in the empty state: N fell, this long ago, and the key. */
+  sessionsFellNote: (count: number, ago: string) => string
+  /** The confirmation, naming how many and when. */
+  sessionsFellConfirm: (count: number, ago: string) => string
+  /**
+   * Removing a task NAME. The count is in the question because the answer turns on it — and the
+   * sentence says the sessions are KEPT, because a delete that sounded like it took them with it is
+   * one nobody would press.
+   */
+  sessionsDeleteTaskAsk: (task: string, count: number) => string
+  /** The prompt field, and the sentence above it saying where the text is going. */
+  sessionsPromptLabel: (title: string) => string
+  sessionsPromptHint: string
+  /** The approval confirmation — and its caveat, which is the whole design. */
+  sessionsApproveConfirm: (title: string) => string
+  sessionsApproveCaveat: string
+  /** Heading over the dialog lines carried into the confirmation. */
+  sessionsApproveWhat: string
+  /** Marks the option the dialog itself is highlighting, inside the picker. */
+  sessionsChoiceHighlighted: string
+  /** Fallback for a harness with no verified way to pick — the host normally supplies its own. */
+  sessionsChooseBlind: string
+  /** What DOES work when the options cannot be picked from here. */
+  sessionsChooseAttach: string
   asideProjects: string
   asideAllProjects: string
   toggleDone: string
@@ -243,6 +322,18 @@ export interface ControlStrings {
   toggleDetail: string
   /** Written on the detail pane itself: the key that puts it away. */
   sessionsDetailHide: string
+  /** The menu's layout section, and what the two layouts are called. */
+  asideLayout: string
+  sessionsLayouts: Record<'list' | 'cards', string>
+  /** The card pager: which page, and how much of the fleet is on it. */
+  sessionsPage: (page: number, pages: number) => string
+  sessionsShowing: (shown: number, total: number) => string
+  /** Card markers — said on the state line, where a row has no room for them. */
+  sessionsCardAttached: string
+  sessionsCardBlind: string
+  keySessionsLayout: string
+  keySessionsCard: string
+  keySessionsPage: string
   asideSort: string
   asideStates: string
   sessionsSorts: Record<'state' | 'name' | 'started' | 'usage' | 'project', string>
@@ -267,6 +358,12 @@ export interface ControlStrings {
   keySessionsNew: string
   keySessionsSearch: string
   keySessionsActions: string
+  keySessionsApprove: string
+  keySessionsPrompt: string
+  /** The menu fold — the plain letter, because tmux's default prefix never arrives inside a tmux. */
+  keySessionsFold: string
+  /** The two keys the restore offer answers, and nothing else. */
+  keyRestoreAnswer: string
   /** The visible action row — the same verbs the letters run, spelled out and clickable. */
   actSessions: {
     attach: string
@@ -274,9 +371,14 @@ export interface ControlStrings {
     rename: string
     note: string
     task: string
+    approve: string
+    prompt: string
     kill: string
     openTask: string
+    reopenFell: string
     finishTask: string
+    /** Removing a task NAME — the sessions under it survive, unfiled. */
+    deleteTask: string
     newSession: string
     search: string
     group: string
@@ -290,6 +392,8 @@ export interface ControlStrings {
   sessionsResumeRunning: string
   sessionsSearchLabel: string
   sessionsSearchEmpty: string
+  /** The word on a HISTORY band. Must agree with `sessionsStates` — a row saying `off` under a
+   *  band called `closed` is the same vocabulary split this collapse exists to remove. */
   sessionsClosedWord: string
   sessionsShowClosed: string
   /** The view panel: one vertical list of every choice about what the list shows. */
@@ -308,9 +412,15 @@ export interface ControlStrings {
   asideShow: string
   asideTasks: string
   asideAllTasks: string
-  toggleClosed: string
-  toggleExited: string
-  toggleUnfiled: string
+  /** ONE switch for "not running". `toggleClosed`/`toggleExited` were two names for one question. */
+  toggleHistory: string
+  /**
+   * The named-row widening, made visible.
+   *
+   * It replaced `toggleUnfiled`, which hid the task-less band only while grouping by task — that is
+   * now the task section's own "no task" row, on every dimension.
+   */
+  toggleNamed: string
   keySessionsAside: string
   /** The management view a session opens into. */
   manageTitle: (title: string) => string
@@ -337,6 +447,8 @@ export interface ControlStrings {
   wizEffort: string
   wizPrompt: string
   wizPromptHint: string
+  wizName: string
+  wizNameHint: string
   wizHow: string
   /** Said while the session is being started, so `enter` is visibly doing something. */
   wizStarting: string
@@ -366,11 +478,25 @@ export interface ControlStrings {
   sessionsKillConfirm: (title: string) => string
   /** Said when a verb is pressed on a row that cannot take it. */
   sessionsNotActionable: string
+  /** Said when the approve key is pressed on a session that is not blocked on anything. */
+  sessionsNotAsking: string
+  /** Said when "reopen what fell" is pressed and nothing did. */
+  sessionsNoFell: string
 
   /** Static tabs. */
   helpIntro: string
   cheatIntro: string
   contributeIntro: string
+  /**
+   * Why the dashboard is showing no numbers.
+   *
+   * Two sentences rather than one: `dashDown` is actionable and names the screen that starts the
+   * server, while `dashUnknown` is the honest form of a service whose state could not be read at
+   * all. Reporting the second as the first would send someone to press a button for a problem they
+   * do not have — the same N/A-versus-a-confident-0 rule the rest of this app follows.
+   */
+  dashDown: string
+  dashUnknown: string
   copyHint: string
   /** The same reminder while the mouse reports, when a plain drag no longer selects. */
   copyHintShift: string
@@ -382,7 +508,7 @@ const EN: ControlStrings = {
   tabs: {
     services: 'Services',
     sessions: 'Sessions',
-    setup: 'Setup',
+    dashboard: 'Dashboard',
     logs: 'Logs',
     cheatsheet: 'Cheat sheet',
     help: 'Help',
@@ -392,7 +518,7 @@ const EN: ControlStrings = {
   tabsShort: {
     services: 'services',
     sessions: 'sessions',
-    setup: 'setup',
+    dashboard: 'dashboard',
     logs: 'logs',
     cheatsheet: 'commands',
     help: 'help',
@@ -416,6 +542,8 @@ const EN: ControlStrings = {
   keyEnds: 'g/G ends',
   keyRefresh: 'r refresh',
   keyLogSource: '[ ] source',
+  dashView: '1-5/tab view',
+  dashFilter: 'f harness',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+drag to copy',
 
@@ -459,7 +587,7 @@ const EN: ControlStrings = {
   actHistory: 'Change',
   actLanguage: 'Switch',
   actMouse: 'Switch',
-  actBoot: 'Start at boot',
+  actSetup: 'Change…',
 
   stateUp: 'up',
   stateDown: 'stopped',
@@ -472,13 +600,13 @@ const EN: ControlStrings = {
 
   killQuestion: 'A server is already running here — stop it and start a new one?',
 
-  setupIntro: 'How this machine tracks usage, and what leaves it.',
-  setupSolo: 'solo',
-  setupSoloHint: 'local only — nothing leaves this machine',
-  setupCentral: 'central',
-  setupCentralHint: 'host the team central (Docker) here',
-  setupMember: 'member',
-  setupMemberHint: 'everything solo does, plus push metrics (never chat) to a central',
+  setupQuestion: 'How should this machine track usage, and what may leave it?',
+  setupMode: { solo: 'solo', central: 'central', member: 'member' },
+  setupModeHint: {
+    solo: 'local only — nothing leaves this machine',
+    central: 'host the team central (Docker) here',
+    member: 'everything solo does, plus push metrics (never chat) to a central',
+  },
   archiveUnset: 'not chosen yet',
   archiveQuestion: 'Preserve session history?',
   archiveWhy: 'Claude deletes session transcripts older than 30 days.',
@@ -506,7 +634,9 @@ const EN: ControlStrings = {
   sessionsEmptyFiltered: 'nothing matches · esc clears the filter',
   sessionsLoading: 'reading…',
   sessionsUnsupported: 'session management is not available on this machine.',
-  sessionsCount: (n: number) => (n === 1 ? '1 session' : `${n} sessions`),
+  sessionsCount: (shown: number, total: number) => (shown === total
+    ? (total === 1 ? '1 session' : `${total} sessions`)
+    : `${shown} of ${total} sessions`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
   sessionsGroupBy: 'GROUP',
   sessionsGroupings: {
@@ -516,7 +646,21 @@ const EN: ControlStrings = {
     harness: 'harness',
     model: 'model',
     project: 'project',
+    status: 'state',
+    marked: 'marked',
   },
+  sessionsUnfiled: {
+    harness: 'harness unknown',
+    model: 'no model recorded',
+    project: 'no directory recorded',
+    task: 'no task',
+    repo: 'no repository',
+    // Unreachable in practice — every row wears a state — but a bucket without a name is a heading
+    // the screen cannot draw, so it is named rather than left to render blank.
+    status: 'state unrecorded',
+    marked: 'not marked',
+  },
+  sessionsMarkedBand: 'marked',
   sessionsUnknownHarness: 'harness unknown',
   sessionsUnknownModel: 'no model recorded',
   sessionsUnknownProject: 'no directory recorded',
@@ -532,6 +676,9 @@ const EN: ControlStrings = {
     task: 'task',
     worktree: 'worktree',
     metrics: 'usage',
+    // The WINDOW, not "context": the cell shows how full one is, and a column headed `context`
+    // over a bar reads as "this session's context" — a thing, not a level.
+    context: 'window',
     harness: 'harness',
     where: 'project',
   },
@@ -542,12 +689,21 @@ const EN: ControlStrings = {
   sessionsDoing: 'saying',
   sessionsTask: 'task',
   sessionsMetrics: 'usage',
+  sessionsContext: 'context window',
+  sessionsConversation: 'conversation',
+  sessionsGoneProject: 'directory no longer exists',
+  sessionsAlsoLabel: 'named here',
+  sessionsAlsoHarness: 'named inside',
   sessionsDetach: 'to detach',
   sessionsDoneWord: 'finished',
   sessionsPaneMenu: 'menu',
   sessionsPaneDetail: 'detail',
   sessionsPaneAsk: 'question',
   sessionsPaneKeys: 'keys',
+  sessionsPaneRestore: 'last time',
+  restoreTitle: (n: number) =>
+    n === 1 ? 'Your last session was this one:' : `Your last ${n} sessions were these:`,
+  restoreAnswer: 'enter starts them in the background · esc leaves them closed',
   sessionsKeyWhat: {
     move: 'move the cursor',
     open: 'switch between the menu and the list',
@@ -565,23 +721,63 @@ const EN: ControlStrings = {
     onlyActive: 'show only what is running',
     closed: 'show closed conversations',
     exited: 'show sessions that ended',
-    unfiled: 'show sessions under no task',
+    layout: 'list or cards',
     group: 'change the grouping',
     detail: 'hide the detail pane',
+    menuFold: 'fold the menu away — any digit brings it back',
     reset: 'back to how the app opens',
     tabs: 'change screen',
     help: 'this list',
     quit: 'leave agentop',
+    approve: 'answer the question this session is blocked on',
+    prompt: 'send it a line without attaching',
+    reopenFell: 'reopen everything the machine took at once',
   },
-  sessionsFinishConfirm: (task, count) =>
-    `Mark "${task}" finished? Its ${count} session${count === 1 ? '' : 's'} stay listed behind the "finished tasks" switch.`,
+  // Says what finishing ACTUALLY does. It marks the task and hides its sessions behind a switch —
+  // it stops nothing — so the sentence names the count, calls out the ones still running, and names
+  // the switch that brings them back.
+  sessionsFinishConfirm: (task, count, running) =>
+    `Mark "${task}" finished? Its ${count} session${count === 1 ? '' : 's'}`
+    + `${running > 0 ? ` (${running} still running)` : ''}`
+    + (count === 1
+      ? ' is NOT stopped — it keeps running and stays'
+      : ' are NOT stopped — they keep running and stay')
+    + ' listed behind the "finished tasks" switch.',
   sessionsReopenConfirm: task => `Reopen "${task}"?`,
+  sessionsFellWord: 'fell together',
+  sessionsFellNote: (count, ago) =>
+    `${count} session${count === 1 ? '' : 's'} fell ${ago} — R reopens them`,
+  sessionsFellConfirm: (count, ago) =>
+    `Reopen the ${count} session${count === 1 ? '' : 's'} that fell ${ago}? `
+    + 'Each comes back as a new session resuming its own conversation; anything still running is left alone.',
+  sessionsDeleteTaskAsk: (task, count) => count === 0
+    ? `Remove the task "${task}"? No session is filed under it.`
+    : `Remove the task "${task}"? The ${count} session${count === 1 ? '' : 's'} filed under it `
+      + `${count === 1 ? 'is' : 'are'} KEPT — only the label goes.`,
+  sessionsPromptLabel: (title: string) => `Send to "${title}"`,
+  sessionsPromptHint: 'typed straight into the session — it reads it when it gets there',
+  sessionsApproveConfirm: (title: string) => `Send the confirm key to "${title}"?`,
+  sessionsApproveCaveat:
+    'it takes whichever option the dialog above has highlighted — read it first.',
+  sessionsApproveWhat: 'on its screen right now',
+  sessionsChoiceHighlighted: '(its default)',
+  sessionsChooseBlind: 'this dialog is a choice, and agentop cannot pick an option on this harness.',
+  sessionsChooseAttach: 'o attaches to the session, where you can answer it — esc goes back.',
   asideProjects: 'PROJECTS',
   asideAllProjects: 'every project',
   toggleDone: 'finished tasks',
   toggleActive: 'only active',
   toggleDetail: 'detail pane',
   sessionsDetailHide: 'd hides',
+  asideLayout: 'LAYOUT',
+  sessionsLayouts: { list: 'list', cards: 'cards' },
+  sessionsPage: (page, pages) => `${page} / ${pages}`,
+  sessionsShowing: (shown, total) => `${shown} of ${total}`,
+  sessionsCardAttached: 'attached',
+  sessionsCardBlind: 'approval unknown',
+  keySessionsLayout: 'ctrl+g list/cards',
+  keySessionsCard: '←→ card',
+  keySessionsPage: 'pgup/pgdn page',
   asideSort: 'ORDER',
   asideStates: 'STATE',
   sessionsSorts: {
@@ -591,9 +787,11 @@ const EN: ControlStrings = {
     'waiting-approval': 'needs approval',
     waiting: 'waiting',
     working: 'working',
-    exited: 'exited',
-    lost: 'lost',
-    closed: 'closed',
+    // ONE word for every way a session is not running — see `cli-i18n.ts`'s `sessState`, which this
+    // table has to agree with or a row reads `off` under a band called `closed`.
+    exited: 'off',
+    lost: 'off',
+    closed: 'off',
     unknown: 'external',
   },
   sessionsSearching: q => `search: ${q} · esc clears`,
@@ -612,17 +810,27 @@ const EN: ControlStrings = {
   keySessionsRename: 'n name',
   keySessionsNote: 't note',
   keySessionsNew: 'a new',
-  keySessionsSearch: '/ search',
+  keySessionsSearch: 'ctrl+f search',
   keySessionsActions: 'tab actions',
+  keySessionsApprove: 'y approve',
+  keySessionsPrompt: 'p send',
+  keySessionsFold: 'b menu',
+  keyRestoreAnswer: 'enter start · esc leave closed',
   actSessions: {
     attach: 'Attach',
     resume: 'Reopen',
+    // "Answer" rather than "Approve": the key takes whichever option is highlighted, and the verb
+    // must not promise more than the keystroke can deliver.
+    approve: 'Answer its question',
+    prompt: 'Send a prompt',
     rename: 'Rename',
     note: 'Note',
     task: 'Task',
     kill: 'Stop session',
     openTask: 'Open whole task',
+    reopenFell: 'Reopen what fell',
     finishTask: 'Finish task',
+    deleteTask: 'Delete task',
     newSession: 'New session',
     search: 'Search',
     group: 'Group',
@@ -638,7 +846,7 @@ const EN: ControlStrings = {
     'the assistant already running there is NOT stopped — close it first, or you will have two on one conversation.',
   sessionsSearchLabel: 'Search sessions and closed conversations',
   sessionsSearchEmpty: 'nothing matches.',
-  sessionsClosedWord: 'closed',
+  sessionsClosedWord: 'off',
   sessionsShowClosed: 'closed: shown',
   viewTitle: 'What this list shows',
   viewGroupBy: 'Group by',
@@ -654,9 +862,8 @@ const EN: ControlStrings = {
   asideShow: 'SHOW',
   asideTasks: 'TASKS',
   asideAllTasks: 'every task',
-  toggleClosed: 'closed conversations',
-  toggleExited: 'finished sessions',
-  toggleUnfiled: 'sessions with no task',
+  toggleHistory: 'not running',
+  toggleNamed: 'always keep named sessions',
   keySessionsAside: 'tab menu',
   manageTitle: (title: string) => `Managing "${title}"`,
   manageHint: '↑↓ move · enter run · esc back to the list',
@@ -679,6 +886,8 @@ const EN: ControlStrings = {
   wizEffort: 'Which reasoning effort?',
   wizPrompt: 'First prompt (optional)',
   wizPromptHint: 'leave empty to start with nothing typed',
+  wizName: 'Call it what?',
+  wizNameHint: 'a name of your own — enter alone derives one from the harness and the folder',
   wizHow: 'Start it how?',
   wizStarting: 'starting…',
   wizKeptDraft: 'nothing you typed was lost — esc goes back a step, or try again',
@@ -702,10 +911,14 @@ const EN: ControlStrings = {
   sessionsNotePrompt: 'Describe this session',
   sessionsKillConfirm: (title: string) => `Stop "${title}"? The assistant running in it is ended.`,
   sessionsNotActionable: 'that session was not started by agentop, so it cannot be driven from here.',
+  sessionsNotAsking: 'that session is not blocked on a question — there is nothing to answer.',
+  sessionsNoFell: 'nothing fell — no session was lost with the machine still on record.',
 
   helpIntro: 'Every command, with the flags that matter. `agentop --help` prints this plain.',
   cheatIntro: 'The commands worth remembering.',
   contributeIntro: 'Agentistics is open source — issues and pull requests welcome.',
+  dashDown: 'The agentistics server is not running, so there are no metrics to read. Start it on the services screen.',
+  dashUnknown: 'The agentistics server\u2019s state could not be read, so there are no metrics to show. The services screen says why.',
   copyHint: 'select with the mouse to copy',
   copyHintShift: 'hold shift and drag to select and copy',
 }
@@ -716,7 +929,7 @@ const PT: ControlStrings = {
   tabs: {
     services: 'Serviços',
     sessions: 'Sessões',
-    setup: 'Setup',
+    dashboard: 'Dashboard',
     logs: 'Logs',
     cheatsheet: 'Comandos',
     help: 'Ajuda',
@@ -726,7 +939,7 @@ const PT: ControlStrings = {
   tabsShort: {
     services: 'serviços',
     sessions: 'sessões',
-    setup: 'setup',
+    dashboard: 'dashboard',
     logs: 'logs',
     cheatsheet: 'comandos',
     help: 'ajuda',
@@ -750,6 +963,8 @@ const PT: ControlStrings = {
   keyEnds: 'g/G extremos',
   keyRefresh: 'r atualizar',
   keyLogSource: '[ ] fonte',
+  dashView: '1-5/tab tela',
+  dashFilter: 'f assistente',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+arrastar copia',
 
@@ -791,7 +1006,7 @@ const PT: ControlStrings = {
   actHistory: 'Mudar',
   actLanguage: 'Trocar',
   actMouse: 'Trocar',
-  actBoot: 'Iniciar no boot',
+  actSetup: 'Mudar…',
 
   stateUp: 'no ar',
   stateDown: 'parado',
@@ -804,13 +1019,13 @@ const PT: ControlStrings = {
 
   killQuestion: 'Já existe um servidor rodando aqui — parar e iniciar outro?',
 
-  setupIntro: 'Como esta máquina registra o uso, e o que sai dela.',
-  setupSolo: 'solo',
-  setupSoloHint: 'só local — nada sai desta máquina',
-  setupCentral: 'central',
-  setupCentralHint: 'hospedar a central do time (Docker) aqui',
-  setupMember: 'member',
-  setupMemberHint: 'tudo que o solo faz, e ainda envia métricas (nunca chat) para uma central',
+  setupQuestion: 'Como esta máquina deve registrar o uso, e o que pode sair dela?',
+  setupMode: { solo: 'solo', central: 'central', member: 'member' },
+  setupModeHint: {
+    solo: 'só local — nada sai desta máquina',
+    central: 'hospedar a central do time (Docker) aqui',
+    member: 'tudo que o solo faz, e ainda envia métricas (nunca chat) para uma central',
+  },
   archiveUnset: 'ainda não escolhido',
   archiveQuestion: 'Preservar o histórico de sessões?',
   archiveWhy: 'O Claude apaga transcrições de sessão com mais de 30 dias.',
@@ -838,7 +1053,9 @@ const PT: ControlStrings = {
   sessionsEmptyFiltered: 'nada corresponde · esc limpa o filtro',
   sessionsLoading: 'lendo…',
   sessionsUnsupported: 'gerenciamento de sessões não está disponível nesta máquina.',
-  sessionsCount: (n: number) => (n === 1 ? '1 sessão' : `${n} sessões`),
+  sessionsCount: (shown: number, total: number) => (shown === total
+    ? (total === 1 ? '1 sessão' : `${total} sessões`)
+    : `${shown} de ${total} sessões`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
   sessionsGroupBy: 'AGRUPAR',
   sessionsGroupings: {
@@ -848,7 +1065,19 @@ const PT: ControlStrings = {
     harness: 'harness',
     model: 'modelo',
     project: 'projeto',
+    status: 'estado',
+    marked: 'marcadas',
   },
+  sessionsUnfiled: {
+    harness: 'harness desconhecido',
+    model: 'sem modelo registrado',
+    project: 'sem diretório registrado',
+    task: 'sem tarefa',
+    repo: 'sem repositório',
+    status: 'estado não registrado',
+    marked: 'não marcadas',
+  },
+  sessionsMarkedBand: 'marcadas',
   sessionsUnknownHarness: 'harness desconhecido',
   sessionsUnknownModel: 'sem modelo registrado',
   sessionsUnknownProject: 'sem diretório registrado',
@@ -863,6 +1092,7 @@ const PT: ControlStrings = {
     task: 'tarefa',
     worktree: 'worktree',
     metrics: 'uso',
+    context: 'janela',
     harness: 'harness',
     where: 'projeto',
   },
@@ -873,12 +1103,21 @@ const PT: ControlStrings = {
   sessionsDoing: 'dizendo',
   sessionsTask: 'tarefa',
   sessionsMetrics: 'uso',
+  sessionsContext: 'janela de contexto',
+  sessionsConversation: 'conversa',
+  sessionsGoneProject: 'diretório não existe mais',
+  sessionsAlsoLabel: 'nome daqui',
+  sessionsAlsoHarness: 'nome de dentro',
   sessionsDetach: 'para sair',
   sessionsDoneWord: 'finalizada',
   sessionsPaneMenu: 'menu',
   sessionsPaneDetail: 'detalhe',
   sessionsPaneAsk: 'pergunta',
   sessionsPaneKeys: 'teclas',
+  sessionsPaneRestore: 'da última vez',
+  restoreTitle: (n: number) =>
+    n === 1 ? 'Sua última sessão foi esta:' : `Suas últimas ${n} sessões foram estas:`,
+  restoreAnswer: 'enter inicia em background · esc deixa fechadas',
   sessionsKeyWhat: {
     move: 'move o cursor',
     open: 'alterna entre o menu e a lista',
@@ -896,23 +1135,62 @@ const PT: ControlStrings = {
     onlyActive: 'mostra só o que está rodando',
     closed: 'mostra conversas fechadas',
     exited: 'mostra sessões encerradas',
-    unfiled: 'mostra sessões sem tarefa',
+    layout: 'lista ou cards',
     group: 'muda o agrupamento',
     detail: 'oculta o painel de detalhe',
+    menuFold: 'recolhe o menu — qualquer dígito traz de volta',
     reset: 'volta para como o app abre',
     tabs: 'muda de tela',
     help: 'esta lista',
     quit: 'sai do agentop',
+    approve: 'responde a pergunta que travou a sessão',
+    prompt: 'envia uma linha para ela sem anexar',
+    reopenFell: 'reabre tudo que a máquina levou de uma vez',
   },
-  sessionsFinishConfirm: (task, count) =>
-    `Finalizar "${task}"? Suas ${count} sessõe${count === 1 ? '' : 's'} continuam listadas atrás do interruptor "tarefas finalizadas".`,
+  sessionsFinishConfirm: (task, count, running) =>
+    `Finalizar "${task}"? ${count === 1 ? 'A sessão dela' : `As ${count} sessões dela`}`
+    + `${running > 0 ? ` (${running} ainda rodando)` : ''}`
+    + (count === 1
+      ? ' NÃO é encerrada — continua rodando e fica listada'
+      : ' NÃO são encerradas — continuam rodando e ficam listadas')
+    + ' atrás do interruptor "tarefas finalizadas".',
   sessionsReopenConfirm: task => `Reabrir "${task}"?`,
+  sessionsFellWord: 'caíram juntas',
+  sessionsFellNote: (count, ago) =>
+    (count === 1 ? `1 sessão caiu ${ago} — R reabre` : `${count} sessões caíram ${ago} — R reabre todas`),
+  sessionsFellConfirm: (count, ago) =>
+    (count === 1
+      ? `Reabrir a sessão que caiu ${ago}? `
+      : `Reabrir as ${count} sessões que caíram ${ago}? `)
+    + 'Cada uma volta como uma sessão nova retomando a própria conversa; o que ainda estiver rodando fica como está.',
+  sessionsDeleteTaskAsk: (task, count) => count === 0
+    ? `Remover a tarefa "${task}"? Nenhuma sessão está sob ela.`
+    : `Remover a tarefa "${task}"? ${count === 1 ? 'A sessão' : `As ${count} sessões`} sob ela `
+      + `${count === 1 ? 'é MANTIDA' : 'são MANTIDAS'} — some só o rótulo.`,
+  sessionsPromptLabel: (title: string) => `Enviar para "${title}"`,
+  sessionsPromptHint: 'digitado direto na sessão — ela lê quando chegar lá',
+  sessionsApproveConfirm: (title: string) => `Enviar a tecla de confirmação para "${title}"?`,
+  sessionsApproveCaveat:
+    'ela pega a opção que o diálogo acima está destacando — leia antes.',
+  sessionsApproveWhat: 'na tela dela agora',
+  sessionsChoiceHighlighted: '(o padrão dela)',
+  sessionsChooseBlind: 'esse diálogo é uma escolha, e o agentop não sabe selecionar uma opção neste harness.',
+  sessionsChooseAttach: 'o anexa na sessão, onde dá para responder — esc volta.',
   asideProjects: 'PROJETOS',
   asideAllProjects: 'todos os projetos',
   toggleDone: 'tarefas finalizadas',
   toggleActive: 'apenas ativas',
   toggleDetail: 'painel de detalhe',
   sessionsDetailHide: 'd oculta',
+  asideLayout: 'FORMATO',
+  sessionsLayouts: { list: 'lista', cards: 'cards' },
+  sessionsPage: (page, pages) => `${page} / ${pages}`,
+  sessionsShowing: (shown, total) => `${shown} de ${total}`,
+  sessionsCardAttached: 'anexada',
+  sessionsCardBlind: 'aprovação incerta',
+  keySessionsLayout: 'ctrl+g lista/cards',
+  keySessionsCard: '←→ card',
+  keySessionsPage: 'pgup/pgdn página',
   asideSort: 'ORDENAR',
   asideStates: 'ESTADO',
   sessionsSorts: {
@@ -920,11 +1198,15 @@ const PT: ControlStrings = {
   },
   sessionsStates: {
     'waiting-approval': 'precisa aprovação',
-    waiting: 'aguardando',
+    // The same word the state COLUMN shows (`cli-i18n.ts`'s `sessState.waiting`). Two tables of one
+    // vocabulary, and the sessions screen draws from both at once — the column from the host, the
+    // band heading and the filter row from here. They have to say the same thing or the row reads
+    // `aguardando resposta` under a band called `aguardando`.
+    waiting: 'aguardando resposta',
     working: 'trabalhando',
-    exited: 'encerrada',
-    lost: 'perdida',
-    closed: 'fechada',
+    exited: 'desligada',
+    lost: 'desligada',
+    closed: 'desligada',
     unknown: 'externa',
   },
   sessionsSearching: q => `busca: ${q} · esc limpa`,
@@ -943,17 +1225,27 @@ const PT: ControlStrings = {
   keySessionsRename: 'n nomear',
   keySessionsNote: 't nota',
   keySessionsNew: 'a nova',
-  keySessionsSearch: '/ buscar',
+  keySessionsSearch: 'ctrl+f buscar',
   keySessionsActions: 'tab ações',
+  keySessionsApprove: 'y aprovar',
+  keySessionsPrompt: 'p enviar',
+  keySessionsFold: 'b menu',
+  keyRestoreAnswer: 'enter inicia · esc deixa fechadas',
   actSessions: {
     attach: 'Anexar',
     resume: 'Reabrir',
+    // "Responder", não "Aprovar": a tecla pega a opção destacada, e o verbo não pode prometer mais
+    // do que a tecla entrega.
+    approve: 'Responder a pergunta',
+    prompt: 'Enviar prompt',
     rename: 'Renomear',
     note: 'Nota',
     task: 'Tarefa',
     kill: 'Encerrar sessão',
     openTask: 'Abrir tarefa toda',
+    reopenFell: 'Reabrir o que caiu',
     finishTask: 'Finalizar tarefa',
+    deleteTask: 'Apagar tarefa',
     newSession: 'Nova sessão',
     search: 'Buscar',
     group: 'Agrupar',
@@ -969,7 +1261,7 @@ const PT: ControlStrings = {
     'o assistente que já roda ali NÃO é encerrado — feche ele antes, ou você fica com dois na mesma conversa.',
   sessionsSearchLabel: 'Buscar sessões e conversas fechadas',
   sessionsSearchEmpty: 'nada corresponde.',
-  sessionsClosedWord: 'fechada',
+  sessionsClosedWord: 'desligada',
   sessionsShowClosed: 'fechadas: visíveis',
   viewTitle: 'O que esta lista mostra',
   viewGroupBy: 'Agrupar por',
@@ -985,9 +1277,8 @@ const PT: ControlStrings = {
   asideShow: 'MOSTRAR',
   asideTasks: 'TAREFAS',
   asideAllTasks: 'todas as tarefas',
-  toggleClosed: 'conversas fechadas',
-  toggleExited: 'sessões encerradas',
-  toggleUnfiled: 'sessões sem tarefa',
+  toggleHistory: 'não estão rodando',
+  toggleNamed: 'sempre manter sessões nomeadas',
   keySessionsAside: 'tab menu',
   manageTitle: (title: string) => `Gerenciando "${title}"`,
   manageHint: '↑↓ mover · enter executar · esc voltar à lista',
@@ -1010,6 +1301,8 @@ const PT: ControlStrings = {
   wizEffort: 'Qual nível de raciocínio?',
   wizPrompt: 'Primeiro prompt (opcional)',
   wizPromptHint: 'deixe vazio para começar sem nada digitado',
+  wizName: 'Chamar de quê?',
+  wizNameHint: 'um nome seu — enter vazio deriva um do harness e da pasta',
   wizHow: 'Iniciar como?',
   wizStarting: 'iniciando…',
   wizKeptDraft: 'nada do que você digitou foi perdido — esc volta um passo, ou tente de novo',
@@ -1033,10 +1326,14 @@ const PT: ControlStrings = {
   sessionsNotePrompt: 'Descreva esta sessão',
   sessionsKillConfirm: (title: string) => `Encerrar "${title}"? O assistente que roda nela é finalizado.`,
   sessionsNotActionable: 'essa sessão não foi iniciada pelo agentop, então não dá para controlá-la daqui.',
+  sessionsNotAsking: 'essa sessão não está travada em uma pergunta — não há o que responder.',
+  sessionsNoFell: 'nada caiu — nenhuma sessão foi perdida com registro de que estava viva.',
 
   helpIntro: 'Todos os comandos, com as flags que importam. `agentop --help` imprime isto puro.',
   cheatIntro: 'Os comandos que vale a pena lembrar.',
   contributeIntro: 'Agentistics é open source — issues e pull requests são bem-vindos.',
+  dashDown: 'O servidor agentistics não está rodando, então não há métricas para ler. Suba-o na tela de serviços.',
+  dashUnknown: 'Não foi possível ler o estado do servidor agentistics, então não há métricas para mostrar. A tela de serviços diz por quê.',
   copyHint: 'selecione com o mouse para copiar',
   copyHintShift: 'segure shift e arraste para selecionar e copiar',
 }
@@ -1045,4 +1342,29 @@ const TABLE: Record<CliLang, ControlStrings> = { en: EN, pt: PT }
 
 export function controlStrings(lang: CliLang): ControlStrings {
   return TABLE[lang] ?? EN
+}
+
+/**
+ * The dimension word book for one language — the ONE place the strings are wired to the table.
+ *
+ * Every surface that groups or filters (the cockpit, `agentop session ls`) calls this rather than
+ * assembling its own: two assemblies is two chances for a band and the chip that selects it to be
+ * called different things, which is the whole defect the dimension table exists to remove.
+ */
+export function sessionWordBook(c: ControlStrings): DimensionWordBook {
+  return dimensionWordBook({
+    labels: {
+      status: c.sessionsGroupings.status,
+      harness: c.sessionsGroupings.harness,
+      model: c.sessionsGroupings.model,
+      project: c.sessionsGroupings.project,
+      repo: c.sessionsGroupings.repo,
+      task: c.sessionsGroupings.task,
+      marked: c.sessionsGroupings.marked,
+    },
+    unfiled: c.sessionsUnfiled,
+    states: c.sessionsStates,
+    goneProject: c.sessionsGoneProject,
+    marked: c.sessionsMarkedBand,
+  })
 }

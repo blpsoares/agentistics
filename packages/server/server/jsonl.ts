@@ -82,6 +82,42 @@ export function isHumanUserEntry(e: Record<string, unknown>): boolean {
  * no per-turn timing, so the value has to come from the transcript, and that path deliberately
  * does not run the full parser.
  */
+/**
+ * The context one `usage` record says was SENT — PURE.
+ *
+ * The three INPUT-side counters are the prompt: `input_tokens` is the uncached remainder and the
+ * two cache figures are the rest of the same prefix. `output_tokens` is excluded — it came back,
+ * it was not sent. `0` for a record with no input side, which callers read as "no reading" rather
+ * than as an empty context.
+ */
+export function contextOfUsage(u: Record<string, number> | undefined): number {
+  if (!u) return 0
+  return (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0)
+}
+
+/**
+ * The LAST context reading in a Claude transcript — PURE, `undefined` when there is none.
+ *
+ * A sibling of `activeMinutesFromClaudeJsonl` and for the same reason: `session-meta` is the
+ * preferred source and serves most Claude sessions, so a metric that exists only inside
+ * `parseSessionJsonl` is a metric most sessions never get. That is the exact bug the comment on
+ * the active-time branch in `data.ts` records; this function is what keeps the gauge out of it.
+ */
+export function contextTokensFromClaudeJsonl(lines: string[]): number | undefined {
+  let last = 0
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) continue
+    let e: Record<string, unknown>
+    try { e = JSON.parse(line) } catch { continue }
+    if (e.type !== 'assistant') continue
+    const msg = e.message as Record<string, unknown> | undefined
+    const sent = contextOfUsage(msg?.usage as Record<string, number> | undefined)
+    if (sent > 0) last = sent
+  }
+  return last > 0 ? last : undefined
+}
+
 export function activeMinutesFromClaudeJsonl(lines: string[]): number | undefined {
   const events: TurnEvent[] = []
   for (const raw of lines) {
@@ -160,6 +196,17 @@ export async function parseSessionJsonl(
   let cwd = '', lastCwd = '', startTime = '', lastTime = '', firstPrompt = '', modelId = '', sessionTitle = ''
   let userMsgs = 0, assistantMsgs = 0, inputTokens = 0, outputTokens = 0
   let cacheReadTokens = 0, cacheCreationTokens = 0
+  /**
+   * How full the window was on the LAST turn — a gauge, reassigned rather than accumulated.
+   *
+   * The three input-side counters of one `usage` record ARE the prompt that turn sent: `input_tokens`
+   * is the uncached remainder, and the two cache figures are the rest of the same prefix (see
+   * `prompt-caching`: total prompt = input + cache_creation + cache_read). `output_tokens` is
+   * deliberately excluded — it is what came back, not what was sent.
+   *
+   * Verified on a real transcript (2026-08-14, claude 2.1.232): 2 + 1.380 + 211.577 = 212.959.
+   */
+  let contextTokens = 0
   let gitCommits = 0, gitPushes = 0
   let toolErrors = 0, userInterruptions = 0
   let hasMcp = false
@@ -283,6 +330,10 @@ export async function parseSessionJsonl(
         outputTokens        += u.output_tokens ?? 0
         cacheReadTokens     += u.cache_read_input_tokens ?? 0
         cacheCreationTokens += u.cache_creation_input_tokens ?? 0
+        // LAST wins, and only when the record actually carries an input side. A synthetic record of
+        // all zeros would otherwise reset a real reading to "context empty" on the final turn.
+        const sent = contextOfUsage(u)
+        if (sent > 0) contextTokens = sent
       }
       // Collect tool names in this message for token attribution
       const toolsInMessage: string[] = []
@@ -386,6 +437,9 @@ export async function parseSessionJsonl(
     output_tokens: outputTokens,
     cache_read_input_tokens: cacheReadTokens,
     cache_creation_input_tokens: cacheCreationTokens,
+    // Absent rather than zero when nothing was measured — a confident "0% of the window" on a
+    // session that simply recorded no usage is the same lie `HARNESS_CAPABILITIES` prevents.
+    ...(contextTokens > 0 ? { context_tokens: contextTokens } : {}),
     first_prompt: firstPrompt,
     title: sessionTitle || undefined,
     user_interruptions: userInterruptions,

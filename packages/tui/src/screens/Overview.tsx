@@ -6,6 +6,7 @@ import { harnessRows, overviewTotals, activitySeries } from '../selectors'
 import { Kpi, KpiRow, BarRow, Section, Empty } from '../components/Primitives'
 import { Sparkline } from '../components/Sparkline'
 import { COLORS, HARNESS_COLOR, HARNESS_LABEL } from '../theme'
+import { overviewPlan } from '../dashboard/view'
 import type { TuiStrings } from '../i18n'
 
 const ACTIVITY_DAYS = 30
@@ -38,10 +39,12 @@ export function fitKpis(kpis: KpiSpec[], width: number): KpiSpec[] {
   return out
 }
 
-export function Overview({ data, s, width, streak }: {
+export function Overview({ data, s, width, height, streak }: {
   data: AppData
   s: TuiStrings
   width: number
+  /** Rows this screen may use. It is drawn inside a pane now, so it is not the terminal's. */
+  height: number
   streak: number
 }) {
   const totals = overviewTotals(data)
@@ -69,23 +72,33 @@ export function Overview({ data, s, width, streak }: {
     width,
   )
 
+  // What this screen can afford: the KPI row stays, the sparkline is the first thing to go, and the
+  // harness bars are trimmed last. See `overviewPlan` for why that order and not another.
+  const plan = overviewPlan(height, rows.length)
+  const bars = rows.slice(0, plan.bars)
+
   return (
     <Box flexDirection="column">
-      <KpiRow>
-        {visibleKpis.map(k => (
-          <Kpi key={k.label} label={k.label} value={k.value} color={k.color} width={k.width} />
-        ))}
-      </KpiRow>
+      {plan.kpis && (
+        <KpiRow>
+          {visibleKpis.map(k => (
+            <Kpi key={k.label} label={k.label} value={k.value} color={k.color} width={k.width} />
+          ))}
+        </KpiRow>
+      )}
 
-      <Section title={s.activity30d}>
-        <Sparkline values={series} color={COLORS.accent} />
-      </Section>
+      {plan.activity && (
+        <Section title={s.activity30d}>
+          <Sparkline values={series} color={COLORS.accent} />
+        </Section>
+      )}
 
+      {(plan.empty || plan.bars > 0) && (
       <Section title={s.harnesses}>
-        {rows.length === 0 ? (
+        {plan.empty ? (
           <Empty message={s.empty} />
         ) : (
-          rows.map((r, i) => (
+          bars.map((r, i) => (
             <BarRow
               key={r.harness}
               label={HARNESS_LABEL[r.harness]}
@@ -98,6 +111,7 @@ export function Overview({ data, s, width, streak }: {
           ))
         )}
       </Section>
+      )}
     </Box>
   )
 }

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test'
 import {
   LIST_FORMAT, attachArgs, capturePaneArgs, idFromTmuxName, isSessionGoneError, killSessionArgs,
-  newSessionArgs, parsePrefix, parseTmuxList, sendKeysEnterArgs, sendKeysLiteralArgs, trimCapture,
+  newSessionArgs, parsePrefix, parseTmuxList, sendKeysEnterArgs, sendKeysLiteralArgs,
+  sendKeysNamedArgs, trimCapture,
   tmuxName,
   serverOptionsArgs, HISTORY_LIMIT,
 } from './tmux-cli'
@@ -34,6 +35,19 @@ describe('the other argv builders', () => {
     expect(sendKeysLiteralArgs('a1', 'hello there')).toEqual(['-L', 'agentop', 'send-keys', '-t', 'agentop-a1', '-l', 'hello there'])
     expect(sendKeysEnterArgs('a1')).toEqual(['-L', 'agentop', 'send-keys', '-t', 'agentop-a1', 'Enter'])
     expect(attachArgs('a1')).toEqual(['tmux', '-L', 'agentop', 'attach-session', '-t', 'agentop-a1'])
+  })
+
+  it('sends a NAMED key without -l, which is the opposite of sending text', () => {
+    // Getting these two the wrong way round fails silently: `send-keys -l Enter` types the five
+    // characters `E n t e r` into the assistant's prompt and reports success.
+    expect(sendKeysNamedArgs('a1', 'Enter')).toEqual(['-L', 'agentop', 'send-keys', '-t', 'agentop-a1', 'Enter'])
+    expect(sendKeysNamedArgs('a1', 'Escape')).toEqual(['-L', 'agentop', 'send-keys', '-t', 'agentop-a1', 'Escape'])
+    expect(sendKeysNamedArgs('a1', 'Enter')).not.toContain('-l')
+    expect(sendKeysLiteralArgs('a1', 'Enter')).toContain('-l')
+  })
+
+  it('builds the Enter argv through the named one, so there is a single answer', () => {
+    expect(sendKeysEnterArgs('a1')).toEqual(sendKeysNamedArgs('a1', 'Enter'))
   })
 })
 

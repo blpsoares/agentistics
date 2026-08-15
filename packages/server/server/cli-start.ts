@@ -29,6 +29,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
@@ -59,8 +60,10 @@ import type {
   ProjectOption,
   ResumeSessionRequest,
   StartOption,
+  BootOption,
   TabId,
   StartRequest,
+  RestoreCandidate,
 } from '@agentistics/tui/control'
 import { DEFAULT_SESSION_VIEW } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
@@ -78,7 +81,13 @@ import {
 import { createLineDecoder } from '@agentistics/tui/control/stream'
 import { ensureArchiveModeChosen } from './cli-setup'
 import { memberConnect, memberLeave } from './cli-member'
-import { enableAutostart, type AutostartMode } from './autostart'
+import {
+  disableAutostart,
+  enableAutostart,
+  serviceCommandFor,
+  unitName,
+  type AutostartMode,
+} from './autostart'
 import { confirm } from './cli-ui'
 import { CURRENT_VERSION, getVersionInfo } from './version'
 import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
@@ -88,17 +97,43 @@ import { resolveBackend } from './sessions'
 import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
 import { findProjects } from './sessions/project-source'
 import { candidatePath } from './sessions/project-search'
-import { repoFacts } from './sessions/repo-facts'
+import { recordedRepo, repoFacts } from './sessions/repo-facts'
 // The `SessionView` -> `ControlSession` mapping, extracted so `agentop session ls` draws the same
 // rows from the same decision rather than mapping the fleet a second time.
 import { toControlSession } from './sessions/control-session'
-import { planTaskReopen, taskReopenSucceeded } from './sessions/task-reopen'
-import type { SpawnPlanError } from './sessions/types'
-import { addSession, newSessionId, patchSession, readRegistry, removeSession } from './sessions/registry'
+import { planTaskReopen, taskReopenSucceeded, type TaskReopenPlan } from './sessions/task-reopen'
+import { approvalFor, choiceKey } from './sessions/approval-spec'
+import { needsChoice, parseDialogOptions } from './sessions/dialog-choice'
+import { rulesFor } from './sessions/attention-rules'
+import { planCrashGroup, planFellOffer } from './sessions/crash-group'
+import { loadHarnessSessions } from './sessions/harness-sessions'
+import { idleServers, isServerCommand } from './idle-servers'
+import { planTaskDelete, taskDeleteIsNoop } from './sessions/task-delete'
+import { memoryBudget } from './sessions/memory-budget'
+import { readMemory, readRss } from './sessions/memory-probe'
+// The lock on the door: one conversation, one live session. See `conversation-claim.ts` for the
+// measurement that made it necessary, and `live-claims.ts` for the evidence it is allowed to use.
+import { conversationHeldBy } from './sessions/conversation-claim'
+import { liveConversationHolders } from './sessions/live-claims'
+import type { ManagedSession, SpawnPlanError } from './sessions/types'
+import {
+  addSession, newSessionId, patchSession, readRegistry, removeSession, touchSessions,
+} from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
 import { conversationForProcess, forgetConversations, loadConversations } from './sessions/conversations'
 
 export type StartResult = number | 'foreground'
+
+/**
+ * How much of the pane to re-read before writing into a session.
+ *
+ * The same depth the poller captures with, and for the same reason: the approval rules are matched
+ * against a frame, and matching them against a shallower one would make a dialog that scrolled its
+ * footer just off the top read as no dialog at all — which on this path means typing a sentence into
+ * an open menu.
+ */
+const SEND_CAPTURE_LINES = 60
+
 
 // ANSI, for the output this module still writes to the REAL terminal: the suspended commands,
 // the foreground handover and the non-interactive `agentop restart --all`.
@@ -372,6 +407,88 @@ function restartOptionsFor(
 }
 
 /**
+ * One way a service can be registered to come back, as this box currently finds it.
+ *
+ * A mechanism is a systemd USER UNIT, and `agentistics` has two of them — `agentop-server` runs the
+ * binary, `agentop-machine` runs `docker compose … up -d` — which is exactly why the boot switch
+ * cannot be one flag on the service: turning "boot" off for a machine that registered the container
+ * would have removed the native unit and left the container coming back.
+ */
+export interface BootMechanism {
+  /** The full unit name, e.g. `agentop-central.service`. NAMED in every sentence it produces. */
+  unit: string
+  /** Which runtime it brings back, handed straight back to `enableBoot`/`disableBoot`. */
+  runtime?: RuntimeId
+  /** The word that distinguishes it on a verb (`native`, `docker`), or '' when there is only one. */
+  mech: string
+  /** Registered right now. The ONLY thing that decides whether the verb is "on" or "off". */
+  on: boolean
+  /**
+   * Whether the unit could be WRITTEN here — its `ExecStart` needs a file that only a repo checkout
+   * has (`central.sh`, `docker-compose.machine.yml`). False means no enable verb is offered, rather
+   * than one that writes a unit systemd would then restart every five seconds forever.
+   */
+  installable: boolean
+}
+
+/**
+ * The boot verbs a service offers — PURE, one per mechanism, and never both positions of the same
+ * switch.
+ *
+ * `supported` is the platform answer and it is all-or-nothing: `enableAutostart` writes a systemd
+ * user unit and macOS/Windows are not wired up at all, so there the list is EMPTY. That is the same
+ * absence-is-absence rule `ControlService.boot` follows — a verb that refuses on principle is worse
+ * than a missing one, and the detail pane is already silent about boot on those platforms.
+ */
+export function bootOptionsFor(
+  mechs: readonly BootMechanism[],
+  s: CliStrings,
+  supported: boolean,
+  /** The service's own name, for the sentence asked right after a stop. */
+  serviceLabel = '',
+): BootOption[] {
+  if (!supported) return []
+  const out: BootOption[] = []
+  for (const m of mechs) {
+    if (m.on) {
+      out.push({
+        runtime: m.runtime,
+        enable: false,
+        label: s.optBootOff(m.mech),
+        hint: s.optBootOffHint,
+        confirm: s.bootConfirmOff(m.unit),
+        confirmAfterStop: s.bootAfterStop(serviceLabel, m.unit),
+      })
+      continue
+    }
+    if (!m.installable) continue
+    out.push({
+      runtime: m.runtime,
+      enable: true,
+      label: s.optBootOn(m.mech),
+      hint: s.optBootOnHint,
+      confirm: s.bootConfirmOn(m.unit),
+    })
+  }
+  return out
+}
+
+/**
+ * Which autostart MODE a boot verb on this service means — PURE, and shared by both halves of the
+ * switch so `enableBoot` and `disableBoot` can never resolve the same press differently.
+ *
+ * `agentistics` boots as the native server by default: the verb offered while nothing is running
+ * has always meant that. `runtime: 'machine'` is the ONE case that means something else — the
+ * container's unit runs `docker compose … up -d`, so writing (or removing) a native unit there
+ * would act on a mechanism that does not match what the user pointed at. `central` has exactly one
+ * mechanism regardless of `runtime`.
+ */
+export function bootModeFor(service: ServiceId, runtime?: RuntimeId): AutostartMode {
+  if (service === 'central') return 'central'
+  return runtime === 'machine' ? 'machine' : 'server'
+}
+
+/**
  * One logical service, assembled from the runtimes it could be running under.
  *
  * PURE — states and strings in, the value the screen draws out — because every judgement worth
@@ -390,7 +507,17 @@ export function buildService(
    * cannot ask — or a platform with no user systemd — produces a service that says nothing about
    * boot rather than one that says "no", and offers no rebuild rather than one that cannot work.
    */
-  facts: { boot?: BootState; rebuild?: RebuildAbility; centralPlan?: CentralStartPlan } = {},
+  facts: {
+    boot?: BootState
+    /** The unit `boot` is describing. Carried so the pane can NAME what brings the service back. */
+    bootUnit?: string
+    /** Every registration this box can change. Empty on a platform with no user systemd. */
+    bootOptions?: BootOption[]
+    rebuild?: RebuildAbility
+    centralPlan?: CentralStartPlan
+    /** Pids of extra copies of this service that hold no port — see `idle-servers.ts`. */
+    idlePids?: number[]
+  } = {},
 ): ControlService {
   const up = runtimes.filter(r => r.state === 'up')
   const { state, reason } = aggregateState(runtimes)
@@ -402,8 +529,15 @@ export function buildService(
     running: up.map(r => r.id),
     active: up[0],
     boot: facts.boot,
+    // Only ever beside a state: a unit name under no state would be a fact about a question nobody
+    // could answer.
+    bootUnit: facts.boot ? facts.bootUnit : undefined,
+    bootOptions: facts.bootOptions ?? [],
     // Named, not merely coloured, and never reduced to whichever copy we happened to find first.
     conflict: up.length > 1 ? s.svcConflict(up.map(r => r.kind)) : undefined,
+    // Two processes of the ONE runtime — invisible to every runtime probe, because they all ask
+    // which pid holds the port. See `idle-servers.ts` for the seventy-minute incident.
+    idle: facts.idlePids?.length ? s.svcIdleServer(facts.idlePids) : undefined,
     reason,
     // The single most important line in the model: while anything is up there is nothing to start.
     startOptions: up.length > 0
@@ -621,6 +755,31 @@ async function nativeServerFacts(): Promise<ProcessFacts> {
   const pid = Number((await listeningServerPids())[0])
   if (!Number.isInteger(pid) || pid <= 0) return {}
   return { pid, startedAt: await processStartedAt(pid) }
+}
+
+/**
+ * Server processes that hold NO port — the copies every runtime probe is blind to.
+ *
+ * `lsof -sTCP:LISTEN` can only ever find the process that won the port, so a second server is
+ * invisible to `nativeServerFacts` by construction while it burns a core on the file watcher. This
+ * asks the process table instead and subtracts the listener and ourselves.
+ *
+ * Empty on any failure, including a platform with no `ps`: an unreadable process table is "cannot
+ * tell", and a warning invented out of one would appear on machines nobody could ask.
+ */
+async function idleServerPids(): Promise<number[]> {
+  try {
+    const ps = await sh(['ps', '-eo', 'pid=,args='])
+    const processes = ps.out.split('\n')
+      .map(line => /^\s*(\d+)\s+(.*)$/.exec(line.trim()))
+      .filter((m): m is RegExpExecArray => m !== null)
+      .map(m => ({ pid: Number(m[1]), command: m[2]! }))
+      .filter(p => isServerCommand(p.command))
+    const listening = (await listeningServerPids()).map(Number).filter(n => Number.isInteger(n) && n > 0)
+    return idleServers({ processes, listening, self: process.pid }).idle.map(p => p.pid)
+  } catch {
+    return []
+  }
 }
 
 async function stopLocal(s: CliStrings): Promise<void> {
@@ -1171,7 +1330,13 @@ let sessionsPoller: SessionsPoller | null = null
 async function ensureSessionsPoller(): Promise<SessionsPoller> {
   if (sessionsPoller) return sessionsPoller
   const backend = await resolveBackend()
-  sessionsPoller = createSessionsPoller({ backend, readRegistry, scanProcesses, loadConversations })
+  sessionsPoller = createSessionsPoller({
+    backend, readRegistry, scanProcesses, loadConversations, touchSessions,
+    loadHarnessSessions,
+    // Written once per session, not once per poll — the poller only calls this when the harness's
+    // own record disagrees with the registry.
+    recordConversation: (id, conversationId) => patchSession(id, { conversationId }),
+  })
   return sessionsPoller
 }
 
@@ -1236,6 +1401,9 @@ async function spawnManaged(req: {
     ...(req.prompt ? { prompt: req.prompt } : {}),
     ...(req.model ? { model: req.model } : {}),
     ...(req.effort ? { effort: req.effort } : {}),
+    // Offered for a FRESH session; `planSpawn` applies it only where the CLI accepts one and reports
+    // back what it actually did. A resume ignores it — that conversation already has an id.
+    conversationId: randomUUID(),
   })
   if (!planned.ok) return { ok: false, message: explainSpawnError(planned.error, s) }
 
@@ -1256,10 +1424,23 @@ async function spawnManaged(req: {
     harness: req.harness,
     cwd: req.cwd,
     createdAt: new Date().toISOString(),
+    // Stamped at birth, not left to the first heartbeat: a session started and lost inside the same
+    // minute would otherwise carry no evidence it was ever alive, and would sit out the very crash
+    // it was part of. See `crash-group.ts`.
+    lastSeenMs: Date.now(),
     ...(req.model ? { model: req.model } : {}),
     ...(req.effort ? { effort: req.effort } : {}),
     ...(req.label ? { label: req.label } : {}),
     ...(req.task ? { task: req.task } : {}),
+    // Recorded at the one moment it is certain — the harness was just handed this id, or we asked
+    // it to reopen this conversation. Without it a fresh session's link exists only while the
+    // harness's own record does (`harness-sessions.ts`, claude alone), so a session started with
+    // the cockpit closed had nothing to fall back on but the harness-and-directory guess.
+    ...(planned.plan.conversationId ? { conversationId: planned.plan.conversationId } : {}),
+    // Which repository this directory is in, while the directory is provably there. See
+    // `ManagedSession.repo`: a worktree removed later leaves a path that names nothing, and the
+    // grouping fell through to its last path segment as though it were a project.
+    ...(await recordedRepo(req.cwd)),
   })
 
   const name = req.label ?? id
@@ -1270,6 +1451,122 @@ async function spawnManaged(req: {
     message: s.sessStarted(name),
     ticket: { argv: backend.attachCommand(id), detachHint: await backend.detachHint(), label: name },
   }
+}
+
+/**
+ * Reopen a SET of registry rows in the background — the one implementation behind both "open the
+ * whole task" and "reopen everything that fell".
+ *
+ * The two differ only in how the set is chosen: a task is a name the user filed sessions under, a
+ * fall is a timestamp `crash-group.ts` matched them on. Everything after that — which rows are left
+ * alone, which are not resurrected, which are skipped and counted, and the retiring of every row
+ * that is replaced — is `planTaskReopen`, and writing it twice is exactly the drift that module was
+ * extracted to end.
+ */
+async function reopenEntries(
+  entries: readonly ManagedSession[],
+  s: CliStrings,
+): Promise<{ plan: TaskReopenPlan; opened: number; skipped: number }> {
+  const conversations = await loadConversations()
+  const backend = await resolveBackend()
+  const live = new Set(
+    (await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id),
+  )
+  // What is already being driven, so a task reopen cannot put a second assistant into a conversation
+  // that has one. `live` above cannot answer this: it is keyed by ROW, and the twin case is a row
+  // that is down while another row drives its conversation.
+  const inUse = await liveConversationHolders(backend)
+
+  // CLAIMED, one per row: the harness+directory match cannot tell two sessions of one repository
+  // apart, so a set of five rows used to start five copies of one conversation. A row that RECORDED
+  // which conversation it drives is exact and takes that one.
+  const taken = new Set<string>()
+  const plan = planTaskReopen({
+    entries,
+    liveIds: live,
+    inUse,
+    conversationFor: entry => {
+      const own = entry.conversationId
+        ? conversations.find(c => c.sessionId === entry.conversationId)
+        : undefined
+      const conv = own ?? conversations.find(c =>
+        !taken.has(c.sessionId) && c.harness === entry.harness && c.cwd === entry.cwd)
+      if (!conv?.resumable) return null
+      taken.add(conv.sessionId)
+      return { sessionId: conv.sessionId, title: conv.title }
+    },
+  })
+
+  let opened = 0
+  let skipped = plan.skipped.length
+  for (const row of plan.reopen) {
+    const m = row.entry
+    const r = await spawnManaged({
+      harness: m.harness,
+      cwd: m.cwd,
+      resumeId: row.resumeId,
+      label: row.label,
+      attach: false,
+      // The task travels with the session, whichever set this reopen was chosen from: a fall does
+      // not un-file the work someone filed.
+      ...(m.task ? { task: m.task } : {}),
+    }, s)
+    if (!r.ok) { skipped++; continue }
+    opened++
+    if (r.id) await patchSession(r.id, { conversationId: row.resumeId })
+    // Retired, so a laptop closed and opened twice does not leave two dead twins and one live
+    // session standing under the same name.
+    await patchSession(m.id, { endedAt: new Date().toISOString() })
+    if (m.note && r.id) await patchSession(r.id, { note: m.note })
+  }
+  forgetConversations()
+  return { plan, opened, skipped }
+}
+
+/**
+ * The fall, named ROW BY ROW — what the offer made on the way in shows.
+ *
+ * The SELECTION is `planCrashGroup` and nothing else. This started life as a second selection
+ * (`planRestore`, from the branch this is reconciled with), and the two agreed about `endedAt` and
+ * about claiming a conversation once while disagreeing about the thing that matters: `planRestore`
+ * had no evidence a row was ever ALIVE, so it offered every resolvable `lost` row — which on a
+ * machine with months of history is the "sessões lixo" complaint this feature was built to answer.
+ * Two selections is two sets of rules; the repo has paid for that once already (`task-reopen.ts`).
+ *
+ * Exactly ONE rule is added on top, and it belongs here rather than in the pure selection because it
+ * is about the OFFER and not about the fall: a row whose conversation cannot be resolved is dropped,
+ * because this list is clickable and a row that cannot be reopened is a button that fails. It stays
+ * inside `fell`, where `reopenEntries` counts it as skipped — the fall is what happened, and the
+ * offer is what can be done about it.
+ */
+async function restorableSessions(fell: readonly ManagedSession[]): Promise<RestoreCandidate[]> {
+  if (fell.length === 0) return []
+  const conversations = await loadConversations()
+  const taken = new Set<string>()
+
+  // The DECISION is the pure `planFellOffer`; this is the I/O around it — the conversation store,
+  // and the claiming that stops four fallen rows in one repository being offered four copies of one
+  // conversation.
+  return planFellOffer({
+    entries: fell,
+    conversationFor: m => {
+      const own = m.conversationId
+        ? conversations.find(c => c.sessionId === m.conversationId)
+        : undefined
+      const conv = own ?? conversations.find(c =>
+        !taken.has(c.sessionId) && c.harness === m.harness && c.cwd === m.cwd)
+      if (!conv?.resumable) return null
+      taken.add(conv.sessionId)
+      return { sessionId: conv.sessionId, title: conv.title }
+    },
+  }).map(o => ({
+    id: o.entry.id,
+    label: o.label,
+    harness: o.entry.harness,
+    // The last segment, the same key the "by project" grouping falls back to.
+    project: o.entry.cwd.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? '',
+    ...(o.startedMs !== undefined ? { startedAt: o.startedMs } : {}),
+  }))
 }
 
 function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
@@ -1288,12 +1585,51 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       .catch(() => { /* offline — the header simply says nothing */ })
   }
 
+  /**
+   * The last status this host produced, kept so a REMOUNT has something true to open on.
+   *
+   * The host outlives the Ink app — `runStart` creates it once and loops around every attach — which
+   * is what makes this possible at all, and `ControlHost.lastStatus` is where the reason is written
+   * down. Every write to it goes through `remember()`, so there is one place that can go stale.
+   */
+  let lastStatus: ControlStatus | null = null
+  const remember = (next: ControlStatus): ControlStatus => (lastStatus = next)
+
   /** Has the archive consent never been answered? Used only to append a hint, so it fails open. */
   const archivePending = async (): Promise<boolean> => {
     try {
       return resolveArchiveMode(await readPreferences()) === undefined
     } catch {
       return false
+    }
+  }
+
+  /**
+   * The parallel-sessions budget, or `{}` when this machine cannot be measured.
+   *
+   * Spread into the status, so an unreadable machine contributes NO `memory` key at all and the
+   * header draws no gauge — the same absence-is-absence rule as `ControlService.boot`. A zero here
+   * would read as "no room left" on precisely the machines that could not be asked.
+   *
+   * The pids come from the harness records, which is the set this budget is about: assistants. It
+   * deliberately does not try to price the whole machine — `MemAvailable` already accounts for
+   * everything else, and RESERVED_BYTES holds room back for it.
+   */
+  const memoryStatus = async (): Promise<{ memory?: { used: number; max: number; red: boolean } }> => {
+    try {
+      const sample = await readMemory()
+      if (!sample) return {}
+      const index = await loadHarnessSessions()
+      const pids = [...index.byConversation.values()]
+        .filter(f => f.alive === true && f.pid !== undefined)
+        .map(f => f.pid!)
+      const { bytes, read } = await readRss(pids)
+      const b = memoryBudget({ sample, sessionBytes: bytes, sessions: read })
+      return { memory: { used: b.used, max: b.max, red: b.red } }
+    } catch {
+      // Best-effort, exactly like every other reader on this object: a gauge that throws must not
+      // take the whole status down with it.
+      return {}
     }
   }
 
@@ -1338,6 +1674,10 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // native start option even exists (see `StartFacts.centralPlan`).
       centralStartPlan(),
     ])
+    // Asked whatever the runtime state says: the case this exists for is a second server running
+    // while the row reads perfectly healthy, so gating it on `local` would skip exactly the machine
+    // that needs it — and it is worth asking even when nothing holds the port at all.
+    const idlePids = await idleServerPids()
     const [nativeFacts, centralFacts, machineFacts] = await Promise.all([
       local ? nativeServerFacts() : Promise.resolve<ProcessFacts>({}),
       central.state === 'up' ? containerFacts(CENTRAL_FILTER) : Promise.resolve<ContainerFacts>({}),
@@ -1382,20 +1722,63 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         : {}),
     }
 
+    // Only a Linux box has the mechanism at all — see `bootOptionsFor`. Asked once and handed to
+    // both services, so the two rows can never disagree about whether this box does boot units.
+    const bootSupported = platform() === 'linux'
+    // `serviceCommandFor` is what decides `installable`: it returns null when the file the unit's
+    // ExecStart would point at is not here, and a unit whose ExecStart cannot resolve is a service
+    // systemd restarts every five seconds for the life of the machine.
+    const canWrite = (mode: AutostartMode) => serviceCommandFor(mode) !== null
+
     return [
       buildService('agentistics', s.svcAgentistics, [nativeRuntime, machineRuntime], s, {
-        // Two distinct boot mechanisms now exist for this one service (native `agentop-server` vs
-        // Docker `agentop-machine`); the detail pane can only state one, so it states the one that
-        // matches whichever runtime is actually up — the native unit otherwise, matching this
-        // field's behavior before the Docker runtime had a boot mechanism of its own at all.
-        boot: machine.state === 'up' ? bootMachine : bootAgentistics,
+        // Two distinct boot mechanisms exist for this ONE service — the native `agentop-server` and
+        // the Docker `agentop-machine` — and BOTH can be registered at once. The row used to name
+        // whichever matched the runtime that happened to be up, so on a machine that had registered
+        // both, the other one was invisible: something would bring the service back after a reboot
+        // and the pane named a unit that was not it. That is the same class of half-truth
+        // `ControlService.conflict` exists to prevent for the running state.
+        //
+        // So: registered if EITHER is, and the unit cell names every one that actually is. `boot`
+        // stays `undefined` when the host could not tell at all (no user systemd) — absence is
+        // absence, and a row with no answer draws nothing rather than claiming `off`.
+        boot: bootAgentistics === undefined && bootMachine === undefined
+          ? undefined
+          : bootAgentistics === 'on' || bootMachine === 'on' ? 'on' : 'off',
+        bootUnit: [
+          bootAgentistics === 'on' ? unitName('server') : '',
+          bootMachine === 'on' ? unitName('machine') : '',
+        ].filter(Boolean).join(' + ')
+          // Nothing registered: name the unit the switch on this row would WRITE, so "off" still
+          // says what it is off about.
+          || unitName(machine.state === 'up' ? 'machine' : 'server'),
+        // BOTH mechanisms get a verb, whichever runtime happens to be up: the row states one and
+        // the switch has to reach either, or a machine that registered the container at boot could
+        // never turn that off while running natively.
+        bootOptions: bootOptionsFor([
+          {
+            unit: unitName('server'), runtime: 'local', mech: 'native',
+            on: bootAgentistics === 'on', installable: canWrite('server'),
+          },
+          {
+            unit: unitName('machine'), runtime: 'machine', mech: 'docker',
+            on: bootMachine === 'on', installable: canWrite('machine'),
+          },
+        ], s, bootSupported, s.svcAgentistics),
         rebuild: { local: repo, machine: machineCompose },
+        idlePids,
       }),
       // The central's rebuild always works: `central.sh up` inside a checkout, and the published
       // image outside one — `cli-central.ts` picks between them, and a central that is RUNNING
       // (the only state that offers a restart) has already proved whichever path it took.
       buildService('central', s.svcCentral, [centralRuntime], s, {
         boot: bootCentral,
+        bootUnit: unitName('central'),
+        // One mechanism, so no word distinguishes it — `Start at boot`, not `Start at boot (docker)`.
+        bootOptions: bootOptionsFor([{
+          unit: unitName('central'), runtime: 'central', mech: '',
+          on: bootCentral === 'on', installable: canWrite('central'),
+        }], s, bootSupported, s.svcCentral),
         rebuild: { central: true },
         centralPlan,
       }),
@@ -1430,10 +1813,12 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
   return {
     get lang() { return lang },
 
+    lastStatus: () => lastStatus,
+
     async refresh(): Promise<ControlStatus> {
       const s = S()
       const [{ mode, endpoint, connections, mouse }, services] = await Promise.all([loadState(), serviceRows()])
-      return {
+      return remember({
         mode,
         modeLabel: modeSentence(s, mode, connections.length),
         // Every endpoint, not the mirror's first one: the detail pane is where the user checks
@@ -1446,10 +1831,23 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         services,
         version: CURRENT_VERSION,
         latestVersion,
+        // The parallel-sessions budget. Computed HERE and not in the TUI, like every other decision
+        // on this object: the arithmetic lives in the pure `memory-budget.ts` and the two `/proc`
+        // reads in `memory-probe.ts`, and the answer arrives already decided — including `red`,
+        // which depends on swap pressure the screen has no way to know about.
+        ...(await memoryStatus()),
         archiveMode: await currentArchiveMode(),
+        // The setup wizard is a question the cockpit asks, so what it may offer is decided here,
+        // beside the very service states that decide it. `central` is the only mode that
+        // RECONFIGURES a running service — it re-runs `central.sh init`, which rewrites the
+        // environment file and recreates the containers — so it is the only one withheld, and it
+        // is withheld with a sentence rather than by disappearing.
+        setupBlocked: services.some(v => v.id === 'central' && v.state === 'up')
+          ? { central: s.setupBlockedCentralUp }
+          : {},
         ...(await sessionViewPref()),
         mouse,
-      }
+      })
     },
 
     /**
@@ -1668,10 +2066,32 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // unit (`docker compose … up -d`) instead of a native unit that would not match what is
       // actually running. `central` has one mechanism regardless of `runtime` — `agentop-central`
       // already runs `central.sh up` (Docker) — so it is passed through unchanged.
-      const mode = service === 'central' ? 'central' : runtime === 'machine' ? 'machine' : 'server'
+      const mode = bootModeFor(service, runtime)
       const res = await enableAutostart(mode)
       // enableAutostart formats for a printed block; the status line is one row.
       return { ok: res.ok, message: res.message.split('\n').map(l => l.trim()).filter(Boolean).join(' · ') }
+    },
+
+    /**
+     * Take the registration away again — and take NOTHING else.
+     *
+     * `stop: false` is the whole difference from `agentop autostart <mode> disable`, and it is
+     * deliberate: the cockpit's switch answers "should this come back after a reboot", which is a
+     * statement about the future. A verb that also killed the running service would be doing two
+     * things under one label, and the row it sits on already carries `Stop` for the other one.
+     *
+     * The message NAMES the unit rather than repeating systemd's block: the status line is one row,
+     * and the one fact worth spending it on is which registration is now gone.
+     */
+    async disableBoot(service: ServiceId, runtime?: RuntimeId): Promise<ActionResult> {
+      const s = S()
+      const mode = bootModeFor(service, runtime)
+      const unit = unitName(mode)
+      const res = await disableAutostart(mode, { stop: false })
+      if (!res.ok) {
+        return { ok: false, message: `${s.bootDisableFailed(unit)} ${lastLine(res.message)}`.trim() }
+      }
+      return { ok: true, message: s.bootDisabled(unit) }
     },
 
     /**
@@ -1719,6 +2139,12 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
      * run. Losing it across restarts is not worth failing anything for.
      */
     async setSessionView(view: SessionViewPrefs): Promise<void> {
+      // The remembered status has to move with it. This is the ONE thing a user changes that never
+      // goes through an action — so it never triggers a `refresh()` — and a cache left behind would
+      // hand the next remount the arrangement from before the change, undoing it on screen a moment
+      // after it was made. Written even when the file write fails, for the same reason the failure
+      // is swallowed: the arrangement still holds for this run.
+      if (lastStatus) remember({ ...lastStatus, sessionView: view })
       try {
         await writePreferences({ sessionView: view })
       } catch {
@@ -1735,6 +2161,10 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     // the toggle for this session, because the control center holds the answer itself and only
     // asks us to remember it.
     async setMouse(on: boolean): Promise<void> {
+      // Same reason as `setSessionView`: a preference the user changes with a keypress, answered by
+      // no action and therefore followed by no `refresh()`. Left out, the remembered status would
+      // tell the next remount the mouse is still what it was before the key was pressed.
+      if (lastStatus) remember({ ...lastStatus, mouse: on })
       try { await writePreferences({ mouse: on }) } catch { /* best-effort */ }
     },
 
@@ -1785,12 +2215,25 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const finishedTasks = (await readPreferences()).finishedTasks ?? []
       // Resolved per session and MEMOIZED by directory: a directory does not change repository, and
       // this poll runs every five seconds over the whole fleet — asking git three times per session
-      // per tick would be a hundred processes a minute to learn the same thing.
-      const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd)))
+      // per tick would be a hundred processes a minute to learn the same thing. What the registry
+      // recorded at spawn is handed over with it, so a worktree somebody has since removed keeps
+      // the project it belongs to instead of becoming one.
+      const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd, v.recordedRepo)))
+      // What the machine LOST and could start again — named row by row for the offer, from the
+      // SAME selection the count below reports. Read off the snapshot the poll already produced
+      // rather than recomputed, so the screen cannot be shown two answers to one question while a
+      // poll is in flight.
+      const restorable = await restorableSessions(snap.fell?.entries ?? [])
       return {
+        ...(restorable.length > 0 ? { restorable } : {}),
         sessions: snap.sessions.map((v, i) => toControlSession(v, s, facts[i])),
         attention: snap.attention,
         rang: snap.rang,
+        // Only the COUNT and the instant travel: the rows themselves are already in `sessions`,
+        // marked `fell`, and shipping the set twice is two things that can disagree about it.
+        ...(snap.fell && snap.fell.entries.length > 0
+          ? { fell: { count: snap.fell.entries.length, atMs: snap.fell.atMs } }
+          : {}),
         ...(finishedTasks.length > 0 ? { finishedTasks } : {}),
         ...(detachHint ? { detachHint } : {}),
         ...(snap.unavailable ? { unavailable: snap.unavailable } : {}),
@@ -1839,6 +2282,38 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
      * what the button just did. Nothing about the sessions changes: a finished task is a statement
      * about the WORK, and its sessions stay listed, attachable and killable behind one switch.
      */
+    /**
+     * Start the offered sessions again, detached — or decline them.
+     *
+     * ACCEPTING is `reopenEntries`, the same thing "open the whole task" and "reopen what fell"
+     * perform. It arrived here as its own copy of that loop, which made THREE implementations of
+     * one gesture — the drift `task-reopen.ts` was extracted to end, reintroduced by two sessions
+     * that could not see each other's work. The set is different, the act is not.
+     *
+     * DECLINING retires the rows it was offered. "No" here means the work is over, and without it
+     * the same offer greets you on the next run and the one after, which is how a prompt becomes
+     * something people clear without reading. Nothing is destroyed either way: a retired row stays
+     * listed, and `endedAt` is exactly what keeps it out of the next crash group while leaving it
+     * individually reopenable.
+     */
+    async restoreSessions(ids: string[], accept: boolean): Promise<ActionResult> {
+      const s = S()
+      const registry = await readRegistry()
+      const wanted = registry.filter(m => ids.includes(m.id))
+      if (wanted.length === 0) return { ok: false, message: s.sessRestoreNone }
+
+      if (!accept) {
+        const stamp = new Date().toISOString()
+        for (const m of wanted) await patchSession(m.id, { endedAt: stamp })
+        return { ok: true, message: s.sessRestoreDeclined(wanted.length) }
+      }
+
+      const { opened, skipped } = await reopenEntries(wanted, s)
+      return opened > 0
+        ? { ok: true, message: s.sessRestored(opened, skipped) }
+        : { ok: false, message: s.sessRestoreFailed(skipped) }
+    },
+
     async finishTask(task: string, done: boolean): Promise<ActionResult> {
       const s = S()
       if (!task) return { ok: false, message: s.sessNoTask }
@@ -1850,9 +2325,42 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       return { ok: true, message: done ? s.sessTaskFinished(task) : s.sessTaskReopened(task) }
     },
 
+    /**
+     * Remove a task NAME. The sessions filed under it survive, unfiled.
+     *
+     * Reported: the task list had grown to dozens of entries, some naming work that is over and
+     * some whose sessions no longer exist. `finishTask` marks work DONE and hides its sessions
+     * behind a switch — a statement about the work. This is a statement about the LABEL, and the
+     * two are different requests.
+     *
+     * The name lives in TWO places, and clearing one is the bug: on each session, and in
+     * `finishedTasks`. Leave it in the finished list and it goes on being a menu entry naming
+     * nothing; leave it on the sessions and the task reappears the moment the list is rebuilt.
+     */
+    async deleteTask(task: string): Promise<ActionResult> {
+      const s = S()
+      if (!task.trim()) return { ok: false, message: s.sessNoTask }
+      const prefs = await readPreferences()
+      const plan = planTaskDelete({
+        task,
+        sessions: await readRegistry().catch(() => []),
+        finished: prefs.finishedTasks ?? [],
+      })
+      if (taskDeleteIsNoop(plan)) return { ok: false, message: s.sessTaskUnknown(task) }
+
+      for (const id of plan.clear) await patchSession(id, { task: undefined })
+      if (plan.unfinish) {
+        await writePreferences({ finishedTasks: (prefs.finishedTasks ?? []).filter(t => t !== task) })
+      }
+      return { ok: true, message: s.sessTaskDeleted(task, plan.clear.length) }
+    },
+
     async renameSession(id: string, label: string): Promise<ActionResult> {
       const s = S()
-      const ok = await patchSession(id, { label })
+      // The INSTANT goes down with the name. A session can also be renamed from inside the harness,
+      // and recency is the only non-arbitrary way to settle a disagreement between the two — a
+      // stored name with no timestamp cannot take part in that. See `pickTitle`.
+      const ok = await patchSession(id, { label, labelSince: Date.now() })
       return ok ? { ok: true, message: s.sessRenamed } : { ok: false, message: s.sessNoRegistryEntry }
     },
 
@@ -1895,6 +2403,17 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const previous = req.replaces
         ? (await readRegistry()).find(m => m.id === req.replaces)
         : undefined
+      // THE LOCK ON THE DOOR. Refused before anything is spawned, and NAMING the session that
+      // already has this conversation, because a refusal the user cannot act on is a dead end: the
+      // next thing they want is to go and look at it. This is the cheapest defence there is against
+      // the worst thing this feature has done — two assistants typing into one transcript and one
+      // working tree — and it is deliberately a refusal rather than a tidy-up afterwards.
+      const holder = conversationHeldBy(
+        await liveConversationHolders(await resolveBackend()),
+        req.sessionId,
+        req.replaces,
+      )
+      if (holder) return { ok: false, message: s.sessResumeInUse(holder.label) }
       const spawned = await spawnManaged({
         harness: req.harness as HarnessId,
         cwd: req.cwd,
@@ -1931,57 +2450,128 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const wanted = (await readRegistry()).filter(m => m.task === task)
       if (wanted.length === 0) return { ok: false, message: s.sessTaskEmpty(task) }
 
-      const conversations = await loadConversations()
-      const backend = await resolveBackend()
-      const live = new Set(
-        (await backend.list().catch(() => [])).filter(b => b.alive).map(b => b.id),
-      )
-      // The DECISION is the pure `planTaskReopen`, shared with `agentop session open` — the two
-      // were separate implementations of one gesture and had already drifted.
-      const plan = planTaskReopen({
-        entries: wanted,
-        liveIds: live,
-        // CLAIMED, one per row: the directory match cannot tell two sessions of one repository
-        // apart, so reopening a task of five rows used to start five copies of one conversation.
-        conversationFor: (m => {
-          const taken = new Set<string>()
-          return (entry: typeof m) => {
-            const own = entry.conversationId
-              ? conversations.find(c => c.sessionId === entry.conversationId)
-              : undefined
-            const conv = own ?? conversations.find(c =>
-              !taken.has(c.sessionId) && c.harness === entry.harness && c.cwd === entry.cwd)
-            if (!conv?.resumable) return null
-            taken.add(conv.sessionId)
-            return { sessionId: conv.sessionId, title: conv.title }
-          }
-        })(wanted[0]!),
-      })
-
-      let opened = 0
-      let skipped = plan.skipped.length
-      for (const row of plan.reopen) {
-        const m = row.entry
-        const r = await spawnManaged({
-          harness: m.harness,
-          cwd: m.cwd,
-          resumeId: row.resumeId,
-          label: row.label,
-          task,
-          attach: false,
-        }, s)
-        if (!r.ok) { skipped++; continue }
-        opened++
-        if (r.id) await patchSession(r.id, { conversationId: row.resumeId })
-        // Retired, so a laptop closed and opened twice does not leave the task holding two dead
-        // twins and one live session, all under the same name.
-        await patchSession(m.id, { endedAt: new Date().toISOString() })
-        if (m.note && r.id) await patchSession(r.id, { note: m.note })
-      }
-      forgetConversations()
+      // The DECISION is the pure `planTaskReopen`, and the PERFORMANCE is `reopenEntries` — shared
+      // with `reopenFell` below, which is the same gesture over a set chosen a different way.
+      const { plan, opened, skipped } = await reopenEntries(wanted, s)
       return taskReopenSucceeded(plan, opened)
-        ? { ok: true, message: s.sessTaskOpened(task, opened, skipped) }
+        ? { ok: true, message: s.sessTaskOpened(task, opened, skipped, plan.heldElsewhere.length) }
         : { ok: false, message: s.sessTaskNoneOpened(task, skipped) }
+    },
+
+    /**
+     * Reopen everything the machine took at once.
+     *
+     * The set is recomputed HERE rather than taken from the snapshot the screen is showing: a
+     * snapshot is up to five seconds old, and this spawns real assistants. Recomputing costs one
+     * registry read and one `tmux list-sessions`, and it is the difference between reopening what
+     * fell and reopening what fell as of a moment ago.
+     */
+    async reopenFell(): Promise<ActionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+
+      const backendIds = new Set((await backend.list().catch(() => [])).map(b => b.id))
+      const group = planCrashGroup({ entries: await readRegistry(), backendIds })
+      if (!group || group.entries.length === 0) return { ok: false, message: s.sessNoFell }
+
+      const { plan, opened, skipped } = await reopenEntries(group.entries, s)
+      return taskReopenSucceeded(plan, opened)
+        ? { ok: true, message: s.sessFellOpened(opened, skipped, plan.heldElsewhere.length) }
+        : { ok: false, message: s.sessFellNoneOpened(skipped) }
+    },
+
+    /**
+     * Type one line into a session and submit it, without attaching.
+     *
+     * The screen is RE-READ here rather than trusted from the snapshot, and that is the whole of the
+     * safety: a session that was working five seconds ago may be sitting on a permission prompt now,
+     * where its input line is a menu and a typed sentence is an answer to a question nobody read. A
+     * poll-old belief is not good enough to write into somebody's session on.
+     */
+    async promptSession(id: string, text: string): Promise<ActionResult> {
+      const s = S()
+      const body = text.trim()
+      if (!body) return { ok: false, message: s.sessPromptEmpty }
+
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+
+      const managed = (await readRegistry()).find(m => m.id === id)
+      if (!managed) return { ok: false, message: s.sessNoRegistryEntry }
+
+      const live = (await backend.list().catch(() => [])).find(b => b.id === id)
+      if (!live?.alive) return { ok: false, message: s.sessNotRunning }
+
+      const frame = await backend.capture(id, SEND_CAPTURE_LINES).catch(() => [] as string[])
+      const rules = rulesFor(managed.harness)
+      if (rules && rules.approval.some(re => re.test(frame.join('\n')))) {
+        return { ok: false, message: s.sessPromptBlocked }
+      }
+
+      return (await backend.sendText(id, body))
+        ? { ok: true, message: s.sessPrompted(id) }
+        : { ok: false, message: s.sessSendFailed(id) }
+    },
+
+    /**
+     * Answer the dialog this session is blocked on.
+     *
+     * Everything is checked at THIS instant rather than assumed from a snapshot: the session is
+     * still asking, the options on screen are still the ones the user was shown, and the harness has
+     * a verified way to select the one they picked. A snapshot is up to five seconds old, and an
+     * answer sent to a question that has changed underneath it is both wrong and silent.
+     */
+    async answerSession(id: string, choice?: number): Promise<ActionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+
+      const managed = (await readRegistry()).find(m => m.id === id)
+      if (!managed) return { ok: false, message: s.sessNoRegistryEntry }
+
+      const spec = approvalFor(managed.harness)
+      if (!spec) return { ok: false, message: s.sessApproveUnknown(managed.harness) }
+
+      const live = (await backend.list().catch(() => [])).find(b => b.id === id)
+      if (!live?.alive) return { ok: false, message: s.sessNotRunning }
+
+      const rules = rulesFor(managed.harness)
+      const frame = await backend.capture(id, SEND_CAPTURE_LINES).catch(() => [] as string[])
+      if (!rules || !rules.approval.some(re => re.test(frame.join('\n')))) {
+        return { ok: false, message: s.sessNotAsking }
+      }
+
+      // What is on the screen RIGHT NOW, not what was drawn up to a poll ago.
+      const options = parseDialogOptions(frame)
+
+      if (needsChoice(options)) {
+        // A numbered dialog is NEVER answered with a bare confirm. `Enter` takes whichever row is
+        // highlighted, and on "only my fix / promote everything / stop here / type something" that
+        // is choosing between four different outcomes on somebody else's repository.
+        if (choice === undefined) return { ok: false, message: s.sessNeedsChoice(options.length) }
+        const picked = options.find(o => o.number === choice)
+        // The question CHANGED between being shown and being answered. Sending "3" to a question
+        // that now has different answers is worse than sending nothing, and nothing about it would
+        // be visible afterwards — so it is refused by name.
+        if (!picked) return { ok: false, message: s.sessChoiceGone }
+        const key = choiceKey(spec, choice)
+        if (!key) return { ok: false, message: s.sessChooseUnknown(managed.harness) }
+        return (await backend.sendKey(id, key))
+          ? { ok: true, message: s.sessAnswered(picked.label) }
+          : { ok: false, message: s.sessSendFailed(id) }
+      }
+
+      // No readable options: the codex-shaped `Press enter to continue`, where there genuinely is
+      // nothing to choose between. A choice offered here would be answering a question with no
+      // answers, so it is refused rather than quietly ignored.
+      if (choice !== undefined) return { ok: false, message: s.sessChoiceGone }
+      return (await backend.sendKey(id, spec.key))
+        ? { ok: true, message: s.sessApproved(id) }
+        : { ok: false, message: s.sessSendFailed(id) }
     },
 
     /**
@@ -2057,19 +2647,24 @@ export async function runStart(): Promise<StartResult> {
 
   const host = createControlHost(lang, altScreen)
 
-  // A machine that has never been configured opens on Setup rather than on Services. Bare
-  // `agentop` used to run the wizard outright; the control center replaced that, and landing an
-  // unconfigured user on a list of services to start would leave the mode and the history-
-  // preservation consent — the two things the wizard existed to ask — behind a tab they have no
-  // reason to look for.
-  let tab: TabId | undefined = (await isUnconfigured()) ? 'setup' : undefined
+  // A machine that has never been configured still opens on the WIZARD — it is just no longer a tab
+  // of its own. Setup is a question the cockpit asks, drawn in the detail region like every other
+  // one, so "open on setup" is now "open the cockpit with the question up": `initial.setup`. Landing
+  // an unconfigured user on a list of services to start would still leave the mode and the
+  // history-preservation consent behind something they have no reason to look for.
+  const setup = await isUnconfigured()
+  let tab: TabId | undefined
 
   // Attach and detach are two halves of ONE gesture, so this is a loop rather than an exit. The Ink
   // app never execs anything: it unmounts, the session gets the real tty here, and when the user
   // detaches the control center comes back up on the tab they left from. Anything else would make
   // "look at a session" a one-way trip out of the application.
+  // The wizard is offered on the FIRST pass only. Detaching from a session re-enters the loop, and
+  // a question that greeted the user again there would be one they learn to dismiss without reading.
+  let opening = setup
   for (;;) {
-    const exit = await runControlCenter({ lang, host, tab })
+    const exit = await runControlCenter({ lang, host, tab, setup: opening })
+    opening = false
     if (exit.kind === 'foreground') break
     if (exit.kind === 'quit') return exit.code
     await execAttachTicket(exit.ticket, cliStrings(host.lang))

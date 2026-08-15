@@ -8,8 +8,6 @@ import {
   sectionHead,
   logRows,
   logSources,
-  setupBodyTop,
-  setupRows,
   sourceAtColumn,
   sourceRowFit,
   sourceRowText,
@@ -230,53 +228,6 @@ describe('staticRows', () => {
   })
 })
 
-describe('setupRows', () => {
-  test('never draws more rows than it was given', () => {
-    for (let height = 0; height <= 40; height++) {
-      for (let intro = 0; intro <= 4; intro++) {
-        for (let facts = 1; facts <= 4; facts++) {
-          const r = setupRows(height, intro, facts)
-          const used =
-            (r.intro ? intro : 0)
-            + (r.configHeader ? 1 : 0)
-            + r.configRows
-            + (r.gap ? 1 : 0)
-            + (r.stepHeader ? 1 : 0)
-            + r.body
-          expect(used).toBeLessThanOrEqual(Math.max(0, height))
-        }
-      }
-    }
-  })
-
-  test('the step always keeps a row — a wizard without its question is not a degraded wizard', () => {
-    for (let height = 1; height <= 20; height++) {
-      expect(setupRows(height, 2, 3).body).toBeGreaterThanOrEqual(1)
-    }
-  })
-
-  test('never heads a config block it has no room to fill', () => {
-    for (let height = 0; height <= 20; height++) {
-      const r = setupRows(height, 0, 3)
-      if (r.configHeader) expect(r.configRows).toBeGreaterThanOrEqual(1)
-      if (r.configRows > 0) expect(r.configHeader).toBe(true)
-      // The blank row exists to separate the facts from the step; without facts it separates nothing.
-      if (r.gap) expect(r.configHeader).toBe(true)
-    }
-  })
-
-  test('gives up the prose first and the facts last', () => {
-    const roomy = setupRows(20, 2, 3)
-    expect(roomy.intro).toBe(true)
-    expect(roomy.configRows).toBe(3)
-    // Twelve rows of pane: the intro goes, the facts stay.
-    const tight = setupRows(7, 2, 3)
-    expect(tight.intro).toBe(false)
-    expect(tight.configRows).toBeGreaterThanOrEqual(1)
-    expect(tight.stepHeader).toBe(true)
-  })
-})
-
 describe('logRows', () => {
   test('a comfortable pane draws the selector, the rule and the rest as log', () => {
     expect(logRows(20)).toEqual({ source: true, divider: true, body: 18 })
@@ -318,6 +269,7 @@ describe('logSources', () => {
     startOptions: [],
     restartOptions: [],
     stopOptions: [],
+    bootOptions: [],
     ...over,
   })
 
@@ -442,30 +394,5 @@ describe('sourceAtColumn', () => {
     const fit = sourceRowFit('SOURCE', many, many.length - 1, 18)
     expect(fit.from).toBeGreaterThan(0)
     expect(sourceAtColumn(fit, sourceRowText({ ...fit, labels: [] }).length)).toBe(fit.from)
-  })
-})
-
-describe('setupBodyTop', () => {
-  const INTRO = 3
-
-  test('is the sum of the rows the budget actually kept', () => {
-    const tall = setupRows(30, INTRO, 3)
-    expect(tall).toMatchObject({ intro: true, configHeader: true, configRows: 3, gap: true, stepHeader: true })
-    expect(setupBodyTop(tall, INTRO)).toBe(INTRO + 1 + 3 + 1 + 1)
-  })
-
-  test('follows every piece the height took away, in the order they give way', () => {
-    // The intro goes first, then the config block whole, then the blank between them — so the
-    // offset shrinks with the screen. A constant here would answer the second mode when the third
-    // was clicked, on exactly the terminals where the rows are scarcest.
-    let previous = Number.MAX_SAFE_INTEGER
-    for (let height = 30; height >= 1; height--) {
-      const rows = setupRows(height, INTRO, 3)
-      const top = setupBodyTop(rows, INTRO)
-      expect(top).toBeLessThanOrEqual(previous)
-      // The step always has its rows: the offset can never push the body past the pane.
-      expect(top + rows.body).toBeLessThanOrEqual(Math.max(1, height))
-      previous = top
-    }
   })
 })

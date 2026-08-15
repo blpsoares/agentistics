@@ -210,3 +210,236 @@ describe('bellTransitions', () => {
     expect(bellTransitions(new Map(), external)).toEqual([])
   })
 })
+
+describe("what the harness says about its OWN session", () => {
+  const index = (over: {
+    byManagedId?: Record<string, Record<string, unknown>>
+    byPid?: Record<number, Record<string, unknown>>
+    byConversation?: Record<string, Record<string, unknown>>
+  }) => ({
+    byManagedId: new Map(Object.entries(over.byManagedId ?? {})),
+    byPid: new Map(Object.entries(over.byPid ?? {}).map(([k, v]) => [Number(k), v])),
+    byConversation: new Map(Object.entries(over.byConversation ?? {})),
+  }) as never
+
+  const managed = (id: string, o: Partial<ManagedSession> = {}): ManagedSession => ({
+    id, harness: 'claude', cwd: '/repo/a', createdAt: '2026-08-14T10:00:00.000Z', ...o,
+  })
+
+  it('carries a name a person typed inside the session', () => {
+    const [v] = buildSessionViews({
+      reconciled: [{ id: 'm1', managed: managed('m1'), status: 'lost' }],
+      activity: new Map(),
+      processes: [],
+      harnessSessions: index({ byManagedId: { m1: { name: 'principal do cockpit' } } }),
+    })
+    expect(v!.harnessName).toBe('principal do cockpit')
+    // And it is SEARCHABLE, because it may be the only name the person remembers.
+    expect(v!.searchText).toContain('principal do cockpit')
+  })
+
+  it('carries nothing for a name the harness invented for itself', () => {
+    const [v] = buildSessionViews({
+      reconciled: [{ id: 'm1', managed: managed('m1'), status: 'lost' }],
+      activity: new Map(),
+      processes: [],
+      harnessSessions: index({
+        byManagedId: { m1: { name: 'agentistics-77', nameSource: 'derived' } },
+      }),
+    })
+    expect(v!.harnessName).toBeUndefined()
+  })
+
+  it('resolves the conversation EXACTLY, over the directory guess', () => {
+    // The guess this replaces matches on harness+directory, so every session in one repository
+    // resolves to the same conversation — the bug that reopened three rows onto one conversation.
+    const conv = (sessionId: string, title: string, lastActivityMs: number) => ({
+      sessionId, title, lastActivityMs,
+      harness: 'claude' as const, cwd: '/repo/a', resumable: true, firstPrompt: '',
+    })
+    // The newest is deliberately the WRONG one, so the directory guess and the exact answer differ.
+    const conversations = [conv('wrong', 'the guess', 2), conv('right', 'the truth', 1)]
+    const [v] = buildSessionViews({
+      reconciled: [{ id: 'm1', managed: managed('m1'), status: 'exited' }],
+      activity: new Map(),
+      processes: [],
+      conversations,
+      harnessSessions: index({ byManagedId: { m1: { sessionId: 'right' } } }),
+    })
+    expect(v!.resume?.sessionId).toBe('right')
+  })
+
+  it('gives a CLOSED row the name its own session chose, over the store title', () => {
+    // Measured on 2026-08-15. A session renamed to `MAIN` was listed under
+    // `Build agentop harness cockpit with session management` — a title from a different week.
+    // It is a BACKGROUND AGENT: no tmux, so `byManagedId` cannot see it, and the /proc scan
+    // surfaced nothing, so `byPid` was never asked. `byConversation` is the key that needs
+    // neither.
+    const views = buildSessionViews({
+      reconciled: [],
+      activity: new Map(),
+      processes: [],
+      conversations: [{
+        sessionId: '581deab7', title: 'Build agentop harness cockpit with session management',
+        lastActivityMs: 1, harness: 'claude' as const, cwd: '/repo/a', resumable: true,
+        firstPrompt: '',
+      }],
+      harnessSessions: index({ byConversation: { '581deab7': { name: 'MAIN' } } }),
+    })
+    expect(views[0]!.label).toBe('MAIN')
+    // Findable by BOTH: the name it now shows, and the one it used to show.
+    expect(views[0]!.searchText).toContain('main')
+    expect(views[0]!.searchText).toContain('cockpit')
+  })
+
+  it('a conversation whose record is ALIVE is running, not closed', () => {
+    // The other half of the report. A background agent alive for 38 minutes sat in the closed block
+    // under a title from another week, offering to "reopen" a conversation that had never stopped.
+    // It is synthesised into the SAME external path a scanned process takes, so it inherits every
+    // rule already written there rather than getting a parallel branch.
+    const views = buildSessionViews({
+      reconciled: [],
+      activity: new Map(),
+      processes: [],
+      conversations: [{
+        sessionId: '581deab7', title: 'a title from another week', lastActivityMs: 1,
+        harness: 'claude' as const, cwd: '/repo/a', resumable: true, firstPrompt: '',
+      }],
+      harnessSessions: index({
+        byConversation: {
+          '581deab7': {
+            name: 'MAIN', pid: 508665, cwd: '/repo/a', sessionId: '581deab7',
+            harness: 'claude', alive: true,
+          },
+        },
+      }),
+    })
+    expect(views.map(v => v.status)).toContain('external')
+    expect(views.find(v => v.status === 'external')?.harnessName).toBe('MAIN')
+    // …and it is not ALSO sitting in the closed block under the old title.
+    expect(views.filter(v => v.status === 'closed')).toHaveLength(0)
+  })
+
+  it('synthesises nothing when liveness could not be determined', () => {
+    // `alive: undefined` means no /proc — not Linux, or a uid that may not read it. Unknown must
+    // never become a claim, so the row stays exactly as it was today.
+    const views = buildSessionViews({
+      reconciled: [],
+      activity: new Map(),
+      processes: [],
+      conversations: [{
+        sessionId: 'c1', title: 'stored title', lastActivityMs: 1,
+        harness: 'claude' as const, cwd: '/repo/a', resumable: true, firstPrompt: '',
+      }],
+      harnessSessions: index({
+        byConversation: { c1: { name: 'MAIN', pid: 1, cwd: '/repo/a', harness: 'claude' } },
+      }),
+    })
+    expect(views).toHaveLength(1)
+    expect(views[0]!.status).toBe('closed')
+  })
+
+  it('never lets a DERIVED name displace a real store title', () => {
+    // `agentistics-84` is what the harness invents from the folder when nobody has said anything.
+    const views = buildSessionViews({
+      reconciled: [],
+      activity: new Map(),
+      processes: [],
+      conversations: [{
+        sessionId: 'c1', title: 'a title somebody wrote', lastActivityMs: 1,
+        harness: 'claude' as const, cwd: '/repo/a', resumable: true, firstPrompt: '',
+      }],
+      harnessSessions: index({
+        byConversation: { c1: { name: 'agentistics-84', nameSource: 'derived' } },
+      }),
+    })
+    expect(views[0]!.label).toBe('a title somebody wrote')
+  })
+
+  it('matches an EXTERNAL process by its pid', () => {
+    const views = buildSessionViews({
+      reconciled: [],
+      activity: new Map(),
+      processes: [{ harness: 'claude', cwd: '/repo/z', pid: 4242, startedMs: 10 }],
+      harnessSessions: index({ byPid: { 4242: { name: 'the one in the other window' } } }),
+    })
+    expect(views[0]!.harnessName).toBe('the one in the other window')
+  })
+
+  it('leaves every row exactly as it was when nothing can be read', () => {
+    // A harness with no such file, an unreadable directory, a container that cannot see it: the
+    // feature costs the extra name and nothing else.
+    const [v] = buildSessionViews({
+      reconciled: [{ id: 'm1', managed: managed('m1', { label: 'Principal' }), status: 'lost' }],
+      activity: new Map(),
+      processes: [],
+    })
+    expect(v!.harnessName).toBeUndefined()
+    expect(v!.label).toBe('Principal')
+  })
+})
+
+describe('a row that KNOWS which conversation it drives', () => {
+  const conv = (sessionId: string, over: Record<string, unknown> = {}) => ({
+    sessionId,
+    harness: 'claude' as const,
+    cwd: '/repo/a',
+    title: sessionId,
+    lastActivityMs: 1,
+    resumable: true,
+    firstPrompt: '',
+    ...over,
+  })
+
+  it('offers exactly that conversation, never the directory guess', () => {
+    const reconciled = [row('a', {
+      status: 'lost',
+      backend: undefined,
+      managed: managed('a', { conversationId: 'mine' }),
+    })]
+    const [v] = buildSessionViews({
+      reconciled,
+      activity: new Map(),
+      processes: [],
+      // `older` is the one the harness+directory guess would pick — same harness, same directory.
+      conversations: [conv('older'), conv('mine')],
+    })
+    expect(v!.resume?.sessionId).toBe('mine')
+  })
+
+  it('offers NOTHING when the store does not hold that conversation yet', () => {
+    // Ordinary now that the id is recorded at SPAWN rather than only at reopen: a session minutes
+    // old has an id and no transcript written under it. Falling through to the guess would hand it
+    // an unrelated conversation from the same directory — the bug that reopened three rows onto one.
+    const reconciled = [row('a', {
+      status: 'lost',
+      backend: undefined,
+      managed: managed('a', { conversationId: 'not-written-yet' }),
+    })]
+    const [v] = buildSessionViews({
+      reconciled,
+      activity: new Map(),
+      processes: [],
+      conversations: [conv('older')],
+    })
+    expect(v!.resume).toBeUndefined()
+  })
+
+  it('still guesses for a row that recorded nothing — the old behaviour, unchanged', () => {
+    const reconciled = [row('a', { status: 'lost', backend: undefined })]
+    const [v] = buildSessionViews({
+      reconciled,
+      activity: new Map(),
+      processes: [],
+      conversations: [conv('older')],
+    })
+    expect(v!.resume?.sessionId).toBe('older')
+  })
+
+  it('carries the repository the registry recorded, for the caller that resolves the facts', () => {
+    const repo = { repo: 'blpsoares/agentistics', root: 'agentistics', worktree: true }
+    const reconciled = [row('a', { managed: managed('a', { repo }) })]
+    const [v] = buildSessionViews({ reconciled, activity: new Map(), processes: [] })
+    expect(v!.recordedRepo).toEqual(repo)
+  })
+})

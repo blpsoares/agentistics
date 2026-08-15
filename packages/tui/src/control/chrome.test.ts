@@ -25,6 +25,8 @@ import {
   LEFT_MAX_SHARE,
   LEFT_MIN,
   paneTop,
+  paneBadgeRoom,
+  paneTitleRoom,
   PANE_FRAME_X,
   PANE_FRAME_Y,
   PANE_MIN_ROWS,
@@ -39,6 +41,7 @@ import {
   type TabSpec,
 } from './chrome.ts'
 import { TAB_ORDER, type ControlService, type ServiceRuntimeState } from './types'
+import { truncate } from '../components/Primitives'
 import { PANE_ORDER } from './nav'
 import { brandMark, brandWidth, WORDMARK_ART } from '../components/Wordmark'
 import { controlStrings } from './i18n'
@@ -212,6 +215,42 @@ describe('headerMeta', () => {
     expect(meta.update).toBe('● 1.7.4')
   })
 
+  test('draws the parallel-sessions budget, and NOTHING when it could not be measured', () => {
+    const with_ = headerMeta({
+      mode: 'solo', version: '1.7.4', memory: { used: 3, max: 17, red: false }, width: 60,
+    })
+    expect(with_.memory).toBe('▤ 3/17')
+    expect(with_.memoryRed).toBe(false)
+    // A machine whose memory cannot be read draws no gauge at all — never a zero, which would read
+    // as "no room left" on precisely the machines nobody could ask.
+    expect(headerMeta({ mode: 'solo', version: '1.7.4', width: 60 }).memory).toBe('')
+  })
+
+  test('a RED budget outranks the version under width pressure', () => {
+    // The pieces drop least-actionable-first, and a budget about to run out is the most actionable
+    // thing on the row. Dropping the warning to keep a version number would be the wrong trade at
+    // exactly the moment it matters — the version is one `agentop --version` away.
+    const narrow = { mode: 'solo', version: '1.7.4', latestVersion: '1.9.0', attention: 2 }
+    const red = headerMeta({ ...narrow, memory: { used: 14, max: 15, red: true }, width: 22 })
+    expect(red.memory).toBe('▤ 14/15')
+    expect(red.text).toBe('solo')            // the version went first
+    // …while a calm budget gives way instead, because it is only informational.
+    const calm = headerMeta({ ...narrow, memory: { used: 3, max: 17, red: false }, width: 22 })
+    expect(calm.memory).toBe('')
+  })
+
+  test('the waiting counter still outlives the budget', () => {
+    // Ordering pinned end to end: update, then a calm budget, then the version, and the counter is
+    // the last thing standing after the mode token.
+    const meta = headerMeta({
+      mode: 'solo', version: '1.7.4', latestVersion: '1.9.0', attention: 2,
+      memory: { used: 3, max: 17, red: false }, width: 12,
+    })
+    expect(meta.alert).toBe('⏳ 2')
+    expect(meta.memory).toBe('')
+    expect(meta.update).toBe('')
+  })
+
   test('says nothing about an update when the running version IS the latest', () => {
     expect(headerMeta({ mode: 'solo', version: '1.7.4', latestVersion: '1.7.4', width: 60 }).update).toBe('')
     expect(headerMeta({ mode: 'solo', version: '1.7.4', width: 60 }).update).toBe('')
@@ -340,6 +379,32 @@ describe('paneTop', () => {
     expect(top.title).toBe('')
     expect(top.head.startsWith('╭')).toBe(true)
     expect(top.tail).toBe('╮')
+  })
+})
+
+describe('paneTitleRoom', () => {
+  // The inverse of `paneBadgeRoom`, for the caller whose BADGE is the thing that may not disappear:
+  // a card puts the session handle there, and `paneTop` would drop it whole rather than cut the
+  // project name in the title. Cutting the title first is what keeps the handle on the frame.
+  test('a title cut to this width never costs a badge the frame could have drawn', () => {
+    const long = 'a-very-long-project-name-indeed'
+    for (const badge of ['a1b2c', 'following']) {
+      for (let w = 0; w <= 120; w++) {
+        // What the frame can do at ALL at this width: the shortest possible title, which is the
+        // most room a badge can ever be given.
+        const best = paneTop('x', badge, w).badge
+        const cut = paneTop(truncate(long, paneTitleRoom(badge, w)), badge, w).badge
+        expect(cut).toBe(best)
+      }
+      // And the cut is only ever as deep as the badge needs: with the badge gone, the title takes
+      // everything the frame has.
+      expect(paneTitleRoom('', 40)).toBeGreaterThan(paneTitleRoom(badge, 40))
+    }
+  })
+
+  test('a pane with no badge gives the whole budget to the title', () => {
+    expect(paneTitleRoom('', 40)).toBeGreaterThan(paneTitleRoom('a1b2c', 40))
+    expect(paneTitleRoom('a1b2c', 0)).toBe(0)
   })
 })
 
@@ -747,6 +812,7 @@ describe('detailContent', () => {
       startOptions: [],
       restartOptions: [],
       stopOptions: [],
+      bootOptions: [],
       ...over,
     }
   }
@@ -774,6 +840,31 @@ describe('detailContent', () => {
     )
     expect(texts(c)).toEqual(['native · pid 48213 · up 2h14m'])
     expect(c.alert).toBe('')
+  })
+
+  test('names a second copy that is running and serving nothing', () => {
+    // The seventy-minute incident: a second `agentop server` could not bind the ports and kept the
+    // file watcher going anyway, burning a core for nobody. Every runtime probe asks
+    // `lsof -sTCP:LISTEN` and therefore CANNOT see it, so the service row read perfectly healthy.
+    const c = detailContent(
+      service({ idle: 'a second server (pid 3189270) is running and serving nothing — kill 3189270' }),
+      s,
+      NOW,
+    )
+    expect(texts(c).join(' ')).toContain('3189270')
+  })
+
+  test('says the conflict AND the idle copy when both are true', () => {
+    // Different faults with different answers — one asks which runtime to stop, the other names a
+    // pid doing work for nobody. Folding them into one sentence would lose an instruction.
+    const c = detailContent(
+      service({ conflict: 'conflict: native + docker both running — stop one', idle: 'a second server (pid 7) …' }),
+      s,
+      NOW,
+    )
+    const said = texts(c).join(' ')
+    expect(said).toContain('conflict')
+    expect(said).toContain('pid 7')
   })
 
   test('says nothing about a pid the box would not give up — never `pid 0`', () => {
@@ -875,6 +966,23 @@ describe('detailContent', () => {
 
     const unknown = detailContent(service(), s, NOW)
     expect(rowsUnder(unknown, s.sectionMachine).map(r => r.label)).not.toContain(s.bootLabel)
+  })
+
+  test('the boot row NAMES the unit, which is the only thing a user can go and look at', () => {
+    // "starts at boot" on its own tells someone that SOMETHING will bring their central back and
+    // gives them nowhere to go. With the unit named, `systemctl --user status <unit>` answers, and
+    // the verb that removes it is on the same pane.
+    const named = detailContent(service({ boot: 'on', bootUnit: 'agentop-central.service' }), s, NOW)
+    const row = rowsUnder(named, s.sectionMachine).find(r => r.label === s.bootLabel)
+    expect(row?.value).toContain(s.bootOn)
+    expect(row?.value).toContain('agentop-central.service')
+  })
+
+  test('a unit with no boot state is not stated at all', () => {
+    // The unit is a detail OF the state. Printing it where the state is unknown would answer a
+    // question the pane has just declined to answer.
+    const c = detailContent(service({ bootUnit: 'agentop-server.service' }), s, NOW)
+    expect(rowsUnder(c, s.sectionMachine).map(r => r.value).join(' ')).not.toContain('agentop-server')
   })
 
   test("the machine's own facts land under their own rule, in the order they were given", () => {
@@ -1238,5 +1346,24 @@ describe('actionAtColumn', () => {
 
   test('says nothing about an empty row', () => {
     expect(actionAtColumn(fitActionRow([], 0, 40), 2)).toBeNull()
+  })
+})
+
+describe('paneBadgeRoom', () => {
+  // The contract is exact: a badge cut to this length must actually be DRAWN, and one character
+  // longer must be the case `paneTop` drops. A room that is merely "about right" is a badge that
+  // vanishes on some widths and not others.
+  test('is exactly the length paneTop will draw', () => {
+    for (let w = 0; w <= 80; w++) {
+      const room = paneBadgeRoom('3f5f', w)
+      if (room === 0) continue
+      expect(paneTop('3f5f', 'x'.repeat(room), w).badge).toBe('x'.repeat(room))
+      expect(paneTop('3f5f', 'x'.repeat(room + 1), w).badge).toBe('')
+    }
+  })
+
+  test('answers zero on a pane with no room for one', () => {
+    expect(paneBadgeRoom('3f5f', 6)).toBe(0)
+    expect(paneBadgeRoom('3f5f', 0)).toBe(0)
   })
 })

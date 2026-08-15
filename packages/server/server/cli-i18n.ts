@@ -89,6 +89,8 @@ export interface CliStrings {
    * the services row can say least, a red line that named one runtime.
    */
   svcConflict: (runtimes: string[]) => string
+  /** A second copy under the SAME runtime, serving nothing. Names the pid — see ControlService.idle. */
+  svcIdleServer: (pids: number[]) => string
   /** A stop/restart named something that is not running. */
   svcNotRunning: string
 
@@ -104,11 +106,79 @@ export interface CliStrings {
   }
   /** Said on a session whose harness has no probed approval markers. */
   sessApprovalBlind: (harness: string) => string
+  /**
+   * Said on a row whose recorded DIRECTORY no longer exists on this machine.
+   *
+   * A removed worktree is the ordinary way to get here, and the row is still worth having — it
+   * carries the name, the note and the task. What it cannot carry is a project derived from a path
+   * that resolves to nothing, and this is the sentence that says so instead.
+   */
+  sessDirGone: string
+  /**
+   * Said on a hosted row whose harness can never report which conversation it is writing.
+   *
+   * Not "no conversation was found": the point is that none can be, so what the reopen verb offers
+   * for this harness is inferred from the directory rather than recorded. See
+   * `conversationLinkable`.
+   */
+  sessConversationBlind: (harness: string) => string
+  /**
+   * Said on a session that IS visibly blocked, but whose dialog nobody has read.
+   *
+   * A different fact from `sessApprovalBlind`, which is about not being able to SEE the block. This
+   * one is about not knowing which key answers it — and a harness can have one and not the other.
+   */
+  sessApproveBlind: (harness: string) => string
+  /** The prompt was typed in and submitted. */
+  sessPrompted: (id: string) => string
+  /** Refused: the session is sitting on a dialog, so typed text would answer the menu. */
+  sessPromptBlocked: string
+  /** Refused: nothing is running there to type into. */
+  sessNotRunning: string
+  /** Refused: nothing was typed. */
+  sessPromptEmpty: string
+  /** The backend accepted neither the text nor the key. */
+  sessSendFailed: (id: string) => string
+  /** The keystroke went in — and the sentence says what it did, not that it "approved". */
+  sessApproved: (id: string) => string
+  /** Refused: it is not asking anything at this moment, whatever the list said a poll ago. */
+  sessNotAsking: string
+  /** Refused: this harness's dialog has never been read, so there is no key to send. */
+  sessApproveUnknown: (harness: string) => string
+  /** Said on a row whose dialog offers OPTIONS and whose harness has no verified way to pick one. */
+  sessChooseBlind: (harness: string) => string
+  /** Refused: the dialog offers N options, so there is nothing to merely "approve". */
+  sessNeedsChoice: (n: number) => string
+  /** Refused: the question changed between being shown and being answered. */
+  sessChoiceGone: string
+  /** Refused: no verified way to select an option by number on this harness. */
+  sessChooseUnknown: (harness: string) => string
+  /** The chosen option went in — and the sentence names WHICH, because that is the whole point. */
+  sessAnswered: (label: string) => string
+  /** Nothing fell, or everything that did has already been picked back up. */
+  sessNoFell: string
+  sessFellOpened: (opened: number, skipped: number, held: number) => string
+  sessFellNoneOpened: (skipped: number) => string
+  /**
+   * Refusing to open a conversation a live session already has, and NAMING that session.
+   *
+   * The name is the whole message. "Already open" leaves someone hunting for it; the twins this
+   * prevents were only found by reading two screens side by side and noticing identical text.
+   */
+  sessResumeInUse: (holder: string) => string
   /** The fallback title for a session the user never named. */
   sessUntitled: (harness: string, project: string) => string
   sessKilled: (id: string) => string
+  sessRestoreNone: string
+  sessRestoreDeclined: (n: number) => string
+  sessRestored: (opened: number, skipped: number) => string
+  sessRestoreFailed: (skipped: number) => string
   sessNoTask: string
   sessTaskFinished: (task: string) => string
+  /** The task named nothing — no session wears it and it is not in the finished list. */
+  sessTaskUnknown: (task: string) => string
+  /** Removed. Says how many sessions were UNFILED, because they were kept, not deleted. */
+  sessTaskDeleted: (task: string, freed: number) => string
   sessTaskReopened: (task: string) => string
   sessKillUnconfirmed: (id: string) => string
   sessRenamed: string
@@ -117,7 +187,7 @@ export interface CliStrings {
   sessNoted: string
   sessTasked: string
   sessTaskEmpty: (task: string) => string
-  sessTaskOpened: (task: string, opened: number, skipped: number) => string
+  sessTaskOpened: (task: string, opened: number, skipped: number, held: number) => string
   sessTaskNoneOpened: (task: string, skipped: number) => string
   /** A session the backend hosts but the registry never recorded has no metadata to patch. */
   sessNoRegistryEntry: string
@@ -179,6 +249,36 @@ export interface CliStrings {
   optCentralNativeBackgroundHint: string
   /** `Stop (native)` / `Stop (docker)` — offered only to break a conflict. */
   stopRuntime: (runtime: string) => string
+
+  /**
+   * The BOOT switch, both positions, composed here for the same reason the starts are: which unit
+   * brings a service back is a fact about this box, and `agentistics` has two of them.
+   *
+   * `mech` is the mechanism in one word — the runtime for `agentistics`, nothing for the central,
+   * which has only one. The confirmations NAME the unit, because a sentence that says "it will not
+   * come back" and does not say what was doing the bringing back leaves the user with nothing to go
+   * look at — which is the whole of the complaint these strings answer.
+   */
+  optBootOn: (mech: string) => string
+  optBootOnHint: string
+  optBootOff: (mech: string) => string
+  optBootOffHint: string
+  bootConfirmOn: (unit: string) => string
+  bootConfirmOff: (unit: string) => string
+  /** Asked right after a stop that worked, while a boot unit is still registered for it. */
+  bootAfterStop: (service: string, unit: string) => string
+  bootDisabled: (unit: string) => string
+  bootDisableFailed: (unit: string) => string
+
+  /**
+   * Why a setup mode cannot be chosen right now.
+   *
+   * `central` re-runs `central.sh init`, which rewrites the environment file and recreates the
+   * containers — on a central that is up that is a teardown of the thing being used. The sentence
+   * names what to do instead, because a greyed row that explains nothing is indistinguishable from
+   * a broken one.
+   */
+  setupBlockedCentralUp: string
 
   /**
    * The restarts a RUNNING service offers — composed here for the same reason the starts are: only
@@ -310,23 +410,75 @@ const EN: CliStrings = {
   svcAgentistics: 'agentistics',
   svcCentral: 'agentistics central',
   svcConflict: (runtimes) => `conflict: ${runtimes.join(' + ')} both running — stop one`,
+  svcIdleServer: pids => pids.length === 1
+    ? `a second server (pid ${pids[0]}) is running and serving nothing — kill ${pids[0]}`
+    : `${pids.length} extra servers are running and serving nothing — kill ${pids.join(' ')}`,
   svcNotRunning: 'that service is not running.',
 
   sessState: {
     working: 'working',
     waitingApproval: 'needs approval',
     waiting: 'waiting',
-    exited: 'exited',
-    lost: 'lost',
+    // ONE word for every way a session is not running. `exited`, `lost` and `closed` are three
+    // internal facts and were three words on the row — but a reader has one question here ("is it
+    // running?") and one move available ("reopen it"), so three answers to it was noise dressed as
+    // precision. The distinction still exists in the state and is still said by the DETAIL pane;
+    // the column stops spending three vocabularies on one bit.
+    exited: 'off',
+    lost: 'off',
+    closed: 'off',
     external: 'external',
-    closed: 'closed',
   },
   sessApprovalBlind: (harness: string) =>
     `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
+  sessDirGone: 'this directory no longer exists — a removed worktree, most likely. Reopening will not work until it is back.',
+  sessConversationBlind: (harness: string) =>
+    `${harness} never reports which conversation a session it started is writing, so agentop cannot record the link — anything offered to reopen here is inferred from the directory.`,
+  sessApproveBlind: (harness: string) =>
+    `nobody has read ${harness}'s dialog, so agentop does not know which key answers it — attach to this session to answer it there.`,
+  sessPrompted: (id: string) => `sent to ${id}.`,
+  sessPromptBlocked:
+    'that session has a question open, so typed text would be answering its menu. Approve it, or attach and answer it there.',
+  sessNotRunning: 'nothing is running in that session to type into.',
+  sessPromptEmpty: 'nothing to send.',
+  sessSendFailed: (id: string) => `${id} did not take the keystroke — it may have just ended.`,
+  sessApproved: (id: string) => `sent the confirm key to ${id}.`,
+  sessNotAsking: 'that session is not asking anything right now — nothing was sent.',
+  sessApproveUnknown: (harness: string) =>
+    `agentop has not read ${harness}'s dialog, so it will not guess which key answers it.`,
+  sessChooseBlind: (harness: string) =>
+    `this dialog is a choice, and nobody has verified how to pick an option on ${harness} — attach to answer it there.`,
+  sessNeedsChoice: (n: number) =>
+    `that dialog offers ${n} options, so there is nothing to simply approve — pick one.`,
+  sessChoiceGone:
+    'the session is asking something else now — nothing was sent. Look again before answering.',
+  sessChooseUnknown: (harness: string) =>
+    `agentop has no verified way to pick an option on ${harness}, and will not confirm the highlighted one for you — attach to answer it there.`,
+  sessAnswered: (label: string) => `answered: ${label}`,
+  sessNoFell: 'nothing fell — no session was lost with the machine still on record.',
+  sessFellOpened: (opened: number, skipped: number, held: number) =>
+    `reopened ${opened} session(s) that fell.`
+    + (held > 0 ? ` ${held} already open in another session.` : '')
+    + (skipped > 0 ? ` ${skipped} could not be reopened.` : ''),
+  sessFellNoneOpened: (skipped: number) =>
+    `none of the ${skipped} session(s) that fell could be reopened.`,
+  sessResumeInUse: (holder: string) =>
+    `that conversation is already open in ${holder} — open it there instead of starting a second assistant in it.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
   sessKilled: (id: string) => `stopped ${id}.`,
+  sessRestoreNone: 'those sessions are no longer in the registry.',
+  sessRestoreDeclined: (n: number) =>
+    `left ${n} session${n === 1 ? '' : 's'} closed — still listed, still reopenable.`,
+  sessRestored: (opened: number, skipped: number) =>
+    `restored ${opened}${skipped ? `, ${skipped} could not be` : ''}.`,
+  sessRestoreFailed: (skipped: number) =>
+    `nothing could be restored${skipped ? ` — ${skipped} had no conversation to reopen` : ''}.`,
   sessNoTask: 'that session has no task.',
   sessTaskFinished: (task: string) => `"${task}" marked finished.`,
+  sessTaskUnknown: (task: string) => `no session is filed under "${task}", and it is not a finished task.`,
+  sessTaskDeleted: (task: string, freed: number) => freed === 0
+    ? `"${task}" removed.`
+    : `"${task}" removed — ${freed} session(s) kept, now unfiled.`,
   sessTaskReopened: (task: string) => `"${task}" reopened.`,
   sessKillUnconfirmed: (id: string) =>
     `could not confirm ${id} was stopped — it may still be running, so its record was kept.`,
@@ -336,10 +488,10 @@ const EN: CliStrings = {
   sessNoted: 'note saved.',
   sessTasked: 'task set.',
   sessTaskEmpty: (task: string) => `no sessions are filed under "${task}".`,
-  sessTaskOpened: (task: string, opened: number, skipped: number) =>
-    skipped > 0
-      ? `reopened ${opened} session(s) of "${task}" — ${skipped} could not be reopened.`
-      : `reopened ${opened} session(s) of "${task}".`,
+  sessTaskOpened: (task: string, opened: number, skipped: number, held: number) =>
+    `reopened ${opened} session(s) of "${task}".`
+    + (held > 0 ? ` ${held} already open in another session.` : '')
+    + (skipped > 0 ? ` ${skipped} could not be reopened.` : ''),
   sessTaskNoneOpened: (task: string, skipped: number) =>
     `none of the ${skipped} session(s) of "${task}" could be reopened.`,
   sessNoRegistryEntry: 'that session has no record to update — it was not started by agentop.',
@@ -383,13 +535,25 @@ const EN: CliStrings = {
   optCentralNativeBackground: 'Start (background)',
   optCentralNativeBackgroundHint: 'detached — keeps running, no Docker needed',
   stopRuntime: (runtime) => `Stop (${runtime})`,
+  optBootOn: (mech) => (mech ? `Start at boot (${mech})` : 'Start at boot'),
+  optBootOnHint: 'register a systemd user service so it comes back after a reboot',
+  optBootOff: (mech) => (mech ? `Do not start at boot (${mech})` : 'Do not start at boot'),
+  optBootOffHint: 'remove that registration — anything running now keeps running',
+  bootConfirmOn: (unit) => `Register ${unit} so this comes back on every boot?`,
+  bootConfirmOff: (unit) =>
+    `Remove ${unit}? It stops bringing this back after a reboot. Anything running now keeps running.`,
+  bootAfterStop: (service, unit) =>
+    `${service} is stopped, but ${unit} still starts it at boot. Remove that registration too?`,
+  bootDisabled: (unit) => `${unit} removed — it no longer starts at boot.`,
+  bootDisableFailed: (unit) => `Could not remove ${unit}.`,
+  setupBlockedCentralUp: 'the central is running — stop it before reconfiguring it',
   optRestart: 'Restart',
   optRestartHint: 'bounce it — same build',
   optRebuild: 'Rebuild & restart',
   optRebuildRuntime: (runtime) => `Rebuild & restart (${runtime})`,
   optRebuildNativeHint: 'recompile the binary first (bun run bin), then restart',
   optRebuildDockerHint: 'rebuild the image and recreate the container',
-  archiveUnsetHint: 'history preservation is still unset — see the Setup tab',
+  archiveUnsetHint: 'history preservation is still unset — the config pane can set it',
   dockerStartFailed: 'the machine container did not start.',
   localStartFailed: 'the local server did not come back up.',
   centralStarted: 'agentistics central is up.',
@@ -497,23 +661,74 @@ const PT: CliStrings = {
   svcAgentistics: 'agentistics',
   svcCentral: 'agentistics central',
   svcConflict: (runtimes) => `conflito: ${runtimes.join(' + ')} rodando juntos — pare um`,
+  svcIdleServer: pids => pids.length === 1
+    ? `um segundo servidor (pid ${pids[0]}) está rodando sem servir nada — encerre ${pids[0]}`
+    : `${pids.length} servidores extras rodando sem servir nada — encerre ${pids.join(' ')}`,
   svcNotRunning: 'esse serviço não está rodando.',
 
   sessState: {
     working: 'trabalhando',
     waitingApproval: 'precisa de aprovação',
-    waiting: 'aguardando',
-    exited: 'encerrada',
-    lost: 'perdida',
+    // "aguardando" alone does not say aguardando WHAT, and the state next to it is
+    // `waitingApproval` — with both spelled out the pair reads as the distinction it is. English
+    // keeps `waiting`: there it is already the intransitive answer, and "waiting for a reply" would
+    // be longer without saying more.
+    waiting: 'aguardando resposta',
+    exited: 'desligada',
+    lost: 'desligada',
+    closed: 'desligada',
     external: 'externa',
-    closed: 'fechada',
   },
   sessApprovalBlind: (harness: string) =>
-    `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando", como qualquer outra pausa.`,
+    `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando resposta", como qualquer outra pausa.`,
+  sessDirGone: 'este diretório não existe mais — provavelmente uma worktree removida. Reabrir não vai funcionar enquanto ele não voltar.',
+  sessConversationBlind: (harness: string) =>
+    `o ${harness} nunca informa qual conversa uma sessão iniciada por ele está escrevendo, então o agentop não consegue registrar o vínculo — o que for oferecido para reabrir aqui é inferido pelo diretório.`,
+  sessApproveBlind: (harness: string) =>
+    `ninguém leu o diálogo do ${harness}, então o agentop não sabe qual tecla responde — anexe na sessão para responder lá.`,
+  sessPrompted: (id: string) => `enviado para ${id}.`,
+  sessPromptBlocked:
+    'essa sessão está com uma pergunta aberta, então o texto digitado responderia o menu dela. Aprove, ou anexe e responda lá.',
+  sessNotRunning: 'não há nada rodando nessa sessão para digitar.',
+  sessPromptEmpty: 'nada para enviar.',
+  sessSendFailed: (id: string) => `${id} não aceitou a tecla — pode ter acabado de encerrar.`,
+  sessApproved: (id: string) => `tecla de confirmação enviada para ${id}.`,
+  sessNotAsking: 'essa sessão não está perguntando nada agora — nada foi enviado.',
+  sessApproveUnknown: (harness: string) =>
+    `o agentop não leu o diálogo do ${harness}, e não vai chutar qual tecla responde.`,
+  sessChooseBlind: (harness: string) =>
+    `esse diálogo é uma escolha, e ninguém verificou como selecionar uma opção no ${harness} — anexe para responder lá.`,
+  sessNeedsChoice: (n: number) =>
+    `esse diálogo tem ${n} opções, então não há o que simplesmente aprovar — escolha uma.`,
+  sessChoiceGone:
+    'a sessão está perguntando outra coisa agora — nada foi enviado. Olhe de novo antes de responder.',
+  sessChooseUnknown: (harness: string) =>
+    `o agentop não tem forma verificada de escolher uma opção no ${harness}, e não vai confirmar a destacada por você — anexe para responder lá.`,
+  sessAnswered: (label: string) => `respondido: ${label}`,
+  sessNoFell: 'nada caiu — nenhuma sessão foi perdida com registro de que estava viva.',
+  sessFellOpened: (opened: number, skipped: number, held: number) =>
+    `${opened} sessão(ões) que caíram reabertas.`
+    + (held > 0 ? ` ${held} já estava(m) aberta(s) em outra sessão.` : '')
+    + (skipped > 0 ? ` ${skipped} não puderam ser reabertas.` : ''),
+  sessFellNoneOpened: (skipped: number) =>
+    `nenhuma das ${skipped} sessão(ões) que caíram pôde ser reaberta.`,
+  sessResumeInUse: (holder: string) =>
+    `essa conversa já está aberta em ${holder} — abra ela por lá, em vez de colocar um segundo assistente dentro dela.`,
   sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
   sessKilled: (id: string) => `${id} encerrada.`,
+  sessRestoreNone: 'essas sessões não estão mais no registro.',
+  sessRestoreDeclined: (n: number) =>
+    `${n} ${n === 1 ? 'sessão deixada fechada' : 'sessões deixadas fechadas'} — continuam listadas e reabríveis.`,
+  sessRestored: (opened: number, skipped: number) =>
+    `${opened} restaurada${opened === 1 ? '' : 's'}${skipped ? `, ${skipped} não deu` : ''}.`,
+  sessRestoreFailed: (skipped: number) =>
+    `nada pôde ser restaurado${skipped ? ` — ${skipped} sem conversa para reabrir` : ''}.`,
   sessNoTask: 'essa sessão não tem tarefa.',
   sessTaskFinished: (task: string) => `"${task}" marcada como finalizada.`,
+  sessTaskUnknown: (task: string) => `nenhuma sessão está sob "${task}", e ela não está na lista de finalizadas.`,
+  sessTaskDeleted: (task: string, freed: number) => freed === 0
+    ? `"${task}" removida.`
+    : `"${task}" removida — ${freed} sessão(ões) mantida(s), agora sem tarefa.`,
   sessTaskReopened: (task: string) => `"${task}" reaberta.`,
   sessKillUnconfirmed: (id: string) =>
     `não deu para confirmar que ${id} foi encerrada — ela pode continuar rodando, então o registro dela foi mantido.`,
@@ -523,10 +738,10 @@ const PT: CliStrings = {
   sessNoted: 'nota salva.',
   sessTasked: 'tarefa definida.',
   sessTaskEmpty: (task: string) => `nenhuma sessão está na tarefa "${task}".`,
-  sessTaskOpened: (task: string, opened: number, skipped: number) =>
-    skipped > 0
-      ? `${opened} sessão(ões) de "${task}" reabertas — ${skipped} não puderam ser reabertas.`
-      : `${opened} sessão(ões) de "${task}" reabertas.`,
+  sessTaskOpened: (task: string, opened: number, skipped: number, held: number) =>
+    `${opened} sessão(ões) de "${task}" reabertas.`
+    + (held > 0 ? ` ${held} já estava(m) aberta(s) em outra sessão.` : '')
+    + (skipped > 0 ? ` ${skipped} não puderam ser reabertas.` : ''),
   sessTaskNoneOpened: (task: string, skipped: number) =>
     `nenhuma das ${skipped} sessão(ões) de "${task}" pôde ser reaberta.`,
   sessNoRegistryEntry: 'essa sessão não tem registro para atualizar — não foi o agentop que iniciou ela.',
@@ -547,7 +762,7 @@ const PT: CliStrings = {
     waiting: (n: number, names: string) =>
       `${n} ${n === 1 ? 'sessão esperando' : 'sessões esperando'} por você: ${names}`,
     blind: (harnesses: string) =>
-      `Detecção de aprovação não está disponível para: ${harnesses} — essas sessões aparecem como "aguardando" de qualquer jeito.`,
+      `Detecção de aprovação não está disponível para: ${harnesses} — essas sessões aparecem como "aguardando resposta" de qualquer jeito.`,
   },
 
   dockerMissing: 'docker não instalado',
@@ -570,13 +785,25 @@ const PT: CliStrings = {
   optCentralNativeBackground: 'Iniciar (background)',
   optCentralNativeBackgroundHint: 'destacado — continua rodando, sem Docker',
   stopRuntime: (runtime) => `Parar (${runtime})`,
+  optBootOn: (mech) => (mech ? `Iniciar no boot (${mech})` : 'Iniciar no boot'),
+  optBootOnHint: 'registra um serviço systemd de usuário para voltar depois de reiniciar',
+  optBootOffHint: 'remove esse registro — o que está rodando agora continua rodando',
+  optBootOff: (mech) => (mech ? `Não iniciar no boot (${mech})` : 'Não iniciar no boot'),
+  bootConfirmOn: (unit) => `Registrar ${unit} para isto voltar a cada boot?`,
+  bootConfirmOff: (unit) =>
+    `Remover ${unit}? Ele deixa de trazer isto de volta depois de reiniciar. O que está rodando agora continua rodando.`,
+  bootAfterStop: (service, unit) =>
+    `${service} está parado, mas ${unit} ainda o inicia no boot. Remover esse registro também?`,
+  bootDisabled: (unit) => `${unit} removido — não inicia mais no boot.`,
+  bootDisableFailed: (unit) => `Não foi possível remover ${unit}.`,
+  setupBlockedCentralUp: 'a central está rodando — pare ela antes de reconfigurá-la',
   optRestart: 'Reiniciar',
   optRestartHint: 'só reinicia — mesmo build',
   optRebuild: 'Reconstruir & reiniciar',
   optRebuildRuntime: (runtime) => `Reconstruir & reiniciar (${runtime})`,
   optRebuildNativeHint: 'recompila o binário (bun run bin) e depois reinicia',
   optRebuildDockerHint: 'reconstrói a imagem e recria o container',
-  archiveUnsetHint: 'a preservação do histórico ainda não foi definida — veja a aba Setup',
+  archiveUnsetHint: 'a preservação do histórico ainda não foi definida — o painel de config define',
   dockerStartFailed: 'o container da máquina não subiu.',
   localStartFailed: 'o server local não voltou a rodar.',
   centralStarted: 'agentistics central está no ar.',

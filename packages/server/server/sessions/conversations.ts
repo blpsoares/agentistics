@@ -11,7 +11,7 @@
  */
 
 import type { HarnessId, SessionMeta } from '@agentistics/core'
-import { calcCost, sessionLabel } from '@agentistics/core'
+import { calcCost, resolveContextWindow, sessionLabel } from '@agentistics/core'
 import { loadConsolidated } from '../consolidate'
 import { sessionAtCwd } from '../live-sessions'
 import { SPAWN_SPECS } from './spawn-spec'
@@ -37,6 +37,16 @@ export interface Conversation {
   /** Total tokens, when the harness records them. Absent is NOT zero — see HARNESS_CAPABILITIES. */
   tokens?: number
   costUSD?: number
+  /**
+   * How full the context window was on the last turn, and out of how much — the gauge's two halves.
+   *
+   * `contextWindow` is resolved HERE rather than on the row, because it is the one place that holds
+   * both the harness's own answer (codex writes `model_context_window` per session) and the model
+   * id a table lookup needs. A row further downstream has neither. Both absent together: a
+   * measurement with no window cannot be drawn, and a window with no measurement is not a reading.
+   */
+  contextTokens?: number
+  contextWindow?: number
 }
 
 const CACHE_TTL_MS = 30_000
@@ -54,6 +64,10 @@ function lastActivityOf(s: SessionMeta): number {
 
 export function toConversation(s: SessionMeta): Conversation {
   const harness = (s.harness ?? 'claude') as HarnessId
+  // The harness's OWN window outranks the table: it knows the deployment and any per-session cap,
+  // which a model id cannot express. The table answers for everyone else, and answers `null` for a
+  // model nobody has verified — which is what stops the gauge being drawn at all.
+  const window = s.context_window ?? resolveContextWindow(s.model)?.tokens
   const total = (s.input_tokens ?? 0) + (s.output_tokens ?? 0)
     + (s.cache_read_input_tokens ?? 0) + (s.cache_creation_input_tokens ?? 0)
   return {
@@ -69,6 +83,11 @@ export function toConversation(s: SessionMeta): Conversation {
     // Absent rather than zero when the harness records none: a confident 0 next to real numbers is
     // the same lie `HARNESS_CAPABILITIES` exists to prevent on the dashboard.
     ...(total > 0 ? { tokens: total } : {}),
+    // BOTH or NEITHER. Half a gauge is not a weaker gauge, it is an unreadable one: a measurement
+    // with no window has no percentage, and a window with no measurement has no level.
+    ...(s.context_tokens && window
+      ? { contextTokens: s.context_tokens, contextWindow: window }
+      : {}),
     // Through `calcCost`, never an inline rate: CLAUDE.md makes that the single source of truth, and
     // a second arithmetic here would disagree with the dashboard the first time a price changed.
     ...(total > 0 && s.model

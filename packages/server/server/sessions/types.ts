@@ -7,6 +7,7 @@
  */
 
 import type { HarnessId } from '@agentistics/core'
+import type { RepoFacts } from './repo-facts'
 
 /**
  * How a harness accepts an initial prompt while starting an INTERACTIVE session.
@@ -45,6 +46,18 @@ export interface SpawnSpec {
    * an index, never an id, so it has none and the verb is simply not offered for it.
    */
   resume?: (id: string) => string[]
+  /**
+   * The argv (after `bin`) that tells a FRESH session which conversation id to write under.
+   *
+   * Absent for every CLI that invents its own and never reports it back, which is most of them —
+   * and absence is load-bearing: it is what makes the cockpit say the link cannot be recorded for
+   * this harness rather than showing the harness-and-directory guess as though it were a fact.
+   *
+   * Only ever set where the id the CLI accepts is EXACTLY the id the adapter reads sessions back
+   * by, verified by running it. Gemini accepts a UUID and is deliberately absent for that reason —
+   * see its entry in `SPAWN_SPECS`.
+   */
+  assignId?: (id: string) => string[]
 }
 
 export interface SpawnRequest {
@@ -57,6 +70,15 @@ export interface SpawnRequest {
    * not refused, because a resumed session accepting an opening line is a reasonable thing to want.
    */
   resumeId?: string
+  /**
+   * A conversation id to ASSIGN to a fresh session — a UUID the caller minted.
+   *
+   * Offered, never imposed: it is used only where `SpawnSpec.assignId` says the CLI accepts one,
+   * and ignored beside `resumeId`, whose conversation already has an id. The caller reads back
+   * `SpawnPlan.conversationId` to learn whether it was actually applied, so nothing is ever
+   * recorded that was not passed to the CLI.
+   */
+  conversationId?: string
   prompt?: string
   model?: string
   effort?: string
@@ -68,6 +90,16 @@ export interface SpawnPlan {
   argv: string[]
   /** Typed into the session once it is up, for a `send-keys` harness. */
   sendKeys?: string
+  /**
+   * The conversation this spawn is KNOWN to drive — the id reopened, or the id assigned.
+   *
+   * This is the whole of what a caller may record. Absent means the harness will invent its own and
+   * never say what it was, and the registry must then hold nothing rather than a plausible guess:
+   * `conversationForProcess` matches by harness and directory, so a guess files every session of
+   * one repository under the same conversation, which is how a crash left one conversation listed
+   * three times under three names.
+   */
+  conversationId?: string
 }
 
 export type SpawnPlanError =
@@ -111,6 +143,16 @@ export interface ManagedSession {
   model?: string
   effort?: string
   label?: string
+  /**
+   * When the label was written, epoch ms — so a name typed HERE can be compared with one typed
+   * inside the session.
+   *
+   * A harness records its own name too (`/rename` in Claude Code), and the two can disagree. The
+   * only non-arbitrary way to settle that is recency, which needs both sides to say WHEN — this is
+   * our side. Absent on a row renamed before agentop recorded it, which `pickTitle` handles rather
+   * than treating as "long ago". See `harness-session-file.ts`.
+   */
+  labelSince?: number
   note?: string
   /**
    * The piece of work this session belongs to.
@@ -120,6 +162,20 @@ export interface ManagedSession {
    * carrying the same task are that task's sessions, and can be reopened together.
    */
   task?: string
+  /**
+   * The last time this session was OBSERVED ALIVE, epoch ms — stamped at creation, then refreshed by
+   * the poller's heartbeat for every session the backend reports as running.
+   *
+   * It exists so that "these fell together" can be answered at all. A machine that reboots takes the
+   * backend with it, so nothing about a `lost` row says whether it was open at the time: `createdAt`
+   * is equally true of a session abandoned three weeks ago, and `BackendSession.lastActivityMs` only
+   * exists for a session the backend still has. See `crash-group.ts`.
+   *
+   * Absent on a row written by a build that predates it, and on one this process has never seen
+   * alive. Absent is never guessed at — it simply keeps the row out of a crash group until the next
+   * heartbeat stamps it.
+   */
+  lastSeenMs?: number
   /**
    * When this session was FINISHED, ISO — set instead of deleting the entry.
    *
@@ -142,6 +198,22 @@ export interface ManagedSession {
    * the same one, and the fleet came back with a single session listed three times under one name.
    */
   conversationId?: string
+  /**
+   * The repository this session's directory belonged to WHEN IT STARTED.
+   *
+   * Recorded because `repo-facts.ts` can only answer by running git in the directory, and the
+   * directory does not always survive the session: `ExitWorktree --remove` and `git worktree
+   * remove` leave the row registered at a path that names nothing. Every probe then fails, the
+   * grouping falls through to the last path segment, and a removed worktree appears as a PROJECT
+   * of its own beside the project it was a worktree of — a name invented from a path that resolves
+   * to nothing, which is the same error as a confident `0` for a metric nobody can produce.
+   *
+   * Spawn is the one moment the answer is certain, because the directory is provably there — the
+   * session is being started in it. Absent on a row written by a build that predates this, and on
+   * one started outside a repository; `resolveRepoFacts` treats absence as "nothing recorded",
+   * never as "no repository", so an older row simply behaves as it always did.
+   */
+  repo?: RepoFacts
 }
 
 /**
@@ -184,6 +256,25 @@ export interface SessionBackend {
   list(): Promise<BackendSession[]>
   /** Newest-last lines of the last rendered frame, trailing blanks removed. */
   capture(id: string, lines: number): Promise<string[]>
+  /**
+   * Type `text` into the session and submit it — what a person does at the keyboard.
+   *
+   * A capability of its own rather than something only `spawn` may do. It was already implemented
+   * (kimi and copilot have no interactive prompt flag, so their opening line is TYPED IN), but it was
+   * buried inside the spawn path, so the one thing the backend could do that nothing else could ask
+   * for was talking to a session that already exists.
+   *
+   * `false` when the backend could not deliver it. Never a throw: a session that ended between the
+   * poll and the keystroke is an ordinary outcome, not an error to crash a caller with.
+   */
+  sendText(id: string, text: string): Promise<boolean>
+  /**
+   * Press ONE named key — the backend's own vocabulary (`Enter`, `Escape`).
+   *
+   * Separate from `sendText` because the two are opposites and confusing them fails silently: sent
+   * as text, `Enter` is five characters typed into the assistant's prompt.
+   */
+  sendKey(id: string, key: string): Promise<boolean>
   /**
    * Kill the session and report whether it is confirmed GONE afterwards. "Already gone" (the
    * session finished or was removed between `list` and this call) counts as success — the caller

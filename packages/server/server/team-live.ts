@@ -33,6 +33,7 @@ export interface MemberLiveReport {
   user: string
   sessionIds: string[]
   processes: LiveProcess[]
+  sessionActivities?: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'>
   /** Epoch ms the report arrived. */
   at: number
 }
@@ -49,8 +50,9 @@ export function recordMemberLive(
   sessionIds: string[],
   processes: LiveProcess[],
   now: number = Date.now(),
+  sessionActivities?: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'>,
 ): void {
-  reports.set(machineId, { user, sessionIds, processes, at: now })
+  reports.set(machineId, { user, sessionIds, processes, sessionActivities, at: now })
 }
 
 /** Drop ONE MACHINE's report immediately — used when its socket closes, so the panel does not wait
@@ -69,16 +71,24 @@ export function clearMemberLive(machineId: string): void {
 export function collectMemberLive(
   visibleUsers: Set<string> | null = null,
   now: number = Date.now(),
-): { liveSessionIds: string[]; liveProcesses: LiveProcess[] } {
+): {
+  liveSessionIds: string[]
+  liveProcesses: LiveProcess[]
+  liveSessionActivities: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'>
+} {
   const ids = new Set<string>()
   const processes: LiveProcess[] = []
+  const liveSessionActivities: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'> = {}
   for (const r of reports.values()) {
     if (now - r.at > LIVE_REPORT_TTL_MS) continue
     if (visibleUsers && !visibleUsers.has(r.user)) continue
     for (const id of r.sessionIds) ids.add(id)
     for (const p of r.processes) processes.push({ ...p, user: r.user })
+    if (r.sessionActivities) {
+      Object.assign(liveSessionActivities, r.sessionActivities)
+    }
   }
-  return { liveSessionIds: [...ids], liveProcesses: processes }
+  return { liveSessionIds: [...ids], liveProcesses: processes, liveSessionActivities }
 }
 
 /** Test seam — drops every stored report. */

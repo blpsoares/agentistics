@@ -1,7 +1,7 @@
 /** Which settings sections a viewer can see. UX-only gate — the server enforces real authz. */
 export type SettingsSectionId =
   | 'preferences' | 'sessions' | 'data-sources' | 'harnesses' | 'pricing' | 'billing' | 'install' | 'connection' | 'live'
-  | 'chat'
+  | 'chat' | 'notifications'
   | 'users' | 'teams' | 'machines' | 'repositories'
 
 export type SettingsGroup = 'personal' | 'governance'
@@ -11,6 +11,7 @@ export interface SettingsViewer { central: boolean; role?: 'owner' | 'member'; i
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   { id: 'preferences', labelEn: 'Preferences', labelPt: 'Preferências', group: 'personal' },
+  { id: 'notifications', labelEn: 'Notifications', labelPt: 'Notificações', group: 'personal' },
   { id: 'sessions', labelEn: 'Sessions', labelPt: 'Sessões', group: 'personal' },
   { id: 'data-sources', labelEn: 'Data & sources', labelPt: 'Dados & fontes', group: 'personal' },
   { id: 'harnesses', labelEn: 'Harnesses', labelPt: 'Harnesses', group: 'personal' },

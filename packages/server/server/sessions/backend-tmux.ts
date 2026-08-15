@@ -5,7 +5,7 @@
 
 import {
   attachArgs, capturePaneArgs, isSessionGoneError, killSessionArgs, listSessionsArgs,
-  newSessionArgs, parsePrefix, parseTmuxList, serverOptionsArgs, sendKeysEnterArgs,
+  newSessionArgs, parsePrefix, parseTmuxList, serverOptionsArgs, sendKeysNamedArgs,
   sendKeysLiteralArgs, showPrefixArgs, trimCapture,
 } from './tmux-cli'
 import type { BackendSession, BackendSpawn, SessionBackend } from './types'
@@ -26,6 +26,26 @@ async function tmux(args: string[]): Promise<{ code: number; out: string; err: s
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+/**
+ * Type text and submit it, as two separate `send-keys` calls.
+ *
+ * `-l` (literal) for the text so a prompt containing `;` or `C-c` is typed rather than interpreted,
+ * then the named `Enter` — which is why they cannot be one call.
+ *
+ * The submit is only sent once the text was accepted. Half a prompt followed by an unconditional
+ * Enter is a blank turn sent to an assistant, which is the exact accident this feature exists to
+ * avoid.
+ *
+ * A free function rather than a method on the object below, because `spawn` calls it: reaching it
+ * through `this` would break the moment a caller spread or destructured the backend, and `index.ts`
+ * spreads it.
+ */
+async function sendTextTo(id: string, text: string): Promise<boolean> {
+  const typed = await tmux(sendKeysLiteralArgs(id, text))
+  if (typed.code !== 0) return false
+  return (await tmux(sendKeysNamedArgs(id, 'Enter'))).code === 0
+}
 
 let tmuxPresent: boolean | null = null
 
@@ -48,10 +68,18 @@ export const tmuxBackend: SessionBackend = {
     const { code, out } = await tmux(newSessionArgs({ id: req.id, cwd: req.cwd, argv: req.argv }))
     if (code !== 0) throw new Error(out.trim() || `tmux new-session failed (code ${code})`)
     if (req.sendKeys) {
+      // The harness has to have drawn its prompt before anything typed into it lands anywhere. Only
+      // the OPENING line needs this wait; `sendText` below is called on a session that is already up
+      // and must not pay for it.
       await sleep(SEND_KEYS_DELAY_MS)
-      await tmux(sendKeysLiteralArgs(req.id, req.sendKeys))
-      await tmux(sendKeysEnterArgs(req.id))
+      await sendTextTo(req.id, req.sendKeys)
     }
+  },
+
+  sendText: sendTextTo,
+
+  async sendKey(id: string, key: string) {
+    return (await tmux(sendKeysNamedArgs(id, key))).code === 0
   },
 
   async list(): Promise<BackendSession[]> {

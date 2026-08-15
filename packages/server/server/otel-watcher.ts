@@ -606,11 +606,19 @@ async function main() {
   // Also do periodic polling as a fallback (chokidar can miss events in some edge cases)
   setInterval(() => rebuildSnapshot(), WATCH_INTERVAL_SEC * 1000)
 
+  // The session-event producer rides along here rather than being its own service: it has to be
+  // long-lived to tell a working session from a finished one (see events/producer.ts), and a
+  // separate process the user must remember to start is a process that will be dead at the moment
+  // it matters. Never fatal to this daemon — see events/daemon.ts.
+  const { startEventProducer } = await import('./events/daemon')
+  const events = await startEventProducer()
+
   console.log('[watcher] Running — use `bun run dev` in a separate terminal for the dashboard UI')
 
   // Graceful shutdown
   const shutdown = async () => {
     console.log('\n[watcher] Shutting down...')
+    await events?.stop()
     if (otel) await otel.shutdown()
     process.exit(0)
   }

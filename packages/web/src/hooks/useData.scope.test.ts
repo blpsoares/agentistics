@@ -31,12 +31,18 @@ import type { TagDef } from '../lib/tagMatch'
  * Spreading the real React keeps every other export intact and overrides only the hooks this
  * file needs to run the memo body eagerly. The real module is captured by the import above,
  * which is evaluated before this call.
+ *
+ * Every override that stays must still be FAITHFUL to the hook it replaces, for the same reason:
+ * whatever runs after this file gets this React. `useState` ignoring a lazy initializer handed the
+ * component the function itself as its state — `useTerminalSize` does `useState(currentSize)`, so
+ * every Ink surface rendered after this file came out at a width of `undefined`.
  */
 mock.module('react', () => ({
   ...React,
   default: (React as { default?: unknown }).default ?? React,
   useMemo: <T>(fn: () => T) => fn(),
-  useState: <T>(init: T) => [init, () => {}],
+  useState: <T>(init: T | (() => T)) =>
+    [typeof init === 'function' ? (init as () => T)() : init, () => {}],
   useEffect: () => {},
   useCallback: <T>(fn: T) => fn,
   useRef: <T>(init: T) => ({ current: init }),

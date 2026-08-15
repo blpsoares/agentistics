@@ -184,6 +184,14 @@ export interface HeaderMetaInput {
    * cannot tell you to navigate there.
    */
   attention?: number
+  /**
+   * How many assistants are up out of how many this MACHINE can hold, when it could be measured.
+   *
+   * Absent means nobody could read the memory (not Linux, no `/proc`) and the gauge is simply not
+   * drawn. `red` is decided by the host, from the distance to the ceiling and from swap pressure —
+   * the TUI owns no logic, here as everywhere.
+   */
+  memory?: { used: number; max: number; red: boolean }
   width: number
 }
 
@@ -197,12 +205,23 @@ export interface HeaderMeta {
   /** The waiting-sessions counter, e.g. `⏳ 2`. */
   alert: string
   update: string
+  /**
+   * The parallel-sessions budget, e.g. `▤ 3/17` — how many assistants are up, out of how many this
+   * MACHINE can hold. Empty where memory could not be read at all.
+   *
+   * It answers the question actually asked before opening one, which "10 GB used" does not. The
+   * glyph is there so it cannot be misread as a session count on its own.
+   */
+  memory: string
+  /** True when the budget is inside its warning distance — the caller colours it. */
+  memoryRed?: boolean
 }
 
 /** What the pieces cost together, separators included — the number the caller budgets against. */
 export function headerMetaWidth(meta: HeaderMeta): number {
   return meta.text.length
     + (meta.alert ? SEP.length + meta.alert.length : 0)
+    + (meta.memory ? SEP.length + meta.memory.length : 0)
     + (meta.update ? SEP.length + meta.update.length : 0)
 }
 
@@ -222,25 +241,41 @@ export function headerMetaWidth(meta: HeaderMeta): number {
  * and it is the piece that must survive a narrow terminal.
  */
 export function headerMeta(input: HeaderMetaInput): HeaderMeta {
-  const { mode, version, latestVersion, attention, width } = input
-  if (width <= 0) return { text: '', alert: '', update: '' }
+  const { mode, version, latestVersion, attention, memory, width } = input
+  if (width <= 0) return { text: '', alert: '', update: '', memory: '' }
 
   const outdated = Boolean(latestVersion && latestVersion !== version)
   const text = version ? `${mode}${SEP}v${version}` : mode
   const alert = attention && attention > 0 ? `⏳ ${attention}` : ''
   const update = outdated ? `● ${latestVersion}` : ''
+  // Absent memory renders nothing at all — a machine whose `/proc` cannot be read shows no gauge
+  // rather than a zero, the same rule the boot row and the harness capabilities follow.
+  const mem = memory ? `▤ ${memory.used}/${memory.max}` : ''
+  const red = memory?.red === true
 
-  const full = { text, alert, update }
+  const full = { text, alert, update, memory: mem, memoryRed: red }
   if (headerMetaWidth(full) <= width) return full
 
-  const withoutUpdate = { text, alert, update: '' }
+  // Dropped least-actionable first, exactly as before. The budget sits between the update notice
+  // and the version: it is more actionable than "there is a new release" and less than the waiting
+  // counter, which stays the last thing standing after the mode token.
+  const withoutUpdate = { ...full, update: '' }
   if (headerMetaWidth(withoutUpdate) <= width) return withoutUpdate
 
-  const withoutVersion = { text: mode, alert, update: '' }
+  // …unless it is RED. A budget about to run out is the most actionable thing on the row, so it
+  // outranks the version and keeps its place — dropping the warning to keep a version number would
+  // be the wrong trade at exactly the moment it matters.
+  const withoutMemory = { ...full, update: '', memory: red ? mem : '' }
+  if (headerMetaWidth(withoutMemory) <= width) return withoutMemory
+
+  const withoutVersion = { text: mode, alert, update: '', memory: red ? mem : '', memoryRed: red }
   if (headerMetaWidth(withoutVersion) <= width) return withoutVersion
 
-  if (mode.length <= width) return { text: mode, alert: '', update: '' }
-  return { text: truncate(mode, width), alert: '', update: '' }
+  const modeAndAlert = { text: mode, alert, update: '', memory: '' }
+  if (headerMetaWidth(modeAndAlert) <= width) return modeAndAlert
+
+  if (mode.length <= width) return { text: mode, alert: '', update: '', memory: '' }
+  return { text: truncate(mode, width), alert: '', update: '', memory: '' }
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +408,38 @@ export function paneTop(title: string, badge: string, width: number): PaneTop {
     badge: shownBadge,
     tail: (shownBadge ? ' ' : '') + '╮',
   }
+}
+
+/**
+ * The widest badge `paneTop` will actually DRAW beside this title — PURE.
+ *
+ * Its rule is whole-or-nothing, which is right for a badge the pane's rows repeat and wrong for one
+ * that is the only place a fact appears: a card's group would simply disappear on a narrow card,
+ * and a card that does not say which project it belongs to is the feature not working. A caller
+ * with such a badge truncates it against this rather than guessing at the frame's overhead.
+ */
+export function paneBadgeRoom(title: string, width: number): number {
+  if (width < TOP_MIN) return 0
+  const budget = width - TOP_OVERHEAD
+  const shownTitle = truncate(title, Math.max(1, budget - 1))
+  return Math.max(0, budget - shownTitle.length - 3)
+}
+
+/**
+ * The widest TITLE that still leaves `paneTop` room to draw this badge — PURE, and the inverse of
+ * `paneBadgeRoom`.
+ *
+ * `paneTop` serves the title first and then keeps the badge whole or not at all, which is right when
+ * the badge repeats something the pane's rows already say and wrong when the badge is the only place
+ * a fact appears. A card puts the session HANDLE there — the prefix `agentop session attach 3f5f`
+ * resolves, and the one thing on the card naming the session to anything outside this screen — so a
+ * long project name in the title must be cut to make room for it, rather than silently taking it.
+ */
+export function paneTitleRoom(badge: string, width: number): number {
+  if (width < TOP_MIN) return 0
+  const budget = width - TOP_OVERHEAD
+  const whole = Math.max(1, budget - 1)
+  return badge === '' ? whole : Math.max(1, Math.min(whole, budget - badge.length - 3))
 }
 
 // ---------------------------------------------------------------------------
@@ -867,6 +934,12 @@ export function detailContent(
   const alert = service.conflict ?? ''
   if (alert) lines.push({ kind: 'text', label: '', value: alert, tone: 'bad' })
 
+  // A second copy under the SAME runtime, holding no port. Its own line rather than folded into the
+  // conflict sentence: the two are different faults with different answers — a conflict asks which
+  // runtime to stop, this one names a pid that is doing work for nobody. Both can be true at once,
+  // and then both are said.
+  if (service.idle) lines.push({ kind: 'text', label: '', value: service.idle, tone: 'bad' })
+
   const summary = summaryOf(service, s, now)
   if (summary) lines.push({ kind: 'text', label: '', value: summary, tone: 'muted' })
 
@@ -910,7 +983,17 @@ export function detailContent(
   const boot = service.boot
   const machineRows: { label: string; value: string }[] = [
     // Absent, not "no": a box whose init system this host cannot ask must say nothing at all.
-    ...(boot ? [{ label: s.bootLabel, value: boot === 'on' ? s.bootOn : s.bootOff }] : []),
+    //
+    // The UNIT is named beside the state whenever the host carried one, and that is the whole of
+    // the honest trail: "starts at boot" tells a user that SOMETHING will bring their central back
+    // and gives them nothing to go and look at. With the unit named, the answer to "why did this
+    // come back after I stopped it" is on the same row as the verb that turns it off.
+    ...(boot
+      ? [{
+          label: s.bootLabel,
+          value: (boot === 'on' ? s.bootOn : s.bootOff) + (service.bootUnit ? `${SEP}${service.bootUnit}` : ''),
+        }]
+      : []),
     ...machine.rows,
   ]
   if (machineRows.length > 0) {

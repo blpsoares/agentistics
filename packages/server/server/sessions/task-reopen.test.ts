@@ -64,3 +64,71 @@ describe('planTaskReopen', () => {
     expect(plan.reopen.map(r => r.entry.id)).toEqual(['a', 'b', 'c'])
   })
 })
+
+describe('a conversation another live session already has', () => {
+  it('is not opened a second time, and the row NAMES what has it', () => {
+    // The measured defect: `liveIds` is keyed by ROW, so a row that is down while a DIFFERENT row
+    // drives its conversation passed every check here — and the reopen put a second assistant into
+    // a live transcript and a live working tree. Five conversations were in that state on this
+    // machine on 2026-08-14.
+    const plan = planTaskReopen({
+      entries: [entry('a')],
+      liveIds: new Set(),
+      conversationFor: conv('c1'),
+      inUse: new Map([['c1', { id: 'twin', label: 'the one already running it' }]]),
+    })
+    expect(plan.reopen).toEqual([])
+    expect(plan.skipped).toEqual([])
+    expect(plan.heldElsewhere).toEqual([
+      { id: 'a', holder: { id: 'twin', label: 'the one already running it' } },
+    ])
+  })
+
+  it('counts as the task being up, not as a failure', () => {
+    // Nothing is missing after such a reopen: the work is on screen under another row. Reporting it
+    // as a failure sends someone looking for a problem the refusal just prevented.
+    const plan = planTaskReopen({
+      entries: [entry('a')],
+      liveIds: new Set(),
+      conversationFor: conv('c1'),
+      inUse: new Map([['c1', { id: 'twin', label: 'twin' }]]),
+    })
+    expect(taskReopenSucceeded(plan, 0)).toBe(true)
+  })
+
+  it('is judged on the conversation the RESOLVER picked, not the one the row remembers', () => {
+    // The resolver decides which conversation this reopen would actually open — a row's recorded id
+    // may be stale, and locking on it would refuse a reopen of something else entirely.
+    const plan = planTaskReopen({
+      entries: [entry('a', { conversationId: 'stale' })],
+      liveIds: new Set(),
+      conversationFor: conv('c1'),
+      inUse: new Map([['stale', { id: 'twin', label: 'twin' }]]),
+    })
+    expect(plan.reopen.map(r => r.resumeId)).toEqual(['c1'])
+    expect(plan.heldElsewhere).toEqual([])
+  })
+
+  it('never refuses a row because of its own id', () => {
+    const plan = planTaskReopen({
+      entries: [entry('a')],
+      liveIds: new Set(),
+      conversationFor: conv('c1'),
+      inUse: new Map([['c1', { id: 'a', label: 'itself' }]]),
+    })
+    expect(plan.reopen.map(r => r.entry.id)).toEqual(['a'])
+    expect(plan.heldElsewhere).toEqual([])
+  })
+
+  it('degrades to the old behaviour when nothing could be established', () => {
+    // Absent is "we do not know", never "everything is free" — but a caller that cannot look must
+    // still be able to reopen, or an unreadable registry would take the verb down with it.
+    const plan = planTaskReopen({
+      entries: [entry('a')],
+      liveIds: new Set(),
+      conversationFor: conv('c1'),
+    })
+    expect(plan.reopen.map(r => r.entry.id)).toEqual(['a'])
+    expect(plan.heldElsewhere).toEqual([])
+  })
+})

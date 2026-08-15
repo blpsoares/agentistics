@@ -289,6 +289,52 @@ test('an old process with nothing on disk is idle, not starting up', () => {
 
 // --- identifying the process itself --------------------------------------------------------------
 
+test('an install named after its VERSION is still recognised', () => {
+  // Measured on 2026-08-15, and the reason this is a bug and not a tidy-up: two processes running
+  // THE SAME executable, one listed and one invisible.
+  //
+  //   pid 3137032  comm=claude    exe=…/share/claude/versions/2.1.233   ← listed
+  //   pid  508665  comm=2.1.233   exe=…/share/claude/versions/2.1.233   ← invisible
+  //
+  // Claude Code installs to `~/.local/share/claude/versions/<version>`, so comm and the exe
+  // basename can BOTH be a version string — in no table, and different every release. The
+  // directory is the identity that survives an upgrade.
+  const exe = '/home/mithrandir/.local/share/claude/versions/2.1.233'
+  expect(harnessOf('2.1.233', exe)).toBe('claude')
+  expect(harnessOf('claude', exe)).toBe('claude')
+  // Specific enough that a directory merely containing the word cannot match.
+  expect(harnessOf('2.1.233', '/home/u/projects/claude/versions/2.1.233')).toBeUndefined()
+  expect(harnessOf('2.1.233', '/home/u/.local/share/claude/versions/2.1.233/extra/thing')).toBeUndefined()
+})
+
+test('the harness PLUMBING is not a session', () => {
+  // Recognising the install path found the invisible session and brought its infrastructure with
+  // it — the daemon and the pty hosts run the same binary. All argvs verbatim from /proc.
+  const exe = '/home/mithrandir/.local/share/claude/versions/2.1.233'
+  // The pty host rewrote its own argv[0] to a single string CONTAINING the verb — there is no
+  // argv[1] to look at, which is exactly what a first attempt at this rule missed.
+  expect(harnessOfProcess('2.1.233', exe, [
+    'claude bg-pty-host', '--bg-pty-host', '/tmp/cc-daemon-1000/8c5bc785/pty/581deab7.sock', '252',
+  ])).toBeUndefined()
+  expect(harnessOfProcess('2.1.233', exe, [
+    'claude bg-spare', '--bg-spare', '/tmp/cc-daemon-1000/8c5bc785/spare/3aa44d79.claim.sock',
+  ])).toBeUndefined()
+  expect(harnessOfProcess('claude', '/home/mithrandir/.local/bin/claude', [
+    '/home/mithrandir/.local/bin/claude', 'daemon', 'run', '--json-path', '/home/u/.claude/daemon.json',
+  ])).toBeUndefined()
+  // …and the real session is untouched.
+  expect(harnessOfProcess('2.1.233', exe, ['claude'])).toBe('claude')
+})
+
+test('the plumbing gate never eats a session because of what it SAYS', () => {
+  // The trap this gate is written around: a `bg-pty-host` argv carries the session id of the REAL
+  // conversation it serves, so "drop what carries a session id" keeps the helper and hides the
+  // session. The VERB is what separates them — and a prompt that merely mentions one must not match.
+  const exe = '/home/mithrandir/.local/share/claude/versions/2.1.233'
+  expect(harnessOfProcess('claude', exe, ['claude', '-p', 'restart the daemon please'])).toBe('claude')
+  expect(harnessOfProcess('claude', exe, ['claude', '--resume', 'a-uuid', '-p', 'bg-pty-host'])).toBe('claude')
+})
+
 test('a harness is recognised by its executable when comm is not its name', () => {
   // `gh copilot` runs its binary with the thread name MainThread, so comm-only matching missed
   // Copilot entirely and it never appeared as live.

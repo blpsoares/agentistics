@@ -8,13 +8,34 @@
  */
 
 import type { CliLang } from './lang'
+// The default ARRANGEMENT is derived from the dimension vocabulary rather than written out beside
+// it. `session-dimensions.ts` imports this file for TYPES only, so this is the one value direction.
+import { DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED, storedFilters } from './session-dimensions'
 
-export type TabId = 'services' | 'sessions' | 'setup' | 'logs' | 'cheatsheet' | 'help' | 'contribute'
+export type TabId =
+  | 'services'
+  | 'sessions'
+  /** The metrics dashboard — the whole of what `agentop tui` shows, as a screen of this app. */
+  | 'dashboard'
+  | 'logs'
+  | 'cheatsheet'
+  | 'help'
+  | 'contribute'
 
+// Operations first (what is running, and what you can do to it), then the numbers, then the
+// documentation. The dashboard sits where it does because it answers a question about the same work
+// the two screens before it are managing.
+//
+// There is no `setup` screen any more, and its absence is the point: choosing solo / central /
+// member is a question ABOUT the services on this box — you cannot re-run `central.sh init` on a
+// central that is up, and the only way to know that is to be looking at whether it is up. The
+// wizard is a QUESTION the cockpit asks, drawn in the detail region like every other one, reached
+// from the config pane's mode row. `agentop setup` still exists as the non-interactive command —
+// one implementation, two entrances.
 export const TAB_ORDER: readonly TabId[] = [
   'services',
   'sessions',
-  'setup',
+  'dashboard',
   'logs',
   'cheatsheet',
   'help',
@@ -165,6 +186,49 @@ export interface StartOption extends StartRequest {
   offersBoot?: boolean
 }
 
+/**
+ * One boot registration this box can turn ON or OFF, ready to be drawn and handed back.
+ *
+ * It exists because `enableBoot` alone was a switch with one position. A service registered at boot
+ * comes back after every reboot and after every login that starts the user's systemd manager, so a
+ * user who deliberately stopped their central found it running again and had nowhere in the product
+ * to say "stay down" — the machine could disable it (`disableAutostart` has always existed), the
+ * cockpit simply had no way to ask.
+ *
+ * Composed by the host for the same reason `StartOption` is: WHICH mechanism brings a service back
+ * is a fact about this box (`agentistics` has two — a native unit and one that runs `docker compose
+ * … up -d` — and the central has one), and whether a mechanism can be registered here at all
+ * depends on files only the host can look for. A mechanism the host cannot ask about produces NO
+ * option, never a disabled one: the same absence-is-absence rule `ControlService.boot` follows.
+ */
+export interface BootOption {
+  /** The runtime this registration brings back. Handed straight back to `enableBoot`/`disableBoot`. */
+  runtime?: RuntimeId
+  /** True turns it on (`enableBoot`), false turns it off (`disableBoot`). */
+  enable: boolean
+  /** Already-localized verb, e.g. "Start at boot (native)" / "Stop starting at boot (docker)". */
+  label: string
+  /** Already-localized one-line explanation, for surfaces that show hints. */
+  hint?: string
+  /**
+   * Already-localized sentence stating exactly what pressing it does, NAMING the unit.
+   *
+   * The confirmation may not be "are you sure?": this writes or removes a systemd user unit, which
+   * is a change to the machine that outlives the session. Naming the unit is also the only way the
+   * answer to "what keeps bringing my central back" is discoverable from inside agentop.
+   */
+  confirm: string
+  /**
+   * The same question asked in the OTHER place it comes up: unprompted, right after a stop worked.
+   *
+   * Present only on a disable option, because that is the only direction that case has. It needs its
+   * own sentence because the user did not press a boot verb to get here — "Remove <unit>?" appearing
+   * on its own after `Stop` reads as a non sequitur, while "…is stopped, but <unit> still starts it
+   * at boot" states why it is being asked at all.
+   */
+  confirmAfterStop?: string
+}
+
 /** A stop that names ONE runtime — offered only to break a conflict. */
 export interface StopOption {
   runtime: RuntimeId
@@ -233,6 +297,23 @@ export interface ControlService {
    * the flag; pair it with a word as well as a colour, and offer `stopOptions`.
    */
   conflict?: string
+  /**
+   * A SECOND copy of this service running under the SAME runtime, serving nothing — already
+   * localized and naming the pid.
+   *
+   * Deliberately not folded into `conflict`, which is about two RUNTIMES and offers a per-runtime
+   * stop. This one is two processes of the one runtime, and the two cases need different sentences:
+   * "it is running natively and in docker, stop one" is a choice, while "a second one is running and
+   * answering nothing" is waste with a pid on it.
+   *
+   * It exists because the runtime probe cannot see this by construction — it asks
+   * `lsof -sTCP:LISTEN`, which only ever finds the process that WON the port. Measured: two
+   * `agentop server`s ran for seventy minutes, the loser burning 72% of a core and 1.1 GB on the
+   * file watcher, and every screen in the product said the service was healthy.
+   *
+   * The pid is the point. "Something is wrong" that cannot be acted on is a worse message than none.
+   */
+  idle?: string
   /** Why the state is `unknown`, already localized. */
   reason?: string
   /**
@@ -242,6 +323,24 @@ export interface ControlService {
    * the TUI owns, and the host is the only side that can answer the question.
    */
   boot?: BootState
+  /**
+   * WHAT brings it back — the systemd unit name, present only when `boot` is known.
+   *
+   * A proper noun, deliberately untranslated, and the whole of the honest trail: "starts at boot" on
+   * its own tells a user that something will restart their central and gives them nothing to go
+   * look at. With the unit named, `systemctl --user status <unit>` and `agentop autostart status`
+   * both answer, and the verb that turns it off is on the same pane.
+   */
+  bootUnit?: string
+  /**
+   * The boot registrations this box can change right now — on, off, or both, per mechanism.
+   *
+   * Offered whatever the service's state, unlike `startOptions`/`restartOptions`: "should this come
+   * back after a reboot" is a question about the FUTURE and is just as answerable while the thing is
+   * running as while it is stopped. Empty on a box the host cannot ask (no user systemd), which is
+   * why the verbs are absent there rather than present and failing.
+   */
+  bootOptions: BootOption[]
   /** The starts this box can perform right now. ALWAYS EMPTY while the service is up. */
   startOptions: StartOption[]
   /**
@@ -295,8 +394,28 @@ export type SessionState =
  */
 export interface ControlSession {
   id: string
-  /** Already-localized display name: the user's label when there is one, else a derived one. */
+  /**
+   * Already-localized display name.
+   *
+   * A session can be named in TWO places — in agentop, and inside the harness with its own
+   * `/rename` — and the host decides which one this is. See `titleSource`.
+   */
   title: string
+  /**
+   * Where `title` came from, present ONLY when the two names disagree.
+   *
+   * `label` is the name typed in agentop, `harness` the one typed inside the session. Its presence
+   * is the statement: an ordinary row, named in one place or neither, carries nothing here.
+   */
+  titleSource?: 'label' | 'harness' | 'derived'
+  /**
+   * The name that LOST, when there was one and it differs.
+   *
+   * Neither name is ever discarded. Someone who renamed in both places must be able to see that both
+   * renames happened — a rename that vanishes without a word is indistinguishable from one that
+   * failed, which is the complaint this whole field exists to answer.
+   */
+  titleOther?: string
   /** Harness id, or `''` when the registry has forgotten it. The colour and grouping key. */
   harness: string
   cwd: string
@@ -318,8 +437,21 @@ export interface ControlSession {
    * and `agentistics`, which files one project as three. It is a SEPARATE field from `project`
    * because the row must still say which directory it is actually in: with several worktrees open
    * at once, the folder cell is the only thing telling them apart.
+   *
+   * It is also where a row whose directory is GONE and whose repository was never recorded is filed:
+   * the host puts an already-localized sentence here rather than a name, because the alternative is
+   * grouping under the last segment of a path that resolves to nothing — which is how a removed
+   * worktree appeared as a project of its own beside the project it was a worktree of.
    */
   projectGroup?: string
+  /**
+   * Already-localized: this row's directory does not exist on this machine any more.
+   *
+   * Present whether or not the repository was recovered from what the registry recorded, because
+   * the two are different facts — one says which project the work belonged to, this one says the
+   * path is not there, which is also the answer to "why can I not reopen it".
+   */
+  dirGone?: string
   /** True only for a LINKED worktree. Said on the row, because it changes what the row IS. */
   worktree?: boolean
   /**
@@ -335,6 +467,22 @@ export interface ControlSession {
   /** The piece of work this session belongs to, when the user said so. Groups the list. */
   task?: string
   /**
+   * The harness's own conversation id this row is KNOWN to be writing — what `--resume` takes.
+   *
+   * The exact answer to "where does this continue from", and the only one this screen may state:
+   * it is recorded, never inferred. Absent on a row started before the id could be recorded, and on
+   * every row of a harness that cannot report one — see `conversationBlind`.
+   */
+  conversationId?: string
+  /**
+   * Already-localized: this harness can never report which conversation a session it started is
+   * writing, so no link can be recorded for this row and anything offered to reopen is inferred.
+   *
+   * Present only on a hosted row that has no `conversationId`. Same discipline as `approvalBlind`:
+   * a capability that does not exist is said in words rather than left to look like an absence.
+   */
+  conversationBlind?: string
+  /**
    * The conversation this row could REOPEN, when there is one.
    *
    * Present on a row that is running outside agentop (the conversation it appears to be driving) and
@@ -349,10 +497,93 @@ export interface ControlSession {
    * invented one would be the worst possible thing to put under "what is it doing".
    */
   lastLines?: string[]
+  /**
+   * The DIALOG this session is blocked on, verbatim — present only while it is asking.
+   *
+   * A different reading of the frame from `lastLines`, which cuts the input box and the status strip
+   * away and would therefore cut the dialog away. This is what a person has to READ before agreeing:
+   * the options, which one is highlighted, and the footer naming the key. The keystroke that answers
+   * cannot know which option it is taking, so the screen showing this IS the safety.
+   */
+  approvalLines?: string[]
+  /**
+   * Whether the approve verb can run on this row at all.
+   *
+   * True only when the session is blocked on a dialog AND this harness's dialog has been read, so
+   * the keystroke that answers it is a recorded fact rather than a guess. False everywhere else,
+   * including on a perfectly healthy working session — approving something that is not asking
+   * anything sends a blank turn, or takes an option out of a menu nobody was looking at.
+   */
+  canApprove?: boolean
+  /**
+   * The OPTIONS the dialog is offering, when its screen could be read with confidence.
+   *
+   * Present only on a blocked row, and ABSENT rather than invented when the screen cannot be
+   * parsed. Its presence changes what "answering" means: with options there is no such thing as
+   * approving, only choosing one of them, and the UI must show them and send the one picked.
+   *
+   * The case this exists for is real and was reported: a session asking "how should I promote to
+   * prod?" with four different answers, in front of a key called `approve` that would have silently
+   * taken whichever was highlighted.
+   */
+  dialogOptions?: Array<{ number: number; label: string; selected: boolean }>
+  /**
+   * Whether the user may pick one of `dialogOptions` from here.
+   *
+   * False when this harness has no verified way to select an option by number (`approval-spec.ts`).
+   * There is deliberately NO fallback to the confirm key in that case: confirming the highlighted
+   * row on a dialog somebody is being shown four answers to is choosing for them.
+   */
+  canChoose?: boolean
+  /**
+   * Why approving is unavailable HERE, already localized — present only when the session is blocked
+   * and nobody has read this harness's dialog.
+   *
+   * Its presence is the statement, the same shape as `approvalBlind`: absence is not a reassurance,
+   * and a verb that vanished without a word reads as the feature being broken.
+   */
+  approveBlind?: string
+  /**
+   * Why the options on screen cannot be answered from here, already localized — present only when
+   * there ARE options and this harness has no verified way to pick one.
+   *
+   * A refusal that names its reason is usable: it tells someone to attach, which works. A verb that
+   * quietly picks for them is not.
+   */
+  chooseBlind?: string
+  /**
+   * This session was taken by the machine along with the others, and comes back with them.
+   *
+   * Decided over the WHOLE registry rather than from this row — "did these fall together" is a
+   * question about a set — so the host hands the answer down rather than the screen inferring one.
+   */
+  fell?: boolean
   /** Already-formatted token count, when this row's conversation has metrics. */
   tokens?: string
   /** Already-formatted cost, same. */
   cost?: string
+  /**
+   * How full this session's context window was on its last turn — ABSENT when it cannot be known.
+   *
+   * Absent covers three different situations that the screen deliberately does not distinguish,
+   * because the honest rendering of all three is the same nothing: the harness reports no per-turn
+   * context size (`HARNESS_CAPABILITIES.contextWindow`), the model's window is not in the verified
+   * table, or the row has no conversation behind it at all. A `0%` in any of those places is a
+   * confident answer to a question nobody could answer — the same rule the metrics cell follows.
+   *
+   * `fraction` can exceed 1: a session really can send more than the window this table names (see
+   * `contextWindows.ts` on Claude Code's smaller session cap), and the bar saturates while the
+   * label keeps saying the true number rather than pinning it at 100%.
+   */
+  context?: {
+    /** Used / window. Unclamped — see above. */
+    fraction: number
+    /** The percentage as a word, e.g. `45%`. Already localized-agnostic (digits + `%`). */
+    label: string
+    /** Both halves, already formatted, for the detail pane: `455.4k` and `1M`. */
+    used: string
+    window: string
+  }
   /** Everything this row can be found by, already lowercased — including a closed conversation's
    *  opening prompt, which is what a person remembers about work they put down. */
   searchText: string
@@ -387,7 +618,39 @@ export interface ControlSession {
  * its own rather than as a setting that was never stored.
  */
 export interface SessionViewPrefs {
-  grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo'
+  /**
+   * Which dimension the list is arranged by, BY ID.
+   *
+   * An id and never a position: an index records "the third dimension" and becomes a different
+   * question the moment someone reorders the menu. See `session-dimensions.ts`.
+   */
+  grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo' | 'status' | 'marked'
+  /**
+   * What the list is narrowed to, per dimension — the ONE stored source for every filter.
+   *
+   * One source on purpose. The state section and the show switches used to be two, and the state
+   * section silently won: the switches drew their own on/off while changing nothing. Written by
+   * `storedFilters`, read by `migrateSessionFilters`, and gated by `filtersVersion`.
+   */
+  filters?: Record<string, string[]>
+  /** Marks a `filters` written under the current model. See `FILTERS_VERSION`. */
+  filtersVersion?: number
+  /**
+   * Whether a row the user NAMED survives a status filter that would otherwise drop it.
+   *
+   * Off as it ships. The exception itself is old and has a real reason — a reboot turns every
+   * managed session `lost`, and without it the default list came back empty, taking the names with
+   * it — but it used to be unwritten, so a strict filter quietly kept rows it did not name. Now it is
+   * a switch: a widening someone chose and can see.
+   */
+  showNamed?: boolean
+  /**
+   * DERIVED ON WRITE, and read back only by `migrateSessionFilters`.
+   *
+   * Kept so a machine that downgrades to an older binary does not come up with every filter lifted.
+   * Same pattern, and the same reason, as `deniedRepos` in the sharing rules: anything that still
+   * READS these as the live answer is a bug.
+   */
   showClosed: boolean
   showExited: boolean
   /** Only meaningful while grouping by task, but stored either way so it survives a detour. */
@@ -422,6 +685,22 @@ export interface SessionViewPrefs {
   /** Whether the detail pane under the list is drawn at all. */
   hideDetail?: boolean
   /**
+   * How the fleet is ARRANGED — a list of rows, or a grid of cards.
+   *
+   * Absent reads as `DEFAULT_SESSION_VIEW.layout`, never as a literal: a fallback written by hand
+   * once turned the strict filter off on every machine that already had a `preferences.json`, and
+   * the persist effect then wrote that off to disk, making it permanent.
+   */
+  layout?: 'list' | 'cards'
+  /**
+   * WHICH PAGE of cards was open, named by the SESSION at the top of it rather than by a number.
+   *
+   * The fleet re-sorts every five seconds, so "page 2" is a position and a position is not an
+   * identity — by the next poll it holds different sessions. The same rule `asideRowKey` follows
+   * for the menu cursor. An anchor that is no longer in the list simply opens page 0.
+   */
+  cardAnchor?: string
+  /**
    * Session ids the user has MARKED, so a row can be found again without searching for it.
    *
    * Persisted for the same reason the arrangement is: detaching from a session remounts this
@@ -439,8 +718,14 @@ export interface SessionViewPrefs {
  * one arrangement and reset to another.
  *
  * Only ACTIVE conversations, grouped by project. The list opens as what is happening rather than as
- * everything that ever has — and `onlyActive` means that strictly, named rows included, which is
- * the whole reason it exists.
+ * everything that ever has — and it means that STRICTLY, named rows included: `showNamed` is off, so
+ * nothing slips past the status selection unannounced.
+ *
+ * "Only active" is no longer a switch of its own. It is a SELECTION on the status dimension, spelled
+ * out here as the states it keeps, and the switch that used to carry the name is one of the
+ * shortcuts that writes into that selection. The two can no longer disagree — see
+ * `session-dimensions.ts`. `onlyActive`/`showClosed`/`showExited` below are the derived-on-write
+ * copies an older binary reads.
  *
  * The consequence is deliberate and has to be stated somewhere the user can see it: when nothing is
  * running, this default shows an EMPTY list. It is not empty because the fleet is — the sessions
@@ -450,11 +735,35 @@ export interface SessionViewPrefs {
  */
 export const DEFAULT_SESSION_VIEW: SessionViewPrefs = {
   grouping: 'project',
-  showClosed: false,
-  showExited: false,
-  showUnfiled: true,
+  ...storedFilters({ filters: DEFAULT_FILTERS, showNamed: DEFAULT_SHOW_NAMED, marked: DEFAULT_MARKED }),
   showDone: false,
-  onlyActive: true,
+  layout: 'list',
+  // Derived-on-write, like the three `storedFilters` writes above: only an older binary reads it.
+  showUnfiled: true,
+} as SessionViewPrefs
+
+/**
+ * A session the machine lost that could be started again — see `planRestore`.
+ *
+ * Offered ONCE, on the run after everything went down, and never while anything is still running:
+ * a machine with live sessions did not lose everything, and a modal that greets an ordinary restart
+ * is a modal people learn to dismiss without reading.
+ */
+export interface RestoreCandidate {
+  id: string
+  /** Already-composed name: the user's own when there is one, else the conversation's. */
+  label: string
+  harness: string
+  /** The last path segment, for a list that has to stay narrow. */
+  project: string
+  /**
+   * When it started, epoch ms — absent when the registry's timestamp is unreadable.
+   *
+   * An instant rather than a duration, like every other time this contract carries: the screen
+   * repaints far more often than the poll runs, so a duration computed here would freeze at
+   * whatever it was when the host last looked.
+   */
+  startedAt?: number
 }
 
 export interface ControlSessions {
@@ -482,6 +791,36 @@ export interface ControlSessions {
    * hidden by default and shown by a toggle.
    */
   finishedTasks?: string[]
+  /**
+   * The sessions the machine took ALL AT ONCE, when there are any.
+   *
+   * A reboot, an OOM kill or a lost tmux server turns every managed session into a `lost` row in the
+   * same instant. This names that event so all of them can be picked back up with one action — which
+   * is the whole point: a list of forty rows that includes everything that ever ran cannot be
+   * reopened without reading each one first.
+   *
+   * `atMs` is when it happened, and the UI must SAY it: a fall from three days ago is a perfectly
+   * legitimate thing to offer, and an offer that does not say when reads as one that just happened.
+   */
+  fell?: { count: number; atMs: number }
+  /**
+   * The SAME fall, named row by row, for the offer made on the way in.
+   *
+   * `fell` is the count and the instant — enough for the summary row, the section heading and the
+   * menu verb. This is the list a person reads to DECIDE, and a count cannot be decided on: three
+   * sessions in a repository you have finished with and one you were in the middle of are the same
+   * "4" on screen.
+   *
+   * Both come from ONE selection (`planCrashGroup`), and that is the point of them being two fields
+   * rather than two questions: a second answer to "what fell" is a second set of rules, which is
+   * the bug `task-reopen.ts` exists to have fixed once.
+   *
+   * Narrower than `fell` by exactly one rule: a row whose conversation does not resolve is dropped
+   * here, because this list is CLICKABLE and a row that cannot be reopened is a button that fails.
+   * It stays inside `fell`, where the reopen counts it as skipped rather than pretending it never
+   * fell.
+   */
+  restorable?: RestoreCandidate[]
 }
 
 export type TeamMode = 'solo' | 'central' | 'member'
@@ -497,8 +836,38 @@ export interface ControlStatus {
   version: string
   /** Set when a newer release exists; drives the update dot in the header. */
   latestVersion?: string
+  /**
+   * How many assistants are running out of how many this MACHINE can hold — the header's `▤ 3/17`.
+   *
+   * **This is about the SYSTEM, not about agentop**, and the surface has to say so: a number in the
+   * corner of a window is read as belonging to that window, and someone would otherwise conclude
+   * agentop eats 10 GB. Measured: agentop's own server was 578 MB of a 4 GB total, and the rest was
+   * one Node process per assistant CLI.
+   *
+   * **Absent when the memory could not be read at all** (not Linux, no `/proc`), and then no gauge
+   * is drawn — never a zero. `red` is the host's decision, taken from the DISTANCE to the ceiling
+   * rather than a percentage (three left of thirty is comfortable, three of fourteen is the last
+   * warning) and from swap pressure, which is what actually freezes a machine: the incident this
+   * exists for read 3.6 GB of free RAM while swap sat at 97%.
+   */
+  memory?: { used: number; max: number; red: boolean }
   /** The history-preservation setting in force, or `undefined` while it is still unanswered. */
   archiveMode?: ArchiveMode
+  /**
+   * Why a mode cannot be chosen right now, already localized — one entry per BLOCKED mode, and the
+   * ordinary case is an empty object.
+   *
+   * Reconfiguring a service that is RUNNING is the trap this closes: `central` re-runs
+   * `central.sh init`, which rewrites the environment file and recreates the containers, so
+   * choosing it in the middle of a working session tears down the very central being used. The
+   * cockpit already refuses a start for something that is up by handing over an empty
+   * `startOptions`; this is the same rule applied to the wizard.
+   *
+   * A REASON, never a bare flag: a greyed row with no explanation is indistinguishable from a bug,
+   * and the sentence has to name what to do instead ("stop it first"). The host decides, because
+   * only it knows what is running.
+   */
+  setupBlocked?: Partial<Record<TeamMode, string>>
   /** How the fleet list was last arranged. Absent on a machine that has never chosen. */
   sessionView?: SessionViewPrefs
   /**
@@ -521,6 +890,21 @@ export interface ActionResult {
 export interface ControlHost {
   /** Re-detect config + services. Must never throw; failures come back as `unknown` services. */
   refresh(): Promise<ControlStatus>
+  /**
+   * What the host ALREADY knows, synchronously, or `null` on the very first look.
+   *
+   * `refresh()` shells out to systemd and to docker, so it takes about a second — and attach and
+   * detach are two halves of one gesture, so every detach REMOUNTS this app and starts that second
+   * over. Whatever the screen cannot know during it is drawn from defaults, and for the sessions
+   * list that means the arrangement someone chose is replaced by the shipped one and then swapped
+   * back in front of them: a frame that is not merely incomplete but WRONG about a choice the user
+   * made. This is the same answer as the fleet poll's — the previous truth beats a confident
+   * default — and `refresh()` runs anyway, on the frame after.
+   *
+   * The host is what survives the remount (`runStart` creates it once, outside the loop), so it is
+   * the only place this can live.
+   */
+  lastStatus?(): ControlStatus | null
 
   /**
    * Start one runtime — normally a `StartOption` handed straight back.
@@ -576,6 +960,25 @@ export interface ControlHost {
    * Docker for `central`, its only mechanism).
    */
   enableBoot(service: ServiceId, runtime?: RuntimeId): Promise<ActionResult>
+
+  /**
+   * Remove that registration again — the other half of the switch.
+   *
+   * It was missing, and its absence is the bug this pair exists to fix: `enableBoot` wrote a
+   * systemd user unit that nothing in the product could take away, so stopping a service stopped
+   * only this instance of it. The unit stayed enabled, and the next boot — or the next login that
+   * starts the user's systemd manager — ran it again. "I stopped my central and it keeps coming
+   * back" is exactly what a one-way switch produces.
+   *
+   * It NEVER stops what is running. Turning off "come back after a reboot" is a statement about the
+   * future, and a verb that also killed the live service would be two actions behind one label —
+   * the cockpit already has `Stop` for the other one. (`agentop autostart <mode> disable` keeps its
+   * older meaning and does both; the flag lives on `disableAutostart`, not here.)
+   *
+   * `runtime` is read the same way `enableBoot` reads it: it names WHICH mechanism to remove, since
+   * `agentistics` has two.
+   */
+  disableBoot(service: ServiceId, runtime?: RuntimeId): Promise<ActionResult>
 
   setLang(lang: CliLang): Promise<void>
 
@@ -651,6 +1054,44 @@ export interface ControlHost {
   attachSession?(id: string): Promise<AttachTicket | null>
 
   killSession?(id: string): Promise<ActionResult>
+
+  /**
+   * Type one line into a session and submit it, WITHOUT attaching to it.
+   *
+   * The ordinary case is a session that is working or waiting: the text lands in its prompt and it
+   * reads it when it gets there. The case that must be refused is a session with a DIALOG open —
+   * there the prompt is not a prompt, it is a menu, and a sentence typed into it is an answer to a
+   * question nobody read. The host re-reads the screen before sending and refuses in words; the
+   * screen cannot decide it, because its list is up to a poll old.
+   */
+  promptSession?(id: string, text: string): Promise<ActionResult>
+
+  /**
+   * Answer the dialog this session is blocked on.
+   *
+   * `choice` is the option NUMBER to pick, and it is the whole point of this signature: a dialog
+   * offering "only my fix / promote everything / stop here / type something" has no approval, and a
+   * verb that took the highlighted row would be choosing between four different outcomes on the
+   * user's behalf. Omitted only for a dialog with no readable options — the codex-shaped
+   * `Press enter to continue`, where there genuinely is nothing to choose between — and the host
+   * then sends the confirm key.
+   *
+   * The host re-reads the frame immediately before sending and refuses when the session is no longer
+   * asking, or when the options on screen no longer match what the user was shown. A snapshot is up
+   * to five seconds old, and an answer to a question that has changed is worse than no answer.
+   */
+  answerSession?(id: string, choice?: number): Promise<ActionResult>
+
+  /**
+   * Reopen every session of the last fall, in the background.
+   *
+   * The same arithmetic `openTask` runs (`task-reopen.ts`), over the set `ControlSessions.fell`
+   * names instead of over a task: a row still running is left alone and reported as such, a row
+   * already finished is not resurrected, an unresolvable one is skipped AND counted, and everything
+   * reopened retires the row it replaced.
+   */
+  reopenFell?(): Promise<ActionResult>
+
   renameSession?(id: string, label: string): Promise<ActionResult>
   noteSession?(id: string, text: string): Promise<ActionResult>
   /** File this session under a piece of work. Empty string clears it. */
@@ -691,6 +1132,26 @@ export interface ControlHost {
    * way the moment two things happen between polls.
    */
   finishTask?(task: string, done: boolean): Promise<ActionResult>
+  /**
+   * Remove a task NAME. The sessions filed under it survive, unfiled.
+   *
+   * Separate from `finishTask`, which hides a task's sessions behind a switch — that is a statement
+   * about the WORK, this is one about the LABEL. Deleting must never take the sessions with it: a
+   * verb that loses work while sounding like tidying up is one nobody can safely press, and the
+   * reason the list grew long enough to complain about is that people do not remove what they are
+   * unsure of.
+   */
+  deleteTask?(task: string): Promise<ActionResult>
+
+  /**
+   * Start the offered sessions again, detached, or decline them.
+   *
+   * DECLINING is not a no-op: it retires the rows it was offered (`endedAt`), because "no" here
+   * means the work is over. Without that the same modal greets you on the next run and the run
+   * after, which is how a prompt becomes something people clear without reading — and the rows
+   * stay listed and individually reopenable either way, so nothing is destroyed by saying no.
+   */
+  restoreSessions?(ids: string[], accept: boolean): Promise<ActionResult>
 
   /**
    * The harnesses this machine can actually START, with what each of them accepts.
