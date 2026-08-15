@@ -555,6 +555,8 @@ export interface LiveSnapshot {
   liveSessionIds: string[]
   /** Running assistants that could not be matched to any persisted session. */
   liveProcesses: UnmatchedProcess[]
+  /** Map of session_id to current activity status (working, waiting, waiting-approval, exited). */
+  liveSessionActivities?: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'>
   /** Set when this configuration cannot observe host processes AT ALL. An empty list then means
    *  "we cannot know", not "nobody is working", and the UI must say which. */
   liveUnavailable?: LiveUnavailableReason
@@ -616,5 +618,33 @@ export function resolveLiveSnapshot(
 export async function getLiveSnapshot(sessions: SessionMeta[]): Promise<LiveSnapshot> {
   const { procs, unavailable } = await scanProcesses()
   const snap = resolveLiveSnapshot(procs, sessions)
-  return unavailable ? { ...snap, liveUnavailable: unavailable } : snap
+
+  const liveSessionActivities: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'> = {}
+  try {
+    const { createEventStore } = await import('./events/event-store')
+    const store = createEventStore()
+    const { events } = await store.recent(100)
+
+    for (const id of snap.liveSessionIds) {
+      const match = events.filter(e => e.id === id || e.conversationId === id).pop()
+      if (match) {
+        if (match.kind === 'turn-end') {
+          liveSessionActivities[id] = 'waiting'
+        } else if (match.kind === 'working' || match.kind === 'waiting' || match.kind === 'waiting-approval' || match.kind === 'exited') {
+          liveSessionActivities[id] = match.kind
+        } else {
+          liveSessionActivities[id] = 'working'
+        }
+      } else {
+        liveSessionActivities[id] = 'working'
+      }
+    }
+  } catch {
+    for (const id of snap.liveSessionIds) {
+      liveSessionActivities[id] = 'working'
+    }
+  }
+
+  const result: LiveSnapshot = { ...snap, liveSessionActivities }
+  return unavailable ? { ...result, liveUnavailable: unavailable } : result
 }

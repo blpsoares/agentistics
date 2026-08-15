@@ -1132,6 +1132,16 @@ export interface ControlHost {
    * way the moment two things happen between polls.
    */
   finishTask?(task: string, done: boolean): Promise<ActionResult>
+  /**
+   * Remove a task NAME. The sessions filed under it survive, unfiled.
+   *
+   * Separate from `finishTask`, which hides a task's sessions behind a switch — that is a statement
+   * about the WORK, this is one about the LABEL. Deleting must never take the sessions with it: a
+   * verb that loses work while sounding like tidying up is one nobody can safely press, and the
+   * reason the list grew long enough to complain about is that people do not remove what they are
+   * unsure of.
+   */
+  deleteTask?(task: string): Promise<ActionResult>
 
   /**
    * Start the offered sessions again, detached, or decline them.

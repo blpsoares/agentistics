@@ -108,6 +108,7 @@ import { rulesFor } from './sessions/attention-rules'
 import { planCrashGroup, planFellOffer } from './sessions/crash-group'
 import { loadHarnessSessions } from './sessions/harness-sessions'
 import { idleServers, isServerCommand } from './idle-servers'
+import { planTaskDelete, taskDeleteIsNoop } from './sessions/task-delete'
 import { memoryBudget } from './sessions/memory-budget'
 import { readMemory, readRss } from './sessions/memory-probe'
 // The lock on the door: one conversation, one live session. See `conversation-claim.ts` for the
@@ -2322,6 +2323,36 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         : current.filter(t => t !== task)
       await writePreferences({ finishedTasks: next })
       return { ok: true, message: done ? s.sessTaskFinished(task) : s.sessTaskReopened(task) }
+    },
+
+    /**
+     * Remove a task NAME. The sessions filed under it survive, unfiled.
+     *
+     * Reported: the task list had grown to dozens of entries, some naming work that is over and
+     * some whose sessions no longer exist. `finishTask` marks work DONE and hides its sessions
+     * behind a switch — a statement about the work. This is a statement about the LABEL, and the
+     * two are different requests.
+     *
+     * The name lives in TWO places, and clearing one is the bug: on each session, and in
+     * `finishedTasks`. Leave it in the finished list and it goes on being a menu entry naming
+     * nothing; leave it on the sessions and the task reappears the moment the list is rebuilt.
+     */
+    async deleteTask(task: string): Promise<ActionResult> {
+      const s = S()
+      if (!task.trim()) return { ok: false, message: s.sessNoTask }
+      const prefs = await readPreferences()
+      const plan = planTaskDelete({
+        task,
+        sessions: await readRegistry().catch(() => []),
+        finished: prefs.finishedTasks ?? [],
+      })
+      if (taskDeleteIsNoop(plan)) return { ok: false, message: s.sessTaskUnknown(task) }
+
+      for (const id of plan.clear) await patchSession(id, { task: undefined })
+      if (plan.unfinish) {
+        await writePreferences({ finishedTasks: (prefs.finishedTasks ?? []).filter(t => t !== task) })
+      }
+      return { ok: true, message: s.sessTaskDeleted(task, plan.clear.length) }
     },
 
     async renameSession(id: string, label: string): Promise<ActionResult> {

@@ -175,6 +175,10 @@ export interface CliStrings {
   sessRestoreFailed: (skipped: number) => string
   sessNoTask: string
   sessTaskFinished: (task: string) => string
+  /** The task named nothing — no session wears it and it is not in the finished list. */
+  sessTaskUnknown: (task: string) => string
+  /** Removed. Says how many sessions were UNFILED, because they were kept, not deleted. */
+  sessTaskDeleted: (task: string, freed: number) => string
   sessTaskReopened: (task: string) => string
   sessKillUnconfirmed: (id: string) => string
   sessRenamed: string
@@ -471,6 +475,10 @@ const EN: CliStrings = {
     `nothing could be restored${skipped ? ` — ${skipped} had no conversation to reopen` : ''}.`,
   sessNoTask: 'that session has no task.',
   sessTaskFinished: (task: string) => `"${task}" marked finished.`,
+  sessTaskUnknown: (task: string) => `no session is filed under "${task}", and it is not a finished task.`,
+  sessTaskDeleted: (task: string, freed: number) => freed === 0
+    ? `"${task}" removed.`
+    : `"${task}" removed — ${freed} session(s) kept, now unfiled.`,
   sessTaskReopened: (task: string) => `"${task}" reopened.`,
   sessKillUnconfirmed: (id: string) =>
     `could not confirm ${id} was stopped — it may still be running, so its record was kept.`,
@@ -717,6 +725,10 @@ const PT: CliStrings = {
     `nada pôde ser restaurado${skipped ? ` — ${skipped} sem conversa para reabrir` : ''}.`,
   sessNoTask: 'essa sessão não tem tarefa.',
   sessTaskFinished: (task: string) => `"${task}" marcada como finalizada.`,
+  sessTaskUnknown: (task: string) => `nenhuma sessão está sob "${task}", e ela não está na lista de finalizadas.`,
+  sessTaskDeleted: (task: string, freed: number) => freed === 0
+    ? `"${task}" removida.`
+    : `"${task}" removida — ${freed} sessão(ões) mantida(s), agora sem tarefa.`,
   sessTaskReopened: (task: string) => `"${task}" reaberta.`,
   sessKillUnconfirmed: (id: string) =>
     `não deu para confirmar que ${id} foi encerrada — ela pode continuar rodando, então o registro dela foi mantido.`,

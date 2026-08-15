@@ -10,7 +10,7 @@
 
 import { PANE_FRAME_Y } from './chrome.ts'
 import {
-  ACTIVE_STATES, GROUPINGS, SESSION_STATES, SESSION_DIMENSIONS, UNFILED,
+  ACTIVE_STATES, GROUPINGS, SESSION_STATES, SESSION_STATE_CHOICES, SESSION_DIMENSIONS, UNFILED,
   bucketKey, dimensionValueLabel, sessionNamed, sessionRunning,
   type DimensionContext, type DimensionWordBook, type SessionDimensionId, type SessionGroupingId,
 } from './session-dimensions'
@@ -1320,7 +1320,9 @@ export function asideRows(o: {
 
   if (o.states) {
     rows.push({ kind: 'rule' }, { kind: 'heading', label: o.states.heading })
-    for (const value of SESSION_STATES) {
+    // The CHOICES, not every internal state: `exited`, `lost` and `closed` all mean "not running"
+    // and drew three rows that read the same word. See `SESSION_STATE_CHOICES`.
+    for (const value of SESSION_STATE_CHOICES) {
       const count = o.states.counts[value] ?? 0
       // A state nothing on this machine wears is not a filter, it is a row that does nothing.
       if (count === 0 && !o.states.kept.includes(value)) continue

@@ -222,7 +222,7 @@ export function onAgentMessage(
   try {
     const text = typeof raw === 'string' ? raw : raw.toString('utf8')
     if (!text) return
-    const msg = JSON.parse(text) as { type?: string; sessionIds?: unknown; processes?: unknown }
+    const msg = JSON.parse(text) as { type?: string; sessionIds?: unknown; processes?: unknown; sessionActivities?: unknown }
     if (msg?.type !== 'live-sessions') return
     const sessionIds = Array.isArray(msg.sessionIds)
       ? msg.sessionIds.filter((x): x is string => typeof x === 'string')
@@ -231,10 +231,13 @@ export function onAgentMessage(
       ? msg.processes.filter((p): p is { harness: string; cwd: string } =>
           !!p && typeof p === 'object' && typeof (p as { cwd?: unknown }).cwd === 'string')
       : []
+    const sessionActivities = msg.sessionActivities && typeof msg.sessionActivities === 'object'
+      ? msg.sessionActivities as Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'>
+      : undefined
     void import('./team-live').then(m => {
       // The member NEVER names itself — the machine id and display name are taken from the
       // authenticated socket, so a member cannot report live sessions on someone else's behalf.
-      m.recordMemberLive(ws.data.memberId, ws.data.user, sessionIds, processes as never)
+      m.recordMemberLive(ws.data.memberId, ws.data.user, sessionIds, processes as never, Date.now(), sessionActivities)
       onPresenceChange?.()
     }).catch(() => { /* best-effort */ })
   } catch { /* ignore malformed frames */ }

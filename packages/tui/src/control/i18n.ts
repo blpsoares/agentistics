@@ -293,6 +293,12 @@ export interface ControlStrings {
   sessionsFellNote: (count: number, ago: string) => string
   /** The confirmation, naming how many and when. */
   sessionsFellConfirm: (count: number, ago: string) => string
+  /**
+   * Removing a task NAME. The count is in the question because the answer turns on it — and the
+   * sentence says the sessions are KEPT, because a delete that sounded like it took them with it is
+   * one nobody would press.
+   */
+  sessionsDeleteTaskAsk: (task: string, count: number) => string
   /** The prompt field, and the sentence above it saying where the text is going. */
   sessionsPromptLabel: (title: string) => string
   sessionsPromptHint: string
@@ -371,6 +377,8 @@ export interface ControlStrings {
     openTask: string
     reopenFell: string
     finishTask: string
+    /** Removing a task NAME — the sessions under it survive, unfiled. */
+    deleteTask: string
     newSession: string
     search: string
     group: string
@@ -742,6 +750,10 @@ const EN: ControlStrings = {
   sessionsFellConfirm: (count, ago) =>
     `Reopen the ${count} session${count === 1 ? '' : 's'} that fell ${ago}? `
     + 'Each comes back as a new session resuming its own conversation; anything still running is left alone.',
+  sessionsDeleteTaskAsk: (task, count) => count === 0
+    ? `Remove the task "${task}"? No session is filed under it.`
+    : `Remove the task "${task}"? The ${count} session${count === 1 ? '' : 's'} filed under it `
+      + `${count === 1 ? 'is' : 'are'} KEPT — only the label goes.`,
   sessionsPromptLabel: (title: string) => `Send to "${title}"`,
   sessionsPromptHint: 'typed straight into the session — it reads it when it gets there',
   sessionsApproveConfirm: (title: string) => `Send the confirm key to "${title}"?`,
@@ -818,6 +830,7 @@ const EN: ControlStrings = {
     openTask: 'Open whole task',
     reopenFell: 'Reopen what fell',
     finishTask: 'Finish task',
+    deleteTask: 'Delete task',
     newSession: 'New session',
     search: 'Search',
     group: 'Group',
@@ -1150,6 +1163,10 @@ const PT: ControlStrings = {
       ? `Reabrir a sessão que caiu ${ago}? `
       : `Reabrir as ${count} sessões que caíram ${ago}? `)
     + 'Cada uma volta como uma sessão nova retomando a própria conversa; o que ainda estiver rodando fica como está.',
+  sessionsDeleteTaskAsk: (task, count) => count === 0
+    ? `Remover a tarefa "${task}"? Nenhuma sessão está sob ela.`
+    : `Remover a tarefa "${task}"? ${count === 1 ? 'A sessão' : `As ${count} sessões`} sob ela `
+      + `${count === 1 ? 'é MANTIDA' : 'são MANTIDAS'} — some só o rótulo.`,
   sessionsPromptLabel: (title: string) => `Enviar para "${title}"`,
   sessionsPromptHint: 'digitado direto na sessão — ela lê quando chegar lá',
   sessionsApproveConfirm: (title: string) => `Enviar a tecla de confirmação para "${title}"?`,
@@ -1228,6 +1245,7 @@ const PT: ControlStrings = {
     openTask: 'Abrir tarefa toda',
     reopenFell: 'Reabrir o que caiu',
     finishTask: 'Finalizar tarefa',
+    deleteTask: 'Apagar tarefa',
     newSession: 'Nova sessão',
     search: 'Buscar',
     group: 'Agrupar',

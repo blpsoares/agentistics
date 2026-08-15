@@ -154,6 +154,7 @@ type Ask =
   | { kind: 'keys' }
   /** Finishing or reopening a TASK — the session is only how the task was named. */
   | { kind: 'finishTask'; session: ControlSession }
+  | { kind: 'deleteTask'; name: string; count: number }
   | { kind: 'task'; session: ControlSession }
   | { kind: 'openTask'; session: ControlSession }
   | { kind: 'resume'; session: ControlSession }
@@ -813,6 +814,18 @@ export function Sessions({
     if (focus === 'aside' && cockpit.aside > 0) {
       if (key.escape) { setFocus('list'); return }
       if (key.return) return runAside(asideRow)
+      // `x` on a TASK row removes the name. The list grows without bound otherwise — reported with
+      // dozens of entries, some naming work that is over and some whose sessions no longer exist —
+      // and `finishTask` only hides them. Same key as closing a session, because it is the same
+      // gesture applied to whatever the cursor is on; `all` is refused, since "every task" names no
+      // task to remove.
+      if (input === 'x') {
+        const row = asideList[asideRow]
+        if (row?.kind === 'task' && !row.all && row.name) {
+          setAsk({ kind: 'deleteTask', name: row.name, count: row.count })
+          return
+        }
+      }
       // `←`/`→` JUMP between sections. Reaching the next one by pressing down through every row of
       // this one is the whole of what made the menu tedious — and with the accordion it is also the
       // gesture that opens a section, so the arrows that do nothing else here are the right keys
@@ -2254,6 +2267,29 @@ function Question({
           const reopen = host.reopenFell
           if (!yes || !reopen) return onClose()
           onRun(() => reopen.call(host), s.actSessions.reopenFell)
+        }}
+      />
+    )
+  }
+
+  // Answered BEFORE `session` is destructured, because it names a TASK and not a session — the same
+  // reason `reopenFell` sits above.
+  if (ask.kind === 'deleteTask') {
+    return (
+      <ConfirmPrompt
+        // The count is in the question because the answer turns on it: removing a name that files
+        // eleven sessions is a different act from removing one that files none, and the sessions
+        // are KEPT either way. A confirmation that hid the number would be asking for a blank yes.
+        label={s.sessionsDeleteTaskAsk(ask.name, ask.count)}
+        yesLabel={s.yes}
+        noLabel={s.no}
+        width={width}
+        onAnswer={yes => {
+          const del = host.deleteTask
+          if (!yes || !del) return onClose()
+          const name = ask.name
+          onClose()
+          onRun(() => del.call(host, name), s.actSessions.deleteTask)
         }}
       />
     )
