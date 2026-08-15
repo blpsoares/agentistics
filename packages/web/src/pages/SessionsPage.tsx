@@ -97,7 +97,7 @@ export default function SessionsPage() {
 
     if (perm === 'granted') {
       triggerSessionNotification({
-        title: pt ? '🔔 Notificações Ativadas' : '🔔 Notifications Enabled',
+        title: pt ? 'Notificações Ativadas' : 'Notifications Enabled',
         body: pt
           ? 'Você receberá alertas em tempo real sobre o andamento das suas live sessions.'
           : 'You will receive real-time alerts on your live sessions progress.',

@@ -12,7 +12,7 @@ import {
   type SoundPreset,
 } from '../../lib/sessionNotifications'
 import { SectionHeader, Divider, PrefRow, Toggle } from './primitives'
-import { Bell, Volume2, VolumeX, ShieldAlert, Sparkles, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Bell, Volume2, VolumeX, ShieldAlert, Sparkles, CheckCircle2, AlertCircle, Clock, Activity, XCircle } from 'lucide-react'
 
 export default function NotificationsSettings() {
   const ctx = useOutletContext<AppContext>()
@@ -55,7 +55,7 @@ export default function NotificationsSettings() {
 
   function handleTestSoundAndNotification() {
     triggerSessionNotification({
-      title: pt ? '🔔 Notificação de Teste' : '🔔 Test Notification',
+      title: pt ? 'Notificação de Teste' : 'Test Notification',
       body: pt
         ? 'Isso é uma demonstração do alerta sonoro e visual das Live Sessions.'
         : 'This is a test of the Live Sessions visual and sound notification.',
@@ -190,7 +190,7 @@ export default function NotificationsSettings() {
         >
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#ef4444', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>🔴</span>
+              <AlertCircle size={15} style={{ color: '#ef4444' }} />
               <span>{pt ? 'Precisa de Aprovação' : 'Needs Approval'}</span>
               <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 4 }}>
                 (waiting-approval)
@@ -222,7 +222,7 @@ export default function NotificationsSettings() {
         >
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--anthropic-orange)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>🟡</span>
+              <Clock size={15} style={{ color: 'var(--anthropic-orange)' }} />
               <span>{pt ? 'Aguardando Resposta' : 'Waiting Response'}</span>
               <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 4 }}>
                 (waiting)
@@ -230,7 +230,7 @@ export default function NotificationsSettings() {
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
               {pt
-                ? 'Quando a IA conclui a resposta e aguarda sua nova mensagem/comando'
+                ? 'Quando a IA concluiu a resposta e aguarda sua nova mensagem/comando'
                 : 'When AI completes its turn and awaits your input/command'}
             </div>
           </div>
@@ -254,7 +254,7 @@ export default function NotificationsSettings() {
         >
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#22c55e', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>🟢</span>
+              <Activity size={15} style={{ color: '#22c55e' }} />
               <span>{pt ? 'Trabalhando' : 'Working'}</span>
               <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 4 }}>
                 (working)
@@ -286,7 +286,7 @@ export default function NotificationsSettings() {
         >
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>⚪</span>
+              <XCircle size={15} style={{ color: 'var(--text-tertiary)' }} />
               <span>{pt ? 'Sessão Encerrada' : 'Session Exited'}</span>
               <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 4 }}>
                 (exited)
