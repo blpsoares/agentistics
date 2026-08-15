@@ -206,11 +206,15 @@ export interface HeaderMeta {
   alert: string
   update: string
   /**
-   * The parallel-sessions budget, e.g. `▤ 3/17` — how many assistants are up, out of how many this
+   * The parallel-sessions budget, e.g. `ram 3/17` — how many assistant PROCESSES are up, out of how many this
    * MACHINE can hold. Empty where memory could not be read at all.
    *
-   * It answers the question actually asked before opening one, which "10 GB used" does not. The
-   * glyph is there so it cannot be misread as a session count on its own.
+   * It answers the question actually asked before opening one, which "10 GB used" does not.
+   *
+   * It is NAMED rather than drawn as a glyph. `▤ n/m` was chosen so it could not be misread as a
+   * session count and it failed at that twice on real machines — the two numbers legitimately
+   * differ, because this one counts assistant PROCESSES and the sessions list counts ROWS after its
+   * filter, and only the label can say so.
    */
   memory: string
   /** True when the budget is inside its warning distance — the caller colours it. */
@@ -250,7 +254,15 @@ export function headerMeta(input: HeaderMetaInput): HeaderMeta {
   const update = outdated ? `● ${latestVersion}` : ''
   // Absent memory renders nothing at all — a machine whose `/proc` cannot be read shows no gauge
   // rather than a zero, the same rule the boot row and the harness capabilities follow.
-  const mem = memory ? `▤ ${memory.used}/${memory.max}` : ''
+  //
+  // NAMED `ram`, not drawn as a bare `▤`. The glyph was chosen so the pair could not be misread as
+  // a session count, and it did not work: reported twice from real machines, once as `▤ 4/18` over
+  // a list of 4 rows and once as `▤ 5/…` over a list of 3. The two numbers legitimately differ —
+  // this side counts assistant PROCESSES (a background agent sharing its parent's directory is one
+  // process and no row of its own) while the list counts ROWS after its filter — so no arithmetic
+  // fix is available or wanted. What was missing is that the gauge never said what it measures. A
+  // word costs one column over the glyph and is the same in both languages.
+  const mem = memory ? `ram ${memory.used}/${memory.max}` : ''
   const red = memory?.red === true
 
   const full = { text, alert, update, memory: mem, memoryRed: red }

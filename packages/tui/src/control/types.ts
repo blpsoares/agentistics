@@ -837,7 +837,7 @@ export interface ControlStatus {
   /** Set when a newer release exists; drives the update dot in the header. */
   latestVersion?: string
   /**
-   * How many assistants are running out of how many this MACHINE can hold — the header's `▤ 3/17`.
+   * How many assistants are running out of how many this MACHINE can hold — the header's `ram 3/17`.
    *
    * **This is about the SYSTEM, not about agentop**, and the surface has to say so: a number in the
    * corner of a window is read as belonging to that window, and someone would otherwise conclude

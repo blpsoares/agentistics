@@ -5,8 +5,9 @@ import {
 } from 'recharts'
 import { format, parseISO } from 'date-fns'
 import { ArrowLeft, Pencil, Trash2, CalendarRange } from 'lucide-react'
-import { fmt, fmtCost, formatModel, formatProjectName, repoShortName } from '@agentistics/core'
+import { fmt, fmtCost, formatModel, formatProjectName, repoShortName, totalTokens as totalTokensOf } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
+import type { TokenBreakdown } from '@agentistics/core'
 import { HARNESS_LABELS } from '../lib/harness'
 import { ConfirmModal, SectionHeader } from './settings/primitives'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -18,8 +19,11 @@ interface TagSource { type: TagSourceType; value: string }
 interface TagAggregate {
   sessions: number
   costUSD: number
+  /** The two conversational counters. NOT the total — read `tokens`. */
   inputTokens: number
   outputTokens: number
+  /** All four billed counters, as the server's `TagAggregate` now sends them. */
+  tokens: TokenBreakdown
   topProject: string | null
   topModel: string | null
   topHarness: string | null
@@ -323,7 +327,8 @@ export default function TagDetailPage() {
         : `${pt ? 'até' : 'until'} ${niceDate(tag.window.end!)}`)
     : null
 
-  const totalTokens = tag.aggregate.inputTokens + tag.aggregate.outputTokens
+  // Every billed counter — see `tokens.ts` in the core.
+  const totalTokens = totalTokensOf(tag.aggregate.tokens)
   const empty = tag.aggregate.sessions === 0
 
   const metricLabel: Record<Metric, string> = {
@@ -654,7 +659,7 @@ export default function TagDetailPage() {
                     {b.aggregate.sessions.toLocaleString()}
                   </span>
                   <span style={{ textAlign: 'right', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                    {fmt(b.aggregate.inputTokens + b.aggregate.outputTokens)}
+                    {fmt(totalTokensOf(b.aggregate.tokens))}
                   </span>
                 </div>
               ))}

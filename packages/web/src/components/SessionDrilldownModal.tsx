@@ -6,8 +6,12 @@ import {
 } from 'lucide-react'
 import type { SessionMeta, Lang, WorkflowRun } from '@agentistics/core'
 import { sessionTime } from '../lib/sessionTime'
-import { formatProjectName, formatModel, calcCost, getModelColor, sessionLabel, fmtCost } from '@agentistics/core'
-import { blendedCostPerToken } from '../hooks/useData'
+import { formatProjectName, formatModel, getModelColor, sessionLabel, fmtCost, sessionCostUSD } from '@agentistics/core'
+import {
+  TOKEN_COLORS, TOKEN_PARTS, sessionTokens, tokenHelp, tokenLabel, tokenShares,
+  totalTokens as totalTokensOf, totalTokensExplained,
+} from '@agentistics/core'
+import { blendedCostPerToken, blendedSessionCost } from '../hooks/useData'
 import { buildWorkflowSteps } from '../lib/workflowSteps'
 import { fmtFull, workflowTokens } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
@@ -53,33 +57,33 @@ function fmtAgentDuration(ms: number): string {
   return rem > 0 ? `${m}m ${rem}s` : `${m}m`
 }
 
+/**
+ * Cost of the session on screen.
+ *
+ * The cache counters were HARDCODED TO ZERO here, so this drawer priced a session on the 4 % of its
+ * volume that is not cache. Measured against the cockpit on the same session: USD 1,74 here against
+ * a real USD 11,98 — and the drawer was the surface people opened precisely when a number looked
+ * wrong. `sessionCostUSD` is the shared per-model pricing every other surface already used.
+ */
 function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelUsage']): number | null {
-  // If the session has an explicit model, use exact pricing for any harness.
-  if (session.model) {
-    return calcCost(
-      {
-        inputTokens: session.input_tokens ?? 0,
-        outputTokens: session.output_tokens ?? 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-        webSearchRequests: 0,
-        costUSD: 0,
-      },
-      session.model,
-    )
-  }
+  // Exact per-model pricing when the session names a model — for any harness, and for a session
+  // spanning several models (an Antigravity parent with its subagents folded in).
+  const exact = sessionCostUSD(session)
+  if (exact !== null) return exact
   // No model on this session.
   // For Claude, fall back to the statsCache blended rate (it's Claude-only data, so safe to use).
   // For any other harness, the Claude blended rate would be misleading — return null (N/A).
   const harness = session.harness ?? 'claude'
   if (harness !== 'claude') return null
-  const blended = blendedCostPerToken(globalModelUsage)
-  return ((session.input_tokens ?? 0) / 1_000_000) * blended.input
-       + ((session.output_tokens ?? 0) / 1_000_000) * blended.output
+  // Each counter at its own blended rate — shared with the PDF's per-session column, which had
+  // the same two-term version of this arithmetic.
+  return blendedSessionCost(session, blendedCostPerToken(globalModelUsage))
 }
 
 export function SessionDrilldownModal({ session, globalModelUsage, currency, brlRate, lang, central, workflows, onClose }: Props) {
   const pt = lang === 'pt'
+  /** `Lang` narrowed for the token vocabulary — `lang` is widened elsewhere in this component. */
+  const tokLang: Lang = pt ? 'pt' : 'en'
   const isMobile = useIsMobile()
   const [fullPrecision, setFullPrecision] = useState(false)
   // Dynamic-workflow runs that belong to THIS session (moved here from the old aside menu).
@@ -91,7 +95,10 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
     return () => document.removeEventListener('keydown', handler)
   }, [onClose])
 
-  const totalTokens = (session.input_tokens ?? 0) + (session.output_tokens ?? 0)
+  // Every billed counter. This read `input + output` and reported a 9,8M-token session as 69,8K.
+  const breakdown = sessionTokens(session)
+  const totalTokens = totalTokensOf(breakdown)
+  const shares = tokenShares(breakdown)
   const totalMessages = (session.user_message_count ?? 0) + (session.assistant_message_count ?? 0)
   const totalTools = Object.values(session.tool_counts ?? {}).reduce((a, b) => a + b, 0)
   const cost = sessionCost(session, globalModelUsage)
@@ -285,7 +292,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(auto-fit, minmax(96px, 1fr))' : 'repeat(5, 1fr)', gap: isMobile ? 8 : 10 }}>
               <Kpi icon={<MessageSquare size={12} />} label={pt ? 'Mensagens' : 'Messages'} value={fmt(totalMessages, fullPrecision)} accent="var(--accent-blue, #3b82f6)" />
-              <Kpi icon={<Zap size={12} />} label="Tokens" value={fmt(totalTokens, fullPrecision)} accent="var(--anthropic-orange)" />
+              <Kpi icon={<Zap size={12} />} label="Tokens" value={fmt(totalTokens, fullPrecision)} accent="var(--anthropic-orange)" title={totalTokensExplained(breakdown, tokLang)} />
               <Kpi icon={<Wrench size={12} />} label="Tool calls" value={fmt(totalTools, fullPrecision)} accent="var(--accent-green, #22c55e)" />
               <Kpi icon={<GitCommit size={12} />} label="Commits" value={String(session.git_commits ?? 0)} accent="var(--accent-purple, #a855f7)" />
               <Kpi
@@ -308,25 +315,34 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
               <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)' }}>
                 {pt ? 'Divisão de tokens' : 'Token breakdown'}
               </span>
-              <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
-                {fmt(totalTokens, fullPrecision)} total
+              <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }} title={tokenHelp('total', tokLang)}>
+                {fmt(totalTokens, fullPrecision)} {tokenLabel('total', tokLang).toLowerCase()}
               </span>
             </div>
             <div style={{ display: 'flex', height: 8, background: 'var(--bg-card)', borderRadius: 4, overflow: 'hidden', marginBottom: 8 }}>
-              {totalTokens > 0 && (
-                <>
-                  <div style={{ width: `${(session.input_tokens ?? 0) / totalTokens * 100}%`, background: 'var(--accent-blue, #3b82f6)' }} />
-                  <div style={{ width: `${(session.output_tokens ?? 0) / totalTokens * 100}%`, background: 'var(--accent-green, #22c55e)' }} />
-                </>
-              )}
+              {totalTokens > 0 && TOKEN_PARTS.map(part => (
+                <div
+                  key={part}
+                  title={`${tokenLabel(part, tokLang)} — ${tokenHelp(part, tokLang)}`}
+                  style={{ width: `${shares[part] * 100}%`, background: TOKEN_COLORS[part] }}
+                />
+              ))}
             </div>
-            <div style={{ display: 'flex', gap: 14, fontSize: 11 }}>
-              <span style={{ color: 'var(--accent-blue, #3b82f6)', fontWeight: 600 }}>
-                ■ Input: {fmt(session.input_tokens ?? 0, fullPrecision)}
-              </span>
-              <span style={{ color: 'var(--accent-green, #22c55e)', fontWeight: 600 }}>
-                ■ Output: {fmt(session.output_tokens ?? 0, fullPrecision)}
-              </span>
+            {/* Every counter is named AND explained. The cache pair is the whole reason this number
+                is what it is, and a legend of two entries used to imply the other two did not exist. */}
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: '6px 12px', fontSize: 11 }}>
+              {TOKEN_PARTS.map(part => (
+                <span
+                  key={part}
+                  title={tokenHelp(part, tokLang)}
+                  style={{ color: TOKEN_COLORS[part], fontWeight: 600, minWidth: 0 }}
+                >
+                  ■ {tokenLabel(part, tokLang)}: {fmt(breakdown[part], fullPrecision)}
+                </span>
+              ))}
+            </div>
+            <div style={{ marginTop: 8, fontSize: 10, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+              {totalTokensExplained(breakdown, tokLang)}
             </div>
           </div>
 
@@ -613,9 +629,9 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
   )
 }
 
-function Kpi({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: string; accent: string }) {
+function Kpi({ icon, label, value, accent, title }: { icon: React.ReactNode; label: string; value: string; accent: string; title?: string }) {
   return (
-    <div style={{
+    <div title={title} style={{
       background: 'var(--bg-elevated)',
       border: '1px solid var(--border-subtle)',
       borderRadius: 10,

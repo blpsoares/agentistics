@@ -13,6 +13,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { getSessionsMenuHidden, setSessionsMenuHidden } from '../ephemeral'
 import { Box, Text, useInput } from 'ink'
 import type {
   ActionResult, ControlExit, ControlHost, ControlSession, ControlSessions, RestoreCandidate,
@@ -274,12 +275,23 @@ export function Sessions({
   /**
    * Whether the menu is folded away entirely, for when the list is what you came to read.
    *
-   * NOT persisted, unlike every other part of the arrangement: it is a gesture you make to look at
-   * something, not a setting. A menu that was still hidden three days later would be a feature
-   * nobody could find their way back out of — and the keys that open it (`1`-`9`) are the same ones
-   * that jump to a section, so opening it is never a thing you have to remember how to do.
+   * Not persisted to disk, unlike the rest of the arrangement: it is a gesture you make to look at
+   * something, not a setting, and a menu still hidden three days later is a feature nobody can find
+   * their way back out of. But "not forever" was implemented as "not at all", and that cost the one
+   * round trip people make dozens of times an hour: attaching to a session REMOUNTS this app, so
+   * folding the menu, entering a session and leaving it found the menu open again, every time.
+   *
+   * It lives in module state (`ephemeral.ts`) — the lifetime that was missing. Survives the
+   * remount, gone when you quit agentop.
    */
-  const [menuHidden, setMenuHidden] = useState(false)
+  const [menuHidden, setMenuHiddenState] = useState(getSessionsMenuHidden)
+  const setMenuHidden = useCallback((next: boolean | ((v: boolean) => boolean)) => {
+    setMenuHiddenState(prev => {
+      const value = typeof next === 'function' ? next(prev) : next
+      setSessionsMenuHidden(value)
+      return value
+    })
+  }, [])
   /** Ids the user has already been asked about this run, so the offer is made once. */
   const [restoreAsked, setRestoreAsked] = useState(false)
   /**
@@ -903,8 +915,14 @@ export function Sessions({
     if (input === '?' || (key.ctrl && input === 'h')) { setAsk({ kind: 'keys' }); return }
     if (input === 'v') return runAction('group')
     // One key, because there is one switch. `c` and `e` toggled two halves of the same question.
-    if (input === 'c' || input === 'e') { pressShortcut('history'); return }
-    if (input === 'l') { pressShortcut('active'); return }
+    // ONE key for one question. `active` and `history` partition `SESSION_STATES`, so the two
+    // shortcuts are one boolean read from either end — and it had THREE keys: `l` narrowed to the
+    // active states, while `c` and `e` (literally the same call) widened back. Pressing any of them
+    // did the same visible thing, which is a keyboard that lies about how many controls exist.
+    if (input === 'l' || input === 'c' || input === 'e') {
+      pressShortcut(onlyActive ? 'history' : 'active')
+      return
+    }
     if (input === 'd') { setHideDetail(v => !v); return }
     // `ctrl+g` for the GRID, not `g`: `g` is "top of the list" two lines down and in
     // `resolveListKey`'s menus, and a key answered by the screen AND by the list does two things at

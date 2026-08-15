@@ -6,13 +6,25 @@
  *
  * No Mongo, no auth, no I/O.
  */
-import { calcCost, sessionCostUSD, type SessionMeta } from '@agentistics/core'
+import {
+  EMPTY_TOKENS, addTokens, calcCost, sessionCostUSD, sessionTokens,
+  type SessionMeta, type TokenBreakdown,
+} from '@agentistics/core'
 
 export interface TagAggregate {
   sessions: number
   costUSD: number
+  /** The two conversational counters. NOT the total — read `tokens` for that. */
   inputTokens: number
   outputTokens: number
+  /**
+   * All four billed counters.
+   *
+   * The tag cards and the tag detail page printed `inputTokens + outputTokens` under the word
+   * "Tokens", which on a cached workload is a fraction of a percent of the real figure. The
+   * aggregate had no field to hold the rest, so the bug could not be fixed in the UI alone.
+   */
+  tokens: TokenBreakdown
   topProject: string | null
   topModel: string | null
   topHarness: string | null
@@ -37,11 +49,13 @@ export function aggregateSessions(sessions: SessionMeta[]): TagAggregate {
   let costUSD = 0
   let inputTokens = 0
   let outputTokens = 0
+  let tokens: TokenBreakdown = EMPTY_TOKENS
   for (const s of sessions) {
     const input = s.input_tokens ?? 0
     const output = s.output_tokens ?? 0
     inputTokens += input
     outputTokens += output
+    tokens = addTokens(tokens, sessionTokens(s))
     // Priced per model (multi-model sessions carry a `model_usage` breakdown).
     // No model at all → calcCost falls back to the default price, same as everywhere else.
     costUSD += sessionCostUSD(s) ?? calcCost({
@@ -58,6 +72,7 @@ export function aggregateSessions(sessions: SessionMeta[]): TagAggregate {
     costUSD,
     inputTokens,
     outputTokens,
+    tokens,
     topProject: topOf(sessions.map(s => s.project_path)),
     topModel: topOf(sessions.map(s => s.model)),
     topHarness: topOf(sessions.map(s => s.harness)),

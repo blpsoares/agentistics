@@ -45,10 +45,34 @@
  * which those are. Reading the records alone would refuse to reopen anything that ever ran.
  */
 
+/**
+ * What kind of thing is holding a conversation.
+ *
+ * The distinction the lock was missing. `managed` is a row agentop hosts: it has a tmux pane you can
+ * attach to, so "go and use it" is a real instruction. `process` is an assistant nobody here
+ * started — one opened by hand, or a background agent — and for that one "go and use it" is not an
+ * instruction at all: there is no pane to attach to, and the refusal named its DIRECTORY, which is
+ * not somewhere you can go. It was a dead end, and it was the only thing on offer.
+ *
+ * A `process` holder is therefore not a refusal any more, it is a takeover: the conversation lives
+ * on disk, so ending that process and reopening the SAME id under tmux loses nothing but the turn in
+ * flight and puts the work back under every verb this screen has.
+ */
+export type ClaimKind = 'managed' | 'process'
+
 /** A live session, as much of it as a refusal needs to name. */
 export interface ClaimingSession {
   /** The row id — a managed session id, or an external row's id. */
   id: string
+  /** Whether this is a row we host or a process we merely observed. */
+  kind: ClaimKind
+  /**
+   * The OS pid, for a `process` holder — what a takeover has to end.
+   *
+   * Absent on a managed row: those are ended through the backend by session id, never by signalling
+   * a pid, and a pid here would invite the wrong kind of kill.
+   */
+  pid?: number
   /**
    * Whether this session is running NOW.
    *
@@ -71,6 +95,10 @@ export interface ConversationHolder {
   id: string
   /** Its name, or its id when it has none — a refusal that names nothing cannot be acted on. */
   label: string
+  /** See {@link ClaimKind}: `managed` is somewhere to go, `process` is something to take over. */
+  kind: ClaimKind
+  /** The pid to end when taking over a `process` holder. */
+  pid?: number
 }
 
 /**
@@ -86,7 +114,12 @@ export function conversationsInUse(
   for (const s of sessions) {
     if (!s.alive || !s.conversationId) continue
     if (held.has(s.conversationId)) continue
-    held.set(s.conversationId, { id: s.id, label: s.label?.trim() || s.id })
+    held.set(s.conversationId, {
+      id: s.id,
+      label: s.label?.trim() || s.id,
+      kind: s.kind,
+      ...(s.pid !== undefined ? { pid: s.pid } : {}),
+    })
   }
   return held
 }
@@ -124,7 +157,12 @@ export function duplicateConversations(
   for (const s of sessions) {
     if (!s.alive || !s.conversationId) continue
     const list = byConv.get(s.conversationId) ?? []
-    list.push({ id: s.id, label: s.label?.trim() || s.id })
+    list.push({
+      id: s.id,
+      label: s.label?.trim() || s.id,
+      kind: s.kind,
+      ...(s.pid !== undefined ? { pid: s.pid } : {}),
+    })
     byConv.set(s.conversationId, list)
   }
   return [...byConv.entries()]

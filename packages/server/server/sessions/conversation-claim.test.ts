@@ -19,12 +19,14 @@ import {
 const TWINS: ClaimingSession[] = [
   {
     id: '44d649269a',
+    kind: 'managed',
     alive: true,
     conversationId: 'cd118e71-3708-420e-8c7f-c578cf59900f',
     label: 'Avaliar armazenamento de dados em SQLite local',
   },
   {
     id: '1da098e5cb',
+    kind: 'managed',
     alive: true,
     conversationId: 'cd118e71-3708-420e-8c7f-c578cf59900f',
     label: 'Possivel implementacao de SQLite no agentistics local',
@@ -34,9 +36,9 @@ const TWINS: ClaimingSession[] = [
 describe('conversationsInUse', () => {
   it('names the live session driving a conversation', () => {
     const held = conversationsInUse([
-      { id: 'a', alive: true, conversationId: 'c1', label: 'the auth work' },
+      { id: 'a', kind: 'managed', alive: true, conversationId: 'c1', label: 'the auth work' },
     ])
-    expect(held.get('c1')).toEqual({ id: 'a', label: 'the auth work' })
+    expect(held.get('c1')).toEqual({ id: 'a', label: 'the auth work', kind: 'managed' })
   })
 
   it('ignores a session that is not alive, however well recorded', () => {
@@ -44,20 +46,20 @@ describe('conversationsInUse', () => {
     // the process goes — 53 files on this machine against about a dozen live ones — so counting a
     // record as a claim would refuse to reopen anything that had ever run, which is every row the
     // reopen verb exists for.
-    const held = conversationsInUse([{ id: 'a', alive: false, conversationId: 'c1' }])
+    const held = conversationsInUse([{ id: 'a', kind: 'managed', alive: false, conversationId: 'c1' }])
     expect(held.size).toBe(0)
   })
 
   it('ignores a live session whose conversation is unknown', () => {
     // Absent is "we do not know", never "it holds nothing" — but there is nothing to lock either,
     // and inventing a claim from a directory guess is what `conversation-claim.ts` refuses to do.
-    expect(conversationsInUse([{ id: 'a', alive: true }]).size).toBe(0)
+    expect(conversationsInUse([{ id: 'a', kind: 'managed', alive: true }]).size).toBe(0)
   })
 
   it('falls back to the id when a session has no name, so a refusal always names something', () => {
-    const held = conversationsInUse([{ id: 'a', alive: true, conversationId: 'c1' }])
+    const held = conversationsInUse([{ id: 'a', kind: 'managed', alive: true, conversationId: 'c1' }])
     expect(held.get('c1')?.label).toBe('a')
-    const blank = conversationsInUse([{ id: 'b', alive: true, conversationId: 'c2', label: '  ' }])
+    const blank = conversationsInUse([{ id: 'b', kind: 'managed', alive: true, conversationId: 'c2', label: '  ' }])
     expect(blank.get('c2')?.label).toBe('b')
   })
 
@@ -70,7 +72,7 @@ describe('conversationsInUse', () => {
 })
 
 describe('conversationHeldBy', () => {
-  const held = conversationsInUse([{ id: 'a', alive: true, conversationId: 'c1', label: 'A' }])
+  const held = conversationsInUse([{ id: 'a', kind: 'managed', alive: true, conversationId: 'c1', label: 'A' }])
 
   it('reports the holder', () => {
     expect(conversationHeldBy(held, 'c1')?.id).toBe('a')
@@ -99,8 +101,8 @@ describe('duplicateConversations', () => {
 
   it('reports nothing when every conversation has one live session', () => {
     expect(duplicateConversations([
-      { id: 'a', alive: true, conversationId: 'c1' },
-      { id: 'b', alive: true, conversationId: 'c2' },
+      { id: 'a', kind: 'managed', alive: true, conversationId: 'c1' },
+      { id: 'b', kind: 'managed', alive: true, conversationId: 'c2' },
     ])).toEqual([])
   })
 
@@ -108,18 +110,62 @@ describe('duplicateConversations', () => {
     // Two ROWS on one conversation is a tidy-up; two LIVE rows is lost work. Only the second is a
     // finding, and calling the first one would make the report noise nobody reads.
     expect(duplicateConversations([
-      { id: 'a', alive: true, conversationId: 'c1' },
-      { id: 'b', alive: false, conversationId: 'c1' },
+      { id: 'a', kind: 'managed', alive: true, conversationId: 'c1' },
+      { id: 'b', kind: 'managed', alive: false, conversationId: 'c1' },
     ])).toEqual([])
   })
 
   it('is ordered by conversation, so two reads agree', () => {
     const dupes = duplicateConversations([
-      { id: 'a', alive: true, conversationId: 'z' },
-      { id: 'b', alive: true, conversationId: 'z' },
-      { id: 'c', alive: true, conversationId: 'm' },
-      { id: 'd', alive: true, conversationId: 'm' },
+      { id: 'a', kind: 'managed', alive: true, conversationId: 'z' },
+      { id: 'b', kind: 'managed', alive: true, conversationId: 'z' },
+      { id: 'c', kind: 'managed', alive: true, conversationId: 'm' },
+      { id: 'd', kind: 'managed', alive: true, conversationId: 'm' },
     ])
     expect(dupes.map(d => d.conversationId)).toEqual(['m', 'z'])
+  })
+})
+
+describe('what KIND of thing holds a conversation', () => {
+  // The distinction that turns a dead end into a gesture. A managed row is somewhere you can go —
+  // it has a pane, `o` attaches to it, and "open it there" is an instruction. A loose process is
+  // not: an assistant started by hand has no pane, and the refusal named its DIRECTORY, which is
+  // not a place. That row was visible and completely inert, which is what was reported.
+  it('carries the kind and the pid through to the holder', () => {
+    const held = conversationsInUse([
+      { id: 'external:claude:/repo:1', kind: 'process', pid: 4242, alive: true, conversationId: 'c1', label: '/repo' },
+    ])
+    expect(held.get('c1')).toEqual({
+      id: 'external:claude:/repo:1', label: '/repo', kind: 'process', pid: 4242,
+    })
+  })
+
+  it('leaves the pid ABSENT on a managed row', () => {
+    // A managed session is ended through the backend by session id, never by signalling a pid. A
+    // pid on this side would invite exactly the wrong kind of kill.
+    const held = conversationsInUse([
+      { id: 'row', kind: 'managed', alive: true, conversationId: 'c1', label: 'the auth work' },
+    ])
+    expect(held.get('c1')).not.toHaveProperty('pid')
+  })
+
+  it('reports a pid-less process holder rather than inventing one', () => {
+    // `/proc` can report a process whose pid could not be read. The caller must refuse there — it
+    // cannot end what it cannot name, and spawning beside it creates the twin the lock exists for.
+    const held = conversationsInUse([
+      { id: 'external:claude:/repo:1', kind: 'process', alive: true, conversationId: 'c1' },
+    ])
+    expect(held.get('c1')?.kind).toBe('process')
+    expect(held.get('c1')?.pid).toBeUndefined()
+  })
+
+  it('still lets the FIRST live holder win, whatever kind it is', () => {
+    // The map names ONE session to act on, not a census of the mess.
+    const held = conversationsInUse([
+      { id: 'row', kind: 'managed', alive: true, conversationId: 'c1', label: 'the row' },
+      { id: 'proc', kind: 'process', pid: 9, alive: true, conversationId: 'c1', label: '/repo' },
+    ])
+    expect(held.get('c1')?.id).toBe('row')
+    expect(held.size).toBe(1)
   })
 })

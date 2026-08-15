@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId, WorkflowRun } from '@agentistics/core'
-import { mergeStatsCaches, sessionDay, sanitizeStatsCache, normalizeSessionTimes } from '@agentistics/core'
+import { mergeStatsCaches, sessionDay, sanitizeStatsCache, normalizeSessionTimes, sessionTokenTotal } from '@agentistics/core'
 import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER, PARSE_CACHE_ENABLED } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
@@ -1073,7 +1073,7 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
       if (set && set.size > 0) p.users = Array.from(set)
     }
 
-    const totalTokens = dedupedSessions.reduce((sum, s) => sum + (s.input_tokens ?? 0) + (s.output_tokens ?? 0), 0)
+    const totalTokens = dedupedSessions.reduce((sum, s) => sum + sessionTokenTotal(s), 0)
     onProgress('finalizing', 1, String(totalTokens))
 
     return { statsCache, projects, allSessions: [] as [], sessions: dedupedSessions, healthIssues, homeDir: HOME_DIR, harnesses: Array.from(harnessSet), userStatsCaches, machineStatsCaches, machineOwners, workflows }

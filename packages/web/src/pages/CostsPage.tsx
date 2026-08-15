@@ -1,6 +1,6 @@
 import React from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { TrendingUp, Zap, Target, Sparkles } from 'lucide-react'
+import { TrendingUp, Zap, Target, Sparkles, Sigma } from 'lucide-react'
 import { planAllocation } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -8,6 +8,7 @@ import { Section } from '../components/Section'
 import { ModelBreakdown } from '../components/ModelBreakdown'
 import { BudgetPanel } from '../components/BudgetPanel'
 import { CacheHitRatePanel } from '../components/CacheHitRatePanel'
+import { TokenTotalsPanel } from '../components/TokenTotalsPanel'
 
 export default function CostsPage() {
   const ctx = useOutletContext<AppContext>()
@@ -28,6 +29,12 @@ export default function CostsPage() {
           ? 'Uso por modelo, projeção mensal e eficiência de cache — tudo relacionado a gastos.'
           : 'Model usage, monthly forecast and cache efficiency — everything related to spending.'}
       />
+
+      {/* The totals come FIRST: every figure below is a slice of these four numbers, and the panel
+          is where the word "tokens" is defined for the whole product. */}
+      <Section flashId="token-totals" title={<><Sigma size={14} /> {lang === 'pt' ? 'Totais de tokens' : 'Token totals'}</>}>
+        <TokenTotalsPanel tokens={derived.tokenTotals} filters={filters} lang={lang} />
+      </Section>
 
       <Section flashId="models" title={<><TrendingUp size={14} /> {lang === 'pt' ? 'Uso por modelo' : 'Model usage & cost'}</>} onExpand={() => setExpandedChart('models')}>
         <ModelBreakdown

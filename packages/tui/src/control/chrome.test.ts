@@ -219,11 +219,29 @@ describe('headerMeta', () => {
     const with_ = headerMeta({
       mode: 'solo', version: '1.7.4', memory: { used: 3, max: 17, red: false }, width: 60,
     })
-    expect(with_.memory).toBe('▤ 3/17')
+    expect(with_.memory).toBe('ram 3/17')
     expect(with_.memoryRed).toBe(false)
     // A machine whose memory cannot be read draws no gauge at all — never a zero, which would read
     // as "no room left" on precisely the machines nobody could ask.
     expect(headerMeta({ mode: 'solo', version: '1.7.4', width: 60 }).memory).toBe('')
+  })
+
+  test('the budget is NAMED, so it cannot be read as a count of sessions', () => {
+    // It was a bare `▤ n/m`, chosen so the pair could not be mistaken for a session count. That
+    // failed twice on real machines — `▤ 4/18` over a list of 4, then `▤ 5/…` over a list of 3 —
+    // because a glyph teaches nobody what a number measures.
+    //
+    // The two counts differ ON PURPOSE and no arithmetic change is wanted: this one counts assistant
+    // PROCESSES (a background agent is a live process sharing its parent's directory, so it costs
+    // memory here and owns no row in the list) while the list counts ROWS after its filter. The
+    // label is the only thing that can say so, so the label is pinned.
+    const meta = headerMeta({
+      mode: 'solo', version: '1.7.4', memory: { used: 5, max: 18, red: false }, width: 60,
+    })
+    expect(meta.memory).toContain('ram')
+    expect(meta.memory).not.toContain('▤')
+    // And it is not the word `sessions` in either language, which is the reading being prevented.
+    expect(meta.memory.toLowerCase()).not.toContain('sess')
   })
 
   test('a RED budget outranks the version under width pressure', () => {
@@ -232,7 +250,7 @@ describe('headerMeta', () => {
     // exactly the moment it matters — the version is one `agentop --version` away.
     const narrow = { mode: 'solo', version: '1.7.4', latestVersion: '1.9.0', attention: 2 }
     const red = headerMeta({ ...narrow, memory: { used: 14, max: 15, red: true }, width: 22 })
-    expect(red.memory).toBe('▤ 14/15')
+    expect(red.memory).toBe('ram 14/15')
     expect(red.text).toBe('solo')            // the version went first
     // …while a calm budget gives way instead, because it is only informational.
     const calm = headerMeta({ ...narrow, memory: { used: 3, max: 17, red: false }, width: 22 })

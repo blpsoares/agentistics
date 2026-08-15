@@ -79,6 +79,18 @@ const HELP_EN: ContentSection[] = [
     ],
   },
   {
+    // Two `n/m` pairs can be on screen at once, counting different things, and neither said so.
+    // A machine reading `ram 4/18` in the header above `5 on screen · 29 known` in the list looked
+    // like it was contradicting itself about how many sessions were open.
+    title: 'The two counters in the header',
+    rows: [
+      { cmd: '⏳ n', text: 'Sessions BLOCKED ON YOU right now — waiting for an answer or an approval. It is why this application is open, so it survives a narrow terminal after everything else has been dropped.' },
+      { cmd: 'ram n/m', text: 'The parallel-sessions budget: assistant PROCESSES alive, out of how many this machine has the MEMORY to hold. `m` grows and shrinks with free RAM and turns red as you approach it. It is not the same count as the sessions list, and is not meant to be: a background agent is a live process sharing its parent session\u2019s directory, so it costs memory here and has no row of its own there.' },
+      { text: 'The sessions list has its own pair, and it counts something else again: `5 on screen · 29 known` means the view is drawing 5 of the 29 sessions this machine has any record of — the rest are closed, lost or withheld by the filter named to its left.' },
+      { cmd: 'usage', text: "A row's token figure is EVERY billed counter: fresh input + output + cache read + cache write. Cache read is usually most of it — the conversation re-read on every turn, at roughly a tenth the price of fresh input — which is why a long session reads in the millions. The dashboard's Costs page breaks the four apart." },
+    ],
+  },
+  {
     title: 'Restart',
     rows: [
       { cmd: 'agentop restart', text: '[server|watch|central|--all] [--rebuild]' },
@@ -194,6 +206,15 @@ const HELP_PT: ContentSection[] = [
       { text: 'Uma única aplicação em tela cheia, no buffer alternativo do terminal — ela não deixa nada no seu scrollback.' },
       { text: 'Telas: Serviços (subir/parar/reiniciar esta máquina, uma central ou a máquina em Docker; ligar ou desligar o boot; e o assistente de SETUP — solo / central / member, o consentimento de preservação do histórico, conectar ou sair de uma central — aberto pela linha de modo no painel de config), Sessões (a frota rodando agora), Dashboard (as métricas — tudo o que o `agentop tui` mostra, em 1-5 ou tab, `f` filtra por assistente), Logs, Comandos, Ajuda, Contribuir.' },
       { text: 'Escolher "foreground" fecha a tela e sobe o servidor neste terminal. Com stdin não interativo, roda como `agentop server`.' },
+    ],
+  },
+  {
+    title: 'Os dois contadores do cabeçalho',
+    rows: [
+      { cmd: '⏳ n', text: 'Sessões PARADAS ESPERANDO VOCÊ agora — uma resposta ou uma aprovação. É o motivo de esta tela estar aberta, então sobrevive a um terminal estreito depois que todo o resto já foi descartado.' },
+      { cmd: 'ram n/m', text: 'O orçamento de sessões em paralelo: PROCESSOS de assistente vivos, sobre quantos esta máquina tem MEMÓRIA para segurar. O `m` sobe e desce com a RAM livre e fica vermelho quando você se aproxima dele. Não é a mesma contagem da lista de sessões, e não deveria ser: um agente em background é um processo vivo que compartilha o diretório da sessão que o criou, então custa memória aqui e não tem linha própria lá.' },
+      { text: 'A lista de sessões tem o par dela, e conta outra coisa ainda: `5 na tela · 29 conhecidas` quer dizer que a visão está desenhando 5 das 29 sessões de que esta máquina tem qualquer registro — o resto está fechado, perdido ou retido pelo filtro nomeado à esquerda.' },
+      { cmd: 'uso', text: 'O número de tokens de uma linha é TODOS os contadores cobrados: entrada nova + saída + leitura + escrita de cache. A leitura de cache costuma ser a maior parte — a conversa relida a cada turno, a cerca de um décimo do preço da entrada nova — e é por isso que uma sessão longa aparece na casa dos milhões. A página de Custos do dashboard separa os quatro.' },
     ],
   },
   {
