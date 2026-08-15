@@ -33,6 +33,15 @@ export interface TextPromptProps {
   /** Mask the value — the member token is pasted in front of other people. */
   secret?: boolean
   onSubmit: (value: string) => void
+  /**
+   * Called on EVERY keystroke, when the caller wants the answer as it is typed.
+   *
+   * Optional because most of these prompts must not act early: a member token is meaningless until
+   * it is whole, and a rename applied per character would write six labels while somebody types
+   * one. A SEARCH is the opposite — the whole value of it is watching the list narrow — so it is
+   * the caller that decides, not this component.
+   */
+  onChange?: (value: string) => void
   onCancel?: () => void
   width: number
   isActive?: boolean
@@ -44,23 +53,29 @@ export function TextPrompt({
   defaultValue,
   secret,
   onSubmit,
+  onChange,
   onCancel,
   width,
   isActive = true,
 }: TextPromptProps) {
   const [value, setValue] = useState('')
+  // One place that changes the value, so `onChange` cannot be forgotten on a path — and it fires
+  // with the NEW value rather than reading state that has not re-rendered yet.
+  const edit = (next: (v: string) => string): void => {
+    setValue(v => { const n = next(v); onChange?.(n); return n })
+  }
 
   useInput((input, key) => {
     if (key.escape) { onCancel?.(); return }
     if (key.return) { onSubmit(value.trim() || defaultValue || ''); return }
-    if (key.ctrl && input === 'u') { setValue(''); return }
-    if (key.backspace || key.delete) { setValue(v => v.slice(0, -1)); return }
+    if (key.ctrl && input === 'u') { edit(() => ''); return }
+    if (key.backspace || key.delete) { edit(v => v.slice(0, -1)); return }
     if (key.ctrl || key.meta || key.tab || key.upArrow || key.downArrow) return
 
     // A paste arrives as one multi-character chunk; control bytes inside it would corrupt the
     // rendered row, so only printable characters are kept.
     const printable = [...input].filter(ch => ch >= ' ' && ch !== '\x7f').join('')
-    if (printable) setValue(v => v + printable)
+    if (printable) edit(v => v + printable)
   }, { isActive })
 
   const suffix = defaultValue ? ` (${defaultValue})` : ''

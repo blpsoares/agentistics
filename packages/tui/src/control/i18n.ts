@@ -402,8 +402,8 @@ export interface ControlStrings {
   asideShow: string
   asideTasks: string
   asideAllTasks: string
-  toggleClosed: string
-  toggleExited: string
+  /** ONE switch for "not running". `toggleClosed`/`toggleExited` were two names for one question. */
+  toggleHistory: string
   /**
    * The named-row widening, made visible.
    *
@@ -845,8 +845,7 @@ const EN: ControlStrings = {
   asideShow: 'SHOW',
   asideTasks: 'TASKS',
   asideAllTasks: 'every task',
-  toggleClosed: 'closed conversations',
-  toggleExited: 'finished sessions',
+  toggleHistory: 'not running',
   toggleNamed: 'always keep named sessions',
   keySessionsAside: 'tab menu',
   manageTitle: (title: string) => `Managing "${title}"`,
@@ -1256,8 +1255,7 @@ const PT: ControlStrings = {
   asideShow: 'MOSTRAR',
   asideTasks: 'TAREFAS',
   asideAllTasks: 'todas as tarefas',
-  toggleClosed: 'conversas fechadas',
-  toggleExited: 'sessões encerradas',
+  toggleHistory: 'não estão rodando',
   toggleNamed: 'sempre manter sessões nomeadas',
   keySessionsAside: 'tab menu',
   manageTitle: (title: string) => `Gerenciando "${title}"`,

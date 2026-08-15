@@ -1189,7 +1189,13 @@ export type AsideRow =
  * `named` replaces it, and is the opposite kind of change — it makes an EXISTING hidden behaviour
  * visible. A row the user named used to survive the history switches unconditionally, unwritten.
  */
-export type SessionToggle = 'closed' | 'exited' | 'named' | 'done' | 'active' | 'detail'
+/**
+ * The switches the menu draws.
+ *
+ * `closed` and `exited` were two of these and asked ONE question — "is it not running" — so ticking
+ * either while the other was on appeared to do nothing. They are now `history`.
+ */
+export type SessionToggle = 'history' | 'named' | 'done' | 'active' | 'detail'
 
 /**
  * The aside's rows, in reading order — PURE, so what is drawn and what a click resolves against are
@@ -1279,7 +1285,7 @@ export function asideRows(o: {
   // so ticking `closed` while `active` is on widens the list and turns `active` off — a switch is
   // never lit over a list it does not describe. `named` sits with them because it is the same kind
   // of thing, and because it used to be the one widening nobody could see.
-  const toggles: SessionToggle[] = ['active', 'closed', 'exited', 'named', 'done', 'detail']
+  const toggles: SessionToggle[] = ['active', 'history', 'named', 'done', 'detail']
   for (const t of toggles) {
     rows.push({ kind: 'toggle', toggle: t, label: o.toggleWords[t], on: o.toggles[t] })
   }

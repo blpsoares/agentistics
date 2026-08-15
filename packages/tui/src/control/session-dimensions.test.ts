@@ -187,20 +187,25 @@ describe('the status shortcuts', () => {
     expect(shortcutOn(['waiting'], 'active')).toBe(false)
   })
 
-  it('reads the widening switches as membership', () => {
-    expect(shortcutOn([...ACTIVE_STATES, 'closed'], 'closed')).toBe(true)
-    expect(shortcutOn([...ACTIVE_STATES], 'closed')).toBe(false)
-    // Both states, together — a `lost` row is over in the only sense this switch asks about.
-    expect(shortcutOn([...ACTIVE_STATES, 'exited'], 'exited')).toBe(false)
-    expect(shortcutOn([...ACTIVE_STATES, 'exited', 'lost'], 'exited')).toBe(true)
+  it('reads the widening switch as membership, and it takes ALL of history', () => {
+    // There were two switches here and they asked one question. `closed` named a conversation that
+    // is not running and `exited` named a finished session plus `lost`; to the person reading the
+    // list all three are "it is not running", so ticking either while the other was on appeared to
+    // do nothing. One switch, all three states, on together or not at all.
+    expect(shortcutOn([...ACTIVE_STATES, 'closed', 'exited', 'lost'], 'history')).toBe(true)
+    expect(shortcutOn([...ACTIVE_STATES], 'history')).toBe(false)
+    // A PARTIAL selection is not the switch being on: it would draw itself lit over a list missing
+    // two of the three states it claims to include.
+    expect(shortcutOn([...ACTIVE_STATES, 'closed'], 'history')).toBe(false)
+    expect(shortcutOn([...ACTIVE_STATES, 'exited', 'lost'], 'history')).toBe(false)
   })
 
   it('turns `active` OFF by itself when another switch widens past it', () => {
     // The visible consequence, and the whole point: a switch is never lit over a list it does not
     // describe. This is what the old model could not express — the state set silently overrode the
     // switches while they went on drawing themselves as if they decided anything.
-    const widened = applyShortcut([...ACTIVE_STATES], 'closed')
-    expect(shortcutOn(widened, 'closed')).toBe(true)
+    const widened = applyShortcut([...ACTIVE_STATES], 'history')
+    expect(shortcutOn(widened, 'history')).toBe(true)
     expect(shortcutOn(widened, 'active')).toBe(false)
   })
 
@@ -210,7 +215,7 @@ describe('the status shortcuts', () => {
   })
 
   it('never empties the selection', () => {
-    expect(applyShortcut(['closed'], 'closed')).toEqual(['closed'])
+    expect(applyShortcut(['closed', 'exited', 'lost'], 'history').sort()).toEqual(['closed', 'exited', 'lost'])
   })
 })
 

@@ -592,7 +592,7 @@ describe('asideRows', () => {
     new: 'New', search: 'Search', group: 'Group',
   }
   const groupWords = { repo: 'repo', none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project', status: 'state', marked: 'marked' }
-  const toggleWords = { closed: 'closed', exited: 'finished', named: 'named', done: 'done tasks', active: 'only active', detail: 'detail' }
+  const toggleWords = { history: 'closed', named: 'named', done: 'done tasks', active: 'only active', detail: 'detail' }
   const headings = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
 
   const build = (o: Partial<Parameters<typeof asideRows>[0]> = {}) => asideRows({
@@ -600,7 +600,7 @@ describe('asideRows', () => {
     actionWords: words,
     grouping: 'none',
     groupWords,
-    toggles: { closed: false, exited: false, named: false, done: false, active: false, detail: false },
+    toggles: { history: false, named: false, done: false, active: false, detail: false },
     toggleWords,
     headings,
     layout: LAYOUT,
@@ -617,10 +617,10 @@ describe('asideRows', () => {
   })
 
   it('states every row own state, so nothing must be pressed to be discovered', () => {
-    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, named: false, done: false, active: false, detail: false } })
+    const rows = build({ grouping: 'task', toggles: { history: true, named: false, done: false, active: false, detail: false } })
     expect(rows.find(r => r.kind === 'group' && r.value === 'task')).toMatchObject({ on: true })
     expect(rows.find(r => r.kind === 'group' && r.value === 'none')).toMatchObject({ on: false })
-    expect(rows.find(r => r.kind === 'toggle' && r.toggle === 'closed')).toMatchObject({ on: true })
+    expect(rows.find(r => r.kind === 'toggle' && r.toggle === 'history')).toMatchObject({ on: true })
   })
 
   it('offers the named-row switch under every grouping', () => {
@@ -1094,9 +1094,9 @@ describe('the only-active toggle', () => {
       project: 'project', status: 'state', marked: 'marked',
     },
     layout: LAYOUT,
-    toggles: { closed: false, exited: false, named: false, done: false, active: true, detail: false },
+    toggles: { history: false, named: false, done: false, active: true, detail: false },
     toggleWords: {
-      closed: 'closed', exited: 'finished', named: 'named', done: 'done tasks',
+      history: 'closed', named: 'named', done: 'done tasks',
       active: 'only active', detail: 'detail',
     },
     headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
@@ -1897,9 +1897,9 @@ describe('asideRows — the layout section', () => {
       project: 'project', status: 'state', marked: 'marked',
     },
     layout: { ...LAYOUT, value },
-    toggles: { closed: false, exited: false, named: false, done: false, active: true, detail: false },
+    toggles: { history: false, named: false, done: false, active: true, detail: false },
     toggleWords: {
-      closed: 'closed', exited: 'exited', named: 'named', done: 'done', active: 'active',
+      history: 'closed', named: 'named', done: 'done', active: 'active',
       detail: 'detail',
     },
     headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
