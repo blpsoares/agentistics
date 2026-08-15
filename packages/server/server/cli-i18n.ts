@@ -10,6 +10,11 @@
  * mode sentence, the outcome of an action, a line printed by a non-interactive subcommand. The
  * words the control center's own screens are made of live in `tui/src/control/i18n.ts`, because the
  * host hands the TUI a `ControlStatus`, not a string table.
+ */
+
+import type { TakeoverRefusal } from './sessions/takeover'
+
+/*
  *
  * The flat arrow-key launcher this file was written for is gone, and with it forty entries that
  * named its menu items and its "stop which?" submenus. They were deleted rather than left in place:
@@ -173,6 +178,13 @@ export interface CliStrings {
    * them a second one in the same transcript, which is what this whole lock exists to prevent.
    */
   sessAdoptFailed: (holder: string) => string
+  /**
+   * A takeover the pure planner refused, said in words.
+   *
+   * Shared with the CLI's `explainTakeover`: the same three refusals, so the cockpit and the command
+   * line cannot describe one situation two ways.
+   */
+  sessTakeoverRefused: (reason: TakeoverRefusal) => string
   /** The fallback title for a session the user never named. */
   sessUntitled: (harness: string, project: string) => string
   sessKilled: (id: string) => string
@@ -473,6 +485,16 @@ const EN: CliStrings = {
     `that conversation is already open in ${holder} — open it there instead of starting a second assistant in it.`,
   sessAdoptFailed: (holder: string) =>
     `the assistant running that conversation (${holder}) would not stop, so it was left alone — nothing was opened.`,
+  sessTakeoverRefused: (reason: TakeoverRefusal) => {
+    switch (reason.code) {
+      case 'resume-unsupported':
+        return `${reason.harness} cannot reopen a conversation by id, so the assistant holding it was left alone.`
+      case 'holder-unreachable':
+        return `something is holding this conversation${reason.label ? ` (${reason.label})` : ''} and agentop cannot close it.`
+      case 'no-cwd':
+        return 'this conversation has no directory to reopen in — a removed worktree, most likely.'
+    }
+  },
   sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
   sessKilled: (id: string) => `stopped ${id}.`,
   sessRestoreNone: 'those sessions are no longer in the registry.',
@@ -725,6 +747,16 @@ const PT: CliStrings = {
     `essa conversa já está aberta em ${holder} — abra ela por lá, em vez de colocar um segundo assistente dentro dela.`,
   sessAdoptFailed: (holder: string) =>
     `o assistente que roda essa conversa (${holder}) não encerrou, então foi deixado como estava — nada foi aberto.`,
+  sessTakeoverRefused: (reason: TakeoverRefusal) => {
+    switch (reason.code) {
+      case 'resume-unsupported':
+        return `o ${reason.harness} não reabre uma conversa por id, então o assistente que a segura foi deixado como estava.`
+      case 'holder-unreachable':
+        return `algo está segurando esta conversa${reason.label ? ` (${reason.label})` : ''} e o agentop não consegue encerrar.`
+      case 'no-cwd':
+        return 'esta conversa não tem diretório para reabrir — provavelmente uma worktree removida.'
+    }
+  },
   sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
   sessKilled: (id: string) => `${id} encerrada.`,
   sessRestoreNone: 'essas sessões não estão mais no registro.',

@@ -245,7 +245,12 @@ export function handleSessionStateTransitions(
     const folderName = session?.project_path ? (session.project_path.split('/').filter(Boolean).pop() || '') : ''
     const sessionSubject = sessionTitle || folderName || id.slice(0, 8)
     const harnessName = session?.harness ? (HARNESS_LABELS[session.harness] || session.harness.toUpperCase()) : ''
-    const locationInfo = folderName ? ` (${harnessName} em ${folderName})` : harnessName ? ` (${harnessName})` : ''
+    // The connector is LOCALIZED. It was a hardcoded Portuguese `em` used by both branches, so an
+    // English notification read "Session X (CLAUDE CODE em agentistics) is waiting for your
+    // response" — one Portuguese word in the middle of an English sentence, on the surface a user
+    // reads at a glance while doing something else.
+    const inWord = lang === 'pt' ? 'em' : 'in'
+    const locationInfo = folderName ? ` (${harnessName} ${inWord} ${folderName})` : harnessName ? ` (${harnessName})` : ''
 
     let title = ''
     let body = ''
