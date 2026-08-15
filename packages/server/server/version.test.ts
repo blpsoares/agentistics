@@ -9,6 +9,7 @@ import {
   cachedVersionInfo,
   shouldRefreshVersionCache,
   VERSION_CACHE_TTL_MS,
+  VERSION_NEGATIVE_TTL_MS,
   VERSION_RETRY_MS,
 } from './version'
 // The unattended-upgrade lock lives in upgrade.ts, but its pure helpers are part of the
@@ -132,6 +133,33 @@ test('a cached verdict is only reused for the version it was computed against', 
   // A failure-only entry (attempt stamped, never a successful fetch) is not an answer.
   expect(cachedVersionInfo(entry({ fetchedAt: 0, attemptedAt: now }), '1.7.0')).toBeNull()
   expect(isVersionCacheFresh(null, now, '1.7.0')).toBe(false)
+})
+
+test('an "up to date" verdict goes stale far sooner than an "update available" one', () => {
+  // The bug, measured: a machine on 1.13.7 checked at 21:51 and cached `latest: 1.13.7`. v1.14.0
+  // shipped at 00:52 — inside the 3-hour window — and `check-update` stayed SILENT for the rest of
+  // it. Silence is indistinguishable from "checked, nothing new", so the release looked unpublished.
+  const negative = entry({ latest: '1.7.0', hasUpdate: false })
+  const justPastNegative = negative.fetchedAt + VERSION_NEGATIVE_TTL_MS + 1
+
+  expect(isVersionCacheFresh(negative, justPastNegative, '1.7.0')).toBe(false)
+  // …while the positive verdict at the very same age is still good: it names a release that still
+  // exists, keeps saying the same true thing, and clears itself on upgrade.
+  expect(isVersionCacheFresh(entry(), justPastNegative, '1.7.0')).toBe(true)
+
+  // And the refresh path agrees with the read path — one `ttlFor`, so they cannot drift apart.
+  const attempted = { attemptedAt: negative.fetchedAt }
+  expect(shouldRefreshVersionCache({ ...negative, ...attempted }, justPastNegative, '1.7.0')).toBe(true)
+  expect(shouldRefreshVersionCache({ ...entry(), ...attempted }, justPastNegative, '1.7.0')).toBe(false)
+})
+
+test('the shorter negative TTL still cannot become traffic', () => {
+  // The retry floor outranks it: stale at 30 minutes, re-asked at most every 15.
+  const negative = entry({ latest: '1.7.0', hasUpdate: false })
+  const inRetryWindow = negative.fetchedAt + VERSION_RETRY_MS - 1
+  expect(shouldRefreshVersionCache(
+    { ...negative, attemptedAt: negative.fetchedAt }, inRetryWindow, '1.7.0',
+  )).toBe(false)
 })
 
 test('a stale entry is past its TTL but still printable', () => {

@@ -26,9 +26,41 @@ const CACHE_TTL_MS = 60 * 60 * 1000 // 1 hour (in-process)
 export const VERSION_CACHE_FILE = join(AGENTISTICS_DATA_DIR, 'version-cache.json')
 /** How long a successful check stays authoritative before a refresh is due. */
 export const VERSION_CACHE_TTL_MS = 3 * 60 * 60 * 1000 // 3 hours
+/**
+ * How long a "you are up to date" verdict stays authoritative.
+ *
+ * **The two verdicts are not equally safe to cache, and that is the whole point of this constant.**
+ * A stale `hasUpdate: true` costs nothing: the release it names still exists, the banner keeps
+ * saying the same true thing, and it clears itself the moment the user upgrades. A stale
+ * `hasUpdate: false` is the opposite — it is the machine actively telling someone they are current
+ * while a release sits there, and it does it in the SILENT direction, so nobody can tell the
+ * difference between "checked, nothing new" and "not checked".
+ *
+ * Measured, and this is the bug it fixes: a machine on 1.13.7 checked at 21:51 and cached
+ * `latest: 1.13.7`. v1.14.0 shipped at 00:52. For the rest of the 3-hour window `check-update`
+ * printed NOTHING, and the release looked like it had never been published — including to the
+ * person who had just published it.
+ *
+ * Bounded, not free: the refresh is detached and additionally spaced by `VERSION_RETRY_MS`, so a
+ * shorter negative TTL can never turn into hammering — at most one attempt per retry window per
+ * machine, and never in front of a shell prompt.
+ */
+export const VERSION_NEGATIVE_TTL_MS = 30 * 60 * 1000 // 30 minutes
 /** Minimum spacing between refresh ATTEMPTS — stops 20 shells opening at once (or an
  *  offline machine) from firing 20 GitHub calls. */
 export const VERSION_RETRY_MS = 15 * 60 * 1000 // 15 minutes
+
+/**
+ * The TTL that applies to THIS entry — PURE.
+ *
+ * One function so the read path (`isVersionCacheFresh`) and the refresh path
+ * (`shouldRefreshVersionCache`) can never disagree about how long an answer lasts. They did not
+ * disagree before only because there was a single number; the moment there are two, one place
+ * deciding is the difference between a fix and a new bug.
+ */
+export function ttlFor(entry: VersionCacheEntry, ttlMs: number, negativeTtlMs: number): number {
+  return entry.hasUpdate ? ttlMs : Math.min(ttlMs, negativeTtlMs)
+}
 
 export interface VersionCacheEntry {
   /** The installed version this verdict was computed against. */
@@ -71,9 +103,10 @@ export function isVersionCacheFresh(
   now: number,
   current: string,
   ttlMs: number = VERSION_CACHE_TTL_MS,
+  negativeTtlMs: number = VERSION_NEGATIVE_TTL_MS,
 ): boolean {
   if (!entry || entry.current !== current || entry.fetchedAt <= 0) return false
-  return now - entry.fetchedAt < ttlMs
+  return now - entry.fetchedAt < ttlFor(entry, ttlMs, negativeTtlMs)
 }
 
 /**
@@ -96,11 +129,14 @@ export function shouldRefreshVersionCache(
   current: string,
   ttlMs: number = VERSION_CACHE_TTL_MS,
   retryMs: number = VERSION_RETRY_MS,
+  negativeTtlMs: number = VERSION_NEGATIVE_TTL_MS,
 ): boolean {
   if (!entry || entry.current !== current) return true
   const attempted = entry.attemptedAt ?? entry.fetchedAt
+  // The retry floor still applies, and it is what keeps the shorter negative TTL from becoming
+  // traffic: an up-to-date verdict goes stale at 30 minutes but is re-asked at most every 15.
   if (now - attempted < retryMs) return false
-  return now - entry.fetchedAt >= ttlMs
+  return now - entry.fetchedAt >= ttlFor(entry, ttlMs, negativeTtlMs)
 }
 
 /** Reads the shared cache file. Never throws. */

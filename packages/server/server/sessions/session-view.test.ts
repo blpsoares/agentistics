@@ -215,9 +215,11 @@ describe("what the harness says about its OWN session", () => {
   const index = (over: {
     byManagedId?: Record<string, Record<string, unknown>>
     byPid?: Record<number, Record<string, unknown>>
+    byConversation?: Record<string, Record<string, unknown>>
   }) => ({
     byManagedId: new Map(Object.entries(over.byManagedId ?? {})),
     byPid: new Map(Object.entries(over.byPid ?? {}).map(([k, v]) => [Number(k), v])),
+    byConversation: new Map(Object.entries(over.byConversation ?? {})),
   }) as never
 
   const managed = (id: string, o: Partial<ManagedSession> = {}): ManagedSession => ({
@@ -265,6 +267,46 @@ describe("what the harness says about its OWN session", () => {
       harnessSessions: index({ byManagedId: { m1: { sessionId: 'right' } } }),
     })
     expect(v!.resume?.sessionId).toBe('right')
+  })
+
+  it('gives a CLOSED row the name its own session chose, over the store title', () => {
+    // Measured on 2026-08-15. A session renamed to `MAIN` was listed under
+    // `Build agentop harness cockpit with session management` — a title from a different week.
+    // It is a BACKGROUND AGENT: no tmux, so `byManagedId` cannot see it, and the /proc scan
+    // surfaced nothing, so `byPid` was never asked. `byConversation` is the key that needs
+    // neither.
+    const views = buildSessionViews({
+      reconciled: [],
+      activity: new Map(),
+      processes: [],
+      conversations: [{
+        sessionId: '581deab7', title: 'Build agentop harness cockpit with session management',
+        lastActivityMs: 1, harness: 'claude' as const, cwd: '/repo/a', resumable: true,
+        firstPrompt: '',
+      }],
+      harnessSessions: index({ byConversation: { '581deab7': { name: 'MAIN' } } }),
+    })
+    expect(views[0]!.label).toBe('MAIN')
+    // Findable by BOTH: the name it now shows, and the one it used to show.
+    expect(views[0]!.searchText).toContain('main')
+    expect(views[0]!.searchText).toContain('cockpit')
+  })
+
+  it('never lets a DERIVED name displace a real store title', () => {
+    // `agentistics-84` is what the harness invents from the folder when nobody has said anything.
+    const views = buildSessionViews({
+      reconciled: [],
+      activity: new Map(),
+      processes: [],
+      conversations: [{
+        sessionId: 'c1', title: 'a title somebody wrote', lastActivityMs: 1,
+        harness: 'claude' as const, cwd: '/repo/a', resumable: true, firstPrompt: '',
+      }],
+      harnessSessions: index({
+        byConversation: { c1: { name: 'agentistics-84', nameSource: 'derived' } },
+      }),
+    })
+    expect(views[0]!.label).toBe('a title somebody wrote')
   })
 
   it('matches an EXTERNAL process by its pid', () => {

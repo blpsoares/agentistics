@@ -106,6 +106,28 @@ describe('pickTitle', () => {
       .toEqual({ title: 'principal do cockpit', source: 'harness' })
   })
 
+  it('prefers the typed name over a COLLISION of that same name', () => {
+    // Measured on a real machine on 2026-08-15: the row labelled `Principal` was listed as
+    // `principal do cockpit-zippy-conway`. A collision name is the user's own with a suffix the
+    // harness appended, so handing the row to the harness shows a mangled copy in preference to the
+    // original — which is the whole of the complaint "the real name still isn't prevailing".
+    expect(pickTitle({
+      label: 'Principal',
+      file: { name: 'principal do cockpit-zippy-conway', nameSource: 'collision' },
+      fallback,
+    })).toEqual({ title: 'Principal', source: 'label', other: 'principal do cockpit-zippy-conway' })
+  })
+
+  it('still lets a real /rename inside the session win when neither side is dated', () => {
+    // The mirror complaint, and the reason the collision rule above is narrow rather than a flipped
+    // default: a name typed with `/rename` carries NO `nameSource`, so it is untouched.
+    expect(pickTitle({
+      label: 'Principal',
+      file: { name: 'renamed inside the session' },
+      fallback,
+    })).toEqual({ title: 'renamed inside the session', source: 'harness', other: 'Principal' })
+  })
+
   it('ignores a name the harness invented, whatever else is true', () => {
     expect(pickTitle({ file: { name: 'aipe-c9', nameSource: 'derived' }, fallback }))
       .toEqual({ title: fallback, source: 'derived' })

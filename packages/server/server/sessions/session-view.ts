@@ -471,12 +471,30 @@ export function buildSessionViews(o: {
   const closed: SessionView[] = conversations
     .filter(c => !shown.has(c.sessionId))
     .slice(0, o.closedLimit ?? 12)
-    .map(c => ({
+    .map(c => {
+      /**
+       * The name the SESSION gave itself, when its own record can be found by conversation id.
+       *
+       * `c.title` comes from the conversation store, which is written from the transcript and can be
+       * days older than a `/rename`. Measured: a session renamed to `MAIN` was listed here under
+       * `Build agentop harness cockpit with session management` — a title from a different week.
+       *
+       * This is the one lookup that needs nothing else to be true. `byManagedId` requires the
+       * session to have been started under tmux and `byPid` requires the `/proc` scan to have
+       * surfaced it; a background agent satisfies neither, and was therefore shown under whatever
+       * the store last recorded with no way to correct it.
+       *
+       * `chosenName` still rejects a `derived` name, so a harness-invented `agentistics-84` never
+       * displaces a real title.
+       */
+      const own = o.harnessSessions?.byConversation.get(c.sessionId)
+      const named = chosenName(own)
+      return {
       id: `closed:${c.sessionId}`,
       harness: c.harness,
       cwd: c.cwd,
       status: 'closed' as const,
-      label: c.title,
+      label: named ?? c.title,
       createdMs: c.lastActivityMs,
       attached: false,
       approvalDetection: false,
@@ -486,8 +504,12 @@ export function buildSessionViews(o: {
       ...(c.contextTokens !== undefined && c.contextWindow !== undefined
         ? { contextTokens: c.contextTokens, contextWindow: c.contextWindow }
         : {}),
-      searchText: searchTextOf(c.harness, c.cwd, c.title, c.firstPrompt),
-    }))
+      // The typed name goes into the search text TOO, or the row is displayed under a name that
+      // cannot be used to find it — which is the complaint arriving by the other door.
+      searchText: searchTextOf(c.harness, c.cwd, named ?? c.title, c.firstPrompt)
+        + (named && named !== c.title ? ` ${c.title.toLowerCase()}` : ''),
+      }
+    })
 
   return [...managed, ...external, ...closed].sort((a, b) => {
     const byRank = rankOf(a) - rankOf(b)
