@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useNavigate } from 'react-router-dom'
-import { Clock, Radio, Copy, Check, Bell, BellOff, Settings, Sparkles } from 'lucide-react'
+import { Clock, Radio, Copy, Check, Bell, BellOff, Settings, Sparkles, Folder, User, Terminal } from 'lucide-react'
 import type { HarnessId, LiveProcess, LiveUnavailableReason, SessionMeta } from '@agentistics/core'
 import { sessionLabel } from '@agentistics/core'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../lib/harness'
@@ -392,27 +392,159 @@ function LiveCard({
   const cmd = central ? null : resumeCommand(s)
   const [copied, setCopied] = useState(false)
   const mins = Math.max(0, Math.round((Date.now() - lastActivityMs(s)) / 60_000))
+  const title = sessionLabel(s) || (s.project_path ? (s.project_path.split('/').filter(Boolean).pop() || '') : '') || s.session_id.slice(0, 8)
+
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, background: 'var(--bg-card)' }}>
-      <div onClick={onOpen} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <StatusBadge activity={activity} pt={pt} />
-        <span style={{ fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sessionLabel(s)}</span>
-        <HarnessBadge harness={s.harness} />
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>{pt ? `há ${mins} min` : `${mins} min ago`}</span>
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+        padding: '16px 18px',
+        background: 'var(--bg-card)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+      }}
+    >
+      {/* Header Row */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        {/* Title & Harness */}
+        <div
+          onClick={onOpen}
+          style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}
+        >
+          <span
+            style={{
+              fontSize: 15,
+              fontWeight: 600,
+              color: 'var(--text-primary)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {title}
+          </span>
+          <HarnessBadge harness={s.harness} />
+        </div>
+
+        {/* Status Badge & Elapsed Time */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <StatusBadge activity={activity} pt={pt} />
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Clock size={12} />
+            <span>{pt ? `há ${mins} min` : `${mins} min ago`}</span>
+          </span>
+        </div>
       </div>
-      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>{s.project_path}</div>
-      {cmd
-        ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-            <code style={{ flex: 1, fontSize: 11, background: 'var(--bg-elevated)', padding: '6px 8px', borderRadius: 6, overflowX: 'auto', whiteSpace: 'nowrap' }}>{cmd}</code>
-            <button onClick={() => { navigator.clipboard.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
-              title={pt ? 'Copiar' : 'Copy'}
-              style={{ border: '1px solid var(--border)', background: 'var(--bg-elevated)', borderRadius: 6, padding: 6, cursor: 'pointer', color: 'var(--text-secondary)' }}>
-              {copied ? <Check size={13} color="#22c55e" /> : <Copy size={13} />}
-            </button>
+
+      {/* Context Details (Project Path / Member) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 12, color: 'var(--text-tertiary)' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={s.project_path}
+        >
+          <Folder size={13} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.project_path}</span>
+        </div>
+
+        {central && s.user && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, color: 'var(--text-secondary)' }}>
+            <User size={13} />
+            <span>{s.user}</span>
           </div>
-        : central
-          ? (s.user ? <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6 }}>{s.user}</div> : null)
-          : <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 6, fontStyle: 'italic' }}>{pt ? 'Retomar não disponível para este harness.' : 'Resume not available for this harness.'}</div>}
+        )}
+      </div>
+
+      {/* Command Box */}
+      {cmd ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '8px 12px',
+            borderRadius: 8,
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-subtle)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+            <Terminal size={13} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+            <code
+              style={{
+                fontSize: 11,
+                fontFamily: 'var(--font-mono, monospace)',
+                color: 'var(--text-primary)',
+                overflowX: 'auto',
+                whiteSpace: 'nowrap',
+                scrollbarWidth: 'none',
+              }}
+            >
+              {cmd}
+            </code>
+          </div>
+
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(cmd)
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1800)
+            }}
+            title={pt ? 'Copiar comando para o terminal' : 'Copy command to terminal'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '5px 10px',
+              borderRadius: 6,
+              border: copied ? '1px solid rgba(34, 197, 94, 0.4)' : '1px solid var(--border)',
+              background: copied ? 'rgba(34, 197, 94, 0.1)' : 'var(--bg-card)',
+              color: copied ? '#22c55e' : 'var(--text-secondary)',
+              fontSize: 11,
+              fontWeight: 500,
+              cursor: 'pointer',
+              flexShrink: 0,
+              transition: 'all 0.15s ease',
+              fontFamily: 'inherit',
+            }}
+          >
+            {copied ? (
+              <>
+                <Check size={12} color="#22c55e" />
+                <span>{pt ? 'Copiado!' : 'Copied!'}</span>
+              </>
+            ) : (
+              <>
+                <Copy size={12} />
+                <span>{pt ? 'Copiar' : 'Copy'}</span>
+              </>
+            )}
+          </button>
+        </div>
+      ) : central ? null : (
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+          {pt ? 'Retomar não disponível para este harness.' : 'Resume not available for this harness.'}
+        </div>
+      )}
     </div>
   )
 }

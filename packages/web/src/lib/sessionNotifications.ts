@@ -3,6 +3,8 @@
  */
 
 import type { SessionMeta } from '@agentistics/core'
+import { sessionLabel } from '@agentistics/core'
+import { HARNESS_LABELS } from './harness'
 
 export type SessionActivity = 'working' | 'waiting' | 'waiting-approval' | 'exited'
 export type SoundPreset = 'chime' | 'soft' | 'alert' | 'ping'
@@ -222,10 +224,6 @@ export function triggerSessionNotification(options: {
   }
 }
 
-// ----------------------------------------------------------------------------
-// Activity Transition Tracking
-// ----------------------------------------------------------------------------
-
 export function handleSessionStateTransitions(
   prevActivities: Record<string, SessionActivity>,
   nextActivities: Record<string, SessionActivity>,
@@ -243,32 +241,43 @@ export function handleSessionStateTransitions(
     if (!settings.events[nextState]) continue
 
     const session = sessionsMap.get(id)
-    const sessionName = session?.title || (session?.project_path ? session.project_path.split('/').pop() : id) || id
-    const harness = session?.harness ? `${session.harness.toUpperCase()} · ` : ''
+    const sessionTitle = session ? sessionLabel(session) : ''
+    const folderName = session?.project_path ? (session.project_path.split('/').filter(Boolean).pop() || '') : ''
+    const sessionSubject = sessionTitle || folderName || id.slice(0, 8)
+    const harnessName = session?.harness ? (HARNESS_LABELS[session.harness] || session.harness.toUpperCase()) : ''
+    const locationInfo = folderName ? ` (${harnessName} em ${folderName})` : harnessName ? ` (${harnessName})` : ''
 
     let title = ''
     let body = ''
 
     if (nextState === 'waiting-approval') {
-      title = lang === 'pt' ? `⚠️ Precisa de Aprovação · ${harness}${sessionName}` : `⚠️ Needs Approval · ${harness}${sessionName}`
+      title = lang === 'pt'
+        ? `🔴 Precisa de Aprovação: ${sessionSubject}`
+        : `🔴 Needs Approval: ${sessionSubject}`
       body = lang === 'pt'
-        ? `A sessão em "${session?.project_path || sessionName}" está aguardando sua aprovação para continuar.`
-        : `Session in "${session?.project_path || sessionName}" is waiting for your approval to proceed.`
+        ? `A sessão "${sessionSubject}"${locationInfo} está aguardando sua autorização para continuar.`
+        : `Session "${sessionSubject}"${locationInfo} is waiting for your authorization to proceed.`
     } else if (nextState === 'waiting') {
-      title = lang === 'pt' ? `💬 Aguardando Resposta · ${harness}${sessionName}` : `💬 Waiting Response · ${harness}${sessionName}`
+      title = lang === 'pt'
+        ? `🟡 Aguardando Resposta: ${sessionSubject}`
+        : `🟡 Waiting Input: ${sessionSubject}`
       body = lang === 'pt'
-        ? `A IA concluiu a resposta e está aguardando seu próximo comando.`
-        : `The AI finished its turn and is waiting for your input.`
+        ? `A sessão "${sessionSubject}"${locationInfo} concluiu o turno e aguarda sua resposta.`
+        : `Session "${sessionSubject}"${locationInfo} finished its turn and is waiting for your response.`
     } else if (nextState === 'working') {
-      title = lang === 'pt' ? `⚡ Trabalhando · ${harness}${sessionName}` : `⚡ Working · ${harness}${sessionName}`
+      title = lang === 'pt'
+        ? `🟢 Em Andamento: ${sessionSubject}`
+        : `🟢 Working: ${sessionSubject}`
       body = lang === 'pt'
-        ? `A sessão iniciou o processamento.`
-        : `Session started working.`
+        ? `A sessão "${sessionSubject}"${locationInfo} iniciou o processamento.`
+        : `Session "${sessionSubject}"${locationInfo} started working.`
     } else if (nextState === 'exited') {
-      title = lang === 'pt' ? `⏹️ Sessão Finalizada · ${harness}${sessionName}` : `⏹️ Session Closed · ${harness}${sessionName}`
+      title = lang === 'pt'
+        ? `⚪ Sessão Encerrada: ${sessionSubject}`
+        : `⚪ Session Closed: ${sessionSubject}`
       body = lang === 'pt'
-        ? `A sessão em "${session?.project_path || sessionName}" foi encerrada.`
-        : `Session in "${session?.project_path || sessionName}" exited.`
+        ? `A sessão "${sessionSubject}"${locationInfo} foi finalizada.`
+        : `Session "${sessionSubject}"${locationInfo} was closed.`
     }
 
     if (title && body) {
