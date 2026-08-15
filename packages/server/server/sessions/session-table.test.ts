@@ -4,16 +4,30 @@ import {
   NATURAL_WIDTH, composeLine, emptyReason, renderSessionTable, resolveWidth,
   type SessionTableStrings,
 } from './session-table'
+import { dimensionWordBook } from '@agentistics/tui/control/sessions'
 
 const STRINGS: SessionTableStrings = {
   cols: {
     id: 'id', state: 'state', title: 'session', age: 'started', task: 'task',
     worktree: 'worktree', metrics: 'usage', context: 'window', harness: 'harness', where: 'project',
   },
-  unknown: {
-    harness: 'harness unknown', model: 'no model recorded', project: 'no directory recorded',
-    task: 'no task', repo: 'no repository',
-  },
+  words: dimensionWordBook({
+    labels: {
+      status: 'state', harness: 'harness', model: 'model', project: 'project', repo: 'repository',
+      task: 'task', marked: 'marked',
+    },
+    unfiled: {
+      status: 'state unrecorded', harness: 'harness unknown', model: 'no model recorded',
+      project: 'no directory recorded', repo: 'no repository', task: 'no task',
+      marked: 'not marked',
+    },
+    states: {
+      working: 'working', waiting: 'waiting', 'waiting-approval': 'needs approval',
+      exited: 'ended', lost: 'lost', closed: 'closed', unknown: 'unknown',
+    },
+    goneProject: 'directory no longer exists',
+    marked: 'marked',
+  }),
   closed: 'closed',
   done: 'finished',
 }

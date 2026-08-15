@@ -113,6 +113,31 @@ function sanitize(raw: unknown): ManagedSession | null {
     ...(typeof s.lastSeenMs === 'number' && Number.isFinite(s.lastSeenMs)
       ? { lastSeenMs: s.lastSeenMs }
       : {}),
+    ...sanitizeRepo(s.repo),
+  }
+}
+
+/**
+ * The recorded repository, kept only if it is SHAPED like one.
+ *
+ * The one nested object in this file, so it is the one field where "the three load-bearing ones
+ * check out, trust the rest" does not hold: a hand-edited `"repo": "agentistics"` would reach
+ * `resolveRepoFacts` as a string, `facts.repo` would be `undefined` on it, and the row would
+ * silently behave as though nothing had been recorded — the exact failure this field exists to
+ * prevent, arriving invisibly. A malformed entry drops the FIELD and keeps the session, because
+ * everything else about that row is still usable.
+ */
+function sanitizeRepo(raw: unknown): { repo?: ManagedSession['repo'] } {
+  if (!raw || typeof raw !== 'object') return {}
+  const r = raw as Record<string, unknown>
+  // `repo` is what every reader keys on; without it the record says nothing worth keeping.
+  if (typeof r.repo !== 'string' || !r.repo) return {}
+  return {
+    repo: {
+      repo: r.repo,
+      ...(typeof r.root === 'string' && r.root ? { root: r.root } : {}),
+      worktree: r.worktree === true,
+    },
   }
 }
 

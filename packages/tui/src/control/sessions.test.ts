@@ -13,6 +13,9 @@ import {
   contextBar, contextLevel, sessionContext,
   askRows, fitApprovalPreview, APPROVAL_PREVIEW_MAX, QUESTION_ROWS, CARD_MIN_LINES,
   type CardBand, type CardLine, type SessionRow,
+  dimensionWordBook,
+  GROUPINGS,
+  CLOSE_CELL,
 } from './sessions'
 import type { ControlSession, SessionState } from './types'
 import { PANE_FRAME_Y } from './chrome.ts'
@@ -25,10 +28,22 @@ const LAYOUT = {
   value: 'list' as const,
 }
 
-const UNKNOWN = {
-  harness: 'harness unknown', model: 'no model recorded', project: 'no directory', task: 'no task',
-  repo: 'no repository',
-}
+const UNKNOWN = dimensionWordBook({
+  labels: {
+    status: 'state', harness: 'harness', model: 'model', project: 'project', repo: 'repository',
+    task: 'task', marked: 'marked',
+  },
+  unfiled: {
+    status: 'state unrecorded', harness: 'harness unknown', model: 'no model recorded',
+    project: 'no directory', task: 'no task', repo: 'no repository', marked: 'not marked',
+  },
+  states: {
+    working: 'working', waiting: 'waiting', 'waiting-approval': 'needs approval',
+    exited: 'ended', lost: 'lost', closed: 'closed', unknown: 'unknown',
+  },
+  goneProject: 'directory no longer exists',
+  marked: 'marked',
+})
 
 const session = (id: string, over: Partial<ControlSession> = {}): ControlSession => ({
   id,
@@ -87,6 +102,47 @@ describe('groupSessions', () => {
     session('b', { harness: 'codex', project: 'x', state: 'waiting-approval' }),
     session('c', { harness: 'claude', model: 'opus', project: 'y', state: 'working' }),
   ]
+
+  it('does not make a PROJECT out of a directory that no longer exists', () => {
+    // Reported from a real machine: the worktree `.claude/worktrees/member-connect-rotate` was
+    // removed with its session still registered, so every `git -C` failed and the row grouped under
+    // the last segment of a path that names nothing — a project of its own, standing beside
+    // `Agentistics`, which is the project it was a worktree of.
+    const gone = [
+      session('w', { project: 'member-connect-rotate', dirGone: 'gone' }),
+      session('v', { project: 'billing-basis', dirGone: 'gone' }),
+      session('m', { project: 'agentistics' }),
+    ]
+    const g = groupSessions(gone, 'project', UNKNOWN)
+    const labels = g.map(x => x.label).sort()
+    expect(labels).toEqual(['agentistics', 'directory no longer exists'])
+    // Both missing rows are in ONE bucket: what they have in common is that nobody knows where
+    // they were, and that is a single fact rather than two project names.
+    expect(g.find(x => x.label === 'directory no longer exists')!.sessions.map(s => s.id).sort())
+      .toEqual(['v', 'w'])
+  })
+
+  it('still groups a gone directory under the project the registry recorded for it', () => {
+    // The recovery case: `ManagedSession.repo` was written at spawn, so the row keeps the project
+    // it belonged to and never reaches the bucket at all.
+    const g = groupSessions(
+      [session('w', { project: 'member-connect-rotate', projectGroup: 'agentistics', dirGone: 'gone' })],
+      'project',
+      UNKNOWN,
+    )
+    expect(g.map(x => x.label)).toEqual(['agentistics'])
+  })
+
+  it('keeps "gone" and "no directory recorded" as two different headings', () => {
+    // A row with no cwd at all is a different absence from a row whose recorded path is not there,
+    // and one heading for both would read as a category that neither of them is.
+    const g = groupSessions(
+      [session('n', { project: '' }), session('w', { project: 'x', dirGone: 'gone' })],
+      'project',
+      UNKNOWN,
+    )
+    expect(g.map(x => x.label).sort()).toEqual(['directory no longer exists', 'no directory'])
+  })
 
   it('returns one unnamed group when grouping is off', () => {
     const g = groupSessions(list, 'none', UNKNOWN)
@@ -211,7 +267,7 @@ describe('detailLines', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'started outside agentop', closed: 'not running', doing: 'saying', task: 'task', metrics: 'usage',
-    context: 'window',
+    context: 'window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
@@ -312,7 +368,7 @@ describe('detailLines — the two non-actionable rows say different things', () 
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'started outside agentop', closed: 'not running', doing: 'saying',
-    task: 'task', metrics: 'usage', context: 'window',
+    task: 'task', metrics: 'usage', context: 'window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
@@ -535,8 +591,8 @@ describe('asideRows', () => {
     finishTask: 'Finish task', approve: 'Answer', prompt: 'Send',
     new: 'New', search: 'Search', group: 'Group',
   }
-  const groupWords = { repo: 'repo', none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project' }
-  const toggleWords = { closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks', active: 'only active', detail: 'detail' }
+  const groupWords = { repo: 'repo', none: 'flat', task: 'tasks', harness: 'harness', model: 'model', project: 'project', status: 'state', marked: 'marked' }
+  const toggleWords = { closed: 'closed', exited: 'finished', named: 'named', done: 'done tasks', active: 'only active', detail: 'detail' }
   const headings = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
 
   const build = (o: Partial<Parameters<typeof asideRows>[0]> = {}) => asideRows({
@@ -544,11 +600,10 @@ describe('asideRows', () => {
     actionWords: words,
     grouping: 'none',
     groupWords,
-    toggles: { closed: false, exited: false, unfiled: false, done: false, active: false, detail: false },
+    toggles: { closed: false, exited: false, named: false, done: false, active: false, detail: false },
     toggleWords,
     headings,
     layout: LAYOUT,
-    showUnfiled: false,
     ...o,
   })
 
@@ -562,15 +617,19 @@ describe('asideRows', () => {
   })
 
   it('states every row own state, so nothing must be pressed to be discovered', () => {
-    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, unfiled: false, done: false, active: false, detail: false } })
+    const rows = build({ grouping: 'task', toggles: { closed: true, exited: false, named: false, done: false, active: false, detail: false } })
     expect(rows.find(r => r.kind === 'group' && r.value === 'task')).toMatchObject({ on: true })
     expect(rows.find(r => r.kind === 'group' && r.value === 'none')).toMatchObject({ on: false })
     expect(rows.find(r => r.kind === 'toggle' && r.toggle === 'closed')).toMatchObject({ on: true })
   })
 
-  it('offers the unfiled switch only where it means something', () => {
-    expect(build().some(r => r.kind === 'toggle' && r.toggle === 'unfiled')).toBe(false)
-    expect(build({ showUnfiled: true }).some(r => r.kind === 'toggle' && r.toggle === 'unfiled')).toBe(true)
+  it('offers the named-row switch under every grouping', () => {
+    // It replaced `unfiled`, which was offered only while grouping by task — a switch that appeared
+    // and disappeared for one dimension. The task-less bucket is a row in the task section now, and
+    // this one is about a widening that applies whatever the list is arranged by.
+    for (const grouping of GROUPINGS) {
+      expect(build({ grouping }).some(r => r.kind === 'toggle' && r.toggle === 'named')).toBe(true)
+    }
   })
 
   it('never lets the cursor land on a heading, a rule, or a disabled verb', () => {
@@ -1032,17 +1091,24 @@ describe('the only-active toggle', () => {
     grouping: 'project',
     groupWords: {
       repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
-      project: 'project',
+      project: 'project', status: 'state', marked: 'marked',
     },
     layout: LAYOUT,
-    toggles: { closed: false, exited: false, unfiled: false, done: false, active: true, detail: false },
+    toggles: { closed: false, exited: false, named: false, done: false, active: true, detail: false },
     toggleWords: {
-      closed: 'closed', exited: 'finished', unfiled: 'no task', done: 'done tasks',
+      closed: 'closed', exited: 'finished', named: 'named', done: 'done tasks',
       active: 'only active', detail: 'detail',
     },
     headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
-    showUnfiled,
+    ...(showUnfiled ? { tasks: TASK_SECTION } : {}),
   })
+  const TASK_SECTION = {
+    counts: [{ name: 't', count: 1 }],
+    active: null,
+    heading: 'TASKS',
+    allLabel: 'all',
+    unfiled: 'no task',
+  }
 
   it('leads the SHOW block, because it overrides the three under it', () => {
     // A switch that appears to do nothing is one people conclude is broken. Listed first it reads
@@ -1234,7 +1300,7 @@ describe('sessionAge', () => {
 describe('sessionKeyHelp', () => {
   const words = Object.fromEntries(
     ['move', 'open', 'attach', 'menu', 'section', 'newSession', 'search', 'clear', 'kill',
-      'rename', 'note', 'task', 'mark', 'onlyActive', 'closed', 'exited', 'unfiled', 'group',
+      'rename', 'note', 'task', 'mark', 'onlyActive', 'closed', 'exited', 'group', 'layout',
       'detail', 'menuFold', 'reset', 'tabs', 'help', 'quit',
       'approve', 'prompt', 'reopenFell'].map(k => [k, `does ${k}`]),
   ) as Parameters<typeof sessionKeyHelp>[0]
@@ -1828,16 +1894,15 @@ describe('asideRows — the layout section', () => {
     grouping: 'project',
     groupWords: {
       repo: 'repository', none: 'flat', task: 'task', harness: 'harness', model: 'model',
-      project: 'project',
+      project: 'project', status: 'state', marked: 'marked',
     },
     layout: { ...LAYOUT, value },
-    toggles: { closed: false, exited: false, unfiled: false, done: false, active: true, detail: false },
+    toggles: { closed: false, exited: false, named: false, done: false, active: true, detail: false },
     toggleWords: {
-      closed: 'closed', exited: 'exited', unfiled: 'unfiled', done: 'done', active: 'active',
+      closed: 'closed', exited: 'exited', named: 'named', done: 'done', active: 'active',
       detail: 'detail',
     },
     headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
-    showUnfiled: false,
   })
 
   it('offers both layouts and marks the one in force', () => {
@@ -2055,7 +2120,7 @@ describe('detailLines — named in two places', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'external', closed: 'closed', doing: 'saying', task: 'task', metrics: 'usage',
-    context: 'window',
+    context: 'window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
@@ -2250,7 +2315,7 @@ describe('detailLines — the gauge spelled out', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'external', closed: 'closed', doing: 'saying', task: 'task', metrics: 'usage',
-    context: 'context window',
+    context: 'context window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
 
@@ -2327,14 +2392,24 @@ describe('the per-row close control', () => {
     expect(canClose(session('d', { state: 'unknown' as SessionState, actionable: false }))).toBe(false)
   })
 
+  it('is measurable ASCII, because this package counts code units and not columns', () => {
+    // `truncate` counts `s.length` — UTF-16 code UNITS — and nothing here measures display width.
+    // A wastebasket is a surrogate pair (`.length === 2`) whose column width is 1 or 2 depending on
+    // the terminal, so it cannot be reserved correctly; the reservation would be wrong by one and
+    // shear every row under it. Bracketed ASCII is three of each.
+    expect(CLOSE_CELL).toBe('[x]')
+    expect([...CLOSE_CELL].length).toBe(CLOSE_CELL.length)
+    expect(CLOSE_CELL.codePointAt(0)!).toBeLessThan(128)
+  })
+
   it('costs nothing when nothing on screen can be closed', () => {
     expect(closeCellWidth([closed, gone], 120)).toBe(0)
-    expect(closeCellWidth([live], 120)).toBe(2)
+    expect(closeCellWidth([live], 120)).toBe(CLOSE_CELL.length + 1)
   })
 
   it('gives up on a narrow list rather than squeezing the table for a button', () => {
     // The keyboard's `x` still works there, and a table squeezed to make room is the worse trade.
     expect(closeCellWidth([live], 30)).toBe(0)
-    expect(closeCellWidth([live], 40)).toBe(2)
+    expect(closeCellWidth([live], 40)).toBe(CLOSE_CELL.length + 1)
   })
 })

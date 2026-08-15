@@ -9,7 +9,8 @@
  * The shell owns what must survive a screen switch (the status, the last action's outcome, the
  * scroll position of each read-only screen) and nothing else. Every screen stays mounted and is
  * hidden with `display="none"` rather than unmounted, so coming back to one finds it exactly as it
- * was — a remount would reset the Logs viewport and the Setup wizard on every glance elsewhere.
+ * was — a remount would reset the Logs viewport and the cockpit's own wizard on every glance
+ * elsewhere.
  *
  * The chrome is six rows and no more, in reading order: the title, a blank, the tab bar, its
  * accent rule, then — under the body — the status line and the footer. It used to be eight: a
@@ -35,7 +36,6 @@ import { cheatContent, contributeContent, helpContent } from './content'
 import { StaticTab } from './tabs/Static'
 import { Logs } from './tabs/Logs'
 import { Services } from './tabs/Services'
-import { Setup } from './tabs/Setup'
 import { Sessions } from './tabs/Sessions'
 import { Dashboard } from './tabs/Dashboard'
 import { writeFrame } from './altScreen'
@@ -118,7 +118,11 @@ type StaticTabId = 'help' | 'cheatsheet' | 'contribute'
 export interface ControlCenterProps {
   host: ControlHost
   lang: CliLang
-  initial?: { tab?: TabId }
+  initial?: {
+    tab?: TabId
+    /** Open with the setup wizard up — what "bare `agentop` opens on Setup" became. */
+    setup?: boolean
+  }
   onExit: (exit: ControlExit) => void
   /**
    * The mouse, or nothing at all.
@@ -135,7 +139,12 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   const s = controlStrings(lang)
 
   const [tab, setTab] = useState<TabId>(initial?.tab ?? 'services')
-  const [status, setStatus] = useState<ControlStatus | null>(null)
+  // Seeded from what the host already knows, so a REMOUNT does not open on the defaults. Detaching
+  // from a session remounts this app, `refresh()` takes about a second to probe systemd and docker,
+  // and for that second the sessions list was drawn with the shipped arrangement instead of the
+  // user's — the screen visibly rearranged itself under them. `null` stays the first-ever launch,
+  // where there is genuinely nothing to know yet.
+  const [status, setStatus] = useState<ControlStatus | null>(host.lastStatus?.() ?? null)
   const [busy, setBusy] = useState(true)
   const [result, setResult] = useState<ActionResult | null>(null)
   const [chrome, setChrome] = useState<ScreenChrome>({ capture: false, hints: [] })
@@ -366,7 +375,7 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   // every claim to them means a screen that never reports cannot inherit a stale `true` and lock
   // the global keys with no owner left to release them.
   const reports = tab === 'services' || tab === 'sessions' || tab === 'dashboard'
-    || tab === 'setup' || tab === 'logs'
+    || tab === 'logs'
   const capturing = chrome.capture && reports
   const arrowsClaimed = Boolean(chrome.claimArrows) && reports
 
@@ -513,7 +522,7 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
    * Everything that is not the cockpit is framed by the shell rather than by the screen.
    *
    * One containment style is what makes six screens read as one application, and putting the frame
-   * here means Logs, Setup and the three read-only screens neither know nor can disagree about it —
+   * here means Logs and the three read-only screens neither know nor can disagree about it —
    * they receive the INSIDE of a pane and lay out against that. The titles are the SHORT names, the
    * same lowercase words the strip prints and the cockpit's own panes wear, so a pane title reads
    * as a label everywhere rather than as a heading here and a label there.
@@ -524,7 +533,7 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   return (
     // Everything under here can be pointed at, so everything under here is inside the provider.
     // Only the ACTIVE screen's components listen (they gate on the same `isActive` their keyboard
-    // does), which is what keeps a hidden Setup wizard from answering a click meant for the cockpit.
+    // does), which is what keeps a hidden screen from answering a click meant for the cockpit.
     <PointerProvider bus={mouse?.pointer ?? EMPTY_POINTERS}>
     <Box flexDirection="column" paddingX={1}>
       <Header layout={header} width={width} />
@@ -559,6 +568,9 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
             // `m` key together rather than leaving a control for a device that cannot report.
             mouseOn={mouseOn}
             onMouse={mouse ? toggleMouse : undefined}
+            // A machine that has never been configured opens with the wizard already asking. It is
+            // a question of this screen now rather than a tab of its own — see `TAB_ORDER`.
+            initialSetup={initial?.setup}
           />
         </Screen>
 
@@ -588,7 +600,7 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
             />
         </Screen>
 
-        {/* Framed by the shell like Logs and Setup, and for the same reason: it is a viewport with a
+        {/* Framed by the shell like Logs, and for the same reason: it is a viewport with a
             selector over it, not a cockpit of related panes. The connection state that used to sit
             in the standalone app's header rides on its screen strip instead of on a pane badge, so
             the same row says where you are and whether the numbers under it are live. */}
@@ -602,22 +614,6 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
               height={bodyRows}
               isActive={tab === 'dashboard'}
               nonce={nonce}
-              onChrome={reportChrome}
-            />
-          </Pane>
-        </Screen>
-
-        <Screen visible={tab === 'setup'}>
-          <Pane title={s.tabsShort.setup} width={width} height={height}>
-            <Setup
-              host={host}
-              status={status}
-              strings={s}
-              lang={lang}
-              width={bodyWidth}
-              height={bodyRows}
-              isActive={tab === 'setup'}
-              run={run}
               onChrome={reportChrome}
             />
           </Pane>
@@ -705,7 +701,7 @@ const EMPTY_POINTERS = createPointerBus()
  * A hidden screen keeps its state but takes no rows.
  *
  * `display="none"` rather than returning null: an unmounted Logs screen would forget its scroll
- * position and its paused/following state, and an unmounted Setup wizard would drop the user back
+ * position and its paused/following state, and an unmounted cockpit would drop the user back
  * at question one for the crime of looking at the cheat sheet.
  */
 function Screen({ visible, children }: { visible: boolean; children: React.ReactNode }) {

@@ -8,7 +8,8 @@
  */
 
 import type { CliLang } from './lang'
-import type { TabId } from './types'
+import { dimensionWordBook, type DimensionWordBook, type SessionDimensionId, type SessionGroupingId } from './session-dimensions'
+import type { TabId, TeamMode } from './types'
 
 export interface ControlStrings {
   tagline: string
@@ -136,8 +137,13 @@ export interface ControlStrings {
   actHistory: string
   actLanguage: string
   actMouse: string
-  /** Install the boot unit for the selected service — offered beside its start options. */
-  actBoot: string
+  /**
+   * Open the setup wizard — what `enter` on the config pane's mode row does.
+   *
+   * There is no `actBoot` beside it any more: the boot VERBS are composed by the host, both
+   * positions of the switch, because which unit brings a service back is a fact about the box.
+   */
+  actSetup: string
 
   stateUp: string
   stateDown: string
@@ -158,14 +164,17 @@ export interface ControlStrings {
   /** Services tab. */
   killQuestion: string
 
-  /** Setup tab. */
-  setupIntro: string
-  setupSolo: string
-  setupSoloHint: string
-  setupCentral: string
-  setupCentralHint: string
-  setupMember: string
-  setupMemberHint: string
+  /**
+   * THE SETUP WIZARD — a question the cockpit asks, not a screen of its own any more.
+   *
+   * Keyed by `TeamMode` rather than spelled out one constant per mode: `ControlStatus.setupBlocked`
+   * is keyed the same way and the menu maps over `SETUP_MODES`, so a mode added to the product
+   * fails the build here instead of compiling clean and being missing from the wizard — the same
+   * rule `HARNESS_CAPABILITIES` enforces for harnesses.
+   */
+  setupQuestion: string
+  setupMode: Record<TeamMode, string>
+  setupModeHint: Record<TeamMode, string>
   archiveUnset: string
   archiveQuestion: string
   archiveWhy: string
@@ -210,7 +219,17 @@ export interface ControlStrings {
   sessionsCount: (shown: number, total: number) => string
   sessionsWaitingCount: (n: number) => string
   sessionsGroupBy: string
-  sessionsGroupings: Record<'none' | 'harness' | 'model' | 'project' | 'task' | 'repo', string>
+  /**
+   * Every dimension's name, plus the flat arrangement.
+   *
+   * `Record<SessionGroupingId, …>` on purpose: a dimension added to `session-dimensions.ts` breaks
+   * the build here until it has a word, rather than appearing in the menu under its internal id.
+   */
+  sessionsGroupings: Record<SessionGroupingId, string>
+  /** What each dimension's 'no value' bucket is called. Same reason it is a `Record`. */
+  sessionsUnfiled: Record<SessionDimensionId, string>
+  /** The band of rows the user MARKED — the filled side of the `marked` dimension. */
+  sessionsMarkedBand: string
   sessionsUnknownHarness: string
   sessionsUnknownModel: string
   sessionsUnknownProject: string
@@ -229,6 +248,10 @@ export interface ControlStrings {
   sessionsMetrics: string
   /** Detail-pane label for the context gauge spelled out. */
   sessionsContext: string
+  /** Detail-pane label for the conversation id this row continues from. */
+  sessionsConversation: string
+  /** Grouping heading for rows whose recorded directory no longer exists on this machine. */
+  sessionsGoneProject: string
   /** The name that did NOT win, when a session is named in agentop AND inside the harness. */
   sessionsAlsoLabel: string
   sessionsAlsoHarness: string
@@ -249,7 +272,7 @@ export interface ControlStrings {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
     note: string; task: string; mark: string; onlyActive: string; closed: string
-    exited: string; unfiled: string; group: string; detail: string; menuFold: string
+    exited: string; group: string; layout: string; detail: string; menuFold: string
     reset: string
     tabs: string; help: string; quit: string
     approve: string; prompt: string; reopenFell: string
@@ -381,7 +404,13 @@ export interface ControlStrings {
   asideAllTasks: string
   toggleClosed: string
   toggleExited: string
-  toggleUnfiled: string
+  /**
+   * The named-row widening, made visible.
+   *
+   * It replaced `toggleUnfiled`, which hid the task-less band only while grouping by task — that is
+   * now the task section's own "no task" row, on every dimension.
+   */
+  toggleNamed: string
   keySessionsAside: string
   /** The management view a session opens into. */
   manageTitle: (title: string) => string
@@ -470,7 +499,6 @@ const EN: ControlStrings = {
     services: 'Services',
     sessions: 'Sessions',
     dashboard: 'Dashboard',
-    setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Cheat sheet',
     help: 'Help',
@@ -481,7 +509,6 @@ const EN: ControlStrings = {
     services: 'services',
     sessions: 'sessions',
     dashboard: 'dashboard',
-    setup: 'setup',
     logs: 'logs',
     cheatsheet: 'commands',
     help: 'help',
@@ -550,7 +577,7 @@ const EN: ControlStrings = {
   actHistory: 'Change',
   actLanguage: 'Switch',
   actMouse: 'Switch',
-  actBoot: 'Start at boot',
+  actSetup: 'Change…',
 
   stateUp: 'up',
   stateDown: 'stopped',
@@ -563,13 +590,13 @@ const EN: ControlStrings = {
 
   killQuestion: 'A server is already running here — stop it and start a new one?',
 
-  setupIntro: 'How this machine tracks usage, and what leaves it.',
-  setupSolo: 'solo',
-  setupSoloHint: 'local only — nothing leaves this machine',
-  setupCentral: 'central',
-  setupCentralHint: 'host the team central (Docker) here',
-  setupMember: 'member',
-  setupMemberHint: 'everything solo does, plus push metrics (never chat) to a central',
+  setupQuestion: 'How should this machine track usage, and what may leave it?',
+  setupMode: { solo: 'solo', central: 'central', member: 'member' },
+  setupModeHint: {
+    solo: 'local only — nothing leaves this machine',
+    central: 'host the team central (Docker) here',
+    member: 'everything solo does, plus push metrics (never chat) to a central',
+  },
   archiveUnset: 'not chosen yet',
   archiveQuestion: 'Preserve session history?',
   archiveWhy: 'Claude deletes session transcripts older than 30 days.',
@@ -609,7 +636,21 @@ const EN: ControlStrings = {
     harness: 'harness',
     model: 'model',
     project: 'project',
+    status: 'state',
+    marked: 'marked',
   },
+  sessionsUnfiled: {
+    harness: 'harness unknown',
+    model: 'no model recorded',
+    project: 'no directory recorded',
+    task: 'no task',
+    repo: 'no repository',
+    // Unreachable in practice — every row wears a state — but a bucket without a name is a heading
+    // the screen cannot draw, so it is named rather than left to render blank.
+    status: 'state unrecorded',
+    marked: 'not marked',
+  },
+  sessionsMarkedBand: 'marked',
   sessionsUnknownHarness: 'harness unknown',
   sessionsUnknownModel: 'no model recorded',
   sessionsUnknownProject: 'no directory recorded',
@@ -639,6 +680,8 @@ const EN: ControlStrings = {
   sessionsTask: 'task',
   sessionsMetrics: 'usage',
   sessionsContext: 'context window',
+  sessionsConversation: 'conversation',
+  sessionsGoneProject: 'directory no longer exists',
   sessionsAlsoLabel: 'named here',
   sessionsAlsoHarness: 'named inside',
   sessionsDetach: 'to detach',
@@ -668,7 +711,7 @@ const EN: ControlStrings = {
     onlyActive: 'show only what is running',
     closed: 'show closed conversations',
     exited: 'show sessions that ended',
-    unfiled: 'show sessions under no task',
+    layout: 'list or cards',
     group: 'change the grouping',
     detail: 'hide the detail pane',
     menuFold: 'fold the menu away — any digit brings it back',
@@ -718,7 +761,7 @@ const EN: ControlStrings = {
   sessionsShowing: (shown, total) => `${shown} of ${total}`,
   sessionsCardAttached: 'attached',
   sessionsCardBlind: 'approval unknown',
-  keySessionsLayout: 'f list/cards',
+  keySessionsLayout: 'ctrl+g list/cards',
   keySessionsCard: '←→ card',
   keySessionsPage: 'pgup/pgdn page',
   asideSort: 'ORDER',
@@ -751,7 +794,7 @@ const EN: ControlStrings = {
   keySessionsRename: 'n name',
   keySessionsNote: 't note',
   keySessionsNew: 'a new',
-  keySessionsSearch: '/ search',
+  keySessionsSearch: 'ctrl+f search',
   keySessionsActions: 'tab actions',
   keySessionsApprove: 'y approve',
   keySessionsPrompt: 'p send',
@@ -804,7 +847,7 @@ const EN: ControlStrings = {
   asideAllTasks: 'every task',
   toggleClosed: 'closed conversations',
   toggleExited: 'finished sessions',
-  toggleUnfiled: 'sessions with no task',
+  toggleNamed: 'always keep named sessions',
   keySessionsAside: 'tab menu',
   manageTitle: (title: string) => `Managing "${title}"`,
   manageHint: '↑↓ move · enter run · esc back to the list',
@@ -871,7 +914,6 @@ const PT: ControlStrings = {
     services: 'Serviços',
     sessions: 'Sessões',
     dashboard: 'Dashboard',
-    setup: 'Setup',
     logs: 'Logs',
     cheatsheet: 'Comandos',
     help: 'Ajuda',
@@ -882,7 +924,6 @@ const PT: ControlStrings = {
     services: 'serviços',
     sessions: 'sessões',
     dashboard: 'dashboard',
-    setup: 'setup',
     logs: 'logs',
     cheatsheet: 'comandos',
     help: 'ajuda',
@@ -949,7 +990,7 @@ const PT: ControlStrings = {
   actHistory: 'Mudar',
   actLanguage: 'Trocar',
   actMouse: 'Trocar',
-  actBoot: 'Iniciar no boot',
+  actSetup: 'Mudar…',
 
   stateUp: 'no ar',
   stateDown: 'parado',
@@ -962,13 +1003,13 @@ const PT: ControlStrings = {
 
   killQuestion: 'Já existe um servidor rodando aqui — parar e iniciar outro?',
 
-  setupIntro: 'Como esta máquina registra o uso, e o que sai dela.',
-  setupSolo: 'solo',
-  setupSoloHint: 'só local — nada sai desta máquina',
-  setupCentral: 'central',
-  setupCentralHint: 'hospedar a central do time (Docker) aqui',
-  setupMember: 'member',
-  setupMemberHint: 'tudo que o solo faz, e ainda envia métricas (nunca chat) para uma central',
+  setupQuestion: 'Como esta máquina deve registrar o uso, e o que pode sair dela?',
+  setupMode: { solo: 'solo', central: 'central', member: 'member' },
+  setupModeHint: {
+    solo: 'só local — nada sai desta máquina',
+    central: 'hospedar a central do time (Docker) aqui',
+    member: 'tudo que o solo faz, e ainda envia métricas (nunca chat) para uma central',
+  },
   archiveUnset: 'ainda não escolhido',
   archiveQuestion: 'Preservar o histórico de sessões?',
   archiveWhy: 'O Claude apaga transcrições de sessão com mais de 30 dias.',
@@ -1008,7 +1049,19 @@ const PT: ControlStrings = {
     harness: 'harness',
     model: 'modelo',
     project: 'projeto',
+    status: 'estado',
+    marked: 'marcadas',
   },
+  sessionsUnfiled: {
+    harness: 'harness desconhecido',
+    model: 'sem modelo registrado',
+    project: 'sem diretório registrado',
+    task: 'sem tarefa',
+    repo: 'sem repositório',
+    status: 'estado não registrado',
+    marked: 'não marcadas',
+  },
+  sessionsMarkedBand: 'marcadas',
   sessionsUnknownHarness: 'harness desconhecido',
   sessionsUnknownModel: 'sem modelo registrado',
   sessionsUnknownProject: 'sem diretório registrado',
@@ -1035,6 +1088,8 @@ const PT: ControlStrings = {
   sessionsTask: 'tarefa',
   sessionsMetrics: 'uso',
   sessionsContext: 'janela de contexto',
+  sessionsConversation: 'conversa',
+  sessionsGoneProject: 'diretório não existe mais',
   sessionsAlsoLabel: 'nome daqui',
   sessionsAlsoHarness: 'nome de dentro',
   sessionsDetach: 'para sair',
@@ -1064,7 +1119,7 @@ const PT: ControlStrings = {
     onlyActive: 'mostra só o que está rodando',
     closed: 'mostra conversas fechadas',
     exited: 'mostra sessões encerradas',
-    unfiled: 'mostra sessões sem tarefa',
+    layout: 'lista ou cards',
     group: 'muda o agrupamento',
     detail: 'oculta o painel de detalhe',
     menuFold: 'recolhe o menu — qualquer dígito traz de volta',
@@ -1113,7 +1168,7 @@ const PT: ControlStrings = {
   sessionsShowing: (shown, total) => `${shown} de ${total}`,
   sessionsCardAttached: 'anexada',
   sessionsCardBlind: 'aprovação incerta',
-  keySessionsLayout: 'f lista/cards',
+  keySessionsLayout: 'ctrl+g lista/cards',
   keySessionsCard: '←→ card',
   keySessionsPage: 'pgup/pgdn página',
   asideSort: 'ORDENAR',
@@ -1123,7 +1178,11 @@ const PT: ControlStrings = {
   },
   sessionsStates: {
     'waiting-approval': 'precisa aprovação',
-    waiting: 'aguardando',
+    // The same word the state COLUMN shows (`cli-i18n.ts`'s `sessState.waiting`). Two tables of one
+    // vocabulary, and the sessions screen draws from both at once — the column from the host, the
+    // band heading and the filter row from here. They have to say the same thing or the row reads
+    // `aguardando resposta` under a band called `aguardando`.
+    waiting: 'aguardando resposta',
     working: 'trabalhando',
     exited: 'encerrada',
     lost: 'perdida',
@@ -1146,7 +1205,7 @@ const PT: ControlStrings = {
   keySessionsRename: 'n nomear',
   keySessionsNote: 't nota',
   keySessionsNew: 'a nova',
-  keySessionsSearch: '/ buscar',
+  keySessionsSearch: 'ctrl+f buscar',
   keySessionsActions: 'tab ações',
   keySessionsApprove: 'y aprovar',
   keySessionsPrompt: 'p enviar',
@@ -1199,7 +1258,7 @@ const PT: ControlStrings = {
   asideAllTasks: 'todas as tarefas',
   toggleClosed: 'conversas fechadas',
   toggleExited: 'sessões encerradas',
-  toggleUnfiled: 'sessões sem tarefa',
+  toggleNamed: 'sempre manter sessões nomeadas',
   keySessionsAside: 'tab menu',
   manageTitle: (title: string) => `Gerenciando "${title}"`,
   manageHint: '↑↓ mover · enter executar · esc voltar à lista',
@@ -1263,4 +1322,29 @@ const TABLE: Record<CliLang, ControlStrings> = { en: EN, pt: PT }
 
 export function controlStrings(lang: CliLang): ControlStrings {
   return TABLE[lang] ?? EN
+}
+
+/**
+ * The dimension word book for one language — the ONE place the strings are wired to the table.
+ *
+ * Every surface that groups or filters (the cockpit, `agentop session ls`) calls this rather than
+ * assembling its own: two assemblies is two chances for a band and the chip that selects it to be
+ * called different things, which is the whole defect the dimension table exists to remove.
+ */
+export function sessionWordBook(c: ControlStrings): DimensionWordBook {
+  return dimensionWordBook({
+    labels: {
+      status: c.sessionsGroupings.status,
+      harness: c.sessionsGroupings.harness,
+      model: c.sessionsGroupings.model,
+      project: c.sessionsGroupings.project,
+      repo: c.sessionsGroupings.repo,
+      task: c.sessionsGroupings.task,
+      marked: c.sessionsGroupings.marked,
+    },
+    unfiled: c.sessionsUnfiled,
+    states: c.sessionsStates,
+    goneProject: c.sessionsGoneProject,
+    marked: c.sessionsMarkedBand,
+  })
 }

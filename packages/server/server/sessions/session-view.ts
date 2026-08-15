@@ -14,6 +14,7 @@ import { rulesFor } from './attention-rules'
 import type { DialogOption } from './dialog-choice'
 import { chosenName, type HarnessSessionFile } from './harness-session-file'
 import type { HarnessSessionIndex } from './harness-sessions'
+import type { RepoFacts } from './repo-facts'
 import type { ReconciledSession } from './session-ref'
 import type { Conversation } from './conversations'
 import { conversationForProcess } from './conversations'
@@ -114,6 +115,15 @@ export interface SessionView {
    * event channel deduplicates on. Absent is absent.
    */
   conversationId?: string
+  /**
+   * The repository this row's directory was in when the session STARTED, as the registry recorded
+   * it — carried so the caller that resolves `repo-facts.ts` can hand it over.
+   *
+   * It is here rather than resolved here because resolving means running git, and this module is
+   * pure. Present only on a managed row written by a build that records it; `resolveRepoFacts`
+   * treats absence as "nothing recorded", never as "no repository".
+   */
+  recordedRepo?: RepoFacts
   createdMs?: number
   attached: boolean
   /**
@@ -175,7 +185,7 @@ function rankOf(v: SessionView): number {
  * in one directory (harness + cwd alone would collapse them into a single row), and unlike a list
  * index it does not change when an unrelated process appears or exits.
  */
-function externalId(p: HarnessProcess): string {
+export function externalId(p: HarnessProcess): string {
   return `external:${p.harness}:${p.cwd}:${p.startedMs ?? 0}`
 }
 
@@ -255,11 +265,19 @@ export function buildSessionViews(o: {
     exactId?: string,
   ): { resume?: { sessionId: string; title: string } } => {
     const pool = o.conversations ?? []
-    const exact = exactId ? pool.find(c => c.sessionId === exactId) : undefined
-    const own = exact ?? (managed?.conversationId
-      ? pool.find(c => c.sessionId === managed.conversationId)
-      : undefined)
-    const conv = own ?? pool.find(c =>
+    const knownId = exactId ?? managed?.conversationId
+    const own = knownId ? pool.find(c => c.sessionId === knownId) : undefined
+    // A row that KNOWS which conversation it drives never falls back to the guess — not even when
+    // the store does not hold that conversation yet. Since the id is recorded at SPAWN (not only at
+    // reopen), that gap is now ordinary: a session minutes old has an id and no transcript written
+    // under it. "Not yet" and "some other conversation in this directory" are not the same answer,
+    // and taking the second is the guess that handed three rows one conversation after a crash.
+    if (knownId) {
+      if (!own?.resumable) return {}
+      claimed.add(own.sessionId)
+      return { resume: { sessionId: own.sessionId, title: own.title } }
+    }
+    const conv = pool.find(c =>
       !claimed.has(c.sessionId)
       && c.harness === harness
       && sessionAtCwd({ current_cwd: c.cwd, project_path: c.cwd }, managed?.cwd ?? ''))
@@ -333,6 +351,7 @@ export function buildSessionViews(o: {
       ...(r.managed?.effort ? { effort: r.managed.effort } : {}),
       ...(r.managed?.task ? { task: r.managed.task } : {}),
       ...(r.managed?.conversationId ? { conversationId: r.managed.conversationId } : {}),
+      ...(r.managed?.repo ? { recordedRepo: r.managed.repo } : {}),
       // The backend's clock when there is a backend, the REGISTRY's when there is not. A row the
       // machine lost has no tmux session left to ask, so it reported no start time at all — and a
       // session you are deciding whether to reopen is one whose age is most of the decision.

@@ -19,8 +19,9 @@ import type { CliStrings } from '../cli-i18n'
 import { approvalFor } from './approval-spec'
 import { needsChoice } from './dialog-choice'
 import { pickTitle } from './harness-session-file'
-import type { RepoFacts } from './repo-facts'
+import type { ResolvedRepoFacts } from './repo-facts'
 import type { SessionView } from './session-view'
+import { conversationLinkable } from './spawn-spec'
 
 /** The state word each session wears, and the machine-readable state beside it. */
 export function sessionState(v: SessionView): SessionState {
@@ -62,7 +63,7 @@ export function toControlSession(
   v: SessionView,
   s: CliStrings,
   /** What repository this session's directory belongs to, already resolved and memoized. */
-  facts: RepoFacts = { worktree: false },
+  facts: ResolvedRepoFacts = { worktree: false, missing: false, source: 'none' },
 ): ControlSession {
   const state = sessionState(v)
   const project = projectName(v.cwd)
@@ -121,7 +122,22 @@ export function toControlSession(
     // Only when it differs: a session in the main checkout groups under its own folder already, and
     // a field repeating what is beside it is one more thing that can disagree.
     ...(facts.root && facts.root !== project ? { projectGroup: facts.root } : {}),
+    // Said wherever it is true, recovered repository or not: the row still names a path, and that
+    // path resolves to nothing on this machine. It is also the answer to "why did reopening fail",
+    // and — when no repository was recorded — it is what `groupSessions` keys the bucket on instead
+    // of `project`, which is then the last segment of a path that names nothing.
+    ...(facts.missing ? { dirGone: s.sessDirGone } : {}),
     ...(facts.worktree ? { worktree: true } : {}),
+    // The conversation this row is KNOWN to be writing — what `--resume` takes, and the only exact
+    // answer to "where does it continue from". Never filled from the harness+directory guess.
+    ...(v.conversationId ? { conversationId: v.conversationId } : {}),
+    // …and where no answer can ever exist, that is stated instead. Only on a row we HOST and only
+    // while it has no id: an `external` or `closed` row was never ours to record, and a claude row
+    // that has not been polled yet is about to have one. Same shape as `approvalBlind`.
+    ...(v.status !== 'external' && v.status !== 'closed' && !v.conversationId && harness
+      && !conversationLinkable(v.harness!)
+      ? { conversationBlind: s.sessConversationBlind(harness) }
+      : {}),
     ...(v.resume ? { resume: v.resume } : {}),
     ...(v.lastLines?.length ? { lastLines: v.lastLines } : {}),
     ...(v.approvalLines?.length ? { approvalLines: v.approvalLines } : {}),

@@ -138,8 +138,20 @@ export function serviceCommandFor(mode: AutostartMode): string | null {
   }
 }
 
+/**
+ * The systemd unit that brings a mode back — the name a user has to be given.
+ *
+ * Exported because "starts at boot" is not an answer anyone can act on: the whole complaint this
+ * module grew a `disable` path for was a central that came back with nothing on screen naming what
+ * brought it. With the unit named, `systemctl --user status <unit>` answers, `agentop autostart
+ * status` answers, and the cockpit's detail pane can print it beside the state.
+ */
+export function unitName(mode: AutostartMode): string {
+  return `agentop-${mode}.service`
+}
+
 function unitPath(mode: AutostartMode): string {
-  return join(homedir(), '.config', 'systemd', 'user', `agentop-${mode}.service`)
+  return join(homedir(), '.config', 'systemd', 'user', unitName(mode))
 }
 
 function unitContents(mode: AutostartMode, command: string): string {
@@ -318,16 +330,40 @@ export async function enableAutostart(mode: AutostartMode): Promise<AutostartRes
   return { ok: true, message: lines.join('\n') }
 }
 
+/**
+ * Options for `disableAutostart`.
+ *
+ * `stop` is the whole of it, and it exists because the two callers mean genuinely different things.
+ * `agentop autostart <mode> disable` has always meant "turn this service off, now and forever", and
+ * changing that under people scripting it would be a silent behaviour change. The control center's
+ * boot switch means only "do not bring it back", and a switch that also killed the running service
+ * would be two actions behind one label — the cockpit has a `Stop` verb for the other one, sitting
+ * two cells away on the same row.
+ */
+export interface DisableOptions {
+  /** Also stop it right now (`--now`). Default true, which is what the CLI has always done. */
+  stop?: boolean
+}
+
 /** Disables and removes an agentop autostart service for the given mode. */
-export async function disableAutostart(mode: AutostartMode): Promise<AutostartResult> {
+export async function disableAutostart(
+  mode: AutostartMode,
+  opts: DisableOptions = {},
+): Promise<AutostartResult> {
   if (platform() !== 'linux') return notSupported('disable')
 
+  const stop = opts.stop ?? true
   const lines: string[] = []
-  const disable = await run(['systemctl', '--user', 'disable', '--now', `agentop-${mode}`])
+  const argv = stop
+    ? ['systemctl', '--user', 'disable', '--now', `agentop-${mode}`]
+    : ['systemctl', '--user', 'disable', `agentop-${mode}`]
+  const disable = await run(argv)
   if (disable.code === 0) {
-    lines.push(`Disabled and stopped agentop-${mode}.`)
+    lines.push(stop
+      ? `Disabled and stopped agentop-${mode}.`
+      : `Disabled agentop-${mode} — it will not start at boot. Anything running now keeps running.`)
   } else {
-    lines.push(`systemctl --user disable --now agentop-${mode}: ${disable.stderr || `exit ${disable.code}`}`)
+    lines.push(`${argv.slice(0, -1).join(' ')} agentop-${mode}: ${disable.stderr || `exit ${disable.code}`}`)
   }
 
   const path = unitPath(mode)
@@ -405,6 +441,12 @@ export async function restartAutostart(mode: AutostartMode): Promise<AutostartRe
 
 /**
  * Reports the enabled/active status of one or all agentop autostart services.
+ *
+ * It states WHAT each enabled unit runs, and it says the consequence in a sentence. `enabled=enabled,
+ * active=inactive` is the exact shape of the bug people report — a central that is not running right
+ * now and comes back anyway — and read as two words it looks like nothing is wrong. The unit is the
+ * thing that brings it back; the sentence and the `ExecStart` are what make that discoverable
+ * without reading systemd's manual.
  */
 export async function autostartStatus(mode?: AutostartMode): Promise<AutostartResult> {
   if (platform() !== 'linux') return notSupported('status')
@@ -417,7 +459,15 @@ export async function autostartStatus(mode?: AutostartMode): Promise<AutostartRe
     // systemctl prints the state to stdout even on non-zero exit.
     const enabledState = enabled.stdout || enabled.stderr || 'unknown'
     const activeState = active.stdout || active.stderr || 'unknown'
-    lines.push(`agentop-${m}: enabled=${enabledState}, active=${activeState}`)
+    lines.push(`${unitName(m)}: enabled=${enabledState}, active=${activeState}`)
+    // Only for a unit that is actually registered: reading the ExecStart of a unit that does not
+    // exist would print an empty promise about a mechanism that is not installed.
+    if (enabledState.startsWith('enabled') || enabledState.startsWith('linked')) {
+      const exec = await run(['systemctl', '--user', 'show', `agentop-${m}`, '-p', 'ExecStart', '--value'])
+      const cmd = exec.stdout.match(/argv\[\]=([^;]+);/)?.[1]?.trim()
+      lines.push(`  → comes back at boot${cmd ? `, running: ${cmd}` : ''}`)
+      lines.push(`  → \`agentop autostart ${m} disable\` removes it`)
+    }
   }
   return { ok: true, message: lines.join('\n') }
 }

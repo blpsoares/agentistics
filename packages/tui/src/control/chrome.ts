@@ -942,7 +942,17 @@ export function detailContent(
   const boot = service.boot
   const machineRows: { label: string; value: string }[] = [
     // Absent, not "no": a box whose init system this host cannot ask must say nothing at all.
-    ...(boot ? [{ label: s.bootLabel, value: boot === 'on' ? s.bootOn : s.bootOff }] : []),
+    //
+    // The UNIT is named beside the state whenever the host carried one, and that is the whole of
+    // the honest trail: "starts at boot" tells a user that SOMETHING will bring their central back
+    // and gives them nothing to go and look at. With the unit named, the answer to "why did this
+    // come back after I stopped it" is on the same row as the verb that turns it off.
+    ...(boot
+      ? [{
+          label: s.bootLabel,
+          value: (boot === 'on' ? s.bootOn : s.bootOff) + (service.bootUnit ? `${SEP}${service.bootUnit}` : ''),
+        }]
+      : []),
     ...machine.rows,
   ]
   if (machineRows.length > 0) {

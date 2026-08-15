@@ -1,6 +1,8 @@
 import { test, expect } from 'bun:test'
 import {
   aggregateState,
+  bootModeFor,
+  bootOptionsFor,
   buildService,
   logRuntime,
   parseBootState,
@@ -11,6 +13,7 @@ import {
   targetRuntimes,
 } from './cli-start'
 import { cliStrings } from './cli-i18n'
+import type { BootMechanism } from './cli-start'
 import type { RuntimeId, ServiceRuntimeState } from '@agentistics/tui/control'
 
 // Regression for the "kill and restart" self-termination bug: the CLI health check
@@ -437,4 +440,131 @@ test('buildService says nothing about boot unless it was told', () => {
   expect(buildService('agentistics', s.svcAgentistics, runtimes, s).boot).toBeUndefined()
   expect(buildService('agentistics', s.svcAgentistics, runtimes, s, { boot: 'on' }).boot).toBe('on')
   expect(buildService('agentistics', s.svcAgentistics, runtimes, s, { boot: 'off' }).boot).toBe('off')
+})
+
+// ---------------------------------------------------------------------------
+// the BOOT switch — both positions, and the absences that must stay absences
+// ---------------------------------------------------------------------------
+//
+// The bug these cover, stated once: `enableBoot` wrote a systemd user unit and nothing in the
+// product could take it away. A user who stopped their central because they were finished with it
+// got it back on the next boot — and on the next login that starts the user's systemd manager —
+// with nothing on screen naming what had brought it back. A switch with one position is not a
+// switch, and `bootOptionsFor` is the thing that has to have both.
+
+const BOOT_S = cliStrings('en')
+
+const mech = (over: Partial<BootMechanism> = {}): BootMechanism => ({
+  unit: 'agentop-server.service',
+  runtime: 'local',
+  mech: 'native',
+  on: false,
+  installable: true,
+  ...over,
+})
+
+test('a registered mechanism offers to be REMOVED, and only that', () => {
+  const opts = bootOptionsFor([mech({ on: true })], BOOT_S, true, 'agentistics')
+  expect(opts.map(o => o.enable)).toEqual([false])
+  // Never both positions of one switch: a row offering "start at boot" beside "do not start at
+  // boot" asks the user which of two facts about the same unit is the true one.
+  expect(opts).toHaveLength(1)
+})
+
+test('an unregistered mechanism offers to be WRITTEN, and only that', () => {
+  const opts = bootOptionsFor([mech({ on: false })], BOOT_S, true, 'agentistics')
+  expect(opts.map(o => o.enable)).toEqual([true])
+})
+
+test('every sentence NAMES the unit — both directions, and the one asked after a stop', () => {
+  const [off] = bootOptionsFor([mech({ on: true })], BOOT_S, true, 'agentistics')
+  const [on] = bootOptionsFor([mech({ on: false })], BOOT_S, true, 'agentistics')
+  // This is the honest trail. A confirmation that says "it will not come back" without saying what
+  // was bringing it back leaves the user with nothing to go and look at.
+  expect(off!.confirm).toContain('agentop-server.service')
+  expect(off!.confirmAfterStop).toContain('agentop-server.service')
+  expect(off!.confirmAfterStop).toContain('agentistics')
+  expect(on!.confirm).toContain('agentop-server.service')
+})
+
+test('only a REMOVAL carries the after-stop sentence', () => {
+  // There is no such moment for the other direction: nothing offers to register a boot unit on the
+  // way out of stopping something.
+  const [on] = bootOptionsFor([mech({ on: false })], BOOT_S, true, 'agentistics')
+  expect(on!.confirmAfterStop).toBeUndefined()
+})
+
+test('a unit this box could not WRITE is absent, never present and failing', () => {
+  // `serviceCommandFor` answers null when the file the ExecStart would point at is not here, and a
+  // unit whose ExecStart cannot resolve is a service systemd restarts every five seconds forever.
+  expect(bootOptionsFor([mech({ on: false, installable: false })], BOOT_S, true, 'x')).toEqual([])
+  // Removing one that IS registered never needs the file — it only unlinks.
+  expect(bootOptionsFor([mech({ on: true, installable: false })], BOOT_S, true, 'x')).toHaveLength(1)
+})
+
+test('a platform with no user systemd offers NOTHING, whatever the mechanisms say', () => {
+  // Absence is absence, the same rule `ControlService.boot` follows: macOS and Windows are not
+  // wired up at all, so a verb there would refuse on principle.
+  expect(bootOptionsFor([mech({ on: true }), mech({ on: false })], BOOT_S, false, 'x')).toEqual([])
+})
+
+test('both mechanisms of agentistics get their own verb, each naming its runtime', () => {
+  // The case that makes this a list rather than a flag: the native unit is registered and the
+  // container's is not, so the two verbs point in opposite directions on one service.
+  const opts = bootOptionsFor([
+    mech({ unit: 'agentop-server.service', runtime: 'local', mech: 'native', on: true }),
+    mech({ unit: 'agentop-machine.service', runtime: 'machine', mech: 'docker', on: false }),
+  ], BOOT_S, true, 'agentistics')
+  expect(opts.map(o => o.runtime)).toEqual(['local', 'machine'])
+  expect(opts.map(o => o.enable)).toEqual([false, true])
+  expect(opts[0]!.label).toContain('native')
+  expect(opts[1]!.label).toContain('docker')
+})
+
+test('a service with one mechanism names no runtime on its verb', () => {
+  // "Start at boot (docker)" on the central would invite the question "as opposed to what?".
+  const [only] = bootOptionsFor([mech({ mech: '', runtime: 'central', on: false })], BOOT_S, true, 'c')
+  expect(only!.label).not.toContain('(')
+})
+
+// `enableBoot` and `disableBoot` must resolve the same press to the same unit, or the switch turns
+// one mechanism on and a different one off.
+test('bootModeFor sends the docker runtime to the docker unit and everything else to the native one', () => {
+  expect(bootModeFor('agentistics', 'machine')).toBe('machine')
+  expect(bootModeFor('agentistics', 'local')).toBe('server')
+  // The manual verb has no runtime to name — it has always meant the native server.
+  expect(bootModeFor('agentistics', undefined)).toBe('server')
+})
+
+test('the central has ONE mechanism, whatever runtime is named', () => {
+  for (const runtime of [undefined, 'central', 'local', 'machine'] as const) {
+    expect(bootModeFor('central', runtime)).toBe('central')
+  }
+})
+
+test('buildService carries the unit only beside a boot state it actually has', () => {
+  const runtimes: ServiceRuntimeState[] = [
+    { id: 'local', kind: 'native', state: 'down', available: true },
+  ]
+  const known = buildService('agentistics', 'agentistics', runtimes, BOOT_S, {
+    boot: 'on', bootUnit: 'agentop-server.service',
+  })
+  expect(known.bootUnit).toBe('agentop-server.service')
+  // A box whose init system could not be asked says NOTHING about boot — so a unit name there would
+  // be a fact about a question nobody could answer.
+  const unknown = buildService('agentistics', 'agentistics', runtimes, BOOT_S, {
+    bootUnit: 'agentop-server.service',
+  })
+  expect(unknown.boot).toBeUndefined()
+  expect(unknown.bootUnit).toBeUndefined()
+})
+
+test('boot options are offered whatever the service state, unlike starts and restarts', () => {
+  // The asymmetry is the point: "should this come back after a reboot" is a question about the
+  // FUTURE and is just as answerable while the thing is running as while it is stopped.
+  const up: ServiceRuntimeState[] = [{ id: 'local', kind: 'native', state: 'up', available: true }]
+  const options = bootOptionsFor([mech({ on: true })], BOOT_S, true, 'agentistics')
+  const running = buildService('agentistics', 'agentistics', up, BOOT_S, { bootOptions: options })
+  expect(running.startOptions).toEqual([])
+  expect(running.bootOptions).toHaveLength(1)
 })

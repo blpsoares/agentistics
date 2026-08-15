@@ -9,7 +9,27 @@
  */
 
 import { PANE_FRAME_Y } from './chrome.ts'
+import {
+  ACTIVE_STATES, GROUPINGS, SESSION_STATES, SESSION_DIMENSIONS, UNFILED,
+  bucketKey, dimensionValueLabel, sessionNamed, sessionRunning,
+  type DimensionContext, type DimensionWordBook, type SessionDimensionId, type SessionGroupingId,
+} from './session-dimensions'
 import type { ControlSession, SessionState } from './types'
+
+// The status vocabulary and the two row predicates live in `session-dimensions.ts`, because `keyOf`
+// needs them and the dependency has to run one way. Re-exported here because this is the module the
+// rest of the control center imports from, and moving a name is not a reason to touch nine files.
+export {
+  ACTIVE_STATES, SESSION_STATES, SESSION_DIMENSIONS, DIMENSION_ORDER, GROUPINGS, UNFILED,
+  GONE_PROJECT_KEY, FILTERS_VERSION, DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED,
+  SHORTCUT_STATES,
+  applyShortcut, bucketKey, dimensionValueLabel, dimensionWordBook, migrateSessionFilters,
+  sessionKept, sessionNamed,
+  sessionRunning, shortcutOn, storedFilters, toggleValue,
+  type DimensionContext, type DimensionWordBook, type DimensionWords, type SessionDimensionId,
+  type SessionFilters,
+  type SessionFilterState, type SessionGroupingId, type StatusShortcut,
+} from './session-dimensions'
 
 // ---------------------------------------------------------------------------
 // ordering
@@ -107,18 +127,6 @@ export function sortSessions(
  * would be a search that cannot find the thing it was most likely opened to find. `searchText` is
  * composed by the host and already carries a closed conversation's opening prompt.
  */
-/**
- * Whether the user deliberately MARKED this row — a name, a note, or a task — PURE.
- *
- * It is what the history switches make an exception of. A machine restart makes every managed
- * session `lost`, and with those switches off (which is how they ship) the list came back empty:
- * the session you had renamed and filed under a task was gone, and the name with it. A row someone
- * named is their work, not anonymous history.
- */
-export function sessionNamed(s: ControlSession): boolean {
-  return s.named === true
-}
-
 export function filterSessions(list: readonly ControlSession[], query: string): ControlSession[] {
   const q = query.trim().toLowerCase()
   if (q === '') return [...list]
@@ -133,15 +141,14 @@ export function attentionOf(list: readonly ControlSession[]): number {
 // grouping
 // ---------------------------------------------------------------------------
 
-export type SessionGrouping = 'none' | 'harness' | 'model' | 'project' | 'task' | 'repo'
-
 /**
- * `repo` leads because it is the DEFAULT, and it is the default because it is the grouping that
- * matches how the work is organised: a session is opened in a directory, but the thing a person
- * thinks in is the repository, and worktrees of one repo are places to work on ONE project.
+ * Grouping is a DIMENSION ID, plus the one arrangement that is not a dimension.
+ *
+ * It used to be a hand-written union sitting beside a differently-shaped set of filters, which is
+ * the two-lists-of-one-fact defect `session-dimensions.ts` exists to remove. The alias is kept
+ * because half the control center names this type.
  */
-export const GROUPINGS: readonly SessionGrouping[] =
-  ['repo', 'none', 'task', 'harness', 'model', 'project'] as const
+export type SessionGrouping = SessionGroupingId
 
 export interface SessionGroup {
   key: string
@@ -163,27 +170,31 @@ export interface SessionGroup {
 export function groupSessions(
   list: readonly ControlSession[],
   by: SessionGrouping,
-  unknownLabels: { harness: string; model: string; project: string; task: string; repo: string },
+  /**
+   * Every dimension's words, so a band and the chip that selects it read the SAME name.
+   *
+   * The whole book rather than one dimension's slice: the caller resolves its strings once, and a
+   * screen that offers seven groupings would otherwise pick the slice itself on every render — one
+   * more place to pick the wrong one.
+   */
+  words: DimensionWordBook,
   /** The tasks the user marked finished — a statement about the WORK, not about any session. */
   doneTasks: readonly string[] = [],
   order: SessionOrder = DEFAULT_ORDER,
+  ctx: DimensionContext = {},
 ): SessionGroup[] {
   if (by === 'none') return [{ key: '', label: '', sessions: sortSessions(list, order) }]
 
   const groups = new Map<string, SessionGroup>()
   for (const s of list) {
-    const key = by === 'harness' ? s.harness
-      : by === 'model' ? (s.model ?? '')
-      : by === 'task' ? (s.task ?? '')
-      : by === 'repo' ? (s.repo ?? '')
-      // The PROJECT is what the work is called, which for anything in a repository is the main
-      // checkout — never the worktree's own directory, or one project files as three.
-      : (s.projectGroup || s.project)
-    const label = key !== '' ? key : unknownLabels[by]
+    // The SAME `keyOf` the filter reads. Deriving the bucket here as well is how the chip
+    // "status: waiting" and the band "waiting" come to show different sets with nothing failing.
+    const key = bucketKey(s, by, ctx)
+    const label = dimensionValueLabel(words[by], key)
     const found = groups.get(key)
     if (found) found.sessions.push(s)
     else {
-      const done = by === 'task' && key !== '' && doneTasks.includes(key)
+      const done = by === 'task' && key !== UNFILED && doneTasks.includes(key)
       groups.set(key, { key, label, sessions: [s], ...(done ? { done: true } : {}) })
     }
   }
@@ -240,8 +251,28 @@ export function sessionRows(
    * the reading order, never a change to which rows are listed.
    */
   fellLabel?: string,
+  /**
+   * The rows the user MARKED, and what to call their band.
+   *
+   * Marking a row exists for exactly one purpose — finding it again — and a glyph on a line that
+   * stays wherever the ordering left it does not serve it. So marked rows become a BAND AT THE TOP,
+   * in the same shape as every other band here.
+   *
+   * Three rules, and the third is the one that makes the feature work:
+   *  - the band is absent when nothing is marked (a band with a title and no rows is a box with a
+   *    name in it);
+   *  - it applies under EVERY arrangement, `none` included — marking is the user's, and it outranks
+   *    the grouping;
+   *  - a marked row appears in the band and NOWHERE ELSE. The same session in two places is the
+   *    reason someone was hunting for it.
+   *
+   * It lives here rather than in a component because `cardPages` walks these very rows: the card
+   * grid gets the band for free, and cannot disagree with the list about which group a row is in.
+   */
+  marked?: { ids: ReadonlySet<string>; label: string },
 ): SessionRow[] {
   const out: SessionRow[] = []
+  const isMarked = (s: ControlSession) => marked?.ids.has(s.id) ?? false
 
   const push = (label: string, sessions: readonly ControlSession[], muted?: boolean) => {
     if (sessions.length === 0) return
@@ -263,10 +294,21 @@ export function sessionRows(
   const hasFell = Boolean(fellLabel)
   const isFell = (s: ControlSession) => hasFell && s.fell === true && !isLive(s)
 
+  // The marked band leads, drawn from every group so a mark outranks the arrangement. It is ONE
+  // band rather than the live/fell/closed split the groups get: a marked conversation that is over
+  // is still the one you marked, and filing it under history is putting it back where it was hard
+  // to find.
+  if (marked) {
+    push(marked.label, groups.flatMap(g => g.sessions.filter(isMarked)))
+  }
+
   for (const g of groups) {
-    const live = g.sessions.filter(isLive)
-    const fell = g.sessions.filter(isFell)
-    const closed = g.sessions.filter(s => !isLive(s) && !isFell(s))
+    // Everything the band above took is gone from here — the same row twice is the bug, not the
+    // feature. A group left empty by this simply draws nothing: `push` skips it.
+    const rest = g.sessions.filter(s => !isMarked(s))
+    const live = rest.filter(isLive)
+    const fell = rest.filter(isFell)
+    const closed = rest.filter(s => !isLive(s) && !isFell(s))
     // An empty KEY is an absence ("no task"), not a category, and is drawn as one. A FINISHED task
     // says so in its heading and is muted with it: the sessions are still listed and still
     // attachable, so the screen must say why they are set apart rather than merely dimming them.
@@ -394,6 +436,14 @@ export function detailLines(s: ControlSession, labels: {
   /** Heads the spelled-out gauge: `45%  ·  455.4k / 1M`. */
   context: string
   /**
+   * Heads the conversation this row continues from — the id `--resume` takes.
+   *
+   * Worth a row of its own because it is the one fact that turns "this session is somewhere" into
+   * something a person can act on outside agentop, and because it is only ever shown when it was
+   * RECORDED: a row without it is a row where nobody knows, and `conversationBlind` says so.
+   */
+  conversation: string
+  /**
    * Labels for the OTHER name, when a session is named in both places.
    *
    * Two of them, because which one is the other depends on which one won — and a single label
@@ -458,6 +508,10 @@ export function detailLines(s: ControlSession, labels: {
       value: `${s.context.label}  ·  ${s.context.used} / ${s.context.window}`,
     })
   }
+  // Where it continues from. Under the metrics because it is the fact you copy rather than read.
+  if (s.conversationId) {
+    out.push({ key: 'conv', label: labels.conversation, value: s.conversationId })
+  }
   if (s.note) out.push({ key: 'note', label: labels.note, value: s.note })
   if (s.startedAt !== undefined) {
     out.push({ key: 'started', label: labels.started, value: ago(s.startedAt) })
@@ -474,7 +528,13 @@ export function detailLines(s: ControlSession, labels: {
   }
   if (s.state === 'closed') out.push({ key: 'closed', label: '', value: labels.closed, note: true })
   else if (!s.actionable) out.push({ key: 'external', label: '', value: labels.external, note: true })
+  // The directory first: it is the caveat that explains the others — a path that resolves to
+  // nothing is why the project may be a bucket and why reopening will fail.
+  if (s.dirGone) out.push({ key: 'gone', label: '', value: s.dirGone, note: true })
   if (s.approvalBlind) out.push({ key: 'blind', label: '', value: s.approvalBlind, note: true })
+  if (s.conversationBlind) {
+    out.push({ key: 'convblind', label: '', value: s.conversationBlind, note: true })
+  }
   return out
 }
 
@@ -1088,8 +1148,29 @@ export type AsideRow =
   /** One LAYOUT the list can be drawn in, and whether it is the one in force. */
   | { kind: 'layout'; value: SessionLayout; label: string; on: boolean }
   | { kind: 'toggle'; toggle: SessionToggle; label: string; on: boolean }
-  /** One task, with how many sessions are filed under it. `name: ''` is "all of them". */
-  | { kind: 'task'; name: string; count: number; on: boolean; done?: boolean }
+  /**
+   * One task, with how many sessions are filed under it.
+   *
+   * `all` marks the "every task" row — `name: ''` cannot, now that the UNFILED bucket is a real
+   * selectable value whose key is also `''`. Two different rows had one identity, and clicking
+   * "no task" cleared the scope instead of selecting it.
+   */
+  | {
+      kind: 'task'
+      name: string
+      /**
+       * What the row is CALLED, decided here rather than rebuilt by the renderer.
+       *
+       * The renderer used to draw `name || allLabel`, which collapsed two different rows the moment
+       * the UNFILED bucket became selectable: "every task" and "no task" both carry `name: ''`, so
+       * the menu listed "every task" twice and one of them scoped to something else.
+       */
+      label: string
+      count: number
+      on: boolean
+      done?: boolean
+      all?: boolean
+    }
   /** One project directory, with its session count. `name: ''` is "every project". */
   | { kind: 'project'; name: string; count: number; on: boolean }
   /** One STATE the list may keep, with how many rows wear it. */
@@ -1098,42 +1179,17 @@ export type AsideRow =
   | { kind: 'sort'; value: SessionSort; label: string; on: boolean; dir: 'asc' | 'desc' }
 
 
-/** The three things the list can be told to withhold. */
-export type SessionToggle = 'closed' | 'exited' | 'unfiled' | 'done' | 'active' | 'detail'
-
 /**
- * Every state a row can wear, in the order the menu lists them: most urgent first, history last.
+ * The switches in the SHOW block.
  *
- * The list is exhaustive on purpose — `Record`-shaped elsewhere, a plain array here — so a new
- * state added to `SessionState` shows up as a missing row rather than as a filter that silently
- * drops every session wearing it.
- */
-export const SESSION_STATES: readonly SessionState[] =
-  ['waiting-approval', 'waiting', 'working', 'exited', 'lost', 'closed', 'unknown'] as const
-
-/**
- * The states that mean something is ALIVE on the other end — what `only active` keeps.
+ * `unfiled` is gone: it hid the task-less band, but only while grouping BY task, and only for that
+ * one dimension. Every dimension now has a selectable "no value" bucket, so the switch was a hidden
+ * special case of a control that exists in the open.
  *
- * `unknown` is in the list, and that is not a hedge. It is the state of an EXTERNAL session, and an
- * external row exists precisely because `/proc` reported a live assistant process: the thing that
- * cannot be read is its ACTIVITY, never whether it is running. Leaving it out hid exactly the
- * sessions someone opened outside agentop and is in the middle of — the ones most likely to be
- * forgotten, since agentop is not the thing that started them.
+ * `named` replaces it, and is the opposite kind of change — it makes an EXISTING hidden behaviour
+ * visible. A row the user named used to survive the history switches unconditionally, unwritten.
  */
-export const ACTIVE_STATES: readonly SessionState[] =
-  ['working', 'waiting', 'waiting-approval', 'unknown'] as const
-
-/**
- * Is this session RUNNING right now — PURE.
- *
- * `exited`, `lost` and `closed` are not. `unknown` IS: it is what an external session wears, and an
- * external row exists because a live assistant process was found — what cannot be read there is the
- * activity, not the existence. Treating "we cannot say what it is doing" as "it is not running" hid
- * every session started outside agentop from the one filter meant to show what is happening.
- */
-export function sessionRunning(s: ControlSession): boolean {
-  return ACTIVE_STATES.includes(s.state)
-}
+export type SessionToggle = 'closed' | 'exited' | 'named' | 'done' | 'active' | 'detail'
 
 /**
  * The aside's rows, in reading order — PURE, so what is drawn and what a click resolves against are
@@ -1174,8 +1230,6 @@ export function asideRows(o: {
     counts: Partial<Record<SessionState, number>>
     kept: readonly SessionState[]
   }
-  /** `unfiled` only means anything while grouping by task, so it is ABSENT otherwise. */
-  showUnfiled: boolean
   /**
    * The tasks in the fleet with their session counts, and which one the list is scoped to.
    *
@@ -1188,6 +1242,10 @@ export function asideRows(o: {
     active: string | null
     heading: string
     allLabel: string
+    /** What the "no task" bucket is called — the row that replaced the `unfiled` switch. */
+    unfiled: string
+    /** How many sessions are in it. A bucket with nothing in it draws no row. */
+    unfiledCount?: number
     /** The finished ones, marked in the list so the menu states what it already knows. */
     done?: readonly string[]
   }
@@ -1216,14 +1274,12 @@ export function asideRows(o: {
     rows.push({ kind: 'group', value: g, label: o.groupWords[g], on: g === o.grouping })
   }
   rows.push({ kind: 'rule' }, { kind: 'heading', label: o.headings.show })
-  // `done` sits with the other two because it is the same kind of thing — what the list withholds.
-  // `unfiled` only means anything while grouping by task and is ABSENT otherwise.
-  // `active` leads because it OVERRIDES the three under it: with it on they change nothing, and a
-  // switch that appears to do nothing is one people conclude is broken. Listed first, it reads as
-  // what it is — the strict answer, with the widening ones beneath.
-  const toggles: SessionToggle[] = o.showUnfiled
-    ? ['active', 'closed', 'exited', 'done', 'unfiled', 'detail']
-    : ['active', 'closed', 'exited', 'done', 'detail']
+  // `active` leads because it is the STRICT one, with the widening ones beneath. It no longer
+  // overrides them: all three write into one status selection and read their state back out of it,
+  // so ticking `closed` while `active` is on widens the list and turns `active` off — a switch is
+  // never lit over a list it does not describe. `named` sits with them because it is the same kind
+  // of thing, and because it used to be the one widening nobody could see.
+  const toggles: SessionToggle[] = ['active', 'closed', 'exited', 'named', 'done', 'detail']
   for (const t of toggles) {
     rows.push({ kind: 'toggle', toggle: t, label: o.toggleWords[t], on: o.toggles[t] })
   }
@@ -1257,11 +1313,24 @@ export function asideRows(o: {
   if (o.tasks && o.tasks.counts.length > 0) {
     const done = o.tasks.done ?? []
     rows.push({ kind: 'rule' }, { kind: 'heading', label: o.tasks.heading })
-    rows.push({ kind: 'task', name: '', count: 0, on: o.tasks.active === null })
+    rows.push({
+      kind: 'task', name: '', label: o.tasks.allLabel, count: 0,
+      on: o.tasks.active === null, all: true,
+    })
     for (const t of o.tasks.counts) {
       rows.push({
-        kind: 'task', name: t.name, count: t.count, on: o.tasks.active === t.name,
+        kind: 'task', name: t.name, label: t.name, count: t.count, on: o.tasks.active === t.name,
         ...(done.includes(t.name) ? { done: true } : {}),
+      })
+    }
+    // The "no task" bucket, last, and only when something is in it. It is what the `unfiled` switch
+    // used to be — except it is a value on a dimension like any other, selectable under every
+    // grouping rather than only while grouping by task.
+    const unfiledCount = o.tasks.unfiledCount ?? 0
+    if (unfiledCount > 0) {
+      rows.push({
+        kind: 'task', name: UNFILED, label: o.tasks.unfiled, count: unfiledCount,
+        on: o.tasks.active === UNFILED,
       })
     }
   }
@@ -1725,7 +1794,7 @@ export function sessionKeyHelp(w: {
   move: string; open: string; attach: string; menu: string; section: string
   newSession: string; search: string; clear: string; kill: string; rename: string
   note: string; task: string; mark: string; onlyActive: string; closed: string
-  exited: string; unfiled: string; group: string; detail: string; menuFold: string
+  exited: string; group: string; layout: string; detail: string; menuFold: string
   reset: string; tabs: string; help: string; quit: string
   approve: string; prompt: string; reopenFell: string
 }): KeyHelp[] {
@@ -1741,7 +1810,7 @@ export function sessionKeyHelp(w: {
     { keys: 'tab', what: w.open },
     { keys: '1-9 / ← →', what: w.section },
     { keys: 'a', what: w.newSession },
-    { keys: '/', what: w.search },
+    { keys: 'ctrl+f', what: w.search },
     { keys: 'esc', what: w.clear },
     { keys: 'x', what: w.kill },
     { keys: 'n', what: w.rename },
@@ -1750,8 +1819,8 @@ export function sessionKeyHelp(w: {
     { keys: 'ctrl+a / l', what: w.onlyActive },
     { keys: 'c', what: w.closed },
     { keys: 'e', what: w.exited },
-    { keys: 'u', what: w.unfiled },
     { keys: 'v', what: w.group },
+    { keys: 'ctrl+g', what: w.layout },
     { keys: 'd', what: w.detail },
     // `b` leads: `ctrl+b` is tmux's default prefix, so inside a tmux the chord never reaches this
     // app at all. The plain letter is the one that always works, and the one the footer names.
@@ -2443,15 +2512,30 @@ export function pagerHit(cells: PagerCells, x: number): 'prev' | 'next' | null {
 // closing a session from its own row
 // ---------------------------------------------------------------------------
 
-/** The glyph that closes a session from its own row. */
-export const CLOSE_CELL = '✕'
+/**
+ * The control that closes a session from its own row.
+ *
+ * A bare `✕` at the end of a table reads as a TRUNCATION mark, not as a verb — which is what it was
+ * reported as. A wastebasket would say it plainly, and it is what the design asked for, but it
+ * cannot be measured here: `truncate` counts `s.length`, which is UTF-16 code UNITS, and there is no
+ * width dependency anywhere in this package. `🗑` is a surrogate pair, so `.length` is 2, while its
+ * DISPLAY width is 1 or 2 depending on the terminal and on whether it is given emoji presentation.
+ * Neither number is reliably the other, and a glyph whose measure is wrong by one shears every row
+ * under it.
+ *
+ * So it is bracketed ASCII: three characters, `.length === 3`, three columns, on every terminal.
+ * The design named this trade itself — a pretty glyph that shears the table is worse than a plain
+ * one that does not. Revisit it the day this package measures display width.
+ */
+export const CLOSE_CELL = '[x]'
 
 /**
  * Columns reserved at the right edge of the list for the per-row close control — PURE.
  *
- * Two: a gap and the glyph. Reserved from the width BEFORE the columns are measured, because a
- * control drawn after a table that already spent the full width is a control drawn on top of the
- * last cell.
+ * A gap plus the control itself, DERIVED from `CLOSE_CELL` rather than written as a number beside
+ * it: the two were `'✕'` and `2`, and changing the glyph without changing the reservation is how a
+ * control ends up drawn on top of the last cell. Reserved from the width BEFORE the columns are
+ * measured, for the same reason.
  *
  * Zero when nothing on screen can be closed, and zero on a list too narrow to spare it — the
  * keyboard's `x` still works there, and a table squeezed to make room for a button is a worse
@@ -2459,7 +2543,7 @@ export const CLOSE_CELL = '✕'
  */
 export function closeCellWidth(rows: readonly ControlSession[], width: number): number {
   const NEEDS = 40
-  return width >= NEEDS && rows.some(canClose) ? 2 : 0
+  return width >= NEEDS && rows.some(canClose) ? CLOSE_CELL.length + 1 : 0
 }
 
 /**
