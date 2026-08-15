@@ -31,6 +31,8 @@ import { needsAttention, type SessionView } from './session-view'
 import { planTaskReopen, taskReopenSucceeded } from './task-reopen'
 import { liveConversationHolders } from './live-claims'
 import { POLL_MS, SETTLE_MS, spawnOutcome } from './spawn-outcome'
+import { parseHarnessAgents } from './harness-agents'
+import { planTakeover, type TakeoverRefusal } from './takeover'
 import type { SessionBackend, SpawnPlanError } from './types'
 
 /** Derived from the specs, never a second hand-written list — the two could not then disagree. */
@@ -600,8 +602,127 @@ async function list(backend: SessionBackend, json = false): Promise<number> {
 async function attach(ref: string, backend: SessionBackend): Promise<number> {
   const reconciled = reconcileSessions(await readRegistry(), await backend.list())
   const found = resolveSessionRef(reconciled.map(toRefCandidate), ref)
-  if (!found.ok) { console.error(refError(ref, found.reason, found.matches)); return 1 }
-  return execAttach(found.session.id, backend)
+  if (found.ok) return execAttach(found.session.id, backend)
+
+  // Not a row agentop hosts — but it may be a conversation that is RUNNING somewhere, and the user
+  // asked to get into it. This is the case the product had no answer for: it refused with "open it
+  // where it already is", which names a place that for a background agent does not exist.
+  //
+  // The answer is to CLOSE the assistant holding it and reopen the conversation here. The lock
+  // exists to stop two assistants in one conversation, and closing the first satisfies it exactly;
+  // refusing satisfies it by leaving the user with none. The decision is the pure `planTakeover` —
+  // it checks that the harness can resume by id BEFORE anything is killed.
+  const took = await takeOver(ref, backend)
+  if (took !== null) return took
+
+  console.error(refError(ref, found.reason, found.matches))
+  return 1
+}
+
+/**
+ * Close whatever is holding a live conversation and reopen it under agentop.
+ *
+ * `null` when `ref` names no live conversation — the caller then reports the ordinary lookup error.
+ *
+ * Not claude-specific: the two steps are the same everywhere, and `planSpawn` already knows which
+ * harnesses can resume by id at all. Today only claude publishes a live-session list to search
+ * (`claude agents --json`); the day another does, it joins the search and nothing else changes.
+ */
+async function takeOver(ref: string, backend: SessionBackend): Promise<number | null> {
+  const live = await liveAgentFor(ref)
+  if (!live) return null
+
+  const planned = planSpawn({ harness: live.harness, cwd: live.cwd, resumeId: live.sessionId })
+  const plan = planTakeover({
+    conversationId: live.sessionId,
+    harness: live.harness,
+    resumable: planned.ok,
+    holder: { pid: live.pid, cwd: live.cwd, label: live.name },
+    cwd: live.cwd,
+  })
+
+  if (plan.kind === 'refuse') {
+    console.error(explainTakeover(plan.reason))
+    return 1
+  }
+  if (plan.kind === 'free' || !planned.ok) return null
+
+  // Ending somebody's running assistant loses whatever it was mid-turn, so it is stated before it
+  // happens rather than reported after.
+  console.log(`Closing ${plan.holder.label ?? plan.conversationId.slice(0, 8)} (pid ${plan.holder.pid}) to reopen it here…`)
+  try {
+    process.kill(plan.holder.pid!, 'SIGTERM')
+  } catch (e) {
+    console.error(`Could not close it: ${e instanceof Error ? e.message : String(e)}`)
+    return 1
+  }
+  // Wait for it to actually go. Resuming while the old one is still shutting down is the very race
+  // the harness refuses on, and it would land as another dead row.
+  for (let i = 0; i < 40; i++) {
+    await new Promise(r => setTimeout(r, 100))
+    try { process.kill(plan.holder.pid!, 0) } catch { break }
+  }
+
+  const id = newSessionId()
+  try {
+    await backend.spawn({ id, cwd: plan.cwd, argv: planned.plan.argv })
+  } catch (e) {
+    console.error(`Closed it, but could not reopen: ${e instanceof Error ? e.message : String(e)}`)
+    return 1
+  }
+  const died = await spawnFailure(backend, id)
+  if (died) { console.error(died); await backend.kill(id).catch(() => {}); return 1 }
+
+  await addSession({
+    id, harness: live.harness, cwd: plan.cwd, createdAt: new Date().toISOString(),
+    ...(live.name ? { label: live.name, labelSince: Date.now() } : {}),
+    conversationId: plan.conversationId,
+    ...(await recordedRepo(plan.cwd)),
+  })
+  return execAttach(id, backend)
+}
+
+/** Already-localized refusal — the harness's limitation said in words, never a silent no-op. */
+function explainTakeover(reason: TakeoverRefusal): string {
+  switch (reason.code) {
+    case 'resume-unsupported':
+      return `${reason.harness} cannot reopen a conversation by id, so the assistant holding it was left alone.`
+    case 'holder-unreachable':
+      return `something is holding this conversation${reason.label ? ` (${reason.label})` : ''} and agentop cannot close it.`
+    case 'no-cwd':
+      return 'this conversation has no directory to reopen in — a removed worktree, most likely.'
+  }
+}
+
+/**
+ * The LIVE conversation matching what the user typed, when there is exactly one.
+ *
+ * Matched on a prefix of the conversation id or on the session's NAME, because those are the two
+ * things on screen. Ambiguity resolves to nothing rather than to a guess: taking over the wrong
+ * conversation closes the wrong assistant.
+ */
+async function liveAgentFor(ref: string): Promise<
+  { sessionId: string; harness: HarnessId; cwd: string; pid?: number; name?: string } | null
+> {
+  try {
+    const out = Bun.spawnSync(['claude', 'agents', '--json'])
+    if (!out.success) return null
+    const needle = ref.trim().toLowerCase()
+    const hits = parseHarnessAgents(out.stdout.toString()).filter(a =>
+      a.sessionId.toLowerCase().startsWith(needle)
+      || (a.name ?? '').toLowerCase() === needle)
+    const only = hits.length === 1 ? hits[0]! : undefined
+    if (!only?.cwd) return null
+    return {
+      sessionId: only.sessionId,
+      harness: 'claude',
+      cwd: only.cwd,
+      ...(only.pid !== undefined ? { pid: only.pid } : {}),
+      ...(only.name ? { name: only.name } : {}),
+    }
+  } catch {
+    return null
+  }
 }
 
 async function kill(ref: string, backend: SessionBackend): Promise<number> {

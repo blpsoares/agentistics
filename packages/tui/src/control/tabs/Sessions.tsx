@@ -1857,7 +1857,9 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           and in a grouping you had to switch to. `sessionColumns` drops the cell while grouping BY
           task, where the heading over the row already says it. */}
       {columns.task > 0 ? (
-        <Text color={COLORS.secondary}>{gap + padCell(session.task ?? '', columns.task)}</Text>
+        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>
+          {gap + padCell(session.task ?? '', columns.task)}
+        </Text>
       ) : null}
       {/* Usage sits right of the name and left of the harness — it is a number about THIS row, and
           a row you are deciding whether to close is one whose cost you want beside its name rather
