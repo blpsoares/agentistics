@@ -69,9 +69,22 @@ function probingHost(known: ControlStatus | null): ControlHost {
   } as unknown as ControlHost
 }
 
-/** Strip ANSI so assertions read against the visible text. */
+/**
+ * Strip ANSI so assertions read against the visible text.
+ *
+ * The ESC byte is part of the pattern, and that is the whole point. This used to strip `[36m`
+ * while LEAVING the `\x1b` in front of it, which was invisible for as long as no assertion
+ * straddled a colour change: `GROUP repository` was drawn in one style, so the two words sat next
+ * to each other and `toContain` matched. The moment the dimension VALUE got its own colour, a bare
+ * `\x1b` landed between them and every one of these assertions failed against a frame that was
+ * perfectly correct. A half-stripped frame is worse than an unstripped one — it reads as text right
+ * up until it doesn't.
+ *
+ * Matches whole CSI sequences rather than only SGR (`…m`), so a cursor move or an erase cannot
+ * reintroduce the same class of bug.
+ */
 function plain(frame: string | undefined): string {
-  return (frame ?? '').replace(/\[[0-9;]*m/g, '')
+  return (frame ?? '').replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/g, '')
 }
 
 const COLS = 100
