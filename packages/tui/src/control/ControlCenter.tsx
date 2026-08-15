@@ -365,6 +365,10 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
     // Drawn in the header so it is readable from every tab — a counter you have to navigate to in
     // order to see cannot tell you to navigate there.
     attention: fleet?.attention ?? 0,
+    // Absent on a machine whose memory cannot be read, and then no gauge is drawn at all — never a
+    // zero. The host decides `red`, from the distance to the ceiling AND from swap pressure; the
+    // TUI owns no logic here either.
+    ...(status?.memory ? { memory: status.memory } : {}),
     width,
   })
   const height = bodyHeight(rows, header.rows)

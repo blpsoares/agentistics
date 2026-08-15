@@ -215,6 +215,42 @@ describe('headerMeta', () => {
     expect(meta.update).toBe('● 1.7.4')
   })
 
+  test('draws the parallel-sessions budget, and NOTHING when it could not be measured', () => {
+    const with_ = headerMeta({
+      mode: 'solo', version: '1.7.4', memory: { used: 3, max: 17, red: false }, width: 60,
+    })
+    expect(with_.memory).toBe('▤ 3/17')
+    expect(with_.memoryRed).toBe(false)
+    // A machine whose memory cannot be read draws no gauge at all — never a zero, which would read
+    // as "no room left" on precisely the machines nobody could ask.
+    expect(headerMeta({ mode: 'solo', version: '1.7.4', width: 60 }).memory).toBe('')
+  })
+
+  test('a RED budget outranks the version under width pressure', () => {
+    // The pieces drop least-actionable-first, and a budget about to run out is the most actionable
+    // thing on the row. Dropping the warning to keep a version number would be the wrong trade at
+    // exactly the moment it matters — the version is one `agentop --version` away.
+    const narrow = { mode: 'solo', version: '1.7.4', latestVersion: '1.9.0', attention: 2 }
+    const red = headerMeta({ ...narrow, memory: { used: 14, max: 15, red: true }, width: 22 })
+    expect(red.memory).toBe('▤ 14/15')
+    expect(red.text).toBe('solo')            // the version went first
+    // …while a calm budget gives way instead, because it is only informational.
+    const calm = headerMeta({ ...narrow, memory: { used: 3, max: 17, red: false }, width: 22 })
+    expect(calm.memory).toBe('')
+  })
+
+  test('the waiting counter still outlives the budget', () => {
+    // Ordering pinned end to end: update, then a calm budget, then the version, and the counter is
+    // the last thing standing after the mode token.
+    const meta = headerMeta({
+      mode: 'solo', version: '1.7.4', latestVersion: '1.9.0', attention: 2,
+      memory: { used: 3, max: 17, red: false }, width: 12,
+    })
+    expect(meta.alert).toBe('⏳ 2')
+    expect(meta.memory).toBe('')
+    expect(meta.update).toBe('')
+  })
+
   test('says nothing about an update when the running version IS the latest', () => {
     expect(headerMeta({ mode: 'solo', version: '1.7.4', latestVersion: '1.7.4', width: 60 }).update).toBe('')
     expect(headerMeta({ mode: 'solo', version: '1.7.4', width: 60 }).update).toBe('')

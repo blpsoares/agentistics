@@ -289,6 +289,9 @@ function fakeStatus(opts: Options, apiUrl?: string): ControlStatus {
     services: services(opts.mode, s, apiUrl),
     version: '1.7.3',
     latestVersion: '1.7.4',
+    // The parallel-sessions budget, so the width sweep exercises the header WITH it. A calm one:
+    // the red case gives way later than this does, so a frame that fits this fits that too.
+    memory: { used: 3, max: 17, red: false },
     archiveMode: 'consolidate',
     // The wizard's blocked row, stated whenever the fake central is up: it is the case the fold
     // exists for, and a preview that only ever drew three selectable modes would never show it.

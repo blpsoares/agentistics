@@ -819,6 +819,21 @@ export interface ControlStatus {
   version: string
   /** Set when a newer release exists; drives the update dot in the header. */
   latestVersion?: string
+  /**
+   * How many assistants are running out of how many this MACHINE can hold — the header's `▤ 3/17`.
+   *
+   * **This is about the SYSTEM, not about agentop**, and the surface has to say so: a number in the
+   * corner of a window is read as belonging to that window, and someone would otherwise conclude
+   * agentop eats 10 GB. Measured: agentop's own server was 578 MB of a 4 GB total, and the rest was
+   * one Node process per assistant CLI.
+   *
+   * **Absent when the memory could not be read at all** (not Linux, no `/proc`), and then no gauge
+   * is drawn — never a zero. `red` is the host's decision, taken from the DISTANCE to the ceiling
+   * rather than a percentage (three left of thirty is comfortable, three of fourteen is the last
+   * warning) and from swap pressure, which is what actually freezes a machine: the incident this
+   * exists for read 3.6 GB of free RAM while swap sat at 97%.
+   */
+  memory?: { used: number; max: number; red: boolean }
   /** The history-preservation setting in force, or `undefined` while it is still unanswered. */
   archiveMode?: ArchiveMode
   /**
