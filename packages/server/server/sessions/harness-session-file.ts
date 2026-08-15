@@ -62,6 +62,41 @@ export interface HarnessSessionFile {
    * agentop. It is the EXACT link between a harness's own record and a managed row.
    */
   tmux?: string
+  /**
+   * The process's start time as the kernel counts it — field 22 of `/proc/<pid>/stat`.
+   *
+   * **This is what makes `pid` safe to believe.** These records outlive their processes by design
+   * (that is what keeps a name readable on a `lost` row), so the directory is mostly full of dead
+   * pids — measured here: 64 records, 3 of them still running. A pid alone would therefore report a
+   * long-dead session as alive the moment the OS handed its number to something else, and it would
+   * do it on the row that says "this conversation is running", which is the worst place to be wrong.
+   *
+   * Compared as an opaque STRING, never parsed into a time: it is a count of clock ticks since boot,
+   * whose unit and epoch are the kernel's business. All this code needs is whether the process
+   * answering to that pid is the same one that wrote the record.
+   *
+   * Verified on this machine 2026-08-15: of the three records whose pid still existed, all three
+   * matched `/proc` exactly.
+   */
+  procStart?: string
+  /**
+   * Which harness wrote this record — stamped by the loader, which knows because it is iterating
+   * `HARNESS_SESSION_SOURCES` one harness at a time.
+   *
+   * Not in the file, and carried so no reader has to hardcode a harness to use one of these. Only
+   * claude writes such a record today; that is a fact about the sources table, and the day a second
+   * one does, every consumer is already correct.
+   */
+  harness?: HarnessId
+  /**
+   * Whether the process that wrote this record is STILL RUNNING — stamped by the loader.
+   *
+   * Not part of the file: it is a fact about this moment, answered by the platform. `undefined`
+   * means nobody could tell (no `/proc`, so not Linux) and must be read as "unknown", never as
+   * "not running" — the same N/A-versus-a-confident-0 rule the dashboard applies to harness
+   * capabilities. A row whose liveness is unknown stays exactly as it was.
+   */
+  alive?: boolean
 }
 
 /**
@@ -85,6 +120,10 @@ export function parseHarnessSessionFile(raw: unknown): HarnessSessionFile | null
     ...(str(s.nameSource) ? { nameSource: str(s.nameSource)! } : {}),
     ...(num(s.nameSince) !== undefined ? { nameSince: num(s.nameSince)! } : {}),
     ...(str(s.tmux) ? { tmux: str(s.tmux)! } : {}),
+    // Claude writes it as a STRING of clock ticks; a number would also be reasonable and is
+    // accepted, because the only operation ever performed on it is equality against `/proc`.
+    ...(str(s.procStart) ? { procStart: str(s.procStart)! }
+      : num(s.procStart) !== undefined ? { procStart: String(num(s.procStart)!) } : {}),
   }
 }
 

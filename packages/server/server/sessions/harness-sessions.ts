@@ -33,6 +33,7 @@ import {
   type HarnessSessionFile,
 } from './harness-session-file'
 import { idFromTmuxName } from './tmux-cli'
+import { procAvailable, readProcStart, sameProcess } from './proc-liveness'
 
 /**
  * Where each harness's own session records live on THIS machine.
@@ -146,6 +147,9 @@ export async function loadHarnessSessions(
   // How fresh the record already sitting under each managed id is, so the newest wins rather than
   // whichever `readdir` happened to hand over last. See the note above `Keyed`.
   const seenAt = new Map<string, number>()
+  // Asked ONCE for the whole sweep rather than per file: off Linux the answer is the same 60 times,
+  // and it decides whether `alive` is a fact or stays `undefined`.
+  const canProbe = await procAvailable()
 
   for (const harness of harnesses) {
     const source = HARNESS_SESSION_SOURCES[harness]
@@ -166,7 +170,19 @@ export async function loadHarnessSessions(
       if (!source.matches.test(name)) continue
       const read = await readOne(join(dir, name))
       if (!read) continue
-      const { file, mtimeMs } = read
+      const { mtimeMs } = read
+      // Liveness is stamped here because this is the impure layer and the answer is about NOW.
+      // Only asked where `/proc` exists at all, and only for a record that carries the
+      // anti-recycling key — everywhere else it stays `undefined`, meaning "nobody could tell",
+      // which every reader must treat as unknown rather than as "not running".
+      const pid = read.file.pid
+      const file: HarnessSessionFile = {
+        ...read.file,
+        harness,
+        ...(canProbe && pid !== undefined
+          ? { alive: sameProcess(read.file.procStart, await readProcStart(pid)) }
+          : {}),
+      }
       if (file.pid !== undefined) out.byPid.set(file.pid, file)
 
       // Indexed BEFORE the tmux gate below, and that placement is the fix: everything past that
