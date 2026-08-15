@@ -69,6 +69,13 @@ export const WORKFLOWS_STORE_DIR = join(AGENTISTICS_DATA_DIR, 'workflows')
 // root as a legacy Claude session, so a registry file there would be parsed as session metrics.
 export const MANAGED_SESSIONS_FILE = join(AGENTISTICS_DATA_DIR, 'managed-sessions.json')
 
+// Derived-value cache for JSONL parses: <data dir>/cache.db (SQLite).
+// DERIVED STATE ONLY — every row is recomputable from the file it names, so deleting
+// this file may only ever cost one slow build. Never store anything here that is not
+// also on disk somewhere else.
+export const PARSE_CACHE_FILE = process.env.AGENTISTICS_PARSE_CACHE_FILE ?? join(AGENTISTICS_DATA_DIR, 'cache.db')
+export const PARSE_CACHE_ENABLED = process.env.AGENTISTICS_PARSE_CACHE !== '0'
+
 // ---------------------------------------------------------------------------
 // Team mode (Phase 1: folder union). When AGENTISTICS_TEAM=1 the server unions
 // per-user consolidated SessionMeta JSONs from TEAM_DIR/<user>/sessions/*.json

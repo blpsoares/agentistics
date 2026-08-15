@@ -2,7 +2,7 @@ import { join } from 'path'
 import { readFile } from 'fs/promises'
 import type { StatsCache, SessionMeta, ProjectGitStats, HealthIssue, HarnessId, WorkflowRun } from '@agentistics/core'
 import { mergeStatsCaches, sessionDay, sanitizeStatsCache, normalizeSessionTimes } from '@agentistics/core'
-import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER } from './config'
+import { PROJECTS_DIR, SESSION_META_DIR, ARCHIVE_PROJECTS_DIR, ARCHIVE_SESSION_META_DIR, STATS_CACHE_FILE, ARCHIVE_STATS_DIR, ARCHIVE_ENABLED, HOME_DIR, TEAM_MODE, TEAM_CENTRAL, CENTRAL_USER, PARSE_CACHE_ENABLED } from './config'
 import { getArchiveMode } from './preferences'
 import { writeConsolidated, loadConsolidated } from './consolidate'
 import { planProjectFacts, applyProjectFacts, type ResolvedFacts } from './project-facts'
@@ -10,10 +10,15 @@ import { mergeLocalAndIngestedSessions, sessionKey } from './session-merge'
 import { writeWorkflowRuns, loadWorkflowRuns } from './workflow-store'
 import { createLimiter, safeReadDir, safeReadJson, safeStat } from './utils'
 import { UUID_RE, decodeProjectDir, getProjectGitStats, getGitRemote } from './git'
-import { activeMinutesFromClaudeJsonl, contextTokensFromClaudeJsonl, parseSessionJsonl } from './jsonl'
+// `activeMinutesFromClaudeJsonl` / `contextTokensFromClaudeJsonl` are no longer called
+// here — the meta-session enrichment they served now runs inside `cachedEnrich`, which
+// reads the transcript once per file VERSION instead of once per build.
+import { parseSessionJsonl } from './jsonl'
 import type { MachineInfo } from './team-tokens'
 import { runHealthChecks, analyzeToolHealthIssues, analyzeCacheStaleness } from './health'
 import { extractAgentMetricsFromFile } from './agent-metrics'
+import { openParseCache, NOOP_PARSE_CACHE, type ParseCache } from './parse-cache'
+import { cachedParseSession, cachedEnrich } from './parse-cache-jsonl'
 
 /** Extract the model ID from a JSONL file by reading only the first assistant message.
  *  Skips `<synthetic>` — Claude Code sentinel for system-generated turns, not a real model. */
@@ -159,7 +164,8 @@ async function scanProjectDir(
   rootDirPaths: string[],
   knownIds: Set<string>,
   metaMap: Map<string, SessionMeta>,
-  fileLimit: ReturnType<typeof createLimiter>
+  fileLimit: ReturnType<typeof createLimiter>,
+  cache: ParseCache
 ): Promise<{ project: ServerProject; extraSessions: SessionMeta[]; workflowRuns: WorkflowRun[] } | null> {
   // Fallback path (ambiguous for dir names that contain dashes)
   const fallbackPath = decodeProjectDir(projDir)
@@ -204,20 +210,20 @@ async function scanProjectDir(
       }
 
       if (!knownIds.has(sessionId)) {
-        const session = await fileLimit(() => parseSessionJsonl(filePath, sessionId, fallbackPath, 'jsonl'))
+        const session = await fileLimit(() => cachedParseSession(cache, filePath, sessionId, fallbackPath, 'jsonl'))
         cwdCounts[session.project_path] = (cwdCounts[session.project_path] ?? 0) + 1
         extraSessions.push(session)
       } else if (metaEntry && (!metaEntry.model || metaEntry.active_minutes === undefined
         || metaEntry.context_tokens === undefined
         || (metaEntry.uses_task_agent && !metaEntry.agentMetrics))) {
-        // Meta session — extract model, active time and/or agent metrics from the JSONL
-        // (single read). Claude's own session-meta files carry none of the three.
+        // Meta session — model, active time and agent metrics all come from the
+        // transcript (Claude's own session-meta files carry none of the three), and all
+        // three are cached as one unit keyed on the file's version. Wall-clock duration
+        // is in the meta file; per-turn active time only exists here, so it has to be
+        // computed or the metric is blank for the path that serves MOST Claude sessions.
         await fileLimit(async () => {
           const needsModel = !metaEntry.model
           const needsAgentMetrics = metaEntry.uses_task_agent && !metaEntry.agentMetrics
-          // Wall-clock duration is in the meta file; per-turn active time only exists in the
-          // transcript, so it has to be computed here or the metric is blank for the path that
-          // serves MOST Claude sessions.
           const needsActive = metaEntry.active_minutes === undefined
           // Same reason as active time, one metric later: Claude's session-meta files carry no
           // context reading, and this path serves MOST Claude sessions — a gauge computed only
@@ -225,38 +231,16 @@ async function scanProjectDir(
           const needsContext = metaEntry.context_tokens === undefined
           if (!needsModel && !needsAgentMetrics && !needsActive && !needsContext) return
 
-          const content = await readFile(filePath, 'utf-8').catch(() => '')
-          if (!content) return
+          const enriched = await cachedEnrich(cache, filePath, metaEntry.model ?? '')
+          if (!enriched) return
 
-          if (needsModel) {
-            for (const raw of content.split('\n').slice(0, 200)) {
-              const line = raw.trim()
-              if (!line) continue
-              try {
-                const e = JSON.parse(line)
-                const m = e.message?.model
-                if (e.type === 'assistant' && typeof m === 'string' && m && m.startsWith('claude-')) {
-                  metaEntry.model = m as string
-                  break
-                }
-              } catch { /* skip */ }
-            }
-          }
-
-          if (needsActive) {
-            metaEntry.active_minutes = activeMinutesFromClaudeJsonl(content.split('\n'))
-          }
-
-          if (needsContext) {
-            const ctx = contextTokensFromClaudeJsonl(content.split('\n'))
-            if (ctx !== undefined) metaEntry.context_tokens = ctx
-          }
-
-          if (needsAgentMetrics) {
-            const { extractAgentMetrics } = await import('./agent-metrics')
-            const metrics = extractAgentMetrics(content.split('\n'), metaEntry.model ?? '')
-            if (metrics.totalInvocations > 0) metaEntry.agentMetrics = metrics
-          }
+          if (needsModel && enriched.model) metaEntry.model = enriched.model
+          if (needsActive) metaEntry.active_minutes = enriched.activeMinutes ?? undefined
+          // `?? undefined` would be wrong here: the pre-cache code left `context_tokens`
+          // ALONE when the transcript had no gauge, and writing `undefined` over an
+          // existing meta value is not the same as not writing.
+          if (needsContext && enriched.contextTokens !== null) metaEntry.context_tokens = enriched.contextTokens
+          if (needsAgentMetrics && enriched.agentMetrics) metaEntry.agentMetrics = enriched.agentMetrics
         })
       }
       return
@@ -312,7 +296,7 @@ async function scanProjectDir(
     if (agentFiles.length > 0) {
       const agentFilePath = join(subagentsDir, agentFiles[0]!)
       if (!knownIds.has(sessionId)) {
-        const session = await fileLimit(() => parseSessionJsonl(agentFilePath, sessionId, fallbackPath, 'subdir'))
+        const session = await fileLimit(() => cachedParseSession(cache, agentFilePath, sessionId, fallbackPath, 'subdir'))
         created = session.start_time
         cwdCounts[session.project_path] = (cwdCounts[session.project_path] ?? 0) + 1
         extraSessions.push(session)
@@ -407,6 +391,7 @@ export async function scanProjects(
   metaMap: Map<string, SessionMeta>,
   roots: string[] = [PROJECTS_DIR],
   onProjectComplete?: (completed: number, total: number) => void,
+  cache: ParseCache = NOOP_PARSE_CACHE,
 ): Promise<ScanResult> {
   // Separate limiter just for file reads (not project dir traversal)
   const fileLimit = createLimiter(30)
@@ -428,7 +413,7 @@ export async function scanProjects(
   // Process project dirs in parallel (they mostly do readdirs + parallel file reads)
   const results = await Promise.all(
     dirEntries.map(([projDir, rootDirPaths]) =>
-      scanProjectDir(projDir, rootDirPaths, knownIds, metaMap, fileLimit).then(r => {
+      scanProjectDir(projDir, rootDirPaths, knownIds, metaMap, fileLimit, cache).then(r => {
         completed++
         onProjectComplete?.(completed, total)
         return r
@@ -723,12 +708,21 @@ async function _buildApiResponseCore(onProgress: ProgressFn): Promise<ApiRespons
 
     onProgress('projects', 0)
     const knownIds = new Set(metaMap.keys())
+    const parseCache = PARSE_CACHE_ENABLED ? await openParseCache() : NOOP_PARSE_CACHE
     const { projects, extraSessions, workflowRuns: collectedWorkflowRuns } = await scanProjects(
       knownIds,
       metaMap,
       projectRoots,
       (done, total) => onProgress('projects', total > 0 ? done / total : 1),
+      parseCache,
     )
+    // Mark everything read this build as live, then drop rows for files not seen in 30
+    // days — Claude deletes transcripts at 30 days by default, so their rows are dead
+    // weight after that. The cache is derived state: dropping too much costs one
+    // reparse, dropping too little costs disk. Neither can cost a wrong number.
+    parseCache.flush()
+    parseCache.gc(Date.now() - 30 * 24 * 60 * 60 * 1000)
+    parseCache.close()
     onProgress('projects', 1, String(projects.length))
     // Every path the Claude walk has already asked git about — including the ones that turned out
     // not to be repositories. `resolveProjectFacts` below skips these rather than re-reading them.
