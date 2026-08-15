@@ -256,7 +256,14 @@ export function renderSessionTable(o: SessionTableOptions): string[] {
     if (segs) { out.push(composeLine(segs, o.width, o.color)); return }
     if (row.kind === 'spacer') { out.push(''); return }
     if (row.kind === 'heading') {
-      out.push(composeLine(headingSegs(row.label, row.count, edge, row.muted), o.width, o.color))
+      // Indented by the cascade's branch depth, exactly as the cockpit's list does it — the two
+      // draw ONE table, and a tree that reads as a flat list on the command line would be a
+      // different arrangement wearing the same name.
+      out.push(composeLine(
+        headingSegs(`${HEADING_INDENT.repeat(row.depth ?? 0)}${row.label}`, row.count, edge, row.muted),
+        o.width,
+        o.color,
+      ))
     }
   })
   return out
@@ -270,6 +277,9 @@ function plainWidth(segs: readonly Seg[]): number {
 }
 
 const GAP = '  '
+
+/** One level of the cascade, the same two columns the cockpit's list spends. */
+const HEADING_INDENT = '  '
 
 /** The header row — the same cells, from the same measured widths, so a heading can never sit over
  *  a column it no longer names. */

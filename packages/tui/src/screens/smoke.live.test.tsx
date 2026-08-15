@@ -10,6 +10,11 @@
  * and Ink COMPOSITES an overflowing child rather than clipping it: one row too many lands on top of
  * the row below and the frame reads as corrupted. A screen that fits at height 24 and not at 8 is
  * exactly the regression this catches.
+ *
+ * The 20s timeout is not slack, it is the shape of the test: it renders every screen against a LIVE
+ * server's full payload, so its cost grows with the machine's own history and with whatever else the
+ * suite is doing in parallel. It passes in 2s alone and timed out at 5.6s against bun's 5s default
+ * during a full run — a red that says nothing about the code, which is the most expensive kind.
  */
 import React from 'react'
 import { test, expect } from 'bun:test'
@@ -76,4 +81,4 @@ test.skipIf(!data)('every screen renders real data inside the rows and columns i
       }
     }
   }
-})
+}, 20_000)

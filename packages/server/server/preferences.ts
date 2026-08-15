@@ -3,6 +3,9 @@ import { mkdir, rename, writeFile, open, unlink, stat, readFile, utimes } from '
 import { AGENTISTICS_DATA_DIR, CLAUDE_DIR } from './config'
 import type { BillingSettings, SavedComparison, TeamConfig } from '@agentistics/core'
 import { migrateTeamConfig } from '@agentistics/core'
+// TYPE-only, and the allowed direction: `server -> tui`. The arrangements are declared once, in
+// `session-dimensions.ts`, and this file stores whichever one was chosen.
+import type { SessionGroupingId } from '@agentistics/tui/control'
 
 // Preferences live in the writable ~/.agentistics dir. The legacy location under CLAUDE_DIR
 // is read-only in Docker (host ~/.claude mounted :ro), which silently broke persistence and
@@ -65,7 +68,16 @@ export interface Preferences {
    * threw away the arrangement someone chose, which reads as the screen forgetting on its own.
    */
   sessionView?: {
-    grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo' | 'status' | 'marked'
+    /**
+     * `SessionGroupingId` and never a union spelled out here.
+     *
+     * This was a hand-copied list of the arrangements — the third copy of one, beside `GROUPINGS`
+     * and `SessionViewPrefs` — which is the pattern CLAUDE.md forbids for harnesses and for the
+     * same reason: TypeScript accepts a union with a member missing, so a new arrangement was
+     * offered by the menu, accepted by the CLI, and refused only by the type of the file it is
+     * saved to.
+     */
+    grouping: SessionGroupingId
     /**
      * What the list is narrowed to, per dimension — the ONE stored source for every filter.
      *

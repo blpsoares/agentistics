@@ -116,6 +116,12 @@ export interface SessionView {
    * event channel deduplicates on. Absent is absent.
    */
   conversationId?: string
+  /** The OS process ID for a managed running session, where known. */
+  pid?: number
+  /** Process CPU percentage sampled over poller interval (null if unmeasurable/unavailable). */
+  cpuPercent?: number | null
+  /** Resident Set Size memory in bytes (null if unmeasurable/unavailable). */
+  rssBytes?: number | null
   /**
    * The repository this row's directory was in when the session STARTED, as the registry recorded
    * it — carried so the caller that resolves `repo-facts.ts` can hand it over.
@@ -265,6 +271,8 @@ export function buildSessionViews(o: {
    * Forty made the closed block longer than everything else on the screen put together.
    */
   closedLimit?: number
+  /** Hardware metrics for managed sessions, keyed by managed session ID. */
+  sessionHardware?: ReadonlyMap<string, { pid?: number; cpuPercent?: number | null; rssBytes?: number | null }>
 }): SessionView[] {
   /**
    * Conversations already spoken for, so ONE is never offered to two rows.
@@ -405,6 +413,13 @@ export function buildSessionViews(o: {
       ...(conv?.costUSD !== undefined ? { costUSD: conv.costUSD } : {}),
       ...(conv?.contextTokens !== undefined && conv.contextWindow !== undefined
         ? { contextTokens: conv.contextTokens, contextWindow: conv.contextWindow }
+        : {}),
+      ...(o.sessionHardware?.get(r.id)
+        ? {
+            pid: o.sessionHardware.get(r.id)!.pid,
+            cpuPercent: o.sessionHardware.get(r.id)!.cpuPercent,
+            rssBytes: o.sessionHardware.get(r.id)!.rssBytes,
+          }
         : {}),
       attached: r.backend?.attached ?? false,
       approvalDetection: harness !== undefined && rulesFor(harness) !== undefined,
@@ -608,45 +623,6 @@ export function buildSessionViews(o: {
 
 export function attentionCount(views: readonly SessionView[]): number {
   return views.filter(v => needsAttention(v.activity)).length
-}
-
-export type SessionGrouping = 'harness' | 'model' | 'project' | 'task' | 'none'
-
-export interface SessionGroup {
-  key: string
-  /** Already display-ready. An empty key gets a sentence rather than a blank heading. */
-  label: string
-  sessions: SessionView[]
-}
-
-/** The last path segment, separators normalised — the same reading `projectNameKey` uses, minus the
- *  case folding, because this is a heading rather than a cross-machine correlation key. */
-function projectName(cwd: string): string {
-  const parts = cwd.replace(/\\/g, '/').replace(/\/+$/, '').split('/')
-  return parts[parts.length - 1] ?? cwd
-}
-
-export function groupSessions(views: readonly SessionView[], by: SessionGrouping): SessionGroup[] {
-  if (by === 'none') return [{ key: '', label: '', sessions: [...views] }]
-
-  const groups = new Map<string, SessionGroup>()
-  for (const v of views) {
-    const key = by === 'harness' ? (v.harness ?? '')
-      : by === 'model' ? (v.model ?? '')
-      : by === 'task' ? (v.task ?? '')
-      : projectName(v.cwd)
-    // An empty key means the fact was never recorded. Each dimension says so in its own words
-    // rather than sharing one blank heading that reads as a category.
-    const label = key !== '' ? key
-      : by === 'harness' ? 'harness unknown'
-      : by === 'model' ? 'no model recorded'
-      : by === 'task' ? 'no task'
-      : 'no directory recorded'
-    const found = groups.get(key)
-    if (found) found.sessions.push(v)
-    else groups.set(key, { key, label, sessions: [v] })
-  }
-  return [...groups.values()]
 }
 
 /**

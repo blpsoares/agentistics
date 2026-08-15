@@ -38,6 +38,18 @@ export default function SessionsPage() {
   // Notification settings state & prompt banner
   const [notifSettings, setNotifSettings] = useState<NotificationSettings>(getNotificationSettings)
   const prevActivitiesRef = useRef<Record<string, SessionActivity>>({})
+  /**
+   * Whether a baseline has been taken — the fix for a notification storm on every page load.
+   *
+   * `prevActivitiesRef` starts empty, so on the FIRST poll every live session has no previous state
+   * and each one counted as a transition: opening this page with three sessions up fired three
+   * notifications and three sounds, and it did it again on every remount. The bell must ring on the
+   * TRANSITION, never on the level — the same rule the cockpit's waiting counter already follows.
+   *
+   * So the first poll RECORDS what is already true and says nothing. A session that appears after
+   * that genuinely did just appear, and is still worth reporting.
+   */
+  const baselineTakenRef = useRef(false)
 
   // Sessions map lookup helper
   const sessionsMap = useMemo(() => {
@@ -69,8 +81,12 @@ export default function SessionsPage() {
         const activities = json.liveSessionActivities || {}
         setLiveActivities(activities)
 
-        // Check state transitions for notifications
-        handleSessionStateTransitions(prevActivitiesRef.current, activities, sessionsMap, pt ? 'pt' : 'en')
+        // Check state transitions for notifications — but never on the first poll; see
+        // `baselineTakenRef`. What is already running when you arrive is not news.
+        if (baselineTakenRef.current) {
+          handleSessionStateTransitions(prevActivitiesRef.current, activities, sessionsMap, pt ? 'pt' : 'en')
+        }
+        baselineTakenRef.current = true
         prevActivitiesRef.current = activities
       } catch { /* transient — keep last known */ }
     }
@@ -97,7 +113,7 @@ export default function SessionsPage() {
 
     if (perm === 'granted') {
       triggerSessionNotification({
-        title: pt ? '🔔 Notificações Ativadas' : '🔔 Notifications Enabled',
+        title: pt ? 'Notificações Ativadas' : 'Notifications Enabled',
         body: pt
           ? 'Você receberá alertas em tempo real sobre o andamento das suas live sessions.'
           : 'You will receive real-time alerts on your live sessions progress.',

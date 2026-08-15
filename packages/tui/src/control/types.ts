@@ -10,13 +10,17 @@
 import type { CliLang } from './lang'
 // The default ARRANGEMENT is derived from the dimension vocabulary rather than written out beside
 // it. `session-dimensions.ts` imports this file for TYPES only, so this is the one value direction.
-import { DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED, storedFilters } from './session-dimensions'
+import {
+  DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED, storedFilters,
+  type SessionGroupingId,
+} from './session-dimensions'
 
 export type TabId =
   | 'services'
   | 'sessions'
   /** The metrics dashboard — the whole of what `agentop tui` shows, as a screen of this app. */
   | 'dashboard'
+  | 'hardware'
   | 'logs'
   | 'cheatsheet'
   | 'help'
@@ -36,6 +40,7 @@ export const TAB_ORDER: readonly TabId[] = [
   'services',
   'sessions',
   'dashboard',
+  'hardware',
   'logs',
   'cheatsheet',
   'help',
@@ -445,6 +450,20 @@ export interface ControlSession {
    */
   projectGroup?: string
   /**
+   * The project's own DIRECTORY — the main checkout, even for a session inside one of its worktrees.
+   *
+   * What the CASCADE arrangement measures a session's branches against: the segments of `cwd` below
+   * this path are the nodes it hangs under. It is a path where `projectGroup` is a name, and the two
+   * are not interchangeable — deriving the branches by string-matching the name against the cwd is a
+   * guess that goes wrong wherever a segment repeats along the path.
+   *
+   * Absent whenever no repository names one — outside a repository, or for a directory that is gone
+   * with nothing recorded at spawn. The tree then hangs the session directly off its project root
+   * with no branch, which is the honest answer: a relative path that cannot be established is never
+   * synthesised.
+   */
+  projectRoot?: string
+  /**
    * Already-localized: this row's directory does not exist on this machine any more.
    *
    * Present whether or not the repository was recovered from what the registry recorded, because
@@ -607,6 +626,12 @@ export interface ControlSession {
   /** When it started, epoch ms. An instant rather than a duration — see `ServiceRuntimeState`. */
   startedAt?: number
   attached: boolean
+  /** Process ID for live process monitoring. */
+  pid?: number
+  /** Process CPU load percentage. */
+  cpuPercent?: number | null
+  /** Resident Set Size memory usage in bytes. */
+  rssBytes?: number | null
 }
 
 /**
@@ -619,12 +644,18 @@ export interface ControlSession {
  */
 export interface SessionViewPrefs {
   /**
-   * Which dimension the list is arranged by, BY ID.
+   * How the list is arranged, BY ID.
    *
    * An id and never a position: an index records "the third dimension" and becomes a different
    * question the moment someone reorders the menu. See `session-dimensions.ts`.
+   *
+   * `SessionGroupingId` and never a union written out here: this was a hand-copied list of the
+   * arrangements, which is the pattern CLAUDE.md forbids for harnesses and for the same reason —
+   * TypeScript accepts a union with a member missing, so an arrangement added to `GROUPINGS` would
+   * be offered by the menu, accepted by the CLI, and then refused by the type of the file it is
+   * persisted to.
    */
-  grouping: 'none' | 'task' | 'harness' | 'model' | 'project' | 'repo' | 'status' | 'marked'
+  grouping: SessionGroupingId
   /**
    * What the list is narrowed to, per dimension — the ONE stored source for every filter.
    *

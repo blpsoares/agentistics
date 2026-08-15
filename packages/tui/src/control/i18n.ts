@@ -353,6 +353,7 @@ export interface ControlStrings {
   /** How to put the arrangement back to how the app opens on a fresh machine. */
   keySessionsReset: string
   keySessionsKill: string
+  keySessionsDeleteTask: string
   keySessionsRename: string
   keySessionsNote: string
   keySessionsNew: string
@@ -527,6 +528,7 @@ const EN: ControlStrings = {
     services: 'Services',
     sessions: 'Sessions',
     dashboard: 'Dashboard',
+    hardware: 'Hardware',
     logs: 'Logs',
     cheatsheet: 'Cheat sheet',
     help: 'Help',
@@ -537,6 +539,7 @@ const EN: ControlStrings = {
     services: 'services',
     sessions: 'sessions',
     dashboard: 'dashboard',
+    hardware: 'hardware',
     logs: 'logs',
     cheatsheet: 'commands',
     help: 'help',
@@ -560,7 +563,7 @@ const EN: ControlStrings = {
   keyEnds: 'g/G ends',
   keyRefresh: 'r refresh',
   keyLogSource: '[ ] source',
-  dashView: '1-5/tab view',
+  dashView: '1-6/tab view',
   dashFilter: 'f harness',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+drag to copy',
@@ -667,6 +670,7 @@ const EN: ControlStrings = {
     repo: 'repository',
     task: 'task',
     none: 'flat',
+    tree: 'cascade',
     harness: 'harness',
     model: 'model',
     project: 'project',
@@ -829,6 +833,7 @@ const EN: ControlStrings = {
   keySessionsAttach: 'o attach',
   keySessionsReset: '^r reset view',
   keySessionsKill: 'x kill',
+  keySessionsDeleteTask: 'x delete task',
   keySessionsRename: 'n name',
   keySessionsNote: 't note',
   keySessionsNew: 'a new',
@@ -952,6 +957,7 @@ const PT: ControlStrings = {
     services: 'Serviços',
     sessions: 'Sessões',
     dashboard: 'Dashboard',
+    hardware: 'Hardware',
     logs: 'Logs',
     cheatsheet: 'Comandos',
     help: 'Ajuda',
@@ -962,6 +968,7 @@ const PT: ControlStrings = {
     services: 'serviços',
     sessions: 'sessões',
     dashboard: 'dashboard',
+    hardware: 'hardware',
     logs: 'logs',
     cheatsheet: 'comandos',
     help: 'ajuda',
@@ -985,7 +992,7 @@ const PT: ControlStrings = {
   keyEnds: 'g/G extremos',
   keyRefresh: 'r atualizar',
   keyLogSource: '[ ] fonte',
-  dashView: '1-5/tab tela',
+  dashView: '1-6/tab tela',
   dashFilter: 'f assistente',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+arrastar copia',
@@ -1086,6 +1093,7 @@ const PT: ControlStrings = {
     repo: 'repositório',
     task: 'tarefa',
     none: 'lista',
+    tree: 'cascata',
     harness: 'harness',
     model: 'modelo',
     project: 'projeto',
@@ -1244,6 +1252,7 @@ const PT: ControlStrings = {
   keySessionsAttach: 'o anexar',
   keySessionsReset: '^r restaurar view',
   keySessionsKill: 'x encerrar',
+  keySessionsDeleteTask: 'x apagar tarefa',
   keySessionsRename: 'n nomear',
   keySessionsNote: 't nota',
   keySessionsNew: 'a nova',

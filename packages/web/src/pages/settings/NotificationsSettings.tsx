@@ -8,11 +8,13 @@ import {
   getBrowserNotificationPermission,
   playNotificationSound,
   triggerSessionNotification,
+  DEFAULT_NOTIFICATION_SETTINGS,
   type NotificationSettings,
   type SoundPreset,
+  type SessionActivity,
 } from '../../lib/sessionNotifications'
 import { SectionHeader, Divider, PrefRow, Toggle } from './primitives'
-import { Bell, Volume2, VolumeX, ShieldAlert, Sparkles, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Bell, Volume2, VolumeX, ShieldAlert, Sparkles, CheckCircle2, AlertCircle, Clock, Activity, XCircle } from 'lucide-react'
 
 export default function NotificationsSettings() {
   const ctx = useOutletContext<AppContext>()
@@ -36,6 +38,12 @@ export default function NotificationsSettings() {
     update({ events: nextEvents })
   }
 
+  function updateEventSound(eventKey: SessionActivity, value: SoundPreset) {
+    const base = settings.eventSounds || DEFAULT_NOTIFICATION_SETTINGS.eventSounds!
+    const nextSounds: NonNullable<NotificationSettings['eventSounds']> = { ...base, [eventKey]: value }
+    update({ eventSounds: nextSounds })
+  }
+
   async function handleRequestPermission() {
     const res = await requestNotificationPermission()
     setPermission(res)
@@ -55,7 +63,7 @@ export default function NotificationsSettings() {
 
   function handleTestSoundAndNotification() {
     triggerSessionNotification({
-      title: pt ? '🔔 Notificação de Teste' : '🔔 Test Notification',
+      title: pt ? 'Notificação de Teste' : 'Test Notification',
       body: pt
         ? 'Isso é uma demonstração do alerta sonoro e visual das Live Sessions.'
         : 'This is a test of the Live Sessions visual and sound notification.',
@@ -70,6 +78,53 @@ export default function NotificationsSettings() {
     { key: 'soft', labelPt: 'Suave / Discreto', labelEn: 'Soft / Subtle', descPt: 'Pulso duplo de baixa frequência', descEn: 'Double low-frequency pulse' },
     { key: 'alert', labelPt: 'Alerta / Destaque', labelEn: 'Alert Tone', descPt: 'Tom triplo de atenção em E5', descEn: 'Triple attention tone in E5' },
     { key: 'ping', labelPt: 'Ping de Cristal', labelEn: 'Crystal Ping', descPt: 'Sino agudo de alta clareza', descEn: 'High clarity bell' },
+  ]
+
+  const EVENT_CONFIGS: {
+    key: keyof NotificationSettings['events']
+    titlePt: string
+    titleEn: string
+    color: string
+    icon: React.ReactNode
+    descPt: string
+    descEn: string
+  }[] = [
+    {
+      key: 'waiting-approval',
+      titlePt: 'Precisa de Aprovação',
+      titleEn: 'Needs Approval',
+      color: '#ef4444',
+      icon: <AlertCircle size={15} style={{ color: '#ef4444' }} />,
+      descPt: 'Quando a sessão é pausada aguardando confirmação ou autorização do usuário',
+      descEn: 'When session is paused waiting for user confirmation or tool authorization',
+    },
+    {
+      key: 'waiting',
+      titlePt: 'Aguardando Resposta',
+      titleEn: 'Waiting Response',
+      color: 'var(--anthropic-orange)',
+      icon: <Clock size={15} style={{ color: 'var(--anthropic-orange)' }} />,
+      descPt: 'Quando a IA concluiu a resposta e aguarda sua nova mensagem/comando',
+      descEn: 'When AI completes its turn and awaits your input/command',
+    },
+    {
+      key: 'working',
+      titlePt: 'Trabalhando',
+      titleEn: 'Working',
+      color: '#22c55e',
+      icon: <Activity size={15} style={{ color: '#22c55e' }} />,
+      descPt: 'Quando a sessão retoma a execução / geração de código',
+      descEn: 'When session resumes execution / code generation',
+    },
+    {
+      key: 'exited',
+      titlePt: 'Sessão Encerrada',
+      titleEn: 'Session Exited',
+      color: 'var(--text-secondary)',
+      icon: <XCircle size={15} style={{ color: 'var(--text-tertiary)' }} />,
+      descPt: 'Quando o processo de uma sessão ao vivo é finalizado',
+      descEn: 'When a live session process exits or terminates',
+    },
   ]
 
   return (
@@ -167,152 +222,118 @@ export default function NotificationsSettings() {
 
       <Divider />
 
-      {/* Event Types / Filter Section */}
-      <SectionHeader label={pt ? 'Eventos para Notificar' : 'Notification Events'} />
+      {/* Event Types & Per-Status Sound Customization */}
+      <SectionHeader label={pt ? 'Eventos e Toques por Status' : 'Events & Per-Status Tones'} />
       <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 14 }}>
         {pt
-          ? 'Escolha em quais momentos das suas live sessions você deseja receber alertas:'
-          : 'Choose when you want to be notified during live session progress:'}
+          ? 'Escolha em quais momentos notificar e defina o toque específico para cada status:'
+          : 'Choose when to notify and select a specific sound chime for each status:'}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
-        {/* Waiting Approval */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '12px 14px',
-            borderRadius: 8,
-            border: '1px solid var(--border-subtle)',
-            background: 'var(--bg-elevated)',
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#ef4444', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>🔴</span>
-              <span>{pt ? 'Precisa de Aprovação' : 'Needs Approval'}</span>
-              <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 4 }}>
-                (waiting-approval)
-              </span>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-              {pt
-                ? 'Quando a sessão é pausada aguardando confirmação ou autorização do usuário'
-                : 'When session is paused waiting for user confirmation or tool authorization'}
-            </div>
-          </div>
-          <Toggle
-            on={settings.events['waiting-approval']}
-            onToggle={() => updateEvent('waiting-approval', !settings.events['waiting-approval'])}
-          />
-        </div>
+        {EVENT_CONFIGS.map(evt => {
+          const events = settings.events || DEFAULT_NOTIFICATION_SETTINGS.events
+          const eventSounds = settings.eventSounds || DEFAULT_NOTIFICATION_SETTINGS.eventSounds!
+          const enabled = events[evt.key] ?? true
+          const currentSound = eventSounds[evt.key] ?? 'chime'
 
-        {/* Waiting Input */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '12px 14px',
-            borderRadius: 8,
-            border: '1px solid var(--border-subtle)',
-            background: 'var(--bg-elevated)',
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--anthropic-orange)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>🟡</span>
-              <span>{pt ? 'Aguardando Resposta' : 'Waiting Response'}</span>
-              <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 4 }}>
-                (waiting)
-              </span>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-              {pt
-                ? 'Quando a IA conclui a resposta e aguarda sua nova mensagem/comando'
-                : 'When AI completes its turn and awaits your input/command'}
-            </div>
-          </div>
-          <Toggle
-            on={settings.events['waiting']}
-            onToggle={() => updateEvent('waiting', !settings.events['waiting'])}
-          />
-        </div>
+          return (
+            <div
+              key={evt.key}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 14px',
+                borderRadius: 8,
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--bg-elevated)',
+                gap: 12,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: evt.color, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {evt.icon}
+                  <span>{pt ? evt.titlePt : evt.titleEn}</span>
+                  <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 4 }}>
+                    ({evt.key})
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                  {pt ? evt.descPt : evt.descEn}
+                </div>
+              </div>
 
-        {/* Working */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '12px 14px',
-            borderRadius: 8,
-            border: '1px solid var(--border-subtle)',
-            background: 'var(--bg-elevated)',
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#22c55e', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>🟢</span>
-              <span>{pt ? 'Trabalhando' : 'Working'}</span>
-              <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 4 }}>
-                (working)
-              </span>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-              {pt
-                ? 'Quando a sessão retoma a execução / geração de código'
-                : 'When session resumes execution / code generation'}
-            </div>
-          </div>
-          <Toggle
-            on={settings.events['working']}
-            onToggle={() => updateEvent('working', !settings.events['working'])}
-          />
-        </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                {/* Per-Status Sound Dropdown */}
+                {settings.soundEnabled && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <select
+                      value={currentSound}
+                      onChange={e => updateEventSound(evt.key, e.target.value as SoundPreset)}
+                      disabled={!enabled}
+                      style={{
+                        padding: '5px 8px',
+                        borderRadius: 6,
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-surface)',
+                        color: enabled ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                        fontSize: 11,
+                        fontFamily: 'inherit',
+                        cursor: enabled ? 'pointer' : 'not-allowed',
+                        opacity: enabled ? 1 : 0.6,
+                      }}
+                    >
+                      {SOUND_PRESETS.map(p => (
+                        <option key={p.key} value={p.key}>
+                          {pt ? p.labelPt : p.labelEn}
+                        </option>
+                      ))}
+                    </select>
 
-        {/* Exited */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '12px 14px',
-            borderRadius: 8,
-            border: '1px solid var(--border-subtle)',
-            background: 'var(--bg-elevated)',
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>⚪</span>
-              <span>{pt ? 'Sessão Encerrada' : 'Session Exited'}</span>
-              <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 4 }}>
-                (exited)
-              </span>
+                    <button
+                      onClick={() => playNotificationSound(currentSound, settings.soundVolume)}
+                      disabled={!enabled}
+                      title={pt ? 'Ouvir toque deste status' : 'Play sound'}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: 28,
+                        height: 28,
+                        borderRadius: 6,
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-surface)',
+                        color: enabled ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                        cursor: enabled ? 'pointer' : 'not-allowed',
+                        padding: 0,
+                        opacity: enabled ? 1 : 0.6,
+                      }}
+                    >
+                      <Volume2 size={13} />
+                    </button>
+                  </div>
+                )}
+
+                <Toggle
+                  on={enabled}
+                  onToggle={() => updateEvent(evt.key, !enabled)}
+                />
+              </div>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>
-              {pt
-                ? 'Quando o processo de uma sessão ao vivo é finalizado'
-                : 'When a live session process exits or terminates'}
-            </div>
-          </div>
-          <Toggle
-            on={settings.events['exited']}
-            onToggle={() => updateEvent('exited', !settings.events['exited'])}
-          />
-        </div>
+          )
+        })}
       </div>
 
       <Divider />
 
-      {/* Sound Effects Section */}
-      <SectionHeader label={pt ? 'Efeitos Sonoros' : 'Sound Effects'} />
+      {/* General Sound Effects Section */}
+      <SectionHeader label={pt ? 'Efeitos Sonoros Globais' : 'Sound Effects'} />
 
       <PrefRow
         label={pt ? 'Tocar Som nas Notificações' : 'Play Sound on Notifications'}
-        sub={pt ? 'Efeito sonoro synthesized sem arquivos externos' : 'Synthesized audio chime without external asset downloads'}
+        sub={pt ? 'Efeito sonoro sintetizado via Web Audio API sem arquivos externos' : 'Synthesized audio chime via Web Audio API without external downloads'}
       >
         <Toggle on={settings.soundEnabled} onToggle={() => update({ soundEnabled: !settings.soundEnabled })} />
       </PrefRow>
@@ -321,7 +342,7 @@ export default function NotificationsSettings() {
         <>
           <div style={{ marginTop: 14, marginBottom: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
-              {pt ? 'Estilo do Som' : 'Sound Style'}
+              {pt ? 'Toque Padrão / Fallback' : 'Default Sound Style'}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 8 }}>
               {SOUND_PRESETS.map(preset => {

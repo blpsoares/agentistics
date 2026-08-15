@@ -16,6 +16,8 @@ import type { HarnessProcess } from '../live-sessions'
 import { rulesFor } from './attention-rules'
 import { approvalTail, attentionOf, digestFrame, frameTail } from './attention'
 import { parseDialogOptions, type DialogOption } from './dialog-choice'
+// Taking a running session back when its registry record is gone. See `session-adopt.ts`.
+import { planAdoptions } from './session-adopt'
 import { loadConversations, type Conversation } from './conversations'
 import { HEARTBEAT_MS, planCrashGroup, type CrashGroup } from './crash-group'
 import { emptyHarnessSessionIndex, type HarnessSessionIndex } from './harness-sessions'
@@ -24,6 +26,9 @@ import {
   attentionCount, bellTransitions, buildSessionViews, type SessionView,
 } from './session-view'
 import type { ManagedSession, SessionActivity, SessionBackend } from './types'
+import { calculateProcCpu, type ProcStatSample } from '../hardware-pure'
+import { readProcRss, readProcStat } from '../hardware-probe'
+import { procAvailable } from './proc-liveness'
 
 /** How often the cockpit refreshes. Five seconds is the interval the feature was specified at. */
 export const SESSION_POLL_MS = Number(process.env.AGENTISTICS_SESSION_POLL_MS) > 0
@@ -112,6 +117,14 @@ export function createSessionsPoller(o: {
    * conversation.
    */
   recordConversation?: (id: string, conversationId: string) => Promise<unknown>
+  /**
+   * Write registry records for sessions the backend is running and the registry has lost.
+   *
+   * Injected and optional for the same reason the two above are: it writes to disk. Called only with
+   * a non-empty list, so a fleet with nothing to adopt — the ordinary case — never touches the file.
+   * What may be adopted at all is the pure `planAdoptions`.
+   */
+  adoptSessions?: (records: readonly ManagedSession[]) => Promise<unknown>
   now?: () => number
   captureLines?: number
   /** Overridable so a test can drive several heartbeats without waiting a minute for each. */
@@ -126,6 +139,7 @@ export function createSessionsPoller(o: {
   // first is how movement is detected; the second is what makes the bell a transition.
   let prevDigest = new Map<string, string>()
   let prevActivity = new Map<string, SessionActivity>()
+  const prevProcStats = new Map<number, ProcStatSample>()
   let last: SessionSnapshot | null = null
   /**
    * When the heartbeat last wrote. `-Infinity` so the FIRST poll always stamps.
@@ -167,6 +181,24 @@ export function createSessionsPoller(o: {
 
       const reconciled = reconcileSessions(registry, backendSessions)
       const harnessOf = new Map(registry.map(r => [r.id, r.harness]))
+
+      // Take back any session the backend is running that the registry has lost. It is not a
+      // theoretical case: the registry's write queue is per PROCESS, several agentop processes write
+      // the same file, and a record added by a short-lived one has been observed erased by a
+      // longer-lived one — leaving the user sitting in a session the cockpit could no longer name,
+      // attach to, rename or kill. Adoption never invents anything: see `session-adopt.ts`. It is
+      // idempotent by construction (an adopted row stops being `unregistered`), so it writes once.
+      if (o.adoptSessions) {
+        const adopt = planAdoptions({
+          rows: reconciled,
+          byManagedId: harnessSessions.byManagedId,
+          harness: 'claude',
+          nowIso: new Date(nowMs).toISOString(),
+        })
+        // Best effort, exactly like the heartbeat: a registry that cannot be written costs the
+        // adoption, never the fleet on screen.
+        if (adopt.length > 0) await o.adoptSessions(adopt).catch(() => undefined)
+      }
 
       const nextDigest = new Map<string, string>()
       const activity = new Map<string, SessionActivity>()
@@ -234,6 +266,37 @@ export function createSessionsPoller(o: {
       const backendIds = new Set(backendSessions.map(b => b.id))
       const fell = planCrashGroup({ entries: registry, backendIds })
 
+      const canReadProc = await procAvailable()
+      const sessionHardware = new Map<string, { pid?: number; cpuPercent?: number | null; rssBytes?: number | null }>()
+      if (canReadProc) {
+        const panePids = await o.backend.listPanePids?.().catch(() => new Map<string, number>())
+        for (const r of reconciled) {
+          const own = harnessSessions.byManagedId.get(r.id)
+          const harness = r.managed?.harness
+          const cwd = r.managed?.cwd
+          const liveProc = processes.find(
+            p =>
+              p.sessionId === r.id ||
+              (Boolean(harness) &&
+                Boolean(cwd) &&
+                p.harness === harness &&
+                (p.cwd === cwd || p.cwd.startsWith(cwd! + '/') || cwd!.startsWith(p.cwd + '/'))),
+          )
+          const pid = own?.pid ?? panePids?.get(r.id) ?? liveProc?.pid
+          if (pid && Number.isFinite(pid) && pid > 0) {
+            const currStat = await readProcStat(pid, nowMs)
+            const rssBytes = await readProcRss(pid)
+            let cpuPercent: number | null = null
+            if (currStat) {
+              const prevStat = prevProcStats.get(pid)
+              cpuPercent = calculateProcCpu(prevStat, currStat)
+              prevProcStats.set(pid, currStat)
+            }
+            sessionHardware.set(r.id, { pid, cpuPercent, rssBytes })
+          }
+        }
+      }
+
       const sessions = buildSessionViews({
         reconciled,
         activity,
@@ -243,6 +306,7 @@ export function createSessionsPoller(o: {
         processes,
         conversations,
         harnessSessions,
+        sessionHardware,
         ...(fell ? { fell: new Set(fell.entries.map(e => e.id)) } : {}),
       })
       const rang = bellTransitions(prevActivity, sessions)

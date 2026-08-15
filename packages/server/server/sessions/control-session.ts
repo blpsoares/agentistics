@@ -122,6 +122,11 @@ export function toControlSession(
     // Only when it differs: a session in the main checkout groups under its own folder already, and
     // a field repeating what is beside it is one more thing that can disagree.
     ...(facts.root && facts.root !== project ? { projectGroup: facts.root } : {}),
+    // Stamped whether or not `projectGroup` was — a session sitting IN the main checkout has no
+    // group to state and still has a root, and the cascade needs the path in both cases. Absent
+    // where nothing names a repository, which is what makes such a row hang at its project's root
+    // rather than under a branch invented from its own cwd.
+    ...(facts.rootPath ? { projectRoot: facts.rootPath } : {}),
     // Said wherever it is true, recovered repository or not: the row still names a path, and that
     // path resolves to nothing on this machine. It is also the answer to "why did reopening fail",
     // and — when no repository was recorded — it is what `groupSessions` keys the bucket on instead
@@ -187,5 +192,8 @@ export function toControlSession(
       : {}),
     searchText: v.searchText,
     attached: v.attached,
+    ...(v.pid !== undefined ? { pid: v.pid } : {}),
+    ...(v.cpuPercent !== undefined ? { cpuPercent: v.cpuPercent } : {}),
+    ...(v.rssBytes !== undefined ? { rssBytes: v.rssBytes } : {}),
   }
 }

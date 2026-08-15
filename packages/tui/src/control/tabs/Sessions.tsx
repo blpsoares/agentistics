@@ -33,6 +33,15 @@ import { Pane, paneBody, paneRows } from '../Pane'
 const PANE_EDGE_X = 2
 
 /**
+ * What one level of the CASCADE indents a heading by.
+ *
+ * Two columns: enough to read as a level, cheap enough that a deep branch does not eat the width
+ * its own name needs. The rows under a heading are NOT indented — the cursor moves over them and a
+ * row that shifts sideways with its branch is a column that stops lining up.
+ */
+const INDENT = '  '
+
+/**
  * How far down a scrolling region is, one cell per drawn row.
  *
  * A window with no bar is a list whose length is a secret: you cannot tell whether the row under
@@ -57,7 +66,7 @@ import { Question as WrappedText } from '../Surface'
 import { SessionWizard } from './SessionWizard'
 import { TaskChoice } from '../TaskChoice'
 import {
-  GROUPINGS, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
+  GROUPINGS, breadcrumb, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
   QUESTION_ROWS, askRows, fitApprovalPreview, actionLabels, asideRows, asideSelectable,
   asideRowKey, resolveAsideCursor,
   enabledActionIndexes, filterSessions,
@@ -102,6 +111,8 @@ const CONTEXT_COLOR: Record<ContextLevel, string | undefined> = {
   warn: COLORS.accent,
   full: COLORS.danger,
 }
+
+const SESSION_FOCUS_ACCENT = COLORS.info
 
 /** The colour each state wears. Paired with a WORD everywhere it is drawn — a fleet state announced
  *  in colour alone is unreadable on a terminal with a flattened palette, and this is the one screen
@@ -434,11 +445,12 @@ export function Sessions({
   // The one question that carries EVIDENCE. Its rows are BUDGETED here rather than drawn on top of
   // the answers: Ink composites what does not fit, so an unbudgeted preview would not crowd the two
   // answers, it would draw over whatever sits under them.
-  const askPreview = ask?.kind === 'approve' ? (ask.session.approvalLines?.length ?? 0) : 0
+  const askDetail = ask !== null && ask.kind !== 'keys' ? ask : null
+  const askPreview = askDetail?.kind === 'approve' ? (askDetail.session.approvalLines?.length ?? 0) : 0
   // A picker needs a row per option on top of the evidence, or the answers are composited over
   // whatever sits under the pane — the same reason the evidence itself is budgeted.
-  const askChoices = ask?.kind === 'approve' ? (ask.session.dialogOptions?.length ?? 0) : 0
-  const detailWanted = ask
+  const askChoices = askDetail?.kind === 'approve' ? (askDetail.session.dialogOptions?.length ?? 0) : 0
+  const detailWanted = askDetail
     ? askRows({ preview: askPreview, detail: detail.length, choices: askChoices })
     : layout === 'cards' || hideDetail ? 0 : detail.length
 
@@ -1081,7 +1093,21 @@ export function Sessions({
       : focus === 'aside' && cockpit.aside > 0
         // The menu is a vertical list, so it answers ↑↓ and enter — and `esc` is the way back to the
         // sessions. A hint for a key that does nothing here is the one bug this footer prevents.
-        ? { capture: false, claimArrows: true, hints: [s.keyQuit, s.keyAsideSection, s.keyMove, s.keyRun, s.keyBack, s.keyTabsAlt] }
+        ? {
+            capture: false,
+            claimArrows: true,
+            hints: [
+              s.keyQuit,
+              s.keyAsideSection,
+              s.keyMove,
+              s.keyRun,
+              ...(asideList[asideRow]?.kind === 'task' && !asideList[asideRow].all && asideList[asideRow].name
+                ? [s.keySessionsDeleteTask]
+                : []),
+              s.keyBack,
+              s.keyTabsAlt,
+            ],
+          }
       : actionsFocused
         // While the action row has the keyboard it is a horizontal list, so it claims the arrows —
         // and the footer stops saying they change screen for exactly as long as that is true.
@@ -1111,7 +1137,7 @@ export function Sessions({
             ],
           })
   }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping,
-      selected?.canApprove, selected?.canChoose, canPrompt, menuHidden, restoring])
+      selected?.canApprove, selected?.canChoose, canPrompt, menuHidden, restoring, asideList, asideRow])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
@@ -1392,7 +1418,7 @@ export function Sessions({
     )
   }
 
-  if (ask?.kind === 'keys') {
+  if (ask?.kind === 'keys' && cockpit.aside === 0) {
     return (
       <Box flexDirection="column" width={width} flexShrink={0}>
         <KeyHelpScreen strings={s} width={width} height={height} onClose={() => setAsk(null)} />
@@ -1432,7 +1458,14 @@ export function Sessions({
       <Box flexDirection="row" width={width} flexShrink={0}>
       {cockpit.aside > 0 ? (
         <>
-          {foldRows ? (
+          {ask?.kind === 'keys' ? (
+            <KeyHelpScreen
+              strings={s}
+              width={cockpit.aside}
+              height={cockpit.band}
+              onClose={() => setAsk(null)}
+            />
+          ) : foldRows ? (
             // Each block its OWN framed pane, titled with its own heading. One scrolling pane
             // titled "menu" showed its first section and nothing else, so every switch and every
             // task sat below the fold — and the honest reading of that screen is that all of it
@@ -1542,15 +1575,15 @@ export function Sessions({
           same measured widths so the heading can never sit over the wrong column. */}
       {cockpit.header && rows.length > 0 && !grid ? (
         <Text dimColor wrap="truncate">
-          {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')
-            + padCell(s.sessionsCols.state, columns.state)}
+          {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')}
+          {columns.harness > 0 ? padCell(s.sessionsCols.harness, columns.harness) + '  ' : ''}
+          {padCell(s.sessionsCols.state, columns.state)}
           {columns.title > 0 ? '  ' + padCell(s.sessionsCols.title, columns.title) : ''}
           {columns.age > 0 ? '  ' + padCell(s.sessionsCols.age, columns.age) : ''}
           {columns.worktree > 0 ? '  ' + padCell(s.sessionsCols.worktree, columns.worktree) : ''}
           {columns.task > 0 ? '  ' + padCell(s.sessionsCols.task, columns.task) : ''}
           {columns.metrics > 0 ? '  ' + padCell(s.sessionsCols.metrics, columns.metrics) : ''}
           {columns.context > 0 ? '  ' + padCell(s.sessionsCols.context, columns.context) : ''}
-          {columns.harness > 0 ? '  ' + padCell(s.sessionsCols.harness, columns.harness) : ''}
           {columns.where > 0 ? '  ' + padCell(s.sessionsCols.where, columns.where) : ''}
         </Text>
       ) : null}
@@ -1618,7 +1651,11 @@ export function Sessions({
               // A heading is drawn as a HEADING: accented, bold, with a rule running out to the
               // edge. Dim grey at the same weight as its rows is not a hierarchy — it is a list that
               // happens to be sorted, which is what this screen was.
-              const head = `${row.label}  ${row.count}`
+              //
+              // The cascade indents by its branch DEPTH, which is the whole of what the list has to
+              // learn about the tree — the rest of this screen never finds out one exists. The card
+              // grid, which has no indentation to spend, breadcrumbs the same branch instead.
+              const head = `${INDENT.repeat(row.depth ?? 0)}${row.label}  ${row.count}`
               const rule = Math.max(0, listBody - head.length - 3)
               return (
                 <Text key={`h${index}`} wrap="truncate">
@@ -1666,20 +1703,20 @@ export function Sessions({
 
       {/* The third pane: what you selected, or the question you were just asked. A question owns the
           keyboard, so the frame says so — the accent is where the keys go, everywhere, always. */}
-      {cockpit.detail > 0 && (ask || (!hideDetail && detail.length > 0)) ? (
+      {cockpit.detail > 0 && (askDetail || (!hideDetail && detail.length > 0)) ? (
         <Pane
-          title={ask ? s.sessionsPaneAsk : s.sessionsPaneDetail}
+          title={askDetail ? s.sessionsPaneAsk : s.sessionsPaneDetail}
           // The key that puts this pane away, written ON the pane. It lives as a row in the `show`
           // block too, but that block is collapsed by default and five rows deep — a control for a
           // thing you are looking straight at belongs on the thing.
-          badge={ask ? '' : s.sessionsDetailHide}
-          focused={Boolean(ask)}
+          badge={askDetail ? '' : s.sessionsDetailHide}
+          focused={Boolean(askDetail)}
           width={width}
           height={cockpit.detail}
         >
-          {ask ? (
+          {askDetail ? (
             <Question
-              ask={ask as Exclude<Ask, { kind: 'new' } | { kind: 'view' } | { kind: 'keys' }>}
+              ask={askDetail as Exclude<Ask, { kind: 'new' } | { kind: 'view' } | { kind: 'keys' }>}
               strings={s}
               width={paneBody(width)}
               rows={paneRows(cockpit.detail)}
@@ -1843,7 +1880,7 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           the one moment you are looking straight at it. The bar is `info` rather than the accent
           on purpose — the accent means focus everywhere else in this app, and a highlight that
           wore it would read as "this is selected" on four rows at once. */}
-      <Text color={selected ? COLORS.accent : undefined}>{selected ? '❯' : ' '}</Text>
+      <Text color={selected ? COLORS.info : undefined} underline={selected}>{selected ? '❯' : ' '}</Text>
       <Text color={marked ? COLORS.info : undefined} bold={marked}>{marked ? '▌' : ' '}</Text>
       {/* Colour AND word, always paired — and PADDED, so every title starts in the same column.
           Two spaces between unpadded cells is what made this read as a jumble of words: the state
@@ -1851,19 +1888,27 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
       {/* The HANDLE. `agentop session attach 3f5f` takes a prefix, so this is the one thing on the
           row that names the session to anything but this screen. */}
       {columns.id > 0 ? (
-        <Text color={selected ? COLORS.accent : undefined} dimColor={!selected}>
+        <Text color={selected ? COLORS.info : undefined} underline={selected} dimColor={!selected} bold={selected}>
           {padCell(sessionHandle(session), columns.id) + gap}
         </Text>
       ) : null}
+      {/* Harness column is placed right after id, and retains its harness color when selected while taking underline. */}
+      {columns.harness > 0 ? (
+        <Text color={harnessColor} underline={selected} bold={selected}>
+          {padCell(session.harness, columns.harness) + gap}
+        </Text>
+      ) : null}
       <Text
-        color={selected ? COLORS.accent : STATE_COLOR[session.state]}
+        color={selected ? COLORS.info : STATE_COLOR[session.state]}
+        underline={selected}
         bold={selected || session.state === 'waiting-approval'}
       >
         {padCell(session.stateLabel, columns.state)}
       </Text>
       {columns.title > 0 ? (
         <Text
-          color={selected ? COLORS.accent : marked ? COLORS.info : undefined}
+          color={selected ? COLORS.info : marked ? COLORS.info : undefined}
+          underline={selected}
           bold={selected || marked}
         >
           {gap + padCell(session.title, columns.title)}
@@ -1872,7 +1917,7 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
       {/* How long ago it started, on rows that are NOT running — the age is most of the "reopen
           this or not" decision, and it lived only in the detail pane. */}
       {columns.age > 0 ? (
-        <Text color={selected ? COLORS.accent : undefined} dimColor={!selected}>
+        <Text color={selected ? COLORS.info : undefined} underline={selected} dimColor={!selected}>
           {gap + padCell(ages.get(session.id) ?? '', columns.age)}
         </Text>
       ) : null}
@@ -1881,14 +1926,14 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           The word, never a glyph alone — a distinction announced in a symbol is one that has to be
           taught before the screen can be read. */}
       {columns.worktree > 0 ? (
-        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>{gap + padCell(worktreeName(session), columns.worktree)}</Text>
+        <Text color={selected ? COLORS.info : COLORS.secondary} underline={selected} bold={selected}>{gap + padCell(worktreeName(session), columns.worktree)}</Text>
       ) : null}
       {/* The TASK, right of the name. Filing a session under a task and then not being able to see
           which task it is in is the feature not working — the fact only existed in the detail pane
           and in a grouping you had to switch to. `sessionColumns` drops the cell while grouping BY
           task, where the heading over the row already says it. */}
       {columns.task > 0 ? (
-        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>
+        <Text color={selected ? COLORS.info : COLORS.secondary} underline={selected} bold={selected}>
           {gap + padCell(session.task ?? '', columns.task)}
         </Text>
       ) : null}
@@ -1896,7 +1941,7 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           a row you are deciding whether to close is one whose cost you want beside its name rather
           than one selection away in the detail pane. */}
       {columns.metrics > 0 ? (
-        <Text color={selected ? COLORS.accent : COLORS.secondary} bold={selected}>{gap + padCell(sessionMetric(session), columns.metrics)}</Text>
+        <Text color={selected ? COLORS.info : COLORS.secondary} underline={selected} bold={selected}>{gap + padCell(sessionMetric(session), columns.metrics)}</Text>
       ) : null}
       {/* How full the context window is. Beside the usage because it is the same kind of fact and
           the opposite reading of it: usage is what this session has spent, this is what it has
@@ -1905,20 +1950,16 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
       {columns.context > 0 ? (
         <Text
           color={selected
-            ? COLORS.accent
+            ? COLORS.info
             : session.context ? CONTEXT_COLOR[contextLevel(session.context.fraction)] : undefined}
+          underline={selected}
           dimColor={!selected && (!session.context || contextLevel(session.context.fraction) === 'ok')}
         >
           {gap + padCell(sessionContext(session), columns.context)}
         </Text>
       ) : null}
-      {columns.harness > 0 ? (
-        <Text color={selected ? COLORS.accent : harnessColor} bold={selected}>
-          {gap + padCell(session.harness, columns.harness)}
-        </Text>
-      ) : null}
       {columns.where > 0 ? (
-        <Text dimColor>{gap + padCell(session.projectGroup || session.project, columns.where)}</Text>
+        <Text color={selected ? COLORS.info : undefined} underline={selected} dimColor={!selected}>{gap + padCell(session.projectGroup || session.project, columns.where)}</Text>
       ) : null}
       {/* The close control, at the right edge and only on a row that can take it. It asks before
           it acts — the same confirmation `x` opens, because a one-click stop on a list that
@@ -2023,7 +2064,12 @@ function GroupHeading({ band, width }: {
   band: Extract<CardBand, { kind: 'heading' }>
   width: number
 }) {
-  const head = `${band.label}  ${band.count}`
+  // A cascade branch is titled with its whole PATH — the grid has no indentation to spend, so
+  // `session-monitor` alone would say nothing about where it sits. Cut from the LEFT, because the
+  // last segment is what identifies the node and so is the last thing given up.
+  const count = `  ${band.count}`
+  const name = band.path ? breadcrumb(band.path, Math.max(0, width - count.length)) : band.label
+  const head = `${name}${count}`
   const rule = Math.max(0, width - head.length - 3)
   return (
     <Text wrap="truncate">
@@ -2132,7 +2178,7 @@ function CardLineView({ line, width, labelWidth, marked, selected, stateColor, b
   }
   if (line.kind === 'title') {
     return (
-      <Text wrap="truncate" color={selected ? COLORS.accent : marked ? COLORS.info : undefined} bold>
+      <Text wrap="truncate" color={selected ? SESSION_FOCUS_ACCENT : marked ? COLORS.info : undefined} bold>
         {truncate(line.text, width)}
       </Text>
     )

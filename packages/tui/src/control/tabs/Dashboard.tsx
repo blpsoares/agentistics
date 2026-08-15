@@ -80,6 +80,7 @@ export function Dashboard({ status, strings: s, lang, width, height, isActive, n
   return (
     <DashboardView
       data={data}
+      apiBase={source.kind === 'api' ? source.apiBase : null}
       s={t}
       width={width}
       height={height}

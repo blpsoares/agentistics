@@ -95,6 +95,7 @@ import { resolveLang } from './cli-lang'
 import { scanProcesses } from './live-sessions'
 import { resolveBackend } from './sessions'
 import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
+import { planTakeover } from './sessions/takeover'
 import { findProjects } from './sessions/project-source'
 import { candidatePath } from './sessions/project-search'
 import { recordedRepo, repoFacts } from './sessions/repo-facts'
@@ -103,6 +104,9 @@ import { recordedRepo, repoFacts } from './sessions/repo-facts'
 import { toControlSession } from './sessions/control-session'
 import { planTaskReopen, taskReopenSucceeded, type TaskReopenPlan } from './sessions/task-reopen'
 import { approvalFor, choiceKey } from './sessions/approval-spec'
+// Carrying a rename through to the harness. Shared with `agentop session rename` — one gesture, one
+// implementation, for the reason `task-reopen.ts` exists.
+import { renameInHarness, renameMessage } from './sessions/rename'
 import { needsChoice, parseDialogOptions } from './sessions/dialog-choice'
 import { rulesFor } from './sessions/attention-rules'
 import { planCrashGroup, planFellOffer } from './sessions/crash-group'
@@ -1336,6 +1340,9 @@ async function ensureSessionsPoller(): Promise<SessionsPoller> {
     // Written once per session, not once per poll — the poller only calls this when the harness's
     // own record disagrees with the registry.
     recordConversation: (id, conversationId) => patchSession(id, { conversationId }),
+    // Take back a running session whose registry record was lost. Called only with a non-empty
+    // list, so a healthy fleet never writes. See `session-adopt.ts` for what may be adopted.
+    adoptSessions: async records => { for (const r of records) await addSession(r) },
   })
   return sessionsPoller
 }
@@ -2456,13 +2463,33 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       return { ok: true, message: s.sessTaskDeleted(task, plan.clear.length) }
     },
 
+    /**
+     * Rename a session in BOTH places it can be named — agentop's registry and the harness itself.
+     *
+     * The registry write comes first and is unconditional: it is the one that always works, and a
+     * rename that refused because the harness could not be reached would leave every `lost` row
+     * unnameable. The harness half is then attempted through the shared `renameInHarness`, and
+     * whatever became of it is SAID — see `renameMessage`.
+     */
     async renameSession(id: string, label: string): Promise<ActionResult> {
       const s = S()
+      const managed = (await readRegistry()).find(m => m.id === id)
       // The INSTANT goes down with the name. A session can also be renamed from inside the harness,
       // and recency is the only non-arbitrary way to settle a disagreement between the two — a
       // stored name with no timestamp cannot take part in that. See `pickTitle`.
       const ok = await patchSession(id, { label, labelSince: Date.now() })
-      return ok ? { ok: true, message: s.sessRenamed } : { ok: false, message: s.sessNoRegistryEntry }
+      if (!ok || !managed) return ok
+        ? { ok: true, message: s.sessRenamed }
+        : { ok: false, message: s.sessNoRegistryEntry }
+
+      const backend = await resolveBackend()
+      // A backend that cannot run at all is not a failed rename — the label is written and the row
+      // reads correctly. It is the harness half that did not happen, and it is reported as such.
+      const blocked = await backend.unavailable()
+      const outcome = blocked
+        ? ({ kind: 'skipped', reason: 'not-running' } as const)
+        : await renameInHarness({ id, harness: managed.harness }, label.trim(), backend)
+      return { ok: true, message: renameMessage(outcome, managed.harness, s) }
     },
 
     async noteSession(id: string, text: string): Promise<ActionResult> {
@@ -2521,26 +2548,44 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // every verb this screen has. That is a takeover, and it is what `resume` now does rather
       // than a verb of its own: the user already pressed the key that means "put this conversation
       // in front of me".
+      // THE DECISION IS `planTakeover`, which already existed and which this code did not use.
+      //
+      // `cli-session.ts` had been taking a conversation over since the CLI gained the verb, through
+      // that pure planner. This method grew its own copy of the same gesture — the exact drift
+      // `task-reopen.ts` was extracted to end — and the copy was WORSE in a way that costs work: it
+      // killed the holder and then tried to resume, so a harness that cannot reopen by id would
+      // have had its assistant closed for nothing. The planner refuses `resume-unsupported` BEFORE
+      // anything is signalled, which is the whole reason it is a plan rather than an action.
       const holder = conversationHeldBy(
         await liveConversationHolders(await resolveBackend()),
         req.sessionId,
         req.replaces,
       )
+      // A managed row is somewhere to go: it has a pane and `o` attaches to it, so "open it there"
+      // is an instruction the user can follow. It never becomes a takeover.
       if (holder?.kind === 'managed') return { ok: false, message: s.sessResumeInUse(holder.label) }
-      if (holder?.kind === 'process') {
-        // A holder with no pid cannot be ended, and spawning beside it would create the very twin
-        // the lock exists to prevent. Refuse, saying so — never spawn on a maybe.
-        if (holder.pid === undefined) {
-          return { ok: false, message: s.sessResumeInUse(holder.label) }
-        }
+
+      const harness = req.harness as HarnessId
+      const plan = planTakeover({
+        conversationId: req.sessionId,
+        harness,
+        resumable: planSpawn({ harness, cwd: req.cwd, resumeId: req.sessionId }).ok,
+        ...(holder?.kind === 'process'
+          ? { holder: { ...(holder.pid !== undefined ? { pid: holder.pid } : {}), label: holder.label, cwd: req.cwd } }
+          : {}),
+        cwd: req.cwd,
+      })
+      if (plan.kind === 'refuse') return { ok: false, message: s.sessTakeoverRefused(plan.reason) }
+      if (plan.kind === 'takeover') {
         // A pid is not an identity — see `isAssistantPid`. Confirmed against the live scan in the
         // moment before signalling, or the takeover is abandoned: the cost of being wrong here is
-        // SIGKILL on somebody else's process.
-        if (!await isAssistantPid(holder.pid)) {
-          return { ok: false, message: s.sessResumeInUse(holder.label) }
+        // SIGKILL on somebody else's process. The planner cannot do this: it is pure, and this is a
+        // question only the machine can answer, in the instant before the signal.
+        if (plan.holder.pid === undefined || !await isAssistantPid(plan.holder.pid)) {
+          return { ok: false, message: s.sessResumeInUse(plan.holder.label ?? req.sessionId) }
         }
-        const ended = await endProcess(holder.pid)
-        if (!ended) return { ok: false, message: s.sessAdoptFailed(holder.label) }
+        const ended = await endProcess(plan.holder.pid)
+        if (!ended) return { ok: false, message: s.sessAdoptFailed(plan.holder.label ?? req.sessionId) }
       }
       const spawned = await spawnManaged({
         harness: req.harness as HarnessId,

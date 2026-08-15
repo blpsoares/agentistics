@@ -10,6 +10,11 @@
  * mode sentence, the outcome of an action, a line printed by a non-interactive subcommand. The
  * words the control center's own screens are made of live in `tui/src/control/i18n.ts`, because the
  * host hands the TUI a `ControlStatus`, not a string table.
+ */
+
+import type { TakeoverRefusal } from './sessions/takeover'
+
+/*
  *
  * The flat arrow-key launcher this file was written for is gone, and with it forty entries that
  * named its menu items and its "stop which?" submenus. They were deleted rather than left in place:
@@ -173,6 +178,13 @@ export interface CliStrings {
    * them a second one in the same transcript, which is what this whole lock exists to prevent.
    */
   sessAdoptFailed: (holder: string) => string
+  /**
+   * A takeover the pure planner refused, said in words.
+   *
+   * Shared with the CLI's `explainTakeover`: the same three refusals, so the cockpit and the command
+   * line cannot describe one situation two ways.
+   */
+  sessTakeoverRefused: (reason: TakeoverRefusal) => string
   /** The fallback title for a session the user never named. */
   sessUntitled: (harness: string, project: string) => string
   sessKilled: (id: string) => string
@@ -189,6 +201,29 @@ export interface CliStrings {
   sessTaskReopened: (task: string) => string
   sessKillUnconfirmed: (id: string) => string
   sessRenamed: string
+  /**
+   * A rename that landed in BOTH places — agentop's label and the harness's own name.
+   *
+   * Separate from `sessRenamed` because the two claims differ, and the difference is the feature:
+   * one says a row was relabelled, the other says the session now calls itself that too.
+   */
+  sessRenamedBoth: string
+  /**
+   * The agentop label was written and the harness was NOT told — with the reason, in words.
+   *
+   * The label is never withheld over this: a rename that refuses outright would make a `lost` row
+   * unnameable, and naming those rows is most of what the verb is for. But a rename that only half
+   * happened and says nothing is indistinguishable from one that failed, which is the complaint this
+   * whole feature answers in reverse.
+   */
+  sessRenamedLocalOnly: (why: string) => string
+  /** A fact about the TOOL, not about this session: it publishes no rename channel at all. */
+  sessRenameWhyUnsupported: (harness: string) => string
+  sessRenameWhyExternal: string
+  sessRenameWhyNotRunning: string
+  sessRenameWhyDialog: string
+  sessRenameWhyUntypable: string
+  sessRenameWhyFailed: string
   /** Printed on the way into an attach, with the REAL detach key. */
   sessAttaching: (title: string, detach: string) => string
   sessNoted: string
@@ -473,6 +508,16 @@ const EN: CliStrings = {
     `that conversation is already open in ${holder} — open it there instead of starting a second assistant in it.`,
   sessAdoptFailed: (holder: string) =>
     `the assistant running that conversation (${holder}) would not stop, so it was left alone — nothing was opened.`,
+  sessTakeoverRefused: (reason: TakeoverRefusal) => {
+    switch (reason.code) {
+      case 'resume-unsupported':
+        return `${reason.harness} cannot reopen a conversation by id, so the assistant holding it was left alone.`
+      case 'holder-unreachable':
+        return `something is holding this conversation${reason.label ? ` (${reason.label})` : ''} and agentop cannot close it.`
+      case 'no-cwd':
+        return 'this conversation has no directory to reopen in — a removed worktree, most likely.'
+    }
+  },
   sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
   sessKilled: (id: string) => `stopped ${id}.`,
   sessRestoreNone: 'those sessions are no longer in the registry.',
@@ -492,6 +537,18 @@ const EN: CliStrings = {
   sessKillUnconfirmed: (id: string) =>
     `could not confirm ${id} was stopped — it may still be running, so its record was kept.`,
   sessRenamed: 'session renamed.',
+  sessRenamedBoth: 'renamed here and inside the session.',
+  sessRenamedLocalOnly: (why: string) => `renamed in agentop only — ${why}`,
+  sessRenameWhyUnsupported: (harness: string) =>
+    `${harness} publishes no way to rename a session from outside, so it keeps its own name.`,
+  sessRenameWhyExternal:
+    'agentop did not start this session, so there is no pane to type into — it keeps its own name.',
+  sessRenameWhyNotRunning:
+    'nothing is running, so the harness could not be told — it will keep the name it had.',
+  sessRenameWhyDialog:
+    'that session has a question open, and typing now would answer it. Answer it, then rename again to carry the name across.',
+  sessRenameWhyUntypable: 'the name has a line break, which cannot be typed as a single command.',
+  sessRenameWhyFailed: 'the session did not take the keystroke — it may have just ended.',
   sessAttaching: (title: string, detach: string) =>
     `Attaching to ${title}. To leave it running and come back here, press ${detach}.`,
   sessNoted: 'note saved.',
@@ -725,6 +782,16 @@ const PT: CliStrings = {
     `essa conversa já está aberta em ${holder} — abra ela por lá, em vez de colocar um segundo assistente dentro dela.`,
   sessAdoptFailed: (holder: string) =>
     `o assistente que roda essa conversa (${holder}) não encerrou, então foi deixado como estava — nada foi aberto.`,
+  sessTakeoverRefused: (reason: TakeoverRefusal) => {
+    switch (reason.code) {
+      case 'resume-unsupported':
+        return `o ${reason.harness} não reabre uma conversa por id, então o assistente que a segura foi deixado como estava.`
+      case 'holder-unreachable':
+        return `algo está segurando esta conversa${reason.label ? ` (${reason.label})` : ''} e o agentop não consegue encerrar.`
+      case 'no-cwd':
+        return 'esta conversa não tem diretório para reabrir — provavelmente uma worktree removida.'
+    }
+  },
   sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
   sessKilled: (id: string) => `${id} encerrada.`,
   sessRestoreNone: 'essas sessões não estão mais no registro.',
@@ -744,6 +811,18 @@ const PT: CliStrings = {
   sessKillUnconfirmed: (id: string) =>
     `não deu para confirmar que ${id} foi encerrada — ela pode continuar rodando, então o registro dela foi mantido.`,
   sessRenamed: 'sessão renomeada.',
+  sessRenamedBoth: 'renomeada aqui e dentro da sessão.',
+  sessRenamedLocalOnly: (why: string) => `renomeada só no agentop — ${why}`,
+  sessRenameWhyUnsupported: (harness: string) =>
+    `o ${harness} não publica nenhuma forma de renomear uma sessão de fora, então ele mantém o nome dele.`,
+  sessRenameWhyExternal:
+    'o agentop não iniciou essa sessão, então não há painel onde digitar — ela mantém o nome dela.',
+  sessRenameWhyNotRunning:
+    'não há nada rodando, então não deu para avisar o harness — ele vai manter o nome que tinha.',
+  sessRenameWhyDialog:
+    'essa sessão está com uma pergunta aberta, e digitar agora responderia ela. Responda e renomeie de novo para levar o nome adiante.',
+  sessRenameWhyUntypable: 'o nome tem quebra de linha, o que não dá para digitar como um comando só.',
+  sessRenameWhyFailed: 'a sessão não aceitou a tecla — ela pode ter acabado de terminar.',
   sessAttaching: (title: string, detach: string) =>
     `Anexando a ${title}. Para deixá-la rodando e voltar aqui, aperte ${detach}.`,
   sessNoted: 'nota salva.',

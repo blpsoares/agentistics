@@ -254,7 +254,52 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          thing drawing a row) and `session-table.ts` is the pure renderer behind
   │                          `agentop session ls` — including `emptyReason`, which keeps "the poll
   │                          failed", "there is nothing" and "the filter withheld it" three different
-  │                          sentences. See docs/session-manager.md
+  │                          sentences.
+  │                          **A RENAME lands in BOTH places a session can be named.** The reverse
+  │                          direction always worked (`pickTitle` reads the harness's own record);
+  │                          only agentop→harness was missing, so a row renamed here kept whatever
+  │                          the harness went on calling itself and lost to it on recency. The pure
+  │                          `rename-spec.ts` is `Record<HarnessId, RenameSpec|null>` and holds ONE
+  │                          entry — claude's `/rename`, read from its own command table
+  │                          (`immediate: true`, so it costs the session no turn). The other five
+  │                          nulls are FINDINGS, each with its sentence: copilot and kimi HAVE a
+  │                          rename and expose it only in-process (an SDK method, a UI call over
+  │                          `state.json`); codex, gemini and agy have none at all. Two routes were
+  │                          tried against claude 2.1.233 and REJECTED BY MEASUREMENT, not by taste:
+  │                          the messaging socket carries a `{subtype:'rename_session'}` control
+  │                          request that belongs to the SDK's stdio transport and is IGNORED there
+  │                          (sent with a valid token and a distinct title, the record did not
+  │                          change), and there is no CLI subcommand. Writing the harness's own file
+  │                          is refused on principle: a live process rewrites it on every status
+  │                          change, so our bytes would vanish while the session showed the old name
+  │                          — a rename reporting success and doing nothing. So it is a TYPED LINE,
+  │                          which means it needs a pane: an `external` or non-running row keeps its
+  │                          agentop label alone. **The label is written on every path** — refusing
+  │                          outright would make a `lost` row unnameable, which is most of what the
+  │                          verb is for — and what became of the harness half is SAID in words
+  │                          (`renameMessage`, one sentence per reason). It REFUSES on an open
+  │                          dialog, like `promptSession`: a `/rename` typed into a permission
+  │                          prompt goes into the dialog's filter and the submit takes the
+  │                          highlighted option. `rename.ts` is the one implementation both
+  │                          `agentop session rename` and the cockpit's verb call — one gesture
+  │                          implemented twice is the bug `task-reopen.ts` exists to have fixed once.
+  │                          **A RUNNING session whose registry record is GONE is taken back**
+  │                          (`session-adopt.ts`, pure). `registry.ts` serialises writes within ONE
+  │                          process and says so; agentop runs as several (cockpit, daemon, every
+  │                          one-shot command) all read-modify-writing one file, and a record added
+  │                          by a short-lived one has been observed ERASED by a longer-lived one.
+  │                          Measured 2026-08-15: `agentop session attach <conversation-id>` took
+  │                          over a conversation, spawned `agentop-a2b569c123`, and the file that
+  │                          survived did not hold it while nine sibling rows were intact — leaving
+  │                          the user sitting in a session that was `unregistered`, filed under
+  │                          `GONE_PROJECT_KEY`, and beyond every verb (they all resolve against the
+  │                          registry). Adoption never INVENTS: the link is the harness's own record
+  │                          naming our tmux session (`byManagedId`), a row with no such record or no
+  │                          `cwd` stays visible and unregistered rather than being filed under a
+  │                          guessed directory, and a `derived` name is never adopted as a label. The
+  │                          takeover additionally READS ITS WRITE BACK and retries once, saying so
+  │                          when the record still cannot be kept — the loss is otherwise invisible
+  │                          at the moment it happens. See docs/session-manager.md
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
@@ -1120,6 +1165,27 @@ packages/tui/src/
     Output.tsx       the pane a streaming task owns — the detail region, auto-following its tail
     sessions.ts      PURE arithmetic for the sessions tab: its row budget, the cell fit, the
                      grouping and the ordering (tested in sessions.test.ts)
+    session-order.ts PURE: what a fleet is ordered BY, and the ranking every surface breaks ties
+                     on. Below `sessions.ts` so `session-tree.ts` can read it without the two
+                     importing each other — `sessions.ts` re-exports every name
+    session-tree.ts  PURE: the CASCADE arrangement (`tree`) — the project as the root and the
+                     segments of each session's `cwd` below it as branches, single-child chains
+                     compressed. It returns the SAME `SessionGroup[]` the flat arrangements return,
+                     already in reading order, with `depth` and `path` on top — which is what lets
+                     `sessionRows`, `cardPages`, `selectableIndexes`, the cursor, the row budget,
+                     the marked band and the search keep working without knowing a tree exists.
+                     `groupSessions` dispatches it in the one line that already special-cases
+                     `none`. `tree` is an ARRANGEMENT and stays OUT of `DIMENSION_ORDER`: a session
+                     belongs to EVERY node on its path, so "filter to `packages`" and "the band
+                     `packages`" could never agree, and `session-dimensions.test.ts` cross-checks
+                     exactly that agreement for every id in there. Branches are measured against
+                     `ControlSession.projectRoot` — the main checkout's PATH, from
+                     `decideRepoFacts`, recorded at spawn — because deriving them by
+                     string-matching the project's NAME against the cwd goes wrong wherever a
+                     segment repeats along the path. **No `projectRoot` = no branch** (outside a
+                     repository, or gone with nothing recorded; `GONE_PROJECT_KEY` is left intact)
+                     and **a worktree outside the main checkout gets ONE branch named after its own
+                     folder** — a relative path that cannot be established is never synthesised
     tabs/            Services (the cockpit — and the SETUP wizard, as a question in its detail
                      region), Sessions (+ SessionWizard), Dashboard, Logs,
                      Static (Help / Cheat sheet / Contribute)

@@ -18,6 +18,23 @@ export interface NotificationSettings {
     'working': boolean
     'exited': boolean
   }
+  /**
+   * REQUIRED, because it always exists.
+   *
+   * It was declared optional while `getNotificationSettings` fills it from the defaults on every
+   * read — so the `?` described a state the code cannot produce, and made `keyof` on it resolve to
+   * `never`. That is what broke the typecheck on `dev`: three errors in the settings screen, all of
+   * them the type disagreeing with its own reader rather than a real absence.
+   *
+   * A stored blob written before this field existed is still handled — the reader spreads the
+   * defaults under whatever it parsed, which is where the guarantee comes from.
+   */
+  eventSounds: {
+    'waiting-approval': SoundPreset
+    'waiting': SoundPreset
+    'working': SoundPreset
+    'exited': SoundPreset
+  }
   soundEnabled: boolean
   soundPreset: SoundPreset
   soundVolume: number // 0.0 to 1.0
@@ -33,6 +50,12 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     'waiting': true,
     'working': false,
     'exited': true,
+  },
+  eventSounds: {
+    'waiting-approval': 'alert',
+    'waiting': 'chime',
+    'working': 'soft',
+    'exited': 'ping',
   },
   soundEnabled: true,
   soundPreset: 'chime',
@@ -50,6 +73,10 @@ export function getNotificationSettings(): NotificationSettings {
       events: {
         ...DEFAULT_NOTIFICATION_SETTINGS.events,
         ...(parsed.events || {}),
+      },
+      eventSounds: {
+        ...DEFAULT_NOTIFICATION_SETTINGS.eventSounds,
+        ...(parsed.eventSounds || {}),
       },
     }
   } catch {
@@ -245,36 +272,41 @@ export function handleSessionStateTransitions(
     const folderName = session?.project_path ? (session.project_path.split('/').filter(Boolean).pop() || '') : ''
     const sessionSubject = sessionTitle || folderName || id.slice(0, 8)
     const harnessName = session?.harness ? (HARNESS_LABELS[session.harness] || session.harness.toUpperCase()) : ''
-    const locationInfo = folderName ? ` (${harnessName} em ${folderName})` : harnessName ? ` (${harnessName})` : ''
+    // The connector is LOCALIZED. It was a hardcoded Portuguese `em` used by both branches, so an
+    // English notification read "Session X (CLAUDE CODE em agentistics) is waiting for your
+    // response" — one Portuguese word in the middle of an English sentence, on the surface a user
+    // reads at a glance while doing something else.
+    const inWord = lang === 'pt' ? 'em' : 'in'
+    const locationInfo = folderName ? ` (${harnessName} ${inWord} ${folderName})` : harnessName ? ` (${harnessName})` : ''
 
     let title = ''
     let body = ''
 
     if (nextState === 'waiting-approval') {
       title = lang === 'pt'
-        ? `🔴 Precisa de Aprovação: ${sessionSubject}`
-        : `🔴 Needs Approval: ${sessionSubject}`
+        ? `[Precisa de Aprovação] ${sessionSubject}`
+        : `[Needs Approval] ${sessionSubject}`
       body = lang === 'pt'
         ? `A sessão "${sessionSubject}"${locationInfo} está aguardando sua autorização para continuar.`
         : `Session "${sessionSubject}"${locationInfo} is waiting for your authorization to proceed.`
     } else if (nextState === 'waiting') {
       title = lang === 'pt'
-        ? `🟡 Aguardando Resposta: ${sessionSubject}`
-        : `🟡 Waiting Input: ${sessionSubject}`
+        ? `[Aguardando Resposta] ${sessionSubject}`
+        : `[Waiting Input] ${sessionSubject}`
       body = lang === 'pt'
         ? `A sessão "${sessionSubject}"${locationInfo} concluiu o turno e aguarda sua resposta.`
         : `Session "${sessionSubject}"${locationInfo} finished its turn and is waiting for your response.`
     } else if (nextState === 'working') {
       title = lang === 'pt'
-        ? `🟢 Em Andamento: ${sessionSubject}`
-        : `🟢 Working: ${sessionSubject}`
+        ? `[Em Andamento] ${sessionSubject}`
+        : `[Working] ${sessionSubject}`
       body = lang === 'pt'
         ? `A sessão "${sessionSubject}"${locationInfo} iniciou o processamento.`
         : `Session "${sessionSubject}"${locationInfo} started working.`
     } else if (nextState === 'exited') {
       title = lang === 'pt'
-        ? `⚪ Sessão Encerrada: ${sessionSubject}`
-        : `⚪ Session Closed: ${sessionSubject}`
+        ? `[Sessão Encerrada] ${sessionSubject}`
+        : `[Session Closed] ${sessionSubject}`
       body = lang === 'pt'
         ? `A sessão "${sessionSubject}"${locationInfo} foi finalizada.`
         : `Session "${sessionSubject}"${locationInfo} was closed.`
