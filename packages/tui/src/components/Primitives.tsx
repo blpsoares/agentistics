@@ -66,6 +66,29 @@ export function Empty({ message }: { message: string }) {
 }
 
 /**
+ * The line under a paged list: where you are, how much there IS, and the keys that move.
+ *
+ * The total is the point. These screens used to slice to whatever the terminal afforded and say
+ * nothing about the rest, so a machine holding hundreds of sessions answered with the twenty-five
+ * that happened to fit — a confident wrong number in the one place a person goes to find out. What
+ * is on screen is a WINDOW, and a window that does not say so is a total.
+ */
+export function Pager({ window: win, total, s }: {
+  window: { page: number; pages: number; from: number; to: number }
+  total: number
+  s: { pageOf: (page: number, pages: number) => string; showing: (from: number, to: number, total: number) => string; pagerHint: string }
+}) {
+  return (
+    <Text dimColor>
+      {s.pageOf(win.page + 1, win.pages)}
+      {'  ·  '}
+      {s.showing(win.from + 1, win.to, total)}
+      {win.pages > 1 ? `  ·  ${s.pagerHint}` : ''}
+    </Text>
+  )
+}
+
+/**
  * Truncates to a visible width with an ellipsis. Terminal cells are the constraint here, and an
  * over-long project path or session title would otherwise wrap and break every row below it.
  */

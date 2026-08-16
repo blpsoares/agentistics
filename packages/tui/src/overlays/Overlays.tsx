@@ -25,6 +25,7 @@ export function HelpOverlay({ s }: { s: TuiStrings }) {
     <Panel title={s.helpTitle}>
       <Text dimColor>{s.helpNav}</Text>
       <Text dimColor>{s.helpFilter}</Text>
+      <Text dimColor>{s.helpPager}</Text>
       <Text dimColor>{s.helpQuit}</Text>
       <Text dimColor>{s.helpClose}</Text>
       {/* What the numbers MEAN, not just which key does what. The token total is the one figure on

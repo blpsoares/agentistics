@@ -12,11 +12,20 @@
  * uses the same flag to hold its own `?`/`q` handler back.
  */
 
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useInput } from 'ink'
-import type { HarnessId } from '@agentistics/core'
+import type { AppData, HarnessId } from '@agentistics/core'
 import { HARNESS_ORDER } from '@agentistics/core'
-import { DASHBOARD_SCREENS, resolveDashboardScreen, type DashboardScreenId } from './view'
+import {
+  applyHarnessFilter,
+  dashboardRows,
+  DASHBOARD_SCREENS,
+  listPlan,
+  pageableTotal,
+  pageWindow,
+  resolveDashboardScreen,
+  type DashboardScreenId,
+} from './view'
 
 export interface DashboardFilter {
   /** `null` is the "all harnesses" entry, always first. */
@@ -33,17 +42,42 @@ export interface DashboardNav {
   filter: DashboardFilter | null
   /** True while the picker owns the keyboard. */
   capture: boolean
+  /** The page the open screen's list is on, 0-based. Clamped where the rows are drawn as well. */
+  page: number
 }
+
+/**
+ * The keys that page a list.
+ *
+ * The ARROWS are not among them, deliberately — see `resolveDashboardScreen`: the control center
+ * answers `←`/`→` for its tabs, and a key answered here as well would do two things at once. `pgup`
+ * and `pgdn` are free everywhere this is drawn, and `,` / `.` are the fallback for the terminals
+ * that keep those two for their own scrollback. Both are named by the pager line itself, which is
+ * the only documentation a screen this dense can afford.
+ */
+const PAGE_BACK = ','
+const PAGE_FORWARD = '.'
 
 export function useDashboardNav(opts: {
   isActive: boolean
   /** The harnesses that actually have data, so the picker never offers an empty one. */
   harnesses: readonly HarnessId[] | undefined
+  /**
+   * What the screens are drawing, so a page can be clamped against the rows that EXIST.
+   *
+   * An unbounded counter takes as many presses to come back as it took to run past the end, and
+   * correcting it where the rows are drawn is one frame too late — that frame is the one the next
+   * key lands on.
+   */
+  data?: AppData | null
+  /** The height `DashboardView` is given, which is what decides how many rows a page holds. */
+  height?: number
 }): DashboardNav {
   const [screen, setScreen] = useState<DashboardScreenId>(DASHBOARD_SCREENS[0]!)
   const [harness, setHarness] = useState<HarnessId | null>(null)
   const [open, setOpen] = useState(false)
   const [index, setIndex] = useState(0)
+  const [page, setPage] = useState(0)
 
   // Keyed on the joined ids rather than the array: `data.harnesses` is a fresh array on every
   // payload, and rebuilding this list each time would reset nothing but would churn every consumer.
@@ -53,6 +87,24 @@ export function useDashboardNav(opts: {
     return [null, ...HARNESS_ORDER.filter(h => present.has(h))]
   }, [key])
 
+  /**
+   * Open a screen — the ONE way, so a click on the strip resets the page exactly as a key does.
+   *
+   * Each screen lists something else, so a page carried across is a position in a list that is not
+   * there any more.
+   */
+  const goto = useCallback((id: DashboardScreenId) => {
+    setScreen(id)
+    setPage(0)
+  }, [])
+
+  // Paging is decided against the FILTERED list, so a page can never name a row the filter removed
+  // and the page count is the count of what the filter left standing.
+  const view = opts.data ? applyHarnessFilter(opts.data, harness) : null
+  const total = pageableTotal(screen, view)
+  const body = dashboardRows(opts.height ?? 0).body
+  const pages = pageWindow(total, listPlan(body, total).size, 0).pages
+
   useInput((input, key2) => {
     if (open) {
       if (key2.escape) { setOpen(false); return }
@@ -60,6 +112,9 @@ export function useDashboardNav(opts: {
       if (key2.downArrow) { setIndex(i => Math.min(options.length - 1, i + 1)); return }
       if (key2.return) {
         setHarness(options[index] ?? null)
+        // A new filter is a new list; keeping the page would land on a window of it that has
+        // nothing to do with where the reader was.
+        setPage(0)
         setOpen(false)
       }
       return
@@ -72,15 +127,22 @@ export function useDashboardNav(opts: {
       return
     }
 
+    if (key2.pageUp || input === PAGE_BACK) { setPage(p => Math.max(0, p - 1)); return }
+    if (key2.pageDown || input === PAGE_FORWARD) {
+      setPage(p => Math.min(pages - 1, p + 1))
+      return
+    }
+
     const next = resolveDashboardScreen({ input, tab: key2.tab, shift: key2.shift }, screen)
-    if (next) setScreen(next)
+    if (next) goto(next)
   }, { isActive: opts.isActive })
 
   return {
     screen,
-    setScreen,
+    setScreen: goto,
     harness,
     filter: open ? { options, index } : null,
     capture: open,
+    page,
   }
 }

@@ -25,31 +25,20 @@ import { Costs } from '../screens/Costs'
 import { Harnesses } from '../screens/Harnesses'
 import { Hardware } from '../screens/Hardware'
 import { FilterOverlay } from '../overlays/Overlays'
-import { sessionHarness } from '../selectors'
 import { Divider } from '../control/Surface'
 import { fitsBeside, sourceRowText } from '../control/surface.ts'
 import { ACTION_SEP } from '../control/chrome.ts'
 import { COLORS } from '../theme'
 import type { TuiStrings } from '../i18n'
 import type { ConnectionState } from '../data/useAppData'
-import { DASHBOARD_SCREENS, dashboardRows, stripFit } from './view'
+import { applyHarnessFilter, DASHBOARD_SCREENS, dashboardRows, stripFit } from './view'
 import type { DashboardNav } from './useDashboardNav'
 
 /**
- * Restricts an AppData to one harness, so every screen can stay filter-unaware.
- *
- * Claude's totals live in the statsCache and every other harness's live in the session list, so
- * filtering has to act on BOTH: selecting a non-Claude harness must blank the cache, or the
- * Claude numbers would survive the filter and be attributed to the selection.
+ * Kept exported here under its old name: it moved down to the pure view module, beside the paging
+ * that is decided against its result, not out of the product.
  */
-export function applyHarnessFilter(data: AppData, harness: HarnessId | null): AppData {
-  if (!harness) return data
-  return {
-    ...data,
-    harnesses: (data.harnesses ?? []).filter(h => h === harness),
-    sessions: (data.sessions ?? []).filter(s => sessionHarness(s) === harness),
-  }
-}
+export { applyHarnessFilter } from './view'
 
 export interface DashboardViewProps {
   /** `null` while nothing has been read yet — a different sentence from "there is nothing". */
@@ -85,7 +74,7 @@ export function DashboardView({ data, apiBase, s, width, height, nav, connection
       ? <Box marginTop={1}><Text color={COLORS.muted}>{notice}</Text></Box>
       : !view
         ? <Box marginTop={1}><Text color={COLORS.accent}>{s.loading}…</Text></Box>
-        : <Screen id={nav.screen} data={view} apiBase={apiBase} s={s} width={width} height={rows.body} streak={streak} />
+        : <Screen id={nav.screen} data={view} apiBase={apiBase} s={s} width={width} height={rows.body} streak={streak} page={nav.page} />
 
   return (
     // `flexShrink={0}`: the budget above is this view's contract with whatever frames it, and a Box
@@ -110,7 +99,7 @@ export function DashboardView({ data, apiBase, s, width, height, nav, connection
   )
 }
 
-function Screen({ id, data, apiBase, s, width, height, streak }: {
+function Screen({ id, data, apiBase, s, width, height, streak, page }: {
   id: DashboardNav['screen']
   data: AppData
   apiBase?: string | null
@@ -118,12 +107,14 @@ function Screen({ id, data, apiBase, s, width, height, streak }: {
   width: number
   height: number
   streak: number
+  /** The page the three LIST screens are on. The others draw no list and ignore it. */
+  page: number
 }) {
   switch (id) {
     case 'overview': return <Overview data={data} s={s} width={width} height={height} streak={streak} />
-    case 'projects': return <Projects data={data} s={s} width={width} height={height} />
-    case 'history': return <History data={data} s={s} width={width} height={height} />
-    case 'costs': return <Costs data={data} s={s} width={width} height={height} />
+    case 'projects': return <Projects data={data} s={s} width={width} height={height} page={page} />
+    case 'history': return <History data={data} s={s} width={width} height={height} page={page} />
+    case 'costs': return <Costs data={data} s={s} width={width} height={height} page={page} />
     case 'harnesses': return <Harnesses data={data} s={s} width={width} height={height} />
     case 'hardware': return <Hardware data={data} apiBase={apiBase ?? null} s={s} width={width} height={height} />
   }

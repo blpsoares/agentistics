@@ -12,22 +12,31 @@ import { Box } from 'ink'
 import type { AppData } from '@agentistics/core'
 import { fmt, fmtCost } from '@agentistics/core'
 import { sessionRows, type SessionRow } from '../selectors'
-import { DataTable, Empty, type Column } from '../components/Primitives'
+import { DataTable, Empty, Pager, type Column } from '../components/Primitives'
 import { COLORS, HARNESS_COLOR, HARNESS_LABEL } from '../theme'
-import { listRows } from '../dashboard/view'
+import { listPlan, pageWindow } from '../dashboard/view'
 import type { TuiStrings } from '../i18n'
 
-export function History({ data, s, width, height }: {
+export function History({ data, s, width, height, page }: {
   data: AppData
   s: TuiStrings
   width: number
   height: number
+  /** The requested page, 0-based. Clamped here — the shell may hand over a stale one. */
+  page?: number
 }) {
-  // The table spends a row on its header, so the rows it may draw are one fewer than the height it
-  // was given — asking for `height` results and then drawing a header over them is one row of
-  // overflow, which Ink composites onto whatever is below.
-  const rows = sessionRows(data, { limit: listRows(height) })
-  if (rows.length === 0) return <Empty message={s.noSessions} />
+  // The WHOLE list the filter left standing. It used to be sliced to the terminal's height with no
+  // way to reach anything below the fold, so a machine holding hundreds of sessions answered with
+  // the twenty-five that happened to fit.
+  const all = sessionRows(data)
+  if (all.length === 0) return <Empty message={s.noSessions} />
+
+  // The table spends a row on its header and the pager another, so the rows a page may draw are
+  // fewer than the height it was given — drawing over them is overflow, which Ink composites onto
+  // whatever is below.
+  const plan = listPlan(height, all.length)
+  const win = pageWindow(all.length, plan.size, page ?? 0)
+  const rows = all.slice(win.from, win.to)
 
   const labelWidth = 24
   const columns: Column<SessionRow>[] = [
@@ -47,8 +56,9 @@ export function History({ data, s, width, height }: {
   ]
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" flexShrink={0}>
       <DataTable columns={columns} rows={rows} keyOf={r => r.id} width={width} />
+      {plan.pager && <Pager window={win} total={all.length} s={s} />}
     </Box>
   )
 }

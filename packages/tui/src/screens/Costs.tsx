@@ -3,16 +3,18 @@ import { Box } from 'ink'
 import type { AppData } from '@agentistics/core'
 import { fmt, fmtCost, formatModel } from '@agentistics/core'
 import { modelRows, type ModelRow } from '../selectors'
-import { DataTable, Empty, BarRow, Section, type Column } from '../components/Primitives'
+import { DataTable, Empty, BarRow, Pager, Section, type Column } from '../components/Primitives'
 import { COLORS } from '../theme'
-import { costsPlan } from '../dashboard/view'
+import { costsPlan, pageWindow } from '../dashboard/view'
 import type { TuiStrings } from '../i18n'
 
-export function Costs({ data, s, width, height }: {
+export function Costs({ data, s, width, height, page }: {
   data: AppData
   s: TuiStrings
   width: number
   height: number
+  /** The requested page, 0-based. Clamped here — the shell may hand over a stale one. */
+  page?: number
 }) {
   const rows = modelRows(data)
   if (rows.length === 0) return <Empty message={s.empty} />
@@ -31,10 +33,12 @@ export function Costs({ data, s, width, height }: {
   // The table is the screen and the share panel re-states its top five as bars, so the panel is what
   // gives way — whole, never partially. See `costsPlan`.
   const plan = costsPlan(height, rows.length)
+  const win = pageWindow(rows.length, plan.table, page ?? 0)
 
   return (
-    <Box flexDirection="column">
-      <DataTable columns={columns} rows={rows.slice(0, plan.table)} keyOf={r => r.model} width={width} />
+    <Box flexDirection="column" flexShrink={0}>
+      <DataTable columns={columns} rows={rows.slice(win.from, win.to)} keyOf={r => r.model} width={width} />
+      {plan.pager && <Pager window={win} total={rows.length} s={s} />}
       {plan.share > 0 && (
         <Section title={s.share}>
           {rows.slice(0, plan.share).map(r => (
