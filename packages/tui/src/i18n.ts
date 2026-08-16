@@ -80,8 +80,15 @@ export interface TuiStrings {
   filterTitle: string
   filterAll: string
   filterHint: string
+  helpPager: string
 
   days: (n: number) => string
+  /** "page 2 of 24" — the place, said the same way at every terminal size. */
+  pageOf: (page: number, pages: number) => string
+  /** "16-30 of 355" — the window AND the total, because the window alone reads as the total. */
+  showing: (from: number, to: number, total: number) => string
+  /** The keys that page, named on the line itself. */
+  pagerHint: string
 }
 
 const en: TuiStrings = {
@@ -136,8 +143,12 @@ const en: TuiStrings = {
   filterTitle: 'Filter by harness',
   filterAll: 'All harnesses',
   filterHint: '↑↓ choose · enter apply · esc cancel',
+  helpPager: ', .         page through the list (pgup/pgdn)',
 
   days: n => `${n}d`,
+  pageOf: (page, pages) => `page ${page} of ${pages}`,
+  showing: (from, to, total) => `${from}-${to} of ${total}`,
+  pagerHint: ', . page',
 }
 
 const pt: TuiStrings = {
@@ -192,8 +203,12 @@ const pt: TuiStrings = {
   filterTitle: 'Filtrar por assistente',
   filterAll: 'Todos os assistentes',
   filterHint: '↑↓ escolher · enter aplicar · esc cancelar',
+  helpPager: ', .         paginar a lista (pgup/pgdn)',
 
   days: n => `${n}d`,
+  pageOf: (page, pages) => `página ${page} de ${pages}`,
+  showing: (from, to, total) => `${from}-${to} de ${total}`,
+  pagerHint: ', . paginar',
 }
 
 export const TUI_STRINGS: Record<TuiLang, TuiStrings> = { en, pt }

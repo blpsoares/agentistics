@@ -15,9 +15,11 @@
  * which its parts give way.
  */
 
+import type { AppData, HarnessId } from '@agentistics/core'
 import type { NavKey } from '../control/nav'
 import type { ControlService } from '../control/types'
 import { sourceRowFit, type SourceRowFit } from '../control/surface.ts'
+import { modelRows, projectRows, sessionHarness, sessionRows } from '../selectors'
 import type { TuiStrings } from '../i18n'
 
 /**
@@ -221,10 +223,12 @@ export function overviewPlan(height: number, harnesses: number): OverviewPlan {
 }
 
 export interface CostsPlan {
-  /** Model rows under the table header. */
+  /** Model rows under the table header — one page of them once `pager` is set. */
   table: number
   /** Bars in the share panel. `0` means it is not drawn. */
   share: number
+  /** Whether the pager line is drawn, and therefore whether its row was paid for. */
+  pager: boolean
 }
 
 /**
@@ -233,8 +237,23 @@ export interface CostsPlan {
  * The TABLE is the screen: it is every model, priced and ranked, while the share panel re-states the
  * top five as bars. So the panel is what gives way, whole — a share panel showing one of five bars is
  * a proportion the reader cannot use.
+ *
+ * The pager is decided LAST and only once a model would be held back. Its page is `PAGE_SIZE` at
+ * most, like every other list, but it is also bounded by whatever the share panel leaves — the share
+ * panel is a view OF the table's top rows, so a page that pushed it off screen would be paging one
+ * half of the screen by destroying the other.
  */
 export function costsPlan(height: number, models: number): CostsPlan {
+  const whole = costsLayout(height, models)
+  // A pager over a table with no rows at all is a row spent saying nothing can be shown; at that
+  // height the header is the only thing left, and it still says what the columns are.
+  if (whole.table <= 0 || models <= whole.table) return { ...whole, pager: false }
+  const paged = costsLayout(height - PAGER_ROW, models)
+  return { ...paged, table: Math.min(PAGE_SIZE, paged.table), pager: true }
+}
+
+/** The table/share split at a given height, pager already paid for by the caller. */
+function costsLayout(height: number, models: number): { table: number; share: number } {
   // At one row there is only the table's own header, which still says what the columns are. Asking
   // for a result row as well is one row of overflow — and `Math.max(1, …)` is exactly the shape of
   // that bug: it hands out a row that does not exist.
@@ -251,6 +270,123 @@ export function costsPlan(height: number, models: number): CostsPlan {
 /** Result rows a plain table may draw at this height — its header is not free. */
 export function listRows(height: number): number {
   return Math.max(1, height - TABLE_HEADER)
+}
+
+// ---------------------------------------------------------------------------
+// paging
+// ---------------------------------------------------------------------------
+
+/**
+ * Rows a page of a list holds.
+ *
+ * The three list screens used to slice to whatever the terminal afforded and stop there, with no way
+ * to reach anything below the fold: on a 25-row terminal that answered "you have 25 sessions" to a
+ * machine holding hundreds — a confident wrong number, in the one place a person goes to find out.
+ *
+ * It is a FIXED 15 rather than "whatever fits" because the pager states a place, and a place whose
+ * page count changes when you resize the window is not one. The height still bounds it downward: Ink
+ * COMPOSITES what does not fit rather than clipping it, so a page taller than the body paints over
+ * whatever is below.
+ */
+export const PAGE_SIZE = 15
+
+/** The pager line costs a row wherever it is drawn. */
+const PAGER_ROW = 1
+
+export interface PageWindow {
+  /** The page actually in force, clamped into range. */
+  page: number
+  /** At least 1: an empty list is on page 1 of 1, never page 1 of 0. */
+  pages: number
+  /** Slice bounds for `rows.slice(from, to)`. */
+  from: number
+  /** One past the last index, `Math.min`ed against the total — a short last page stays honest. */
+  to: number
+}
+
+/**
+ * Which slice of a list a page names — PURE, and CLAMPED on every call.
+ *
+ * Clamped rather than corrected in an effect, for the same reason the cockpit's cursor is: a filter
+ * that removes rows, or a poll that ends a session, shortens the list under a remembered index, and
+ * a stored page would point past the end for exactly one frame — the frame the user presses a key
+ * on. The cockpit's own `cardPages` is deliberately NOT this function: its pages are bands of
+ * variable height rather than fixed slices, so the two share the idea and nothing else.
+ */
+export function pageWindow(total: number, size: number, page: number): PageWindow {
+  const capacity = Math.max(1, Math.floor(size))
+  const count = Math.max(0, Math.floor(total))
+  const pages = Math.max(1, Math.ceil(count / capacity))
+  const at = clampInt(Math.floor(page), 0, pages - 1)
+  const from = at * capacity
+  return { page: at, pages, from, to: Math.min(count, from + capacity) }
+}
+
+export interface ListPlan {
+  /** Rows one page may draw. */
+  size: number
+  /** Whether the pager line is drawn — and therefore whether it was paid for. */
+  pager: boolean
+}
+
+/**
+ * How a plain list spends its rows: results, and the pager line under them.
+ *
+ * A list that fits pays for NO pager — a pager saying "page 1 of 1" is a row spent stating that
+ * nothing was withheld, on a screen whose rows are the scarce thing. As soon as one row would be
+ * held back the line appears, because that is the moment its absence becomes a lie.
+ */
+export function listPlan(height: number, total: number): ListPlan {
+  const whole = Math.max(1, Math.min(PAGE_SIZE, height - TABLE_HEADER))
+  if (total <= whole) return { size: whole, pager: false }
+  return { size: Math.max(1, Math.min(PAGE_SIZE, height - TABLE_HEADER - PAGER_ROW)), pager: true }
+}
+
+/**
+ * How many rows the screen behind `id` would list — the total a pager counts against.
+ *
+ * It exists so the KEYBOARD can clamp: an unbounded page counter takes as many presses to come back
+ * as it took to run past the end, and correcting it where the rows are drawn is one frame too late.
+ * The screens that page nothing report 0, which reads as a single page and no keys — `overview` and
+ * `hardware` draw no list, and `harnesses` cannot have more rows than there are harnesses.
+ */
+export function pageableTotal(id: DashboardScreenId, data: AppData | null): number {
+  if (!data) return 0
+  switch (id) {
+    case 'history': return sessionRows(data).length
+    case 'projects': return projectRows(data).length
+    case 'costs': return modelRows(data).length
+    default: return 0
+  }
+}
+
+function clampInt(n: number, lo: number, hi: number): number {
+  if (!Number.isFinite(n)) return lo
+  return Math.min(hi, Math.max(lo, n))
+}
+
+// ---------------------------------------------------------------------------
+// the harness filter
+// ---------------------------------------------------------------------------
+
+/**
+ * Restricts an AppData to one harness, so every screen can stay filter-unaware.
+ *
+ * Claude's totals live in the statsCache and every other harness's live in the session list, so
+ * filtering has to act on BOTH: selecting a non-Claude harness must blank the cache, or the
+ * Claude numbers would survive the filter and be attributed to the selection.
+ *
+ * It lives here, beside `pageableTotal`, because paging is decided AGAINST THE FILTERED LIST: the
+ * page count is the count of what the filter left standing, and a page can never name a row the
+ * filter removed.
+ */
+export function applyHarnessFilter(data: AppData, harness: HarnessId | null): AppData {
+  if (!harness) return data
+  return {
+    ...data,
+    harnesses: (data.harnesses ?? []).filter(h => h === harness),
+    sessions: (data.sessions ?? []).filter(s => sessionHarness(s) === harness),
+  }
 }
 
 /**

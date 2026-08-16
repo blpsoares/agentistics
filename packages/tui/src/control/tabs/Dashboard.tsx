@@ -55,7 +55,7 @@ export function Dashboard({ status, strings: s, lang, width, height, isActive, n
     nonce,
   })
 
-  const nav = useDashboardNav({ isActive, harnesses: data?.harnesses })
+  const nav = useDashboardNav({ isActive, harnesses: data?.harnesses, data, height })
 
   useEffect(() => {
     if (!isActive) return
