@@ -1322,26 +1322,32 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
     let filteredModelUsage: Record<string, import('@agentistics/core').ModelUsage>
 
     if (cacheBlindScope || nonClaudeHarness || harnessesFiltered) {
-      // Build per-model breakdown from sessions that have a model field.
-      // Sessions without a model field are excluded from the per-model breakdown.
+      // Build per-model breakdown from sessions, via sessionModelUsage — same helper the other
+      // two branches use below, and the same one every per-session cost path in this file goes
+      // through. A session's own `model` field can be empty while it still carries real tokens
+      // (an Antigravity rollup whose root conversation never generated a token itself, only its
+      // subagent children did — see mergeAntigravityChild's model fallback), and a plain
+      // `sess.model` read here used to drop that session's tokens/cost from every total that
+      // isn't the raw per-session sum, while cards summing `input_tokens` directly stayed correct
+      // — the two disagreeing is what made the filtered totals read far below the real spend.
       // Also used when a non-Claude harness is selected (statsCache has no harness granularity).
       filteredModelUsage = {}
       for (const sess of filteredSessions) {
-        const m = sess.model
-        if (!m) continue
-        if (modelSet && !modelSet.has(m)) continue
-        if (!filteredModelUsage[m]) {
-          filteredModelUsage[m] = {
-            inputTokens: 0, outputTokens: 0,
-            cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            webSearchRequests: 0, costUSD: 0,
+        for (const [m, u] of sessionModelUsage(sess)) {
+          if (modelSet && !modelSet.has(m)) continue
+          if (!filteredModelUsage[m]) {
+            filteredModelUsage[m] = {
+              inputTokens: 0, outputTokens: 0,
+              cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+              webSearchRequests: 0, costUSD: 0,
+            }
           }
+          const entry = filteredModelUsage[m]!
+          entry.inputTokens              += u.inputTokens
+          entry.outputTokens             += u.outputTokens
+          entry.cacheReadInputTokens     += u.cacheReadInputTokens
+          entry.cacheCreationInputTokens += u.cacheCreationInputTokens
         }
-        const entry = filteredModelUsage[m]!
-        entry.inputTokens              += sess.input_tokens ?? 0
-        entry.outputTokens             += sess.output_tokens ?? 0
-        entry.cacheReadInputTokens     += sess.cache_read_input_tokens ?? 0
-        entry.cacheCreationInputTokens += sess.cache_creation_input_tokens ?? 0
       }
     } else if (dateFiltered) {
       // Build approximate model usage from dailyModelTokens (date-filtered, Claude-only).

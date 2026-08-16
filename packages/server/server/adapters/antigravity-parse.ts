@@ -655,6 +655,18 @@ function sumRecords(a: Record<string, number>, b: Record<string, number>): Recor
   return out
 }
 
+/** The model carrying the most tokens (in+out+cache) in a per-model usage map, or '' if empty. */
+function dominantModelOf(usage: Record<string, ModelUsage>): string {
+  let best = ''
+  let bestTokens = -1
+  for (const [model, u] of Object.entries(usage)) {
+    const total = (u.inputTokens ?? 0) + (u.outputTokens ?? 0)
+      + (u.cacheReadInputTokens ?? 0) + (u.cacheCreationInputTokens ?? 0)
+    if (total > bestTokens) { bestTokens = total; best = model }
+  }
+  return best
+}
+
 /**
  * Pure: fold an `invoke_subagent` CHILD conversation into its PARENT.
  *
@@ -667,9 +679,16 @@ function sumRecords(a: Record<string, number>, b: Record<string, number>): Recor
  *  - tokens: SUMMED (input / output / cache read / cache write).
  *  - `model_usage`: unioned per model, so the merged session stays cost-exact even when parent and
  *    child ran different models (Opus parent + Gemini Flash subagents is the normal case).
- *  - `model`: the PARENT's own dominant model, never the child's. One label cannot honestly
- *    describe a multi-model session; the parent's own model is the defensible choice and the
- *    per-model breakdown carries the truth.
+ *  - `model`: the PARENT's own dominant model, never the child's, WHEN the parent generated any
+ *    tokens itself. One label cannot honestly describe a multi-model session; the parent's own
+ *    model is the defensible choice there and the per-model breakdown carries the truth. But a
+ *    pure orchestrator — a parent that only dispatches subagents and never generates a token of
+ *    its own — has no such label, and leaving `model` empty is not neutral: every caller that
+ *    prices or aggregates a session keys off `model` first (`sessionModelUsage`'s own fallback
+ *    included) and treats "no model" as "no session", dropping real, merged-in child spend from
+ *    every total that does not separately consult `model_usage`. So a parentless model falls back
+ *    to the DOMINANT model of the merged usage — real attribution (it is where the tokens actually
+ *    went), not a guess.
  *  - work: tool_counts / tool_errors (+categories) / lines added+removed SUMMED, files UNIONED
  *    (a file both touched is one file), capability flags OR-ed, uses_task_agent forced true.
  *  - message counts, message_hours and user_message_timestamps are NOT merged: a child's
@@ -726,8 +745,10 @@ export function mergeAntigravityChild(
     uses_web_search: !!p.uses_web_search || !!c.uses_web_search,
     uses_web_fetch: !!p.uses_web_fetch || !!c.uses_web_fetch,
     uses_task_agent: true,
-    // Keep the parent's own label; the honest multi-model picture lives in model_usage.
-    model: p.model,
+    // Keep the parent's own label when it has one; a pure orchestrator falls back to the
+    // dominant merged model rather than losing its label (and its tokens) entirely. The honest
+    // multi-model picture, when there is one, lives in model_usage regardless.
+    model: p.model || dominantModelOf(usage) || undefined,
     ...(Object.keys(usage).length > 1 ? { model_usage: usage } : {}),
   }
   return { session, modifiedFiles: [...files] }

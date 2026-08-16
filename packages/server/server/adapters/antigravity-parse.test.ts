@@ -601,6 +601,36 @@ test('mergeAntigravityChild: work is folded, invented user activity is not', () 
   expect(merged.end_time).toBe('2026-07-27T18:21:00.000Z')
 })
 
+// Regression: a pure orchestrator (dispatches subagents, generates no gen_metadata rows of its
+// own) must not end up with model === undefined after the merge, or every consumer that keys off
+// `model` first (useData.ts's per-model aggregation, sessionModelUsage's own fallback) silently
+// drops the session's real, merged-in child tokens/cost from every total — while a raw
+// `input_tokens` sum stays correct, so the discrepancy is invisible until totals are compared
+// against a source of truth (measured: 232M tokens on the vendor's own quota panel vs 407K on a
+// harness-filtered agentistics total, for a fleet with several long orchestrator sessions).
+test('mergeAntigravityChild: a parentless model falls back to the dominant merged model', () => {
+  const parentOf = new Map([[CHILD_A, 'parent-1']])
+  const parentTranscript = PARENT_WITH_SUBAGENTS
+  const childTranscript = userInput(0, '2026-07-27T18:07:00Z', 'do the research')
+
+  // The parent's own DB has zero gen_metadata rows (empty model) — everything real happened in
+  // the one child, under one model.
+  const parsed = parseAll([
+    ['parent-1', parentTranscript, tokens(0, 0, 0, '')],
+    [CHILD_A, childTranscript, tokens(50, 5, 5, 'gemini-3.6-flash-tiered')],
+  ], parentOf)
+  const merged = rollUpAntigravitySessions(parsed, parentOf)[0]!
+
+  // `model` must carry the dominant model, not be dropped as undefined — with only one model
+  // involved, model_usage is not populated (by design), so `model` is the ONLY place this
+  // session's model — and therefore its tokens, via every model-keyed consumer — can be found.
+  expect(merged.model).toBe('gemini-3.6-flash-tiered')
+  expect(merged.model_usage).toBeUndefined()
+  expect(merged.input_tokens).toBe(50)
+  expect(merged.cache_read_input_tokens).toBe(5)
+  expect(merged.output_tokens).toBe(5)
+})
+
 test('D5: uses_task_agent is true exactly when the conversation dispatched a sub-agent', () => {
   const parent = parseAntigravityTranscript(PARENT_WITH_SUBAGENTS, 'parent-1', '')
   expect(parent!.uses_task_agent).toBe(true)
