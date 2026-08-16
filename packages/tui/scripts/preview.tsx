@@ -310,7 +310,14 @@ function fakeStatus(opts: Options, apiUrl?: string): ControlStatus {
     services: services(opts.mode, s, apiUrl),
     // A member machine carries a NAME and a latency; the sweep has to see the header at its widest,
     // or the fit is only ever checked in the shape that happens to be shortest.
-    ...(opts.mode === 'member' ? { machineName: 'wsl-mithrandir', pushMs: 468 } : {}),
+    ...(opts.mode === 'member'
+      ? {
+          machineName: 'wsl-mithrandir',
+          accountName: 'blpsoares',
+          linkState: 'ok' as const,
+          pushMs: 468,
+        }
+      : {}),
     version: '1.7.3',
     latestVersion: '1.7.4',
     // The parallel-sessions budget, so the width sweep exercises the header WITH it. A calm one:

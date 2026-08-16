@@ -10,7 +10,8 @@
 
 import { PANE_FRAME_Y } from './chrome.ts'
 import {
-  ACTIVE_STATES, GROUPINGS, SESSION_STATES, SESSION_STATE_CHOICES, SESSION_DIMENSIONS, UNFILED,
+  ACTIVE_STATES, OFF_STATE, GROUPINGS, SESSION_STATES, SESSION_STATE_CHOICES, SESSION_DIMENSIONS,
+  UNFILED,
   bucketKey, dimensionValueLabel, sessionNamed, sessionRunning,
   type DimensionContext, type DimensionWordBook, type SessionDimensionId, type SessionGroupingId,
 } from './session-dimensions'
@@ -34,7 +35,7 @@ export {
 } from './session-order'
 export { breadcrumb, buildSessionTree, CRUMB_SEP } from './session-tree'
 export {
-  ACTIVE_STATES, SESSION_STATES, SESSION_DIMENSIONS, DIMENSION_ORDER, GROUPINGS, UNFILED,
+  ACTIVE_STATES, OFF_STATE, SESSION_STATES, SESSION_DIMENSIONS, DIMENSION_ORDER, GROUPINGS, UNFILED,
   GONE_PROJECT_KEY, FILTERS_VERSION, DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED,
   SHORTCUT_STATES,
   applyShortcut, bucketKey, dimensionValueLabel, dimensionWordBook, migrateSessionFilters,
@@ -946,6 +947,34 @@ export function sessionAge(s: ControlSession, now: number, ago: (seconds: number
   return ago(Math.max(0, Math.round((now - s.lastActiveAt) / 1000)))
 }
 
+/**
+ * The NOTIFICATION cell: a dot at the head of a row that is waiting on a person.
+ *
+ * The state word already says it and is four columns in from the left, among five other words; what
+ * a fleet needs is something readable without reading — the same job the header's `⏳ 2` does for
+ * the whole machine, done per row. It is a dot AND a word, never a dot alone: a distinction
+ * announced only in a glyph has to be taught before the screen can be read.
+ *
+ * Its own cell rather than the cursor's or the mark's, because all three can be true at once — the
+ * row you are on, the row you marked, and the row that needs you are three different facts.
+ */
+export const NOTIFY_CELL = 2
+
+/** Does this row want a person? The one predicate the dot, the counter and the bell all read. */
+export function sessionNotify(s: ControlSession): boolean {
+  return s.state === 'waiting' || s.state === 'waiting-approval'
+}
+
+/**
+ * What the notification cell costs on THIS screen — zero when nothing is waiting.
+ *
+ * The same rule every other cell here follows: a column nothing on screen carries is not drawn and
+ * does not narrow the title to reserve a space nothing occupies.
+ */
+export function notifyCellWidth(rows: readonly ControlSession[]): number {
+  return rows.some(sessionNotify) ? NOTIFY_CELL : 0
+}
+
 /** How much of a session id a row shows. Enough to be unambiguous in practice, and to type. */
 export const ID_CELL = 5
 
@@ -1143,7 +1172,7 @@ export function sessionColumns(
     const sum = values.reduce((n, v) => n + v, 0)
     // `1` stands in for the title, which is always drawn and so always pays its own gap.
     const drawn = [id, state, 1, ...values].filter(n => n > 0).length
-    return 2 + id + state + sum + GAP * (drawn - 1)
+    return 2 + notifyCellWidth(rows) + id + state + sum + GAP * (drawn - 1)
   }
 
   // The fewest columns a title is worth. Below it the row has a state word and an ellipsis, which
@@ -1946,6 +1975,7 @@ export function sessionKeyHelp(w: {
   move: string; open: string; attach: string; menu: string; section: string
   newSession: string; search: string; clear: string; kill: string; rename: string
   note: string; task: string; mark: string; onlyActive: string
+  openTask: string; finishTask: string; recent: string; cascade: string
   group: string; layout: string; detail: string; menuFold: string
   reset: string; tabs: string; help: string; quit: string
   approve: string; prompt: string; reopenFell: string
@@ -1955,22 +1985,28 @@ export function sessionKeyHelp(w: {
     { keys: 'enter', what: w.menu },
     { keys: 'o', what: w.attach },
     // The two that act on a session WITHOUT entering it, listed right under the one that enters it:
-    // they answer the same question ("this one needs me") in the two cheaper ways.
-    { keys: 'y', what: w.approve },
+    // they answer the same question ("this one needs me") in the two cheaper ways. `y` is kept as an
+    // alias and left out of the list — the reference names ONE key per verb or it stops being read.
+    { keys: 'a', what: w.approve },
     { keys: 'p', what: w.prompt },
     { keys: 'R', what: w.reopenFell },
     { keys: 'tab', what: w.open },
     { keys: '1-9 / ← →', what: w.section },
-    { keys: 'a', what: w.newSession },
+    { keys: 'n', what: w.newSession },
     { keys: 'ctrl+f', what: w.search },
     { keys: 'esc', what: w.clear },
     { keys: 'x', what: w.kill },
-    { keys: 'n', what: w.rename },
-    { keys: 't', what: w.note },
+    { keys: 'r', what: w.rename },
+    { keys: 'm', what: w.note },
+    { keys: 't', what: w.task },
+    { keys: 'T', what: w.openTask },
+    { keys: 'F', what: w.finishTask },
     { keys: 'space', what: w.mark },
-    // One row, three keys, ONE question. `c` and `e` called the same function and `l` was the same
-    // boolean read from the other end, so the help listed three controls where the screen has one.
-    { keys: 'l / c / e', what: w.onlyActive },
+    // One row, three keys, ONE question. `c` leads and `l`/`e` are aliases of the same call: they
+    // were three controls doing one visible thing, which is a keyboard that lies about how many
+    // controls exist.
+    { keys: 'c / l / e', what: w.onlyActive },
+    { keys: 'C', what: w.recent },
     { keys: 'v', what: w.group },
     { keys: 'ctrl+g', what: w.layout },
     { keys: 'd', what: w.detail },

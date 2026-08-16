@@ -1479,7 +1479,8 @@ describe('sessionAge', () => {
 describe('sessionKeyHelp', () => {
   const words = Object.fromEntries(
     ['move', 'open', 'attach', 'menu', 'section', 'newSession', 'search', 'clear', 'kill',
-      'rename', 'note', 'task', 'mark', 'onlyActive', 'closed', 'exited', 'group', 'layout',
+      'rename', 'note', 'task', 'openTask', 'finishTask', 'recent', 'cascade',
+      'mark', 'onlyActive', 'closed', 'exited', 'group', 'layout',
       'detail', 'menuFold', 'reset', 'tabs', 'help', 'quit',
       'approve', 'prompt', 'reopenFell'].map(k => [k, `does ${k}`]),
   ) as Parameters<typeof sessionKeyHelp>[0]

@@ -873,6 +873,9 @@ export interface ControlSessions {
 
 export type TeamMode = 'solo' | 'central' | 'member'
 
+/** What the central link is doing — see `ControlStatus.linkState`. */
+export type CentralLinkState = 'ok' | 'stale' | 'offline' | 'unauthorized'
+
 export type ArchiveMode = 'consolidate' | 'full' | 'off'
 
 export interface ControlStatus {
@@ -927,6 +930,26 @@ export interface ControlStatus {
    * a different fact wearing the same label.
    */
   machineName?: string
+  /**
+   * The ACCOUNT that central knows this machine under.
+   *
+   * Beside the name because the two answer different halves of one question: two machines can be
+   * called `laptop` on two centrals, and the account is what says whose fleet this row belongs to.
+   * Read from the connection the machine actually has (`/api/team/status`), never from a config
+   * value typed here — a name this machine believes and the central does not is the one thing this
+   * cell must not show.
+   */
+  accountName?: string
+  /**
+   * Whether that link is WORKING — decided HERE, because only the host can see the connection.
+   *
+   * A name and a latency say a connection was configured and once answered; neither says it is
+   * alive now, and that was the whole of what the header could show. `stale` is its own answer
+   * rather than folded into `offline`: the central owns the push cadence, so a member that has not
+   * pushed recently has not failed at anything, and reporting that as broken is the false alarm
+   * that teaches people to ignore the indicator. Absent when there is no connection at all.
+   */
+  linkState?: CentralLinkState
   /**
    * Round trip of the last successful contact with the central, in milliseconds.
    *

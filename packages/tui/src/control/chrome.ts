@@ -197,10 +197,36 @@ export interface HeaderMetaInput {
   memory?: { used: number; max: number; red: boolean; percent: number }
   /** What this machine is called on its central, when it has one. */
   machineName?: string
+  /**
+   * Which ACCOUNT that central knows it under.
+   *
+   * Beside the name because they answer different halves of one question: two machines can be
+   * called `laptop` on two centrals, and the account is what says whose fleet this row belongs to.
+   * Absent on a machine that is not connected — and then nothing here is drawn at all.
+   */
+  accountName?: string
+  /**
+   * Whether the link is WORKING, as the host decided it — never derived here.
+   *
+   * A name and a latency say a connection was configured and once answered; they cannot say it is
+   * alive now. This is the dot beside them, and it is the only part of the cell that carries a
+   * colour, on the same rule the rest of the app follows: the state is also said in the numbers
+   * (`ms`) and in words in the config pane, so colour never carries the message alone.
+   */
+  linkState?: CentralLinkState
   /** Round trip of the last successful push, ms. */
   pushMs?: number
   width: number
 }
+
+/**
+ * What the central link is DOING — decided by the host, drawn here.
+ *
+ * `stale` is its own answer rather than folded into `offline`: a member whose last push is old has
+ * not failed at anything (the central owns the cadence and may simply be quiet), and reporting that
+ * as a broken connection is the false alarm that teaches people to ignore the dot.
+ */
+export type CentralLinkState = 'ok' | 'stale' | 'offline' | 'unauthorized'
 
 /**
  * `text` is the dim run; `alert` and `update` are the accent-colored ones, empty when there is
@@ -243,6 +269,8 @@ export interface HeaderMeta {
    * belonging to no named machine.
    */
   machine: string
+  /** The link's state, when there is a link — what the caller colours the dot by. */
+  machineState?: CentralLinkState
 }
 
 /** What the pieces cost together, separators included — the number the caller budgets against. */
@@ -275,9 +303,12 @@ export function loadLevel(percent: number): 'ok' | 'warn' | 'full' {
   return 'ok'
 }
 
+/** The dot and its space, charged to the machine cell whenever one is drawn. */
+export const LINK_DOT = 2
+
 export function headerMetaWidth(meta: HeaderMeta): number {
   return meta.text.length
-    + (meta.machine ? SEP.length + meta.machine.length : 0)
+    + (meta.machine ? SEP.length + LINK_DOT + meta.machine.length : 0)
     + (meta.alert ? SEP.length + meta.alert.length : 0)
     + (meta.memory ? SEP.length + meta.memory.length : 0)
     + (meta.update ? SEP.length + meta.update.length : 0)
@@ -299,7 +330,10 @@ export function headerMetaWidth(meta: HeaderMeta): number {
  * and it is the piece that must survive a narrow terminal.
  */
 export function headerMeta(input: HeaderMetaInput): HeaderMeta {
-  const { mode, version, latestVersion, attention, memory, machineName, pushMs, width } = input
+  const {
+    mode, version, latestVersion, attention, memory,
+    machineName, accountName, linkState, pushMs, width,
+  } = input
   if (width <= 0) return { text: '', machine: '', alert: '', update: '', memory: '' }
 
   const outdated = Boolean(latestVersion && latestVersion !== version)
@@ -329,13 +363,19 @@ export function headerMeta(input: HeaderMetaInput): HeaderMeta {
   const red = memory?.red === true
   // Which machine this is, and whether its link is alive. Two SSH'd terminals running identical
   // cockpits are otherwise indistinguishable — the name already existed and was simply never shown.
+  // WHICH machine, on WHOSE account, and how fast it last answered — one cell, because they are one
+  // fact and split apart they would drop independently, leaving a latency belonging to no named
+  // machine. Drawn only when there IS a central: on a solo box every piece of this is absent, and a
+  // dot with nothing to say about a connection that does not exist is worse than no dot.
   const machine = machineName
-    ? (pushMs !== undefined ? `${machineName} ${pushMs}ms` : machineName)
+    ? [machineName, accountName, pushMs !== undefined ? `${pushMs}ms` : '']
+        .filter(Boolean).join(' · ')
     : ''
 
   const level = memory ? loadLevel(memory.percent) : undefined
+  const linked = machine ? { machineState: linkState ?? 'ok' } : {}
   const full = {
-    text, machine, alert, update, memory: mem, memoryRed: red,
+    text, machine, alert, update, memory: mem, memoryRed: red, ...linked,
     ...(level ? { memoryLevel: level } : {}),
   }
   if (headerMetaWidth(full) <= width) return full
@@ -355,13 +395,14 @@ export function headerMeta(input: HeaderMetaInput): HeaderMeta {
   // The version goes before the machine NAME: a version is one `agentop --version` away, while the
   // name is the answer to "which box am I looking at" — the whole reason it is on the row, and
   // unanswerable from anywhere else in a terminal SSH'd into somewhere.
-  const withoutVersion = { text: mode, machine, alert, update: '', memory: red ? mem : '', memoryRed: red, ...(level ? { memoryLevel: level } : {}) }
+  const withoutVersion = { text: mode, machine, alert, update: '', memory: red ? mem : '', memoryRed: red, ...linked, ...(level ? { memoryLevel: level } : {}) }
   if (headerMetaWidth(withoutVersion) <= width) return withoutVersion
 
-  // Then the latency, keeping the bare name. Knowing WHICH machine survives longer than knowing how
-  // fast it answered.
+  // Then the ACCOUNT and the latency, keeping the bare name and its dot. Knowing WHICH machine, and
+  // whether its link is alive, both survive longer than knowing whose account it is or how fast it
+  // answered — the dot is one column and is the only part of the cell that is a warning.
   const bareName = machineName ?? ''
-  const withoutLatency = { text: mode, machine: bareName, alert, update: '', memory: red ? mem : '', memoryRed: red, ...(level ? { memoryLevel: level } : {}) }
+  const withoutLatency = { text: mode, machine: bareName, alert, update: '', memory: red ? mem : '', memoryRed: red, ...linked, ...(level ? { memoryLevel: level } : {}) }
   if (headerMetaWidth(withoutLatency) <= width) return withoutLatency
 
   const modeAndAlert = { text: mode, machine: '', alert, update: '', memory: '' }

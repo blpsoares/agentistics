@@ -460,7 +460,10 @@ const EN: CliStrings = {
   sessState: {
     working: 'working',
     waitingApproval: 'needs approval',
-    waiting: 'waiting',
+    // Named for what it means to the READER. `waiting` and `working` differ by two letters in the
+    // middle of a narrow column, so the state that needs a person was being read as the one that
+    // does not — and `needs you` sits beside `needs approval` as the pair they are.
+    waiting: 'needs you',
     // ONE word for every way a session is not running. `exited`, `lost` and `closed` are three
     // internal facts and were three words on the row — but a reader has one question here ("is it
     // running?") and one move available ("reopen it"), so three answers to it was noise dressed as
@@ -472,7 +475,7 @@ const EN: CliStrings = {
     external: 'external',
   },
   sessApprovalBlind: (harness: string) =>
-    `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "waiting" like any other pause.`,
+    `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "needs you" like any other pause.`,
   sessDirGone: 'this directory no longer exists — a removed worktree, most likely. Reopening will not work until it is back.',
   sessConversationBlind: (harness: string) =>
     `${harness} never reports which conversation a session it started is writing, so agentop cannot record the link — anything offered to reopen here is inferred from the directory.`,
@@ -735,18 +738,16 @@ const PT: CliStrings = {
   sessState: {
     working: 'trabalhando',
     waitingApproval: 'precisa de aprovação',
-    // "aguardando" alone does not say aguardando WHAT, and the state next to it is
-    // `waitingApproval` — with both spelled out the pair reads as the distinction it is. English
-    // keeps `waiting`: there it is already the intransitive answer, and "waiting for a reply" would
-    // be longer without saying more.
-    waiting: 'aguardando resposta',
+    // Named for what it means to the READER rather than for what the machine is doing, and it
+    // pairs with `precisa de aprovação` above as the distinction it is.
+    waiting: 'precisa de você',
     exited: 'desligada',
     lost: 'desligada',
     closed: 'desligada',
     external: 'externa',
   },
   sessApprovalBlind: (harness: string) =>
-    `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "aguardando resposta", como qualquer outra pausa.`,
+    `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "precisa de você", como qualquer outra pausa.`,
   sessDirGone: 'este diretório não existe mais — provavelmente uma worktree removida. Reabrir não vai funcionar enquanto ele não voltar.',
   sessConversationBlind: (harness: string) =>
     `o ${harness} nunca informa qual conversa uma sessão iniciada por ele está escrevendo, então o agentop não consegue registrar o vínculo — o que for oferecido para reabrir aqui é inferido pelo diretório.`,

@@ -1395,6 +1395,27 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   asks whether to reopen that conversation** rather than refusing (external rows included): the
   row-specific verb is decided by what is running, not by whether agentop hosts the row, or a
   session whose backend died offers a button whose only outcome is an error.
+- **A row that wants a person says so THREE ways, and the keys are named after what they do.**
+  `waiting` is called **needs you** (`precisa de você`) — it and `working` differ by two letters in
+  the middle of a narrow column, so the state that needs somebody was read as the one that does not
+  — and every waiting row carries a coloured `●` in its own leading cell (`NOTIFY_CELL`,
+  `sessionNotify`), which costs ZERO columns on a fleet where nothing is waiting and is drawn by
+  BOTH renderers (the cockpit and `session ls`) out of the same measure. The dot never carries the
+  message alone: the word is beside it. `COLORS.running` (#22c55e) is its own token rather than
+  `success` (#10b981), which reads as teal on a terminal and sits within a hair of
+  `HARNESS_COLOR.codex`. The verbs are **`n`** new, **`r`** rename, **`m`** note (memo — `t` belongs
+  to the TASK), **`t`** task, **`T`** open the whole task, **`F`** finish it, **`a`** approve (`y`
+  kept as the alias every yes/no prompt taught), **`c`** show what is not running (`l`/`e` aliases),
+  **`C`** the last conversations flat and by recency, **`h`** the key reference. They were handed
+  out in the order they were written — `a` started a session, `n` renamed one, `t` wrote a note — so
+  the only way to learn one was to read the list.
+- **The header's central pill is `● machine · account · Nms`, and only when there IS a central.**
+  The dot is the one coloured thing in it and its STATE is the host's decision
+  (`ControlStatus.linkState`, from `/api/team/status`'s `errKind` + `lastSuccessAt`): `unauthorized`
+  and `offline` are red, `stale` is amber, `ok` is green. **`stale` is deliberately not red** — the
+  central owns the push cadence, so a member that has not pushed recently has not failed at
+  anything, and a warning that cries wolf is one people stop reading. Under width pressure the
+  account and the latency go before the name, and the name before the dot.
 - **The sessions cockpit is three framed panes and claims the ARROWS.** Menu, fleet, detail; the one
   holding the keyboard wears the accent border, and clicking the list focuses it too — a pointer
   that moves the selection without moving the focus leaves the frame saying one thing while the keys
@@ -1468,7 +1489,10 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   a non-Claude harness is selected, or Claude's numbers would survive the filter.
 - **Capability-gated metrics render `N/A`** (`HARNESS_CAPABILITIES`), never a confident `0`.
 - **The TUI does not read preferences.** The dependency direction is `server -> tui`: `cli.ts`
-  resolves the language via `server/cli-lang.ts` and passes it in.
+  resolves the language via `server/cli-lang.ts` and passes it in. **`runStart`'s loop must pass
+  `host.lang`, never the value it resolved at boot** — the language is a closure variable the in-app
+  toggle reassigns, so attaching to a session and detaching remounted the whole cockpit in the
+  previous language, with nothing on screen to explain it and nothing to do but restart.
 
 ## Important rules
 

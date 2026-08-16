@@ -284,6 +284,7 @@ export interface ControlStrings {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
     note: string; task: string; mark: string; onlyActive: string
+    openTask: string; finishTask: string; recent: string; cascade: string
     group: string; layout: string; detail: string; menuFold: string
     reset: string
     tabs: string; help: string; quit: string
@@ -350,7 +351,7 @@ export interface ControlStrings {
   keySessionsPage: string
   asideSort: string
   asideStates: string
-  sessionsSorts: Record<'state' | 'name' | 'started' | 'usage' | 'project', string>
+  sessionsSorts: Record<'state' | 'name' | 'started' | 'recent' | 'usage' | 'project', string>
   sessionsStates: Record<
     'working' | 'waiting' | 'waiting-approval' | 'exited' | 'lost' | 'closed' | 'unknown', string
   >
@@ -770,6 +771,10 @@ const EN: ControlStrings = {
     rename: 'rename it',
     note: 'write a note on it',
     task: 'file it under a task',
+    openTask: 'open every session of its task',
+    finishTask: 'mark its task finished',
+    recent: 'the last conversations, newest first, ungrouped',
+    cascade: 'cascade the rows by directory',
     mark: 'mark this row, and keep it marked',
     onlyActive: 'show what is not running too — closed, ended and lost',
     layout: 'list or cards',
@@ -833,11 +838,15 @@ const EN: ControlStrings = {
   asideSort: 'ORDER',
   asideStates: 'STATE',
   sessionsSorts: {
-    state: 'urgency', name: 'name', started: 'started', usage: 'usage', project: 'project',
+    state: 'urgency', name: 'name', started: 'started', recent: 'last active',
+    usage: 'usage', project: 'project',
   },
   sessionsStates: {
     'waiting-approval': 'needs approval',
-    waiting: 'waiting',
+    // Named for what it means to the READER, not for what the machine is doing. `waiting` and
+    // `working` differ by two letters in the middle of a narrow column, and the one that needs a
+    // person was the one being read as the one that does not.
+    waiting: 'needs you',
     working: 'working',
     // ONE word for every way a session is not running — see `cli-i18n.ts`'s `sessState`, which this
     // table has to agree with or a row reads `off` under a band called `closed`.
@@ -860,12 +869,12 @@ const EN: ControlStrings = {
   keySessionsReset: '^r reset view',
   keySessionsKill: 'x kill',
   keySessionsDeleteTask: 'x delete task',
-  keySessionsRename: 'n name',
-  keySessionsNote: 't note',
-  keySessionsNew: 'a new',
+  keySessionsRename: 'r name',
+  keySessionsNote: 'm note',
+  keySessionsNew: 'n new',
   keySessionsSearch: 'ctrl+f search',
   keySessionsActions: 'tab actions',
-  keySessionsApprove: 'y approve',
+  keySessionsApprove: 'a approve',
   keySessionsPrompt: 'p send',
   keySessionsFold: 'b menu',
   keyRestoreAnswer: 'enter start · esc leave closed',
@@ -922,7 +931,7 @@ const EN: ControlStrings = {
   manageHint: '↑↓ move · enter run · esc back to the list',
   promptHint: 'enter saves · esc cancels',
   sessionsHideClosed: 'closed: hidden',
-  keySessionsActive: 'l only active',
+  keySessionsActive: 'c only active',
   keySessionsDetail: 'd detail',
   keySessionsMark: 'space mark',
   keySessionsClosed: 'c closed',
@@ -1195,6 +1204,10 @@ const PT: ControlStrings = {
     rename: 'renomeia',
     note: 'escreve uma nota nela',
     task: 'arquiva sob uma tarefa',
+    openTask: 'abre todas as sessões da tarefa dela',
+    finishTask: 'marca a tarefa dela como finalizada',
+    recent: 'as últimas conversas, mais recentes primeiro, sem agrupamento',
+    cascade: 'exibe em cascata por diretório',
     mark: 'marca esta linha, e mantém marcada',
     onlyActive: 'mostra também o que não está rodando — fechadas, encerradas e perdidas',
     layout: 'lista ou cards',
@@ -1257,7 +1270,8 @@ const PT: ControlStrings = {
   asideSort: 'ORDENAR',
   asideStates: 'ESTADO',
   sessionsSorts: {
-    state: 'urgência', name: 'nome', started: 'início', usage: 'uso', project: 'projeto',
+    state: 'urgência', name: 'nome', started: 'início', recent: 'atividade',
+    usage: 'uso', project: 'projeto',
   },
   sessionsStates: {
     'waiting-approval': 'precisa aprovação',
@@ -1265,7 +1279,7 @@ const PT: ControlStrings = {
     // vocabulary, and the sessions screen draws from both at once — the column from the host, the
     // band heading and the filter row from here. They have to say the same thing or the row reads
     // `aguardando resposta` under a band called `aguardando`.
-    waiting: 'aguardando resposta',
+    waiting: 'precisa de você',
     working: 'trabalhando',
     exited: 'desligada',
     lost: 'desligada',
@@ -1286,12 +1300,12 @@ const PT: ControlStrings = {
   keySessionsReset: '^r restaurar view',
   keySessionsKill: 'x encerrar',
   keySessionsDeleteTask: 'x apagar tarefa',
-  keySessionsRename: 'n nomear',
-  keySessionsNote: 't nota',
-  keySessionsNew: 'a nova',
+  keySessionsRename: 'r nomear',
+  keySessionsNote: 'm nota',
+  keySessionsNew: 'n nova',
   keySessionsSearch: 'ctrl+f buscar',
   keySessionsActions: 'tab ações',
-  keySessionsApprove: 'y aprovar',
+  keySessionsApprove: 'a aprovar',
   keySessionsPrompt: 'p enviar',
   keySessionsFold: 'b menu',
   keyRestoreAnswer: 'enter inicia · esc deixa fechadas',
@@ -1348,7 +1362,7 @@ const PT: ControlStrings = {
   manageHint: '↑↓ mover · enter executar · esc voltar à lista',
   promptHint: 'enter salva · esc cancela',
   sessionsHideClosed: 'fechadas: ocultas',
-  keySessionsActive: 'l só ativas',
+  keySessionsActive: 'c só ativas',
   keySessionsDetail: 'd detalhe',
   keySessionsMark: 'space marcar',
   keySessionsClosed: 'c fechadas',

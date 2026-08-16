@@ -34,6 +34,8 @@ import {
   sessionHandle,
   sessionMetric,
   sessionRows,
+  sessionNotify,
+  notifyCellWidth,
   worktreeName,
   type ContextLevel,
   type DimensionWordBook,
@@ -232,6 +234,8 @@ export function renderSessionTable(o: SessionTableOptions): string[] {
   // Measured across every row that will be PRINTED. Unlike the cockpit there is no window here —
   // the whole fleet is the page — so a long title does widen the column for all of it, which is
   // correct for a log: it is read as one block, not scrolled.
+  // Zero on a quiet fleet — the same rule and the same function the cockpit uses.
+  const notify = notifyCellWidth(rows.flatMap(r => (r.kind === 'session' ? [r.session] : [])))
   const columns = sessionColumns(
     rows.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
     o.width,
@@ -245,8 +249,8 @@ export function renderSessionTable(o: SessionTableOptions): string[] {
   // Every line except the headings, first — because a heading's rule runs to the edge of the TABLE
   // and the table is only as wide as its widest row. Ruling to the budget instead is invisible at a
   // terminal's width and absurd at a pipe's, where it drew ten thousand dashes over four sessions.
-  const drawn = [headerSegs(columns, o.strings.cols), ...rows.map(
-    r => (r.kind === 'session' ? rowSegs(r.session, columns) : null),
+  const drawn = [headerSegs(columns, o.strings.cols, notify), ...rows.map(
+    r => (r.kind === 'session' ? rowSegs(r.session, columns, notify) : null),
   )]
   const table = drawn.reduce(
     (n, segs) => (segs ? Math.max(n, plainWidth(segs)) : n),
@@ -287,8 +291,12 @@ const HEADING_INDENT = '  '
 
 /** The header row — the same cells, from the same measured widths, so a heading can never sit over
  *  a column it no longer names. */
-function headerSegs(c: SessionColumns, words: Record<keyof SessionColumns, string>): Seg[] {
-  const segs: Seg[] = [{ text: GAP }]
+function headerSegs(
+  c: SessionColumns,
+  words: Record<keyof SessionColumns, string>,
+  notify: number,
+): Seg[] {
+  const segs: Seg[] = [{ text: GAP + ' '.repeat(notify) }]
   if (c.id > 0) segs.push({ text: padCell(words.id, c.id) + GAP, code: DIM })
   segs.push({ text: padCell(words.state, c.state), code: DIM })
   const rest: Array<[number, string]> = [
@@ -322,10 +330,18 @@ function headingSegs(label: string, count: number, width: number, muted?: boolea
 }
 
 /** One session row. The cell order and the give-up order are `sessionColumns`', not this module's. */
-function rowSegs(s: ControlSession, c: SessionColumns): Seg[] {
+function rowSegs(s: ControlSession, c: SessionColumns, notify: number): Seg[] {
   // Two columns where the cockpit draws its cursor and its mark. Kept rather than reclaimed: it is
   // what `sessionColumns` budgets for, and it is what leaves the rows indented under their heading.
   const segs: Seg[] = [{ text: GAP }]
+  // The same NOTIFICATION cell the cockpit draws, for the same reason and out of the same measure:
+  // one table, two renderers, and a dot that existed in only one of them would make `session ls`
+  // and the screen disagree about which rows are asking for something.
+  if (notify > 0) {
+    segs.push(sessionNotify(s)
+      ? { text: '● ', code: STATE_ANSI[s.state] }
+      : { text: ' '.repeat(notify) })
+  }
   if (c.id > 0) segs.push({ text: padCell(sessionHandle(s), c.id) + GAP, code: DIM })
   segs.push({ text: padCell(s.stateLabel, c.state), code: STATE_ANSI[s.state] })
   if (c.title > 0) segs.push({ text: GAP + padCell(s.title, c.title) })

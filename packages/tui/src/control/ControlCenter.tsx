@@ -373,6 +373,8 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
     // WHICH machine, and whether its link is alive. Absent in solo mode and on a machine that has
     // never completed a handshake — no name is drawn rather than a hostname standing in for one.
     ...(status?.machineName ? { machineName: status.machineName } : {}),
+    ...(status?.accountName ? { accountName: status.accountName } : {}),
+    ...(status?.linkState ? { linkState: status.linkState } : {}),
     ...(status?.pushMs !== undefined ? { pushMs: status.pushMs } : {}),
     width,
   })

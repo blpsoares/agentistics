@@ -85,8 +85,8 @@ import {
   taskCounts, projectCounts, sessionMetric, sessionContext, contextLevel,
   sessionHandle, worktreeName, sessionRunning,
   sessionAge, sessionKeyHelp, keyHelpColumn, keyHelpLines, closeCellWidth, canClose, CLOSE_CELL,
-  treeGuides,
-  DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder, type SessionLayout,
+  treeGuides, notifyCellWidth, sessionNotify,
+  DEFAULT_ORDER, ACTIVE_STATES, OFF_STATE, type SessionOrder, type SessionLayout,
   cardGrid, cardPages, pageOfCard, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
   cardHit, cardStep, cardPageRows, cardLabelWidth, CARD_LABEL_GAP, pagerCells, pagerHit,
   type CardBand, type CardGrid, type CardLabels, type CardLine, type CardPage, type PagerCells,
@@ -134,7 +134,7 @@ const STATE_COLOR: Record<SessionState, string | undefined> = {
   // Amber is also the selection colour, which they can share: a selected row already carries the
   // `❯` cursor and a bold title, so the two never have to be told apart by hue alone.
   waiting: COLORS.accent,
-  working: COLORS.success,
+  working: COLORS.running,
   exited: COLORS.muted,
   lost: COLORS.muted,
   unknown: COLORS.muted,
@@ -779,6 +779,32 @@ export function Sessions({
    * One function behind `ctrl+r` and behind the menu row, because a keystroke and a button that
    * both claim to do the same thing and are written twice are two things that will one day differ.
    */
+  /**
+   * Everything that is not running, newest first, with nothing grouping it.
+   *
+   * It sets the four things that answer "what did I have open recently" in one move: no bands, the
+   * off states only, ordered by last activity, and no scope or search left over narrowing it. It is
+   * an ordinary arrangement rather than a mode — every switch it touched is still where it was, and
+   * `ctrl+r` puts it all back.
+   */
+  const showRecentlyClosed = useCallback(() => {
+    setGrouping('none')
+    setCascade(false)
+    // The status selection AND both scopes in one write: a scope left over is exactly the kind of
+    // leftover that makes this land on an empty list.
+    setFilters(f => {
+      const next = { ...f, status: [OFF_STATE] }
+      delete next.task
+      delete next.project
+      return next
+    })
+    setShowNamed(true)
+    setShowDone(true)
+    setOrder({ by: 'recent', dir: 'desc' })
+    setQuery('')
+    setCursor(0)
+  }, [])
+
   const resetView = useCallback(() => {
     setGrouping(groupingOf(DEFAULT_SESSION_VIEW.grouping))
     setCascade(DEFAULT_SESSION_VIEW.cascade ?? false)
@@ -960,7 +986,16 @@ export function Sessions({
     // shortcuts are one boolean read from either end — and it had THREE keys: `l` narrowed to the
     // active states, while `c` and `e` (literally the same call) widened back. Pressing any of them
     // did the same visible thing, which is a keyboard that lies about how many controls exist.
-    if (input === 'l' || input === 'c' || input === 'e') {
+    // `c` for CLOSED — one key for one switch. `l` and `e` are kept as aliases of the same call
+    // rather than as controls of their own: they were three keys doing one visible thing, which is
+    // a keyboard that lies about how many controls exist, and dropping them outright would break
+    // the hands that already learned `l`.
+    // The LAST CONVERSATIONS, flat and by recency — a view, reached by one key, because the ordinary
+    // way to it was four separate switches (lift the filter, drop the grouping, change the sort,
+    // clear the scope) and by then you are arranging a screen instead of finding the thing you
+    // closed twenty minutes ago. Capital, like the other verbs that act on more than the row.
+    if (input === 'C') { showRecentlyClosed(); return }
+    if (input === 'c' || input === 'l' || input === 'e') {
       pressShortcut(onlyActive ? 'history' : 'active')
       return
     }
@@ -985,7 +1020,20 @@ export function Sessions({
     // `u` used to hide the unfiled band while grouping by task. That is now the task section's own
     // "no task" row, selectable like every other value on every dimension, so the key is gone with
     // the switch — a key whose control no longer exists is a key nothing on screen explains.
-    if (input === 'a') return runAction('new')
+    // The verbs are named after what they DO, in the language of the menu they open. They were
+    // handed out in the order they were written — `a` started a session, `n` renamed one, `t` wrote
+    // a note — so the letter and the verb had nothing to do with each other and the only way to
+    // learn one was to read the list. `k` stays out of all of it: it is `up` in this list, and a key
+    // that moves the cursor on one screen and destroys work on another is a real accident waiting.
+    if (input === 'n') return runAction('new')
+    if (input === 'r') return runAction('rename')
+    // The note is `m` for memo: `t` belongs to the TASK, which is the verb people reach for it with.
+    if (input === 'm') return runAction('note')
+    if (input === 't') return runAction('task')
+    // The capitals act on the whole TASK rather than on the row, which is the one thing worth making
+    // people reach for a shift key to say.
+    if (input === 'T') return runAction('openTask')
+    if (input === 'F') return runAction('finishTask')
     // Attaching has its OWN key because `enter` deliberately does not do it any more: enter opens
     // the menu, which is what made every other verb reachable, and the cost of that was three
     // keystrokes for the thing this screen is most often opened to do.
@@ -993,16 +1041,12 @@ export function Sessions({
     // `ctrl+f` is what people already type for find; `/` stays as an alias for the vi hands, and is
     // deliberately not in the key help — the footer names ONE key per verb or it stops being read.
     if ((key.ctrl && input === 'f') || input === '/') return runAction('search')
-    // `k` is deliberately NOT the kill key — it is `up` in this list, and a key that moves the
-    // cursor on one screen and destroys work on another is the shape of a real accident.
     if (input === 'x') return runAction('kill')
-    if (input === 'n') return runAction('rename')
-    if (input === 't') return runAction('note')
-    // The two that act on a session WITHOUT entering it. `y` for yes and `p` for prompt, both
-    // unclaimed on this screen — and neither is a navigation key, which is the rule `x` exists for:
-    // a key that moves the cursor on one screen and writes into somebody's session on another is
-    // the shape of a real accident.
-    if (input === 'y') return runAction('approve')
+    // The two that act on a session WITHOUT entering it. `a` for approve, with `y` kept as the alias
+    // every yes/no prompt has taught — neither is a navigation key, which is the rule `x` exists
+    // for: a key that moves the cursor on one screen and writes into somebody's session on another
+    // is the shape of a real accident.
+    if (input === 'a' || input === 'y') return runAction('approve')
     if (input === 'p') return runAction('prompt')
     // Capital `R`, so it cannot be hit while reaching for anything else. It is the one verb here
     // that acts on the whole fleet.
@@ -1392,6 +1436,12 @@ export function Sessions({
   // Measured across the rows ON SCREEN, so the state, harness and directory columns line up. A
   // single long title thirty rows down must not narrow every visible row to pay for something
   // nobody can see.
+  // Zero on a quiet fleet, so the dot's column costs nothing until something is actually waiting.
+  const notifyWidth = useMemo(
+    () => notifyCellWidth(visible.flatMap(r => (r.kind === 'session' ? [r.session] : []))),
+    [visible],
+  )
+
   const columns = useMemo(
     () => sessionColumns(
       visible.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
@@ -1617,7 +1667,7 @@ export function Sessions({
           {/* Shifted by the cascade's guide column, or the headings sit over the wrong cells the
               moment the tree is on. */}
           {' '.repeat(guideWidth)}
-          {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')}
+          {'  ' + ' '.repeat(notifyWidth) + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')}
           {columns.harness > 0 ? padCell(s.sessionsCols.harness, columns.harness) + '  ' : ''}
           {padCell(s.sessionsCols.state, columns.state)}
           {columns.title > 0 ? '  ' + padCell(s.sessionsCols.title, columns.title) : ''}
@@ -1723,6 +1773,7 @@ export function Sessions({
                 session={row.session}
                 selected={selected?.id === row.session.id}
                 marked={marked.has(row.session.id)}
+                notify={notifyWidth}
                 ages={ages}
                 columns={columns}
                 width={listBody - guide.length}
@@ -1928,13 +1979,15 @@ function SummaryRow({
   )
 }
 
-function SessionRowView({ session, selected, marked, ages, columns, width, closeCell }: {
+function SessionRowView({ session, selected, marked, notify, ages, columns, width, closeCell }: {
   session: ControlSession
   selected: boolean
   /** Already-localized ages by session id — this component owns no clock and no strings. */
   ages: ReadonlyMap<string, string>
   /** The user's own highlight. Survives re-sorting, and outlives the cursor moving away. */
   marked: boolean
+  /** Columns the notification dot takes — `0` when nothing on screen is waiting. */
+  notify: number
   columns: SessionColumns
   width: number
   /** Columns reserved at the right edge for the close control — `0` when there is none. */
@@ -1954,6 +2007,16 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           wore it would read as "this is selected" on four rows at once. */}
       <Text color={selected ? COLORS.info : undefined} underline={selected}>{selected ? '❯' : ' '}</Text>
       <Text color={marked ? COLORS.info : undefined} bold={marked}>{marked ? '▌' : ' '}</Text>
+      {/* The NOTIFICATION. Three cells rather than one, because the row you are on, the row you
+          marked and the row that needs you are three facts that can all be true at once — and the
+          one that must survive is this, since it is the only one the machine is telling YOU. It
+          wears the state's own colour, so red and amber keep meaning the same thing across the row,
+          and it costs nothing at all on a fleet where nothing is waiting. */}
+      {notify > 0 ? (
+        <Text color={STATE_COLOR[session.state]} bold>
+          {sessionNotify(session) ? '● ' : ' '.repeat(notify)}
+        </Text>
+      ) : null}
       {/* Colour AND word, always paired — and PADDED, so every title starts in the same column.
           Two spaces between unpadded cells is what made this read as a jumble of words: the state
           words differ by ten characters, so nothing after them ever lined up. */}
