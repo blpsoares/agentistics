@@ -832,8 +832,10 @@ export interface SessionColumns {
  * make the column's width depend on the second it was measured in.
  */
 export function sessionAge(s: ControlSession, now: number, ago: (seconds: number) => string): string {
-  if (sessionRunning(s) || s.startedAt === undefined) return ''
-  return ago(Math.max(0, Math.round((now - s.startedAt) / 1000)))
+  if (sessionRunning(s)) return ''
+  const t = s.endedAt ?? s.startedAt
+  if (t === undefined) return ''
+  return ago(Math.max(0, Math.round((now - t) / 1000)))
 }
 
 /** How much of a session id a row shows. Enough to be unambiguous in practice, and to type. */

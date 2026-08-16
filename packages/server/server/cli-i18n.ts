@@ -740,9 +740,9 @@ const PT: CliStrings = {
     // keeps `waiting`: there it is already the intransitive answer, and "waiting for a reply" would
     // be longer without saying more.
     waiting: 'aguardando resposta',
-    exited: 'desligada',
-    lost: 'desligada',
-    closed: 'desligada',
+    exited: 'encerrada',
+    lost: 'desconectada',
+    closed: 'fechada',
     external: 'externa',
   },
   sessApprovalBlind: (harness: string) =>

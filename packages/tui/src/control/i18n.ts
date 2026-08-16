@@ -1238,9 +1238,9 @@ const PT: ControlStrings = {
     // `aguardando resposta` under a band called `aguardando`.
     waiting: 'aguardando resposta',
     working: 'trabalhando',
-    exited: 'desligada',
-    lost: 'desligada',
-    closed: 'desligada',
+    exited: 'encerrada',
+    lost: 'desconectada',
+    closed: 'fechada',
     unknown: 'externa',
   },
   sessionsSearching: q => `busca: ${q} · esc limpa`,
