@@ -1691,10 +1691,20 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     try {
       const sample = await readMemory()
       if (!sample) return {}
-      const index = await loadHarnessSessions()
-      const pids = [...index.byConversation.values()]
-        .filter(f => f.alive === true && f.pid !== undefined)
-        .map(f => f.pid!)
+      const { scanProcesses } = await import('./live-sessions')
+      const scan = await scanProcesses()
+      const pidsFromProc = scan.procs
+        .map(p => p.pid)
+        .filter((pid): pid is number => pid !== undefined)
+
+      const index = await loadHarnessSessions().catch(() => null)
+      const pidsFromHarness = index
+        ? [...index.byConversation.values()]
+            .filter(f => f.alive === true && f.pid !== undefined)
+            .map(f => f.pid!)
+        : []
+
+      const pids = Array.from(new Set([...pidsFromProc, ...pidsFromHarness]))
       const { bytes, read } = await readRss(pids)
       const b = memoryBudget({ sample, sessionBytes: bytes, sessions: read })
       return { memory: { used: b.used, max: b.max, red: b.red, percent: b.percent } }
