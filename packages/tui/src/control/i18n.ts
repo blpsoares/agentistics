@@ -49,10 +49,12 @@ export interface ControlStrings {
   keyEnds: string
   keyRefresh: string
   keyLogSource: string
-  /** The dashboard's own two keys. Its screens are digits and `tab`, never the arrows — see
+  /** The dashboard's own keys. Its screens are digits and `tab`, never the arrows — see
    *  `resolveDashboardScreen` for why the shell's `←→ screens` had to survive this tab. */
   dashView: string
   dashFilter: string
+  /** Paging, on the three screens that draw a list. Named because the arrows could not be taken. */
+  dashPage: string
   /**
    * The mouse's two hints, said only while there IS a mouse.
    *
@@ -565,6 +567,7 @@ const EN: ControlStrings = {
   keyLogSource: '[ ] source',
   dashView: '1-6/tab view',
   dashFilter: 'f harness',
+  dashPage: ', . page',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+drag to copy',
 
@@ -994,6 +997,7 @@ const PT: ControlStrings = {
   keyLogSource: '[ ] fonte',
   dashView: '1-6/tab tela',
   dashFilter: 'f assistente',
+  dashPage: ', . paginar',
   keyMouse: 'm mouse',
   keyMouseCopy: 'shift+arrastar copia',
 
