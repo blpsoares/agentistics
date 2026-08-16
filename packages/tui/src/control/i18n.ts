@@ -219,6 +219,14 @@ export interface ControlStrings {
   sessionsCount: (shown: number, total: number) => string
   sessionsWaitingCount: (n: number) => string
   sessionsGroupBy: string
+  /** Labels the summary row's filter cell, so a grouping and a filter are told apart by WORD. */
+  sessionsFilterBy: string
+  /** What the filter cell says when the list is narrowed to what is alive. */
+  sessionsFilterActive: string
+  /** What it says when closed conversations are the only thing withheld. */
+  sessionsFilterNoHistory: string
+  /** Added when named rows are being kept regardless of the filter — it puts rows BACK. */
+  sessionsFilterNamed: string
   /**
    * Every dimension's name, plus the flat arrangement.
    *
@@ -246,6 +254,8 @@ export interface ControlStrings {
   sessionsDoing: string
   sessionsTask: string
   sessionsMetrics: string
+  /** What the usage figure counts, in words — see `detailLines`'s `metricsAll`. */
+  sessionsMetricsAll: string
   /** Detail-pane label for the context gauge spelled out. */
   sessionsContext: string
   /** Detail-pane label for the conversation id this row continues from. */
@@ -264,6 +274,8 @@ export interface ControlStrings {
   sessionsPaneDetail: string
   sessionsPaneAsk: string
   sessionsPaneKeys: string
+  /** Said only while the reference has more below the fold: `12 of 34  ·  ↑↓ scroll`. */
+  sessionsKeysMore: (shown: number, total: number) => string
   sessionsPaneRestore: string
   restoreTitle: (n: number) => string
   restoreAnswer: string
@@ -666,6 +678,10 @@ const EN: ControlStrings = {
     : `${shown} on screen · ${total} known`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
   sessionsGroupBy: 'GROUP',
+  sessionsFilterBy: 'FILTER',
+  sessionsFilterActive: 'running only',
+  sessionsFilterNoHistory: 'without closed conversations',
+  sessionsFilterNamed: 'plus named',
   sessionsGroupings: {
     repo: 'repository',
     task: 'task',
@@ -699,11 +715,16 @@ const EN: ControlStrings = {
   sessionsCols: {
     id: 'id',
     state: 'state',
-    age: 'started',
+    // The column measures when a row went OFF, not when it began — see `sessionAge`.
+    age: 'off since',
     title: 'session',
     task: 'task',
     worktree: 'worktree',
-    metrics: 'usage',
+    // Named `usage (all)` rather than `usage`: the figure is every token the conversation
+    // recorded — input, output, cache read and cache write — and beside a cost it was read as the
+    // in/out pair alone, which makes it look an order of magnitude too big. The detail pane spells
+    // the four out; the heading only has to stop the wrong reading.
+    metrics: 'usage (all)',
     // The WINDOW, not "context": the cell shows how full one is, and a column headed `context`
     // over a bar reads as "this session's context" — a thing, not a level.
     context: 'window',
@@ -717,6 +738,7 @@ const EN: ControlStrings = {
   sessionsDoing: 'saying',
   sessionsTask: 'task',
   sessionsMetrics: 'usage',
+  sessionsMetricsAll: 'in + out + cache',
   sessionsContext: 'context window',
   sessionsConversation: 'conversation',
   sessionsGoneProject: 'directory no longer exists',
@@ -728,6 +750,7 @@ const EN: ControlStrings = {
   sessionsPaneDetail: 'detail',
   sessionsPaneAsk: 'question',
   sessionsPaneKeys: 'keys',
+  sessionsKeysMore: (shown, total) => `${shown} of ${total}  ·  ↑↓ scroll`,
   sessionsPaneRestore: 'last time',
   restoreTitle: (n: number) =>
     n === 1 ? 'Your last session was this one:' : `Your last ${n} sessions were these:`,
@@ -1089,6 +1112,10 @@ const PT: ControlStrings = {
     : `${shown} na tela · ${total} conhecidas`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
   sessionsGroupBy: 'AGRUPAR',
+  sessionsFilterBy: 'FILTRO',
+  sessionsFilterActive: 'só as ativas',
+  sessionsFilterNoHistory: 'sem conversas fechadas',
+  sessionsFilterNamed: 'mais as nomeadas',
   sessionsGroupings: {
     repo: 'repositório',
     task: 'tarefa',
@@ -1119,11 +1146,11 @@ const PT: ControlStrings = {
   sessionsCols: {
     id: 'id',
     state: 'estado',
-    age: 'iniciada',
+    age: 'parada há',
     title: 'sessão',
     task: 'tarefa',
     worktree: 'worktree',
-    metrics: 'uso',
+    metrics: 'uso (tudo)',
     context: 'janela',
     harness: 'harness',
     where: 'projeto',
@@ -1135,6 +1162,7 @@ const PT: ControlStrings = {
   sessionsDoing: 'dizendo',
   sessionsTask: 'tarefa',
   sessionsMetrics: 'uso',
+  sessionsMetricsAll: 'entrada + saída + cache',
   sessionsContext: 'janela de contexto',
   sessionsConversation: 'conversa',
   sessionsGoneProject: 'diretório não existe mais',
@@ -1146,6 +1174,7 @@ const PT: ControlStrings = {
   sessionsPaneDetail: 'detalhe',
   sessionsPaneAsk: 'pergunta',
   sessionsPaneKeys: 'teclas',
+  sessionsKeysMore: (shown, total) => `${shown} de ${total}  ·  ↑↓ rolar`,
   sessionsPaneRestore: 'da última vez',
   restoreTitle: (n: number) =>
     n === 1 ? 'Sua última sessão foi esta:' : `Suas últimas ${n} sessões foram estas:`,

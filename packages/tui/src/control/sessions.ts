@@ -19,6 +19,9 @@ import {
   type SessionOrder, type SessionSort,
 } from './session-order'
 import { buildSessionTree } from './session-tree'
+// `.ts` explicitly: `Surface.tsx` sits beside `surface.ts` and a bare specifier resolves to the
+// component on a case-insensitive path, exactly as `chrome.ts` is imported above.
+import { wrapText } from './surface.ts'
 import type { ControlSession, SessionState } from './types'
 
 // The status vocabulary and the two row predicates live in `session-dimensions.ts`, and the ordering
@@ -301,7 +304,13 @@ export function sessionRows(
     const rest = g.sessions.filter(s => !isMarked(s))
     const live = rest.filter(isLive)
     const fell = rest.filter(isFell)
+    // Most recently off FIRST. A block of nineteen finished conversations is read from the top, and
+    // the one that ended twenty minutes ago is the one being looked for — the arrangement's own
+    // ordering has no opinion about it, since every row in here shares a state. A row with no
+    // measured end sorts last rather than to the top: unknown is not recent.
     const closed = rest.filter(s => !isLive(s) && !isFell(s))
+      .slice()
+      .sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0))
     // An empty KEY is an absence ("no task"), not a category, and is drawn as one. A FINISHED task
     // says so in its heading and is muted with it: the sessions are still listed and still
     // attachable, so the screen must say why they are set apart rather than merely dimming them.
@@ -319,18 +328,22 @@ export function sessionRows(
       }
       return
     }
-    push(head, live, g.key === '' || Boolean(g.done), g)
+    // Inside a NAMED group the closed rows simply continue under its heading, most recently off
+    // first. They used to get a second heading of their own — `ads-propostas · off  19` under
+    // `ads-propostas  1` — which repeats the group's name to say a thing every one of those rows
+    // already says in its own `state` cell, and splits one project into two bands a screen apart.
+    // In the UNGROUPED arrangement the heading is kept: there is no group name above them, so that
+    // word is the only thing separating what is running from what is over.
+    const inlineClosed = g.label !== '' && closed.length > 0
+    push(head, inlineClosed ? [...live, ...closed] : live, g.key === '' || Boolean(g.done), g)
     if (fell.length > 0) {
       // NOT muted: everything else set apart on this screen is set apart because it is over, and
       // this block is the opposite — it is the one thing on the list asking to be acted on.
       const label = fellLabel ?? ''
       push(g.label !== '' && label ? `${g.label} · ${label}` : label, fell, undefined, g)
     }
-    if (closed.length > 0) {
-      // Inside a named group the closed block still says which group it belongs to, so a heading
-      // read on its own is never ambiguous.
-      const label = closedLabel ?? ''
-      push(g.label !== '' && label ? `${g.label} · ${label}` : label, closed, true, g)
+    if (closed.length > 0 && !inlineClosed) {
+      push(closedLabel ?? '', closed, true, g)
     }
   })
   return out
@@ -439,6 +452,15 @@ export function detailLines(s: ControlSession, labels: {
   doing: string
   task: string
   metrics: string
+  /**
+   * What the usage figure COUNTS, in words — `in + out + cache`.
+   *
+   * The number is every token the conversation recorded (input, output, cache read and cache
+   * write; `conversations.ts` sums the four), and read beside a cost it is naturally taken for the
+   * in/out pair alone — which is the reading that makes it look ten times too big, since a cached
+   * read dwarfs the input on every long session. The row is the only surface with room to say so.
+   */
+  metricsAll: string
   /** Heads the spelled-out gauge: `45%  ·  455.4k / 1M`. */
   context: string
   /**
@@ -497,10 +519,13 @@ export function detailLines(s: ControlSession, labels: {
   // Tokens and cost only where the conversation actually recorded them. Absent is never rendered as
   // zero — the same N/A-versus-a-confident-0 rule the dashboard applies to harness capabilities.
   if (s.tokens || s.cost) {
+    // The parenthetical rides the TOKEN figure, so a row carrying only a cost never claims a
+    // breakdown it is not showing.
+    const tokens = s.tokens ? `${s.tokens} (${labels.metricsAll})` : ''
     out.push({
       key: 'metrics',
       label: labels.metrics,
-      value: [s.tokens, s.cost].filter(Boolean).join('  ·  '),
+      value: [tokens, s.cost].filter(Boolean).join('  ·  '),
     })
   }
   // The gauge SPELLED OUT: the bar on the row is a glance, and this is the only place the two
@@ -826,14 +851,21 @@ export interface SessionColumns {
 }
 
 /**
- * How long ago a row that is not running began — PURE, and EMPTY for one that is.
+ * How long ago a row that is not running WENT OFF — PURE, and EMPTY for one that is.
+ *
+ * It used to measure from `startedAt`, under a heading that said `started`, which is the wrong
+ * question on the only rows that draw it: a block of finished conversations is read by which of
+ * them ended most recently, and "started 96h ago" says nothing about whether that one is the work
+ * of this morning or of last week. `lastActiveAt` is that instant, and there is NO FALLBACK to the
+ * start time — a start age printed under a heading naming the end is a wrong number rather than a
+ * missing one, and this column has always been allowed to be blank.
  *
  * `now` is passed in rather than read: this is called on every repaint and a clock inside it would
  * make the column's width depend on the second it was measured in.
  */
 export function sessionAge(s: ControlSession, now: number, ago: (seconds: number) => string): string {
-  if (sessionRunning(s) || s.startedAt === undefined) return ''
-  return ago(Math.max(0, Math.round((now - s.startedAt) / 1000)))
+  if (sessionRunning(s) || s.lastActiveAt === undefined) return ''
+  return ago(Math.max(0, Math.round((now - s.lastActiveAt) / 1000)))
 }
 
 /** How much of a session id a row shows. Enough to be unambiguous in practice, and to type. */
@@ -963,6 +995,13 @@ export function sessionColumns(
   o: {
     /** True while the HEADING above each row already names the task, so the cell would repeat it. */
     groupedByTask?: boolean
+    /**
+     * The same rule for the PROJECT cell, and it was missing: grouped by project, every row of a
+     * band ended in the very word the heading over it had just said, in the widest cell on the
+     * right-hand side. The cell exists for the arrangements that do NOT say it (`none`, by state,
+     * by harness), which is exactly when it is the only thing naming where a session is.
+     */
+    groupedByProject?: boolean
     /** Already-localized age per row, keyed by session id — see `sessionAge`. */
     ages?: ReadonlyMap<string, string>
     /**
@@ -1004,7 +1043,7 @@ export function sessionColumns(
   const droppable = [
     // The PROJECT, not the directory: once the grouping keys on the main checkout, a folder cell
     // showing the worktree's own name says something the worktree cell already says better.
-    ['where', widest('where', s => s.projectGroup || s.project)],
+    ['where', o.groupedByProject ? 0 : widest('where', s => s.projectGroup || s.project)],
     ['harness', widest('harness', s => s.harness)],
     ['metrics', widest('metrics', sessionMetric)],
     ['context', widest('context', s => sessionContext(s))],
@@ -1856,7 +1895,10 @@ export function sessionKeyHelp(w: {
     { keys: 'b / ctrl+b', what: w.menuFold },
     { keys: 'ctrl+r', what: w.reset },
     { keys: '[ ]', what: w.tabs },
-    { keys: '?', what: w.help },
+    // `h` leads, because it is the letter a person tries first and it was free. `?` stays: it is
+    // what every list-shaped TUI already answers, and a reference nobody can open is not a
+    // reference. Both are listed, so the screen never teaches only the harder one.
+    { keys: 'h / ?', what: w.help },
     { keys: 'q', what: w.quit },
   ]
 }
@@ -1864,6 +1906,38 @@ export function sessionKeyHelp(w: {
 /** The width the keystroke column needs, so the descriptions line up — PURE. */
 export function keyHelpColumn(rows: readonly KeyHelp[]): number {
   return rows.reduce((n, r) => Math.max(n, r.keys.length), 0)
+}
+
+/** One drawn line of the key reference: the keystroke, then what it does. */
+export interface KeyHelpLine {
+  /** Empty on a continuation line, so the keystroke column is written exactly once per key. */
+  keys: string
+  what: string
+}
+
+/**
+ * The reference as LINES that fit `width` — PURE, and the thing the screen scrolls.
+ *
+ * It used to be one row per key, truncated: at the width of the menu column that produced
+ * `attach — or reo…` for half the list, which is a reference that names the keys and withholds
+ * what they do. Wrapping is what makes the narrow case readable, and it is also what makes the
+ * screen SCROLLABLE — once a row can be two lines, a row budget is no longer a line budget, and
+ * paging has to be counted in the units that are actually drawn.
+ *
+ * A description too narrow to hold anything is not wrapped into single characters: below the point
+ * where the keystroke column plus a word fits, the caller is expected to have given the reference
+ * the whole screen instead. `wrapText` still guarantees termination there.
+ */
+export function keyHelpLines(rows: readonly KeyHelp[], width: number): KeyHelpLine[] {
+  const keyCol = keyHelpColumn(rows)
+  const room = Math.max(1, width - keyCol - 2)
+  const out: KeyHelpLine[] = []
+  for (const row of rows) {
+    const wrapped = wrapText(row.what, room)
+    if (wrapped.length === 0) { out.push({ keys: row.keys, what: '' }); continue }
+    wrapped.forEach((what, i) => out.push({ keys: i === 0 ? row.keys : '', what }))
+  }
+  return out
 }
 
 // the card grid

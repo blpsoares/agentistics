@@ -625,6 +625,15 @@ export interface ControlSession {
   approvalBlind?: string
   /** When it started, epoch ms. An instant rather than a duration — see `ServiceRuntimeState`. */
   startedAt?: number
+  /**
+   * When it was last ALIVE, epoch ms — present only on a row that is NOT running.
+   *
+   * `startedAt` answers when the work began and is the wrong question on a finished conversation:
+   * a block of nineteen `off` rows is read, and ordered, by which of them ended most recently. The
+   * host reads it from the heartbeat (managed) or the conversation's own last activity (closed) and
+   * omits it wherever neither exists — an "off for" with no measurement is left blank, never zero.
+   */
+  lastActiveAt?: number
   attached: boolean
   /** Process ID for live process monitoring. */
   pid?: number

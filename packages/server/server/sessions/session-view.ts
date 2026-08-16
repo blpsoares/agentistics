@@ -132,6 +132,17 @@ export interface SessionView {
    */
   recordedRepo?: RepoFacts
   createdMs?: number
+  /**
+   * When this row was last ALIVE, in ms — what "off for how long" is read from.
+   *
+   * A different fact from `createdMs`, and the one that matters on a row that is over: `started`
+   * answers when the work began, and a list of nineteen finished conversations is read by when each
+   * of them ENDED. Two exact sources, no invention: a managed row's `lastSeenMs` (the 60s heartbeat
+   * stamps every live session, so the last stamp is when it was last up) and a closed conversation's
+   * own `lastActivityMs`. Absent on a RUNNING row (it is alive now, and "0m ago" beside `working`
+   * says nothing) and on an external one, where nothing is capturable.
+   */
+  lastActiveMs?: number
   attached: boolean
   /**
    * The conversation this row could REOPEN, when there is one.
@@ -393,6 +404,11 @@ export function buildSessionViews(o: {
       ...(r.backend
         ? { createdMs: r.backend.createdMs }
         : registryCreatedMs(r.managed?.createdAt)),
+      // Only on a row that is NOT running — see `lastActiveMs`. The heartbeat's last stamp is the
+      // closest thing to an end time that exists: nothing writes a record when a machine reboots.
+      ...(r.status !== 'running' && typeof r.managed?.lastSeenMs === 'number'
+        ? { lastActiveMs: r.managed.lastSeenMs }
+        : {}),
       // Reopening a finished session is the whole reason its row is kept. Resolved the same way an
       // external process's conversation is — by harness and directory — and absent when nothing
       // can be resolved, rather than offering a verb with no target.
@@ -599,6 +615,7 @@ export function buildSessionViews(o: {
       status: 'closed' as const,
       label: named ?? c.title,
       createdMs: c.lastActivityMs,
+      lastActiveMs: c.lastActivityMs,
       attached: false,
       approvalDetection: false,
       ...(c.resumable ? { resume: { sessionId: c.sessionId, title: c.title } } : {}),

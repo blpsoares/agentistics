@@ -415,18 +415,15 @@ describe('the marked band', () => {
     // exactly where a marked row is hardest to find.
     const rows = band('project', ['c', 'e'])
     expect(sessionsUnder(rows, 'marked')).toEqual(['c', 'e'])
-    // A history band still exists — `d` is exited and unmarked — so the assertion is about WHERE
-    // the marked two ended up, not about the band being gone.
-    const closedHeadings = rows
-      .map((r, i) => (r.kind === 'heading' && r.label.includes('closed') ? i : -1))
-      .filter(i => i >= 0)
-    expect(closedHeadings.length).toBeGreaterThan(0)
-    for (const at of closedHeadings) {
-      for (let i = at + 1; i < rows.length; i++) {
-        const r = rows[i]!
-        if (r.kind !== 'session') break
-        expect(['c', 'e']).not.toContain(r.session.id)
-      }
+    // The marked band is the ONLY place either of them appears. Closed rows now continue under
+    // their own group's heading rather than under a suffixed one, so the assertion is about the
+    // whole list below the band rather than about a block with `closed` in its name.
+    const bandAt = rows.findIndex(r => r.kind === 'heading' && r.label === 'marked')
+    expect(bandAt).toBeGreaterThanOrEqual(0)
+    const after = rows.slice(bandAt + 1)
+    const nextHeading = after.findIndex(r => r.kind === 'heading')
+    for (const r of after.slice(nextHeading)) {
+      if (r.kind === 'session') expect(['c', 'e']).not.toContain(r.session.id)
     }
   })
 

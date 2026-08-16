@@ -235,7 +235,11 @@ export function renderSessionTable(o: SessionTableOptions): string[] {
   const columns = sessionColumns(
     rows.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
     o.width,
-    { groupedByTask: o.grouping === 'task', headings: o.strings.cols },
+    {
+      groupedByTask: o.grouping === 'task',
+      groupedByProject: o.grouping === 'project',
+      headings: o.strings.cols,
+    },
   )
 
   // Every line except the headings, first — because a heading's rule runs to the edge of the TABLE

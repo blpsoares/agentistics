@@ -211,13 +211,31 @@ describe('sessionRows / selectableIndexes', () => {
     expect(heading).toMatchObject({ label: 'closed', count: 1, muted: true })
   })
 
-  it('names the group a closed block belongs to, so a heading is never ambiguous', () => {
+  it('keeps a named group WHOLE — closed rows continue under its own heading', () => {
+    // They used to get a second heading, `billing · closed`, which repeats the group's name to say
+    // what every one of those rows already says in its `state` cell, and splits one group into two
+    // bands. The ungrouped case above keeps its heading: there the word is all there is.
     const rows = sessionRows(groupSessions(
-      [session('old', { state: 'closed', stateLabel: 'closed', task: 'billing' })],
+      [
+        session('live', { task: 'billing' }),
+        session('old', { state: 'closed', stateLabel: 'closed', task: 'billing' }),
+      ],
       'task',
       UNKNOWN,
     ), 'closed')
-    expect(rows.find(r => r.kind === 'heading')).toMatchObject({ label: 'billing · closed' })
+    expect(rows.filter(r => r.kind === 'heading').map(r => r.label)).toEqual(['billing'])
+    expect(rows.find(r => r.kind === 'heading')).toMatchObject({ count: 2 })
+  })
+
+  it('lists the closed rows MOST RECENTLY OFF first', () => {
+    // A block of finished conversations is read from the top: the one that ended twenty minutes ago
+    // is the one being looked for. A row with no measured end sorts last — unknown is not recent.
+    const off = (id: string, lastActiveAt?: number) =>
+      session(id, { state: 'closed', stateLabel: 'closed', task: 'billing', ...(lastActiveAt !== undefined ? { lastActiveAt } : {}) })
+    const rows = sessionRows(groupSessions(
+      [off('old', 1_000), off('never'), off('fresh', 9_000)], 'task', UNKNOWN,
+    ), 'closed')
+    expect(rows.flatMap(r => (r.kind === 'session' ? [r.session.id] : []))).toEqual(['fresh', 'old', 'never'])
   })
 
   it('marks an absence bucket as muted, so it does not read as a category', () => {
@@ -296,17 +314,19 @@ describe('the CASCADE arrangement', () => {
     ])
   })
 
-  it('keeps a closed block inside the branch it belongs to, breadcrumb included', () => {
+  it('keeps closed rows inside the branch they belong to, breadcrumb included', () => {
     const rows = sessionRows(groupSessions(
       [inRepo('a', `${ROOT}/packages/tui`, { state: 'closed', stateLabel: 'closed' })],
       'tree',
       UNKNOWN,
     ), 'closed')
     const head = rows.filter(r => r.kind === 'heading')
-    expect(head.map(r => r.label)).toEqual(['agentistics', 'packages/tui · closed'])
+    // The branch keeps its own name and the closed rows sit inside it — a suffixed twin would be a
+    // second band for the same directory.
+    expect(head.map(r => r.label)).toEqual(['agentistics', 'packages/tui'])
     // The crumb ends on the SAME words the heading reads, or the card band and the list would name
     // one branch two different ways.
-    expect(head[1]!.path).toEqual(['agentistics', 'packages/tui · closed'])
+    expect(head[1]!.path).toEqual(['agentistics', 'packages/tui'])
   })
 
   it('never lets the cursor land on a branch heading', () => {
@@ -358,7 +378,7 @@ describe('sessionCells', () => {
 describe('detailLines', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
-    external: 'started outside agentop', closed: 'not running', doing: 'saying', task: 'task', metrics: 'usage',
+    external: 'started outside agentop', closed: 'not running', doing: 'saying', task: 'task', metrics: 'usage', metricsAll: 'in + out + cache',
     context: 'window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
@@ -460,7 +480,7 @@ describe('detailLines — the two non-actionable rows say different things', () 
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
     external: 'started outside agentop', closed: 'not running', doing: 'saying',
-    task: 'task', metrics: 'usage', context: 'window', conversation: 'conversation',
+    task: 'task', metrics: 'usage', metricsAll: 'in + out + cache', context: 'window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
   const ago = () => '5m ago'
@@ -487,7 +507,11 @@ describe('detailLines — the two non-actionable rows say different things', () 
   it('shows usage only where the conversation recorded any', () => {
     expect(detailLines(session('m'), labels, ago).map(x => x.key)).not.toContain('metrics')
     const l = detailLines(session('m', { tokens: '41.4K', cost: 'USD 0.26' }), labels, ago)
-    expect(l.find(x => x.key === 'metrics')?.value).toBe('41.4K  ·  USD 0.26')
+    // The token figure says what it counts; the cost does not need to.
+    expect(l.find(x => x.key === 'metrics')?.value).toBe('41.4K (in + out + cache)  ·  USD 0.26')
+    // A row with only a cost claims no breakdown it is not showing.
+    expect(detailLines(session('m', { cost: 'USD 0.26' }), labels, ago)
+      .find(x => x.key === 'metrics')?.value).toBe('USD 0.26')
   })
 })
 
@@ -1384,20 +1408,27 @@ describe('sessionAge', () => {
     expect(sessionAge(live, 60_000, ago)).toBe('')
   })
 
-  it('says how long ago a row that is DOWN began', () => {
-    const down = session('a', { state: 'lost' as SessionState, startedAt: 0 })
+  it('says how long ago a row that is DOWN went off', () => {
+    const down = session('a', { state: 'lost' as SessionState, lastActiveAt: 0 })
     expect(sessionAge(down, 60_000, ago)).toBe('60s')
   })
 
-  it('says nothing when nobody recorded a start', () => {
-    // Absent is absent. A start time nobody has is not "1970", and rendering it as fifty-six years
+  it('never answers with the START time, which is a different fact', () => {
+    // The column is read as "how long has this been off". A row that began three days ago and was
+    // alive until ten minutes ago must not report three days, so there is no fallback at all.
+    const down = session('a', { state: 'lost' as SessionState, startedAt: 0 })
+    expect(sessionAge(down, 60_000, ago)).toBe('')
+  })
+
+  it('says nothing when nobody recorded it', () => {
+    // Absent is absent. An instant nobody has is not "1970", and rendering it as fifty-six years
     // is worse than a blank.
     const down = session('a', { state: 'lost' as SessionState })
     expect(sessionAge(down, 60_000, ago)).toBe('')
   })
 
   it('never reports a negative age', () => {
-    const down = session('a', { state: 'exited' as SessionState, startedAt: 90_000 })
+    const down = session('a', { state: 'exited' as SessionState, lastActiveAt: 90_000 })
     expect(sessionAge(down, 60_000, ago)).toBe('0s')
   })
 })
@@ -2254,7 +2285,7 @@ describe('summaryCells — the fall', () => {
 describe('detailLines — named in two places', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
-    external: 'external', closed: 'closed', doing: 'saying', task: 'task', metrics: 'usage',
+    external: 'external', closed: 'closed', doing: 'saying', task: 'task', metrics: 'usage', metricsAll: 'in + out + cache',
     context: 'window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }
@@ -2449,7 +2480,7 @@ describe('cardLines — the gauge', () => {
 describe('detailLines — the gauge spelled out', () => {
   const labels = {
     where: 'where', model: 'model', note: 'note', started: 'started',
-    external: 'external', closed: 'closed', doing: 'saying', task: 'task', metrics: 'usage',
+    external: 'external', closed: 'closed', doing: 'saying', task: 'task', metrics: 'usage', metricsAll: 'in + out + cache',
     context: 'context window', conversation: 'conversation',
     alsoLabel: 'named here', alsoHarness: 'named inside',
   }

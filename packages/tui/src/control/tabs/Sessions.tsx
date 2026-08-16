@@ -23,7 +23,7 @@ import type { ControlStrings } from '../i18n'
 import { sessionWordBook } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
 import { DEFAULT_SESSION_VIEW } from '../types'
-import { resolveListKey, windowOffset, type NavKey } from '../nav'
+import { resolveListKey, resolveScrollKey, windowOffset, type NavKey } from '../nav'
 import { ACTION_SEP, actionAtColumn, fitActionRow } from '../chrome.ts'
 import { Divider } from '../Surface'
 import { PANE_MIN_ROWS, paneBadgeRoom, paneTitleRoom } from '../chrome.ts'
@@ -73,7 +73,7 @@ import {
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
   taskCounts, projectCounts, sessionMetric, sessionContext, contextLevel,
   sessionHandle, worktreeName, sessionRunning,
-  sessionAge, sessionKeyHelp, keyHelpColumn, closeCellWidth, canClose, CLOSE_CELL,
+  sessionAge, sessionKeyHelp, keyHelpColumn, keyHelpLines, closeCellWidth, canClose, CLOSE_CELL,
   DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder, type SessionLayout,
   cardGrid, cardPages, pageOfCard, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
   cardHit, cardStep, cardPageRows, cardLabelWidth, CARD_LABEL_GAP, pagerCells, pagerHit,
@@ -418,6 +418,7 @@ export function Sessions({
     doing: s.sessionsDoing,
     task: s.sessionsTask,
     metrics: s.sessionsMetrics,
+    metricsAll: s.sessionsMetricsAll,
     context: s.sessionsContext,
     conversation: s.sessionsConversation,
     alsoLabel: s.sessionsAlsoLabel,
@@ -924,7 +925,11 @@ export function Sessions({
     // It usually cannot: `ctrl+h` IS ASCII 8, which is the backspace byte, so Ink reports it as
     // `key.backspace` and a binding on it would either never fire or fire on backspace. Measured
     // here, not assumed. `?` has no such collision and is what every list-shaped TUI already uses.
-    if (input === '?' || (key.ctrl && input === 'h')) { setAsk({ kind: 'keys' }); return }
+    // `h` is the letter people try first and it was unbound; `?` is what every list-shaped TUI
+    // answers and stays. `ctrl+h` is accepted where the terminal can tell it apart from backspace —
+    // it usually cannot, since `ctrl+h` IS ASCII 8, so Ink reports it as `key.backspace` and a
+    // binding on it would either never fire or fire on backspace. Measured here, not assumed.
+    if (input === 'h' || input === '?' || (key.ctrl && input === 'h')) { setAsk({ kind: 'keys' }); return }
     if (input === 'v') return runAction('group')
     // One key, because there is one switch. `c` and `e` toggled two halves of the same question.
     // ONE key for one question. `active` and `history` partition `SESSION_STATES`, so the two
@@ -1360,6 +1365,7 @@ export function Sessions({
       listBody - closeCell,
       {
         groupedByTask: grouping === 'task',
+        groupedByProject: grouping === 'project',
         ages,
         ...(cockpit.header ? { headings: s.sessionsCols } : {}),
       },
@@ -1418,7 +1424,11 @@ export function Sessions({
     )
   }
 
-  if (ask?.kind === 'keys' && cockpit.aside === 0) {
+  // The reference takes the WHOLE screen, never the menu column. Drawn into the aside it had ~24
+  // columns for a description, so every second row ended in `…` — a list of keystrokes with what
+  // they do cut off is the half of the reference nobody needs. It is also the only screen here that
+  // is pure text, so it is the one that can afford to be a page.
+  if (ask?.kind === 'keys') {
     return (
       <Box flexDirection="column" width={width} flexShrink={0}>
         <KeyHelpScreen strings={s} width={width} height={height} onClose={() => setAsk(null)} />
@@ -1458,14 +1468,7 @@ export function Sessions({
       <Box flexDirection="row" width={width} flexShrink={0}>
       {cockpit.aside > 0 ? (
         <>
-          {ask?.kind === 'keys' ? (
-            <KeyHelpScreen
-              strings={s}
-              width={cockpit.aside}
-              height={cockpit.band}
-              onClose={() => setAsk(null)}
-            />
-          ) : foldRows ? (
+          {foldRows ? (
             // Each block its OWN framed pane, titled with its own heading. One scrolling pane
             // titled "menu" showed its first section and nothing else, so every switch and every
             // task sat below the fold — and the honest reading of that screen is that all of it
@@ -1800,17 +1803,22 @@ function SummaryRow({
   }
   const waiting = fleet?.attention ?? 0
 
-  // Only the filters that are actually HIDING something are named. A row that lists every setting
-  // at its default is noise; one that names what is being withheld is an explanation.
-  const hiding: string[] = []
-  // The strict selection is stated FIRST and alone: it withholds everything the other two do and
-  // more, so listing them beside it would describe a filter that is not the one in force. It can no
-  // longer be true at the same time as them — all three read one selection — but the reading order
-  // still matters, and `showNamed` is named whenever it is on because it is the one thing that puts
-  // rows BACK into a list the sentence above says is strict.
-  if (onlyActive) hiding.push(s.viewActiveOn)
-  else if (!showHistory) hiding.push(s.viewClosedOn)
-  if (showNamed) hiding.push(s.toggleNamed)
+  // Only the filters that are actually narrowing something are named. A row that lists every
+  // setting at its default is noise; one that names the filter in force is an explanation.
+  //
+  // Stated as what the list SHOWS, under its own label. It used to read `− not running` beside
+  // `GROUP project`, which is wrong twice over: the reader has to know that `−` means "hidden" to
+  // avoid reading it as the opposite of the truth, and at this row's width the leading dash sits
+  // where a separator would, so the whole thing parses as one phrase — `GROUP project — not
+  // running` — in which the grouping and the filter are indistinguishable. A label per cell is what
+  // tells them apart, and a positive sentence is what stops the filter naming the rows it removed.
+  const filters: string[] = []
+  // The strict selection is stated FIRST and alone: it withholds everything the other one does and
+  // more, so naming both would describe a filter that is not the one in force. `showNamed` is named
+  // whenever it is on, because it is the one thing that puts rows BACK into a narrowed list.
+  if (onlyActive) filters.push(s.sessionsFilterActive)
+  else if (!showHistory) filters.push(s.sessionsFilterNoHistory)
+  if (showNamed) filters.push(s.sessionsFilterNamed)
 
   // MEASURED, never left to Yoga: a row that wraps takes two of the screen's rows while its budget
   // counted one, and everything below it — the action row, the detail pane, the footer — is pushed
@@ -1822,7 +1830,7 @@ function SummaryRow({
   const narrowed = query ? s.sessionsSearching(query) : scope
   const cells = summaryCells({
     group: narrowed || `${s.sessionsGroupBy} ${s.sessionsGroupings[grouping]}`,
-    hiding: hiding.length > 0 ? `− ${hiding.join(', ')}` : '',
+    hiding: filters.length > 0 ? `${s.sessionsFilterBy} ${filters.join(', ')}` : '',
     count: s.sessionsCount(shown, fleet?.sessions.length ?? 0),
     waiting: waiting > 0 ? s.sessionsWaitingCount(waiting) : '',
     fell,
@@ -1840,7 +1848,14 @@ function SummaryRow({
             <Text bold>{cells.group.slice(s.sessionsGroupBy.length + 1)}</Text>
           </>
         )}
-        {cells.hiding ? <Text dimColor>{`   ${cells.hiding}`}</Text> : null}
+        {/* The label dim and the value bold, exactly as the grouping cell beside it is drawn — the
+            two cells answer different questions and must look like two cells. */}
+        {cells.hiding ? (
+          <>
+            <Text dimColor>{`   ${s.sessionsFilterBy} `}</Text>
+            <Text bold>{cells.hiding.slice(s.sessionsFilterBy.length + 1)}</Text>
+          </>
+        ) : null}
         {/* The fall is an OFFER, not a description, so it is the one cell on this row that wears a
             colour: everything beside it says what the list contains, and this says what is one
             keypress from coming back. */}
@@ -1892,9 +1907,14 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           {padCell(sessionHandle(session), columns.id) + gap}
         </Text>
       ) : null}
-      {/* Harness column is placed right after id, and retains its harness color when selected while taking underline. */}
+      {/* Harness column, right after the id. It wears its harness colour EXCEPT on the selected
+          row, where the whole line is the focus highlight: a terminal draws the underline in the
+          text's own colour (there is no separate underline colour Ink can set), so keeping the
+          harness hue here drew a purple rule through a cyan line and broke the highlight into two
+          pieces. Focus outranks provenance — the harness is still named in the cell, and every
+          other row on screen still carries its colour. */}
       {columns.harness > 0 ? (
-        <Text color={harnessColor} underline={selected} bold={selected}>
+        <Text color={selected ? COLORS.info : harnessColor} underline={selected} bold={selected}>
           {padCell(session.harness, columns.harness) + gap}
         </Text>
       ) : null}
@@ -2032,23 +2052,50 @@ function KeyHelpScreen({ strings: s, width, height, onClose }: {
   height: number
   onClose: () => void
 }) {
-  useInput((_i, key) => { if (key.escape || key.return) onClose() })
-
   const rows = useMemo(() => sessionKeyHelp(s.sessionsKeyWhat), [s])
   const keyCol = keyHelpColumn(rows)
-  // Two rows of chrome: the title and the blank under it. Budgeted, because Ink composites what
-  // does not fit rather than clipping it.
-  const page = Math.max(1, height - 3)
+  const lines = useMemo(() => keyHelpLines(rows, paneBody(width)), [rows, width])
+  // Two rows of chrome: the title and the footer that says how to leave and how to scroll. Budgeted
+  // against the height, because Ink composites what does not fit rather than clipping it.
+  const page = Math.max(1, paneRows(height) - 1)
+  const [top, setTop] = useState(0)
+  // The last first-line that still fills the page: scrolling past it would leave air under the
+  // list while claiming there is more below.
+  const maxTop = Math.max(0, lines.length - page)
+  const at = Math.min(top, maxTop)
+
+  useInput((input, key) => {
+    if (key.escape || key.return || input === 'q') return onClose()
+    // The reference is a DOCUMENT, so it answers the same keys every other scrolling surface in
+    // this app answers, through the same pure reducer — clamped at both ends, never wrapped.
+    const next = resolveScrollKey(
+      { upArrow: key.upArrow, downArrow: key.downArrow, pageUp: key.pageUp, pageDown: key.pageDown,
+        home: key.home, end: key.end, input },
+      at, maxTop + 1, page,
+    )
+    if (next !== null) setTop(next)
+  })
+
+  const shown = lines.slice(at, at + page)
 
   return (
     <Pane title={s.sessionsPaneKeys} focused width={width} height={height}>
-      {rows.slice(0, page).map(r => (
-        <Text key={r.keys} wrap="truncate">
-          <Text color={COLORS.accent}>{padCell(r.keys, keyCol)}</Text>
-          <Text dimColor>{'  ' + truncate(r.what, Math.max(1, paneBody(width) - keyCol - 2))}</Text>
+      {shown.map((line, i) => (
+        <Text key={`${at + i}`} wrap="truncate">
+          <Text color={COLORS.accent}>{padCell(line.keys, keyCol)}</Text>
+          <Text dimColor>{'  ' + line.what}</Text>
         </Text>
       ))}
-      {rows.length > page ? <Text dimColor>{`… +${rows.length - page}`}</Text> : null}
+      {/* The footer says how to leave and — only while there IS more — that scrolling reaches it.
+          A list that silently ends at the fold is one people conclude is the whole list. */}
+      <Text dimColor wrap="truncate">
+        {truncate(
+          maxTop > 0
+            ? `${s.sessionsKeysMore(at + shown.length, lines.length)}  ·  ${s.keyBack}`
+            : s.keyBack,
+          Math.max(1, paneBody(width)),
+        )}
+      </Text>
     </Pane>
   )
 }
