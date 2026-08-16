@@ -1400,6 +1400,11 @@ describe('sessionAge', () => {
     const down = session('a', { state: 'exited' as SessionState, startedAt: 90_000 })
     expect(sessionAge(down, 60_000, ago)).toBe('0s')
   })
+
+  it('uses endedAt when available for a closed row', () => {
+    const closed = session('a', { state: 'closed' as SessionState, startedAt: 0, endedAt: 40_000 })
+    expect(sessionAge(closed, 60_000, ago)).toBe('20s')
+  })
 })
 
 describe('sessionKeyHelp', () => {

@@ -625,6 +625,10 @@ export interface ControlSession {
   approvalBlind?: string
   /** When it started, epoch ms. An instant rather than a duration — see `ServiceRuntimeState`. */
   startedAt?: number
+  /** When it ENDED, epoch ms. Absent while the session runs, and absent on a row whose end nothing
+   *  recorded — `sessionAge` then falls back to the start, which is the older, wronger answer, so
+   *  absence must stay distinguishable from zero. */
+  endedAt?: number
   attached: boolean
   /** Process ID for live process monitoring. */
   pid?: number
