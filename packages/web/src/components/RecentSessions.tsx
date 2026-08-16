@@ -291,6 +291,12 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds }: Props) {
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(10)
 
+  // Batch selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [openWarningModal, setOpenWarningModal] = useState<string[] | null>(null)
+  const [promptModal, setPromptModal] = useState<boolean>(false)
+  const [batchPromptText, setBatchPromptText] = useState('')
+
   // Derived: sorted + filtered
   const processed = useMemo<SessionMeta[]>(() => {
     let list = [...sessions]
@@ -384,6 +390,30 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds }: Props) {
           </PillButton>
         ))}
 
+        <button
+          onClick={() => {
+            if (selectedIds.size === pageItems.length && pageItems.length > 0) {
+              setSelectedIds(new Set())
+            } else {
+              setSelectedIds(new Set(pageItems.map(s => s.session_id)))
+            }
+          }}
+          style={{
+            padding: '4px 10px',
+            borderRadius: 6,
+            border: '1px solid var(--border-subtle)',
+            background: 'var(--bg-elevated)',
+            color: 'var(--text-secondary)',
+            fontSize: 11,
+            cursor: 'pointer',
+            marginLeft: 4,
+          }}
+        >
+          {selectedIds.size === pageItems.length && pageItems.length > 0
+            ? (lang === 'pt' ? 'Desmarcar todas' : 'Deselect all')
+            : (lang === 'pt' ? 'Selecionar todas' : 'Select all')}
+        </button>
+
         {/* Spacer */}
         <div style={{ flex: 1 }} />
 
@@ -466,7 +496,21 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds }: Props) {
                     marginBottom: 7,
                   }}
                 >
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flex: 1, minWidth: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(s.session_id)}
+                      onChange={(e) => {
+                        e.stopPropagation()
+                        const next = new Set(selectedIds)
+                        if (next.has(s.session_id)) next.delete(s.session_id)
+                        else next.add(s.session_id)
+                        setSelectedIds(next)
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ cursor: 'pointer', width: 16, height: 16, marginTop: 2, accentColor: 'var(--anthropic-orange)' }}
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
                     {/* Project name + source dot */}
                     <div
                       style={{
@@ -503,6 +547,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds }: Props) {
                       {(() => { const label = sessionLabel(s); return label ? truncate(label, 120) : '(no prompt)' })()}
                     </div>
                   </div>
+                </div>
 
                   {/* Timestamp + open button */}
                   <div
@@ -679,6 +724,204 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds }: Props) {
           </div>
         </div>
       </div>
+
+      {/* Sticky Floating Mass Action Bar */}
+      {selectedIds.size > 0 && (
+        <div
+          style={{
+            position: 'sticky',
+            bottom: 16,
+            zIndex: 100,
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--anthropic-orange, #e8690b)',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.25)',
+            borderRadius: 12,
+            padding: '12px 18px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+            {lang === 'pt' ? `${selectedIds.size} sessão(ões) selecionada(s)` : `${selectedIds.size} session(s) selected`}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {/* Mandar Prompt */}
+            <button
+              onClick={() => setPromptModal(true)}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                background: 'var(--anthropic-orange)',
+                color: '#fff',
+                border: 'none',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {lang === 'pt' ? '💬 Enviar Prompt' : '💬 Send Prompt'}
+            </button>
+
+            {/* Desligar */}
+            <button
+              onClick={() => {
+                for (const id of selectedIds) {
+                  fetch(`/api/session/kill`, { method: 'POST', body: JSON.stringify({ id }) }).catch(() => {})
+                }
+                setSelectedIds(new Set())
+              }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                background: 'rgba(239, 68, 68, 0.15)',
+                color: '#ef4444',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {lang === 'pt' ? '🛑 Desligar' : '🛑 Kill'}
+            </button>
+
+            {/* Reabrir */}
+            <button
+              onClick={() => {
+                const selectedSessions = sessions.filter(s => selectedIds.has(s.session_id))
+                const open = selectedSessions.filter(s => pinnedIds?.has(s.session_id))
+                if (open.length > 0) {
+                  setOpenWarningModal(open.map(s => sessionLabel(s) || s.session_id))
+                } else {
+                  for (const s of selectedSessions) {
+                    fetch(`/api/session/start`, { method: 'POST', body: JSON.stringify({ resumeId: s.session_id, harness: s.harness, cwd: s.project_path }) }).catch(() => {})
+                  }
+                  setSelectedIds(new Set())
+                }
+              }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                background: 'rgba(34, 197, 94, 0.15)',
+                color: '#22c55e',
+                border: '1px solid rgba(34, 197, 94, 0.3)',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {lang === 'pt' ? '🔄 Reabrir' : '🔄 Reopen'}
+            </button>
+
+            {/* Clear selection */}
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                background: 'transparent',
+                color: 'var(--text-tertiary)',
+                border: '1px solid var(--border-subtle)',
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              {lang === 'pt' ? 'Limpar seleção' : 'Clear selection'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Warning Modal */}
+      {openWarningModal && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.6)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+        }}>
+          <div style={{
+            background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
+            padding: 24, maxWidth: 480, width: '100%', display: 'flex', flexDirection: 'column', gap: 16
+          }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>
+              {lang === 'pt' ? 'Aviso: Não é possível reabrir' : 'Warning: Cannot reopen'}
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              {lang === 'pt'
+                ? 'As seguintes sessões já estão abertas e não podem ser religadas:'
+                : 'The following sessions are already open and cannot be restarted:'}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--bg-elevated)', padding: 12, borderRadius: 8 }}>
+              {openWarningModal.map(name => (
+                <div key={name} style={{ fontSize: 13, fontWeight: 600, color: 'var(--anthropic-orange)' }}>
+                  • {name}
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={() => setOpenWarningModal(null)}
+              style={{
+                alignSelf: 'flex-end', padding: '8px 18px', borderRadius: 8,
+                background: 'var(--anthropic-orange)', color: '#fff', border: 'none',
+                fontWeight: 600, fontSize: 13, cursor: 'pointer'
+              }}
+            >
+              {lang === 'pt' ? 'Entendido' : 'OK'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Prompt Modal */}
+      {promptModal && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.6)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+        }}>
+          <div style={{
+            background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
+            padding: 24, maxWidth: 500, width: '100%', display: 'flex', flexDirection: 'column', gap: 16
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
+              {lang === 'pt' ? `Enviar prompt para ${selectedIds.size} sessões` : `Send prompt to ${selectedIds.size} sessions`}
+            </div>
+            <textarea
+              value={batchPromptText}
+              onChange={e => setBatchPromptText(e.target.value)}
+              placeholder={lang === 'pt' ? 'Digite a instrução para as sessões selecionadas...' : 'Type prompt for selected sessions...'}
+              rows={4}
+              style={{
+                width: '100%', boxSizing: 'border-box', padding: 10, borderRadius: 8,
+                border: '1px solid var(--border)', background: 'var(--bg-elevated)',
+                color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 13, outline: 'none'
+              }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button
+                onClick={() => { setPromptModal(false); setBatchPromptText('') }}
+                style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13 }}
+              >
+                {lang === 'pt' ? 'Cancelar' : 'Cancel'}
+              </button>
+              <button
+                onClick={() => {
+                  for (const id of selectedIds) {
+                    fetch(`/api/session/prompt`, { method: 'POST', body: JSON.stringify({ id, prompt: batchPromptText }) }).catch(() => {})
+                  }
+                  setPromptModal(false)
+                  setBatchPromptText('')
+                  setSelectedIds(new Set())
+                }}
+                style={{ padding: '8px 16px', borderRadius: 8, background: 'var(--anthropic-orange)', color: '#fff', border: 'none', fontWeight: 600, cursor: 'pointer', fontSize: 13 }}
+              >
+                {lang === 'pt' ? 'Enviar' : 'Send'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
