@@ -230,8 +230,8 @@ describe('sessionRows / selectableIndexes', () => {
   it('lists the closed rows MOST RECENTLY OFF first', () => {
     // A block of finished conversations is read from the top: the one that ended twenty minutes ago
     // is the one being looked for. A row with no measured end sorts last — unknown is not recent.
-    const off = (id: string, lastActiveAt?: number) =>
-      session(id, { state: 'closed', stateLabel: 'closed', task: 'billing', ...(lastActiveAt !== undefined ? { lastActiveAt } : {}) })
+    const off = (id: string, endedAt?: number) =>
+      session(id, { state: 'closed', stateLabel: 'closed', task: 'billing', ...(endedAt !== undefined ? { endedAt } : {}) })
     const rows = sessionRows(groupSessions(
       [off('old', 1_000), off('never'), off('fresh', 9_000)], 'task', UNKNOWN,
     ), 'closed')
@@ -1452,7 +1452,7 @@ describe('sessionAge', () => {
   })
 
   it('says how long ago a row that is DOWN went off', () => {
-    const down = session('a', { state: 'lost' as SessionState, lastActiveAt: 0 })
+    const down = session('a', { state: 'lost' as SessionState, endedAt: 0 })
     expect(sessionAge(down, 60_000, ago)).toBe('60s')
   })
 
@@ -1471,7 +1471,7 @@ describe('sessionAge', () => {
   })
 
   it('never reports a negative age', () => {
-    const down = session('a', { state: 'exited' as SessionState, lastActiveAt: 90_000 })
+    const down = session('a', { state: 'exited' as SessionState, endedAt: 90_000 })
     expect(sessionAge(down, 60_000, ago)).toBe('0s')
   })
 

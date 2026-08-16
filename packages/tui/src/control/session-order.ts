@@ -94,7 +94,7 @@ export function sortSessions(
       // ten minutes ago sorts three days old under that key, which is the wrong answer to "what was
       // I just doing".
       case 'recent':
-        return (b.lastActiveAt ?? b.startedAt ?? 0) - (a.lastActiveAt ?? a.startedAt ?? 0)
+        return (b.endedAt ?? b.startedAt ?? 0) - (a.endedAt ?? a.startedAt ?? 0)
     }
   }
   const sign = order.dir === 'asc' ? -1 : 1
