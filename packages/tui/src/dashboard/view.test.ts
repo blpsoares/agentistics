@@ -8,12 +8,16 @@ import {
   costsPlan,
   dashboardRows,
   dashboardSource,
+  listPlan,
   listRows,
   overviewPlan,
+  PAGE_SIZE,
+  pageWindow,
   resolveDashboardScreen,
   stripCells,
   stripFit,
   SHARE_MAX,
+  pageableTotal,
 } from './view'
 
 const key = (over: Partial<Parameters<typeof resolveDashboardScreen>[0]> = {}) =>
@@ -146,7 +150,10 @@ describe('row budgets', () => {
         if (o.empty) expect(n).toBe(0)
 
         const c = costsPlan(height, n)
-        const costSpent = c.table > 0 ? 1 + c.table + (c.share > 0 ? 2 + c.share : 0) : 0
+        // Header + rows + the pager's own line + the share panel's chrome and bars.
+        const costSpent = c.table > 0
+          ? 1 + c.table + (c.pager ? 1 : 0) + (c.share > 0 ? 2 + c.share : 0)
+          : 0
         expect(costSpent).toBeLessThanOrEqual(Math.max(0, height))
         expect(c.share).toBeLessThanOrEqual(Math.min(n, SHARE_MAX))
 
@@ -169,7 +176,7 @@ describe('row budgets', () => {
     expect(tight.share).toBe(0)
     expect(tight.table).toBe(5)
     // One row is the header alone. A result row on top of it is the overflow Ink composites.
-    expect(costsPlan(1, 5)).toEqual({ table: 0, share: 0 })
+    expect(costsPlan(1, 5)).toEqual({ table: 0, share: 0, pager: false })
   })
 
   test('a table asks for one row fewer than its height, because it draws a header', () => {
@@ -177,5 +184,86 @@ describe('row budgets', () => {
     // Never zero: a table with no rows at all says less than a table with one.
     expect(listRows(1)).toBe(1)
     expect(listRows(0)).toBe(1)
+  })
+})
+
+describe('paging', () => {
+  test('pageWindow names the slice of the requested page', () => {
+    expect(pageWindow(355, 15, 0)).toEqual({ page: 0, pages: 24, from: 0, to: 15 })
+    expect(pageWindow(355, 15, 1)).toEqual({ page: 1, pages: 24, from: 15, to: 30 })
+  })
+
+  test('the last page is short, never a slice past the end', () => {
+    // 355 = 23 full pages of 15 plus 10 rows.
+    expect(pageWindow(355, 15, 23)).toEqual({ page: 23, pages: 24, from: 345, to: 355 })
+  })
+
+  test('a page pointing past the end is clamped, never blank', () => {
+    // The list shortens under a remembered page every time the filter changes.
+    expect(pageWindow(20, 15, 9)).toEqual({ page: 1, pages: 2, from: 15, to: 20 })
+    expect(pageWindow(20, 15, -3)).toEqual({ page: 0, pages: 2, from: 0, to: 15 })
+    expect(pageWindow(20, 15, NaN)).toEqual({ page: 0, pages: 2, from: 0, to: 15 })
+  })
+
+  test('an empty list is page 1 of 1, never page 1 of 0', () => {
+    expect(pageWindow(0, 15, 4)).toEqual({ page: 0, pages: 1, from: 0, to: 0 })
+  })
+
+  test('a size below one row is one row, never a division by zero', () => {
+    expect(pageWindow(7, 0, 0)).toEqual({ page: 0, pages: 7, from: 0, to: 1 })
+  })
+
+  test('a list that fits pays for no pager', () => {
+    // A line saying "page 1 of 1" is a row spent stating that nothing was withheld.
+    expect(listPlan(30, 10)).toEqual({ size: PAGE_SIZE, pager: false })
+    expect(listPlan(30, PAGE_SIZE)).toEqual({ size: PAGE_SIZE, pager: false })
+  })
+
+  test('one row held back is what raises the pager', () => {
+    expect(listPlan(30, PAGE_SIZE + 1)).toEqual({ size: PAGE_SIZE, pager: true })
+  })
+
+  test('a short body shortens the PAGE rather than overflowing', () => {
+    // Ink composites what does not fit, so the height is a ceiling on the page and not on nothing.
+    expect(listPlan(10, 100)).toEqual({ size: 8, pager: true })
+    expect(listPlan(3, 100)).toEqual({ size: 1, pager: true })
+    expect(listPlan(1, 100).size).toBe(1)
+  })
+
+  test('a page and its chrome never spend more rows than the body has', () => {
+    for (let height = 1; height <= 40; height++) {
+      for (const total of [0, 1, 7, 15, 16, 355]) {
+        const plan = listPlan(height, total)
+        const rows = Math.min(plan.size, total)
+        const spent = (rows > 0 ? 1 + rows : 0) + (plan.pager ? 1 : 0)
+        // One row of a height of one is the floor this arithmetic is allowed to break, and it is
+        // the same floor `listRows` has always had.
+        if (height > 2) expect(spent).toBeLessThanOrEqual(height)
+        expect(plan.size).toBeLessThanOrEqual(PAGE_SIZE)
+        expect(plan.size).toBeGreaterThanOrEqual(1)
+      }
+    }
+  })
+
+  test('the costs table pages without pushing its share panel off the screen', () => {
+    const many = costsPlan(30, 40)
+    expect(many.pager).toBe(true)
+    expect(many.share).toBe(SHARE_MAX)
+    expect(many.table).toBeLessThanOrEqual(PAGE_SIZE)
+    // Header + page + pager + share chrome + bars, all inside the height.
+    expect(1 + many.table + 1 + 2 + many.share).toBeLessThanOrEqual(30)
+  })
+
+  test('only the three list screens page at all', () => {
+    const data = { sessions: [], projects: [], harnesses: [] } as never
+    for (const id of DASHBOARD_SCREENS) {
+      // overview / harnesses / hardware draw no list, so their pager keys do nothing by arithmetic
+      // rather than by a special case in the keyboard.
+      if (id === 'overview' || id === 'harnesses' || id === 'hardware') {
+        expect(pageableTotal(id, data)).toBe(0)
+      }
+    }
+    // Nothing read yet is not the same as an empty list, and neither can be paged.
+    expect(pageableTotal('history', null)).toBe(0)
   })
 })

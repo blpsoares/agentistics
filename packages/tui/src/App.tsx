@@ -35,7 +35,14 @@ export function App({ apiBase, lang }: { apiBase: string; lang: TuiLang }) {
   const { data, connection, refresh } = useAppData(apiBase)
 
   const [help, setHelp] = React.useState(false)
-  const nav = useDashboardNav({ isActive: !help, harnesses: data?.harnesses })
+  // The nav needs both to clamp a page: what is being listed, and how many rows a page holds here.
+  const bodyHeight = Math.max(3, rows - CHROME_ROWS)
+  const nav = useDashboardNav({
+    isActive: !help,
+    harnesses: data?.harnesses,
+    data,
+    height: bodyHeight,
+  })
 
   useInput((input, key) => {
     if (help) {
@@ -64,7 +71,6 @@ export function App({ apiBase, lang }: { apiBase: string; lang: TuiLang }) {
     )
   }
 
-  const bodyHeight = Math.max(3, rows - CHROME_ROWS)
   // The shell adds one column of padding on each side; screens must size against what is left,
   // or a full-width bar/table overflows by exactly those two columns and wraps.
   const bodyWidth = Math.max(20, columns - PADDING_X * 2)
