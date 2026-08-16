@@ -23,7 +23,7 @@ import type { ControlStrings } from '../i18n'
 import { sessionWordBook } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
 import { DEFAULT_SESSION_VIEW } from '../types'
-import { resolveListKey, windowOffset, type NavKey } from '../nav'
+import { resolveListKey, resolveScrollKey, windowOffset, type NavKey } from '../nav'
 import { ACTION_SEP, actionAtColumn, fitActionRow } from '../chrome.ts'
 import { Divider } from '../Surface'
 import { PANE_MIN_ROWS, paneBadgeRoom, paneTitleRoom } from '../chrome.ts'
@@ -40,6 +40,17 @@ const PANE_EDGE_X = 2
  * row that shifts sideways with its branch is a column that stops lining up.
  */
 const INDENT = '  '
+
+/**
+ * A stored grouping, as this build understands it.
+ *
+ * `tree` was a grouping before the cascade became a view: it meant "no bands, cascade on". The menu
+ * no longer offers it, so a preference still carrying it is rewritten rather than left selecting a
+ * row that does not exist — the caller turns the cascade on beside this.
+ */
+function groupingOf(stored: SessionGrouping): SessionGrouping {
+  return stored === 'tree' ? 'none' : stored
+}
 
 /**
  * How far down a scrolling region is, one cell per drawn row.
@@ -73,8 +84,9 @@ import {
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
   taskCounts, projectCounts, sessionMetric, sessionContext, contextLevel,
   sessionHandle, worktreeName, sessionRunning,
-  sessionAge, sessionKeyHelp, keyHelpColumn, closeCellWidth, canClose, CLOSE_CELL,
-  DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder, type SessionLayout,
+  sessionAge, sessionKeyHelp, keyHelpColumn, keyHelpLines, closeCellWidth, canClose, CLOSE_CELL,
+  treeGuides, notifyCellWidth, sessionNotify,
+  DEFAULT_ORDER, ACTIVE_STATES, OFF_STATE, type SessionOrder, type SessionLayout,
   cardGrid, cardPages, pageOfCard, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
   cardHit, cardStep, cardPageRows, cardLabelWidth, CARD_LABEL_GAP, pagerCells, pagerHit,
   type CardBand, type CardGrid, type CardLabels, type CardLine, type CardPage, type PagerCells,
@@ -122,7 +134,7 @@ const STATE_COLOR: Record<SessionState, string | undefined> = {
   // Amber is also the selection colour, which they can share: a selected row already carries the
   // `❯` cursor and a bold title, so the two never have to be told apart by hue alone.
   waiting: COLORS.accent,
-  working: COLORS.success,
+  working: COLORS.running,
   exited: COLORS.muted,
   lost: COLORS.muted,
   unknown: COLORS.muted,
@@ -187,6 +199,12 @@ type Ask =
   | { kind: 'reopenFell' }
   /** Starting a new one — the only question that needs no selected row. */
   | { kind: 'new' }
+  /** Warning when attempting to reopen sessions that are already open. */
+  | { kind: 'openWarning'; openSessions: string[] }
+  /** Sending prompt to multiple selected sessions. */
+  | { kind: 'batchPrompt'; sessions: ControlSession[] }
+  /** Killing multiple selected sessions. */
+  | { kind: 'batchKill'; sessions: ControlSession[] }
 
 export function Sessions({
   host, fleet, strings: s, width, height, isActive, run, onChrome, onExit, onRefreshFleet,
@@ -212,8 +230,16 @@ export function Sessions({
   /** Store the arrangement, so a restart does not throw away what the user chose. */
   onView: (v: SessionViewPrefs) => void
 }) {
+  // A stored `grouping: 'tree'` predates the cascade being a view: it meant "no bands, cascade on",
+  // which is exactly `none` + cascade. Rewritten on the way in rather than left as a grouping the
+  // menu no longer offers — a machine that had it selected would otherwise be stuck in an
+  // arrangement it cannot see a row for.
   const [grouping, setGrouping] = useState<SessionGrouping>(
-    view?.grouping ?? DEFAULT_SESSION_VIEW.grouping,
+    groupingOf(view?.grouping ?? DEFAULT_SESSION_VIEW.grouping),
+  )
+  /** The directory cascade, drawn INSIDE whatever the bands are. See `groupSessions`. */
+  const [cascade, setCascade] = useState<boolean>(
+    view?.cascade ?? view?.grouping === 'tree',
   )
   /** A list of rows, or a grid of cards. See `cardGrid` for why the grid may refuse. */
   const [layout, setLayout] = useState<SessionLayout>(
@@ -359,14 +385,15 @@ export function Sessions({
     fleet?.finishedTasks ?? [],
     order,
     dimensionCtx,
+    cascade,
     // The heading is passed only when something ACTUALLY fell. `sessionRows` treats an absent word
     // as "there is no such section", so on an ordinary machine the reading order is unchanged
     // rather than carrying an empty block that exists to say nothing.
   ), s.sessionsClosedWord, s.sessionsDoneWord, fleet?.fell ? s.sessionsFellWord : undefined,
      // Absent when nothing is marked, so the band is not merely empty — it does not exist.
      marked.size > 0 ? { ids: marked, label: s.sessionsMarkedBand } : undefined), [
-    fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, query, filters, showNamed,
-    showDone, taskFilter, dimensionCtx, order, words, marked,
+    fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, cascade, query, filters,
+    showNamed, showDone, taskFilter, dimensionCtx, order, words, marked,
   ])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
@@ -418,6 +445,7 @@ export function Sessions({
     doing: s.sessionsDoing,
     task: s.sessionsTask,
     metrics: s.sessionsMetrics,
+    metricsAll: s.sessionsMetricsAll,
     context: s.sessionsContext,
     conversation: s.sessionsConversation,
     alsoLabel: s.sessionsAlsoLabel,
@@ -488,11 +516,12 @@ export function Sessions({
     layout: { heading: s.asideLayout, words: s.sessionsLayouts, value: layout },
     toggles: {
       history: showHistory, done: showDone,
-      active: onlyActive, named: showNamed, detail: !hideDetail,
+      active: onlyActive, named: showNamed, detail: !hideDetail, cascade,
     },
     toggleWords: {
       history: s.toggleHistory, done: s.toggleDone,
       active: s.toggleActive, named: s.toggleNamed, detail: s.toggleDetail,
+      cascade: s.toggleCascade,
     },
     headings: { actions: s.asideActions, view: s.asideView, show: s.asideShow },
     tasks: {
@@ -660,13 +689,40 @@ export function Sessions({
   const runAction = useCallback((a: SessionAction) => {
     if (a === 'new') { if (host.spawnSession) setAsk({ kind: 'new' }); return }
     if (a === 'search') { setAsk({ kind: 'search' }); return }
-    // Opens the panel rather than cycling blind. A control that changes something without showing
-    // what the options were, or what the current one is, is a control people stop trusting — and
-    // the hide-closed and hide-unfiled switches had nowhere to live at all.
     if (a === 'group') { setAsk({ kind: 'view' }); return }
-    // A FLEET verb: it names no row, so it must not be gated on one being selected. Refused in a
-    // SENTENCE when nothing fell, never silently — a control that does nothing and says nothing is
-    // indistinguishable from a broken one.
+
+    // Batch actions when items are marked
+    if (marked.size > 0) {
+      const markedList = (fleet?.sessions ?? []).filter(sess => marked.has(sess.id))
+      if (a === 'prompt') {
+        setAsk({ kind: 'batchPrompt', sessions: markedList })
+        return
+      }
+      if (a === 'kill') {
+        const activeMarked = markedList.filter(sess => sess.state === 'working' || sess.state === 'waiting' || sess.state === 'waiting-approval')
+        if (activeMarked.length > 0) {
+          setAsk({ kind: 'batchKill', sessions: activeMarked })
+          return
+        }
+      }
+      if (a === 'reopenFell' || a === 'resume') {
+        const openSessions = markedList.filter(sess => sess.state === 'working' || sess.state === 'waiting' || sess.state === 'waiting-approval')
+        if (openSessions.length > 0) {
+          const names = openSessions.map(s => s.title || s.id)
+          setAsk({ kind: 'openWarning', openSessions: names })
+          return
+        }
+        const restore = host.restoreSessions
+        if (restore) {
+          void run(() => restore.call(host, [...marked], true)).then(() => {
+            setMarked(new Set())
+            onRefreshFleet()
+          })
+          return
+        }
+      }
+    }
+
     if (a === 'reopenFell') {
       if (!fleet?.fell || !host.reopenFell) {
         void run(async () => ({ ok: false, message: s.sessionsNoFell }))
@@ -756,8 +812,35 @@ export function Sessions({
    * One function behind `ctrl+r` and behind the menu row, because a keystroke and a button that
    * both claim to do the same thing and are written twice are two things that will one day differ.
    */
+  /**
+   * Everything that is not running, newest first, with nothing grouping it.
+   *
+   * It sets the four things that answer "what did I have open recently" in one move: no bands, the
+   * off states only, ordered by last activity, and no scope or search left over narrowing it. It is
+   * an ordinary arrangement rather than a mode — every switch it touched is still where it was, and
+   * `ctrl+r` puts it all back.
+   */
+  const showRecentlyClosed = useCallback(() => {
+    setGrouping('none')
+    setCascade(false)
+    // The status selection AND both scopes in one write: a scope left over is exactly the kind of
+    // leftover that makes this land on an empty list.
+    setFilters(f => {
+      const next = { ...f, status: [OFF_STATE] }
+      delete next.task
+      delete next.project
+      return next
+    })
+    setShowNamed(true)
+    setShowDone(true)
+    setOrder({ by: 'recent', dir: 'desc' })
+    setQuery('')
+    setCursor(0)
+  }, [])
+
   const resetView = useCallback(() => {
-    setGrouping(DEFAULT_SESSION_VIEW.grouping)
+    setGrouping(groupingOf(DEFAULT_SESSION_VIEW.grouping))
+    setCascade(DEFAULT_SESSION_VIEW.cascade ?? false)
     setShowDone(DEFAULT_SESSION_VIEW.showDone ?? false)
     // The DEFAULT's own filters, read back through the same migration the restore uses — so the
     // arrangement the app opens on and the one `ctrl+r` returns to are one answer, not two.
@@ -799,6 +882,7 @@ export function Sessions({
     if (row.toggle === 'history') return pressShortcut('history')
     if (row.toggle === 'active') return pressShortcut('active')
     setCursor(0)
+    if (row.toggle === 'cascade') return setCascade(v => !v)
     if (row.toggle === 'done') return setShowDone(v => !v)
     if (row.toggle === 'named') return setShowNamed(v => !v)
     return setHideDetail(v => !v)
@@ -924,14 +1008,27 @@ export function Sessions({
     // It usually cannot: `ctrl+h` IS ASCII 8, which is the backspace byte, so Ink reports it as
     // `key.backspace` and a binding on it would either never fire or fire on backspace. Measured
     // here, not assumed. `?` has no such collision and is what every list-shaped TUI already uses.
-    if (input === '?' || (key.ctrl && input === 'h')) { setAsk({ kind: 'keys' }); return }
+    // `h` is the letter people try first and it was unbound; `?` is what every list-shaped TUI
+    // answers and stays. `ctrl+h` is accepted where the terminal can tell it apart from backspace —
+    // it usually cannot, since `ctrl+h` IS ASCII 8, so Ink reports it as `key.backspace` and a
+    // binding on it would either never fire or fire on backspace. Measured here, not assumed.
+    if (input === 'h' || input === '?' || (key.ctrl && input === 'h')) { setAsk({ kind: 'keys' }); return }
     if (input === 'v') return runAction('group')
     // One key, because there is one switch. `c` and `e` toggled two halves of the same question.
     // ONE key for one question. `active` and `history` partition `SESSION_STATES`, so the two
     // shortcuts are one boolean read from either end — and it had THREE keys: `l` narrowed to the
     // active states, while `c` and `e` (literally the same call) widened back. Pressing any of them
     // did the same visible thing, which is a keyboard that lies about how many controls exist.
-    if (input === 'l' || input === 'c' || input === 'e') {
+    // `c` for CLOSED — one key for one switch. `l` and `e` are kept as aliases of the same call
+    // rather than as controls of their own: they were three keys doing one visible thing, which is
+    // a keyboard that lies about how many controls exist, and dropping them outright would break
+    // the hands that already learned `l`.
+    // The LAST CONVERSATIONS, flat and by recency — a view, reached by one key, because the ordinary
+    // way to it was four separate switches (lift the filter, drop the grouping, change the sort,
+    // clear the scope) and by then you are arranging a screen instead of finding the thing you
+    // closed twenty minutes ago. Capital, like the other verbs that act on more than the row.
+    if (input === 'C') { showRecentlyClosed(); return }
+    if (input === 'c' || input === 'l' || input === 'e') {
       pressShortcut(onlyActive ? 'history' : 'active')
       return
     }
@@ -956,7 +1053,20 @@ export function Sessions({
     // `u` used to hide the unfiled band while grouping by task. That is now the task section's own
     // "no task" row, selectable like every other value on every dimension, so the key is gone with
     // the switch — a key whose control no longer exists is a key nothing on screen explains.
-    if (input === 'a') return runAction('new')
+    // The verbs are named after what they DO, in the language of the menu they open. They were
+    // handed out in the order they were written — `a` started a session, `n` renamed one, `t` wrote
+    // a note — so the letter and the verb had nothing to do with each other and the only way to
+    // learn one was to read the list. `k` stays out of all of it: it is `up` in this list, and a key
+    // that moves the cursor on one screen and destroys work on another is a real accident waiting.
+    if (input === 'n') return runAction('new')
+    if (input === 'r') return runAction('rename')
+    // The note is `m` for memo: `t` belongs to the TASK, which is the verb people reach for it with.
+    if (input === 'm') return runAction('note')
+    if (input === 't') return runAction('task')
+    // The capitals act on the whole TASK rather than on the row, which is the one thing worth making
+    // people reach for a shift key to say.
+    if (input === 'T') return runAction('openTask')
+    if (input === 'F') return runAction('finishTask')
     // Attaching has its OWN key because `enter` deliberately does not do it any more: enter opens
     // the menu, which is what made every other verb reachable, and the cost of that was three
     // keystrokes for the thing this screen is most often opened to do.
@@ -964,16 +1074,12 @@ export function Sessions({
     // `ctrl+f` is what people already type for find; `/` stays as an alias for the vi hands, and is
     // deliberately not in the key help — the footer names ONE key per verb or it stops being read.
     if ((key.ctrl && input === 'f') || input === '/') return runAction('search')
-    // `k` is deliberately NOT the kill key — it is `up` in this list, and a key that moves the
-    // cursor on one screen and destroys work on another is the shape of a real accident.
     if (input === 'x') return runAction('kill')
-    if (input === 'n') return runAction('rename')
-    if (input === 't') return runAction('note')
-    // The two that act on a session WITHOUT entering it. `y` for yes and `p` for prompt, both
-    // unclaimed on this screen — and neither is a navigation key, which is the rule `x` exists for:
-    // a key that moves the cursor on one screen and writes into somebody's session on another is
-    // the shape of a real accident.
-    if (input === 'y') return runAction('approve')
+    // The two that act on a session WITHOUT entering it. `a` for approve, with `y` kept as the alias
+    // every yes/no prompt has taught — neither is a navigation key, which is the rule `x` exists
+    // for: a key that moves the cursor on one screen and writes into somebody's session on another
+    // is the shape of a real accident.
+    if (input === 'a' || input === 'y') return runAction('approve')
     if (input === 'p') return runAction('prompt')
     // Capital `R`, so it cannot be hit while reaching for anything else. It is the one verb here
     // that acts on the whole fleet.
@@ -1019,7 +1125,8 @@ export function Sessions({
   useEffect(() => {
     if (restored.current || !view) return
     restored.current = true
-    setGrouping(view.grouping)
+    setGrouping(groupingOf(view.grouping))
+    setCascade(view.cascade ?? view.grouping === 'tree')
     // Absent reads as OFF, which is the point of finishing a task at all.
     setShowDone(view.showDone ?? false)
     // ONE read of the stored filters, through the migration that decides what a file written by an
@@ -1074,10 +1181,11 @@ export function Sessions({
       showDone,
       hideDetail,
       layout,
+      cascade,
       ...(cardAnchor ? { cardAnchor } : {}),
       sort: order,
     } as SessionViewPrefs)
-  }, [grouping, filters, showNamed, showDone, hideDetail,
+  }, [grouping, cascade, filters, showNamed, showDone, hideDetail,
       layout, cardAnchor, order, marked, onView, view])
 
   useEffect(() => {
@@ -1348,23 +1456,40 @@ export function Sessions({
   // even do that, and the single scrolling pane is drawn instead.
   const foldRows = cockpit.aside > 0 ? asideFold(sections, cockpit.band, activeSection) : null
 
+  // The cascade's guide column, measured over the SAME window as the columns below. Empty for every
+  // flat arrangement, and then it costs nothing.
+  const guides = useMemo(() => treeGuides(visible), [visible])
+  // Measured over the SESSION rows, which are the ones padded to a common width — a heading's guide
+  // is as long as its own branch and says nothing about what the table has left.
+  const guideWidth = visible.reduce(
+    (n, r, i) => (r.kind === 'session' ? Math.max(n, (guides[i] ?? '').length) : n),
+    0,
+  )
+
   // Measured across the rows ON SCREEN, so the state, harness and directory columns line up. A
   // single long title thirty rows down must not narrow every visible row to pay for something
   // nobody can see.
+  // Zero on a quiet fleet, so the dot's column costs nothing until something is actually waiting.
+  const notifyWidth = useMemo(
+    () => notifyCellWidth(visible.flatMap(r => (r.kind === 'session' ? [r.session] : []))),
+    [visible],
+  )
+
   const columns = useMemo(
     () => sessionColumns(
       visible.flatMap(r => (r.kind === 'session' ? [r.session] : [])),
       // The CONTENT width, not the pane's: measuring against the frame made every column four
       // characters wider than the row it was drawn into, and the table survived only because Ink
       // truncated it. Minus whatever the close control took.
-      listBody - closeCell,
+      listBody - closeCell - guideWidth,
       {
         groupedByTask: grouping === 'task',
+        groupedByProject: grouping === 'project',
         ages,
         ...(cockpit.header ? { headings: s.sessionsCols } : {}),
       },
     ),
-    [visible, listBody, closeCell, grouping, cockpit.header, ages, s],
+    [visible, listBody, closeCell, guideWidth, grouping, cockpit.header, ages, s],
   )
 
   // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
@@ -1406,19 +1531,26 @@ export function Sessions({
           width={width}
           height={height}
           isActive={isActive}
-          onAnswer={accept => {
+          onAnswer={action => {
             setRestoreAsked(true)
-            const restore = host.restoreSessions
-            if (!restore) return
-            void run(() => restore.call(host, restorable.map(r => r.id), accept))
-              .then(onRefreshFleet)
+            if (action === 'accept' || action === 'decline') {
+              const restore = host.restoreSessions
+              if (!restore) return
+              void run(() => restore.call(host, restorable.map(r => r.id), action === 'accept'))
+                .then(onRefreshFleet)
+            }
+            // If action === 'list', setRestoreAsked(true) hides the offer banner so user lands straight on the list of recent sessions
           }}
         />
       </Box>
     )
   }
 
-  if (ask?.kind === 'keys' && cockpit.aside === 0) {
+  // The reference takes the WHOLE screen, never the menu column. Drawn into the aside it had ~24
+  // columns for a description, so every second row ended in `…` — a list of keystrokes with what
+  // they do cut off is the half of the reference nobody needs. It is also the only screen here that
+  // is pure text, so it is the one that can afford to be a page.
+  if (ask?.kind === 'keys') {
     return (
       <Box flexDirection="column" width={width} flexShrink={0}>
         <KeyHelpScreen strings={s} width={width} height={height} onClose={() => setAsk(null)} />
@@ -1458,14 +1590,7 @@ export function Sessions({
       <Box flexDirection="row" width={width} flexShrink={0}>
       {cockpit.aside > 0 ? (
         <>
-          {ask?.kind === 'keys' ? (
-            <KeyHelpScreen
-              strings={s}
-              width={cockpit.aside}
-              height={cockpit.band}
-              onClose={() => setAsk(null)}
-            />
-          ) : foldRows ? (
+          {foldRows ? (
             // Each block its OWN framed pane, titled with its own heading. One scrolling pane
             // titled "menu" showed its first section and nothing else, so every switch and every
             // task sat below the fold — and the honest reading of that screen is that all of it
@@ -1575,7 +1700,10 @@ export function Sessions({
           same measured widths so the heading can never sit over the wrong column. */}
       {cockpit.header && rows.length > 0 && !grid ? (
         <Text dimColor wrap="truncate">
-          {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')}
+          {/* Shifted by the cascade's guide column, or the headings sit over the wrong cells the
+              moment the tree is on. */}
+          {' '.repeat(guideWidth)}
+          {'  ' + ' '.repeat(notifyWidth) + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')}
           {columns.harness > 0 ? padCell(s.sessionsCols.harness, columns.harness) + '  ' : ''}
           {padCell(s.sessionsCols.state, columns.state)}
           {columns.title > 0 ? '  ' + padCell(s.sessionsCols.title, columns.title) : ''}
@@ -1646,6 +1774,10 @@ export function Sessions({
         <Box flexDirection="column" flexShrink={0} width={listBody}>
           {visible.map((row, i) => {
             const index = offset + i
+            // The cascade's guides, measured over the SAME window the columns are measured over, so
+            // the two agree about how much room is left. Empty for every flat arrangement, which
+            // then pays no columns at all.
+            const guide = guides[i] ?? ''
             if (row.kind === 'spacer') return <Text key={`s${index}`}> </Text>
             if (row.kind === 'heading') {
               // A heading is drawn as a HEADING: accented, bold, with a rule running out to the
@@ -1655,28 +1787,43 @@ export function Sessions({
               // The cascade indents by its branch DEPTH, which is the whole of what the list has to
               // learn about the tree — the rest of this screen never finds out one exists. The card
               // grid, which has no indentation to spend, breadcrumbs the same branch instead.
-              const head = `${INDENT.repeat(row.depth ?? 0)}${row.label}  ${row.count}`
-              const rule = Math.max(0, listBody - head.length - 3)
+              // The guide REPLACES the old two-spaces-per-level indent: it says the same thing
+              // about depth and also says which node this hangs off and whether the branch ends
+              // here, neither of which a column position can carry.
+              const indent = guide || INDENT.repeat(row.depth ?? 0)
+              const head = `${row.label}  ${row.count}`
+              const rule = Math.max(0, listBody - indent.length - head.length - 3)
               return (
                 <Text key={`h${index}`} wrap="truncate">
+                  <Text dimColor>{indent}</Text>
                   <Text color={row.muted ? COLORS.muted : COLORS.secondary} bold={!row.muted}>
-                    {truncate(head, listBody)}
+                    {truncate(head, Math.max(1, listBody - indent.length))}
                   </Text>
                   <Text dimColor>{rule > 0 ? `  ${'─'.repeat(rule)}` : ''}</Text>
                 </Text>
               )
             }
-            return (
+            const rowView = (
               <SessionRowView
                 key={row.session.id}
                 session={row.session}
                 selected={selected?.id === row.session.id}
                 marked={marked.has(row.session.id)}
+                notify={notifyWidth}
                 ages={ages}
                 columns={columns}
-                width={listBody}
+                width={listBody - guide.length}
                 closeCell={closeCell}
               />
+            )
+            // A session is a CHILD of its heading, so it carries the same bars one level deeper —
+            // a heading joined to its parent above rows that are not is a tree drawn half way.
+            if (!guide) return rowView
+            return (
+              <Box key={row.session.id} flexDirection="row" flexShrink={0}>
+                <Text dimColor>{guide}</Text>
+                {rowView}
+              </Box>
             )
           })}
         </Box>
@@ -1800,17 +1947,22 @@ function SummaryRow({
   }
   const waiting = fleet?.attention ?? 0
 
-  // Only the filters that are actually HIDING something are named. A row that lists every setting
-  // at its default is noise; one that names what is being withheld is an explanation.
-  const hiding: string[] = []
-  // The strict selection is stated FIRST and alone: it withholds everything the other two do and
-  // more, so listing them beside it would describe a filter that is not the one in force. It can no
-  // longer be true at the same time as them — all three read one selection — but the reading order
-  // still matters, and `showNamed` is named whenever it is on because it is the one thing that puts
-  // rows BACK into a list the sentence above says is strict.
-  if (onlyActive) hiding.push(s.viewActiveOn)
-  else if (!showHistory) hiding.push(s.viewClosedOn)
-  if (showNamed) hiding.push(s.toggleNamed)
+  // Only the filters that are actually narrowing something are named. A row that lists every
+  // setting at its default is noise; one that names the filter in force is an explanation.
+  //
+  // Stated as what the list SHOWS, under its own label. It used to read `− not running` beside
+  // `GROUP project`, which is wrong twice over: the reader has to know that `−` means "hidden" to
+  // avoid reading it as the opposite of the truth, and at this row's width the leading dash sits
+  // where a separator would, so the whole thing parses as one phrase — `GROUP project — not
+  // running` — in which the grouping and the filter are indistinguishable. A label per cell is what
+  // tells them apart, and a positive sentence is what stops the filter naming the rows it removed.
+  const filters: string[] = []
+  // The strict selection is stated FIRST and alone: it withholds everything the other one does and
+  // more, so naming both would describe a filter that is not the one in force. `showNamed` is named
+  // whenever it is on, because it is the one thing that puts rows BACK into a narrowed list.
+  if (onlyActive) filters.push(s.sessionsFilterActive)
+  else if (!showHistory) filters.push(s.sessionsFilterNoHistory)
+  if (showNamed) filters.push(s.sessionsFilterNamed)
 
   // MEASURED, never left to Yoga: a row that wraps takes two of the screen's rows while its budget
   // counted one, and everything below it — the action row, the detail pane, the footer — is pushed
@@ -1822,7 +1974,7 @@ function SummaryRow({
   const narrowed = query ? s.sessionsSearching(query) : scope
   const cells = summaryCells({
     group: narrowed || `${s.sessionsGroupBy} ${s.sessionsGroupings[grouping]}`,
-    hiding: hiding.length > 0 ? `− ${hiding.join(', ')}` : '',
+    hiding: filters.length > 0 ? `${s.sessionsFilterBy} ${filters.join(', ')}` : '',
     count: s.sessionsCount(shown, fleet?.sessions.length ?? 0),
     waiting: waiting > 0 ? s.sessionsWaitingCount(waiting) : '',
     fell,
@@ -1840,7 +1992,14 @@ function SummaryRow({
             <Text bold>{cells.group.slice(s.sessionsGroupBy.length + 1)}</Text>
           </>
         )}
-        {cells.hiding ? <Text dimColor>{`   ${cells.hiding}`}</Text> : null}
+        {/* The label dim and the value bold, exactly as the grouping cell beside it is drawn — the
+            two cells answer different questions and must look like two cells. */}
+        {cells.hiding ? (
+          <>
+            <Text dimColor>{`   ${s.sessionsFilterBy} `}</Text>
+            <Text bold>{cells.hiding.slice(s.sessionsFilterBy.length + 1)}</Text>
+          </>
+        ) : null}
         {/* The fall is an OFFER, not a description, so it is the one cell on this row that wears a
             colour: everything beside it says what the list contains, and this says what is one
             keypress from coming back. */}
@@ -1856,13 +2015,15 @@ function SummaryRow({
   )
 }
 
-function SessionRowView({ session, selected, marked, ages, columns, width, closeCell }: {
+function SessionRowView({ session, selected, marked, notify, ages, columns, width, closeCell }: {
   session: ControlSession
   selected: boolean
   /** Already-localized ages by session id — this component owns no clock and no strings. */
   ages: ReadonlyMap<string, string>
   /** The user's own highlight. Survives re-sorting, and outlives the cursor moving away. */
   marked: boolean
+  /** Columns the notification dot takes — `0` when nothing on screen is waiting. */
+  notify: number
   columns: SessionColumns
   width: number
   /** Columns reserved at the right edge for the close control — `0` when there is none. */
@@ -1882,6 +2043,16 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           wore it would read as "this is selected" on four rows at once. */}
       <Text color={selected ? COLORS.info : undefined} underline={selected}>{selected ? '❯' : ' '}</Text>
       <Text color={marked ? COLORS.info : undefined} bold={marked}>{marked ? '▌' : ' '}</Text>
+      {/* The NOTIFICATION. Three cells rather than one, because the row you are on, the row you
+          marked and the row that needs you are three facts that can all be true at once — and the
+          one that must survive is this, since it is the only one the machine is telling YOU. It
+          wears the state's own colour, so red and amber keep meaning the same thing across the row,
+          and it costs nothing at all on a fleet where nothing is waiting. */}
+      {notify > 0 ? (
+        <Text color={STATE_COLOR[session.state]} bold>
+          {sessionNotify(session) ? '● ' : ' '.repeat(notify)}
+        </Text>
+      ) : null}
       {/* Colour AND word, always paired — and PADDED, so every title starts in the same column.
           Two spaces between unpadded cells is what made this read as a jumble of words: the state
           words differ by ten characters, so nothing after them ever lined up. */}
@@ -1892,9 +2063,14 @@ function SessionRowView({ session, selected, marked, ages, columns, width, close
           {padCell(sessionHandle(session), columns.id) + gap}
         </Text>
       ) : null}
-      {/* Harness column is placed right after id, and retains its harness color when selected while taking underline. */}
+      {/* Harness column, right after the id. It wears its harness colour EXCEPT on the selected
+          row, where the whole line is the focus highlight: a terminal draws the underline in the
+          text's own colour (there is no separate underline colour Ink can set), so keeping the
+          harness hue here drew a purple rule through a cyan line and broke the highlight into two
+          pieces. Focus outranks provenance — the harness is still named in the cell, and every
+          other row on screen still carries its colour. */}
       {columns.harness > 0 ? (
-        <Text color={harnessColor} underline={selected} bold={selected}>
+        <Text color={selected ? COLORS.info : harnessColor} underline={selected} bold={selected}>
           {padCell(session.harness, columns.harness) + gap}
         </Text>
       ) : null}
@@ -1986,11 +2162,13 @@ function RestoreOffer({ rows, strings: s, width, height, isActive, onAnswer }: {
   width: number
   height: number
   isActive: boolean
-  onAnswer: (accept: boolean) => void
+  onAnswer: (action: 'accept' | 'decline' | 'list') => void
 }) {
-  useInput((_i, key) => {
-    if (key.return) return onAnswer(true)
-    if (key.escape) return onAnswer(false)
+  useInput((i, key) => {
+    const input = i.toLowerCase()
+    if (key.return || input === 'r') return onAnswer('accept')
+    if (input === 'l' || input === 'v' || key.tab) return onAnswer('list')
+    if (key.escape) return onAnswer('decline')
   }, { isActive })
 
   const now = Date.now()
@@ -2032,23 +2210,50 @@ function KeyHelpScreen({ strings: s, width, height, onClose }: {
   height: number
   onClose: () => void
 }) {
-  useInput((_i, key) => { if (key.escape || key.return) onClose() })
-
   const rows = useMemo(() => sessionKeyHelp(s.sessionsKeyWhat), [s])
   const keyCol = keyHelpColumn(rows)
-  // Two rows of chrome: the title and the blank under it. Budgeted, because Ink composites what
-  // does not fit rather than clipping it.
-  const page = Math.max(1, height - 3)
+  const lines = useMemo(() => keyHelpLines(rows, paneBody(width)), [rows, width])
+  // Two rows of chrome: the title and the footer that says how to leave and how to scroll. Budgeted
+  // against the height, because Ink composites what does not fit rather than clipping it.
+  const page = Math.max(1, paneRows(height) - 1)
+  const [top, setTop] = useState(0)
+  // The last first-line that still fills the page: scrolling past it would leave air under the
+  // list while claiming there is more below.
+  const maxTop = Math.max(0, lines.length - page)
+  const at = Math.min(top, maxTop)
+
+  useInput((input, key) => {
+    if (key.escape || key.return || input === 'q') return onClose()
+    // The reference is a DOCUMENT, so it answers the same keys every other scrolling surface in
+    // this app answers, through the same pure reducer — clamped at both ends, never wrapped.
+    const next = resolveScrollKey(
+      { upArrow: key.upArrow, downArrow: key.downArrow, pageUp: key.pageUp, pageDown: key.pageDown,
+        home: key.home, end: key.end, input },
+      at, maxTop + 1, page,
+    )
+    if (next !== null) setTop(next)
+  })
+
+  const shown = lines.slice(at, at + page)
 
   return (
     <Pane title={s.sessionsPaneKeys} focused width={width} height={height}>
-      {rows.slice(0, page).map(r => (
-        <Text key={r.keys} wrap="truncate">
-          <Text color={COLORS.accent}>{padCell(r.keys, keyCol)}</Text>
-          <Text dimColor>{'  ' + truncate(r.what, Math.max(1, paneBody(width) - keyCol - 2))}</Text>
+      {shown.map((line, i) => (
+        <Text key={`${at + i}`} wrap="truncate">
+          <Text color={COLORS.accent}>{padCell(line.keys, keyCol)}</Text>
+          <Text dimColor>{'  ' + line.what}</Text>
         </Text>
       ))}
-      {rows.length > page ? <Text dimColor>{`… +${rows.length - page}`}</Text> : null}
+      {/* The footer says how to leave and — only while there IS more — that scrolling reaches it.
+          A list that silently ends at the fold is one people conclude is the whole list. */}
+      <Text dimColor wrap="truncate">
+        {truncate(
+          maxTop > 0
+            ? `${s.sessionsKeysMore(at + shown.length, lines.length)}  ·  ${s.keyBack}`
+            : s.keyBack,
+          Math.max(1, paneBody(width)),
+        )}
+      </Text>
     </Pane>
   )
 }
@@ -2331,6 +2536,67 @@ function Question({
           const reopen = host.reopenFell
           if (!yes || !reopen) return onClose()
           onRun(() => reopen.call(host), s.actSessions.reopenFell)
+        }}
+      />
+    )
+  }
+
+  if (ask.kind === 'openWarning') {
+    return (
+      <Box flexDirection="column" width={width}>
+        <Text color={COLORS.danger} bold>Aviso: Não é possível reabrir as sessões selecionadas.</Text>
+        <Text dimColor>As seguintes sessões já estão abertas e não podem ser religadas:</Text>
+        {ask.openSessions.map(title => (
+          <Text key={title} color={COLORS.accent}>{`  • ${title}`}</Text>
+        ))}
+        <Text> </Text>
+        <Text dimColor>Pressione [Enter] ou [Esc] para fechar este aviso.</Text>
+      </Box>
+    )
+  }
+
+  if (ask.kind === 'batchPrompt') {
+    return (
+      <Box flexDirection="column" width={width}>
+        <Text dimColor>{`Enviar prompt para ${ask.sessions.length} sessões selecionadas:`}</Text>
+        <TextPrompt
+          label="Prompt para selecionadas"
+          width={width}
+          onCancel={onClose}
+          onSubmit={value => {
+            const text = value.trim()
+            const send = host.promptSession
+            if (!send || !text) return onClose()
+            onRun(async () => {
+              for (const sess of ask.sessions) {
+                await send.call(host, sess.id, text)
+              }
+              return { ok: true, message: '' }
+            }, s.actSessions.prompt)
+          }}
+        />
+      </Box>
+    )
+  }
+
+  if (ask.kind === 'batchKill') {
+    return (
+      <ConfirmPrompt
+        label={`Deseja encerrar as ${ask.sessions.length} sessões ativas selecionadas?`}
+        yesLabel={s.yes}
+        noLabel={s.no}
+        width={width}
+        onCancel={onClose}
+        onAnswer={(yes: boolean) => {
+          if (!yes) return onClose()
+          const kill = host.killSession
+          if (!kill) return onClose()
+          onRun(async () => {
+            for (const sess of ask.sessions) {
+              await kill.call(host, sess.id)
+            }
+            return { ok: true, message: '' }
+          }, s.actSessions.kill)
         }}
       />
     )

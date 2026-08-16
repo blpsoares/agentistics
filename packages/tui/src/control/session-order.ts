@@ -40,9 +40,10 @@ export function sessionRank(s: ControlSession): number {
  * question ("what is costing me", "where was I an hour ago"), and each keeps state as its tiebreak
  * so a run of equal values still surfaces the blocked one first.
  */
-export type SessionSort = 'state' | 'name' | 'started' | 'usage' | 'project'
+export type SessionSort = 'state' | 'name' | 'started' | 'recent' | 'usage' | 'project'
 
-export const SESSION_SORTS: readonly SessionSort[] = ['state', 'name', 'started', 'usage', 'project'] as const
+export const SESSION_SORTS: readonly SessionSort[] =
+  ['state', 'name', 'started', 'recent', 'usage', 'project'] as const
 
 export interface SessionOrder {
   by: SessionSort
@@ -88,6 +89,12 @@ export function sortSessions(
       case 'project': return (a.projectGroup || a.project).localeCompare(b.projectGroup || b.project)
       case 'usage': return usageOf(b) - usageOf(a)
       case 'started': return (b.startedAt ?? 0) - (a.startedAt ?? 0)
+      // The last time anything HAPPENED, which on a finished conversation is when it went off and
+      // on a live one is now. `started` cannot answer it: a session opened on Monday and used until
+      // ten minutes ago sorts three days old under that key, which is the wrong answer to "what was
+      // I just doing".
+      case 'recent':
+        return (b.endedAt ?? b.startedAt ?? 0) - (a.endedAt ?? a.startedAt ?? 0)
     }
   }
   const sign = order.dir === 'asc' ? -1 : 1

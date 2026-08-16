@@ -221,6 +221,14 @@ export interface ControlStrings {
   sessionsCount: (shown: number, total: number) => string
   sessionsWaitingCount: (n: number) => string
   sessionsGroupBy: string
+  /** Labels the summary row's filter cell, so a grouping and a filter are told apart by WORD. */
+  sessionsFilterBy: string
+  /** What the filter cell says when the list is narrowed to what is alive. */
+  sessionsFilterActive: string
+  /** What it says when closed conversations are the only thing withheld. */
+  sessionsFilterNoHistory: string
+  /** Added when named rows are being kept regardless of the filter — it puts rows BACK. */
+  sessionsFilterNamed: string
   /**
    * Every dimension's name, plus the flat arrangement.
    *
@@ -248,6 +256,8 @@ export interface ControlStrings {
   sessionsDoing: string
   sessionsTask: string
   sessionsMetrics: string
+  /** What the usage figure counts, in words — see `detailLines`'s `metricsAll`. */
+  sessionsMetricsAll: string
   /** Detail-pane label for the context gauge spelled out. */
   sessionsContext: string
   /** Detail-pane label for the conversation id this row continues from. */
@@ -266,6 +276,8 @@ export interface ControlStrings {
   sessionsPaneDetail: string
   sessionsPaneAsk: string
   sessionsPaneKeys: string
+  /** Said only while the reference has more below the fold: `12 of 34  ·  ↑↓ scroll`. */
+  sessionsKeysMore: (shown: number, total: number) => string
   sessionsPaneRestore: string
   restoreTitle: (n: number) => string
   restoreAnswer: string
@@ -274,6 +286,7 @@ export interface ControlStrings {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
     note: string; task: string; mark: string; onlyActive: string
+    openTask: string; finishTask: string; recent: string; cascade: string
     group: string; layout: string; detail: string; menuFold: string
     reset: string
     tabs: string; help: string; quit: string
@@ -322,6 +335,8 @@ export interface ControlStrings {
   toggleActive: string
   /** The detail pane's own switch: it is a pane, not a fact, and a screen is allowed to be a list. */
   toggleDetail: string
+  /** The cascade switch, in the LAYOUT block — it is a way of drawing, not a grouping. */
+  toggleCascade: string
   /** Written on the detail pane itself: the key that puts it away. */
   sessionsDetailHide: string
   /** The menu's layout section, and what the two layouts are called. */
@@ -338,7 +353,7 @@ export interface ControlStrings {
   keySessionsPage: string
   asideSort: string
   asideStates: string
-  sessionsSorts: Record<'state' | 'name' | 'started' | 'usage' | 'project', string>
+  sessionsSorts: Record<'state' | 'name' | 'started' | 'recent' | 'usage' | 'project', string>
   sessionsStates: Record<
     'working' | 'waiting' | 'waiting-approval' | 'exited' | 'lost' | 'closed' | 'unknown', string
   >
@@ -669,6 +684,10 @@ const EN: ControlStrings = {
     : `${shown} on screen · ${total} known`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
   sessionsGroupBy: 'GROUP',
+  sessionsFilterBy: 'FILTER',
+  sessionsFilterActive: 'running only',
+  sessionsFilterNoHistory: 'without closed conversations',
+  sessionsFilterNamed: 'plus named',
   sessionsGroupings: {
     repo: 'repository',
     task: 'task',
@@ -702,11 +721,16 @@ const EN: ControlStrings = {
   sessionsCols: {
     id: 'id',
     state: 'state',
-    age: 'started',
+    // The column measures when a row went OFF, not when it began — see `sessionAge`.
+    age: 'off since',
     title: 'session',
     task: 'task',
     worktree: 'worktree',
-    metrics: 'usage',
+    // Named `usage (all)` rather than `usage`: the figure is every token the conversation
+    // recorded — input, output, cache read and cache write — and beside a cost it was read as the
+    // in/out pair alone, which makes it look an order of magnitude too big. The detail pane spells
+    // the four out; the heading only has to stop the wrong reading.
+    metrics: 'usage (all)',
     // The WINDOW, not "context": the cell shows how full one is, and a column headed `context`
     // over a bar reads as "this session's context" — a thing, not a level.
     context: 'window',
@@ -720,6 +744,7 @@ const EN: ControlStrings = {
   sessionsDoing: 'saying',
   sessionsTask: 'task',
   sessionsMetrics: 'usage',
+  sessionsMetricsAll: 'in + out + cache',
   sessionsContext: 'context window',
   sessionsConversation: 'conversation',
   sessionsGoneProject: 'directory no longer exists',
@@ -731,10 +756,11 @@ const EN: ControlStrings = {
   sessionsPaneDetail: 'detail',
   sessionsPaneAsk: 'question',
   sessionsPaneKeys: 'keys',
+  sessionsKeysMore: (shown, total) => `${shown} of ${total}  ·  ↑↓ scroll`,
   sessionsPaneRestore: 'last time',
   restoreTitle: (n: number) =>
     n === 1 ? 'Your last session was this one:' : `Your last ${n} sessions were these:`,
-  restoreAnswer: 'enter starts them in the background · esc leaves them closed',
+  restoreAnswer: 'enter / R reopens active · L / tab go to list · esc ignore',
   sessionsKeyWhat: {
     move: 'move the cursor',
     open: 'switch between the menu and the list',
@@ -748,6 +774,10 @@ const EN: ControlStrings = {
     rename: 'rename it',
     note: 'write a note on it',
     task: 'file it under a task',
+    openTask: 'open every session of its task',
+    finishTask: 'mark its task finished',
+    recent: 'the last conversations, newest first, ungrouped',
+    cascade: 'cascade the rows by directory',
     mark: 'mark this row, and keep it marked',
     onlyActive: 'show what is not running too — closed, ended and lost',
     layout: 'list or cards',
@@ -797,6 +827,7 @@ const EN: ControlStrings = {
   toggleDone: 'finished tasks',
   toggleActive: 'only active',
   toggleDetail: 'detail pane',
+  toggleCascade: 'cascade by directory',
   sessionsDetailHide: 'd hides',
   asideLayout: 'LAYOUT',
   sessionsLayouts: { list: 'list', cards: 'cards' },
@@ -810,11 +841,15 @@ const EN: ControlStrings = {
   asideSort: 'ORDER',
   asideStates: 'STATE',
   sessionsSorts: {
-    state: 'urgency', name: 'name', started: 'started', usage: 'usage', project: 'project',
+    state: 'urgency', name: 'name', started: 'started', recent: 'last active',
+    usage: 'usage', project: 'project',
   },
   sessionsStates: {
     'waiting-approval': 'needs approval',
-    waiting: 'waiting',
+    // Named for what it means to the READER, not for what the machine is doing. `waiting` and
+    // `working` differ by two letters in the middle of a narrow column, and the one that needs a
+    // person was the one being read as the one that does not.
+    waiting: 'needs you',
     working: 'working',
     // ONE word for every way a session is not running — see `cli-i18n.ts`'s `sessState`, which this
     // table has to agree with or a row reads `off` under a band called `closed`.
@@ -837,12 +872,12 @@ const EN: ControlStrings = {
   keySessionsReset: '^r reset view',
   keySessionsKill: 'x kill',
   keySessionsDeleteTask: 'x delete task',
-  keySessionsRename: 'n name',
-  keySessionsNote: 't note',
-  keySessionsNew: 'a new',
+  keySessionsRename: 'r name',
+  keySessionsNote: 'm note',
+  keySessionsNew: 'n new',
   keySessionsSearch: 'ctrl+f search',
   keySessionsActions: 'tab actions',
-  keySessionsApprove: 'y approve',
+  keySessionsApprove: 'a approve',
   keySessionsPrompt: 'p send',
   keySessionsFold: 'b menu',
   keyRestoreAnswer: 'enter start · esc leave closed',
@@ -899,7 +934,7 @@ const EN: ControlStrings = {
   manageHint: '↑↓ move · enter run · esc back to the list',
   promptHint: 'enter saves · esc cancels',
   sessionsHideClosed: 'closed: hidden',
-  keySessionsActive: 'l only active',
+  keySessionsActive: 'c only active',
   keySessionsDetail: 'd detail',
   keySessionsMark: 'space mark',
   keySessionsClosed: 'c closed',
@@ -1093,6 +1128,10 @@ const PT: ControlStrings = {
     : `${shown} na tela · ${total} conhecidas`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
   sessionsGroupBy: 'AGRUPAR',
+  sessionsFilterBy: 'FILTRO',
+  sessionsFilterActive: 'só as ativas',
+  sessionsFilterNoHistory: 'sem conversas fechadas',
+  sessionsFilterNamed: 'mais as nomeadas',
   sessionsGroupings: {
     repo: 'repositório',
     task: 'tarefa',
@@ -1123,11 +1162,11 @@ const PT: ControlStrings = {
   sessionsCols: {
     id: 'id',
     state: 'estado',
-    age: 'iniciada',
+    age: 'parada há',
     title: 'sessão',
     task: 'tarefa',
     worktree: 'worktree',
-    metrics: 'uso',
+    metrics: 'uso (tudo)',
     context: 'janela',
     harness: 'harness',
     where: 'projeto',
@@ -1139,6 +1178,7 @@ const PT: ControlStrings = {
   sessionsDoing: 'dizendo',
   sessionsTask: 'tarefa',
   sessionsMetrics: 'uso',
+  sessionsMetricsAll: 'entrada + saída + cache',
   sessionsContext: 'janela de contexto',
   sessionsConversation: 'conversa',
   sessionsGoneProject: 'diretório não existe mais',
@@ -1150,10 +1190,11 @@ const PT: ControlStrings = {
   sessionsPaneDetail: 'detalhe',
   sessionsPaneAsk: 'pergunta',
   sessionsPaneKeys: 'teclas',
+  sessionsKeysMore: (shown, total) => `${shown} de ${total}  ·  ↑↓ rolar`,
   sessionsPaneRestore: 'da última vez',
   restoreTitle: (n: number) =>
     n === 1 ? 'Sua última sessão foi esta:' : `Suas últimas ${n} sessões foram estas:`,
-  restoreAnswer: 'enter inicia em background · esc deixa fechadas',
+  restoreAnswer: 'enter / R reabre as ativas · L / tab ir para a listagem · esc ignora',
   sessionsKeyWhat: {
     move: 'move o cursor',
     open: 'alterna entre o menu e a lista',
@@ -1167,6 +1208,10 @@ const PT: ControlStrings = {
     rename: 'renomeia',
     note: 'escreve uma nota nela',
     task: 'arquiva sob uma tarefa',
+    openTask: 'abre todas as sessões da tarefa dela',
+    finishTask: 'marca a tarefa dela como finalizada',
+    recent: 'as últimas conversas, mais recentes primeiro, sem agrupamento',
+    cascade: 'exibe em cascata por diretório',
     mark: 'marca esta linha, e mantém marcada',
     onlyActive: 'mostra também o que não está rodando — fechadas, encerradas e perdidas',
     layout: 'lista ou cards',
@@ -1215,6 +1260,7 @@ const PT: ControlStrings = {
   toggleDone: 'tarefas finalizadas',
   toggleActive: 'apenas ativas',
   toggleDetail: 'painel de detalhe',
+  toggleCascade: 'cascata por diretório',
   sessionsDetailHide: 'd oculta',
   asideLayout: 'FORMATO',
   sessionsLayouts: { list: 'lista', cards: 'cards' },
@@ -1228,7 +1274,8 @@ const PT: ControlStrings = {
   asideSort: 'ORDENAR',
   asideStates: 'ESTADO',
   sessionsSorts: {
-    state: 'urgência', name: 'nome', started: 'início', usage: 'uso', project: 'projeto',
+    state: 'urgência', name: 'nome', started: 'início', recent: 'atividade',
+    usage: 'uso', project: 'projeto',
   },
   sessionsStates: {
     'waiting-approval': 'precisa aprovação',
@@ -1236,11 +1283,11 @@ const PT: ControlStrings = {
     // vocabulary, and the sessions screen draws from both at once — the column from the host, the
     // band heading and the filter row from here. They have to say the same thing or the row reads
     // `aguardando resposta` under a band called `aguardando`.
-    waiting: 'aguardando resposta',
+    waiting: 'precisa de você',
     working: 'trabalhando',
-    exited: 'desligada',
-    lost: 'desligada',
-    closed: 'desligada',
+    exited: 'encerrada',
+    lost: 'desconectada',
+    closed: 'fechada',
     unknown: 'externa',
   },
   sessionsSearching: q => `busca: ${q} · esc limpa`,
@@ -1257,12 +1304,12 @@ const PT: ControlStrings = {
   keySessionsReset: '^r restaurar view',
   keySessionsKill: 'x encerrar',
   keySessionsDeleteTask: 'x apagar tarefa',
-  keySessionsRename: 'n nomear',
-  keySessionsNote: 't nota',
-  keySessionsNew: 'a nova',
+  keySessionsRename: 'r nomear',
+  keySessionsNote: 'm nota',
+  keySessionsNew: 'n nova',
   keySessionsSearch: 'ctrl+f buscar',
   keySessionsActions: 'tab ações',
-  keySessionsApprove: 'y aprovar',
+  keySessionsApprove: 'a aprovar',
   keySessionsPrompt: 'p enviar',
   keySessionsFold: 'b menu',
   keyRestoreAnswer: 'enter inicia · esc deixa fechadas',
@@ -1319,7 +1366,7 @@ const PT: ControlStrings = {
   manageHint: '↑↓ mover · enter executar · esc voltar à lista',
   promptHint: 'enter salva · esc cancela',
   sessionsHideClosed: 'fechadas: ocultas',
-  keySessionsActive: 'l só ativas',
+  keySessionsActive: 'c só ativas',
   keySessionsDetail: 'd detalhe',
   keySessionsMark: 'space marcar',
   keySessionsClosed: 'c fechadas',

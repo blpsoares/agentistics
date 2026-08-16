@@ -45,6 +45,7 @@ import type {
   ControlHost,
   ControlService,
   ControlSessions,
+  CentralLinkState,
   ControlStatus,
   LogSource,
   RestartOption,
@@ -121,7 +122,7 @@ import { conversationHeldBy } from './sessions/conversation-claim'
 import { liveConversationHolders } from './sessions/live-claims'
 import type { ManagedSession, SpawnPlanError } from './sessions/types'
 import {
-  addSession, newSessionId, patchSession, readRegistry, removeSession, touchSessions,
+  addSession, newSessionId, patchSession, readRegistry, removeSession, retireFallenSessions, touchSessions,
 } from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
 import { conversationForProcess, forgetConversations, loadConversations } from './sessions/conversations'
@@ -1450,6 +1451,17 @@ async function spawnManaged(req: {
     ...(await recordedRepo(req.cwd)),
   })
 
+  const convId = planned.plan.conversationId ?? req.resumeId
+  const liveBackend = await backend.list().catch(() => [])
+  const backendIds = new Set(liveBackend.map(b => b.id))
+  await retireFallenSessions({
+    newSessionId: id,
+    conversationId: convId,
+    cwd: req.cwd,
+    harness: req.harness,
+    backendIds,
+  })
+
   const name = req.label ?? id
   if (!req.attach) return { ok: true, id, message: s.sessStartedBg(name) }
   return {
@@ -1641,7 +1653,10 @@ async function restorableSessions(fell: readonly ManagedSession[]): Promise<Rest
   }))
 }
 
-function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
+export function createControlHost(
+  initialLang: CliLang = 'pt',
+  altScreen: Suspendable = { suspend: <T>(fn: () => Promise<T>) => fn() },
+): StartHost {
   let lang = initialLang
   const S = () => cliStrings(lang)
   // Built here so it always reports in the language the host is currently speaking.
@@ -1691,10 +1706,20 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
     try {
       const sample = await readMemory()
       if (!sample) return {}
-      const index = await loadHarnessSessions()
-      const pids = [...index.byConversation.values()]
-        .filter(f => f.alive === true && f.pid !== undefined)
-        .map(f => f.pid!)
+      const { scanProcesses } = await import('./live-sessions')
+      const scan = await scanProcesses()
+      const pidsFromProc = scan.procs
+        .map(p => p.pid)
+        .filter((pid): pid is number => pid !== undefined)
+
+      const index = await loadHarnessSessions().catch(() => null)
+      const pidsFromHarness = index
+        ? [...index.byConversation.values()]
+            .filter(f => f.alive === true && f.pid !== undefined)
+            .map(f => f.pid!)
+        : []
+
+      const pids = Array.from(new Set([...pidsFromProc, ...pidsFromHarness]))
       const { bytes, read } = await readRss(pids)
       const b = memoryBudget({ sample, sessionBytes: bytes, sessions: read })
       return { memory: { used: b.used, max: b.max, red: b.red, percent: b.percent } }
@@ -1713,14 +1738,43 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
    * machine whose server is down, and a header fact is never worth a hang. Absent beats wrong here
    * as everywhere: no name is drawn rather than a hostname standing in for one.
    */
-  const centralIdentity = async (): Promise<Pick<ControlStatus, 'machineName' | 'pushMs'>> => {
+  /**
+   * How long a connection may go without a successful push before the header calls it STALE.
+   *
+   * Three minutes, against a cadence the CENTRAL owns and which floors at 15s (30s by default): well
+   * clear of an ordinary quiet period, and short enough that a link which died between two polls
+   * says so before you have acted on it. A member that has never pushed at all is stale too — "not
+   * yet" and "working" are different answers, and only one of them may wear the green dot.
+   */
+  const LINK_STALE_MS = 3 * 60_000
+
+  /**
+   * What the link is DOING, from the facts `/api/team/status` already publishes.
+   *
+   * The decision lives here rather than in the TUI for the ordinary reason — the control center owns
+   * no logic — and the order matters: an AUTH failure outranks everything (a revoked token does not
+   * heal by waiting), then unreachable, then merely quiet.
+   */
+  const linkStateOf = (errKind: unknown, lastSuccessAt: number | null): CentralLinkState => {
+    if (errKind === 'auth') return 'unauthorized'
+    if (errKind === 'net') return 'offline'
+    if (lastSuccessAt === null) return 'stale'
+    return Date.now() - lastSuccessAt > LINK_STALE_MS ? 'stale' : 'ok'
+  }
+
+  const centralIdentity = async (): Promise<
+    Pick<ControlStatus, 'machineName' | 'accountName' | 'linkState' | 'pushMs'>
+  > => {
     try {
       const res = await fetch(`http://localhost:${PORT}/api/team/status`, {
         signal: AbortSignal.timeout(1200),
       })
       if (!res.ok) return {}
       const body = await res.json() as {
-        connections?: Array<{ machineName?: unknown; latencyMs?: unknown }>
+        connections?: Array<{
+          machineName?: unknown; latencyMs?: unknown
+          org?: unknown; errKind?: unknown; lastSuccessAt?: unknown
+        }>
       }
       // The FIRST connection: a machine with several centrals has one name per central, and a header
       // cell cannot carry a list. The connection card shows them all.
@@ -1729,7 +1783,16 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       const ms = typeof first?.latencyMs === 'number' && Number.isFinite(first.latencyMs)
         ? Math.max(0, Math.round(first.latencyMs))
         : undefined
-      return { ...(name ? { machineName: name } : {}), ...(ms !== undefined ? { pushMs: ms } : {}) }
+      const account = typeof first?.org === 'string' && first.org ? first.org : undefined
+      const lastOk = typeof first?.lastSuccessAt === 'number' && Number.isFinite(first.lastSuccessAt)
+        ? first.lastSuccessAt
+        : null
+      return {
+        ...(name ? { machineName: name } : {}),
+        ...(account ? { accountName: account } : {}),
+        ...(name ? { linkState: linkStateOf(first?.errKind, lastOk) } : {}),
+        ...(ms !== undefined ? { pushMs: ms } : {}),
+      }
     } catch {
       return {}
     }
@@ -2604,6 +2667,17 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         // The old row is RETIRED rather than deleted: it is still a thing that happened, and it
         // stops standing beside its own continuation with the same name on it.
         if (previous) await patchSession(previous.id, { endedAt: new Date().toISOString() })
+
+        const liveBackend = await (await resolveBackend()).list().catch(() => [])
+        const backendIds = new Set(liveBackend.map(b => b.id))
+        await retireFallenSessions({
+          newSessionId: spawned.id,
+          conversationId: req.sessionId,
+          cwd: req.cwd,
+          harness: req.harness,
+          backendIds,
+        })
+
         // The store's view of what is running just changed, and the next poll must see it rather
         // than waiting out the cache and showing the conversation as still closed.
         forgetConversations()
@@ -2836,7 +2910,13 @@ export async function runStart(): Promise<StartResult> {
   // a question that greeted the user again there would be one they learn to dismiss without reading.
   let opening = setup
   for (;;) {
-    const exit = await runControlCenter({ lang, host, tab, setup: opening })
+    // `host.lang`, never the `lang` this function resolved at boot. The language is a closure
+    // variable the in-app toggle REASSIGNS, so the boot value is stale the moment anyone switches —
+    // and every pass through this loop remounted the app with it. Attaching to a session and
+    // detaching was enough to put the whole cockpit back into the previous language, with nothing
+    // on screen to explain it and nothing to do about it but restart the application, which is how
+    // it was reported. `execAttachTicket` below already read it correctly.
+    const exit = await runControlCenter({ lang: host.lang, host, tab, setup: opening })
     opening = false
     if (exit.kind === 'foreground') break
     if (exit.kind === 'quit') return exit.code

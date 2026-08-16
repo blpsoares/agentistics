@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useNavigate } from 'react-router-dom'
 import { Clock, Radio, Copy, Check, Bell, BellOff, Settings, Sparkles, Folder, User, Terminal } from 'lucide-react'
-import type { HarnessId, LiveProcess, LiveUnavailableReason, SessionMeta } from '@agentistics/core'
+import type { HarnessId, LiveApprovalInfo, LiveProcess, LiveUnavailableReason, SessionMeta } from '@agentistics/core'
 import { sessionLabel } from '@agentistics/core'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../lib/harness'
 import type { AppContext } from '../lib/app-context'
@@ -34,22 +34,11 @@ export default function SessionsPage() {
   const [liveUnavailable, setLiveUnavailable] =
     useState<LiveUnavailableReason | undefined>(data.liveUnavailable)
   const [liveActivities, setLiveActivities] = useState<Record<string, SessionActivity>>({})
+  const [liveApprovals, setLiveApprovals] = useState<Record<string, LiveApprovalInfo>>(data.liveApprovals ?? {})
 
   // Notification settings state & prompt banner
   const [notifSettings, setNotifSettings] = useState<NotificationSettings>(getNotificationSettings)
   const prevActivitiesRef = useRef<Record<string, SessionActivity>>({})
-  /**
-   * Whether a baseline has been taken — the fix for a notification storm on every page load.
-   *
-   * `prevActivitiesRef` starts empty, so on the FIRST poll every live session has no previous state
-   * and each one counted as a transition: opening this page with three sessions up fired three
-   * notifications and three sounds, and it did it again on every remount. The bell must ring on the
-   * TRANSITION, never on the level — the same rule the cockpit's waiting counter already follows.
-   *
-   * So the first poll RECORDS what is already true and says nothing. A session that appears after
-   * that genuinely did just appear, and is still worth reporting.
-   */
-  const baselineTakenRef = useRef(false)
 
   // Sessions map lookup helper
   const sessionsMap = useMemo(() => {
@@ -59,6 +48,8 @@ export default function SessionsPage() {
     }
     return map
   }, [data.sessions])
+
+  const pollRef = useRef<() => void>(() => {})
 
   // Poll live sessions
   useEffect(() => {
@@ -72,24 +63,23 @@ export default function SessionsPage() {
           liveProcesses?: LiveProcess[]
           liveUnavailable?: LiveUnavailableReason
           liveSessionActivities?: Record<string, SessionActivity>
+          liveApprovals?: Record<string, LiveApprovalInfo>
         }
         if (!alive) return
         if (Array.isArray(json.liveSessionIds)) setLiveIdList(json.liveSessionIds)
         setLiveProcs(Array.isArray(json.liveProcesses) ? json.liveProcesses : [])
         setLiveUnavailable(json.liveUnavailable)
+        setLiveApprovals(json.liveApprovals || {})
 
         const activities = json.liveSessionActivities || {}
         setLiveActivities(activities)
 
-        // Check state transitions for notifications — but never on the first poll; see
-        // `baselineTakenRef`. What is already running when you arrive is not news.
-        if (baselineTakenRef.current) {
-          handleSessionStateTransitions(prevActivitiesRef.current, activities, sessionsMap, pt ? 'pt' : 'en')
-        }
-        baselineTakenRef.current = true
+        // Check state transitions for notifications
+        handleSessionStateTransitions(prevActivitiesRef.current, activities, sessionsMap, pt ? 'pt' : 'en')
         prevActivitiesRef.current = activities
       } catch { /* transient — keep last known */ }
     }
+    pollRef.current = poll
     poll()
     const id = setInterval(poll, LIVE_POLL_MS)
     return () => { alive = false; clearInterval(id) }
@@ -288,7 +278,9 @@ export default function SessionsPage() {
                   pt={pt}
                   central={isCentral}
                   activity={liveActivities[s.session_id]}
+                  approval={liveApprovals[s.session_id]}
                   onOpen={() => setSelectedSession(s)}
+                  onRefreshLive={() => pollRef.current()}
                 />
               ))}
               {liveProcs.map((p, i) => <StartingCard key={`${p.harness}-${p.cwd}-${i}`} p={p} pt={pt} />)}
@@ -398,29 +390,64 @@ function LiveCard({
   onOpen,
   central,
   activity,
+  approval,
+  onRefreshLive,
 }: {
   s: SessionMeta
   pt: boolean
   onOpen: () => void
   central?: boolean
   activity?: SessionActivity
+  approval?: LiveApprovalInfo
+  onRefreshLive?: () => void
 }) {
   const cmd = central ? null : resumeCommand(s)
   const [copied, setCopied] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [answerFeedback, setAnswerFeedback] = useState<string | null>(null)
   const mins = Math.max(0, Math.round((Date.now() - lastActivityMs(s)) / 60_000))
   const title = sessionLabel(s) || (s.project_path ? (s.project_path.split('/').filter(Boolean).pop() || '') : '') || s.session_id.slice(0, 8)
+
+  async function handleAnswer(choice?: number) {
+    setSubmitting(true)
+    setAnswerFeedback(null)
+    try {
+      const res = await fetch('/api/session-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: s.session_id, choice }),
+      })
+      const json = await res.json() as { ok: boolean; message?: string }
+      if (res.ok && json.ok) {
+        setAnswerFeedback(pt ? 'Aprovado / Respondido com sucesso!' : 'Approved / Answered successfully!')
+        setTimeout(() => setAnswerFeedback(null), 3000)
+        onRefreshLive?.()
+      } else {
+        setAnswerFeedback(json.message || (pt ? 'Falha ao responder' : 'Failed to answer'))
+      }
+    } catch {
+      setAnswerFeedback(pt ? 'Erro de conexão' : 'Network error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const hasApproval = !!(
+    approval &&
+    (approval.canApprove || approval.canChoose || (approval.dialogOptions && approval.dialogOptions.length > 0) || (approval.approvalLines && approval.approvalLines.length > 0))
+  )
 
   return (
     <div
       style={{
-        border: '1px solid var(--border)',
+        border: hasApproval ? '1.5px solid var(--anthropic-orange)' : '1px solid var(--border)',
         borderRadius: 12,
         padding: '16px 18px',
         background: 'var(--bg-card)',
         display: 'flex',
         flexDirection: 'column',
         gap: 12,
-        boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+        boxShadow: hasApproval ? '0 0 12px rgba(232, 105, 11, 0.15)' : '0 1px 3px rgba(0,0,0,0.03)',
       }}
     >
       {/* Header Row */}
@@ -488,6 +515,102 @@ function LiveCard({
           </div>
         )}
       </div>
+
+      {/* Direct Approval Controls */}
+      {hasApproval && (
+        <div
+          style={{
+            border: '1px solid var(--anthropic-orange-dim, rgba(232, 105, 11, 0.35))',
+            background: 'rgba(232, 105, 11, 0.08)',
+            borderRadius: 10,
+            padding: '12px 14px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 13, color: 'var(--anthropic-orange)' }}>
+            <Sparkles size={14} />
+            <span>{pt ? 'Ação ou permissão necessária diretamente nesta listagem:' : 'Action or permission needed directly from listing:'}</span>
+          </div>
+
+          {approval!.approvalLines && approval!.approvalLines.length > 0 && (
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--text-primary)',
+                fontFamily: 'var(--font-mono, monospace)',
+                whiteSpace: 'pre-wrap',
+                lineHeight: 1.4,
+                background: 'var(--bg-elevated)',
+                padding: '8px 10px',
+                borderRadius: 6,
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
+              {approval!.approvalLines.join('\n')}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+            {approval!.canApprove && (
+              <button
+                disabled={submitting}
+                onClick={() => handleAnswer()}
+                style={{
+                  padding: '7px 16px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: 'var(--anthropic-orange)',
+                  color: '#fff',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: submitting ? 'wait' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  boxShadow: '0 2px 4px rgba(232, 105, 11, 0.2)',
+                  fontFamily: 'inherit',
+                }}
+              >
+                <Check size={14} />
+                <span>{pt ? 'Aprovar / Aceitar' : 'Approve / Accept'}</span>
+              </button>
+            )}
+
+            {approval!.dialogOptions && approval!.dialogOptions.map((opt: { number: number; label: string }) => (
+              <button
+                key={opt.number}
+                disabled={submitting}
+                onClick={() => handleAnswer(opt.number)}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-elevated)',
+                  color: 'var(--text-primary)',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  cursor: submitting ? 'wait' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontFamily: 'inherit',
+                }}
+              >
+                <span style={{ fontWeight: 700, color: 'var(--anthropic-orange)' }}>{opt.number}.</span>
+                <span>{opt.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {answerFeedback && (
+            <div style={{ fontSize: 12, fontWeight: 500, color: answerFeedback.includes('sucesso') || answerFeedback.includes('success') ? '#22c55e' : '#ef4444' }}>
+              {answerFeedback}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Command Box */}
       {cmd ? (

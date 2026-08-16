@@ -94,6 +94,7 @@ interface Options {
   task: TaskState
   /** Open the sessions list on this arrangement, as a stored preference would. */
   group?: SessionGroupingId
+  cascade?: boolean
   /**
    * Pretend the history consent has never been answered.
    *
@@ -135,6 +136,7 @@ const USAGE = `
     --task   running|done   the next start/restart streams a build into the output pane
                             and either never finishes (running) or does (done);
                             reach it with --keys enter,enter
+    --cascade               draw the directory cascade inside the bands
     --pending               history consent still unanswered, so a start opens the
                             gate: --pending --keys enter,right,enter
     --fail-spawn            the new-session wizard's spawn is refused, so its failure
@@ -168,6 +170,9 @@ function parseArgs(argv: string[]): Options {
         i++
         break
       }
+      // The cascade is a VIEW now, so it is its own flag rather than one of the groupings —
+      // `--group task --cascade` is exactly the combination that could not be previewed before.
+      case '--cascade': opts.cascade = true; break
       case '--pending': opts.pending = true; break
       case '--fail-spawn': opts.failSpawn = true; break
       case '--restore': opts.restore = true; break
@@ -305,7 +310,14 @@ function fakeStatus(opts: Options, apiUrl?: string): ControlStatus {
     services: services(opts.mode, s, apiUrl),
     // A member machine carries a NAME and a latency; the sweep has to see the header at its widest,
     // or the fit is only ever checked in the shape that happens to be shortest.
-    ...(opts.mode === 'member' ? { machineName: 'wsl-mithrandir', pushMs: 468 } : {}),
+    ...(opts.mode === 'member'
+      ? {
+          machineName: 'wsl-mithrandir',
+          accountName: 'blpsoares',
+          linkState: 'ok' as const,
+          pushMs: 468,
+        }
+      : {}),
     version: '1.7.3',
     latestVersion: '1.7.4',
     // The parallel-sessions budget, so the width sweep exercises the header WITH it. A calm one:
@@ -319,7 +331,15 @@ function fakeStatus(opts: Options, apiUrl?: string): ControlStatus {
     // the screen reads its own default otherwise. It is the only way to LOOK at an arrangement
     // without driving the menu by keystroke, and the cascade is the one arrangement whose whole
     // point is what it looks like.
-    ...(opts.group ? { sessionView: { ...DEFAULT_SESSION_VIEW, grouping: opts.group } } : {}),
+    ...(opts.group || opts.cascade
+      ? {
+          sessionView: {
+            ...DEFAULT_SESSION_VIEW,
+            ...(opts.group ? { grouping: opts.group } : {}),
+            ...(opts.cascade ? { cascade: true } : {}),
+          },
+        }
+      : {}),
   }
 }
 

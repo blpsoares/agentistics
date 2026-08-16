@@ -17,6 +17,7 @@ import {
   footerHints,
   headerMetaWidth,
   tabUnderline,
+  type CentralLinkState,
   type ConfigCells,
   type HeaderLayout,
   type HeaderMeta,
@@ -94,6 +95,14 @@ export function Header({ layout, width }: { layout: HeaderLayout; width: number 
  * green bar in the corner is a light nobody looks at, and the whole value of this cell is that a
  * change in it is noticeable.
  */
+/** The link dot's colour per state — presentation only; the STATE is the host's decision. */
+const LINK_COLOR: Record<CentralLinkState, string> = {
+  ok: COLORS.running,
+  stale: COLORS.accent,
+  offline: COLORS.danger,
+  unauthorized: COLORS.danger,
+}
+
 const LOAD_COLOR: Record<'ok' | 'warn' | 'full', string | undefined> = {
   ok: undefined,
   warn: COLORS.accent,
@@ -107,7 +116,17 @@ function HeaderTag({ meta }: { meta: HeaderMeta }) {
       {/* WHICH machine, and whether its link is alive. In `secondary` rather than dim: it is the
           thing a person scans for when two terminals look identical, so it has to be findable at a
           glance without competing with the waiting counter's accent. */}
-      {meta.machine ? <Text color={COLORS.secondary}>{` · ${meta.machine}`}</Text> : null}
+      {/* The link's own dot, and it is the ONLY coloured thing in this cell: green while the last
+          push landed, amber while it is merely quiet, red when the central refused or cannot be
+          reached. A `stale` link is deliberately not red — the central owns the push cadence and
+          may simply have nothing to say, and a warning that cries wolf is one people stop reading.
+          The state is said in words on the connection card too; colour never carries it alone. */}
+      {meta.machine ? (
+        <>
+          <Text color={LINK_COLOR[meta.machineState ?? 'ok']}>{' · ●'}</Text>
+          <Text color={COLORS.secondary}>{` ${meta.machine}`}</Text>
+        </>
+      ) : null}
       {meta.alert ? <Text color={COLORS.accent} bold>{` · ${meta.alert}`}</Text> : null}
       {/* The parallel-sessions budget. Dim while there is room, `danger` once the ceiling is close
           or the machine is already swapping — but the NUMBERS are always drawn, so a reader who

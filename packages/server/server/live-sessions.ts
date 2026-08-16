@@ -400,6 +400,12 @@ export async function scanProcesses(): Promise<{
   try { pids = await readdir('/proc') } catch {
     return { procs: [], unavailable: 'no-proc' }
   }
+  let harnessIndex: Awaited<ReturnType<typeof import('./sessions/harness-sessions').loadHarnessSessions>> | null = null
+  try {
+    const { loadHarnessSessions } = await import('./sessions/harness-sessions')
+    harnessIndex = await loadHarnessSessions()
+  } catch { /* best-effort */ }
+
   const btimeSec = await bootTimeSec()
   const hz = 100 // USER_HZ is 100 on every Linux this runs on; only used to scale start ticks.
   const procs: HarnessProcess[] = []
@@ -425,9 +431,13 @@ export async function scanProcesses(): Promise<{
       const cwd = await readlink(`/proc/${pid}/cwd`).catch(() => { cwdDenied = true; return '' })
       if (!cwd) return
       const startedMs = await processStartMs(pid, btimeSec, hz)
-      // An open session file beats argv: it is what the process is writing to right now.
-      const sessionId = (await sessionIdFromFds(pid, harness)) ?? sessionIdFromArgv(argv)
-      procs.push({ harness, cwd, sessionId, startedMs, pid: Number(pid) })
+      const pidNum = Number(pid)
+      const harnessRecord = harnessIndex?.byPid.get(pidNum)
+      // Harness session file beats fd and argv: it is what the harness explicitly wrote for this pid.
+      const sessionId = harnessRecord?.sessionId
+        ?? (await sessionIdFromFds(pid, harness))
+        ?? sessionIdFromArgv(argv)
+      procs.push({ harness, cwd, sessionId, startedMs, pid: pidNum })
     } catch { /* process exited or not ours — ignore */ }
   }))
   const unavailable = procs.length > 0
@@ -561,6 +571,8 @@ export interface LiveSnapshot {
   liveProcesses: UnmatchedProcess[]
   /** Map of session_id to current activity status (working, waiting, waiting-approval, exited). */
   liveSessionActivities?: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'>
+  /** Map of session_id to current approval dialog information. */
+  liveApprovals?: Record<string, import('@agentistics/core').LiveApprovalInfo>
   /** Set when this configuration cannot observe host processes AT ALL. An empty list then means
    *  "we cannot know", not "nobody is working", and the UI must say which. */
   liveUnavailable?: LiveUnavailableReason
@@ -624,6 +636,7 @@ export async function getLiveSnapshot(sessions: SessionMeta[]): Promise<LiveSnap
   const snap = resolveLiveSnapshot(procs, sessions)
 
   const liveSessionActivities: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'> = {}
+  const liveApprovals: Record<string, import('@agentistics/core').LiveApprovalInfo> = {}
   try {
     const { createEventStore } = await import('./events/event-store')
     const store = createEventStore()
@@ -649,6 +662,25 @@ export async function getLiveSnapshot(sessions: SessionMeta[]): Promise<LiveSnap
     }
   }
 
-  const result: LiveSnapshot = { ...snap, liveSessionActivities }
+  try {
+    const { createControlHost } = await import('./cli-start')
+    const host = createControlHost()
+    if (host.sessions) {
+      const ctrlSnap = await host.sessions()
+      for (const s of ctrlSnap.sessions) {
+        if (s.canApprove || s.canChoose || (s.dialogOptions && s.dialogOptions.length > 0) || (s.approvalLines && s.approvalLines.length > 0)) {
+          liveApprovals[s.id] = {
+            approvalLines: s.approvalLines,
+            dialogOptions: s.dialogOptions,
+            canApprove: s.canApprove,
+            canChoose: s.canChoose,
+          }
+          liveSessionActivities[s.id] = 'waiting-approval'
+        }
+      }
+    }
+  } catch { /* best effort */ }
+
+  const result: LiveSnapshot = { ...snap, liveSessionActivities, liveApprovals }
   return unavailable ? { ...result, liveUnavailable: unavailable } : result
 }

@@ -245,8 +245,15 @@ export const DIMENSION_ORDER: readonly SessionDimensionId[] =
  */
 export type SessionArrangementId = 'none' | 'tree'
 
-/** The arrangements that are not dimensions, in menu order. See `SessionArrangementId`. */
-export const ARRANGEMENTS: readonly SessionArrangementId[] = ['none', 'tree'] as const
+/**
+ * The arrangements that are not dimensions, in menu order. See `SessionArrangementId`.
+ *
+ * `tree` is deliberately ABSENT: the cascade stopped being a grouping and became a view that draws
+ * inside whatever the bands are (`groupSessions`'s `cascade`), so offering it here would ask the
+ * user to give up every band to see their directories. The id survives in the type because a
+ * `preferences.json` written by an older build still carries it.
+ */
+export const ARRANGEMENTS: readonly SessionArrangementId[] = ['none'] as const
 
 /** How the list is arranged — an arrangement, or any dimension. */
 export type SessionGroupingId = SessionArrangementId | SessionDimensionId

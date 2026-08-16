@@ -10,7 +10,8 @@
 
 import { PANE_FRAME_Y } from './chrome.ts'
 import {
-  ACTIVE_STATES, GROUPINGS, SESSION_STATES, SESSION_STATE_CHOICES, SESSION_DIMENSIONS, UNFILED,
+  ACTIVE_STATES, OFF_STATE, GROUPINGS, SESSION_STATES, SESSION_STATE_CHOICES, SESSION_DIMENSIONS,
+  UNFILED,
   bucketKey, dimensionValueLabel, sessionNamed, sessionRunning,
   type DimensionContext, type DimensionWordBook, type SessionDimensionId, type SessionGroupingId,
 } from './session-dimensions'
@@ -19,6 +20,9 @@ import {
   type SessionOrder, type SessionSort,
 } from './session-order'
 import { buildSessionTree } from './session-tree'
+// `.ts` explicitly: `Surface.tsx` sits beside `surface.ts` and a bare specifier resolves to the
+// component on a case-insensitive path, exactly as `chrome.ts` is imported above.
+import { wrapText } from './surface.ts'
 import type { ControlSession, SessionState } from './types'
 
 // The status vocabulary and the two row predicates live in `session-dimensions.ts`, and the ordering
@@ -31,7 +35,7 @@ export {
 } from './session-order'
 export { breadcrumb, buildSessionTree, CRUMB_SEP } from './session-tree'
 export {
-  ACTIVE_STATES, SESSION_STATES, SESSION_DIMENSIONS, DIMENSION_ORDER, GROUPINGS, UNFILED,
+  ACTIVE_STATES, OFF_STATE, SESSION_STATES, SESSION_DIMENSIONS, DIMENSION_ORDER, GROUPINGS, UNFILED,
   GONE_PROJECT_KEY, FILTERS_VERSION, DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED,
   SHORTCUT_STATES,
   applyShortcut, bucketKey, dimensionValueLabel, dimensionWordBook, migrateSessionFilters,
@@ -115,13 +119,28 @@ export function groupSessions(
   doneTasks: readonly string[] = [],
   order: SessionOrder = DEFAULT_ORDER,
   ctx: DimensionContext = {},
+  /**
+   * Draw the directory CASCADE inside each band — a VIEW, not a grouping.
+   *
+   * It used to be one of the groupings, which forced a choice nobody should have to make: the
+   * cascade answers "which directory is this session in" and the grouping answers "what do these
+   * bands stand for", and picking the tree meant giving up every other band. Composed instead: the
+   * grouping decides the bands, and inside each one the sessions cascade by project and then by the
+   * segments of their `cwd`.
+   *
+   * `tree` survives as a grouping id so a stored preference still parses; the menu no longer offers
+   * it and `migrateSessionFilters` rewrites it to `none` + cascade.
+   */
+  cascade = false,
 ): SessionGroup[] {
-  if (by === 'none') return [{ key: '', label: '', sessions: sortSessions(list, order) }]
   // The CASCADE returns the same shape, already in reading order, with `depth` and `path` on top —
   // which is what lets every consumer below keep working without knowing a tree exists. Dispatched
   // here rather than by each caller, for the same reason `none` is: three surfaces arrange a fleet,
   // and an arrangement one of them has not been told about is one that silently does not exist.
-  if (by === 'tree') return buildSessionTree(list, words, doneTasks, order, ctx)
+  if (by === 'tree' || (cascade && by === 'none')) {
+    return buildSessionTree(list, words, doneTasks, order, ctx)
+  }
+  if (by === 'none') return [{ key: '', label: '', sessions: sortSessions(list, order) }]
 
   const groups = new Map<string, SessionGroup>()
   for (const s of list) {
@@ -139,12 +158,68 @@ export function groupSessions(
 
   // Groups ordered by their most urgent member, so the box holding a blocked session is the one at
   // the top — grouping must not bury the thing the screen exists to surface.
-  return [...groups.values()]
+  const ordered = [...groups.values()]
     .map(g => ({ ...g, sessions: sortSessions(g.sessions, order) }))
     .sort((a, b) => {
       const byRank = sessionRank(a.sessions[0]!) - sessionRank(b.sessions[0]!)
       return byRank !== 0 ? byRank : a.label.localeCompare(b.label)
     })
+  if (!cascade) return ordered
+  // The bands stay exactly as they were — same keys, same order, same `done` marks — and each one's
+  // sessions become the tree they were already in. The band is the parent node, so it keeps its
+  // heading and its rows hang below it.
+  return ordered.flatMap(g => cascadeInside(g, by, words, doneTasks, order, ctx))
+}
+
+/**
+ * One band's sessions, expanded into the directory cascade beneath it — PURE.
+ *
+ * The cascade's own root is the PROJECT. Grouped BY project that root is the band's own name, so it
+ * is dropped and its sessions hang directly under the band — the same rule the `where` column and
+ * the closed block follow, and for the same reason: a heading repeating the heading above it says
+ * nothing and costs a row. Under every other grouping the project IS new information (a task spans
+ * two repositories, a harness spans everything) and stays as the first level.
+ *
+ * The band itself is emitted with `path`, which is what makes `sessionRows` draw it as a branch —
+ * headings and counts included — when it has no sessions of its own.
+ */
+function cascadeInside(
+  g: SessionGroup,
+  by: SessionGrouping,
+  words: DimensionWordBook,
+  doneTasks: readonly string[],
+  order: SessionOrder,
+  ctx: DimensionContext,
+): SessionGroup[] {
+  const sub = buildSessionTree(g.sessions, words, doneTasks, order, ctx)
+  // Keys are prefixed by the band's own, so two folders of the same name under two bands stay two
+  // nodes — the same rule `buildSessionTree` applies to its own paths.
+  const keyed = (x: SessionGroup) => `${g.key}\u0000${x.key}`
+  const roots = sub.filter(x => (x.depth ?? 0) === 0)
+  // Grouped by project there is exactly one root and it is this band. More than one would mean the
+  // band and the project dimension disagreed about which project a row is in, which cannot happen —
+  // both call `bucketKey(s, 'project')` — and if it ever did, keeping the roots is the honest answer.
+  if (by === 'project' && roots.length === 1) {
+    const root = roots[0]!
+    return [
+      { ...g, sessions: root.sessions, depth: 0, path: [g.label] },
+      ...sub.filter(x => x !== root).map(x => ({
+        ...x,
+        key: keyed(x),
+        depth: x.depth ?? 0,
+        path: [g.label, ...(x.path ?? []).slice(1)],
+      })),
+    ]
+  }
+  return [
+    { ...g, sessions: [], depth: 0, path: [g.label] },
+    ...sub.map(x => ({
+      ...x,
+      key: keyed(x),
+      depth: (x.depth ?? 0) + 1,
+      path: [g.label, ...(x.path ?? [])],
+    })),
+  ]
 }
 
 /**
@@ -244,7 +319,12 @@ export function sessionRows(
     group?: SessionGroup,
   ) => {
     if (sessions.length === 0) return
-    if (out.length > 0) out.push({ kind: 'spacer' })
+    // Air BETWEEN bands, never between a node and its own first child: inside the cascade that blank
+    // reads as the end of the block, which is the one thing the guides exist to say correctly. The
+    // last row being a heading shallower than this group's depth is exactly "this hangs off that".
+    const last = out[out.length - 1]
+    const nested = last?.kind === 'heading' && (last.depth ?? 0) < (group?.depth ?? 0)
+    if (out.length > 0 && !nested) out.push({ kind: 'spacer' })
     if (label !== '') {
       out.push({
         kind: 'heading', label, count: sessions.length, ...(muted ? { muted } : {}),
@@ -301,7 +381,13 @@ export function sessionRows(
     const rest = g.sessions.filter(s => !isMarked(s))
     const live = rest.filter(isLive)
     const fell = rest.filter(isFell)
+    // Most recently off FIRST. A block of nineteen finished conversations is read from the top, and
+    // the one that ended twenty minutes ago is the one being looked for — the arrangement's own
+    // ordering has no opinion about it, since every row in here shares a state. A row with no
+    // measured end sorts last rather than to the top: unknown is not recent.
     const closed = rest.filter(s => !isLive(s) && !isFell(s))
+      .slice()
+      .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
     // An empty KEY is an absence ("no task"), not a category, and is drawn as one. A FINISHED task
     // says so in its heading and is muted with it: the sessions are still listed and still
     // attachable, so the screen must say why they are set apart rather than merely dimming them.
@@ -314,23 +400,29 @@ export function sessionRows(
       // Nothing left under it either: the branch is not merely empty, it is not there. A heading
       // with a name and nothing named is the box-with-a-name-in-it the marked band already refuses.
       if (below > 0) {
-        if (out.length > 0) out.push({ kind: 'spacer' })
+        const last = out[out.length - 1]
+        const nested = last?.kind === 'heading' && (last.depth ?? 0) < (g.depth ?? 0)
+        if (out.length > 0 && !nested) out.push({ kind: 'spacer' })
         out.push({ kind: 'heading', label: head, count: below, ...branch(g, head) })
       }
       return
     }
-    push(head, live, g.key === '' || Boolean(g.done), g)
+    // Inside a NAMED group the closed rows simply continue under its heading, most recently off
+    // first. They used to get a second heading of their own — `ads-propostas · off  19` under
+    // `ads-propostas  1` — which repeats the group's name to say a thing every one of those rows
+    // already says in its own `state` cell, and splits one project into two bands a screen apart.
+    // In the UNGROUPED arrangement the heading is kept: there is no group name above them, so that
+    // word is the only thing separating what is running from what is over.
+    const inlineClosed = g.label !== '' && closed.length > 0
+    push(head, inlineClosed ? [...live, ...closed] : live, g.key === '' || Boolean(g.done), g)
     if (fell.length > 0) {
       // NOT muted: everything else set apart on this screen is set apart because it is over, and
       // this block is the opposite — it is the one thing on the list asking to be acted on.
       const label = fellLabel ?? ''
       push(g.label !== '' && label ? `${g.label} · ${label}` : label, fell, undefined, g)
     }
-    if (closed.length > 0) {
-      // Inside a named group the closed block still says which group it belongs to, so a heading
-      // read on its own is never ambiguous.
-      const label = closedLabel ?? ''
-      push(g.label !== '' && label ? `${g.label} · ${label}` : label, closed, true, g)
+    if (closed.length > 0 && !inlineClosed) {
+      push(closedLabel ?? '', closed, true, g)
     }
   })
   return out
@@ -439,6 +531,15 @@ export function detailLines(s: ControlSession, labels: {
   doing: string
   task: string
   metrics: string
+  /**
+   * What the usage figure COUNTS, in words — `in + out + cache`.
+   *
+   * The number is every token the conversation recorded (input, output, cache read and cache
+   * write; `conversations.ts` sums the four), and read beside a cost it is naturally taken for the
+   * in/out pair alone — which is the reading that makes it look ten times too big, since a cached
+   * read dwarfs the input on every long session. The row is the only surface with room to say so.
+   */
+  metricsAll: string
   /** Heads the spelled-out gauge: `45%  ·  455.4k / 1M`. */
   context: string
   /**
@@ -497,10 +598,13 @@ export function detailLines(s: ControlSession, labels: {
   // Tokens and cost only where the conversation actually recorded them. Absent is never rendered as
   // zero — the same N/A-versus-a-confident-0 rule the dashboard applies to harness capabilities.
   if (s.tokens || s.cost) {
+    // The parenthetical rides the TOKEN figure, so a row carrying only a cost never claims a
+    // breakdown it is not showing.
+    const tokens = s.tokens ? `${s.tokens} (${labels.metricsAll})` : ''
     out.push({
       key: 'metrics',
       label: labels.metrics,
-      value: [s.tokens, s.cost].filter(Boolean).join('  ·  '),
+      value: [tokens, s.cost].filter(Boolean).join('  ·  '),
     })
   }
   // The gauge SPELLED OUT: the bar on the row is a glance, and this is the only place the two
@@ -826,14 +930,49 @@ export interface SessionColumns {
 }
 
 /**
- * How long ago a row that is not running began — PURE, and EMPTY for one that is.
+ * How long ago a row that is not running WENT OFF — PURE, and EMPTY for one that is.
+ *
+ * It used to measure from `startedAt`, under a heading that said `started`, which is the wrong
+ * question on the only rows that draw it: a block of finished conversations is read by which of
+ * them ended most recently, and "started 96h ago" says nothing about whether that one is the work
+ * of this morning or of last week. `endedAt` is that instant, and there is NO FALLBACK to the
+ * start time — a start age printed under a heading naming the end is a wrong number rather than a
+ * missing one, and this column has always been allowed to be blank.
  *
  * `now` is passed in rather than read: this is called on every repaint and a clock inside it would
  * make the column's width depend on the second it was measured in.
  */
 export function sessionAge(s: ControlSession, now: number, ago: (seconds: number) => string): string {
-  if (sessionRunning(s) || s.startedAt === undefined) return ''
-  return ago(Math.max(0, Math.round((now - s.startedAt) / 1000)))
+  if (sessionRunning(s) || s.endedAt === undefined) return ''
+  return ago(Math.max(0, Math.round((now - s.endedAt) / 1000)))
+}
+
+/**
+ * The NOTIFICATION cell: a dot at the head of a row that is waiting on a person.
+ *
+ * The state word already says it and is four columns in from the left, among five other words; what
+ * a fleet needs is something readable without reading — the same job the header's `⏳ 2` does for
+ * the whole machine, done per row. It is a dot AND a word, never a dot alone: a distinction
+ * announced only in a glyph has to be taught before the screen can be read.
+ *
+ * Its own cell rather than the cursor's or the mark's, because all three can be true at once — the
+ * row you are on, the row you marked, and the row that needs you are three different facts.
+ */
+export const NOTIFY_CELL = 2
+
+/** Does this row want a person? The one predicate the dot, the counter and the bell all read. */
+export function sessionNotify(s: ControlSession): boolean {
+  return s.state === 'waiting' || s.state === 'waiting-approval'
+}
+
+/**
+ * What the notification cell costs on THIS screen — zero when nothing is waiting.
+ *
+ * The same rule every other cell here follows: a column nothing on screen carries is not drawn and
+ * does not narrow the title to reserve a space nothing occupies.
+ */
+export function notifyCellWidth(rows: readonly ControlSession[]): number {
+  return rows.some(sessionNotify) ? NOTIFY_CELL : 0
 }
 
 /** How much of a session id a row shows. Enough to be unambiguous in practice, and to type. */
@@ -963,6 +1102,13 @@ export function sessionColumns(
   o: {
     /** True while the HEADING above each row already names the task, so the cell would repeat it. */
     groupedByTask?: boolean
+    /**
+     * The same rule for the PROJECT cell, and it was missing: grouped by project, every row of a
+     * band ended in the very word the heading over it had just said, in the widest cell on the
+     * right-hand side. The cell exists for the arrangements that do NOT say it (`none`, by state,
+     * by harness), which is exactly when it is the only thing naming where a session is.
+     */
+    groupedByProject?: boolean
     /** Already-localized age per row, keyed by session id — see `sessionAge`. */
     ages?: ReadonlyMap<string, string>
     /**
@@ -1004,7 +1150,7 @@ export function sessionColumns(
   const droppable = [
     // The PROJECT, not the directory: once the grouping keys on the main checkout, a folder cell
     // showing the worktree's own name says something the worktree cell already says better.
-    ['where', widest('where', s => s.projectGroup || s.project)],
+    ['where', o.groupedByProject ? 0 : widest('where', s => s.projectGroup || s.project)],
     ['harness', widest('harness', s => s.harness)],
     ['metrics', widest('metrics', sessionMetric)],
     ['context', widest('context', s => sessionContext(s))],
@@ -1026,7 +1172,7 @@ export function sessionColumns(
     const sum = values.reduce((n, v) => n + v, 0)
     // `1` stands in for the title, which is always drawn and so always pays its own gap.
     const drawn = [id, state, 1, ...values].filter(n => n > 0).length
-    return 2 + id + state + sum + GAP * (drawn - 1)
+    return 2 + notifyCellWidth(rows) + id + state + sum + GAP * (drawn - 1)
   }
 
   // The fewest columns a title is worth. Below it the row has a state word and an ellipsis, which
@@ -1216,7 +1362,7 @@ export type AsideRow =
  * `closed` and `exited` were two of these and asked ONE question — "is it not running" — so ticking
  * either while the other was on appeared to do nothing. They are now `history`.
  */
-export type SessionToggle = 'history' | 'named' | 'done' | 'active' | 'detail'
+export type SessionToggle = 'history' | 'named' | 'done' | 'active' | 'detail' | 'cascade'
 
 /**
  * The aside's rows, in reading order — PURE, so what is drawn and what a click resolves against are
@@ -1296,6 +1442,12 @@ export function asideRows(o: {
       kind: 'layout', value, label: o.layout.words[value], on: value === o.layout.value,
     })
   }
+  // The CASCADE sits with the layout rather than with the groupings, because that is what it is: a
+  // way of DRAWING the rows, orthogonal to what the bands stand for. It was a grouping, which made
+  // "show me the directories" cost every band on the screen.
+  rows.push({
+    kind: 'toggle', toggle: 'cascade', label: o.toggleWords.cascade, on: o.toggles.cascade,
+  })
   rows.push({ kind: 'rule' }, { kind: 'heading', label: o.headings.view })
   for (const g of GROUPINGS) {
     rows.push({ kind: 'group', value: g, label: o.groupWords[g], on: g === o.grouping })
@@ -1823,6 +1975,7 @@ export function sessionKeyHelp(w: {
   move: string; open: string; attach: string; menu: string; section: string
   newSession: string; search: string; clear: string; kill: string; rename: string
   note: string; task: string; mark: string; onlyActive: string
+  openTask: string; finishTask: string; recent: string; cascade: string
   group: string; layout: string; detail: string; menuFold: string
   reset: string; tabs: string; help: string; quit: string
   approve: string; prompt: string; reopenFell: string
@@ -1832,22 +1985,28 @@ export function sessionKeyHelp(w: {
     { keys: 'enter', what: w.menu },
     { keys: 'o', what: w.attach },
     // The two that act on a session WITHOUT entering it, listed right under the one that enters it:
-    // they answer the same question ("this one needs me") in the two cheaper ways.
-    { keys: 'y', what: w.approve },
+    // they answer the same question ("this one needs me") in the two cheaper ways. `y` is kept as an
+    // alias and left out of the list — the reference names ONE key per verb or it stops being read.
+    { keys: 'a', what: w.approve },
     { keys: 'p', what: w.prompt },
     { keys: 'R', what: w.reopenFell },
     { keys: 'tab', what: w.open },
     { keys: '1-9 / ← →', what: w.section },
-    { keys: 'a', what: w.newSession },
+    { keys: 'n', what: w.newSession },
     { keys: 'ctrl+f', what: w.search },
     { keys: 'esc', what: w.clear },
     { keys: 'x', what: w.kill },
-    { keys: 'n', what: w.rename },
-    { keys: 't', what: w.note },
+    { keys: 'r', what: w.rename },
+    { keys: 'm', what: w.note },
+    { keys: 't', what: w.task },
+    { keys: 'T', what: w.openTask },
+    { keys: 'F', what: w.finishTask },
     { keys: 'space', what: w.mark },
-    // One row, three keys, ONE question. `c` and `e` called the same function and `l` was the same
-    // boolean read from the other end, so the help listed three controls where the screen has one.
-    { keys: 'l / c / e', what: w.onlyActive },
+    // One row, three keys, ONE question. `c` leads and `l`/`e` are aliases of the same call: they
+    // were three controls doing one visible thing, which is a keyboard that lies about how many
+    // controls exist.
+    { keys: 'c / l / e', what: w.onlyActive },
+    { keys: 'C', what: w.recent },
     { keys: 'v', what: w.group },
     { keys: 'ctrl+g', what: w.layout },
     { keys: 'd', what: w.detail },
@@ -1856,7 +2015,10 @@ export function sessionKeyHelp(w: {
     { keys: 'b / ctrl+b', what: w.menuFold },
     { keys: 'ctrl+r', what: w.reset },
     { keys: '[ ]', what: w.tabs },
-    { keys: '?', what: w.help },
+    // `h` leads, because it is the letter a person tries first and it was free. `?` stays: it is
+    // what every list-shaped TUI already answers, and a reference nobody can open is not a
+    // reference. Both are listed, so the screen never teaches only the harder one.
+    { keys: 'h / ?', what: w.help },
     { keys: 'q', what: w.quit },
   ]
 }
@@ -1864,6 +2026,38 @@ export function sessionKeyHelp(w: {
 /** The width the keystroke column needs, so the descriptions line up — PURE. */
 export function keyHelpColumn(rows: readonly KeyHelp[]): number {
   return rows.reduce((n, r) => Math.max(n, r.keys.length), 0)
+}
+
+/** One drawn line of the key reference: the keystroke, then what it does. */
+export interface KeyHelpLine {
+  /** Empty on a continuation line, so the keystroke column is written exactly once per key. */
+  keys: string
+  what: string
+}
+
+/**
+ * The reference as LINES that fit `width` — PURE, and the thing the screen scrolls.
+ *
+ * It used to be one row per key, truncated: at the width of the menu column that produced
+ * `attach — or reo…` for half the list, which is a reference that names the keys and withholds
+ * what they do. Wrapping is what makes the narrow case readable, and it is also what makes the
+ * screen SCROLLABLE — once a row can be two lines, a row budget is no longer a line budget, and
+ * paging has to be counted in the units that are actually drawn.
+ *
+ * A description too narrow to hold anything is not wrapped into single characters: below the point
+ * where the keystroke column plus a word fits, the caller is expected to have given the reference
+ * the whole screen instead. `wrapText` still guarantees termination there.
+ */
+export function keyHelpLines(rows: readonly KeyHelp[], width: number): KeyHelpLine[] {
+  const keyCol = keyHelpColumn(rows)
+  const room = Math.max(1, width - keyCol - 2)
+  const out: KeyHelpLine[] = []
+  for (const row of rows) {
+    const wrapped = wrapText(row.what, room)
+    if (wrapped.length === 0) { out.push({ keys: row.keys, what: '' }); continue }
+    wrapped.forEach((what, i) => out.push({ keys: i === 0 ? row.keys : '', what }))
+  }
+  return out
 }
 
 // the card grid
@@ -2608,4 +2802,85 @@ export function closeCellWidth(_rows: readonly ControlSession[], _width: number)
  */
 export function canClose(s: ControlSession): boolean {
   return s.actionable && s.state !== 'closed' && s.state !== 'exited'
+}
+
+// ---------------------------------------------------------------------------
+// the cascade's own lines
+// ---------------------------------------------------------------------------
+
+/** What one level of the cascade costs on the left of a row — a bar and a space, or the connector. */
+export const TREE_CELL = 2
+
+/**
+ * The tree GUIDES for a drawn list — PURE, one string per row, all padded to one width.
+ *
+ * Indentation alone does not read as a tree. The cascade drew its branches two spaces further right
+ * per level and nothing else, so a reader sees a list whose headings wander rightwards: which node
+ * a row hangs off, and where a branch ends, are exactly the two facts the shape is supposed to
+ * carry, and both were left to be inferred from a column position.
+ *
+ * The rules are the ones every tree in every file manager uses, and they are worth stating because
+ * each is load-bearing:
+ *
+ *  - a ROOT gets nothing. Two roots are two trees, and a bar between them would claim a parent that
+ *    does not exist;
+ *  - a branch is `├─` while a sibling follows it at the same level and `└─` when it is the last —
+ *    that is the only thing on screen saying where a subtree ENDS;
+ *  - an ancestor that still has siblings coming keeps a `│` running down through everything under
+ *    it, so a row three levels deep can be traced back to the node it belongs to;
+ *  - SESSION rows are children of their heading, so they carry the same bars one level deeper. A
+ *    heading connected to its parent above rows that are not is a tree drawn half way.
+ *
+ * Every prefix is padded to the widest, so the columns to their right stay in one grid — the table
+ * is read across as much as down, and a ragged left edge would cost that.
+ *
+ * Returns `[]` when nothing is nested, which is every arrangement but the cascade: the caller then
+ * pays no columns at all.
+ */
+export function treeGuides(rows: readonly SessionRow[]): string[] {
+  const deepest = rows.reduce((n, r) => Math.max(n, r.kind === 'heading' ? r.depth ?? 0 : 0), 0)
+  if (deepest === 0) return []
+
+  /** Does another heading at exactly `depth` follow, before one that closes it? */
+  const hasSibling = (from: number, depth: number): boolean => {
+    for (let i = from + 1; i < rows.length; i++) {
+      const r = rows[i]!
+      if (r.kind !== 'heading') continue
+      const d = r.depth ?? 0
+      if (d < depth) return false
+      if (d === depth) return true
+    }
+    return false
+  }
+
+  // `open[d]` — a node at depth `d` is still expecting siblings, so its bar keeps running.
+  const open: boolean[] = []
+  let head = 0
+  const out = rows.map((row, i) => {
+    if (row.kind === 'spacer') return ''
+    if (row.kind === 'heading') {
+      const depth = row.depth ?? 0
+      open.length = depth
+      open[depth] = hasSibling(i, depth)
+      head = depth
+      if (depth === 0) return ''
+      // Level 0 is skipped: its siblings are other ROOTS, and a bar there would join two trees.
+      const bars = open.slice(1, depth).map(more => (more ? '│ ' : '  ')).join('')
+      return `${bars}${open[depth] ? '├─' : '└─'}`
+    }
+    // A session hangs off the last heading, one level deeper than it.
+    if (head === 0) return ''
+    return open.slice(1, head + 1).map(more => (more ? '│ ' : '  ')).join('')
+  })
+
+  // Only the SESSION rows are padded to one width, and that is the whole of the difference between
+  // this and a plain indent: a heading is one string and may sit wherever its branch puts it, so
+  // each level steps right — while the rows under them are a TABLE, read across as much as down,
+  // and a ragged left edge would cost the grid. A heading that was padded too ended up starting a
+  // column to the RIGHT of the branch hanging off it, which draws the hierarchy upside down.
+  const width = out.reduce(
+    (n, p, i) => (rows[i]!.kind === 'session' ? Math.max(n, p.length) : n),
+    0,
+  )
+  return out.map((p, i) => (rows[i]!.kind === 'session' ? p.padEnd(width) : p))
 }

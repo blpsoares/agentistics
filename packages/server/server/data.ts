@@ -124,6 +124,7 @@ export async function loadSessionMetas(roots: string[] = [SESSION_META_DIR]): Pr
             output_tokens: (data.output_tokens as number) ?? 0,
             first_prompt: (data.first_prompt as string) ?? '',
             title: (data.title as string) ?? (data.summary as string) ?? undefined,
+            transcript_text: (data.transcript_text as string) ?? undefined,
             user_interruptions: (data.user_interruptions as number) ?? 0,
             user_response_times: (data.user_response_times as number[]) ?? [],
             tool_errors: (data.tool_errors as number) ?? 0,
