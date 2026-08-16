@@ -132,6 +132,14 @@ export interface SessionView {
    */
   recordedRepo?: RepoFacts
   createdMs?: number
+  /**
+   * When this row went OFF, in ms — what "off for how long" is read from, and what orders a block
+   * of finished conversations.
+   *
+   * A different fact from `createdMs`: `started` answers when the work began, and nineteen finished
+   * rows are read by which of them ENDED. Three sources, most exact first, and no invention beyond
+   * them — see where it is filled.
+   */
   endedMs?: number
   attached: boolean
   /**
@@ -394,11 +402,17 @@ export function buildSessionViews(o: {
       ...(r.backend
         ? { createdMs: r.backend.createdMs }
         : registryCreatedMs(r.managed?.createdAt)),
+      // Most exact first: the end the registry RECORDED, then the backend's last activity on a row
+      // that is over, and finally the last HEARTBEAT stamp. That last one is what covers a REBOOT,
+      // which is the ordinary way to get a `lost` row: nothing writes a record when the machine goes
+      // down, so the last time the poller saw the session alive is the only end time that exists.
       ...(r.managed?.endedAt && Number.isFinite(Date.parse(r.managed.endedAt))
         ? { endedMs: Date.parse(r.managed.endedAt) }
         : r.backend?.lastActivityMs && (finished || r.status === 'exited' || r.status === 'lost')
           ? { endedMs: r.backend.lastActivityMs }
-          : {}),
+          : r.status !== 'running' && typeof r.managed?.lastSeenMs === 'number'
+            ? { endedMs: r.managed.lastSeenMs }
+            : {}),
       // Reopening a finished session is the whole reason its row is kept. Resolved the same way an
       // external process's conversation is — by harness and directory — and absent when nothing
       // can be resolved, rather than offering a verb with no target.

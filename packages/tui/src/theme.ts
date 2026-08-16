@@ -13,6 +13,14 @@ export const COLORS = {
   accent: '#f59e0b',
   secondary: '#6366f1',
   success: '#10b981',
+  /**
+   * A session that is RUNNING — its own token, not `success`.
+   *
+   * `success` is emerald and reads as teal on a terminal: beside a cyan focus highlight it was
+   * reported as "blue", and it is within a hair of `HARNESS_COLOR.codex` (#10a37f), so a codex row
+   * that was working wore one colour twice. This green cannot be mistaken for either.
+   */
+  running: '#22c55e',
   danger: '#f43f5e',
   info: '#38bdf8',
   text: '#ffffff',

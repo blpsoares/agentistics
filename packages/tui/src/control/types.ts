@@ -625,9 +625,17 @@ export interface ControlSession {
   approvalBlind?: string
   /** When it started, epoch ms. An instant rather than a duration — see `ServiceRuntimeState`. */
   startedAt?: number
-  /** When it ENDED, epoch ms. Absent while the session runs, and absent on a row whose end nothing
-   *  recorded — `sessionAge` then falls back to the start, which is the older, wronger answer, so
-   *  absence must stay distinguishable from zero. */
+  /**
+   * When it went OFF, epoch ms — absent while it runs, and absent when nothing recorded an end.
+   *
+   * `startedAt` answers when the work began and is the wrong question on a finished conversation: a
+   * block of nineteen off rows is read, and ordered, by which of them ended most recently. Two
+   * sources, in order of exactness: the registry's own recorded end, and — for a row the machine
+   * LOST, where nothing was ever written — the last heartbeat stamp, which is the closest thing to
+   * an end time that can exist for a reboot. There is deliberately no fallback to the start: a
+   * start age printed under a heading naming the end is a wrong number rather than a missing one,
+   * and this column has always been allowed to be blank.
+   */
   endedAt?: number
   attached: boolean
   /** Process ID for live process monitoring. */
@@ -727,6 +735,14 @@ export interface SessionViewPrefs {
    * the persist effect then wrote that off to disk, making it permanent.
    */
   layout?: 'list' | 'cards'
+  /**
+   * Draw the directory CASCADE inside each band.
+   *
+   * A VIEW rather than a grouping — see `groupSessions`. Absent reads as off, and a stored
+   * `grouping: 'tree'` from before this existed is rewritten to `none` + cascade on read, so a
+   * machine that had the cascade selected keeps it.
+   */
+  cascade?: boolean
   /**
    * WHICH PAGE of cards was open, named by the SESSION at the top of it rather than by a number.
    *
@@ -860,6 +876,9 @@ export interface ControlSessions {
 
 export type TeamMode = 'solo' | 'central' | 'member'
 
+/** What the central link is doing — see `ControlStatus.linkState`. */
+export type CentralLinkState = 'ok' | 'stale' | 'offline' | 'unauthorized'
+
 export type ArchiveMode = 'consolidate' | 'full' | 'off'
 
 export interface ControlStatus {
@@ -914,6 +933,26 @@ export interface ControlStatus {
    * a different fact wearing the same label.
    */
   machineName?: string
+  /**
+   * The ACCOUNT that central knows this machine under.
+   *
+   * Beside the name because the two answer different halves of one question: two machines can be
+   * called `laptop` on two centrals, and the account is what says whose fleet this row belongs to.
+   * Read from the connection the machine actually has (`/api/team/status`), never from a config
+   * value typed here — a name this machine believes and the central does not is the one thing this
+   * cell must not show.
+   */
+  accountName?: string
+  /**
+   * Whether that link is WORKING — decided HERE, because only the host can see the connection.
+   *
+   * A name and a latency say a connection was configured and once answered; neither says it is
+   * alive now, and that was the whole of what the header could show. `stale` is its own answer
+   * rather than folded into `offline`: the central owns the push cadence, so a member that has not
+   * pushed recently has not failed at anything, and reporting that as broken is the false alarm
+   * that teaches people to ignore the indicator. Absent when there is no connection at all.
+   */
+  linkState?: CentralLinkState
   /**
    * Round trip of the last successful contact with the central, in milliseconds.
    *

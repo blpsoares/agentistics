@@ -89,13 +89,16 @@ describe('the table', () => {
     expect(GROUPINGS).toEqual([...ARRANGEMENTS, ...DIMENSION_ORDER])
   })
 
-  it('keeps the CASCADE an arrangement and refuses to make it a dimension', () => {
+  it('refuses to make the CASCADE a dimension, or a grouping at all', () => {
     // A tree node is not a bucket on a dimension: a session belongs to EVERY node on its path, so
     // "filter to `packages`" and "the band `packages`" could never be made to agree. The cross-check
     // below asserts exactly that agreement for every id in `DIMENSION_ORDER`, so promoting `tree`
-    // would either break it or force a false answer into it. It is offered as an arrangement, like
-    // `none`, and this test is what stops it drifting.
-    expect(GROUPINGS).toContain('tree')
+    // would either break it or force a false answer into it.
+    //
+    // It is not offered as a GROUPING either any more: the cascade is a view drawn inside whatever
+    // the bands are, so choosing it must not cost the bands. The id survives in the type because a
+    // preferences file written by an older build still carries it, and is migrated on read.
+    expect(GROUPINGS).not.toContain('tree')
     expect(DIMENSION_ORDER).not.toContain('tree' as SessionDimensionId)
     expect(Object.keys(SESSION_DIMENSIONS)).not.toContain('tree')
   })
@@ -415,18 +418,15 @@ describe('the marked band', () => {
     // exactly where a marked row is hardest to find.
     const rows = band('project', ['c', 'e'])
     expect(sessionsUnder(rows, 'marked')).toEqual(['c', 'e'])
-    // A history band still exists — `d` is exited and unmarked — so the assertion is about WHERE
-    // the marked two ended up, not about the band being gone.
-    const closedHeadings = rows
-      .map((r, i) => (r.kind === 'heading' && r.label.includes('closed') ? i : -1))
-      .filter(i => i >= 0)
-    expect(closedHeadings.length).toBeGreaterThan(0)
-    for (const at of closedHeadings) {
-      for (let i = at + 1; i < rows.length; i++) {
-        const r = rows[i]!
-        if (r.kind !== 'session') break
-        expect(['c', 'e']).not.toContain(r.session.id)
-      }
+    // The marked band is the ONLY place either of them appears. Closed rows now continue under
+    // their own group's heading rather than under a suffixed one, so the assertion is about the
+    // whole list below the band rather than about a block with `closed` in its name.
+    const bandAt = rows.findIndex(r => r.kind === 'heading' && r.label === 'marked')
+    expect(bandAt).toBeGreaterThanOrEqual(0)
+    const after = rows.slice(bandAt + 1)
+    const nextHeading = after.findIndex(r => r.kind === 'heading')
+    for (const r of after.slice(nextHeading)) {
+      if (r.kind === 'session') expect(['c', 'e']).not.toContain(r.session.id)
     }
   })
 
