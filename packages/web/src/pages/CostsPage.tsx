@@ -1,12 +1,14 @@
 import React from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { TrendingUp, Zap, Target, Sparkles } from 'lucide-react'
+import { TrendingUp, Zap, Target, Sparkles, Sigma } from 'lucide-react'
+import { planAllocation } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { Section } from '../components/Section'
 import { ModelBreakdown } from '../components/ModelBreakdown'
 import { BudgetPanel } from '../components/BudgetPanel'
 import { CacheHitRatePanel } from '../components/CacheHitRatePanel'
+import { TokenTotalsPanel } from '../components/TokenTotalsPanel'
 
 export default function CostsPage() {
   const ctx = useOutletContext<AppContext>()
@@ -28,11 +30,19 @@ export default function CostsPage() {
           : 'Model usage, monthly forecast and cache efficiency — everything related to spending.'}
       />
 
+      {/* The totals come FIRST: every figure below is a slice of these four numbers, and the panel
+          is where the word "tokens" is defined for the whole product. */}
+      <Section flashId="token-totals" title={<><Sigma size={14} /> {lang === 'pt' ? 'Totais de tokens' : 'Token totals'}</>}>
+        <TokenTotalsPanel tokens={derived.tokenTotals} filters={filters} lang={lang} />
+      </Section>
+
       <Section flashId="models" title={<><TrendingUp size={14} /> {lang === 'pt' ? 'Uso por modelo' : 'Model usage & cost'}</>} onExpand={() => setExpandedChart('models')}>
         <ModelBreakdown
           modelUsage={derived.modelUsage}
           currency={currency}
+          planFactor={ctx.costBasis === 'plan' && ctx.planBasis.basis ? planAllocation(ctx.planBasis.basis).aggregateFactor : null}
           brlRate={brlRate}
+          lang={lang}
           fallbackInputTokens={filters.projects.length > 0 ? derived.inputTokens : undefined}
           fallbackOutputTokens={filters.projects.length > 0 ? derived.outputTokens : undefined}
           fallbackCostUSD={filters.projects.length > 0 ? derived.totalCostUSD : undefined}
@@ -48,10 +58,10 @@ export default function CostsPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16, alignItems: 'stretch' }}>
         <Section flashId="budget" style={{ height: '100%' }} title={<><Target size={14} /> {lang === 'pt' ? 'Orçamento & projeção' : 'Budget & forecast'}</>}>
-          <BudgetPanel statsCache={statsCache} budgetUSD={monthlyBudgetUSD} onBudgetChange={updateBudget} currency={currency} brlRate={brlRate} lang={lang} />
+          <BudgetPanel statsCache={statsCache} budgetUSD={monthlyBudgetUSD} onBudgetChange={updateBudget} currency={currency} brlRate={brlRate} lang={lang} monthlyCommitmentUSD={ctx.monthCommitment?.usd ?? null} commitmentPartial={ctx.monthCommitment?.partial ?? false} />
         </Section>
         <Section flashId="cache" style={{ height: '100%' }} title={<><Zap size={14} /> {lang === 'pt' ? 'Eficiência de cache' : 'Cache efficiency'}</>}>
-          <CacheHitRatePanel hitRate={derived.cacheHitRate} cacheTotals={derived.cacheTotals} grossSavedUSD={derived.cacheGrossSavedUSD} writeOverheadUSD={derived.cacheWriteOverheadUSD} netSavedUSD={derived.cacheNetSavedUSD} perModel={derived.cachePerModel} currency={currency} brlRate={brlRate} lang={lang} />
+          <CacheHitRatePanel hitRate={derived.cacheHitRate} cacheTotals={derived.cacheTotals} grossSavedUSD={derived.cacheGrossSavedUSD} writeOverheadUSD={derived.cacheWriteOverheadUSD} netSavedUSD={derived.cacheNetSavedUSD} perModel={derived.cachePerModel} currency={currency} brlRate={brlRate} costBasis={ctx.costBasis} lang={lang} />
         </Section>
       </div>
     </>

@@ -20,22 +20,23 @@
  * Multi-harness metrics (backward compatible):
  *   The existing claude_stats.* metrics are preserved unchanged for backward
  *   compatibility with existing dashboards. In addition, new agentistics.harness.*
- *   metrics are exported with a `harness` attribute (claude|codex|gemini|copilot),
+ *   metrics are exported with a `harness` attribute
+ *   (claude|codex|gemini|copilot|antigravity),
  *   aggregated from the per-session consolidated store (~/.agentistics/sessions/).
  */
 
 import { join } from 'path'
 import chokidar from 'chokidar'
 
-// ── OpenTelemetry imports ──────────────────────────────────────────────────
+// OpenTelemetry imports
 
 import { metrics, ValueType } from '@opentelemetry/api'
 import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics'
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http'
-import { Resource } from '@opentelemetry/resources'
+import { resourceFromAttributes } from '@opentelemetry/resources'
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
 
-// ── Shared imports from the main codebase ──────────────────────────────────
+// Shared imports from the main codebase
 
 import { calcCost } from '@agentistics/core'
 import type { ModelUsage, HarnessId, SessionMeta } from '@agentistics/core'
@@ -44,7 +45,7 @@ import { HOME_DIR, CLAUDE_DIR, PROJECTS_DIR, SESSION_META_DIR, STATS_CACHE_FILE,
 import { createLimiter, safeReadJson, safeReadDir, safeStat } from './utils'
 import { getEnabledAdapters } from './adapters/types'
 
-// ── Configuration ──────────────────────────────────────────────────────────
+// Configuration
 
 const MIN_INTERVAL_SEC = 5
 const rawInterval = parseInt(process.env.CLAUDE_STATS_WATCH_INTERVAL ?? '30', 10)
@@ -61,7 +62,7 @@ const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? 'agentistics'
 const OTLP_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? ''
 const OTLP_HEADERS = process.env.OTEL_EXPORTER_OTLP_HEADERS ?? ''
 
-// ── Snapshot builder ──────────────────────────────────────────────────────
+// Snapshot builder
 
 interface StatsCache {
   dailyActivity?: Array<{ date: string; messageCount: number; sessionCount: number; toolCallCount: number }>
@@ -237,7 +238,7 @@ async function buildSnapshot(): Promise<OtelSnapshot & { harnessSnapshots: Harne
   }
 }
 
-// ── OpenTelemetry setup ──────────────────────────────────────────────────
+// OpenTelemetry setup
 
 function parseOtlpHeaders(raw: string): Record<string, string> {
   const headers: Record<string, string> = {}
@@ -276,7 +277,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     exportIntervalMillis: WATCH_INTERVAL_SEC * 1000,
   })
 
-  const resource = new Resource({
+  const resource = resourceFromAttributes({
     [ATTR_SERVICE_NAME]: SERVICE_NAME,
   })
 
@@ -289,7 +290,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
 
   const meter = metrics.getMeter('agentistics', '1.0.0')
 
-  // ── Define instruments ────────────────────────────────────────────────────
+  // Define instruments
   // Cumulative totals use ObservableCounter; point-in-time values use ObservableGauge.
 
   const messagesTotal = meter.createObservableCounter('claude_stats.messages.total', {
@@ -456,7 +457,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
     }
   })
 
-  // ── Per-harness metrics (backward-compatible additions) ───────────────────
+  // Per-harness metrics (backward-compatible additions)
   // These agentistics.harness.* metrics add a `harness` attribute so consumers
   // can track all AI assistants in a single dashboard, without touching the
   // existing claude_stats.* metrics above.
@@ -516,7 +517,7 @@ function setupOtel(): { shutdown: () => Promise<void> } | null {
   }
 }
 
-// ── File watcher ──────────────────────────────────────────────────────────
+// File watcher
 
 async function watchDirectory(dir: string, onChange: () => void): Promise<void> {
   const dirStat = await safeStat(dir)
@@ -536,7 +537,7 @@ async function watchDirectory(dir: string, onChange: () => void): Promise<void> 
   console.log(`[watcher] Watching ${dir}`)
 }
 
-// ── Snapshot rebuild serialization ────────────────────────────────────────
+// Snapshot rebuild serialization
 
 let snapshotInFlight = false
 let snapshotPending = false
@@ -568,7 +569,7 @@ async function rebuildSnapshot(): Promise<void> {
   }
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────
+// Main
 
 async function main() {
   console.log('╔══════════════════════════════════════════════╗')
@@ -605,11 +606,19 @@ async function main() {
   // Also do periodic polling as a fallback (chokidar can miss events in some edge cases)
   setInterval(() => rebuildSnapshot(), WATCH_INTERVAL_SEC * 1000)
 
+  // The session-event producer rides along here rather than being its own service: it has to be
+  // long-lived to tell a working session from a finished one (see events/producer.ts), and a
+  // separate process the user must remember to start is a process that will be dead at the moment
+  // it matters. Never fatal to this daemon — see events/daemon.ts.
+  const { startEventProducer } = await import('./events/daemon')
+  const events = await startEventProducer()
+
   console.log('[watcher] Running — use `bun run dev` in a separate terminal for the dashboard UI')
 
   // Graceful shutdown
   const shutdown = async () => {
     console.log('\n[watcher] Shutting down...')
+    await events?.stop()
     if (otel) await otel.shutdown()
     process.exit(0)
   }

@@ -3,12 +3,18 @@ import { mkdir, writeFile, readFile } from 'fs/promises'
 import type { SessionMeta, HarnessId } from '@agentistics/core'
 import { CONSOLIDATED_DIR } from './config'
 import { createLimiter, safeReadDir, safeReadJson } from './utils'
+import { HARNESS_ORDER, normalizeSessionTimes } from '@agentistics/core'
 
 const writeLimit = createLimiter(20)
 const readyDirs = new Set<string>()
 
 export function consolidatedPath(harness: HarnessId, sessionId: string): string {
-  return join(CONSOLIDATED_DIR, harness, `${sessionId}.json`)
+  // Some harnesses (e.g. Gemini) embed a path segment in the session id
+  // ("project/session-..."), so the raw id cannot be a flat filename — the
+  // intermediate dir would not exist (ENOENT). Flatten path separators; the real
+  // session id is read back from the file CONTENT, not the filename, so this is safe.
+  const safeId = sessionId.replace(/[/\\]/g, '_')
+  return join(CONSOLIDATED_DIR, harness, `${safeId}.json`)
 }
 
 async function ensureDir(harness: HarnessId): Promise<void> {
@@ -43,7 +49,7 @@ export async function loadConsolidated(): Promise<Map<string, SessionMeta>> {
   const map = new Map<string, SessionMeta>()
   const limit = createLimiter(40)
   // Per-harness subdirs + legacy flat files (treated as claude)
-  const harnesses: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+  const harnesses: HarnessId[] = HARNESS_ORDER
   const roots = [
     ...harnesses.map(h => ({ dir: join(CONSOLIDATED_DIR, h), legacy: false })),
     { dir: CONSOLIDATED_DIR, legacy: true },
@@ -54,6 +60,11 @@ export async function loadConsolidated(): Promise<Map<string, SessionMeta>> {
       const s = await safeReadJson<SessionMeta>(join(dir, f))
       if (!s?.session_id) return
       if (!s.harness) s.harness = 'claude'
+      // The store holds whatever an adapter wrote, including shapes it should not have written —
+      // Kimi persisted `start_time` as an epoch number, and every consumer that calls a string
+      // method on it threw. Repaired HERE, on the way in, because the file on disk is already
+      // wrong and fixing the adapter cannot reach it. See normalizeSessionTimes.
+      normalizeSessionTimes(s)
       // (harness, id) key; first writer wins per key
       const key = `${s.harness}:${s.session_id}`
       if (!map.has(key)) map.set(key, s)

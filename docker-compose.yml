@@ -1,0 +1,73 @@
+services:
+  app:
+    build: .
+    environment:
+      # Defaults to the bundled local Mongo (added by docker-compose.localdb.yml). Set MONGO_URL
+      # in central.env to an external cluster (e.g. mongodb+srv://…@atlas/) and central.sh will
+      # NOT start the local Mongo — the app connects straight to the external one.
+      MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017/?replicaSet=rs0}
+      MONGO_DB: ${MONGO_DB:-agentistics}
+      AGENTISTICS_TEAM_CENTRAL: "1"
+      AGENTISTICS_TEAM_ORG: ${AGENTISTICS_TEAM_ORG:-default}
+      AGENTISTICS_TEAM_PASSWORD: ${AGENTISTICS_TEAM_PASSWORD:-}
+      AGENTISTICS_TEAM_SESSION_SECRET: ${AGENTISTICS_TEAM_SESSION_SECRET:-}
+      AGENTISTICS_TEAM_INGEST_TOKEN: ${AGENTISTICS_TEAM_INGEST_TOKEN:-}
+      # How reachable this instance is: local | lan | public (see server/exposure.ts).
+      # `public` permanently revokes the local-shell, local-chat, host-transcript and MCP-admin
+      # routes and requires every owner to hold a second factor. Unset defaults to `lan`.
+      AGENTISTICS_EXPOSURE: ${AGENTISTICS_EXPOSURE:-}
+      # Set to 1 only when a proxy that rewrites CF-Connecting-IP / X-Forwarded-For is the ONLY
+      # way in (cloudflared on the same host + BIND_IP=127.0.0.1).
+      AGENTISTICS_TRUST_PROXY: ${AGENTISTICS_TRUST_PROXY:-}
+      # 1 when TLS is terminated in front of this container: adds Secure + the __Host- cookie
+      # prefix and emits HSTS.
+      AGENTISTICS_TEAM_TLS: ${AGENTISTICS_TEAM_TLS:-}
+      # Self-contribution: set this to the central machine's own identity to also show
+      # this machine's Claude usage in the dashboard (one instance = central + member).
+      # Requires docker-compose.selfcontrib.yml, which central.sh includes automatically when
+      # this is set — a dedicated central mounts nothing from the host at all.
+      AGENTISTICS_CENTRAL_USER: ${AGENTISTICS_CENTRAL_USER:-}
+      PORT: "47291"
+      SERVE_STATIC: "1"
+    volumes:
+      # The app's writable data dir (preferences, consolidate store, sync state). A named
+      # volume so it survives container recreation (down/up, image upgrade) — otherwise the
+      # archive-mode consent gate + install prompt reappear on every recreate.
+      - agentistics_data:/data/.agentistics
+    ports:
+      # Bind interface. Default 127.0.0.1 = reachable only from this host, which is all a
+      # tunnel or a local reverse proxy needs. Set BIND_IP=0.0.0.0 deliberately for LAN access —
+      # a fresh install should never land on the network by accident.
+      - "${BIND_IP:-127.0.0.1}:${APP_PORT:-48080}:47291"
+    # NOTE — deliberately NO `pid: host` here, unlike docker-compose.machine.yml. A central does
+    # not detect live sessions by reading /proc: it has no visibility into a member's machine at
+    # all, so members report their own snapshots over the reverse-channel WebSocket
+    # (team-agent-client.ts → team-live.ts). Giving the central the host pid namespace would only
+    # expose the aggregator box's own processes, which nobody is asking about, at the cost of the
+    # hardening below. A central's "Open now" being empty is a MEMBER-side question — check that
+    # the member's own panel works and that its sharing rules do not withhold the repository.
+    #
+    # Hardening: unprivileged user, immutable root filesystem, no capabilities, no privilege
+    # escalation. The only writable paths are the data volume and a small tmpfs.
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:47291/api/health'); process.exit(r.ok ? 0 : 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  agentistics_data:

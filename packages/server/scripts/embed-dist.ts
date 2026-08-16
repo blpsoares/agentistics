@@ -46,14 +46,14 @@ function getContentType(filename: string): string {
 
 const TEXT_EXTS = new Set([
   '.html', '.js', '.mjs', '.cjs', '.css', '.json', '.svg',
-  '.txt', '.xml', '.map',
+  '.txt', '.xml', '.map', '.webmanifest',
 ])
 
 function isText(filename: string): boolean {
   return [...TEXT_EXTS].some(ext => filename.endsWith(ext))
 }
 
-// ── Validate dist/ exists ──────────────────────────────────────────────────
+// Validate dist/ exists
 
 const distStat = await stat(distDir).catch(() => null)
 if (!distStat?.isDirectory()) {
@@ -61,7 +61,7 @@ if (!distStat?.isDirectory()) {
   process.exit(1)
 }
 
-// ── Read every file under dist/ ────────────────────────────────────────────
+// Read every file under dist/
 
 type EmbeddedAsset = {
   content: string
@@ -87,7 +87,7 @@ for await (const file of walkDir(distDir)) {
   count++
 }
 
-// ── Write generated module ─────────────────────────────────────────────────
+// Write generated module
 
 const output = `// AUTO-GENERATED — do not edit manually.
 // Regenerate with: bun run build:assets  (requires \`bun run build\` first)

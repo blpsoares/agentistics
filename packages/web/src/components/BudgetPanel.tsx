@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react'
 import { Target, TrendingUp, AlertTriangle, CheckCircle2, Pencil, Check, X } from 'lucide-react'
 import { parseISO } from 'date-fns'
 import type { StatsCache, Lang, HarnessId } from '@agentistics/core'
-import { getModelPrice } from '@agentistics/core'
+import { getModelPrice, fmtCost } from '@agentistics/core'
 import { NAtag } from './NAtag'
 
 interface Props {
@@ -11,6 +11,18 @@ interface Props {
   onBudgetChange: (v: number | null) => void
   currency: 'USD' | 'BRL'
   brlRate: number
+  /**
+   * What the registered plans commit to this month, when there are any.
+   *
+   * The panel does NOT convert its tracking to plan basis, on purpose: it forecasts VARIABLE
+   * spend from the pace so far, and a subscription has no pace — it is a fixed number known on
+   * day one. Converting would leave a forecast that only ever predicts itself. What the plan
+   * basis genuinely adds here is a second, fixed line the budget can be read against, which is
+   * what this prop is.
+   */
+  monthlyCommitmentUSD?: number | null
+  /** The commitment is prorated because a plan started or ended mid-month. */
+  commitmentPartial?: boolean
   lang: Lang
   /**
    * The active harness filter (undefined = unified / all-harness view).
@@ -21,16 +33,6 @@ interface Props {
   harness?: HarnessId
 }
 
-function fmtCost(usd: number, currency: 'USD' | 'BRL', rate: number): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (Math.abs(brl) < 0.005) return 'R$0,00'
-    const [intPart, decPart] = brl.toFixed(2).split('.')
-    return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
-  }
-  if (Math.abs(usd) < 0.01) return 'USD 0.00'
-  return `USD ${usd.toFixed(2)}`
-}
 
 /** Current-month spend using global modelUsage proportions, same method as useDerivedStats. */
 function computeMonthCost(statsCache: StatsCache, monthStart: Date, now: Date): number {
@@ -60,7 +62,7 @@ function computeMonthCost(statsCache: StatsCache, monthStart: Date, now: Date): 
   return total
 }
 
-export function BudgetPanel({ statsCache, budgetUSD, onBudgetChange, currency, brlRate, lang, harness }: Props) {
+export function BudgetPanel({ statsCache, budgetUSD, onBudgetChange, currency, brlRate, monthlyCommitmentUSD = null, commitmentPartial = false, lang, harness }: Props) {
   const pt = lang === 'pt'
   const [editing, setEditing] = useState(false)
   const displayBudget = budgetUSD !== null
@@ -180,6 +182,19 @@ export function BudgetPanel({ statsCache, budgetUSD, onBudgetChange, currency, b
           sub={pt ? 'extrapolação linear' : 'linear projection'}
           accent={overForecast ? '#f59e0b' : 'var(--accent-blue, #3b82f6)'}
         />
+        {/* The fixed line beside the variable ones. It is NOT a conversion of the two above —
+            those forecast usage from a pace, and a subscription has no pace. This is what you owe
+            whatever the pace turns out to be. */}
+        {monthlyCommitmentUSD !== null && monthlyCommitmentUSD > 0 && (
+          <Stat
+            label={pt ? 'Compromisso do mês' : 'Month commitment'}
+            value={fmtCost(monthlyCommitmentUSD, currency, brlRate)}
+            sub={commitmentPartial
+              ? (pt ? 'proporcional — plano mudou no mês' : 'prorated — plan changed mid-month')
+              : (pt ? 'assinaturas cadastradas' : 'registered subscriptions')}
+            accent="var(--accent-green, #22c55e)"
+          />
+        )}
         <div style={{
           background: 'var(--bg-elevated)',
           border: '1px solid var(--border-subtle)',

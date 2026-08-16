@@ -3,20 +3,46 @@ name: Build & Release
 on:
   push:
     branches: [main, feat/desktop]
+  # The manual valve. The version is otherwise computed from the tags and the commit subjects, which
+  # is right almost always and has no answer for the case where it got the number WRONG: 1.8.2 went
+  # out carrying a whole cockpit because the bump glob did not match scoped commits, and nothing
+  # short of inventing a commit could correct it. Given a version here, that computation is skipped
+  # entirely and this is the number that ships.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release exactly this version (e.g. 1.9.0). Leave empty to compute it.'
+        required: false
+        type: string
 
 permissions:
   contents: write
+  packages: write  # push the central Docker image to GHCR (publish-image job)
 
 jobs:
   build:
     name: Build binary (Linux x64)
     runs-on: ubuntu-latest
+    env:
+      # The packages a release stamps its version onto, in ONE place.
+      #
+      # There were two lists: the bump script wrote the files and `git add` staged them, and they
+      # were not the same list. Adding `packages/tui` to the first alone meant the file was written
+      # in the runner's working tree and thrown away — which is why the tui package went out at
+      # 1.7.3 in the 1.9.0 release, reporting a version no release has ever produced. Two hardcoded
+      # lists that must agree is the shape of the bug, not the fix.
+      PKG_FILES: >-
+        package.json
+        packages/core/package.json
+        packages/server/package.json
+        packages/web/package.json
+        packages/mcp/package.json
+        packages/tui/package.json
     outputs:
       skip: ${{ steps.skip_check.outputs.skip }}
       version_skip: ${{ steps.version.outputs.skip }}
       tag: ${{ steps.version.outputs.tag }}
       next: ${{ steps.version.outputs.next }}
-      mcp_changed: ${{ steps.version.outputs.mcp_changed }}
 
     steps:
       - name: Checkout
@@ -27,8 +53,13 @@ jobs:
       - name: Skip if version bump commit
         id: skip_check
         run: |
+          # A FORCED release is never skipped. This guard exists so the workflow's own bump commit
+          # does not trigger it again; the head of main is always that commit, so honouring it on a
+          # manual dispatch would refuse every corrective release outright.
           MSG=$(git log -1 --pretty=format:"%s")
-          if echo "$MSG" | grep -q "chore: bump version"; then
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+          elif echo "$MSG" | grep -q "chore: bump version"; then
             echo "skip=true" >> $GITHUB_OUTPUT
           else
             echo "skip=false" >> $GITHUB_OUTPUT
@@ -60,6 +91,28 @@ jobs:
         if: steps.skip_check.outputs.skip != 'true'
         id: version
         run: |
+          # An explicitly requested version wins outright: no tag arithmetic, no subject parsing, and
+          # no "no new commits" skip — a corrective release exists precisely because the automatic
+          # answer was wrong, so consulting it again would refuse the correction.
+          FORCED="${{ github.event.inputs.version }}"
+          if [ -n "$FORCED" ]; then
+            FORCED="${FORCED#v}"
+            case "$FORCED" in
+              [0-9]*.[0-9]*.[0-9]*) ;;
+              *) echo "::error::version must look like 1.9.0, got '$FORCED'"; exit 1 ;;
+            esac
+            if git rev-parse -q --verify "refs/tags/v$FORCED" >/dev/null; then
+              echo "::error::v$FORCED already exists"; exit 1
+            fi
+            echo "next=$FORCED"  >> $GITHUB_OUTPUT
+            echo "tag=v$FORCED"  >> $GITHUB_OUTPUT
+            echo "range=HEAD~20..HEAD" >> $GITHUB_OUTPUT
+            echo "bump=forced"   >> $GITHUB_OUTPUT
+            echo "skip=false"    >> $GITHUB_OUTPUT
+            echo "▶ forced release v$FORCED"
+            exit 0
+          fi
+
           # Last semver tag only (ignore 'latest')
           LAST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -1)
 
@@ -87,9 +140,14 @@ jobs:
           # Determine bump type from conventional commits
           BUMP="patch"
           while IFS= read -r subject; do
+            # SCOPES count. `feat:*` does not match `feat(sessions):`, so every scoped feature in
+            # this repository has been shipping as a patch — a whole cockpit went out as 1.8.2.
+            # The bang can sit on either side of the scope (`feat!:` and `feat(x)!:` are both
+            # conventional), so each is matched with and without one.
             case "$subject" in
               feat\!:*|fix\!:*|refactor\!:*|chore\!:*) BUMP="major"; break ;;
-              feat:*) [ "$BUMP" != "major" ] && BUMP="minor" ;;
+              feat\(*\)\!:*|fix\(*\)\!:*|refactor\(*\)\!:*|chore\(*\)\!:*) BUMP="major"; break ;;
+              feat:*|feat\(*\):*) [ "$BUMP" != "major" ] && BUMP="minor" ;;
             esac
             if echo "$subject" | grep -qi "BREAKING CHANGE"; then
               BUMP="major"; break
@@ -111,14 +169,6 @@ jobs:
           echo "skip=false"          >> $GITHUB_OUTPUT
           echo "▶ $CURRENT → $NEXT  (bump: $BUMP, $COMMIT_COUNT commits)"
 
-          # Detect if packages/mcp changed (excluding package.json version bumps)
-          if git diff --name-only "$RANGE" -- packages/mcp/ | grep -qv 'packages/mcp/package.json'; then
-            echo "mcp_changed=true"  >> $GITHUB_OUTPUT
-            echo "  MCP package has changes — will publish to npm"
-          else
-            echo "mcp_changed=false" >> $GITHUB_OUTPUT
-            echo "  MCP package unchanged — skipping npm publish"
-          fi
 
       - name: Bump version in package.json
         if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
@@ -126,13 +176,7 @@ jobs:
           VERSION="${{ steps.version.outputs.next }}"
           bun -e "
             const fs = require('fs');
-            const targets = [
-              'package.json',
-              'packages/core/package.json',
-              'packages/server/package.json',
-              'packages/web/package.json',
-              'packages/mcp/package.json',
-            ];
+            const targets = process.env.PKG_FILES.split(' ').filter(Boolean);
             for (const f of targets) {
               const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
               pkg.version = '$VERSION';
@@ -219,7 +263,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json packages/core/package.json packages/server/package.json packages/web/package.json packages/mcp/package.json
+          git add $PKG_FILES
           git commit -m "chore: bump version to ${VERSION} [skip ci]"
           git tag "$TAG"
           git push origin main "$TAG"
@@ -232,12 +276,20 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.next }}"
 
-          # Create the versioned release (Linux binary only; Windows installer added by build-desktop job)
-          gh release create "$TAG" \
-            --title "v${VERSION}" \
-            --notes-file /tmp/release-notes.md \
-            ./release/agentop \
-            ./release/agentop.exe
+          # Create the versioned release (Linux binary only; Windows installer added by build-desktop job).
+          # `gh release create` fails outright when the release already exists, which turns a
+          # re-run — the normal response to a later job in this workflow failing — into a second
+          # failure at the first step. Upload into it instead when it is already there.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — uploading the binaries into it"
+            gh release upload "$TAG" ./release/agentop ./release/agentop.exe --clobber
+          else
+            gh release create "$TAG" \
+              --title "v${VERSION}" \
+              --notes-file /tmp/release-notes.md \
+              ./release/agentop \
+              ./release/agentop.exe
+          fi
 
           # Update the rolling latest pointer
           gh release delete latest --yes 2>/dev/null || true
@@ -246,7 +298,15 @@ jobs:
           git tag latest
           git push origin latest
 
+          # `--target` is REQUIRED here. Without it `gh release create` refuses a tag it cannot
+          # yet see on the remote ("tag latest exists locally but has not been pushed"), and the
+          # push immediately above has not necessarily propagated by the time this runs. That is
+          # exactly how v1.7.4 failed: the old `latest` release had already been DELETED by the
+          # line above, so the repository was left with no rolling release at all, and every job
+          # after this one — the npm publish, the Windows installer, the GHCR image — was skipped.
+          # Naming the commit lets gh create the release without waiting on tag propagation.
           gh release create latest \
+            --target "$GITHUB_SHA" \
             --title "Latest build ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
             --notes-file /tmp/release-notes.md \
             ./release/agentop \
@@ -284,7 +344,7 @@ jobs:
         run: bun install --frozen-lockfile --cwd packages/desktop
 
       - name: Download agentop.exe artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: agentop-windows-x64
           path: packages/desktop/binaries/
@@ -400,11 +460,29 @@ jobs:
     name: Publish @agentistics/mcp to npm
     runs-on: ubuntu-latest
     needs: build
+    # Trusted publishing: npm verifies THIS workflow's OIDC identity instead of a
+    # stored credential, so there is no NPM_TOKEN to rotate. `id-token: write` is
+    # what lets the runner mint that token — without it npm falls back to looking
+    # for a credential and the publish fails as unauthenticated.
+    #
+    # The trusted publisher is configured per package on npmjs.com and pins the
+    # repository AND this workflow's FILE NAME. Renaming this file, or moving the
+    # publish into a different workflow, breaks the publish until the npm-side
+    # configuration is updated to match.
+    permissions:
+      contents: read
+      id-token: write
+    # The MCP package follows the PROJECT's version, so every release publishes
+    # it — including releases that changed nothing under packages/mcp. That is
+    # the point: "agentistics 1.7.3" should ship "@agentistics/mcp 1.7.3", and
+    # the previous rule (publish only when the package's own code changed, with
+    # version bumps explicitly excluded from the diff) is why npm sat on 1.3.3
+    # while the project reached 1.7.3. The cost is releases whose package is
+    # byte-identical to the one before it, which is the intended trade.
     if: |
       github.ref == 'refs/heads/main' &&
       needs.build.outputs.skip != 'true' &&
-      needs.build.outputs.version_skip != 'true' &&
-      needs.build.outputs.mcp_changed == 'true'
+      needs.build.outputs.version_skip != 'true'
 
     steps:
       - name: Checkout
@@ -428,11 +506,84 @@ jobs:
             fs.writeFileSync('packages/mcp/package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
-      - name: Publish to npm
-        working-directory: packages/mcp
+      # Trusted publishing needs a recent npm CLI; the runner's bundled one is
+      # older than the release that added OIDC support, and an old CLI fails by
+      # looking for a credential rather than by saying the feature is missing.
+      - name: Setup Node + npm
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          # Deliberately NO registry-url: it writes an .npmrc expecting
+          # NODE_AUTH_TOKEN, and a credential present alongside OIDC is what
+          # makes npm authenticate as the token instead of as this workflow.
+      - name: Upgrade npm to a trusted-publishing build
+        run: npm install -g npm@latest
+
+      # Publishing on EVERY release makes "this version is already on npm" a
+      # normal outcome rather than a fault: re-running a release, or retrying it
+      # after a later job failed, would otherwise hit npm's publish conflict and
+      # turn an otherwise-successful release red. Asked explicitly, so the step
+      # below is skipped rather than failed.
+      - name: Is this version already on npm?
+        id: published
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          VERSION="${{ needs.build.outputs.next }}"
+          if npm view "@agentistics/mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "@agentistics/mcp@$VERSION is already published — nothing to do"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "@agentistics/mcp@$VERSION is new — publishing"
+          fi
+
+      - name: Publish to npm
+        if: steps.published.outputs.exists != 'true'
+        working-directory: packages/mcp
+        # No token, and no ~/.npmrc: npm mints its own short-lived credential
+        # from the runner's OIDC identity. Provenance is attached automatically
+        # on this path, so `--provenance` is not passed by hand.
+        run: |
+          npm --version
           bun run build
           npm publish --access public
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Build & push the central (Team Mode aggregator) image to GHCR so `agentop central`
+  # can run from any machine WITHOUT cloning the repo — the CLI materializes a compose
+  # that pulls `ghcr.io/blpsoares/agentistics:<version>` instead of building from source.
+  publish-image:
+    name: Publish central image to GHCR
+    runs-on: ubuntu-latest
+    needs: build
+    if: |
+      github.ref == 'refs/heads/main' &&
+      needs.build.outputs.skip != 'true' &&
+      needs.build.outputs.version_skip != 'true'
+
+    steps:
+      # Check out main so the image includes the version-bump commit the build job pushed,
+      # keeping the image's internal version aligned with the release tag.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/blpsoares/agentistics:${{ needs.build.outputs.next }}
+            ghcr.io/blpsoares/agentistics:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

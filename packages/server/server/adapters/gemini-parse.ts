@@ -1,4 +1,6 @@
-import type { SessionMeta } from '@agentistics/core'
+import { canonicalTool, countGitCommands } from '../harness-activity'
+import type { SessionMeta, TurnEvent } from '@agentistics/core'
+import { activeMinutesOf } from '@agentistics/core'
 
 /** Pure: parse a Gemini CLI chat file (rich JSON format or JSONL streaming format) into a
  *  normalized SessionMeta. Returns null when the content has no usable data.
@@ -73,12 +75,23 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
   const messageHours: number[] = []
   const userMessageTimestamps: string[] = []
   const toolCounts: Record<string, number> = {}
+  let gitCommits = 0, gitPushes = 0
   let hasGenuineContent = false
+  // Per-turn timeline for computeActiveTime() (docs/harness-contract.md). Gemini records no
+  // duration of its own, so every turn is reconstructed from the message timestamps: a genuine
+  // user message opens a turn, the model's last message before the next prompt closes it.
+  const turnEvents: TurnEvent[] = []
 
   if (Array.isArray(parsed.messages)) {
     for (const msg of parsed.messages) {
       const msgType = msg.type as string | undefined
       const timestamp = msg.timestamp as string | undefined
+      const tsMs = timestamp ? Date.parse(timestamp) : NaN
+      let turnEvent: TurnEvent | null = null
+      if (!Number.isNaN(tsMs)) {
+        turnEvent = { ts: tsMs }
+        turnEvents.push(turnEvent)
+      }
 
       if (msgType === 'gemini') {
         // Extract token data from the rich format
@@ -94,12 +107,27 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
           model = msg.model
         }
 
-        // Extract tool call names
+        // Tool calls. The name goes through `canonicalTool` so Gemini's `run_shell_command` and
+        // `read_file` sit in the same buckets as every other harness's equivalents — the tools
+        // breakdown compares harnesses, and it cannot while each one uses its own words.
         if (Array.isArray(msg.toolCalls)) {
           for (const tc of msg.toolCalls) {
             const name = tc.name as string | undefined
-            if (name) {
-              toolCounts[name] = (toolCounts[name] ?? 0) + 1
+            if (!name) continue
+            const shared = canonicalTool('gemini', name)
+            toolCounts[shared] = (toolCounts[shared] ?? 0) + 1
+
+            // A shell call carries its command in `args.command` — verified against real chat
+            // files. This is what lets Gemini report commits at all; it reported 0 not because the
+            // data was missing but because nothing here ever looked.
+            if (shared === 'Bash') {
+              const args = tc.args as Record<string, unknown> | undefined
+              const cmd = typeof args?.command === 'string' ? args.command : ''
+              if (cmd) {
+                const g = countGitCommands(cmd)
+                gitCommits += g.commits
+                gitPushes += g.pushes
+              }
             }
           }
         }
@@ -108,7 +136,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
         assistantMessages++
 
         if (timestamp) {
-          const h = new Date(timestamp).getUTCHours()
+          const h = new Date(timestamp).getHours()
           if (!isNaN(h)) messageHours.push(h)
         }
       } else if (msgType === 'user') {
@@ -116,6 +144,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
         if (isGenuineUserMessage(text)) {
           hasGenuineContent = true
           userMessages++
+          if (turnEvent) turnEvent.userPrompt = true
 
           if (!firstPrompt && text) {
             // Use displayContent if available (stripped of injected file contents)
@@ -125,7 +154,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
 
           if (timestamp) {
             userMessageTimestamps.push(timestamp)
-            const h = new Date(timestamp).getUTCHours()
+            const h = new Date(timestamp).getHours()
             if (!isNaN(h)) messageHours.push(h)
           }
         }
@@ -146,14 +175,15 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
     start_time: startTime || lastUpdated || '',
     end_time: lastUpdated || undefined,
     duration_minutes: durationMinutes,
+    active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
     assistant_message_count: assistantMessages,
     tool_counts: toolCounts,
     tool_output_tokens: {},
     agent_file_reads: {},
     languages: [],
-    git_commits: 0,
-    git_pushes: 0,
+    git_commits: gitCommits,
+    git_pushes: gitPushes,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     cache_read_input_tokens: cacheRead,
@@ -256,10 +286,19 @@ function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
   const messageHours: number[] = []
   const userMessageTimestamps: string[] = []
   let hasGenuineContent = false
+  // Same reconstruction as parseRichJson — see computeActiveTime() / docs/harness-contract.md.
+  const turnEvents: TurnEvent[] = []
 
   for (const msg of messages) {
     const isUser = msg.type === 'user'
     const isAssistant = msg.type === 'model' || msg.type === 'gemini'
+
+    const tsMs = msg.timestamp ? Date.parse(msg.timestamp) : NaN
+    let turnEvent: TurnEvent | null = null
+    if (!Number.isNaN(tsMs)) {
+      turnEvent = { ts: tsMs }
+      turnEvents.push(turnEvent)
+    }
 
     let counted = false
     if (isAssistant) {
@@ -269,12 +308,13 @@ function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
     } else if (isUser && isGenuineUserMessage(msg.text ?? '')) {
       hasGenuineContent = true
       userMessages++
+      if (turnEvent) turnEvent.userPrompt = true
       if (msg.timestamp) userMessageTimestamps.push(msg.timestamp)
       counted = true
     }
 
     if (counted && msg.timestamp) {
-      const h = new Date(msg.timestamp).getUTCHours()
+      const h = new Date(msg.timestamp).getHours()
       if (!isNaN(h)) messageHours.push(h)
     }
   }
@@ -291,6 +331,7 @@ function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
     start_time: startTime || endTime || '',
     end_time: endTime || undefined,
     duration_minutes: durationMinutes,
+    active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
     assistant_message_count: assistantMessages,
     tool_counts: {},

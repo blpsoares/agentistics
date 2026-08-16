@@ -2,6 +2,43 @@
 
 All cost and token calculations use a single source of truth: `packages/core/src/types.ts` (imported as `@agentistics/core`). No layer duplicates the pricing logic.
 
+## What the word "tokens" means
+
+**A token figure is always all four billed counters:** `input + output + cacheRead + cacheWrite`.
+Counting lives in `packages/core/src/tokens.ts` — `sessionTokens` / `usageTokens` /
+`sessionTokenTotal` / `usageTokenTotal` / `totalTokens` / `addTokens` / `sumTokens`. Never write the
+sum by hand.
+
+This is not a stylistic preference. Measured on one real machine across its 123 stored Claude
+sessions:
+
+```
+input + output + cacheRead + cacheWrite   8,856,436,865
+input + output                               30,247,005   ← 0.34% of it
+```
+
+A surface that summed two of the four was not slightly low, it was off by ~300×, and the cost beside
+it (which had always priced the cache) disagreed by ~10×. It was found as a session-drawer bug and
+turned out to be 19 call sites across the web app, the server and the exports.
+
+Consequences that are easy to get wrong:
+
+- **An aggregate type carries `tokens: TokenBreakdown`**, not just `inputTokens`/`outputTokens` —
+  `HarnessSummary`, `RepoStat`, `TagAggregate`, `derived.tokenTotals`. The conversational pair is
+  kept for surfaces that legitimately want it (an "Input" card, an "Output" card) and is **never**
+  the thing labelled "tokens".
+- **A rate per million is over the total**, not over the conversational pair. Computing cost/1M
+  against the non-cached ~4% reports a figure tens of times higher than what is charged, and ranks
+  harnesses by how much they cache.
+- **`calcCost` gets the real cache counters.** For a session with no model, `blendedSessionCost`
+  applies each of the four blended rates — pricing cache as fresh input is the opposite error.
+- **A label may not ship without its explanation.** `TOKEN_KINDS` in `tokens.ts` carries a label
+  and a one-sentence `help` per counter in EN/PT, and `totalTokensExplained()` is the sentence that
+  goes under a headline figure. At these magnitudes an unexplained total reads as a fault.
+- **`tokens.lint.test.ts` enforces it** — it greps core/server/web/tui for two-term sums and for
+  `calcCost` arguments with the cache zeroed, and fails the build. Comments and per-field `+=` are
+  exempt; a deliberate two-term reading needs `@tokens-intentional` **and a reason**.
+
 ## Pricing table
 
 All prices are in USD per **1 million tokens**:
@@ -41,10 +78,15 @@ avg_input_rate  = Σ(model_input_tokens  × model_input_price)  / Σ input_token
 avg_output_rate = Σ(model_output_tokens × model_output_price) / Σ output_tokens
 (same for cache read and write)
 
-Estimated Session Cost = session_input_tokens  × avg_input_rate
-                       + session_output_tokens × avg_output_rate
-                       + ...
+Estimated Session Cost = session_input_tokens      × avg_input_rate
+                       + session_output_tokens     × avg_output_rate
+                       + session_cache_read_tokens  × avg_cache_read_rate
+                       + session_cache_write_tokens × avg_cache_write_rate
 ```
+
+Implemented **once**, in `blendedSessionCost` (`packages/web/src/hooks/useData.ts`). Two call sites
+— the session drawer and the PDF's per-session column — each wrote their own version over `input`
+and `output` only, which priced a session on the ~4% of its volume that is not cache.
 
 ## Token types
 
@@ -57,7 +99,12 @@ Estimated Session Cost = session_input_tokens  × avg_input_rate
 
 ### Cache efficiency
 
-Cache hit rate = `cacheRead / (cacheRead + input)`
+Cache hit rate = `cacheRead / (input + cacheRead + cacheWrite)`
+
+The denominator is everything the model READ, however it was served — cache writes included, since
+a write is input that had to be read to be written. Output is not in it: output is produced, not
+read, so including it would dilute the rate on an output-heavy session. See `readTokens()` in
+`packages/core/src/tokens.ts`, which is the same function the panel uses.
 
 Color coding: red < 30% · yellow 30–60% · green ≥ 60%
 
@@ -124,3 +171,90 @@ Tools consuming more than 40% of total output tokens are flagged as token "villa
 ## BRL conversion
 
 The Brazilian Real exchange rate is fetched from a public API by `/api/rates` and cached for 1 hour. If the fetch fails, a hardcoded fallback rate is used. The dashboard always shows the source and timestamp of the rate in the currency toggle tooltip.
+
+## Cost basis — API estimate vs your plan
+
+Every cost above is an **API-equivalent estimate**: tokens × the model's published rate. If you pay
+a flat subscription, that figure is not your invoice. Register your billing timeline in
+**Settings → Billing** and the dashboard can express the same metrics against what you actually
+pay.
+
+### The arithmetic
+
+For a filter window and one harness:
+
+```
+C = Σ over the harness's registered periods:
+      monthlyUSD(period) × overlapDays(period, window) / 30.44
+
+A = the API-equivalent cost of the filtered sessions, restricted to the SAME days
+
+V = A / C                              the value multiple
+effective $/1M tokens = C / (tokens / 1e6)
+```
+
+`V = 8.5` means you extracted 8.5× the plan's price in API-equivalent value over that window.
+`V = 1` is break-even.
+
+### Why proration, and why by days
+
+The plan price is monthly; a filter window is arbitrary. Counting whole calendar months is the
+*invoice* reading — you did pay the full amount even if you used three days — but applied to a
+7-day filter it reports a whole month's price against a fifth of a month's usage and calls the
+plan a bad deal. Prorating by days (`30.44` = the average month) gives a *rate*, and a rate is
+what makes one window comparable to another.
+
+A period change inside the window is priced exactly: each period contributes its own price for
+its own overlap. That is why the model is a timeline rather than a single "current plan".
+
+### Days with no registered plan
+
+A day no period covers has an A and no C. Including it inflates V; removing it from C alone
+inflates V harder. So such days are removed from **both** sides, and the card states the coverage:
+how many days were excluded and how much API value went with them.
+
+Two related facts appear in the same place:
+
+- **The measured window.** It can be narrower than your filter. Claude's daily token series does
+  not reach the whole history, so an "all time" filter may resolve to the last N days. The number
+  is correct for those days — the window is stated so the heading is not read as covering more.
+- **Undated history.** Claude's cumulative totals include usage the daily series cannot attribute
+  to a day. It is neither included nor excluded silently; it is reported as its own figure.
+
+### Modes other than a subscription
+
+- **API / pay-as-you-go** — those days' C *is* their A, so they contribute a multiple of exactly 1.
+  Nothing is gained or lost, which is the truth.
+- **Third party** (Bedrock, Vertex, a gateway) — the cost is off-machine and unknowable here, so
+  those days count as uncovered.
+
+### The monthly commitment
+
+The budget panel does **not** convert. It forecasts variable spend from the pace so far, and a
+subscription has no pace — it is a fixed number known on day one, so a converted forecast would
+only ever predict itself.
+
+Instead it gains a third figure beside the two variable ones: **Month commitment**, what your
+registered plans owe for the current calendar month. That is a different question from the plan
+cost of a filter window, and it is the one a monthly budget is actually set against. Days billed
+per token commit nothing to it — their cost is usage — so they are reported as variable spend on
+top rather than folded in. A plan that started or ended mid-month is prorated and labelled as
+such, so an unexpected figure explains itself.
+
+### What does not convert
+
+- **Cache savings** stay in API pricing, always. Cache does not reduce a subscription bill — the
+  plan costs the same either way. What it buys you is more work inside the same rate limit.
+- **The Settings → Pricing table** stays in API pricing. It is a *rate* table, and a flat monthly
+  fee has no per-token rate.
+- **Per-model, per-repo and per-agent costs** in plan basis are **allocations**: the plan cost
+  split in proportion to each row's API-equivalent share. Nobody is billed per model on a
+  subscription. Within one harness the split is a linear rescale, so every ranking and proportion
+  is preserved exactly; the labels say "allocated" so the figures are not read as observed.
+
+### What the app cannot know
+
+Prices in the plan catalog are a **prefill** carrying the date they were checked and the page they
+came from; several plans ship with no amount because no vendor page states one. Whatever you type
+wins. The app also cannot see your real API console spend, your overage, or which plan you were on
+historically — that last one is why the timeline asks for dates.

@@ -39,7 +39,7 @@ claude mcp list
 
 agentistics tracks multiple coding harnesses (Claude Code, Codex CLI, Gemini CLI, Copilot CLI). The MCP server reads the same `/api/data` endpoint, so by default its numbers reflect the **unified (all-harness)** view.
 
-- **Per-harness filtering:** `agentistics_summary`, `agentistics_projects`, `agentistics_sessions`, and `agentistics_costs` accept an optional `harness` parameter (`claude` | `codex` | `gemini` | `copilot`, or `all` — the default). When set, the tool scopes its result to that harness only.
+- **Per-harness filtering:** `agentistics_summary`, `agentistics_projects`, `agentistics_sessions`, and `agentistics_costs` accept an optional `harness` parameter (`claude` | `codex` | `gemini` | `copilot` | `antigravity`, or `all` — the default). When set, the tool scopes its result to that harness only.
 - **Comparison:** `agentistics_harnesses` lists every harness present in the data with its sessions, messages, tokens, estimated cost, and last-active date — the quickest way to answer "which harness do I use most / costs most".
 - **Caveats** match the dashboard: `currentStreak` is Claude-only (returned as `null` when scoping to a single non-Claude harness); harnesses that don't emit token usage (e.g. Gemini's local files) contribute 0 tokens/cost; the unified/`claude` cost breakdown comes from the Claude-complete stats-cache, while a specific non-Claude harness's cost breakdown is aggregated per-model from its sessions.
 
@@ -49,7 +49,7 @@ agentistics tracks multiple coding harnesses (Claude Code, Codex CLI, Gemini CLI
 
 All-time totals aggregated from sessions. Token counts and cost are computed directly from session records (not from the stats-cache snapshot), so they are always accurate even if the cache is stale.
 
-**Parameters:** `harness` *(optional)* — `claude` | `codex` | `gemini` | `copilot` | `all` (default `all`).
+**Parameters:** `harness` *(optional)* — `claude` | `codex` | `gemini` | `copilot` | `antigravity` | `all` (default `all`).
 
 **Returns:**
 ```json
@@ -133,7 +133,7 @@ Recent sessions with duration, model, and cost.
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `limit` | number | 20 | Max sessions to return (1–50) |
-| `harness` | string | `all` | Scope to one harness (`claude` \| `codex` \| `gemini` \| `copilot`) |
+| `harness` | string | `all` | Scope to one harness (`claude` \| `codex` \| `gemini` \| `copilot` \| `antigravity`) |
 
 **Returns:** array of sessions sorted by start time descending (each row includes its `harness`)
 ```json

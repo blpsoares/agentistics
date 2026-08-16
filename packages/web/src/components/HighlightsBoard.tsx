@@ -1,16 +1,12 @@
 import React, { useState } from 'react'
 import { Clock, Download, Upload, MessageSquare, Wrench, FolderOpen } from 'lucide-react'
 import type { SessionMeta, Project, HarnessId } from '@agentistics/core'
-import { formatProjectName } from '@agentistics/core'
+import { fmt, formatProjectName, sessionLabel } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { NAtag } from './NAtag'
 import { capable } from '../lib/harness'
+import { sessionTime } from '../lib/sessionTime'
 
-function fmt(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
 
 function fmtDuration(minutes: number): string {
   const h = Math.floor(minutes / 60)
@@ -56,11 +52,16 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
     )
   }
 
-  // ── Record finders ──────────────────────────────────────────────────────────
+  // Record finders
   // sessions[0] is guaranteed defined because of the sessions.length === 0 guard above
   const firstSession = sessions[0]!
-  const longestSession = sessions.reduce((b, s) =>
-    (s.duration_minutes ?? 0) > (b.duration_minutes ?? 0) ? s : b, firstSession)
+  // Ranked by ACTIVE time (Σ per-turn), falling back to wall clock only when NO session in the
+  // set has an active figure — see lib/sessionTime.ts and docs/harness-contract.md. Ranking by
+  // wall clock crowns whichever session merely stayed open longest.
+  const anyActive = sessions.some(s => s.active_minutes !== undefined)
+  const sessionRank = (s: SessionMeta) =>
+    anyActive ? (s.active_minutes ?? -1) : (s.duration_minutes ?? 0)
+  const longestSession = sessions.reduce((b, s) => sessionRank(s) > sessionRank(b) ? s : b, firstSession)
 
   const mostInputTokens = sessions.reduce((b, s) =>
     (s.input_tokens ?? 0) > (b.input_tokens ?? 0) ? s : b, firstSession)
@@ -86,8 +87,11 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
   }
   const topProjectEntry = Object.entries(projectSessionCounts).sort((a, b) => b[1] - a[1])[0]
 
-  // ── Averages for comparison ─────────────────────────────────────────────────
-  const avgDuration = avg(sessions.map(s => s.duration_minutes ?? 0).filter(v => v > 0))
+  // Averages for comparison
+  // Compared against the same quantity the record is ranked by, so "3.2× the average" is honest.
+  const avgDuration = avg(sessions
+    .map(s => anyActive ? (s.active_minutes ?? 0) : (s.duration_minutes ?? 0))
+    .filter(v => v > 0))
   const avgInput    = avg(sessions.map(s => s.input_tokens ?? 0).filter(v => v > 0))
   const avgOutput   = avg(sessions.map(s => s.output_tokens ?? 0).filter(v => v > 0))
   const avgMessages = avg(sessions.map(s => (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)).filter(v => v > 0))
@@ -152,15 +156,25 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
         const lastStyle = lastSpan > 1 ? { gridColumn: `span ${lastSpan}` } : {}
 
       return (
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: isMobile ? 10 : 14 }}>
+      <div className="ag-grid cols-3" style={{ gap: isMobile ? 10 : 14 }}>
 
         <HighlightCard
           label={pt ? 'Sessão mais longa' : 'Longest session'}
           icon={<Clock size={14} />}
           accent="#a855f7"
-          value={fmtDuration(longestSession.duration_minutes ?? 0)}
-          comparison={multiplier(longestSession.duration_minutes ?? 0, avgDuration)}
-          prompt={truncate(longestSession.first_prompt, 90)}
+          value={sessionTime(longestSession, pt ? 'pt' : 'en').active
+            ?? sessionTime(longestSession, pt ? 'pt' : 'en').elapsed}
+          valueTitle={sessionTime(longestSession, pt ? 'pt' : 'en').tooltip}
+          valueSub={sessionTime(longestSession, pt ? 'pt' : 'en').activeLabel}
+          detail={(() => {
+            const t = sessionTime(longestSession, pt ? 'pt' : 'en')
+            // Both quantities NAMED (valueSub says "active", this says "elapsed"); the
+            // definitions stay in the value tooltip — spelled out here they wrap and blow up
+            // the card's height next to the other highlights.
+            return [`${t.elapsed} ${t.elapsedLabel}`]
+          })()}
+          comparison={multiplier(sessionRank(longestSession), avgDuration)}
+          prompt={truncate(sessionLabel(longestSession), 90)}
           project={formatProjectName(longestSession.project_path ?? '')}
         />
 
@@ -170,7 +184,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
           accent="#3b82f6"
           value={fmt(mostInputTokens.input_tokens ?? 0)}
           comparison={multiplier(mostInputTokens.input_tokens ?? 0, avgInput)}
-          prompt={truncate(mostInputTokens.first_prompt, 90)}
+          prompt={truncate(sessionLabel(mostInputTokens), 90)}
           project={formatProjectName(mostInputTokens.project_path ?? '')}
         />
 
@@ -180,7 +194,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
           accent="#8b5cf6"
           value={fmt(mostOutputTokens.output_tokens ?? 0)}
           comparison={multiplier(mostOutputTokens.output_tokens ?? 0, avgOutput)}
-          prompt={truncate(mostOutputTokens.first_prompt, 90)}
+          prompt={truncate(sessionLabel(mostOutputTokens), 90)}
           project={formatProjectName(mostOutputTokens.project_path ?? '')}
         />
 
@@ -193,7 +207,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
             (mostMessages.user_message_count ?? 0) + (mostMessages.assistant_message_count ?? 0),
             avgMessages
           )}
-          prompt={truncate(mostMessages.first_prompt, 90)}
+          prompt={truncate(sessionLabel(mostMessages), 90)}
           project={formatProjectName(mostMessages.project_path ?? '')}
         />
 
@@ -209,7 +223,7 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
               Object.values(mostToolCalls.tool_counts ?? {}).reduce((a, b) => a + b, 0),
               avgTools
             )}
-            prompt={truncate(mostToolCalls.first_prompt, 90)}
+            prompt={truncate(sessionLabel(mostToolCalls), 90)}
             project={formatProjectName(mostToolCalls.project_path ?? '')}
             style={topProjectEntry ? {} : lastStyle}
           />
@@ -246,13 +260,19 @@ export function HighlightsBoard({ sessions, projects, lang, harness }: Highlight
 }
 
 function HighlightCard({
-  label, icon, accent, value, valueSub, comparison, prompt, project, style: extraStyle,
+  label, icon, accent, value, valueSub, valueTitle, detail, comparison, prompt, project,
+  style: extraStyle,
 }: {
   label: string
   icon: React.ReactNode
   accent: string
   value: string
   valueSub?: string
+  /** Short lines under the value that name and explain each quantity the card reports. */
+  detail?: string[]
+  /** Native tooltip on the value — explains a headline that needs a qualifier (e.g. how a
+   *  session's active time was measured vs its wall clock). */
+  valueTitle?: string
   comparison?: string | null
   prompt?: string
   project?: string
@@ -306,8 +326,8 @@ function HighlightCard({
       </div>
 
       {/* Value */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 4 }}>
-        <div className="hl-value" style={{ color: hovered ? accent : 'var(--text-primary)', transition: 'color 0.2s' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 4 }} title={valueTitle}>
+        <div className="hl-value" style={{ color: hovered ? accent : 'var(--text-primary)', transition: 'color 0.2s', cursor: valueTitle ? 'help' : undefined }}>
           {value}
         </div>
         {valueSub && (
@@ -316,6 +336,17 @@ function HighlightCard({
           </span>
         )}
       </div>
+
+      {/* What each reported quantity means — a number nobody can name is not information. */}
+      {detail && detail.length > 0 && (
+        <div style={{ marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {detail.map((line, i) => (
+            <span key={i} style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.35 }}>
+              {line}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Comparison badge */}
       {comparison && (

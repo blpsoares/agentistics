@@ -1,9 +1,10 @@
 import React from 'react'
 import { Zap, Lightbulb, TrendingDown, TrendingUp, Info } from 'lucide-react'
-import { formatModel, getModelColor } from '@agentistics/core'
+import { fmt, formatModel, getModelColor, fmtCost } from '@agentistics/core'
 import type { Lang, HarnessId } from '@agentistics/core'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { NAtag } from './NAtag'
+import { MetricNote } from './MetricNote'
 import { capable } from '../lib/harness'
 
 interface Props {
@@ -19,6 +20,8 @@ interface Props {
   perModel: Record<string, { hitRate: number; cacheReadTokens: number; inputTokens: number }>
   currency: 'USD' | 'BRL'
   brlRate: number
+  /** The page's active basis. This panel NEVER converts — it only says so when the rest has. */
+  costBasis?: 'api' | 'plan'
   lang: Lang
   /**
    * The active harness filter (undefined = unified / all-harness view).
@@ -28,21 +31,6 @@ interface Props {
   harness?: HarnessId
 }
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
-  return String(n)
-}
-
-function fmtCost(usd: number, currency: 'USD' | 'BRL', rate: number): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (Math.abs(brl) < 0.005) return 'R$0,00'
-    return `R$${brl.toFixed(2).replace('.', ',')}`
-  }
-  if (Math.abs(usd) < 0.01) return 'USD 0.00'
-  return `USD ${usd.toFixed(2)}`
-}
 
 type Tier = 'low' | 'medium' | 'high'
 
@@ -114,6 +102,7 @@ export function CacheHitRatePanel({
   perModel,
   currency,
   brlRate,
+  costBasis = 'api',
   lang,
   harness,
 }: Props) {
@@ -217,17 +206,13 @@ export function CacheHitRatePanel({
           </div>
           <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
             {pt
-              ? `${fmtTokens(cacheTotals.cacheReadInputTokens)} de ${fmtTokens(totalRelevant)} tokens do cache`
-              : `${fmtTokens(cacheTotals.cacheReadInputTokens)} of ${fmtTokens(totalRelevant)} tokens from cache`}
+              ? `${fmt(cacheTotals.cacheReadInputTokens)} de ${fmt(totalRelevant)} tokens do cache`
+              : `${fmt(cacheTotals.cacheReadInputTokens)} of ${fmt(totalRelevant)} tokens from cache`}
           </div>
         </div>
 
         {/* Money impact */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: 8,
-        }}>
+        <div className="ag-grid cols-3" style={{ gap: 8 }}>
           <Stat
             label={pt ? 'Economia bruta' : 'Gross savings'}
             value={fmtCost(grossSavedUSD, currency, brlRate)}
@@ -251,6 +236,23 @@ export function CacheHitRatePanel({
           />
         </div>
       </div>
+
+      {/* These figures stay in API basis, ALWAYS, and say so when the rest of the page has moved.
+          Cache does not reduce a subscription bill — the plan costs the same either way; what it
+          buys you is more work inside the same rate limit. A "saving" converted to plan basis
+          would be a number invented to match the toggle. This is the same N/A-versus-a-confident-0
+          rule HARNESS_CAPABILITIES applies to metrics, applied to a basis. */}
+      {costBasis === 'plan' && (
+        <div style={{
+          fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5,
+          borderLeft: '2px solid var(--border)', paddingLeft: 9, marginTop: 2,
+        }}>
+          <strong style={{ color: 'var(--text-secondary)' }}>{pt ? 'Em preços de API.' : 'In API pricing.'}</strong>{' '}
+          {pt
+            ? 'O cache não reduz o valor de uma assinatura — o plano custa o mesmo. O que ele rende é mais trabalho dentro do mesmo limite de uso.'
+            : 'Cache does not reduce a subscription bill — the plan costs the same. What it buys you is more work inside the same rate limit.'}
+        </div>
+      )}
 
       {/* Per-model breakdown */}
       {perModelEntries.length > 1 && (
@@ -292,6 +294,14 @@ export function CacheHitRatePanel({
           })}
         </div>
       )}
+
+      {/* The denominator is the thing people get wrong here, and it is the reason the rate can look
+          high on a session whose bill is mostly output. */}
+      <MetricNote>
+        {pt
+          ? 'A taxa é leitura de cache dividida por tudo que o modelo LEU — entrada nova + leitura + escrita de cache. A saída fica de fora porque saída é produzida, não lida; incluí-la diluiria a taxa numa sessão que escreveu muito. Este painel é sempre em preço de API: cache não reduz uma assinatura, ele estica o limite de uso.'
+          : 'The rate is cache reads over everything the model READ — fresh input + cache read + cache write. Output is excluded because output is produced, not read; including it would dilute the rate on a session that wrote a lot. This panel is always in API prices: cache does not reduce a subscription, it extends a rate limit.'}
+      </MetricNote>
 
       {/* Tips — show only first 2 */}
       <div style={{

@@ -1,6 +1,6 @@
 {
   "name": "@agentistics/server",
-  "version": "1.6.6",
+  "version": "1.12.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,6 +10,9 @@
     "build:binary:windows": "bun build --compile --target=bun-windows-x64 bin/cli.ts --outfile ../../release/agentop.exe"
   },
   "dependencies": {
-    "@agentistics/core": "workspace:*"
+    "@agentistics/core": "workspace:*",
+    "@agentistics/tui": "workspace:*",
+    "jose": "^6.2.3",
+    "mongodb": "^6.12.0"
   }
 }

@@ -1,13 +1,14 @@
 import React, { useMemo } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { GitCompare } from 'lucide-react'
-import { format as formatDate } from 'date-fns'
-import { ptBR } from 'date-fns/locale'
 import type { AppContext } from '../lib/app-context'
-import type { HarnessId, Lang } from '@agentistics/core'
-import { fmt, fmtCost, formatModel, t } from '@agentistics/core'
+import type { HarnessId, Lang, TokenBreakdown } from '@agentistics/core'
+import { EMPTY_TOKENS, fmt, fmtCost, formatModel, t, tokenSharePct, totalTokens } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
-import { computeHarnessSummaries } from '../hooks/useData'
+import { computeFilteredHarnessSummaries } from '../hooks/useData'
+import { fmtDateLocalized } from '../lib/dateFormat'
+import { CompareByFilter } from './compare/CompareByFilter'
+import { MetricNote } from '../components/MetricNote'
 
 interface HarnessAgg {
   harness: HarnessId
@@ -15,18 +16,10 @@ interface HarnessAgg {
   messages: number
   inputTokens: number
   outputTokens: number
+  /** All four billed counters — what the "Tokens" row compares. See `tokens.ts` in the core. */
+  tokens: TokenBreakdown
   costUSD: number
   lastActive: string | null
-}
-
-/** Format a raw date string (ISO or yyyy-MM-dd), localized by language. Returns '—' when invalid. */
-function fmtDateLocalized(raw: string | null | undefined, lang: Lang): string {
-  if (!raw) return '—'
-  const d = new Date(raw)
-  if (Number.isNaN(d.getTime())) return '—'
-  return lang === 'pt'
-    ? formatDate(d, 'dd MMM yyyy', { locale: ptBR })
-    : formatDate(d, 'MMM d, yyyy')
 }
 
 function NACell({ lang }: { lang: Lang }) {
@@ -229,10 +222,80 @@ function SectionCard({ title, children }: { title: string; children: React.React
   )
 }
 
+/**
+ * The compare page, in two modes.
+ *
+ *   'harness' — the original: every harness side by side under ONE filter. Untouched.
+ *   'filter'  — two independent filter sets and a curated A / B / Δ table.
+ *
+ * One page rather than two nav entries, because "compare harnesses" is one case of "compare two
+ * scopes" and two similar items in a menu is a choice nobody wants to make. Only the HARNESS mode
+ * stays gated on having more than one harness; the page itself is always reachable.
+ */
 export default function ComparePage() {
-  const { data, currency, brlRate, lang } = useOutletContext<AppContext>()
+  const ctx = useOutletContext<AppContext>()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const mode: 'harness' | 'filter' = searchParams.get('mode') === 'filter' ? 'filter' : 'harness'
+  const setMode = (m: 'harness' | 'filter') => setSearchParams(m === 'filter' ? { mode: 'filter' } : {})
+  // A FRAGMENT, not a wrapper div. Every page here renders into a `<main>` that is a flex column
+  // with a 20px gap, so a page's top-level children ARE the spaced items. Wrapping them made the
+  // whole page one item and every section inside it lost its spacing — the sections collapsed
+  // into each other and the page read as broken.
+  return (
+    <>
+      <CompareModeSelector mode={mode} onChange={setMode} lang={ctx.lang} multiHarness={(ctx.data.harnesses?.length ?? 0) > 1} />
+      {mode === 'filter' ? <CompareByFilter ctx={ctx} /> : <CompareByHarness />}
+    </>
+  )
+}
 
-  const summaries = useMemo(() => computeHarnessSummaries(data), [data])
+function CompareModeSelector({ mode, onChange, lang, multiHarness }: {
+  mode: 'harness' | 'filter'
+  onChange: (m: 'harness' | 'filter') => void
+  lang: 'pt' | 'en'
+  multiHarness: boolean
+}) {
+  const pt = lang === 'pt'
+  const options: { id: 'harness' | 'filter'; label: string; disabled?: boolean }[] = [
+    { id: 'harness', label: pt ? 'Por harness' : 'By harness', disabled: !multiHarness },
+    { id: 'filter', label: pt ? 'Por filtro' : 'By filter' },
+  ]
+  return (
+    <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', overflow: 'hidden', alignSelf: 'flex-start' }}>
+      {options.map(o => (
+        <button
+          key={o.id}
+          onClick={() => !o.disabled && onChange(o.id)}
+          disabled={o.disabled}
+          title={o.disabled ? (pt ? 'Só há um harness com dados' : 'Only one harness has data') : undefined}
+          style={{
+            padding: '8px 16px', border: 'none', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600,
+            background: mode === o.id ? 'var(--anthropic-orange-dim)' : 'transparent',
+            color: o.disabled ? 'var(--text-tertiary)' : mode === o.id ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+            opacity: o.disabled ? 0.5 : 1,
+            cursor: o.disabled ? 'default' : 'pointer',
+          }}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** The original page body, extracted verbatim. */
+function CompareByHarness() {
+  const { data, currency, brlRate, lang, filters } = useOutletContext<AppContext>()
+
+  // Compare respects the active filters (users, harnesses, date, projects, models): the
+  // columns shown AND every metric reflect exactly the filtered slice — same behavior as the
+  // main dashboard. With NO filter active it keeps the statsCache-canonical Claude totals so
+  // the default view matches the dashboard's all-time KPIs. Shared with the PDF Export page's
+  // Compare section via computeFilteredHarnessSummaries so both always agree.
+  const { activeHarnesses, summaries, lastActive } = useMemo(
+    () => computeFilteredHarnessSummaries(data, filters),
+    [data, filters],
+  )
 
   // Localized short day-of-week labels (Sunday-first to match getDay()).
   const dowLabels = useMemo(() => [
@@ -246,26 +309,21 @@ export default function ComparePage() {
   ], [lang])
 
   const aggs = useMemo<HarnessAgg[]>(() => {
-    return data.harnesses.map(harness => {
-      const s = summaries[harness] ?? { sessions: 0, messages: 0, inputTokens: 0, outputTokens: 0, costUSD: 0 }
-      // lastActive is still derived from raw sessions (per-session field, no statsCache equivalent)
-      const lastActive = data.sessions
-        .filter(sess => (sess.harness ?? 'claude') === harness)
-        .reduce<string | null>((best, sess) => {
-          const t = sess.end_time ?? sess.start_time
-          return t && (!best || t > best) ? t : best
-        }, null)
+    return activeHarnesses.map(harness => {
+      const s = summaries[harness]
+        ?? { sessions: 0, messages: 0, inputTokens: 0, outputTokens: 0, tokens: EMPTY_TOKENS, costUSD: 0 }
       return {
         harness,
         sessions: s.sessions,
         messages: s.messages,
         inputTokens: capable(harness, 'tokens') ? s.inputTokens : 0,
         outputTokens: capable(harness, 'tokens') ? s.outputTokens : 0,
+        tokens: capable(harness, 'tokens') ? s.tokens : EMPTY_TOKENS,
         costUSD: capable(harness, 'cost') ? s.costUSD : 0,
-        lastActive,
+        lastActive: lastActive[harness] ?? null,
       }
     })
-  }, [data, summaries])
+  }, [activeHarnesses, summaries, lastActive])
 
   const colors = HARNESS_COLORS
 
@@ -273,7 +331,7 @@ export default function ComparePage() {
   // earliest→latest active day across ALL harnesses so they are comparable.
   const { minMs, maxMs } = useMemo(() => {
     let mn = Infinity, mx = -Infinity
-    for (const h of data.harnesses) {
+    for (const h of activeHarnesses) {
       for (const d of summaries[h]?.dailyActivity ?? []) {
         const t = new Date(d.date).getTime()
         if (Number.isNaN(t)) continue
@@ -282,11 +340,11 @@ export default function ComparePage() {
       }
     }
     return { minMs: mn === Infinity ? 0 : mn, maxMs: mx === -Infinity ? 0 : mx }
-  }, [data.harnesses, summaries])
+  }, [activeHarnesses, summaries])
 
   const tokensValues = aggs.map(a => ({
     harness: a.harness,
-    value: capable(a.harness, 'tokens') ? a.inputTokens + a.outputTokens : null,
+    value: capable(a.harness, 'tokens') ? totalTokens(a.tokens) : null,
   }))
   const costValues = aggs.map(a => ({
     harness: a.harness,
@@ -444,8 +502,21 @@ export default function ComparePage() {
         </table>
       </div>
 
+      {/* Three token rows sit above each other and only one of them is the total. Without this the
+          obvious reading is that input + output should equal it, and it is off by ~300x. */}
+      <MetricNote>
+        {lang === 'pt'
+          ? 'A linha de tokens totais soma os quatro contadores cobrados. As linhas de entrada e saída abaixo dela são só dois deles — o resto é leitura e escrita de cache, que costumam ser a maior parte do volume. Por isso entrada + saída NÃO fecha com o total.'
+          : 'The total-tokens row adds all four billed counters. The input and output rows under it are only two of them — the rest is cache read and cache write, usually most of the volume. That is why input + output does NOT add up to the total.'}
+      </MetricNote>
+
       {/* Cost per 1M tokens (blended) — highlights the cheapest harness */}
       <SectionCard title={t('compare.costPerMTokens', lang)}>
+        <MetricNote style={{ marginTop: 0, marginBottom: 12 }}>
+          {lang === 'pt'
+            ? 'Custo dividido por TODOS os tokens cobrados, cache incluído. Dividir só pela conversa daria um valor dezenas de vezes maior que o cobrado, e ordenaria os assistentes por quanto cada um usa cache em vez de por quanto custa.'
+            : 'Cost divided by ALL billed tokens, cache included. Dividing by the conversation alone would report a figure tens of times higher than what is charged, and would rank assistants by how much each one caches rather than by what it costs.'}
+        </MetricNote>
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
@@ -515,7 +586,9 @@ export default function ComparePage() {
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {models.map(m => {
-                      const totalTok = m.inputTokens + m.outputTokens
+                      // Every billed counter: a rate per million computed over the non-cached 4 %
+                      // of the volume reads tens of times higher than what is actually charged.
+                      const totalTok = totalTokens(m.tokens)
                       const perM = totalTok > 0 ? m.costUSD / (totalTok / 1e6) : null
                       return (
                         <div key={m.model} style={{
@@ -566,6 +639,12 @@ export default function ComparePage() {
           {aggs.map(a => {
             const totalSessions = aggs.reduce((s, x) => s + x.sessions, 0)
             const pct = totalSessions > 0 ? Math.round((a.sessions / totalSessions) * 100) : 0
+            // A harness with real sessions must never read `0%`. Found in the browser: Codex CLI
+            // and Kimi Code, one session each against 352, both rendered as `0%` beside a bar with
+            // visible width — the label contradicting the chart next to it. The bar keeps the raw
+            // `pct` (a 0-width bar is the honest picture of a rounding error); only the LABEL is
+            // corrected, because a label is read as a claim.
+            const pctLabel = tokenSharePct(a.sessions, totalSessions)
             return (
               <div key={a.harness}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -586,7 +665,7 @@ export default function ComparePage() {
                       {a.sessions.toLocaleString()} {t('compare.sessionsLower', lang)}
                     </span>
                     <span style={{ fontSize: 12, fontWeight: 700, color: colors[a.harness], minWidth: 36, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                      {pct}%
+                      {pctLabel}
                     </span>
                   </div>
                 </div>

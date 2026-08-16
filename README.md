@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Track · Analyze · Improve</strong><br/>
-  Local analytics dashboard for AI coding assistants
+  Local-first analytics for AI coding assistants — one machine, or a whole team
 </p>
 
 <p align="center">
@@ -24,36 +24,45 @@
 </p>
 
 <p align="center">
-  <a href="#install"><strong>Install in one line →</strong></a>
+  <a href="#install"><strong>Install →</strong></a>
   &nbsp;·&nbsp;
-  <a href="docs/nay.md"><strong>Nay AI Chat →</strong></a>
+  <a href="#team-mode"><strong>Team Mode →</strong></a>
   &nbsp;·&nbsp;
-  <a href="docs/mcp.md"><strong>MCP Server →</strong></a>
+  <a href="docs/security.md"><strong>Security model →</strong></a>
+  &nbsp;·&nbsp;
+  <a href="docs/cli.md"><strong>CLI →</strong></a>
 </p>
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/e3f5cf44-f745-4540-9f5d-99192c755263" width="100%" controls></video>
+  <img src="docs/media/machine-dashboard.gif" alt="The agentistics dashboard" width="100%" />
 </p>
+
+> Every screenshot and recording in this README is produced from a **synthetic demo fleet**
+> (`packages/server/scripts/seed-demo.ts`) — real numbers, fictional names. See
+> [Reproducing the media](#reproducing-the-media).
 
 ---
 
 ## What is agentistics?
 
-agentistics is a **local analytics dashboard** for AI coding assistants. It reads the data your harnesses write locally and turns it into charts, metrics, and reports — all without sending anything to a server.
+agentistics reads what your AI coding assistants already write to disk and turns it into
+tokens, costs, sessions and activity you can actually reason about. Nothing is uploaded: on a
+single machine it never opens an outbound connection at all, and in Team Mode a machine sends
+**computed metrics only** — never chat.
 
-**Multi-harness:** beyond Claude Code (`~/.claude/`), it also tracks **Codex CLI**, **Gemini CLI**, and **GitHub Copilot CLI**. A harness selector lets you view any one harness, a unified "All" view, or a side-by-side `/compare` page. Metrics a given harness can't produce render as "N/A" instead of a misleading 0.
+It tracks **six harnesses** side by side:
 
-**Key capabilities:**
+| Harness | Read from | Tokens & cost | Agent metrics | Notes |
+|---|---|---|---|---|
+| **Claude Code** | `~/.claude/` | ✅ | ✅ | The deepest source — agent invocations, git line counts, workflow runs |
+| **Codex CLI** | `~/.codex/sessions/` | ✅ | — | |
+| **Gemini CLI** | `~/.gemini/tmp/` | — | — | Local files carry no token data |
+| **GitHub Copilot CLI** | `~/.copilot/session-state/` | ✅ | — | MCP tool calls counted |
+| **Antigravity (`agy`)** | `~/.gemini/antigravity-cli/` | ✅ | — | Decoded from its own protobuf blobs; edit deltas for lines changed |
+| **Kimi Code** | `~/.kimi-code/sessions/` | ✅ | — | Routes to other providers; priced by the routed model |
 
-- Tokens, costs, sessions, and streaks across all your projects — for every harness
-- Per-harness, per-project, and per-model breakdowns with live BRL/USD conversion
-- Side-by-side harness comparison (`/compare`) and per-harness dashboards (`/h/:harness`)
-- Custom layout builder — drag, resize, and arrange any combination of charts
-- **Nay** — an AI chat assistant that answers questions about your data using MCP tools
-- **MCP server** — exposes your analytics as tools for Claude Code and other agents
-- OpenTelemetry export for Grafana, Datadog, and any OTLP-compatible collector
-- PDF export, themes, PT/BR + EN languages
-- Fully responsive — installable as a PWA (web, mobile-friendly) or native Windows desktop app (Tauri)
+A metric a harness genuinely cannot produce renders as **N/A**, never as a confident `0` —
+`HARNESS_CAPABILITIES` in `@agentistics/core` is the single source of truth for which is which.
 
 ---
 
@@ -61,199 +70,356 @@ agentistics is a **local analytics dashboard** for AI coding assistants. It read
 
 <a name="install"></a>
 
-### Option 1 — Windows installer
-
-Download the latest `.msi` or `.exe` (NSIS) from the [Releases page](https://github.com/blpsoares/agentistics/releases/latest).
-
-- Double-click to install — no terminal required
-- On first launch, agentistics detects your Claude Code data path automatically (Windows native or WSL)
-- The dashboard opens at **http://localhost:47291** inside a native window
-
-> **SmartScreen warning?** Click "More info → Run anyway". The binary is not code-signed yet.
-
----
-
-### Option 2 — Pre-built binary (Linux / WSL)
+### Linux / WSL — one line
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
+curl -fsSL https://agentop.openvibes.tech/cli | bash
 ```
 
-System-wide install:
+Then just run it:
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/blpsoares/agentistics/main/install.sh | bash
+agentop
 ```
 
-> If `~/.local/bin` is not in your `$PATH`, the installer will print the command to add it. Binaries are also on the [Releases page](https://github.com/blpsoares/agentistics/releases/latest).
+Bare `agentop` on a terminal opens the **control center** — one full-screen application in the
+terminal's alternate buffer, so it adds nothing to your scrollback.
 
-**Start:**
+<p align="center">
+  <img src="docs/media/control-center.gif" alt="The agentop control center" width="100%" />
+</p>
 
-```bash
-agentop server        # Dashboard + API + Nay + watcher — everything in one command
-```
+Its tabs are **Services** (start / stop / restart this machine, a central, or the Docker machine;
+connect to or leave a central; enable a boot service), **Setup**, **Logs**, **Commands**, **Help**
+and **Contribute**. Screens change with `←`/`→`, panes with `tab`, and the footer always names the
+keys that work *in the current focus*.
 
-Open **http://localhost:47291** in your browser.
+Open the dashboard at **http://localhost:47292** (the API + MCP endpoint stays on **47291**).
 
-| Command | What it starts |
-|---------|---------------|
-| `agentop server` | API + embedded frontend + Nay + OTel daemon |
-| `agentop tui` | Terminal dashboard (no browser needed) |
-| `agentop watch` | OTel daemon only (headless) |
+### Windows
 
----
+Download the latest `.msi` or `.exe` from the [Releases page](https://github.com/blpsoares/agentistics/releases/latest).
+On first launch agentistics detects your Claude Code data path automatically (Windows native or WSL).
 
-### Option 3 — From source (any OS with Bun)
+> **SmartScreen warning?** "More info → Run anyway". The binary is not code-signed yet.
 
-**Requires:** [Bun](https://bun.sh)
+### From source
 
 ```bash
 git clone https://github.com/blpsoares/agentistics.git
-cd agentistics
-bun install
-bun run dev           # API (47291) + UI dev server (47292) in parallel
+cd agentistics && bun install
+bun run dev            # API (47291) + UI dev server (47292)
 ```
 
-Open **http://localhost:47292** for the UI with hot reload, or **http://localhost:47291** for the API directly.
-
 | Script | What it does |
-|--------|-------------|
+|---|---|
 | `bun run dev` | API + Vite dev server in parallel |
 | `bun run watch` | OTel daemon only |
-| `bun run watch:cli` | Terminal TUI |
 | `bun test` | Unit tests |
 | `bun run build:binary` | Full build → `release/agentop` |
 
 ---
 
-## Nay — AI chat assistant
+## The terminal dashboard
 
-Nay is a floating chat panel (bottom-right corner) that connects to your usage data via MCP tools. Ask it anything about your spend, projects, or sessions — it calls the relevant tools and gives you a direct, data-backed answer.
+`agentop` opens the control center, and its **Dashboard** tab is a live dashboard that needs no
+browser — Overview, Projects, History, Costs, Harnesses and Hardware, switched with the digits or
+`tab`. (`agentop tui` is an alias for `agentop`.)
 
-```
-"Qual projeto gastou mais tokens este mês?"
-"Build me a cost overview layout with KPI cards"
-"What's my cache hit rate?"
-```
-
-> **Uses your Claude subscription quota.** Every Nay message runs `claude --print` under the hood, which counts against your Claude Max / Pro session limit (or API credits if you use an API key). Prefer **Haiku 4.5** for quick data lookups to minimize cost.
-
-Nay sets up its workspace at `~/.agentistics/nay-chat/` on first server start — a `CLAUDE.md` with strict behavior rules and a `settings.json` that grants access to all 13 agentistics MCP tools without prompting.
-
-→ **Full documentation:** [docs/nay.md](docs/nay.md)
+<p align="center">
+  <img src="docs/media/tui.gif" alt="agentop tui" width="100%" />
+</p>
 
 ---
 
-## MCP server
-
-The agentistics MCP server exposes your analytics as structured tools. It runs as a stdio process alongside the dashboard and is registered automatically at user scope (`~/.claude.json`) on first start — no configuration needed.
-
-```bash
-claude mcp list   # verify: should show "agentistics"
-```
-
-**Available tools:**
-
-| Tool | What it returns |
-|------|----------------|
-| `agentistics_summary` | All-time totals: tokens, cost, sessions, streak — unified or per-harness |
-| `agentistics_harnesses` | Side-by-side comparison of every tracked harness |
-| `agentistics_projects` | Per-project token and cost breakdown (optionally per-harness) |
-| `agentistics_sessions` | Recent sessions with harness, duration, model, cost |
-| `agentistics_costs` | Model pricing breakdown and cache savings (optionally per-harness) |
-| `agentistics_component_catalog` | Available dashboard components |
-| `agentistics_get_layouts` | Current custom page layouts |
-| `agentistics_build_layout` | Create a full layout from a component list |
-| `agentistics_add_component` | Add one component to an existing layout |
-| `agentistics_remove_component` | Remove a component by instance ID |
-| `agentistics_create_layout` | Create a new empty layout |
-| `agentistics_set_active_layout` | Switch the active /custom layout |
-| `agentistics_delete_layout` | Delete a layout permanently |
-| `agentistics_export_pdf` | Generate a PDF report download link for a date range |
-
-Once registered, you can use these tools from **any Claude Code session** — not just Nay.
-
-→ **Full documentation:** [docs/mcp.md](docs/mcp.md)
-
----
-
-## Dashboard features
+## The dashboard
 
 ### Pages
 
-| Page | Route | Description |
-|------|-------|-------------|
-| Home | `/` | KPIs, charts, sessions, heatmap, highlights |
-| Costs | `/costs` | Cost deep-dive by model and date |
+| Page | Route | What it answers |
+|---|---|---|
+| Home | `/` | KPIs, activity over time, heatmap, hourly usage, highlights |
+| Costs | `/costs` | Spend by model and date, budget and forecast, cache efficiency |
 | Projects | `/projects` | Per-project breakdown and comparison |
-| Tools | `/tools` | Tool call ranking and token attribution |
+| Repositories | `/repositories` | Grouped by **git remote**, so one repo unifies across people, paths and machines |
+| Actions | `/repositories/actions` | Sessions produced by CI runners |
+| Tags | `/tags` | Saved, named groupings — "what did Client X cost this month" |
+| Tools | `/tools` | Tool-call ranking and token attribution |
+| Compare | `/compare` | Every harness side by side |
 | Custom | `/custom` | Drag-and-drop layout builder |
 
-### Filters
+### Comparing harnesses
 
-- **Period:** 7d · 30d · 90d · All · Custom date range
-- **Projects:** multi-select with search
-- **Models:** multi-select with per-project availability
+<p align="center">
+  <img src="docs/media/machine-compare.gif" alt="The compare page" width="100%" />
+</p>
 
-All filters apply globally and can be set by Nay when you click a navigation button in a response.
+### Repositories
 
-### Statistics cards
+Metrics group by **normalized git remote** (`host/org/repo`), independent of where the repo is
+checked out or which machine produced the work. A repo's detail page carries Overview, Members,
+Sessions, an **Actions** tab when it has CI runs, and a **Dynamic Workflows** tab that renders each
+multi-agent Workflow run as a phase-by-phase timeline.
 
-Messages · Sessions · Tools · Input tokens · Output tokens · Estimated cost · Streak · Longest session · Commits · Modified files — all drag-and-drop sortable, each with an ℹ explanation modal.
+<p align="center">
+  <img src="docs/media/machine-repositories.gif" alt="Repositories and repo detail" width="100%" />
+</p>
 
-### Charts
+### Tags
 
-- **Activity over time** — area chart with messages / sessions / tools / overlay
-- **Activity heatmap** — GitHub-style 26-week grid
-- **Hourly usage** — bar chart grouped by time of day (night / morning / afternoon / evening)
-- **Model breakdown** — token and cost breakdown per model
-- **Budget & forecast** — monthly budget with end-of-month projection
-- **Cache efficiency** — hit rate, gross savings, write overhead, net savings
-- **Top projects** — 12 most active projects, clickable to apply filter
-- **Tool metrics** — ranked by calls or token spend, with villain detection
+A tag is a saved grouping of sources — repositories, projects, machines, teams or accounts —
+optionally pinned to a date window. Tag responses are **aggregate-only**: counts and sums, never
+session rows or transcripts, with any key the viewer cannot see collapsed into an "other" bucket.
 
-### Custom layout builder
+<p align="center">
+  <img src="docs/media/machine-tags.gif" alt="Tags" width="100%" />
+</p>
 
-Build fully custom analytics pages by placing and resizing any combination of components on a 12-column grid. Supports multiple named layouts, pinned project filters per layout, undo/redo (40 steps), export/import as JSON, and random layout generation.
+### Custom layouts
 
-### Live updates
+<p align="center">
+  <img src="docs/media/machine-custom.gif" alt="The custom layout builder" width="100%" />
+</p>
 
-SSE-powered live updates with configurable intervals (10s → 1s risky mode). Update highlights flash changed sections in orange.
+### On a phone
 
-### PDF export
+The whole dashboard is responsive and installs as a PWA.
 
-Export any combination of sections as a PDF report. Configurable period, filters, and theme (light/dark).
+<p align="center">
+  <img src="docs/media/machine-mobile.gif" alt="The dashboard on mobile" width="380" />
+</p>
 
 ---
 
-## Dev config
+## Team Mode
 
-The `</>` button in the header opens a panel to edit port settings. Changes are written to `.env.config` at the repository root and take effect after a server restart.
+<a name="team-mode"></a>
 
-```ini
-# .env.config (committed defaults)
-PORT=47291       # API server + embedded frontend
-VITE_PORT=47292  # Vite dev server (dev mode only)
+One machine runs as a **central** and aggregates usage from many **members**. Members push
+**computed metrics only** — raw chat is never stored centrally (it is fetched on demand over a
+reverse WebSocket, from the machine that holds it).
+
+Every machine has a role: **solo** (local only, the default), **central** (the aggregator, a Docker
+service on port **48080**), or **member**. A machine may be a member of **several centrals at
+once**, with different sharing rules for each.
+
+```bash
+# host a central
+agentop central init && agentop central up
+
+# join one — a token minted by a central with a public URL carries it,
+# so the token alone is enough (--endpoint only for a bare token)
+agentop member connect --token <token>
 ```
+
+### Accounts, teams and roles
+
+A central is not a shared password. First boot prints a one-time **setup token** and asks you to
+create the **owner** account; everyone else is invited. Accounts carry argon2id passwords, optional
+**TOTP two-factor**, and a role. A **team** is a scope key, not a label — being in a team *is*
+seeing it.
+
+<p align="center">
+  <img src="docs/media/central-login.gif" alt="Signing in to a central" width="100%" />
+</p>
+
+**Step-up authentication** gates escalation, not paperwork: editing an account, deleting a team and
+changing a password ask for a second proof. Enrolling a machine, a token or a repository does not —
+a prompt people meet daily is a prompt they clear without reading.
+
+<p align="center">
+  <img src="docs/media/central-dashboard.gif" alt="The central dashboard" width="100%" />
+</p>
+
+### What a machine shares — and what it withholds
+
+Each connection carries its own rules across two dimensions (repositories and projects) in one of
+two modes: **denylist** (share everything except these) or **allowlist** (share only these). The
+rules never travel: the central is told nothing about them beyond a per-dimension *count*.
+
+When several of your machines share one account, they tell **each other** what they withhold over a
+**sealed machine-to-machine channel** (X25519 → HKDF → AES-256-GCM, sender and recipient bound into
+the authenticated header, keys pinned on first sight and every new pin announced). That is what
+makes two things possible:
+
+- A **warning at the point of decision**: before you start sharing a repository, the picker names
+  the sibling machines that withhold it. It warns, never blocks — and it always says that an absent
+  warning is not proof, because a machine knows only what its siblings announced.
+- A **proposal**: a sibling can offer its rules, and applying one may only ever **narrow** what this
+  machine shares. Never replace, never widen.
+
+### Presence, self-healing and CI
+
+- **Presence** is WebSocket-authoritative — online while the socket is live, offline within ~8s.
+- **Auto-reconciliation**: if the central's database is wiped, a token is rotated or an endpoint
+  changes, a member notices and re-pushes its full history. A revoked machine resets itself to solo.
+- **GitHub Actions**: an ephemeral runner pushes its metrics with `agentop ci-push`, authenticated
+  by **keyless GitHub OIDC** against a registered-repos allowlist. The central stamps the repository
+  itself, so a runner cannot mis-report which repo it ran for. See [docs/github-actions.md](docs/github-actions.md).
+
+→ [docs/architecture.md](docs/architecture.md) · [docs/DEPLOY.md](docs/DEPLOY.md) · [docs/security.md](docs/security.md)
+
+---
+
+## Exposing a central on the internet
+
+A central can be published behind a tunnel. `AGENTISTICS_EXPOSURE` selects a profile —
+`local` | `lan` | `public` — and **`public` permanently revokes every route that touches the host**
+(shell, local chat, raw transcripts, MCP admin) and requires a second factor of every owner. The
+profile is the only thing that decides a capability; no opt-in re-enables host power on `public`.
+
+```bash
+agentop doctor --exposed     # run this BEFORE opening a tunnel
+```
+
+A check that could not be verified reports `fail`, never a reassuring `pass`.
+
+→ [docs/exposure.md](docs/exposure.md) · [SECURITY.md](SECURITY.md)
+
+---
+
+## The CLI — `agentop`
+
+<p align="center">
+  <img src="docs/media/control-center-commands.gif" alt="The commands cheat sheet" width="100%" />
+</p>
+
+| Command | Purpose |
+|---|---|
+| *(bare)* / `start` | The control center |
+| `setup` | First-run wizard (solo / central / member) |
+| `server` | Web + API + MCP + daemon. `--central` runs a central natively (no Docker), `--bg` detaches |
+| `restart` | Bounce a mode; `--rebuild` rebuilds first (a **full**, cacheless rebuild — `--cache` opts out) |
+| `status` | Services + health |
+| `tui` | The live terminal dashboard |
+| `watch` | The OTel daemon only |
+| `central` | `up` / `init` / `down` / `logs` / `status` / `restart` / `pull` |
+| `member` | `connect` / `leave` / `status` / `list` |
+| `session` | Start / list / attach / kill background assistant sessions (tmux-backed), or a whole `batch` of them under one task |
+| `hooks` | Teach Claude Code to fan work out across several assistants through agentop |
+| `ci-push` | One-shot push of a CI runner's metrics |
+| `autostart` | Start a mode with the system (systemd user service) |
+| `doctor` | Exposure preflight; `--exposed` checks against the strict public bar |
+| `setup-token` | Reissue the one-time owner setup token |
+| `reset-password` | The way back in for a locked-out last owner |
+| `upgrade` · `check-update` | Update, or print a notice when one is due |
+
+`agentop hooks install` installs two things into Claude Code — a **skill** that teaches it to split
+independent work across several assistants and start them with `agentop session batch`, and a
+**SessionStart hook** that tells each new session which of those are already running. A hook infers
+nothing (it is a shell command on an event); the inference is Claude's, reading what the skill
+teaches. Nothing is written to `~/.claude` until you run that command, and `uninstall` takes back
+exactly what it wrote.
+
+→ **Full reference:** [docs/cli.md](docs/cli.md) · [docs/claude-integration.md](docs/claude-integration.md)
+
+---
+
+## Costs, and where the prices come from
+
+Costs are computed per session from a pricing table with **three layered sources**, merged in order
+of trust: the built-in table (compiled in — the floor), the LiteLLM community dataset, and the
+vendors' own pages. A source that fails or returns junk costs freshness, never the ability to price
+anything; community rows that imply a unit change or sit more than tenfold from the built-in figure
+are dropped.
+
+**Settings → Pricing** lists every model *this machine has actually used*, each with its origin
+(`official` / `community` / `builtin`) — so a model nobody can price is visible rather than silently
+guessed at.
+
+---
+
+## Keeping history that the harnesses delete
+
+Claude Code deletes session transcripts older than `cleanupPeriodDays` (30 by default) on every
+startup. agentistics asks once, on first run, what to do about that:
+
+| Mode | What it keeps |
+|---|---|
+| `consolidate` *(recommended)* | One small JSON of computed metrics per session — survives the cleanup, no chat duplicated |
+| `full` | Additionally mirrors the raw transcripts, chat included. Grows without bound |
+| `off` | Nothing — `~/.claude` only |
+
+Revived sessions appear in lists and agent metrics but never inflate aggregate totals.
+
+---
+
+## Nay, and the MCP server
+
+**Nay** is a chat panel that answers questions about your own data by calling the MCP tools.
+It runs `claude --print` under the hood, so it spends your Claude subscription quota.
+
+The **MCP server** exposes the same analytics as structured tools (summary, harnesses, projects,
+sessions, costs, layout building, PDF export) and registers itself at user scope on first start —
+so any Claude Code session can use them, not just Nay.
+
+```bash
+claude mcp list   # should show "agentistics"
+```
+
+→ [docs/nay.md](docs/nay.md) · [docs/mcp.md](docs/mcp.md)
+
+---
+
+## Also in the box
+
+- **OpenTelemetry export** for Grafana, Datadog or any OTLP collector — [docs/opentelemetry.md](docs/opentelemetry.md)
+- **Live sessions** — which assistants are running right now, detected from host processes. When
+  detection is impossible (not Linux, no `/proc`, a container that cannot see the host) it says so
+  instead of rendering an honest-looking zero
+- **PDF export** of any combination of sections, period and theme
+- **PT-BR + EN**, light and dark, throughout — CLI, TUI and web
 
 ---
 
 ## Documentation
 
 | Doc | Contents |
-|-----|----------|
-| [docs/nay.md](docs/nay.md) | Nay AI chat — how it works, quota warning, behavior rules |
-| [docs/mcp.md](docs/mcp.md) | MCP server — tool reference, parameters, usage from Claude Code |
-| [docs/data-sources.md](docs/data-sources.md) | Data sources, JSONL parsing, SessionMeta structure |
-| [docs/metrics.md](docs/metrics.md) | Pricing table, cost formula, blended rate, streak, cache |
-| [docs/opentelemetry.md](docs/opentelemetry.md) | OTel export, metrics list, Grafana example |
-| [docs/architecture.md](docs/architecture.md) | File structure, request lifecycle, tech stack, build pipeline |
+|---|---|
+| [docs/cli.md](docs/cli.md) | Every `agentop` command, flag and example |
+| [docs/architecture.md](docs/architecture.md) | Structure, request lifecycle, build pipeline |
+| [docs/security.md](docs/security.md) | Threat model, trust boundaries, the limits of each control |
+| [docs/exposure.md](docs/exposure.md) | Publishing a central safely |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Central deployment, `central.sh`, env vars |
+| [docs/github-actions.md](docs/github-actions.md) | CI ingest, OIDC, repo-bound tokens |
+| [docs/harness-contract.md](docs/harness-contract.md) | What each metric must MEAN across harnesses |
+| [docs/data-sources.md](docs/data-sources.md) | Data sources, JSONL parsing, `SessionMeta` |
+| [docs/metrics.md](docs/metrics.md) | Pricing table, cost formula, streak, cache |
+| [docs/session-manager.md](docs/session-manager.md) | Background assistant sessions, the batch form, the cockpit |
+| [docs/claude-integration.md](docs/claude-integration.md) | The Claude Code skill + SessionStart hook `agentop hooks` installs |
+| [docs/nay.md](docs/nay.md) · [docs/mcp.md](docs/mcp.md) | The chat assistant and the MCP tools |
 
 ---
 
-## Changelog
+## Reproducing the media
 
-See [releases](https://github.com/blpsoares/agentistics/releases) for the full version history.
+<a name="reproducing-the-media"></a>
+
+The GIFs above are recorded from a demo fleet, never from a real machine — a published recording
+cannot be taken back, and a real project name or repository in one is a leak.
+
+```bash
+# 1. a pseudonymized fleet, derived from this machine's computed metrics
+#    (never from transcripts, so chat cannot reach it by construction)
+bun run packages/server/scripts/seed-demo.ts --split 3 --force
+
+# 2. run them
+HOME=~/.agentistics-demo-home-1 PORT=47391 ./release/agentop server &
+
+# 3. record
+packages/server/scripts/record-all.sh                    # terminal → .cast + .gif
+bun run packages/server/scripts/record-web.ts            # web → .gif
+```
+
+Terminal recordings are [asciinema](https://asciinema.org) casts (`casts/*.cast`, embeddable as a
+real player with selectable text) rendered to GIF with [`agg`](https://github.com/asciinema/agg).
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Everything in this project is in English — code, comments,
+commits, docs.
 
 ---
 

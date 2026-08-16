@@ -93,6 +93,10 @@ For questions about total Claude Code usage across ALL projects, use agentistics
 | "Cost breakdown by model?" | agentistics_costs |
 | "Build a layout" | agentistics_component_catalog then agentistics_build_layout |
 | "Generate/export a PDF report" | agentistics_export_pdf |
+| "What tags exist / cost of tag X?" | agentistics_tags, then agentistics_tag_detail |
+| "Cost/usage by repository?" | agentistics_repos |
+| "Am I connected to a team/central?" | agentistics_team_status |
+| "Who's on the team? (central only)" | agentistics_team_members |
 | Any follow-up question | Call tools again — never rely on prior conversation |
 
 ---
@@ -114,6 +118,11 @@ For questions about total Claude Code usage across ALL projects, use agentistics
 | agentistics_set_active_layout | Switch which layout is shown on /custom |
 | agentistics_delete_layout | Delete a layout permanently |
 | agentistics_export_pdf | Generate PDF — returns a [⬇ Download PDF](pdf:URL) button link |
+| agentistics_tags | List all tags with aggregate sessions/cost/tokens |
+| agentistics_tag_detail | Full detail for one tag: breakdown + top projects/models/harnesses/repos/members |
+| agentistics_repos | Repository breakdown by normalized git remote |
+| agentistics_team_status | This machine's team mode (solo/central/member) and central connections |
+| agentistics_team_members | Team roster (central only): presence, latency, last seen |
 
 ---
 
@@ -184,6 +193,11 @@ export function buildNaySettings(port: number) {
         'mcp__agentistics__agentistics_set_active_layout',
         'mcp__agentistics__agentistics_delete_layout',
         'mcp__agentistics__agentistics_export_pdf',
+        'mcp__agentistics__agentistics_tags',
+        'mcp__agentistics__agentistics_tag_detail',
+        'mcp__agentistics__agentistics_repos',
+        'mcp__agentistics__agentistics_team_status',
+        'mcp__agentistics__agentistics_team_members',
       ],
     },
   }
@@ -230,14 +244,29 @@ export async function registerMcpGlobally(port: number): Promise<void> {
     if (urlOk && pathOk) return // already up to date
   } catch { /* read or parse failed — proceed with registration */ }
 
-  // Use the official CLI to register at user scope
-  const proc = Bun.spawn(
-    ['claude', 'mcp', 'add', '-s', 'user', 'agentistics',
-      '-e', `AGENTISTICS_API=${apiUrl}`,
-      '--', 'bun', 'run', mcpScript],
-    { stdout: 'pipe', stderr: 'pipe' },
-  )
-  await proc.exited
+  // Use the official CLI to register at user scope.
+  //
+  // A MISSING `claude` binary is a normal state, not a failure: every container image ships
+  // without it (the central and the Docker machine both), and so does any host that runs
+  // agentistics without Claude Code installed. It used to throw ENOENT out of here into the
+  // boot's `.catch(err => console.error(…, err))`, which Bun renders as a ten-line stack with a
+  // source snippet — a startup that looks broken while everything except nay-chat is fine.
+  // Anything else (a permission error, a crashing CLI) still propagates and is still loud.
+  try {
+    const proc = Bun.spawn(
+      ['claude', 'mcp', 'add', '-s', 'user', 'agentistics',
+        '-e', `AGENTISTICS_API=${apiUrl}`,
+        '--', 'bun', 'run', mcpScript],
+      { stdout: 'pipe', stderr: 'pipe' },
+    )
+    await proc.exited
+  } catch (err) {
+    if ((err as { code?: string })?.code === 'ENOENT') {
+      console.info('[nay-chat] the Claude CLI is not on PATH — nay-chat stays unavailable; everything else runs normally.')
+      return
+    }
+    throw err
+  }
 }
 
 export type ChatAttachment = {

@@ -21,16 +21,16 @@ function calcCostUSD(input: number, output: number, cacheRead: number, cacheWrit
   }, model);
 }
 
-// ─── Multi-harness helpers ────────────────────────────────────────────────────
+// Multi-harness helpers
 // agentistics tracks several harnesses (Claude Code, Codex CLI, Gemini CLI,
-// Copilot CLI). Sessions carry a `harness` field; legacy/missing defaults to claude.
+// Copilot CLI, Antigravity CLI). Sessions carry a `harness` field; legacy/missing defaults to claude.
 
-const HARNESS_IDS = ["claude", "codex", "gemini", "copilot"] as const;
+const HARNESS_IDS = ["claude", "codex", "gemini", "copilot", "antigravity"] as const;
 const HARNESS_PARAM = {
   type: "string",
   enum: ["all", ...HARNESS_IDS],
   description:
-    "Scope to one harness (claude | codex | gemini | copilot), or 'all' (default) for the unified view across every harness.",
+    "Scope to one harness (claude | codex | gemini | copilot | antigravity), or 'all' (default) for the unified view across every harness.",
 } as const;
 
 type AnySession = Record<string, any>;
@@ -175,7 +175,7 @@ function fillGaps(
   }
 }
 
-// ─── Server ─────────────────────────────────────────────────────────────────
+// Server
 
 const server = new Server(
   { name: "agentistics", version: "1.0.0" },
@@ -186,7 +186,7 @@ const TOOLS: Tool[] = [
   {
     name: "agentistics_summary",
     description:
-      "Get an overview of AI coding usage metrics (across all tracked harnesses — Claude Code, Codex, Gemini, Copilot — or scoped to one): total tokens, estimated cost, sessions, streak, most used model, and top project. Good starting point for any metrics question.",
+      "Get an overview of AI coding usage metrics (across all tracked harnesses — Claude Code, Codex, Gemini, Copilot, Antigravity — or scoped to one): total tokens, estimated cost, sessions, streak, most used model, and top project. Good starting point for any metrics question.",
     inputSchema: { type: "object", properties: { harness: HARNESS_PARAM }, required: [] },
   },
   {
@@ -368,6 +368,42 @@ const TOOLS: Tool[] = [
       },
       required: ["name", "componentIds"],
     },
+  },
+  {
+    name: "agentistics_tags",
+    description:
+      "List all tags — saved cross-cutting filters over repos/projects/machines/teams/accounts — with their aggregate sessions, cost, and tokens. Use for 'what tags exist' or 'how much did tag X cost' questions.",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "agentistics_tag_detail",
+    description:
+      "Get full detail for one tag by name or id: aggregate totals plus per-source breakdown and distributions (top projects, models, harnesses, repos, members/users), daily activity series, and the active date window. Call agentistics_tags first to find the id/name.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tag: { type: "string", description: "Tag name or id, from agentistics_tags" },
+      },
+      required: ["tag"],
+    },
+  },
+  {
+    name: "agentistics_repos",
+    description:
+      "List repositories, grouped by normalized git remote (independent of local path or which machine produced the session), with session/message/token/cost totals and last-active date. Sessions with no linked repository are grouped under 'unlinked'. Optionally scope to a single harness.",
+    inputSchema: { type: "object", properties: { harness: HARNESS_PARAM }, required: [] },
+  },
+  {
+    name: "agentistics_team_status",
+    description:
+      "Get this machine's team-mode status: solo, central, or member. In member mode, lists its central connections (label, endpoint, connected/error state, last push). Use for 'am I connected to a team' or 'what central do I push to' questions.",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "agentistics_team_members",
+    description:
+      "List members of this team, central only: display name, online/presence status, latency, and last-seen timestamp. For usage/cost per member use agentistics_summary or agentistics_sessions against this central's own /api/data. Returns an explanatory message when this machine is not running as a central (solo/member mode).",
+    inputSchema: { type: "object", properties: {}, required: [] },
   },
 ];
 
@@ -769,6 +805,134 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             text: `Layout "${layoutName}" built with ${items.length} components: ${componentIds.join(", ")}${activate ? ". Now active." : "."}`,
           }],
         };
+      }
+
+      case "agentistics_tags": {
+        const data = await apiGet("/api/tags");
+        const tags = ((data as any).tags ?? []) as Array<any>;
+        const rows = tags.map((t) => ({
+          id: t._id,
+          name: t.name,
+          color: t.color ?? null,
+          sessions: t.aggregate?.sessions ?? 0,
+          estimatedCostUSD: Math.round((t.aggregate?.costUSD ?? 0) * 10000) / 10000,
+          inputTokens: t.aggregate?.inputTokens ?? 0,
+          outputTokens: t.aggregate?.outputTokens ?? 0,
+          topProject: t.aggregate?.topProject ?? null,
+          topModel: t.aggregate?.topModel ?? null,
+          topHarness: t.aggregate?.topHarness ?? null,
+          window: t.window ?? null,
+        }));
+        return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+      }
+
+      case "agentistics_tag_detail": {
+        const wanted = ((args as any)?.tag as string ?? "").trim();
+        if (!wanted) throw new Error("tag is required — pass a name or id from agentistics_tags.");
+        const list = await apiGet("/api/tags");
+        const tags = ((list as any).tags ?? []) as Array<any>;
+        const match = tags.find((t) => t._id === wanted)
+          ?? tags.find((t) => (t.name as string)?.toLowerCase() === wanted.toLowerCase());
+        if (!match) throw new Error(`No tag matching "${wanted}". Available: ${tags.map((t) => t.name).join(", ") || "(none)"}`);
+        const detail = await apiGet(`/api/tags/${encodeURIComponent(match._id)}`);
+        const d = detail as any;
+        const bucketTop = (b: Array<{ key: string; sessions: number; costUSD: number }> | undefined, n = 5) =>
+          (b ?? []).slice(0, n).map((x) => ({ key: x.key, sessions: x.sessions, estimatedCostUSD: Math.round((x.costUSD ?? 0) * 10000) / 10000 }));
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              id: d.tag?._id,
+              name: d.tag?.name,
+              color: d.tag?.color ?? null,
+              window: d.tag?.window ?? null,
+              sources: d.tag?.sources ?? [],
+              aggregate: {
+                sessions: d.tag?.aggregate?.sessions ?? 0,
+                estimatedCostUSD: Math.round((d.tag?.aggregate?.costUSD ?? 0) * 10000) / 10000,
+                inputTokens: d.tag?.aggregate?.inputTokens ?? 0,
+                outputTokens: d.tag?.aggregate?.outputTokens ?? 0,
+              },
+              topProjects: bucketTop(d.stats?.projects),
+              topModels: bucketTop(d.stats?.models),
+              topHarnesses: bucketTop(d.stats?.harnesses),
+              topRepos: bucketTop(d.stats?.repos),
+              topMembers: bucketTop(d.stats?.members),
+              distinctMembers: d.stats?.distinctMembers ?? 0,
+              distinctMachines: d.stats?.distinctMachines ?? 0,
+              firstSessionDate: d.stats?.firstSessionDate ?? null,
+              lastSessionDate: d.stats?.lastSessionDate ?? null,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "agentistics_repos": {
+        const harness = (args as any)?.harness as string | undefined;
+        const data = await apiGet("/api/data");
+        const allSessions = filterSessions((data.sessions ?? []) as AnySession[], harness);
+        const byRemote: Record<string, { sessions: number; messages: number; inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number; costUSD: number; lastActive: string }> = {};
+        for (const s of allSessions) {
+          const key = (s.git_remote as string) || "";
+          if (!byRemote[key]) byRemote[key] = { sessions: 0, messages: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, costUSD: 0, lastActive: "" };
+          const agg = byRemote[key]!;
+          const { input, output, cacheRead, cacheWrite, cost } = sessionTokens(s);
+          agg.sessions += 1;
+          agg.messages += sessionMessages(s);
+          agg.inputTokens += input; agg.outputTokens += output; agg.cacheRead += cacheRead; agg.cacheWrite += cacheWrite;
+          agg.costUSD += cost;
+          if (s.start_time && String(s.start_time) > agg.lastActive) agg.lastActive = String(s.start_time);
+        }
+        const rows = Object.entries(byRemote)
+          .map(([remote, agg]) => ({
+            repo: remote || "unlinked",
+            remote: remote || null,
+            sessions: agg.sessions,
+            messages: agg.messages,
+            inputTokens: agg.inputTokens,
+            outputTokens: agg.outputTokens,
+            totalTokens: agg.inputTokens + agg.outputTokens + agg.cacheRead + agg.cacheWrite,
+            estimatedCostUSD: Math.round(agg.costUSD * 10000) / 10000,
+            lastActive: agg.lastActive || null,
+          }))
+          .sort((a, b) => b.totalTokens - a.totalTokens);
+        return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+      }
+
+      case "agentistics_team_status": {
+        const prefs = await getPrefs();
+        const team = (prefs as any).team as { mode?: string; connections?: Array<any> } | undefined;
+        const mode = team?.mode ?? "solo";
+        const connections = (team?.connections ?? []).map((c: any) => ({
+          id: c.id,
+          label: c.label ?? null,
+          endpoint: c.endpoint,
+        }));
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ mode, connections }, null, 2),
+          }],
+        };
+      }
+
+      case "agentistics_team_members": {
+        const res = await fetch(`${API}/api/team/members`);
+        if (res.status === 404) {
+          return { content: [{ type: "text", text: "This machine is not running as a central (solo or member mode) — there is no member roster here. Use agentistics_team_status to see the current mode." }] };
+        }
+        if (!res.ok) throw new Error(`GET /api/team/members → HTTP ${res.status}`);
+        const data = await res.json() as any;
+        const members = (data.members ?? []) as Array<any>;
+        const rows = members.map((m) => ({
+          id: m.id,
+          name: m.user,
+          label: m.label,
+          online: m.online ?? false,
+          latencyMs: m.latencyMs ?? null,
+          lastSeenAt: m.lastSeenAt ?? null,
+        }));
+        return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
       }
 
       default:

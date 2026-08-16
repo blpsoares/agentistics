@@ -1,7 +1,9 @@
 import React, { useState } from 'react'
 import { CheckCircle, XCircle, ChevronDown, ChevronUp, Bot } from 'lucide-react'
+import { fmt, fmtCost } from '@agentistics/core'
 import type { AgentInvocation, HarnessId } from '@agentistics/core'
 import type { Lang } from '@agentistics/core'
+import { MetricNote } from './MetricNote'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { capable } from '../lib/harness'
 import { NAtag } from './NAtag'
@@ -15,27 +17,15 @@ interface AgentMetricsPanelProps {
   totalDurationMs: number
   currency: 'USD' | 'BRL'
   brlRate: number
+  /** Claude's own C/A when the page is in plan basis. Agents are a Claude-only capability, so the
+   *  cross-harness aggregate would price them partly against a plan paying for something else. */
+  planFactor?: number | null
   lang: Lang
   /** When set, gates the panel — renders N/A if the harness cannot produce agent metrics. */
   harness?: HarnessId
 }
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
 
-function fmtCost(usd: number, currency: 'USD' | 'BRL', rate: number): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (brl < 0.005) return '<R$0,01'
-    return `R$${brl.toFixed(2).replace('.', ',')}`
-  }
-  if (usd < 0.001) return '<USD 0.001'
-  if (usd < 0.01) return `USD ${usd.toFixed(3)}`
-  return `USD ${usd.toFixed(2)}`
-}
 
 function fmtDuration(ms: number): string {
   if (ms === 0) return '—'
@@ -100,6 +90,7 @@ export function AgentMetricsPanel({
   totalDurationMs,
   currency,
   brlRate,
+  planFactor = null,
   lang,
   harness,
 }: AgentMetricsPanelProps) {
@@ -138,7 +129,7 @@ export function AgentMetricsPanel({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 12 }}>
+      <div className="ag-grid cols-4" style={{ gap: 12 }}>
         <SummaryCard
           label={pt ? 'Invocações' : 'Invocations'}
           value={String(totalInvocations)}
@@ -147,14 +138,19 @@ export function AgentMetricsPanel({
         />
         <SummaryCard
           label={pt ? 'Tokens de agentes' : 'Agent tokens'}
-          value={fmtTokens(totalTokens)}
-          sub={`avg ${fmtTokens(Math.round(avgTokens))} / ${pt ? 'chamada' : 'call'}`}
+          value={fmt(totalTokens)}
+          sub={`avg ${fmt(Math.round(avgTokens))} / ${pt ? 'chamada' : 'call'}`}
           accent="var(--accent-blue)"
         />
+        {/* Agents are a Claude-only capability, so the allocation uses CLAUDE's own C/A — never
+            the cross-harness aggregate, which would price Claude's agents partly against a plan
+            paying for something else. */}
         <SummaryCard
-          label={pt ? 'Custo dos agentes' : 'Agent cost'}
-          value={fmtCost(totalCostUSD, currency, brlRate)}
-          sub={`avg ${fmtCost(totalCostUSD / totalInvocations, currency, brlRate)} / ${pt ? 'chamada' : 'call'}`}
+          label={planFactor !== null && planFactor !== undefined
+            ? (pt ? 'Custo dos agentes (rateado)' : 'Agent cost (allocated)')
+            : (pt ? 'Custo dos agentes' : 'Agent cost')}
+          value={fmtCost(totalCostUSD * (planFactor ?? 1), currency, brlRate)}
+          sub={`avg ${fmtCost((totalCostUSD * (planFactor ?? 1)) / totalInvocations, currency, brlRate)} / ${pt ? 'chamada' : 'call'}`}
           accent="var(--anthropic-orange)"
         />
         <SummaryCard
@@ -164,6 +160,15 @@ export function AgentMetricsPanel({
           accent="var(--accent-green)"
         />
       </div>
+
+      {/* What these numbers ARE. An agent's token figure is the harness's own rollup for that
+          invocation, which is a different measurement from the session totals elsewhere — saying so
+          is cheaper than the question "why don't these add up to my session". */}
+      <MetricNote>
+        {pt
+          ? 'Tokens e custo por invocação vêm do que o próprio Claude Code reporta ao encerrar cada agente — já incluem leitura e escrita de cache. Um agente é cobrado dentro da sessão que o chamou, então estes valores são uma FATIA do total da sessão, não uma soma à parte.'
+          : "Tokens and cost per invocation come from what Claude Code itself reports when each agent finishes — cache reads and writes included. An agent is billed inside the session that called it, so these figures are a SLICE of that session's total, not something to add on top."}
+      </MetricNote>
 
       {/* Agent type breakdown */}
       {sortedTypes.length > 0 && (
@@ -188,7 +193,7 @@ export function AgentMetricsPanel({
                   {stats.count}×
                 </span>
                 {!isMobile && <span style={{ color: 'var(--text-secondary)', textAlign: 'right' }}>
-                  {fmtTokens(stats.tokens)} tok
+                  {fmt(stats.tokens)} tok
                 </span>}
                 {!isMobile && <span style={{ color: 'var(--anthropic-orange)', textAlign: 'right' }}>
                   {fmtCost(stats.costUSD, currency, brlRate)}
@@ -261,7 +266,7 @@ export function AgentMetricsPanel({
                 </span>
               </div>
               <span style={{ fontSize: 11, color: 'var(--text-primary)', textAlign: 'right' }}>
-                {fmtTokens(inv.totalTokens)}
+                {fmt(inv.totalTokens)}
               </span>
               <span style={{ fontSize: 11, color: 'var(--text-secondary)', textAlign: 'right' }}>
                 {inv.totalToolUseCount}

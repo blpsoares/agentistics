@@ -1,6 +1,8 @@
 import { readFile } from 'fs/promises'
-import type { SessionMeta } from '@agentistics/core'
+import type { SessionMeta, TurnEvent } from '@agentistics/core'
+import { activeMinutesOf } from '@agentistics/core'
 import { getGitFileStats } from './git'
+import { countGitCommands } from './harness-activity'
 import { extractAgentMetrics } from './agent-metrics'
 
 // File extension → language name (used when session-meta is absent)
@@ -60,6 +62,82 @@ export function classifyAgentFile(filePath: string): string | null {
   return null
 }
 
+/** True when a `type: 'user'` entry is a HUMAN message rather than a tool result being fed back.
+ *  A turn boundary depends on this distinction, and so does `user_message_count` — they must never
+ *  disagree, hence one helper used by both the full parser and the standalone active-time pass. */
+export function isHumanUserEntry(e: Record<string, unknown>): boolean {
+  if (e.type !== 'user') return false
+  const msgContent = (e.message as Record<string, unknown> | undefined)?.content
+  const contentArr = Array.isArray(msgContent) ? msgContent as Record<string, unknown>[] : null
+  const isPureToolResult = contentArr !== null && contentArr.length > 0 &&
+    contentArr.every(p => p.type === 'tool_result')
+  return !isPureToolResult
+}
+
+/**
+ * Active time for a Claude transcript, computed on its own — see docs/harness-contract.md.
+ *
+ * `parseSessionJsonl` collects the same events inline during its single pass. This standalone
+ * version exists for the `_source: 'meta'` path in data.ts: Claude's own session-meta files carry
+ * no per-turn timing, so the value has to come from the transcript, and that path deliberately
+ * does not run the full parser.
+ */
+/**
+ * The context one `usage` record says was SENT — PURE.
+ *
+ * The three INPUT-side counters are the prompt: `input_tokens` is the uncached remainder and the
+ * two cache figures are the rest of the same prefix. `output_tokens` is excluded — it came back,
+ * it was not sent. `0` for a record with no input side, which callers read as "no reading" rather
+ * than as an empty context.
+ */
+export function contextOfUsage(u: Record<string, number> | undefined): number {
+  if (!u) return 0
+  return (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0)
+}
+
+/**
+ * The LAST context reading in a Claude transcript — PURE, `undefined` when there is none.
+ *
+ * A sibling of `activeMinutesFromClaudeJsonl` and for the same reason: `session-meta` is the
+ * preferred source and serves most Claude sessions, so a metric that exists only inside
+ * `parseSessionJsonl` is a metric most sessions never get. That is the exact bug the comment on
+ * the active-time branch in `data.ts` records; this function is what keeps the gauge out of it.
+ */
+export function contextTokensFromClaudeJsonl(lines: string[]): number | undefined {
+  let last = 0
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) continue
+    let e: Record<string, unknown>
+    try { e = JSON.parse(line) } catch { continue }
+    if (e.type !== 'assistant') continue
+    const msg = e.message as Record<string, unknown> | undefined
+    const sent = contextOfUsage(msg?.usage as Record<string, number> | undefined)
+    if (sent > 0) last = sent
+  }
+  return last > 0 ? last : undefined
+}
+
+export function activeMinutesFromClaudeJsonl(lines: string[]): number | undefined {
+  const events: TurnEvent[] = []
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) continue
+    let e: Record<string, unknown>
+    try { e = JSON.parse(line) } catch { continue }
+    const ts = typeof e.timestamp === 'string' ? Date.parse(e.timestamp) : NaN
+    if (Number.isNaN(ts)) continue
+    const event: TurnEvent = { ts }
+    if (e.type === 'system' && e.subtype === 'turn_duration' && typeof e.durationMs === 'number') {
+      event.measuredMs = e.durationMs
+    } else if (isHumanUserEntry(e)) {
+      event.userPrompt = true
+    }
+    events.push(event)
+  }
+  return activeMinutesOf(events)
+}
+
 export function makeEmptySession(
   sessionId: string,
   projectPath: string,
@@ -115,9 +193,20 @@ export async function parseSessionJsonl(
     return makeEmptySession(sessionId, fallbackPath, '', '', source)
   }
 
-  let cwd = '', startTime = '', lastTime = '', firstPrompt = '', modelId = ''
+  let cwd = '', lastCwd = '', startTime = '', lastTime = '', firstPrompt = '', modelId = '', sessionTitle = ''
   let userMsgs = 0, assistantMsgs = 0, inputTokens = 0, outputTokens = 0
   let cacheReadTokens = 0, cacheCreationTokens = 0
+  /**
+   * How full the window was on the LAST turn — a gauge, reassigned rather than accumulated.
+   *
+   * The three input-side counters of one `usage` record ARE the prompt that turn sent: `input_tokens`
+   * is the uncached remainder, and the two cache figures are the rest of the same prefix (see
+   * `prompt-caching`: total prompt = input + cache_creation + cache_read). `output_tokens` is
+   * deliberately excluded — it is what came back, not what was sent.
+   *
+   * Verified on a real transcript (2026-08-14, claude 2.1.232): 2 + 1.380 + 211.577 = 212.959.
+   */
+  let contextTokens = 0
   let gitCommits = 0, gitPushes = 0
   let toolErrors = 0, userInterruptions = 0
   let hasMcp = false
@@ -133,6 +222,10 @@ export async function parseSessionJsonl(
   // Maps tool_use_id → tool name for error attribution
   const toolUseIdToName = new Map<string, string>()
   let lastAssistantTs = ''
+  // Per-turn timeline feeding computeActiveTime() — see docs/harness-contract.md. Every
+  // timestamped line advances the clock; only a genuine human message opens a turn; Claude Code's
+  // own `system`/`turn_duration` line closes one with the duration IT measured.
+  const turnEvents: TurnEvent[] = []
 
   for (const raw of content.split('\n')) {
     const line = raw.trim()
@@ -140,12 +233,47 @@ export async function parseSessionJsonl(
     let e: Record<string, unknown>
     try { e = JSON.parse(line) } catch { continue }
 
-    if (!cwd && e.cwd) cwd = e.cwd as string
-    const ts = e.timestamp as string | undefined
+    // First cwd = the project the session belongs to; last cwd = where it is now. They differ when
+    // the session moved (a git worktree), and the live-session detector needs the latter.
+    if (e.cwd && typeof e.cwd === 'string') {
+      if (!cwd) cwd = e.cwd
+      lastCwd = e.cwd
+    }
+    // `as string` alone is a compile-time promise only — a malformed transcript line can carry a
+    // number here just as Kimi's state.json did for its own timestamp fields (see
+    // isoFromKimiTime/normalizeSessionTimes), and every consumer downstream calls a string method
+    // on `startTime`/`endTime` (parseISO, .slice, .localeCompare). Verify the runtime type here,
+    // at the one place this value enters the pipeline, rather than trusting it all the way down.
+    const ts = typeof e.timestamp === 'string' ? e.timestamp : undefined
+    let turnEvent: TurnEvent | null = null
     if (ts) {
       if (!startTime) startTime = ts
       lastTime = ts
       try { messageHours.push(new Date(ts).getHours()) } catch { /* skip */ }
+      const tsMs = Date.parse(ts)
+      if (!Number.isNaN(tsMs)) {
+        turnEvent = { ts: tsMs }
+        turnEvents.push(turnEvent)
+      }
+    }
+
+    // Claude Code measures each turn itself and writes it out — that number beats anything we
+    // could reconstruct, so it closes the open turn.
+    if (e.type === 'system' && e.subtype === 'turn_duration' && typeof e.durationMs === 'number') {
+      if (turnEvent) turnEvent.measuredMs = e.durationMs
+      continue
+    }
+
+    // Claude writes the auto-generated session title as an `ai-title` line (current format)
+    // or a `summary` line (legacy). ai-title can be regenerated as the chat grows, so the last
+    // one wins; summary only fills the gap when no ai-title is present.
+    if (e.type === 'ai-title' && typeof e.aiTitle === 'string' && e.aiTitle.trim()) {
+      sessionTitle = e.aiTitle.trim()
+      continue
+    }
+    if (e.type === 'summary' && typeof e.summary === 'string' && e.summary.trim()) {
+      if (!sessionTitle) sessionTitle = e.summary.trim()
+      continue
     }
 
     if (e.type === 'user') {
@@ -153,8 +281,7 @@ export async function parseSessionJsonl(
       const contentArr = Array.isArray(msgContent) ? msgContent as Record<string, unknown>[] : null
 
       // Tool result messages: content is an array where every item is type='tool_result'
-      const isPureToolResult = contentArr !== null && contentArr.length > 0 &&
-        contentArr.every(p => p.type === 'tool_result')
+      const isPureToolResult = !isHumanUserEntry(e)
 
       if (isPureToolResult) {
         // Count tool errors and attribute them to the originating tool
@@ -166,8 +293,9 @@ export async function parseSessionJsonl(
           }
         }
       } else {
-        // Real human message (initial prompt or interruption)
+        // Real human message (initial prompt or interruption) — this is what opens a turn.
         userMsgs++
+        if (turnEvent) turnEvent.userPrompt = true
         if (ts) {
           userMessageTimestamps.push(ts)
           // Response time: how long since the last assistant message
@@ -202,6 +330,10 @@ export async function parseSessionJsonl(
         outputTokens        += u.output_tokens ?? 0
         cacheReadTokens     += u.cache_read_input_tokens ?? 0
         cacheCreationTokens += u.cache_creation_input_tokens ?? 0
+        // LAST wins, and only when the record actually carries an input side. A synthetic record of
+        // all zeros would otherwise reset a real reading to "context empty" on the final turn.
+        const sent = contextOfUsage(u)
+        if (sent > 0) contextTokens = sent
       }
       // Collect tool names in this message for token attribution
       const toolsInMessage: string[] = []
@@ -217,14 +349,14 @@ export async function parseSessionJsonl(
 
             if (toolName.startsWith('mcp__')) hasMcp = true
 
-            // Count git commits/pushes from Bash tool calls
+            // Count git commits/pushes from Bash tool calls. The rule itself lives in
+            // `harness-activity.ts` so every harness counts the same thing the same way — it used to
+            // be inline here, which is why no adapter could reuse it and all of them reported 0.
             if (toolName === 'Bash') {
               const cmd = (p.input as Record<string, string> | undefined)?.command ?? ''
-              for (const seg of cmd.split(/&&|\|\||;|\n/)) {
-                const s = seg.trim()
-                if (/^(cd\s+\S+\s+&&\s+)?git\s+commit\b/.test(s)) gitCommits++
-                if (/^(cd\s+\S+\s+&&\s+)?git\s+push\b/.test(s)) gitPushes++
-              }
+              const g = countGitCommands(cmd)
+              gitCommits += g.commits
+              gitPushes += g.pushes
             }
 
             // Detect language and agent files from file-based tool calls
@@ -288,9 +420,11 @@ export async function parseSessionJsonl(
   return {
     session_id: sessionId,
     project_path: projectPath,
+    ...(lastCwd && lastCwd !== projectPath ? { current_cwd: lastCwd } : {}),
     start_time: startTime,
     end_time: lastTime || undefined,
     duration_minutes: durationMinutes,
+    active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMsgs,
     assistant_message_count: assistantMsgs,
     tool_counts: toolCounts,
@@ -303,7 +437,11 @@ export async function parseSessionJsonl(
     output_tokens: outputTokens,
     cache_read_input_tokens: cacheReadTokens,
     cache_creation_input_tokens: cacheCreationTokens,
+    // Absent rather than zero when nothing was measured — a confident "0% of the window" on a
+    // session that simply recorded no usage is the same lie `HARNESS_CAPABILITIES` prevents.
+    ...(contextTokens > 0 ? { context_tokens: contextTokens } : {}),
     first_prompt: firstPrompt,
+    title: sessionTitle || undefined,
     user_interruptions: userInterruptions,
     user_response_times: userResponseTimes,
     tool_errors: toolErrors,

@@ -1,15 +1,20 @@
-import React, { useEffect, useCallback } from 'react'
-import { X, Zap, ArrowUpCircle, Terminal, Download } from 'lucide-react'
+import React, { useEffect, useCallback, useState } from 'react'
+import { X, ArrowUpCircle, Terminal, Download, Copy, Check } from 'lucide-react'
 import type { Lang } from '@agentistics/core'
+import { copyText } from '../lib/clipboard'
 
 interface Props {
   current: string
   latest: string
   lang: Lang
+  /** true when this instance runs in central (hub) mode → rebuild the central. */
+  isCentral?: boolean
+  /** true when this instance is a team member pushing to a central. */
+  isMember?: boolean
   onClose: () => void
 }
 
-export function UpdateModal({ current, latest, lang, onClose }: Props) {
+export function UpdateModal({ current, latest, lang, isCentral, isMember, onClose }: Props) {
   const handleKey = useCallback(
     (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() },
     [onClose],
@@ -27,13 +32,17 @@ export function UpdateModal({ current, latest, lang, onClose }: Props) {
         current: 'Versão atual',
         latest: 'Versão mais recente',
         howTo: 'Como atualizar',
-        opt1Title: 'Opção 1 — Baixar o binário',
-        opt1Desc: 'Acesse a página de releases, baixe o arquivo',
-        opt1Post: 'e substitua seu binário atual.',
-        opt2Title: 'Opção 2 — Compilar do código-fonte',
-        opt2Desc: 'Execute os comandos abaixo no diretório do projeto:',
-        close: 'Fechar',
+        centralTitle: 'Central — recompilar e reiniciar',
+        centralDesc: 'Nesta máquina central, atualize o código e reconstrua o serviço:',
+        memberTitle: 'Atualizar e reiniciar',
+        memberDesc: 'Baixe o binário mais recente e reinicie o serviço:',
+        restartNote: 'Se você não usa o autostart (systemd), basta rodar novamente:',
+        binaryTitle: 'Ou baixe o binário manualmente',
+        binaryDesc: 'Acesse a página de releases e substitua seu binário atual.',
         releasePage: 'Página de releases',
+        close: 'Fechar',
+        copy: 'Copiar',
+        copied: 'Copiado',
       }
     : {
         title: 'New version available',
@@ -41,13 +50,17 @@ export function UpdateModal({ current, latest, lang, onClose }: Props) {
         current: 'Current version',
         latest: 'Latest version',
         howTo: 'How to update',
-        opt1Title: 'Option 1 — Download the binary',
-        opt1Desc: 'Go to the releases page, download',
-        opt1Post: 'and replace your current binary.',
-        opt2Title: 'Option 2 — Build from source',
-        opt2Desc: 'Run the following commands in the project directory:',
-        close: 'Close',
+        centralTitle: 'Central — rebuild & restart',
+        centralDesc: 'On this central machine, pull the update and rebuild the service:',
+        memberTitle: 'Upgrade & restart',
+        memberDesc: 'Download the latest binary and restart the service:',
+        restartNote: 'If you are not using autostart (systemd), just re-run:',
+        binaryTitle: 'Or download the binary manually',
+        binaryDesc: 'Go to the releases page and replace your current binary.',
         releasePage: 'Releases page',
+        close: 'Close',
+        copy: 'Copy',
+        copied: 'Copied',
       }
 
   return (
@@ -126,28 +139,47 @@ export function UpdateModal({ current, latest, lang, onClose }: Props) {
             {t.howTo}
           </div>
 
-          {/* Option 1 */}
+          {isCentral ? (
+            <div style={{
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius: 10, padding: '14px 16px',
+            }}>
+              <SectionHeader icon={<Terminal size={14} color="var(--accent-blue, #60a5fa)" />} label={t.centralTitle} />
+              <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px', lineHeight: 1.6 }}>
+                {t.centralDesc}
+              </p>
+              <CommandLine command="bun run up:central" copyLabel={t.copy} copiedLabel={t.copied} />
+            </div>
+          ) : (
+            <div style={{
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderRadius: 10, padding: '14px 16px',
+            }}>
+              <SectionHeader icon={<Terminal size={14} color="var(--accent-blue, #60a5fa)" />} label={t.memberTitle} />
+              <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px', lineHeight: 1.6 }}>
+                {t.memberDesc}
+              </p>
+              <CommandLine command="agentop upgrade" copyLabel={t.copy} copiedLabel={t.copied} />
+              <div style={{ height: 8 }} />
+              <CommandLine command="systemctl --user restart agentop-server" copyLabel={t.copy} copiedLabel={t.copied} />
+              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '10px 0 8px', lineHeight: 1.6 }}>
+                {t.restartNote}
+              </p>
+              <CommandLine command="agentop server" copyLabel={t.copy} copiedLabel={t.copied} />
+            </div>
+          )}
+
+          {/* Download binary (secondary) */}
           <div style={{
             background: 'var(--bg-card)',
             border: '1px solid var(--border)',
-            borderRadius: 10, padding: '14px 16px', marginBottom: 10,
+            borderRadius: 10, padding: '14px 16px', marginTop: 10,
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <Download size={14} color="var(--anthropic-orange)" />
-              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                {t.opt1Title}
-              </span>
-            </div>
+            <SectionHeader icon={<Download size={14} color="var(--anthropic-orange)" />} label={t.binaryTitle} />
             <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px', lineHeight: 1.6 }}>
-              {t.opt1Desc}{' '}
-              <code style={{
-                background: 'var(--bg-surface)', border: '1px solid var(--border)',
-                borderRadius: 4, padding: '1px 5px', fontSize: 11,
-                color: 'var(--anthropic-orange-light)',
-              }}>
-                agentop
-              </code>
-              {' '}{t.opt1Post}
+              {t.binaryDesc}
             </p>
             <a
               href="https://github.com/blpsoares/agentistics/releases/latest"
@@ -165,27 +197,9 @@ export function UpdateModal({ current, latest, lang, onClose }: Props) {
               onMouseEnter={e => (e.currentTarget.style.opacity = '0.75')}
               onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
             >
-              <Zap size={12} />
+              <Download size={12} />
               {t.releasePage} — v{latest}
             </a>
-          </div>
-
-          {/* Option 2 */}
-          <div style={{
-            background: 'var(--bg-card)',
-            border: '1px solid var(--border)',
-            borderRadius: 10, padding: '14px 16px',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <Terminal size={14} color="var(--accent-blue, #60a5fa)" />
-              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                {t.opt2Title}
-              </span>
-            </div>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px', lineHeight: 1.6 }}>
-              {t.opt2Desc}
-            </p>
-            <CodeBlock lines={['git pull origin main', 'bun run build:binary']} />
           </div>
         </div>
 
@@ -216,6 +230,17 @@ export function UpdateModal({ current, latest, lang, onClose }: Props) {
   )
 }
 
+function SectionHeader({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+      {icon}
+      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+        {label}
+      </span>
+    </div>
+  )
+}
+
 function VersionPill({ label, version, accent, dim }: { label: string; version: string; accent: string; dim?: boolean }) {
   return (
     <div style={{
@@ -234,24 +259,45 @@ function VersionPill({ label, version, accent, dim }: { label: string; version: 
   )
 }
 
-function CodeBlock({ lines }: { lines: string[] }) {
+function CommandLine({ command, copyLabel, copiedLabel }: { command: string; copyLabel: string; copiedLabel: string }) {
+  const [copied, setCopied] = useState(false)
+  const onCopy = useCallback(async () => {
+    const ok = await copyText(command)
+    if (ok) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }
+  }, [command])
+
   return (
     <div style={{
+      display: 'flex', alignItems: 'center', gap: 8,
       background: 'var(--bg-surface)',
       border: '1px solid var(--border)',
       borderRadius: 8,
-      padding: '10px 14px',
-      fontFamily: 'monospace',
-      fontSize: 12,
-      lineHeight: 1.8,
-      color: 'var(--text-primary)',
+      padding: '8px 10px 8px 14px',
     }}>
-      {lines.map((line, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ color: 'var(--accent-green)', userSelect: 'none' }}>$</span>
-          <span>{line}</span>
-        </div>
-      ))}
+      <span style={{ color: 'var(--accent-green)', userSelect: 'none', fontFamily: 'monospace', fontSize: 12 }}>$</span>
+      <code style={{
+        flex: 1, fontFamily: 'monospace', fontSize: 12,
+        color: 'var(--text-primary)', overflowX: 'auto', whiteSpace: 'nowrap',
+      }}>
+        {command}
+      </code>
+      <button
+        onClick={onCopy}
+        title={copied ? copiedLabel : copyLabel}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          padding: '4px 8px', borderRadius: 6, cursor: 'pointer',
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          color: copied ? 'var(--accent-green)' : 'var(--text-secondary)',
+          fontSize: 11, fontWeight: 600, flexShrink: 0,
+        }}
+      >
+        {copied ? <Check size={12} /> : <Copy size={12} />}
+        {copied ? copiedLabel : copyLabel}
+      </button>
     </div>
   )
 }

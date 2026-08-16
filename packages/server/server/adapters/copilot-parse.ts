@@ -1,4 +1,6 @@
-import type { SessionMeta } from '@agentistics/core'
+import type { SessionMeta, TurnEvent } from '@agentistics/core'
+import { activeMinutesOf } from '@agentistics/core'
+import { canonicalTool, countGitCommands } from '../harness-activity'
 
 /** Pure: parse a Copilot events.jsonl string into a normalized SessionMeta.
  *  Returns null when the content has no usable lines. */
@@ -13,6 +15,8 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
   let userMessages = 0
   let assistantTurns = 0
   let toolErrors = 0
+  const toolCounts: Record<string, number> = {}
+  let gitCommits = 0, gitPushes = 0
   let usesMcp = false
   let firstPrompt = ''
   let mcpToolCallCount = 0
@@ -30,6 +34,12 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
 
   const userMessageTimestamps: string[] = []
   const messageHours: number[] = []
+  // Per-turn timeline for computeActiveTime() (docs/harness-contract.md). Copilot brackets every
+  // turn itself: `assistant.turn_start` opens one, `assistant.turn_end` closes it, and an `abort` /
+  // `session.shutdown` closes one the CLI never got to end. The bracket span IS the measurement, so
+  // it is expressed as open/close markers and computeActiveTime does the arithmetic — computing the
+  // span here too would be a second source of truth for one number.
+  const turnEvents: TurnEvent[] = []
 
   for (const raw of lines) {
     let e: any
@@ -42,6 +52,12 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     if (ts) {
       if (!startTime) startTime = ts
       endTime = ts
+    }
+    let turnEvent: TurnEvent | null = null
+    const tsMs = ts ? Date.parse(ts) : NaN
+    if (!Number.isNaN(tsMs)) {
+      turnEvent = { ts: tsMs }
+      turnEvents.push(turnEvent)
     }
 
     if (type === 'session.start') {
@@ -56,7 +72,7 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
       userMessages++
       if (ts) {
         userMessageTimestamps.push(ts)
-        messageHours.push(new Date(ts).getUTCHours())
+        messageHours.push(new Date(ts).getHours())
       }
       // Capture first user prompt
       if (!firstPrompt && typeof data.content === 'string') {
@@ -64,16 +80,43 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
       }
     } else if (type === 'assistant.turn_start') {
       assistantTurns++
+      if (turnEvent) turnEvent.userPrompt = true
+    } else if (type === 'assistant.turn_end') {
+      if (turnEvent) turnEvent.turnEnd = true
     } else if (type === 'session.info') {
       if (data.infoType === 'mcp') usesMcp = true
+    } else if (type === 'abort') {
+      // The turn ended here even though no turn_end was written (the user aborted it). Without
+      // this the open turn would run to the last line of the file, which can be hours of idle —
+      // measured on a real session: aborted at 20:13:05, file ends 23:34.
+      if (turnEvent) turnEvent.turnEnd = true
     } else if (type === 'session.error') {
       toolErrors++
+    } else if (type === 'tool.execution_start') {
+      // Copilot names its tool and hands over its arguments here. This is why the capability table
+      // said `tools: false` for years while the data was sitting in the transcript.
+      const raw = typeof data.toolName === 'string' ? data.toolName : ''
+      if (raw) {
+        const toolName = canonicalTool('copilot', raw)
+        toolCounts[toolName] = (toolCounts[toolName] ?? 0) + 1
+        if (toolName === 'Bash') {
+          const args = data.arguments as Record<string, unknown> | undefined
+          const cmd = typeof args?.command === 'string' ? args.command : ''
+          if (cmd) {
+            const g = countGitCommands(cmd)
+            gitCommits += g.commits
+            gitPushes += g.pushes
+          }
+        }
+      }
     } else if (type === 'mcp.tool_call') {
       mcpToolCallCount++
       if (typeof data.toolName === 'string' && data.toolName) {
         mcpToolNamesSet.add(data.toolName)
       }
     } else if (type === 'session.shutdown') {
+      // The CLI exited: any turn still open ended here, not at whatever line closes the file.
+      if (turnEvent) turnEvent.turnEnd = true
       // Extract per-model token metrics — sum across all models present
       const modelMetrics = data.modelMetrics
       if (modelMetrics && typeof modelMetrics === 'object') {
@@ -112,14 +155,15 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     start_time: startTime || endTime || '',
     end_time: endTime || undefined,
     duration_minutes: durationMinutes,
+    active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
     assistant_message_count: assistantTurns,
-    tool_counts: {},
+    tool_counts: toolCounts,
     tool_output_tokens: {},
     agent_file_reads: {},
     languages: [],
-    git_commits: 0,
-    git_pushes: 0,
+    git_commits: gitCommits,
+    git_pushes: gitPushes,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     cache_read_input_tokens: cacheReadTokens,
@@ -144,4 +188,49 @@ export function parseCopilotEvents(content: string, fallbackId: string): Session
     mcp_tool_call_count: mcpToolCallCount,
     mcp_tool_names: mcpToolNamesSet.size > 0 ? Array.from(mcpToolNamesSet) : undefined,
   }
+}
+
+/** The flat `key: value` block Copilot writes next to each session's events. Not YAML in general —
+ *  every value here is a scalar on one line — so a hand-rolled reader avoids a dependency and
+ *  cannot be tripped by nested structures it would not know what to do with anyway. */
+export interface CopilotWorkspace {
+  cwd?: string
+  /** `owner/name` as GitHub reports it. */
+  repository?: string
+  /** `github` for github.com; anything else is an enterprise host we cannot name from here. */
+  hostType?: string
+  branch?: string
+  /** Session name. Copilot auto-generates one (`user_named: false`) unless the user renamed it. */
+  name?: string
+}
+
+export function parseCopilotWorkspace(text: string): CopilotWorkspace {
+  const out: CopilotWorkspace = {}
+  for (const line of text.split('\n')) {
+    const sep = line.indexOf(':')
+    if (sep <= 0 || line.startsWith(' ') || line.startsWith('#')) continue
+    const key = line.slice(0, sep).trim()
+    let value = line.slice(sep + 1).trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    }
+    if (!value) continue
+    switch (key) {
+      case 'cwd': out.cwd = value; break
+      case 'repository': out.repository = value; break
+      case 'host_type': out.hostType = value; break
+      case 'branch': out.branch = value; break
+      case 'name': out.name = value; break
+      default: break
+    }
+  }
+  return out
+}
+
+/** `repository` + `host_type` → the same protocol-less key every other harness is grouped by.
+ *  Only github.com can be named with confidence; an enterprise host is not recorded here, and
+ *  guessing one would file the sessions under a repo that does not exist. */
+export function copilotGitRemote(ws: CopilotWorkspace): string | undefined {
+  if (!ws.repository || ws.hostType !== 'github') return undefined
+  return `github.com/${ws.repository}`
 }

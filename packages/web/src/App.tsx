@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import { version } from '../../../package.json'
 import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
@@ -8,14 +9,22 @@ import {
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
-  ChevronDown, ChevronUp, GitBranch,
+  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Workflow as WorkflowIcon,
+  GitBranch, Users, LogOut, Server, KeyRound, Tag as TagIcon,
+  ShieldCheck, Cpu,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
+import { usePlanBasis } from './hooks/usePlanBasis'
+import { planScopeHarnesses, planScopeNote } from './lib/costBasis'
+import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
-import type { Filters, HarnessId, HealthIssue } from '@agentistics/core'
+import type { TagDef } from './lib/tagMatch'
+import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
+import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, SavedComparison, TeamConfig } from '@agentistics/core'
 import type { Lang, Theme } from '@agentistics/core'
-import { formatProjectName, setHomeDir, MODEL_PRICING } from '@agentistics/core'
+import { billingReadiness, monthlyCommitment, normalizeBillingSettings, normalizeComparisons, planAllocation, formatProjectName, MODEL_PRICING, distinctUsers, distinctHarnesses, filterByUsers, fmtCost, HARNESS_ORDER, readTeamConnections, fmt, totalTokens, totalTokensExplained } from '@agentistics/core'
+import { buildDeniedRepoLabels } from './lib/shareRepos'
 import { StatCard } from './components/StatCard'
 import { StreakBreakdownButton } from './components/StreakBreakdownButton'
 import { ActivityHeatmap } from './components/ActivityHeatmap'
@@ -24,6 +33,10 @@ import { HourChart } from './components/HourChart'
 import { ModelBreakdown } from './components/ModelBreakdown'
 import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
+import { NotificationToasts } from './components/NotificationToasts'
+import { NotificationBell } from './components/NotificationBell'
+import { useNotificationStream } from './hooks/useNotificationStream'
+import { pushNotification } from './lib/notifications'
 import { RecentSessions } from './components/RecentSessions'
 import { HighlightsBoard } from './components/HighlightsBoard'
 import { InfoModal } from './components/InfoModal'
@@ -35,14 +48,58 @@ import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { TranscriptModal } from './components/TranscriptModal'
-import { PreferencesModal, type PrefsDraft } from './components/PreferencesModal'
+import type { PrefsDraft } from './lib/app-context'
 import { TtyChat } from './components/TtyChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
 import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConsentModal'
+import { resolveArchiveChoice } from './lib/archive'
+import { TeamLogin } from './components/TeamLogin'
+import { Login } from './components/Login'
+import { MemberConnectionStatus } from './components/MemberConnectionStatus'
+import { OwnerSetup } from './components/OwnerSetup'
+import { ChangePassword } from './components/ChangePassword'
+import { ChangePasswordSelf } from './components/ChangePasswordSelf'
+import { MfaSetup } from './components/MfaSetup'
+import { StepUpPrompt } from './components/StepUpPrompt'
 import { type ChatModelId } from './lib/chatModels'
-import { HARNESS_LABELS, HARNESS_COLORS } from './lib/harness'
+import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
+
+// Team session state
+interface TeamSessionState {
+  required: boolean
+  authed: boolean
+  /** true when the server is running in central (hub) mode */
+  central?: boolean
+  /** true when a central has NO local harness data (pure aggregator) — hide local-only UI
+   *  (archive consent gate, Nay chat) that only makes sense with a local harness installed. */
+  aggregatorOnly?: boolean
+  /** How reachable this instance is (server/exposure.ts). */
+  profile?: 'local' | 'lan' | 'public'
+  /** Local host-power capabilities the server still grants. Undefined on an older server
+   *  (treat as granted); the server is the enforcement point either way. */
+  capabilities?: {
+    localShell?: boolean
+    localChat?: boolean
+    localTranscripts?: boolean
+    mcpAdmin?: boolean
+  }
+  /** What the chat endpoints will actually answer: the capability AND the user's own switch.
+   *  Undefined on an older server, which had no switch — treated as "the capability decides",
+   *  so upgrading the web ahead of the server never hides a chat that still works. */
+  chatEnabled?: boolean
+}
+
+export interface IamAccount { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: { teamId: string; role: 'manager' | 'user' }[]; mustChangePassword: boolean }
+interface IamState {
+  needsBootstrap: boolean
+  authed: boolean
+  account?: IamAccount
+  /** The server refuses this owner's requests until a second factor exists. Reported by
+   *  /api/iam/me so the app can show the enrolment screen instead of a wall of 403s. */
+  mfaEnrollmentRequired?: boolean
+}
 
 // Phase 1: parallel (statsCache + sessions + health). Phase 2: projects. Phase 3: finalizing.
 const LOAD_STAGES: { key: string; labelPt: string; labelEn: string; icon: React.ReactNode; phase: 1 | 2 | 3 }[] = [
@@ -362,11 +419,6 @@ function ChartModal({ title, onClose, children }: {
   )
 }
 
-function fmt(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
 
 function fmtDuration(ms: number): string {
   const h = Math.floor(ms / 3_600_000)
@@ -566,16 +618,6 @@ function fmtFull(n: number): string {
   return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
 }
 
-function fmtCost(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
-  if (currency === 'BRL') {
-    const brl = usd * rate
-    if (brl < 0.05) return '<R$0,05'
-    const [intPart, decPart] = brl.toFixed(2).split('.')
-    return `R$${(intPart ?? '0').replace(/\B(?=(\d{3})+$)/g, '.')},${decPart}`
-  }
-  if (usd < 0.01) return '<USD 0.01'
-  return `USD ${usd.toFixed(2)}`
-}
 
 function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): string {
   if (currency === 'BRL') {
@@ -589,22 +631,41 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
 }
 
 function MobileBottomNav({
-  lang, harnesses, onSettings, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues,
+  lang, harnesses, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral, hasWorkflows,
+  principal, theme, onToggleTheme, onToggleLang,
 }: {
   lang: Lang
   harnesses?: HarnessId[]
-  onSettings: () => void
   onRefresh: () => void
   liveUpdates: boolean
   onToggleLive: () => void
   updateInterval: number
   healthIssues?: HealthIssue[]
+  /** A central updates in real time via SSE — no Live toggle. */
+  isCentral?: boolean
+  hasWorkflows?: boolean
+  /** Signed-in account. Absent on a solo machine with no IAM — the account block then hides. */
+  principal?: IamAccount
+  theme: Theme
+  onToggleTheme: () => void
+  onToggleLang: () => void
 }) {
   const location = useLocation()
   const navigate = useNavigate()
   const pt = lang === 'pt'
   const [moreOpen, setMoreOpen] = useState(false)
   const orange = 'var(--anthropic-orange)'
+  // The sheet has two faces: the tile grid, and (after tapping the account row) the account
+  // actions. A nested popover behaves badly on a phone, so we swap the body in place instead
+  // of stacking another floating layer over the sheet.
+  const [accountOpen, setAccountOpen] = useState(false)
+  const [pwOpen, setPwOpen] = useState(false)
+  const [mfaOpen, setMfaOpen] = useState(false)
+  const roleLabel = principal
+    ? (principal.role === 'owner' ? 'Owner' : (principal.memberships.some(m => m.role === 'manager') ? 'Manager' : 'User'))
+    : ''
+  const logout = () => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }
+  const closeSheet = () => { setMoreOpen(false); setAccountOpen(false) }
 
   // Primary destinations live in the bar; the rest go behind a "More" sheet so
   // the bar never crams more than 5 slots on a narrow phone.
@@ -627,24 +688,37 @@ function MobileBottomNav({
     badge?: string
   }
   const navTiles: Tile[] = [
-    { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { setMoreOpen(false); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
-    { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { setMoreOpen(false); navigate('/export') }, active: location.pathname.startsWith('/export') },
-    ...(harnesses && harnesses.length > 1
-      ? [{ key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { setMoreOpen(false); navigate('/compare') }, active: location.pathname.startsWith('/compare') } as Tile]
+    { key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { closeSheet(); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') },
+    { key: 'repositories', label: pt ? 'Repositórios' : 'Repositories', icon: GitBranch, onClick: () => { closeSheet(); navigate('/repositories') }, active: location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo') },
+    // Members/machines only exist on a central — a solo machine has exactly one of each.
+    ...(isCentral
+      ? [{ key: 'members', label: pt ? 'Membros' : 'Members', icon: Users, onClick: () => { closeSheet(); navigate('/members') }, active: location.pathname.startsWith('/members') } as Tile]
       : []),
+    { key: 'top', label: pt ? 'Top' : 'Top', icon: Trophy, onClick: () => { closeSheet(); navigate('/top') }, active: location.pathname.startsWith('/top') },
+    { key: 'tags', label: 'Tags', icon: TagIcon, onClick: () => { closeSheet(); navigate('/tags') }, active: location.pathname.startsWith('/tags') },
+    { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { closeSheet(); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
+    { key: 'hardware', label: pt ? 'Hardware' : 'Hardware', icon: Cpu, onClick: () => { closeSheet(); navigate('/hardware') }, active: location.pathname.startsWith('/hardware') },
+    { key: 'traces', label: 'Pipelines', icon: WorkflowIcon, onClick: () => { closeSheet(); navigate('/traces') }, active: location.pathname.startsWith('/traces') },
+    { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { closeSheet(); navigate('/export') }, active: location.pathname.startsWith('/export') },
+    // Unconditional: the page's filter mode compares two SCOPES and needs no second harness.
+    // Only the by-harness mode inside it stays gated.
+    { key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { closeSheet(); navigate('/compare') }, active: location.pathname.startsWith('/compare') },
   ]
   const activeIssueCount = healthIssues?.length ?? 0
   const actionTiles: Tile[] = [
-    {
+    // Live toggle — hidden on a central (real-time via SSE, nothing to toggle).
+    ...(isCentral ? [] : [{
       key: 'live', label: pt ? 'Ao vivo' : 'Live', icon: Activity,
       onClick: () => onToggleLive(), accent: liveUpdates,
       badge: liveUpdates ? (updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`) : undefined,
-    },
-    { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); setMoreOpen(false) } },
-    { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { onSettings(); setMoreOpen(false) } },
-    ...(activeIssueCount > 0
-      ? [{ key: 'warnings', label: pt ? 'Avisos' : 'Warnings', icon: AlertTriangle, onClick: () => { setMoreOpen(false); onSettings() }, accent: true, badge: String(activeIssueCount) } as Tile]
-      : []),
+    } as Tile]),
+    { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); closeSheet() } },
+    { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { closeSheet(); navigate('/settings') }, active: location.pathname.startsWith('/settings') },
+    // Theme and language live here because the sidebar that hosts them on desktop is not
+    // rendered on mobile. Neither closes the sheet — you toggle and immediately re-judge.
+    { key: 'theme', label: pt ? 'Tema' : 'Theme', icon: theme === 'dark' ? Sun : Moon, onClick: () => onToggleTheme() },
+    { key: 'lang', label: pt ? 'Idioma' : 'Language', icon: Globe, onClick: () => onToggleLang(), badge: pt ? 'EN' : 'PT' },
+    // Health warnings moved next to the notification bell in the mobile top bar (its own popover).
   ]
   const allTiles = [...navTiles, ...actionTiles]
 
@@ -675,20 +749,27 @@ function MobileBottomNav({
     width: '100%', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   }
 
+  const accountActionStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 10, width: '100%', minHeight: 44,
+    padding: '0 14px', borderRadius: 12, border: '1px solid var(--border)',
+    background: 'var(--bg-elevated)', color: 'var(--text-primary)',
+    fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left',
+  }
+
   return (
     <>
       {/* "More" bottom sheet — square tiles for bigger, friendlier tap targets */}
       <div
-        onClick={() => setMoreOpen(false)}
+        onClick={() => closeSheet()}
         style={{
-          position: 'fixed', inset: 0, zIndex: 210, background: 'rgba(0,0,0,0.45)',
+          position: 'fixed', inset: 0, zIndex: 310, background: 'rgba(0,0,0,0.45)',
           opacity: moreOpen ? 1 : 0,
           pointerEvents: moreOpen ? 'auto' : 'none',
           transition: 'opacity 0.25s ease',
         }}
       />
       <div style={{
-        position: 'fixed', left: 0, right: 0, bottom: 56, zIndex: 220,
+        position: 'fixed', left: 0, right: 0, bottom: 'var(--mobile-nav-h)', zIndex: 320,
         background: 'var(--bg-surface)', borderTop: '1px solid var(--border)',
         borderRadius: '16px 16px 0 0', boxShadow: '0 -8px 30px rgba(0,0,0,0.35)',
         padding: '8px 12px 16px',
@@ -699,6 +780,55 @@ function MobileBottomNav({
           width: 36, height: 4, borderRadius: 2, background: 'var(--border)',
           margin: '4px auto 12px',
         }} />
+        {/* Account block — the mobile home for the profile menu that lives in the desktop
+            sidebar. Without it a phone user has no way to change their password or log out. */}
+        {principal && (
+          <button
+            onClick={() => setAccountOpen(o => !o)}
+            aria-expanded={accountOpen}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10, width: '100%', minHeight: 44,
+              padding: '8px 10px', marginBottom: 10, borderRadius: 12,
+              border: `1px solid ${accountOpen ? orange : 'var(--border)'}`,
+              background: accountOpen ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+              cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+            }}
+          >
+            <span style={{
+              width: 32, height: 32, borderRadius: '50%', background: 'var(--bg-surface)',
+              border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0,
+            }}>{principal.name.slice(0, 2)}</span>
+            <span style={{ minWidth: 0, flex: 1 }}>
+              <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</span>
+              <span style={{ display: 'block', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{roleLabel}</span>
+              {!isCentral && <span style={{ display: 'block', marginTop: 3 }}><MemberConnectionStatus lang={lang} compact /></span>}
+            </span>
+            <ChevronDown size={16} style={{ flexShrink: 0, color: 'var(--text-tertiary)', transform: accountOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+          </button>
+        )}
+        {accountOpen && principal ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button
+              onClick={() => { setAccountOpen(false); setMoreOpen(false); setPwOpen(true) }}
+              style={accountActionStyle}
+            >
+              <KeyRound size={16} /> {pt ? 'Trocar senha' : 'Change password'}
+            </button>
+            <button
+              onClick={() => { setAccountOpen(false); setMoreOpen(false); setMfaOpen(true) }}
+              style={accountActionStyle}
+            >
+              <ShieldCheck size={16} /> {pt ? 'Duas etapas' : 'Two-factor'}
+            </button>
+            <button
+              onClick={logout}
+              style={{ ...accountActionStyle, color: '#ef4444', borderColor: 'color-mix(in srgb, #ef4444 40%, transparent)' }}
+            >
+              <LogOut size={16} /> {pt ? 'Sair' : 'Log out'}
+            </button>
+          </div>
+        ) : (
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(3, 1fr)',
@@ -740,6 +870,7 @@ function MobileBottomNav({
             )
           })}
         </div>
+        )}
       </div>
 
       <nav
@@ -749,12 +880,13 @@ function MobileBottomNav({
           bottom: 0,
           left: 0,
           right: 0,
-          zIndex: 230,
+          zIndex: 330,
           background: 'var(--bg-surface)',
           borderTop: '1px solid var(--border)',
           display: 'flex',
           alignItems: 'stretch',
-          height: 56,
+          // Height comes from .mobile-bottom-nav (56px + the home-indicator inset). An inline
+          // `height: 56` would win over the class and re-break the installed PWA.
         }}
       >
         {primary.map(tab => {
@@ -767,7 +899,7 @@ function MobileBottomNav({
               key={tab.to}
               to={tab.to}
               end={tab.to === '/'}
-              onClick={() => setMoreOpen(false)}
+              onClick={() => closeSheet()}
               style={itemStyle(active)}
             >
               <Icon size={18} />
@@ -775,223 +907,393 @@ function MobileBottomNav({
             </NavLink>
           )
         })}
-        <button onClick={() => setMoreOpen(v => !v)} style={itemStyle(navAction || moreOpen)}>
+        <button
+          onClick={() => { if (moreOpen) closeSheet(); else setMoreOpen(true) }}
+          style={itemStyle(navAction || moreOpen)}
+        >
           <div style={{ position: 'relative' }}>
             <MoreHorizontal size={18} />
-            {activeIssueCount > 0 && !moreOpen && (
-              <span style={{
-                position: 'absolute', top: -4, right: -6,
-                width: 8, height: 8, borderRadius: '50%', background: '#f59e0b',
-              }} />
-            )}
           </div>
           <span style={labelStyle}>{pt ? 'Mais' : 'More'}</span>
         </button>
       </nav>
+
+      {pwOpen && <ChangePasswordSelf lang={lang} onClose={() => setPwOpen(false)} />}
+      {mfaOpen && <MfaSetup lang={lang} onClose={() => setMfaOpen(false)} canDisable={principal?.role !== 'owner'} />}
     </>
   )
 }
 
-function HarnessSelector({ harnesses, lang, isMobile }: { harnesses: HarnessId[]; lang: Lang; isMobile?: boolean }) {
-  const location = useLocation()
-  const navigate = useNavigate()
+const SIDEBAR_W = 248
+const SIDEBAR_W_COLLAPSED = 64
 
-  // Only render when there is more than one harness present in the data
-  if (harnesses.length <= 1) return null
-
-  const harnessMatch = location.pathname.match(/^\/h\/([^/]+)$/)
-  const currentHarness: HarnessId | null = harnessMatch
-    ? (harnessMatch[1] as HarnessId)
-    : null
-
-  const handleSelect = (harness: HarnessId | null) => {
-    if (harness === null) {
-      navigate('/')
-    } else {
-      navigate(`/h/${harness}`)
-    }
-  }
-
-  const allOption = { id: null as HarnessId | null, label: lang === 'pt' ? 'Todos' : 'All' }
-  const options = [
-    allOption,
-    ...harnesses.map(h => ({ id: h as HarnessId | null, label: HARNESS_LABELS[h] })),
-  ]
-
-  // Mobile: always-visible chips/pills — one tap to switch harness, no dropdown.
-  // Short labels (first word) + flex-grow so the chips fill each row evenly
-  // instead of leaving a ragged gap on the right.
-  if (isMobile) {
-    return (
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-        {options.map(opt => {
-          const active = opt.id === currentHarness
-          const color = opt.id ? HARNESS_COLORS[opt.id] : 'var(--anthropic-orange)'
-          const shortLabel = opt.id ? opt.label.split(' ')[0] : opt.label
-          return (
-            <button
-              key={opt.id ?? '__all__'}
-              onClick={() => handleSelect(opt.id)}
-              style={{
-                flex: '1 1 auto',
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-                padding: '6px 11px', borderRadius: 999,
-                border: active ? `1px solid ${color}` : '1px solid var(--border)',
-                background: active
-                  ? (opt.id ? `${color}22` : 'var(--anthropic-orange-dim)')
-                  : 'var(--bg-elevated)',
-                color: active ? color : 'var(--text-secondary)',
-                fontSize: 12, fontWeight: active ? 700 : 500, fontFamily: 'inherit',
-                cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.15s',
-              }}
-            >
-              {opt.id && (
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
-              )}
-              {shortLabel}
-            </button>
-          )
-        })}
-      </div>
-    )
-  }
-
-  // Desktop: horizontal pills in the nav bar
+/** Themed hover tooltip for the collapsed sidebar (icons only). Renders via a portal so it
+ *  escapes the sidebar's overflow clipping. Active only when `show` is true (i.e. collapsed);
+ *  when expanded the label is already visible, so it just renders its child untouched. */
+function CollapsedTip({ label, show, children }: { label: string; show: boolean; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  if (!show) return <>{children}</>
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 4,
-      marginLeft: 12,
-      padding: '0 12px',
-      borderLeft: '1px solid var(--border)',
-    }}>
-      {options.map(opt => {
-        const active = opt.id === currentHarness
-        const color = opt.id ? HARNESS_COLORS[opt.id] : undefined
-        return (
-          <button
-            key={opt.id ?? '__all__'}
-            onClick={() => handleSelect(opt.id)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 5,
-              padding: '5px 10px',
-              borderRadius: 7,
-              border: active
-                ? `1px solid ${color ? `${color}50` : 'var(--anthropic-orange)30'}`
-                : '1px solid transparent',
-              background: active
-                ? color ? `${color}18` : 'var(--anthropic-orange-dim)'
-                : 'transparent',
-              color: active
-                ? color ?? 'var(--anthropic-orange)'
-                : 'var(--text-tertiary)',
-              fontSize: 12,
-              fontWeight: active ? 700 : 500,
-              fontFamily: 'inherit',
-              cursor: 'pointer',
-              transition: 'all 0.15s',
-              whiteSpace: 'nowrap',
-            }}
-            onMouseEnter={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)'
-              }
-            }}
-            onMouseLeave={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'transparent'
-              }
-            }}
-          >
-            {opt.label}
-          </button>
-        )
-      })}
+    <div
+      ref={ref}
+      style={{ position: 'relative' }}
+      onMouseEnter={() => { const r = ref.current?.getBoundingClientRect(); if (r) setPos({ top: r.top + r.height / 2, left: r.right + 10 }) }}
+      onMouseLeave={() => setPos(null)}
+    >
+      {children}
+      {pos && createPortal(
+        <div role="tooltip" style={{
+          position: 'fixed', top: pos.top, left: pos.left, transform: 'translateY(-50%)',
+          background: 'var(--bg-card)', color: 'var(--text-primary)',
+          border: '1px solid var(--border)', borderRadius: 7, padding: '5px 10px',
+          fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+          boxShadow: '0 6px 20px rgba(0,0,0,0.35)', zIndex: 500, pointerEvents: 'none',
+        }}>{label}</div>,
+        document.body,
+      )}
     </div>
   )
 }
 
-function NavTabs({ lang, harnesses }: { lang: Lang; harnesses?: HarnessId[] }) {
+function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, theme, onToggleTheme, onToggleLang, onExport, principal }: {
+  lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean
+  collapsed: boolean; onToggle: () => void
+  theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onExport: () => void
+  principal?: IamAccount
+}) {
   const location = useLocation()
   const pt = lang === 'pt'
-
-  const tabs: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
-    { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={12} /> },
-    { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={12} /> },
-    { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={12} /> },
-    { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={12} /> },
-    { to: '/traces',    labelPt: 'Pipelines',    labelEn: 'Pipelines',    icon: <GitBranch size={12} /> },
-    { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={12} /> },
-    { to: '/export',    labelPt: 'Exportar',     labelEn: 'Export',       icon: <FileDown size={12} /> },
-    ...(harnesses && harnesses.length > 1
-      ? [{ to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={12} /> }]
-      : []),
+  // Profile menu (popover anchored to the avatar) + self-service change-password modal.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [pwOpen, setPwOpen] = useState(false)
+  const [mfaOpen, setMfaOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
+  const avatarRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (menuRef.current?.contains(t) || avatarRef.current?.contains(t)) return
+      setMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false) }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey) }
+  }, [menuOpen])
+  const openMenu = () => {
+    const r = avatarRef.current?.getBoundingClientRect()
+    if (r) setMenuPos({ top: r.top, left: r.right + 10 })
+    setMenuOpen(o => !o)
+  }
+  const roleLabel = principal
+    ? (principal.role === 'owner' ? 'Owner' : (principal.memberships.some(m => m.role === 'manager') ? 'Manager' : 'User'))
+    : ''
+  const logout = () => { void fetch('/api/iam/logout', { method: 'POST' }).then(() => window.location.reload()) }
+  // Repositories highlights across the whole section (list, detail, actions) — Actions lives as a
+  // tab inside each repo, so there's no sidebar submenu.
+  const inReposSection = location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo')
+  const items: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
+    { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={17} /> },
+    { to: '/sessions', labelPt: 'Sessões', labelEn: 'Sessions', icon: <Clock size={17} /> },
+    { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={17} /> },
+    { to: '/top',       labelPt: 'Top de uso',   labelEn: 'Top usage',    icon: <Trophy size={17} /> },
+    { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={17} /> },
+    { to: '/repositories', labelPt: 'Repositórios', labelEn: 'Repositories', icon: <GitBranch size={17} /> },
+    // Members/machines only exist on a central — a solo machine has exactly one of each.
+    ...(isCentral ? [{ to: '/members', labelPt: 'Membros', labelEn: 'Members', icon: <Users size={17} /> }] : []),
+    { to: '/tags',      labelPt: 'Tags',         labelEn: 'Tags',         icon: <TagIcon size={17} /> },
+    { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
+    { to: '/traces',    labelPt: 'Pipelines',    labelEn: 'Pipelines',    icon: <WorkflowIcon size={17} /> },
+    { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={17} /> },
+    { to: '/hardware',  labelPt: 'Hardware',     labelEn: 'Hardware',     icon: <Cpu size={17} /> },
+    // Unconditional — see the mobile tile: comparing two filter scopes needs no second harness.
+    { to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={17} /> },
   ]
-
+  const footBtn: React.CSSProperties = {
+    width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: 8, border: '1px solid var(--border)', background: 'transparent',
+    color: 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.15s',
+  }
   return (
-    <nav style={{ display: 'flex', gap: 2, height: 42, alignItems: 'center', overflowX: 'auto' }}>
-      {tabs.map(tab => {
-        const active = tab.to === '/'
-          ? location.pathname === '/'
-          : location.pathname.startsWith(tab.to)
-        return (
-          <NavLink
-            key={tab.to}
-            to={tab.to}
-            end={tab.to === '/'}
+    <aside style={{
+      position: 'fixed', top: 0, left: 0, bottom: 0, width: collapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, zIndex: 200,
+      background: 'var(--bg-surface)', borderRight: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column', padding: '14px 12px', boxSizing: 'border-box',
+      transition: 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1)', overflow: 'hidden',
+    }}>
+      {/* Logo + collapse toggle */}
+      <div style={{ padding: '0 4px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44 }}>
+          {!collapsed && <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 40, width: 'auto', flexShrink: 0 }} />}
+          <button onClick={onToggle} title={collapsed ? (pt ? 'Expandir' : 'Expand') : (pt ? 'Recolher' : 'Collapse')}
+            style={{ ...footBtn, marginLeft: 'auto', width: 30, height: 30 }}>
+            {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+        </div>
+        {/* Member machine: live connection status + latency to the central (mirrors the
+            central's presence line). Renders null unless this instance is a connected member. */}
+        {!collapsed && !isCentral && <div style={{ marginTop: 6 }}><MemberConnectionStatus lang={lang} compact /></div>}
+      </div>
+
+      <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
+        {items.map(item => {
+          const active = item.to === '/'
+            ? location.pathname === '/'
+            : item.to === '/repositories'
+              ? inReposSection
+              : location.pathname.startsWith(item.to)
+          const label = pt ? item.labelPt : item.labelEn
+          return (
+            <CollapsedTip key={item.to} label={label} show={collapsed}>
+              <NavLink
+                to={item.to}
+                end={item.to === '/'}
+                aria-label={collapsed ? label : undefined}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 11, minWidth: 0,
+                  padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
+                  borderRadius: 9, textDecoration: 'none',
+                  fontSize: 13.5, fontWeight: active ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
+                  color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                  background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
+                  transition: 'background 0.15s, color 0.15s',
+                }}
+                onMouseEnter={e => { if (!active) { const t = e.currentTarget as HTMLAnchorElement; t.style.color = 'var(--text-primary)'; t.style.background = 'var(--bg-elevated)' } }}
+                onMouseLeave={e => { if (!active) { const t = e.currentTarget as HTMLAnchorElement; t.style.color = 'var(--text-secondary)'; t.style.background = 'transparent' } }}
+              >
+                <span style={{ flexShrink: 0, display: 'flex' }}>{item.icon}</span>
+                {!collapsed && label}
+              </NavLink>
+            </CollapsedTip>
+          )
+        })}
+      </nav>
+
+      {/* Footer — Row A account · thin divider · Row B config actions */}
+      <div style={{ paddingTop: 10, marginTop: 6, borderTop: '1px solid var(--border)' }}>
+        {/* Row A — account: a single profile button (avatar) opening a popover menu */}
+        {principal && (
+          <div style={{ display: 'flex', justifyContent: collapsed ? 'center' : 'stretch', paddingBottom: 10 }}>
+            <CollapsedTip label={principal.name} show={collapsed}>
+              <button ref={avatarRef} onClick={openMenu} aria-haspopup="menu" aria-expanded={menuOpen}
+                title={collapsed ? undefined : principal.name}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, width: collapsed ? 'auto' : '100%',
+                  padding: collapsed ? 0 : '4px 6px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit',
+                  border: '1px solid transparent', background: menuOpen ? 'var(--bg-elevated)' : 'transparent', transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => { if (!menuOpen) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)' }}
+                onMouseLeave={e => { if (!menuOpen) (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}>
+                <span style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{principal.name.slice(0, 2)}</span>
+                {!collapsed && (
+                  <span style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
+                    <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</span>
+                    <span style={{ display: 'block', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{roleLabel}</span>
+                  </span>
+                )}
+                {!collapsed && <ChevronDown size={14} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />}
+              </button>
+            </CollapsedTip>
+          </div>
+        )}
+
+        {/* Profile popover — rendered via portal so it escapes the sidebar's overflow clip */}
+        {principal && menuOpen && menuPos && createPortal(
+          <div ref={menuRef} role="menu"
             style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '7px 12px',
-              borderRadius: 8,
-              textDecoration: 'none',
-              fontSize: 12,
-              fontWeight: active ? 700 : 500,
-              fontFamily: 'inherit',
-              color: active ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-              background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
-              border: active ? '1px solid var(--anthropic-orange)30' : '1px solid transparent',
-              transition: 'all 0.15s',
-              whiteSpace: 'nowrap',
-            }}
-            onMouseEnter={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLAnchorElement).style.background = 'var(--bg-elevated)'
-              }
-            }}
-            onMouseLeave={e => {
-              if (!active) {
-                ;(e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-tertiary)'
-                ;(e.currentTarget as HTMLAnchorElement).style.background = 'transparent'
-              }
-            }}
-          >
-            {tab.icon}
-            {pt ? tab.labelPt : tab.labelEn}
-          </NavLink>
-        )
-      })}
-    </nav>
+              position: 'fixed', top: menuPos.top, left: menuPos.left, transform: 'translateY(-100%)',
+              minWidth: 220, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
+              boxShadow: '0 10px 30px rgba(0,0,0,0.35)', zIndex: 600, padding: 6,
+            }}>
+            <div style={{ padding: '8px 10px 10px', borderBottom: '1px solid var(--border)', marginBottom: 6 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.email}</div>
+              <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{roleLabel}</div>
+            </div>
+            <button role="menuitem" onClick={() => { setMenuOpen(false); setPwOpen(true) }}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 7, border: 'none', background: 'transparent', color: 'var(--text-secondary)', fontSize: 13, fontWeight: 500, fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left' }}
+              onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'var(--bg-elevated)'; t.style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'transparent'; t.style.color = 'var(--text-secondary)' }}>
+              <KeyRound size={15} /> {pt ? 'Trocar senha' : 'Change password'}
+            </button>
+            <button role="menuitem" onClick={() => { setMenuOpen(false); setMfaOpen(true) }}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 7, border: 'none', background: 'transparent', color: 'var(--text-secondary)', fontSize: 13, fontWeight: 500, fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left' }}
+              onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'var(--bg-elevated)'; t.style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'transparent'; t.style.color = 'var(--text-secondary)' }}>
+              <ShieldCheck size={15} /> {pt ? 'Duas etapas' : 'Two-factor'}
+            </button>
+            <button role="menuitem" onClick={() => { setMenuOpen(false); logout() }}
+              style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 10px', borderRadius: 7, border: 'none', background: 'transparent', color: 'var(--text-secondary)', fontSize: 13, fontWeight: 500, fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left' }}
+              onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'var(--bg-elevated)'; t.style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.background = 'transparent'; t.style.color = 'var(--text-secondary)' }}>
+              <LogOut size={15} /> {pt ? 'Sair' : 'Log out'}
+            </button>
+          </div>,
+          document.body,
+        )}
+
+        {/* Self-service change-password modal */}
+        {pwOpen && <ChangePasswordSelf lang={lang} onClose={() => setPwOpen(false)} />}
+      {mfaOpen && <MfaSetup lang={lang} onClose={() => setMfaOpen(false)} canDisable={principal?.role !== 'owner'} />}
+
+        {/* Thin divider between account and actions */}
+        {principal && <div style={{ height: 1, background: 'var(--border)', marginBottom: 10 }} />}
+
+        {/* Row B — config actions (theme · language · export · settings), evenly spaced */}
+        <div style={{ display: 'flex', flexDirection: collapsed ? 'column' : 'row', alignItems: 'center', gap: 6 }}>
+          <CollapsedTip label={pt ? 'Tema' : 'Theme'} show={collapsed}>
+            <button onClick={onToggleTheme} aria-label={pt ? 'Tema' : 'Theme'} title={collapsed ? undefined : (theme === 'dark' ? (pt ? 'Tema claro' : 'Light theme') : (pt ? 'Tema escuro' : 'Dark theme'))} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1 }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+              {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
+          </CollapsedTip>
+          <CollapsedTip label={pt ? 'Idioma' : 'Language'} show={collapsed}>
+            <button onClick={onToggleLang} aria-label={pt ? 'Idioma' : 'Language'} title={collapsed ? undefined : (pt ? 'Switch to English' : 'Mudar para Português')} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, gap: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
+              <Globe size={14} />{!collapsed && (pt ? 'EN' : 'PT')}
+            </button>
+          </CollapsedTip>
+          <CollapsedTip label={pt ? 'Exportar' : 'Export'} show={collapsed}>
+            <button onClick={onExport} aria-label={pt ? 'Exportar relatório PDF' : 'Export PDF report'} title={collapsed ? undefined : (pt ? 'Exportar relatório PDF' : 'Export PDF report')}
+              style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, borderColor: 'var(--anthropic-orange)50', color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)' }}>
+              <Download size={15} />
+            </button>
+          </CollapsedTip>
+          <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
+            <NavLink to="/settings" aria-label={pt ? 'Configurações' : 'Settings'} title={collapsed ? undefined : (pt ? 'Configurações' : 'Settings')} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, textDecoration: 'none' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-primary)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-secondary)' }}>
+              <SlidersHorizontal size={15} />
+            </NavLink>
+          </CollapsedTip>
+        </div>
+      </div>
+    </aside>
   )
 }
 
 export default function AppLayout() {
   const location = useLocation()
   const navigate = useNavigate()
-  const isCustomPage = location.pathname === '/custom'
+  // Reset scroll to the top on every route change — otherwise navigating away while scrolled to the
+  // bottom of a page lands the next page still scrolled down.
+  useEffect(() => { window.scrollTo(0, 0) }, [location.pathname])
+  // Pages that render their OWN filter bar(s) and must not get the header's as well. `/custom`
+  // embeds one; `/compare?mode=filter` owns two, and three bars on one screen is not a page.
+  const isCustomPage =
+    location.pathname === '/custom'
+    || (location.pathname === '/compare' && new URLSearchParams(location.search).get('mode') === 'filter')
+
+  /** Which filter dimensions a page can actually react to. Top usage ranks by member, team,
+   *  machine, presence, repo, tag, project and model, so those narrow it meaningfully — harness is
+   *  left out because the page already breaks every dimension down per harness. Every other page
+   *  gets the full set (undefined = no restriction). A filter that visibly changes nothing reads as
+   *  broken, so it is better not to offer it. */
+  const filterDimsForRoute = location.pathname.startsWith('/top')
+    ? (['members', 'teams', 'machines', 'presence', 'repos', 'tags', 'projects', 'models'] as const).slice() as
+      Array<'members' | 'teams' | 'machines' | 'presence' | 'repos' | 'tags' | 'projects' | 'models'>
+    : undefined
   const isMobile = useIsMobile()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [lang, setLangState] = useState<Lang>('en')
+
+  // Team session gate
+  // undefined = not yet fetched, TeamSessionState after fetch
+  const [teamSession, setTeamSession] = useState<TeamSessionState | undefined>(undefined)
+  /**
+   * Whether to offer the chat at all.
+   *
+   * `chatEnabled` is the server's own answer (capability AND the user's switch), so this is a
+   * mirror of what /api/chat-tty would do rather than a second opinion about it. `undefined` means
+   * an older server that has no switch — then the capability alone decides, exactly as before, so
+   * a web bundle newer than its server never hides a chat that still works.
+   */
+  const chatOffered = teamSession?.chatEnabled ?? true
+  // true when this instance is a team member pushing to a central (mode === 'member').
+  // Used only to tailor the upgrade command shown in the UpdateModal.
+  const [isMember, setIsMember] = useState(false)
+
+  // IAM gate (central only)
+  const [iam, setIam] = useState<IamState | undefined>(undefined)
+  const reloadIam = useCallback(() => {
+    Promise.all([
+      fetch('/api/iam/status').then(r => r.ok ? r.json() : { needsBootstrap: false }),
+      fetch('/api/iam/me').then(r => r.ok ? r.json() : { authed: false }),
+    ]).then(([st, me]) => setIam({ needsBootstrap: !!st.needsBootstrap, authed: !!me.authed, account: me.account, mfaEnrollmentRequired: !!me.mfaEnrollmentRequired }))
+      .catch(() => setIam({ needsBootstrap: false, authed: false }))
+  }, [])
+  useEffect(() => { if (teamSession?.central) reloadIam() }, [teamSession?.central, reloadIam])
+
+  useEffect(() => {
+    fetch('/api/team/session')
+      .then(r => r.ok ? (r.json() as Promise<TeamSessionState>) : null)
+      .then(s => setTeamSession(s ?? { required: false, authed: true }))
+      .catch(() => setTeamSession({ required: false, authed: true }))
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/team/status')
+      .then(r => r.ok ? (r.json() as Promise<{ mode?: string }>) : null)
+      .then(s => setIsMember(s?.mode === 'member'))
+      .catch(() => {})
+  }, [])
+
+  // Flip to login screen when any API call returns 401 (team password set but cookie expired)
+  useEffect(() => {
+    if (error && error.includes('401') && teamSession?.required) {
+      setTeamSession({ required: true, authed: false })
+    }
+    // 403 too, and for a reason that cost someone their whole first-run: the moment an owner
+    // account is created, the gate starts refusing /api/data with `mfa_enrollment_required`
+    // until a second factor exists. The data layer only sees "HTTP 403" and renders "Failed to
+    // load data" — a dead end, on the screen right after signing up. Re-reading the IAM state is
+    // what turns that into the enrolment screen, which is the only thing that can clear it.
+    if (teamSession?.central && (String(error).includes('401') || String(error).includes('403'))) reloadIam()
+  }, [error, teamSession?.required, teamSession?.central, reloadIam])
   const [theme, setThemeState] = useState<Theme>('dark')
   const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
+
+  // Surface server-pushed notifications (member connection/auth errors) as toasts + bell.
+  useNotificationStream(lang)
+
+  // A central updates in real time via SSE (presence + ingest), so it hides the Live toggle
+  // and keeps live updates always on (the SSE 'change' subscription is gated on liveUpdates).
+  const isCentral = teamSession?.central === true
+  useEffect(() => { if (isCentral) setLiveUpdates(true) }, [isCentral, setLiveUpdates])
 
   const setLang = useCallback((l: Lang) => setLangState(l), [])
   const setTheme = useCallback((t: Theme) => setThemeState(t), [])
   const setCurrency = useCallback((c: 'USD' | 'BRL') => setCurrencyState(c), [])
+
+  // How this machine is actually billed. Local only — it never travels to a central.
+  const [billing, setBilling] = useState<BillingSettings>({ profiles: {} })
+  const [comparisons, setComparisons] = useState<SavedComparison[]>([])
+  const saveComparisons = useCallback(async (next: SavedComparison[]) => {
+    setComparisons(next)
+    await fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comparisons: next }),
+    })
+  }, [])
+  const [costBasisState, setCostBasisState] = useState<CostBasis>('api')
+  const [billingSetupOpen, setBillingSetupOpen] = useState(false)
+  // `writePreferencesTo` is a SHALLOW merge, so a partial PUT would replace the whole billing
+  // object with the fragment. The complete settings always go over the wire.
+  const saveBilling = useCallback(async (next: BillingSettings) => {
+    setBilling(next)
+    await fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ billing: next }),
+    })
+  }, [])
   const [brlRate, setBrlRate] = useState(5.70)
   const [filters, setFilters] = useState<Filters>({
     dateRange: 'all',
@@ -1000,6 +1302,16 @@ export default function AppLayout() {
     projects: [],
     models: [],
   })
+
+  // "Create tag with these filters" — only offered once the active filters actually map to
+  // something a tag can be built from (see filtersToTag.ts). The drawer opens on /tags pre-filled;
+  // TagsPage reads `draftFromFilters` from router state the same way it already reads `editTagId`.
+  const createTagFromFilters = useMemo(
+    () => (canCreateTagFromFilters(filters, { central: isCentral })
+      ? () => navigate('/tags', { state: { draftFromFilters: filtersToTagDraft(filters, { central: isCentral }) } })
+      : undefined),
+    [filters, isCentral, navigate],
+  )
   const [infoModalIndex, setInfoModalIndex] = useState<number | null>(null)
   const [pdfDirectExportRange, setPdfDirectExportRange] = useState<string | null>(null)
   const [expandedChart, setExpandedChart] = useState<string | null>(null)
@@ -1058,10 +1370,17 @@ export default function AppLayout() {
     } catch {}
     return DEFAULT_CARD_ORDER
   })
-  const [showPrefsModal, setShowPrefsModal] = useState(false)
   // Mobile-only: lets the user minimize the sticky filter bar while scrolling so
   // it doesn't eat the viewport on small screens. Expanded by default.
   const [filtersCollapsed, setFiltersCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem('agentistics-sidebar-collapsed') === '1' } catch { return false }
+  })
+  const toggleSidebar = useCallback(() => setSidebarCollapsed(v => {
+    const next = !v
+    try { localStorage.setItem('agentistics-sidebar-collapsed', next ? '1' : '0') } catch { /* ignore */ }
+    return next
+  }), [])
   // The collapse animation needs `overflow: hidden` to clip the sliding panel,
   // but that also clips the Models dropdown popover. Keep it clipped only while
   // animating/collapsed; once an expand transition finishes, switch to visible
@@ -1070,9 +1389,34 @@ export default function AppLayout() {
   const collapseFilters = () => { setFiltersClip(true); setFiltersCollapsed(true) }
   const expandFilters = () => { setFiltersClip(true); setFiltersCollapsed(false) }
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null)
+  // Whether the full UpdateModal (a blocking, position:fixed/inset:0/z-9999 dialog) is open.
+  // Separate from `updateInfo` on purpose: the version CHECK is automatic, but the MODAL must
+  // never be — it sits on top of every drawer/popover in the app (all under z-index 2000), so an
+  // update firing while a user has, say, the "New tag" source picker open silently eats every
+  // click on the page with no visual cue on a dark theme (a 65%-black blur over an already
+  // near-black background reads as almost no change). `updateInfo` still drives the toast/bell
+  // (see the effect below) — that is the correct passive surface. The modal is opt-in, reached by
+  // clicking that toast/bell entry (see the 'agentistics:open-update-modal' listener).
+  const [showUpdateModal, setShowUpdateModal] = useState(false)
   // First-run archive consent gate: undefined = prefs not loaded, null = loaded but
   // not yet chosen (blocks the app), ArchiveMode = chosen.
   const [archiveChoice, setArchiveChoice] = useState<ArchiveMode | null | undefined>(undefined)
+  // Task 13 — the hidden-repo badge: canonical repo key -> labels of the connections hiding it.
+  // Populated from the same /api/preferences load `archiveChoice` uses below; empty map (never
+  // undefined) so every consumer can read it without an extra "not loaded yet" branch.
+  const [deniedRepoLabels, setDeniedRepoLabels] = useState<Map<string, string[]>>(new Map())
+  /** Re-reads the connection list so the hidden-repo badge follows the rules instead of freezing at
+   *  whatever they were on page load. The preferences effect below is mount-only and this is an
+   *  SPA, so un-blocking a repository (or disconnecting the central entirely) used to leave
+   *  `/repositories` still claiming "Hidden from 1 central" until a manual reload — told hidden,
+   *  not hidden. Fired by `ConnectionsPanel`'s `onConnectionsChanged` after EVERY write it makes,
+   *  which is the single source both `RepositoriesList` and `RepoDetailPage` read through. */
+  const refreshDeniedRepoLabels = useCallback(() => {
+    fetch('/api/preferences')
+      .then(r => (r.ok ? r.json() : null))
+      .then(prefs => { if (prefs) setDeniedRepoLabels(buildDeniedRepoLabels(readTeamConnections(prefs))) })
+      .catch(() => { /* a failed refresh keeps the last-known map — never wipes the badges */ })
+  }, [])
   const chooseArchive = useCallback((mode: ArchiveMode) => {
     setArchiveChoice(mode)
     fetch('/api/preferences', {
@@ -1107,16 +1451,24 @@ export default function AppLayout() {
 
   const INSTALL_DISMISSED_KEY = 'agentistics-install-dismissed'
   const [showInstallModal, setShowInstallModal] = useState(false)
+  // Dismissal is persisted SERVER-SIDE (survives incognito, where localStorage is wiped).
+  // undefined = prefs not loaded yet → don't show until we know; true = don't show.
+  const [installDismissedPref, setInstallDismissedPref] = useState<boolean | undefined>(undefined)
   const installModalShownRef = React.useRef(false)
   // Show install modal once after first data load, unless dismissed or already installed
   useEffect(() => {
     if (installModalShownRef.current) return
+    // A central is a server, not an end-user machine — never prompt to install the app there
+    // (and its prefs are ephemeral/read-only in Docker, so a dismiss wouldn't persist anyway).
+    if (isCentral) return
     if (!data || loading) return
     if (pwaInstalled) return
+    if (installDismissedPref === undefined) return // wait for prefs to load
+    if (installDismissedPref) return
     try { if (localStorage.getItem(INSTALL_DISMISSED_KEY) === 'true') return } catch {}
     installModalShownRef.current = true
     setShowInstallModal(true)
-  }, [data, loading, pwaInstalled])
+  }, [data, loading, pwaInstalled, installDismissedPref, isCentral])
   const [chatModel, setChatModel] = useState<ChatModelId | null>(null)
   const [chatSoundEnabled, setChatSoundEnabled] = useState(true)
   const [chatSoundId, setChatSoundId] = useState('ping')
@@ -1137,6 +1489,33 @@ export default function AppLayout() {
       return next
     })
   }, [])
+
+  // Persist a full preferences draft — applies to global state + PUTs /api/preferences.
+  // Threaded to the Preferences settings page (and reused by the legacy Settings modal onSave).
+  const savePreferences = useCallback((draft: PrefsDraft) => {
+    setLangState(draft.lang)
+    setThemeState(draft.theme)
+    setCurrencyState(draft.currency)
+    setCardOrder(draft.cardOrder as CardId[])
+    setCardPrecisionState(draft.cardPrecision)
+    if (draft.chatModel) setChatModel(draft.chatModel)
+    setChatSoundEnabled(draft.chatSoundEnabled)
+    setChatSoundId(draft.chatSoundId)
+    fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        lang: draft.lang,
+        theme: draft.theme,
+        currency: draft.currency,
+        cardOrder: draft.cardOrder,
+        cardPrecision: draft.cardPrecision,
+        chatModel: draft.chatModel,
+        chatSoundEnabled: draft.chatSoundEnabled,
+        chatSoundId: draft.chatSoundId,
+      }),
+    }).catch(() => {})
+  }, [setCardOrder])
   const [scrolled, setScrolled] = useState(false)
   const [highlightUpdates, setHighlightUpdates] = useState(true)
   const highlightUpdatesRef = useRef(true)
@@ -1145,42 +1524,83 @@ export default function AppLayout() {
   const liveFlashFirstRunRef = useRef(true)
 
   useEffect(() => {
-    fetch('/api/preferences')
-      .then(r => r.ok ? r.json() : null)
-      .then((prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean } | null) => {
-        if (!prefs) { setArchiveChoice(null); return }
-        if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
-        if (prefs.lang) setLangState(prefs.lang)
-        if (prefs.theme) setThemeState(prefs.theme)
-        if (prefs.currency) setCurrencyState(prefs.currency)
-        if (prefs.cardOrder) setCardOrder(mergeCardOrder(prefs.cardOrder))
-        if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
-        if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
-        if ((prefs as Record<string, unknown>).chatSoundId) setChatSoundId((prefs as Record<string, unknown>).chatSoundId as string)
-        // Resolve the archive mode, migrating the legacy archiveSessions boolean.
-        const mode: ArchiveMode | undefined =
-          prefs.archiveMode ?? (prefs.archiveSessions === true ? 'full' : prefs.archiveSessions === false ? 'off' : undefined)
-        setArchiveChoice(mode ?? null)
-      })
-      .catch(() => setArchiveChoice(null))
+    // Load preferences resiliently. CRITICAL: a failed load (network hiccup, 5xx, server
+    // still booting) must NEVER be collapsed into the "not chosen yet" sentinel — doing so
+    // re-shows the first-run archive gate AND the install prompt on every transient failure,
+    // even though the user already chose. `archiveChoice === null` means "genuinely unset";
+    // only a real 200 response with no archiveMode may set it. On failure we retry with
+    // backoff and leave state at `undefined` (neutral loading bg) so nothing false-gates.
+    let cancelled = false
+    const apply = (prefs: { cardPrecision?: Record<string, boolean>; lang?: Lang; theme?: Theme; currency?: 'USD' | 'BRL'; cardOrder?: string[]; chatModel?: string; chatSoundEnabled?: boolean; archiveMode?: ArchiveMode; archiveSessions?: boolean; installDismissed?: boolean; team?: TeamConfig; billing?: unknown }) => {
+      if (prefs.cardPrecision) setCardPrecisionState(prefs.cardPrecision)
+      // Total and never throws: a hand-edited preferences.json must not blank the dashboard.
+      const nextBilling = normalizeBillingSettings(prefs.billing)
+      setBilling(nextBilling)
+      setCostBasisState(nextBilling.costBasis ?? 'api')
+      setComparisons(normalizeComparisons((prefs as Record<string, unknown>).comparisons))
+      if (prefs.lang) setLangState(prefs.lang)
+      if (prefs.theme) setThemeState(prefs.theme)
+      if (prefs.currency) setCurrencyState(prefs.currency)
+      if (prefs.cardOrder) setCardOrder(mergeCardOrder(prefs.cardOrder))
+      if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
+      if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
+      setInstallDismissedPref(prefs.installDismissed === true)
+      if ((prefs as Record<string, unknown>).chatSoundId) setChatSoundId((prefs as Record<string, unknown>).chatSoundId as string)
+      // Resolve the archive mode (migrates the legacy archiveSessions boolean). Only reached on
+      // a successful load — a failed fetch is retried in `load`, never funneled through here.
+      setArchiveChoice(resolveArchiveChoice(prefs))
+      // Task 13 — the hidden-repo badge map, rebuilt from the same load (readTeamConnections
+      // tolerates a missing/malformed `connections` array instead of `.map`-ing `undefined`).
+      setDeniedRepoLabels(buildDeniedRepoLabels(readTeamConnections(prefs)))
+    }
+    const load = async (attempt = 0) => {
+      try {
+        const r = await fetch('/api/preferences')
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const prefs = await r.json()
+        if (!cancelled) apply(prefs)
+      } catch {
+        if (cancelled) return
+        // Keep archiveChoice/installDismissedPref at their loading values and retry with
+        // capped backoff, so a transient failure never wipes the user's saved choice.
+        const delay = Math.min(1000 * 2 ** attempt, 15000)
+        setTimeout(() => { if (!cancelled) void load(attempt + 1) }, delay)
+      }
+    }
+    void load()
+    return () => { cancelled = true }
   }, [])
 
+  // Tracks which latest version we've already surfaced as a toast/bell notification,
+  // so re-renders (or an SSE re-check for the same version) don't re-push it.
+  const notifiedVersionRef = useRef<string | null>(null)
   useEffect(() => {
     fetch('/api/version')
       .then(r => r.ok ? r.json() : null)
       .then((info: { current: string; latest: string; hasUpdate: boolean } | null) => {
-        if (info?.hasUpdate) setUpdateInfo({ current: info.current, latest: info.latest })
+        if (info?.hasUpdate) {
+          // Only the passive surfaces (toast + bell) fire automatically. The blocking modal
+          // opens on demand — see `showUpdateModal` above.
+          setUpdateInfo({ current: info.current, latest: info.latest })
+          if (notifiedVersionRef.current !== info.latest) {
+            notifiedVersionRef.current = info.latest
+            pushNotification({ type: 'info', code: 'app.update_available', meta: { version: info.latest } })
+          }
+        }
       })
       .catch(() => {})
+  }, [])
+
+  // The update toast/bell entry dispatches this to open the full modal on click.
+  useEffect(() => {
+    const handler = () => setShowUpdateModal(true)
+    window.addEventListener('agentistics:open-update-modal', handler)
+    return () => window.removeEventListener('agentistics:open-update-modal', handler)
   }, [])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
-
-  useEffect(() => {
-    if (data?.homeDir) setHomeDir(data.homeDir)
-  }, [data?.homeDir])
 
   useEffect(() => {
     let rafId: number | null = null
@@ -1265,7 +1685,94 @@ export default function AppLayout() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const derived = useDerivedStats(data, filters)
+  // Tags visible to the viewer; back both the `tags` filter dimension and the derived stats.
+  const [tagsList, setTagsList] = useState<TagDef[]>([])
+  const derived = useDerivedStats(data, filters, tagsList)
+
+  // ── the plan cost basis ──────────────────────────────────────────────────────────────────
+  // Computed ONCE here and passed down: two surfaces each cutting A their own way would tell two
+  // different stories about the same filter, and the point of the basis is that they agree.
+  const planBasis = usePlanBasis({
+    apiCostByDay: derived?.apiCostByDay,
+    billing,
+    brlRate,
+    filters,
+    // The basis does not exist on a central, and refusing HERE is what makes it unreachable: the
+    // surfaces that read `planBasis` directly (Home's plan panel, compare's per-side button) never
+    // pass through the `costBasis` switch below.
+    central: isCentral,
+  })
+  const billingReady = useMemo(
+    () => billingReadiness(billing, data?.harnesses?.length ? data.harnesses : ['claude']),
+    [billing, data?.harnesses],
+  )
+  // A central aggregates many machines; pricing a whole fleet from its operator's own timeline
+  // would be a fabricated number, so the basis does not exist there at all. And a basis the data
+  // cannot support falls back rather than rendering a page of N/A.
+  const costBasis: CostBasis =
+    isCentral || !billingReady.ready || planBasis.basis === null ? 'api' : costBasisState
+  const setCostBasis = useCallback((b: CostBasis) => {
+    setCostBasisState(b)
+    void saveBilling({ ...billing, costBasis: b })
+  }, [billing, saveBilling])
+  const openBillingSetup = useCallback(() => setBillingSetupOpen(true), [])
+
+  // What the registered plans commit to THIS calendar month — a different question from the
+  // filter-window plan cost, and the one a monthly budget is set against.
+  const monthCommitment = useMemo(
+    () => (isCentral ? null : monthlyCommitment({
+      profiles: billing.profiles,
+      month: new Date().toISOString().slice(0, 10),
+      brlRate,
+    })),
+    [billing.profiles, brlRate, isCentral],
+  )
+
+  // The first-run invite repeats every load until dismissed for good — but only once preferences
+  // have actually loaded (`introDismissed` absent during loading would flash it at someone who
+  // dismissed it months ago), only with nothing registered yet, and never on a central.
+  const [billingIntroSeen, setBillingIntroSeen] = useState(false)
+  const showBillingIntro =
+    !isCentral
+    && !billingIntroSeen
+    && archiveChoice !== null
+    && billing.introDismissed !== true
+    && Object.keys(billing.profiles).length === 0
+
+  // The header totals strip, in whichever basis is active. It carries no label of its own, so the
+  // tooltip is where "this is your plan cost, not an API estimate" has to be said.
+  // C straight off the basis, never `totalCostUSD × factor` — see the long note on the HomePage
+  // cost card. The strip and the card must agree to the cent, so they read the same field.
+  const headerPlanBasis = costBasis === 'plan' && planBasis.basis?.coverage.computable
+    ? planBasis.basis
+    : null
+  const headerCostUSD = headerPlanBasis ? headerPlanBasis.planCostUSD : (derived?.totalCostUSD ?? 0)
+  const headerCostScope = headerPlanBasis
+    ? planScopeNote({
+        covered: planScopeHarnesses(headerPlanBasis).covered.map(h => HARNESS_LABELS[h] ?? h),
+        inScope: planScopeHarnesses(headerPlanBasis).inScope,
+        lang: lang === 'pt' ? 'pt' : 'en',
+      })
+    : null
+  const headerCostTitle = headerPlanBasis
+    ? [
+        lang === 'pt' ? 'Custo do seu plano no período medido' : 'Your plan cost over the measured period',
+        headerCostScope,
+      ].filter(Boolean).join(' · ')
+    : (lang === 'pt' ? 'Estimativa a preços de API' : 'API-price estimate')
+
+  /**
+   * The header's token figure and the sentence explaining it.
+   *
+   * It read `inputTokens + outputTokens` — the two conversational counters — so the number beside
+   * the cost described 0,34 % of the tokens the cost was charged on. Now it is every billed
+   * counter, and it carries its own explanation on hover: at these magnitudes a bare "8,7B tok"
+   * reads as a fault until you know that most of it is the cache being re-read.
+   */
+  const headerTokens = derived ? totalTokens(derived.tokenTotals) : 0
+  const headerTokensTitle = derived
+    ? totalTokensExplained(derived.tokenTotals, lang === 'pt' ? 'pt' : 'en')
+    : ''
 
   const models = useMemo(() => {
     if (!data) return []
@@ -1295,16 +1802,19 @@ export default function AppLayout() {
   // models are offered; in the unified view all harnesses are shown as sections.
   const modelGroups = useMemo<{ harness: HarnessId; models: string[] }[]>(() => {
     if (!data) return []
-    const order: HarnessId[] = ['claude', 'codex', 'gemini', 'copilot']
+    const order: HarnessId[] = HARNESS_ORDER
     const byH: Partial<Record<HarnessId, Set<string>>> = {}
     const add = (h: HarnessId, m?: string) => { if (!m) return; (byH[h] ??= new Set<string>()).add(m) }
     for (const id of Object.keys(data.statsCache.modelUsage ?? {})) add('claude', id)
     for (const s of data.sessions) add((s.harness ?? 'claude') as HarnessId, s.model)
-    const harnesses = filters.harness ? [filters.harness] : order
+    // When the harness filter is active, only the selected harnesses' models are offered;
+    // in the unified view all harnesses are shown as sections.
+    const sel = filters.harnesses ?? []
+    const harnesses = sel.length > 0 ? order.filter(h => sel.includes(h)) : order
     return harnesses
       .filter(h => byH[h] && byH[h]!.size > 0)
       .map(h => ({ harness: h, models: Array.from(byH[h]!).sort() }))
-  }, [data, filters.harness])
+  }, [data, filters.harnesses])
 
   // Live update highlight detection
   useEffect(() => {
@@ -1355,154 +1865,379 @@ export default function AppLayout() {
     return counts
   }, [data])
 
-  // ── Info items for all 8 stat cards ──────────────────────────────────────────
+  const users = useMemo(() => (data ? distinctUsers(data.sessions) : []), [data])
+
+  // Stable signature of who is online right now — drives the machines refetch below.
+  const presenceKey = useMemo(
+    () => Object.entries(data?.presence ?? {}).map(([u, p]) => `${u}:${p.online ? 1 : 0}`).sort().join('|'),
+    [data?.presence],
+  )
+
+  // Central-only: fetch teams and machines for filter dimensions
+  const [teamsList, setTeamsList] = useState<{ id: string; name: string }[]>([])
+  const [machinesList, setMachinesList] = useState<{ id: string; name: string; user: string; teamId?: string; teamIds?: string[]; online?: boolean }[]>([])
+  useEffect(() => {
+    if (!teamSession?.central) {
+      setTeamsList([])
+      setMachinesList([])
+      return
+    }
+    Promise.all([
+      fetch('/api/iam/teams').then(r => r.ok ? r.json() : { teams: [] }),
+      fetch('/api/iam/machines').then(r => r.ok ? r.json() : { machines: [] }),
+    ]).then(([teamsResp, machinesResp]) => {
+      setTeamsList((teamsResp.teams ?? []).map((t: { _id: string; name: string }) => ({ id: t._id, name: t.name })))
+      setMachinesList((machinesResp.machines ?? []).map((m: { id: string; machineName: string; user: string; teamId?: string; teamIds?: string[]; online?: boolean }) => ({ id: m.id, name: m.machineName, user: m.user, teamId: m.teamId, teamIds: m.teamIds, online: m.online === true })))
+    }).catch(() => {
+      setTeamsList([])
+      setMachinesList([])
+    })
+    // presenceKey: /api/iam/machines stamps each machine's `online` from computePresence(), so the
+    // list has to be refetched when presence flips — otherwise the online/offline machine counts
+    // would freeze at whatever they were when the central was first loaded.
+  }, [teamSession?.central, presenceKey])
+
+  // Tags back the `tags` filter dimension; without them the dimension stays hidden and any stored
+  // filters.tags selection is inert. They exist in EVERY mode (a solo machine keeps them in
+  // ~/.agentistics/tags.json), so this load is not tied to the central fetch above.
+  //
+  // The response is only parsed once it IS json: the route used to answer a plain-text 404 off a
+  // central, and `r.json()` on that threw a SyntaxError out of this effect.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const r = await fetch('/api/tags')
+        if (!r.ok || !(r.headers.get('content-type') ?? '').includes('application/json')) throw new Error('no tags')
+        const body = await r.json() as { tags?: TagDef[] }
+        if (!cancelled) setTagsList(body.tags ?? [])
+      } catch {
+        if (!cancelled) setTagsList([])
+      }
+    })()
+    return () => { cancelled = true }
+  }, [teamSession?.central])
+
+  // Header summary counts (desktop only)
+  const memberCount = users.length
+  const onlineCount = data?.presence ? Object.values(data.presence).filter(p => p.online).length : 0
+  const offlineCount = data?.presence ? Object.values(data.presence).filter(p => !p.online).length : 0
+  const machineCount = machinesList.length
+  // Per-machine presence comes stamped on /api/iam/machines (server-side computePresence), so the
+  // machine chip can split total / online / offline exactly like the members chip does.
+  const machinesOnline = machinesList.filter(m => m.online).length
+  const machinesOffline = machineCount - machinesOnline
+  const projectCount = data?.projects?.length ?? 0
+  const teamCount = teamsList.length
+  const repoCount = useMemo(() => new Set((data?.sessions ?? []).map(s => s.git_remote).filter(Boolean)).size, [data])
+  // Collapsible "fleet stats" tab below the header (updated/members/machines/teams/projects/repos).
+  const [fleetOpen, setFleetOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem('agentistics-fleet-open') !== '0' } catch { return true }
+  })
+  const toggleFleet = () => setFleetOpen(v => { const n = !v; try { localStorage.setItem('agentistics-fleet-open', n ? '1' : '0') } catch { /* ignore */ } return n })
+
+  // Members list = users WITH machines only
+  const machineUsers = useMemo(() => new Set(machinesList.map(m => m.user)), [machinesList])
+  const usersWithMachines = useMemo(() => users.filter(u => machineUsers.has(u)), [users, machineUsers])
+
+  // Only member-managers (owner, or a manager of any team) may filter BY member — a plain user
+  // sees only their own scoped data, so member/presence filtering would be meaningless for them.
+  // They still get Teams (their teams) + Machines (their linked machines).
+  const canFilterMembers = iam?.account?.role === 'owner'
+    || (iam?.account?.memberships ?? []).some(m => m.role === 'manager')
+
+  // Harnesses available in the harness filter, scoped to the SELECTED users (empty = all
+  // users). So picking one member narrows the harness options to the harnesses that member
+  // actually used; "All members" shows the union. Falls back to all harnesses in the data
+  // when the scoped slice is empty (e.g. a selected member has no sessions yet).
+  const availableHarnesses = useMemo<HarnessId[]>(() => {
+    if (!data) return []
+    const scoped = filterByUsers(data.sessions, filters.users ?? [])
+    const present = distinctHarnesses(scoped)
+    return present.length > 0 ? present : data.harnesses
+  }, [data, filters.users])
+
+  // Projects offered in the filter, scoped to the SELECTED users (empty = all users).
+  // On a central, filtering by member X should only list X's projects — not everyone's.
+  const availableProjects = useMemo(() => {
+    if (!data) return []
+    const sel = filters.users ?? []
+    if (sel.length === 0) return data.projects
+    const selSet = new Set(sel)
+    // A project is in scope iff at least one of its owning members is selected.
+    // Projects carry an explicit `users` tag (built server-side), so this is
+    // deterministic — no path re-matching and no fallback that leaks other members' projects.
+    return data.projects.filter(p => (p.users ?? []).some(u => selSet.has(u)))
+  }, [data, filters.users])
+
+  // Prune any selected project no longer available after a user-selection change.
+  useEffect(() => {
+    const sel = filters.projects ?? []
+    if (sel.length === 0) return
+    const allowed = new Set(availableProjects.map(p => p.path))
+    const pruned = sel.filter(p => allowed.has(p))
+    if (pruned.length !== sel.length) setFilters(f => ({ ...f, projects: pruned }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableProjects])
+
+  // Prune any selected harness that is no longer available after a user-selection change
+  // (e.g. selecting a member who never used a previously-selected harness).
+  useEffect(() => {
+    const sel = filters.harnesses ?? []
+    if (sel.length === 0) return
+    const allowed = new Set(availableHarnesses)
+    const pruned = sel.filter(h => allowed.has(h))
+    if (pruned.length !== sel.length) setFilters(f => ({ ...f, harnesses: pruned }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableHarnesses])
+
+  // When exactly one harness is selected, the header mirrors the old per-harness view
+  // (derived first/last dates + harness label). With 0 or >1 selected it uses the
+  // statsCache (Claude-canonical) dates, matching the unified dashboard.
+  const singleHarness: HarnessId | undefined =
+    (filters.harnesses?.length === 1) ? filters.harnesses[0] : undefined
+
+  // Info items for all 8 stat cards
+  // Card "i" popovers. These describe REAL behaviour and are audited against useDerivedStats —
+  // a stale explanation is worse than none, because it is read as authoritative.
+  //
+  // The single fact that drives most of them: `stats-cache.json` is CLAUDE-ONLY and has no
+  // project/repo/model granularity. Whenever the active scope cannot be answered from it
+  // (`sessionFiltered` in useDerivedStats: any project/repo/tag/model/date filter, a non-Claude
+  // harness, …) the numbers are recomputed by summing individual sessions instead. So each item
+  // below states BOTH paths rather than pretending there is one.
   const infoItems = useMemo(() => {
-    const projectFiltered = filters.projects.length > 0
+    const scoped = filters.projects.length > 0 || (filters.repos?.length ?? 0) > 0
+      || filters.models.length > 0 || (filters.tags?.length ?? 0) > 0
+      || (filters.harnesses?.length ?? 0) > 0
     const pt = lang === 'pt'
+    // Shared wording for the two-path reality, so the items cannot drift apart.
+    const SESSION_SOURCES = pt
+      ? 'Sessões vêm de: ~/.claude/projects/**/*.jsonl (transcrições), '
+        + '~/.claude/usage-data/session-meta/*.json (quando existe) e '
+        + '~/.agentistics/sessions/<harness>/<id>.json (arquivo local — revive sessões que o Claude já apagou).'
+      : 'Sessions come from: ~/.claude/projects/**/*.jsonl (transcripts), '
+        + '~/.claude/usage-data/session-meta/*.json (when present) and '
+        + '~/.agentistics/sessions/<harness>/<id>.json (local store — revives sessions Claude already deleted).'
+    const CLAUDE_ONLY = pt
+      ? 'stats-cache.json é exclusivo do Claude Code. Métricas de Codex, Gemini, Copilot, Antigravity e Kimi são sempre somadas sessão a sessão.'
+      : 'stats-cache.json is Claude Code only. Codex, Gemini, Copilot, Antigravity and Kimi metrics are always summed session by session.'
+    const twoPaths = (cacheField: string, sessionField: string) => scoped
+      ? `${sessionField}  ${pt ? '(escopo filtrado → soma por sessão)' : '(filtered scope → per-session sum)'}`
+      : `${cacheField}  ${pt ? '(sem filtro de escopo)' : '(no scope filter)'}`
     return [
       {
         label: pt ? 'Total de mensagens' : 'Total messages',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → user_message_count + assistant_message_count'
-          : '~/.claude/stats-cache.json → dailyActivity[].messageCount',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → dailyActivity[].messageCount',
+          'user_message_count + assistant_message_count de cada sessão'),
         formula: pt
-          ? 'Σ messageCount de cada dia no período\nMédia = totalMessages ÷ totalSessions'
-          : 'Σ messageCount for each day in the period\nAvg = totalMessages ÷ totalSessions',
+          ? 'Sem filtro de escopo: Σ messageCount dos dias no período\nCom filtro: Σ (user_message_count + assistant_message_count)\nMédia = totalMessages ÷ totalSessions'
+          : 'No scope filter: Σ messageCount for days in the period\nFiltered: Σ (user_message_count + assistant_message_count)\nAvg = totalMessages ÷ totalSessions',
         note: pt
-          ? 'Cada "mensagem" conta uma entrada do usuário ou uma resposta do assistente. Com filtro de projeto ativo, recalculado dos session-meta individuais.'
-          : 'Each "message" counts one user input or one assistant reply. With project filter active, recalculated from individual session-meta files.',
+          ? `Cada "mensagem" é uma entrada do usuário ou uma resposta do assistente. ${CLAUDE_ONLY}`
+          : `Each "message" is one user input or one assistant reply. ${CLAUDE_ONLY}`,
       },
       {
         label: pt ? 'Sessões' : 'Sessions',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → filtrado por project_path'
-          : '~/.claude/stats-cache.json → dailyActivity[].sessionCount',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → dailyActivity[].sessionCount',
+          pt ? 'contagem das sessões que passam pelos filtros' : 'count of sessions passing the filters'),
         formula: pt
-          ? 'Σ sessionCount dos dias no período\nMédia = totalMessages ÷ totalSessions'
-          : 'Σ sessionCount for days in the period\nAvg = totalMessages ÷ totalSessions',
+          ? 'Sem filtro de escopo: Σ sessionCount dos dias no período\nCom filtro: número de sessões filtradas'
+          : 'No scope filter: Σ sessionCount for days in the period\nFiltered: number of filtered sessions',
         note: pt
-          ? 'Cada arquivo .jsonl em ~/.claude/projects/<proj>/ = 1 sessão. Uma sessão começa ao abrir o Claude e encerra ao fechar ou após inatividade.'
-          : 'Each .jsonl file in ~/.claude/projects/<proj>/ = 1 session. A session starts when you open Claude and ends when you close it or after inactivity.',
+          ? `Uma sessão = um arquivo de transcrição do assistente. ${SESSION_SOURCES}`
+          : `One session = one assistant transcript file. ${SESSION_SOURCES}`,
       },
       {
         label: pt ? 'Chamadas de ferramentas' : 'Tool calls',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → Σ tool_counts values'
-          : '~/.claude/stats-cache.json → dailyActivity[].toolCallCount',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → dailyActivity[].toolCallCount',
+          'Σ values(tool_counts) de cada sessão'),
         formula: pt
           ? 'Σ values(tool_counts) por sessão\nEx: { Bash:16, Read:5, Edit:3 } = 24'
           : 'Σ values(tool_counts) per session\nEx: { Bash:16, Read:5, Edit:3 } = 24',
         note: pt
-          ? 'Inclui todas as ferramentas: Bash, Read, Edit, Write, Grep, Glob, Agent, MCP tools, etc.'
-          : 'Includes all tools: Bash, Read, Edit, Write, Grep, Glob, Agent, MCP tools, etc.',
+          ? 'Inclui todas as ferramentas: Bash, Read, Edit, Write, Grep, Glob, Agent, ferramentas MCP, etc. Harnesses sem registro de ferramentas mostram N/A em vez de 0.'
+          : 'Includes all tools: Bash, Read, Edit, Write, Grep, Glob, Agent, MCP tools, etc. Harnesses that record no tool usage show N/A rather than 0.',
       },
       {
         label: pt ? 'Sequência' : 'Streak',
-        source: '~/.claude/stats-cache.json → dailyActivity[].date',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → dailyActivity[].date',
+          pt ? 'datas das mensagens das sessões filtradas' : 'message dates of the filtered sessions'),
         formula: pt
-          ? 'Conta dias consecutivos até hoje\ncom ≥ 1 mensagem registrada'
-          : 'Count consecutive days up to today\nwith ≥ 1 message recorded',
+          ? 'Conta dias consecutivos para trás a partir de hoje\ncom ≥ 1 dia ativo registrado'
+          : 'Counts consecutive days backwards from today\nwith ≥ 1 active day recorded',
         note: pt
-          ? 'Sempre calculado sobre todos os projetos e datas — não afetado por filtros.'
-          : 'Always calculated across all projects and dates — not affected by any filters.',
+          ? 'Se hoje ainda não teve atividade, a contagem começa em ontem — para não penalizar quem ainda não trabalhou hoje. ATENÇÃO: com filtro de escopo ativo, a sequência é calculada só sobre as sessões filtradas, não sobre todo o histórico.'
+          : 'If today has no activity yet, counting starts from yesterday — so you are not penalised for not having worked yet today. NOTE: with a scope filter active, the streak is computed over the filtered sessions only, not the full history.',
       },
       {
         label: pt ? 'Sessão mais longa' : 'Longest session',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → max(duration_minutes) das sessões filtradas'
-          : '~/.claude/usage-data/session-meta/*.json → max(duration_minutes) de todas as sessões',
+        source: pt
+          ? 'Transcrição da sessão → duração de cada turno (Σ) e primeiro/último evento'
+          : "Session transcript → each turn's duration (Σ) and first/last event",
         formula: pt
-          ? 'duration = timestamp(últimaMsg) − timestamp(primeiraMsg)\nConvertido de minutos → h e min'
-          : 'duration = timestamp(lastMsg) − timestamp(firstMsg)\nConverted from minutes → h and min',
+          ? 'ATIVO = Σ duração de cada turno\n  (do seu prompt até o assistente terminar)\n\nDECORRIDO = último evento − primeiro evento\n  da sessão. É EVENTO, não mensagem: o primeiro\n  costuma ser um anexo ou linha de sistema\n  minutos antes da sua 1ª mensagem, e o último\n  uma linha de sistema depois da resposta final.\n\nO ranking do card usa o ATIVO.'
+          : 'ACTIVE = Σ duration of each turn\n  (from your prompt until the assistant finishes)\n\nELAPSED = last event − first event of the\n  session. EVENT, not message: the first is often\n  an attachment or system line minutes before\n  your first message, and the last a system line\n  after the final reply.\n\nThe card ranks by ACTIVE.',
         note: pt
-          ? 'Com filtro de projeto ativo, considera apenas as sessões daquele projeto. Sem filtro, mostra o projeto correspondente.'
-          : 'With project filter active, considers only sessions of that project. Without filter, shows the corresponding project.',
+          ? 'O ativo NÃO conta o intervalo entre um turno acabar e você mandar o próximo — por isso uma sessão reaberta durante semanas deixa de aparecer como centenas de horas. Mas ele AINDA conta um turno que ficou parado esperando você (ex.: aprovação de permissão): separar isso exigiria um limite de ociosidade arbitrário. Sessões cuja transcrição o Claude já apagou não têm tempo ativo e ficam fora do ranking.'
+          : 'Active time does NOT count the gap between a turn ending and your next prompt — which is why a session reopened over weeks no longer reads as hundreds of hours. It DOES still count a turn that sat waiting on you (e.g. a permission prompt): separating that would need an arbitrary idle threshold. Sessions whose transcript Claude already deleted have no active time and are excluded from the ranking.',
       },
-      {
-        label: pt ? 'Custo estimado' : 'Estimated cost',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → input_tokens + output_tokens (taxa ponderada global)'
-          : '~/.claude/stats-cache.json → modelUsage[model].{inputTokens, outputTokens, cacheRead, cacheWrite}',
-        formula: pt
-          ? 'Σ modelo [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nPreços por 1M tokens (Anthropic público):\n  Opus 4.6   → in $15.00 · out $75.00\n               cR  $1.50 · cW $18.75\n  Sonnet 4.6 → in  $3.00 · out $15.00\n               cR  $0.30 · cW  $3.75\n  Haiku 4.5  → in  $0.80 · out  $4.00\n               cR  $0.08 · cW  $1.00'
-          : 'Σ model [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nPricing per 1M tokens (Anthropic public):\n  Opus 4.6   → in $15.00 · out $75.00\n               cR  $1.50 · cW $18.75\n  Sonnet 4.6 → in  $3.00 · out $15.00\n               cR  $0.30 · cW  $3.75\n  Haiku 4.5  → in  $0.80 · out  $4.00\n               cR  $0.08 · cW  $1.00',
-        note: pt
-          ? 'Cache read é ~10× mais barato que input normal. Cache write é ~1.25× mais caro. Com filtro de projeto, usa taxa ponderada global pelo mix de modelos.\nFonte oficial: anthropic.com/pricing#api'
-          : 'Cache read is ~10× cheaper than regular input. Cache write is ~1.25× more expensive. With project filter, uses a global blended rate weighted by model mix.\nOfficial pricing: anthropic.com/pricing#api',
-      },
+      // Two different items, because in plan basis this card measures something else entirely.
+      // Leaving the API text up while the headline shows C would make the explanation itself the
+      // lie the whole feature exists to remove.
+      costBasis === 'plan'
+        ? {
+            label: pt ? 'Custo do plano' : 'Plan cost',
+            source: pt
+              ? 'Configurações → Cobrança (períodos cadastrados) + as sessões filtradas'
+              : 'Settings → Billing (registered periods) + the filtered sessions',
+            formula: pt
+              ? 'C = Σ dos períodos:  mensalidade × dias no filtro ÷ 30,44\n'
+                + 'A = custo a preços de API dos MESMOS dias\n'
+                + 'V = A ÷ C          (quantas vezes o plano se pagou)\n'
+                + '$/1M efetivo = C ÷ (tokens cobertos ÷ 1.000.000)\n\n'
+                + 'Ex.: R$ 500/mês, 126 dias dentro do filtro\n'
+                + '     500 × 126 ÷ 30,44 = R$ 2.069,65\n\n'
+                + '30,44 = média de dias por mês (365,25 ÷ 12).'
+              : 'C = Σ over periods:  monthly × days in filter ÷ 30.44\n'
+                + 'A = API-price cost of the SAME days\n'
+                + 'V = A ÷ C          (how many times the plan paid for itself)\n'
+                + 'effective $/1M = C ÷ (covered tokens ÷ 1,000,000)\n\n'
+                + 'E.g.: $100/mo, 126 days inside the filter\n'
+                + '      100 × 126 ÷ 30.44 = $413.93\n\n'
+                + '30.44 = average days per month (365.25 ÷ 12).',
+            note: pt
+              ? 'POR QUE TEM CENTAVOS: o rateio é por DIA, não por mês de calendário. 126 dias não são 4 meses redondos, são 4,139 meses — e essa é a única leitura que sobrevive a um filtro arbitrário: "meio mês" não significa nada para 10 dias soltos no meio de maio.\n\n'
+                + 'POR QUE VOCÊ CADASTRA PERÍODOS: nenhum arquivo em nenhuma máquina registra qual plano estava valendo quando. Por isso a cobrança é uma LINHA DO TEMPO: cada período é rateado com o próprio preço, então uma janela que atravessa uma troca de plano soma as duas partes corretamente em vez de aplicar o preço de hoje ao passado inteiro.\n\n'
+                + 'DIAS SEM PLANO SAEM DOS DOIS LADOS — do custo do plano e do valor de API — senão o múltiplo compararia períodos diferentes. O rodapé do card diz quantos dias foram realmente medidos, que pode ser menos que o filtro.\n\n'
+                + 'ESTE NÚMERO É O C, LIDO DIRETO — não é o total da tela reescalado. Por isso ele pode ser menor que os cards ao lado: eles contam todos os harnesses, e o C cobre só os que têm plano cadastrado. Quando os dois escopos diferem, o rodapé nomeia o que está coberto ("só Claude Code").\n\n'
+                + 'POR LINHA (modelo, repositório, agente) o valor é RATEIO, não medição: ninguém consegue dizer que fatia de uma mensalidade fixa um modelo "usou". Dentro de um mesmo harness é um reescalonamento linear, então a ordem e as proporções se mantêm exatas.\n\n'
+                + 'A mensalidade é a que você digitou; BRL converte pela cotação de /api/rates. Cache não reduz assinatura — ele estende seu limite de uso —, por isso o painel de cache continua em base API.'
+              : 'WHY IT HAS CENTS: proration is by DAY, not by calendar month. 126 days is not 4 round months, it is 4.139 months — and that is the only reading that survives an arbitrary filter: "half a month" means nothing for 10 loose days in the middle of May.\n\n'
+                + 'WHY YOU REGISTER PERIODS: no file on any machine records which plan was in force when. That is why billing is a TIMELINE: each period is prorated at its own price, so a window spanning a plan change adds both parts correctly instead of applying today\'s price to the whole past.\n\n'
+                + 'DAYS WITH NO REGISTERED PLAN LEAVE BOTH SIDES — the plan cost and the API value — otherwise the multiple would compare different periods. The card\'s subtitle names how many days were actually measured, which can be fewer than your filter.\n\n'
+                + 'THIS FIGURE IS C, READ DIRECTLY — not the page total rescaled. So it can be smaller than the cards beside it: those count every harness, while C covers only the ones with a registered plan. When the two scopes differ, the subtitle names what is covered ("Claude Code only").\n\n'
+                + 'PER ROW (model, repository, agent) the figure is an ALLOCATION, not a measurement: nobody can say what share of a flat monthly fee a given model "used". Within one harness it is a linear rescale, so rankings and proportions survive exactly.\n\n'
+                + 'The monthly amount is the one you typed; BRL is converted at the /api/rates figure. Cache does not reduce a subscription — it extends your rate limit — which is why the cache panel stays in API basis.',
+          }
+        : {
+            label: pt ? 'Custo estimado' : 'Estimated cost',
+            source: twoPaths(
+              '~/.claude/stats-cache.json → modelUsage[model].{inputTokens, outputTokens, cacheRead, cacheWrite}',
+              pt ? 'tokens de cada sessão × preço do modelo dela' : "each session's tokens × its model's price"),
+            formula: pt
+              ? 'Σ modelo [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nUma sessão sem modelo conhecido usa a taxa média ponderada pelo mix de modelos do período.'
+              : 'Σ model [(input/1M × p.in) + (output/1M × p.out)\n  + (cacheRead/1M × p.cR) + (cacheWrite/1M × p.cW)]\n\nA session with no known model uses the average rate weighted by the period\'s model mix.',
+            note: pt
+              ? 'Preços vêm de três fontes, nesta ordem de confiança: páginas oficiais dos fornecedores, a base comunitária LiteLLM e a tabela embutida no app. Como os harnesses usam vários fornecedores (Anthropic, OpenAI, Google), os preços não são só da Anthropic. Veja Configurações → Preços para a tarifa e a origem de cada modelo que esta máquina realmente usou. É estimativa de preço de API — não é sua fatura nem sua assinatura. Cadastrou seu plano? Configurações → Cobrança transforma isto no custo real.'
+              : 'Prices come from three sources, in this order of trust: the vendors\' official pages, the LiteLLM community dataset and the table built into the app. Because harnesses use several vendors (Anthropic, OpenAI, Google), prices are not Anthropic-only. See Settings → Pricing for the rate and origin of every model this machine actually used. This is an API-price estimate — not your invoice or your subscription. Registered your plan? Settings → Billing turns this into your real cost.',
+          },
       {
         label: pt ? 'Commits' : 'Commits',
-        source: projectFiltered
-          ? pt
-            ? 'git log (projeto) → todos os commits desde a primeira sessão'
-            : 'git log (project) → all commits since the first session'
-          : pt
-            ? '~/.claude/projects/**/*.jsonl → comandos git commit/push nas chamadas Bash'
-            : '~/.claude/projects/**/*.jsonl → git commit/push commands in Bash tool calls',
-        formula: projectFiltered
-          ? pt
-            ? 'Σ commits do projeto (git log --numstat) para cada projeto filtrado\nΣ git_pushes das sessões (via Bash)'
-            : 'Σ project commits (git log --numstat) for each filtered project\nΣ git_pushes from sessions (via Bash)'
-          : pt
-            ? 'Σ git_commits das sessões no período\nΣ git_pushes das sessões no período'
-            : 'Σ git_commits for sessions in the period\nΣ git_pushes for sessions in the period',
-        note: projectFiltered
-          ? pt
-            ? 'Com filtro de projeto ativo, usa git log --numstat diretamente no repositório — inclui todos os commits, mesmo os feitos fora do Claude. Sem filtro de projeto, conta apenas commits executados pelo Claude via ferramenta Bash.'
-            : 'With project filter active, reads git log --numstat directly from the repository — includes all commits, even those made outside Claude. Without project filter, only counts commits run by Claude via the Bash tool.'
-          : pt
-            ? 'Conta apenas commits e pushes executados pelo Claude via ferramenta Bash. Commits feitos manualmente no terminal não são capturados. Ative o filtro de projeto para ver o histórico completo do repositório.'
-            : 'Counts only commits and pushes executed by Claude via the Bash tool. Commits made manually in the terminal are not captured. Activate the project filter to see the full repository history.',
+        source: scoped
+          ? (pt ? 'git log --numstat no repositório do projeto' : 'git log --numstat in the project repository')
+          : (pt ? 'transcrições → comandos git commit/push nas chamadas Bash' : 'transcripts → git commit/push commands in Bash tool calls'),
+        formula: scoped
+          ? (pt ? 'Σ commits do projeto (git log --numstat)\nΣ git_pushes das sessões (via Bash)' : 'Σ project commits (git log --numstat)\nΣ git_pushes from sessions (via Bash)')
+          : (pt ? 'Σ git_commits das sessões no período\nΣ git_pushes das sessões no período' : 'Σ git_commits for sessions in the period\nΣ git_pushes for sessions in the period'),
+        note: scoped
+          ? (pt
+            ? 'Com projeto filtrado, lê git log --numstat direto do repositório — inclui commits feitos fora do assistente. Requer que o projeto seja um repositório git.'
+            : 'With a project filtered, reads git log --numstat straight from the repository — includes commits made outside the assistant. Requires the project to be a git repository.')
+          : (pt
+            ? 'Sem filtro de projeto, conta só commits e pushes que o assistente executou pela ferramenta Bash — commits feitos por você no terminal não aparecem. Filtre um projeto para ver o histórico completo do repositório.'
+            : 'Without a project filter, counts only commits and pushes the assistant ran through the Bash tool — commits you made in the terminal do not appear. Filter a project to see the repository\'s full history.'),
       },
       {
         label: pt ? 'Arquivos modificados' : 'Files modified',
-        source: projectFiltered
-          ? pt
-            ? 'git log --numstat (projeto) → todos os arquivos alterados desde a primeira sessão'
-            : 'git log --numstat (project) → all files changed since the first session'
-          : pt
-            ? '~/.claude/projects/**/*.jsonl → git log --numstat por sessão'
-            : '~/.claude/projects/**/*.jsonl → git log --numstat per session',
+        source: pt
+          ? 'chamadas Edit/Write/MultiEdit das sessões, e git log --numstat quando o projeto é um repositório git'
+          : 'Edit/Write/MultiEdit calls in the sessions, plus git log --numstat when the project is a git repository',
         formula: pt
-          ? 'Σ files_modified das sessões filtradas\nΣ lines_added  |  Σ lines_removed'
-          : 'Σ files_modified for filtered sessions\nΣ lines_added  |  Σ lines_removed',
-        note: projectFiltered
-          ? pt
-            ? 'Com filtro de projeto ativo, usa git log --numstat diretamente no repositório. Arquivos binários são excluídos (git numstat mostra "-" para binários). Requer que o projeto seja um repositório git.'
-            : 'With project filter active, reads git log --numstat directly from the repository. Binary files are excluded (git numstat shows "-" for binaries). Requires the project to be a git repository.'
-          : pt
-            ? 'Calculado via git log --numstat no intervalo de tempo de cada sessão. Requer que o projeto seja um repositório git e que git esteja instalado.'
-            : 'Calculated via git log --numstat over each session\'s time window. Requires the project to be a git repository and git to be installed.',
+          ? 'ARQUIVOS = máx(arquivos distintos editados pelo assistente,\n  arquivos do git log --numstat)\nLINHAS = Σ lines_added | Σ lines_removed'
+          : 'FILES = max(distinct files the assistant edited,\n  files from git log --numstat)\nLINES = Σ lines_added | Σ lines_removed',
+        note: pt
+          ? 'O máximo entre as duas fontes é usado para capturar também arquivos editados fora de um repositório git. Arquivos binários ficam de fora (git numstat marca "-"). Harnesses que não registram diffs mostram N/A em vez de 0.'
+          : 'The max of the two sources is used so files edited outside a git repository are still counted. Binary files are excluded (git numstat writes "-"). Harnesses that record no diffs show N/A rather than 0.',
       },
       {
         label: pt ? 'Tokens de entrada' : 'Input tokens',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → input_tokens'
-          : '~/.claude/stats-cache.json → modelUsage[model].inputTokens',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → modelUsage[model].inputTokens',
+          'input_tokens de cada sessão'),
         formula: pt
-          ? 'Sem filtro de projeto: Σ modelUsage[modelo].inputTokens\nCom filtro de projeto: Σ input_tokens das sessões filtradas'
-          : 'No project filter: Σ modelUsage[model].inputTokens\nWith project filter: Σ input_tokens from filtered sessions',
+          ? 'Sem filtro de escopo: Σ modelUsage[modelo].inputTokens\nCom filtro: Σ input_tokens das sessões filtradas'
+          : 'No scope filter: Σ modelUsage[model].inputTokens\nFiltered: Σ input_tokens of the filtered sessions',
         note: pt
-          ? 'Tokens enviados ao modelo (prompt do usuário + contexto). Não inclui tokens de cache — esses são contados separadamente como cacheReadInputTokens e cacheCreationInputTokens.'
-          : 'Tokens sent to the model (user prompt + context). Does not include cache tokens — those are counted separately as cacheReadInputTokens and cacheCreationInputTokens.',
+          ? `Tokens enviados ao modelo (seu prompt + contexto). NÃO inclui tokens de cache — leitura e escrita de cache são contadas à parte e têm preço próprio. ${CLAUDE_ONLY}`
+          : `Tokens sent to the model (your prompt + context). Does NOT include cache tokens — cache reads and writes are counted separately and priced on their own. ${CLAUDE_ONLY}`,
       },
       {
         label: pt ? 'Tokens de saída' : 'Output tokens',
-        source: projectFiltered
-          ? '~/.claude/usage-data/session-meta/*.json → output_tokens'
-          : '~/.claude/stats-cache.json → modelUsage[model].outputTokens',
+        source: twoPaths(
+          '~/.claude/stats-cache.json → modelUsage[model].outputTokens',
+          'output_tokens de cada sessão'),
         formula: pt
-          ? 'Sem filtro de projeto: Σ modelUsage[modelo].outputTokens\nCom filtro de projeto: Σ output_tokens das sessões filtradas'
-          : 'No project filter: Σ modelUsage[model].outputTokens\nWith project filter: Σ output_tokens from filtered sessions',
+          ? 'Sem filtro de escopo: Σ modelUsage[modelo].outputTokens\nCom filtro: Σ output_tokens das sessões filtradas'
+          : 'No scope filter: Σ modelUsage[model].outputTokens\nFiltered: Σ output_tokens of the filtered sessions',
         note: pt
-          ? 'Tokens gerados pelo modelo nas respostas. Tokens de saída são os mais caros — tipicamente 5× mais caros que tokens de entrada.'
-          : 'Tokens generated by the model in responses. Output tokens are the most expensive — typically 5× more expensive than input tokens.',
+          ? `Tokens gerados pelo modelo nas respostas — a parte mais cara da conta (tipicamente ~5× o preço da entrada). ${CLAUDE_ONLY}`
+          : `Tokens the model generated in its replies — the most expensive part of the bill (typically ~5× the input price). ${CLAUDE_ONLY}`,
       },
     ]
-  }, [filters.projects.length, lang])
+  }, [filters.projects.length, filters.repos?.length, filters.models.length,
+    filters.tags?.length, filters.harnesses?.length, lang])
+
+  // Team auth gate takes precedence over the data loading/error states below:
+  // on a gated central /api/data returns 401 until the operator logs in, so we
+  // must resolve the session and show the login screen FIRST — otherwise the
+  // expected 401 surfaces as a "failed to load" error and the login never shows.
+  if (teamSession === undefined) {
+    return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
+  }
+  // Central: account-based IAM gate (bootstrap → login → app).
+  if (teamSession.central) {
+    if (iam === undefined) return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
+    if (iam.needsBootstrap) return <OwnerSetup lang={lang} onDone={() => { reloadIam(); refetch() }} />
+    if (!iam.authed) return <Login onAuthed={() => { reloadIam(); refetch() }} />
+    // Changing a password is step-up-protected (`server/stepup.ts`), and this screen is returned
+    // BEFORE the app tree that mounts the prompter at the root — so it mounts its own. Without it
+    // the forced first-login change would answer 403 with nobody able to answer the challenge,
+    // which is a lockout on the one screen a new account cannot get past.
+    if (iam.account?.mustChangePassword) {
+      return (
+        <>
+          <ChangePassword onDone={() => { reloadIam(); refetch() }} />
+          <StepUpPrompt lang={lang} />
+        </>
+      )
+    }
+    // An owner owes a second factor. The gate in index.ts is already refusing everything else,
+    // so this is not an extra restriction — it is the screen that says WHY, and the only way the
+    // owner can satisfy it. It also carries the recovery codes that make the account
+    // self-recoverable, which is the other half of why it is mandatory.
+    if (iam.mfaEnrollmentRequired) {
+      return <MfaSetup lang={lang} required onClose={() => { reloadIam(); refetch() }} />
+    }
+  } else if (teamSession.required && !teamSession.authed) {
+    // Non-central (member/solo) keeps the legacy password gate.
+    return <TeamLogin onAuthed={() => { setTeamSession(s => ({ ...(s ?? { required: true }), required: true, authed: true })); refetch() }} />
+  }
 
   if (loading) {
     return <LoadingScreen lang={lang} loadProgress={loadProgress} />
+  }
+
+  // A 403 on a central is an AUTH state, not a broken server: the gate refuses data until the
+  // enrolment (or the sign-in) it is waiting for happens, and the effect above is already
+  // re-reading that state. Showing "Failed to load data — HTTP 403" in that gap turns the
+  // moment right after signing up into a dead end with a Retry button that cannot help.
+  if (error && teamSession.central && String(error).includes('403')) {
+    return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
   }
 
   if (error) {
@@ -1551,6 +2286,16 @@ export default function AppLayout() {
   const d = derived
   const { statsCache } = data
 
+  // Fleet-strip strings. Lifted out of the desktop-only block so the mobile header can render
+  // the same two facts without duplicating the expressions.
+  const fleetUpdated = singleHarness && singleHarness !== 'claude'
+    ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+    : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : (lang === 'pt' ? 'hoje' : 'today'))
+  const fleetFirstDate = singleHarness ? derived.firstSessionDate : statsCache.firstSessionDate
+  const fleetSince = fleetFirstDate
+    ? `${lang === 'pt' ? 'Desde' : 'Since'} ${format(singleHarness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!), 'MMM d, yyyy')} · ${derived.allTimeTotalSessions.toLocaleString()} ${lang === 'pt' ? (derived.allTimeTotalSessions === 1 ? 'sessão' : 'sessões') : (derived.allTimeTotalSessions === 1 ? 'session' : 'sessions')}${singleHarness ? ` · ${HARNESS_LABELS[singleHarness]}` : ''}`
+    : undefined
+
   // Tokens: use model usage totals when available (non-project-filtered), fallback to session-level
   const totalInputTokens = Object.keys(derived.modelUsage).length > 0
     ? Object.values(derived.modelUsage).reduce((s, u) => s + u.inputTokens, 0)
@@ -1567,12 +2312,15 @@ export default function AppLayout() {
     (filters.models.length > 0 ? 1 : 0) +
     (harnessFilterActive ? 1 : 0)
 
-  // Block the app until the user makes the first-run archive choice. While prefs
-  // are still loading (undefined) render a neutral background to avoid a flash.
-  if (archiveChoice === undefined) {
+  // Block the app until the user makes the first-run archive choice. While prefs OR the
+  // team-session flag are still loading render a neutral background to avoid a flash.
+  if (archiveChoice === undefined || teamSession === undefined) {
     return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
   }
-  if (archiveChoice === null) {
+  // A central never shows the archive consent gate: it aggregates members' computed metrics
+  // (stored in Mongo) and any self-contributed host data defaults server-side — there's nothing
+  // for the operator to consent to here, so the blocking prompt would only annoy.
+  if (archiveChoice === null && !teamSession.aggregatorOnly && !isCentral) {
     return (
       <ArchiveConsentModal
         lang={lang}
@@ -1590,7 +2338,36 @@ export default function AppLayout() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W), transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+      {/* The billing prompt. Mounted HERE, after the archive consent gate's early return above, so
+          the two can never stack on a first launch — one blocking modal behind one dismissible one
+          is a pile nobody reads. It is the same component for the first-run invite and for the
+          disabled cost-basis control, which opens it with the specific gaps listed. */}
+      <BillingIntroModal
+        open={(billingSetupOpen || showBillingIntro) && !isCentral}
+        mode={billingSetupOpen ? 'setup' : 'intro'}
+        gaps={billingSetupOpen ? billingReady.gaps : []}
+        lang={lang}
+        onClose={() => { setBillingSetupOpen(false); setBillingIntroSeen(true) }}
+        onNeverShowAgain={() => {
+          setBillingIntroSeen(true)
+          void saveBilling({ ...billing, introDismissed: true })
+        }}
+      />
+      {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
+      {!isMobile && <SideNav
+        lang={lang}
+        harnesses={data.harnesses}
+        isCentral={isCentral}
+        hasWorkflows={(data.workflows?.length ?? 0) > 0}
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
+        theme={theme}
+        onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+        onToggleLang={() => { const next = lang === 'pt' ? 'en' : 'pt'; setLang(next); if (next === 'pt') setCurrency('BRL'); else if (currency === 'BRL') setCurrency('USD') }}
+        onExport={() => navigate('/export')}
+        principal={iam?.account}
+      />}
       {/* Header */}
       <header style={{
         background: 'var(--bg-surface)',
@@ -1603,244 +2380,29 @@ export default function AppLayout() {
         borderBottom: '1px solid var(--border)',
         transition: 'box-shadow 0.25s ease',
       }}>
-        <div style={{
-          maxWidth: 1400,
-          margin: '0 auto',
-          padding: isMobile ? '0 16px' : '0 32px',
-          height: isMobile ? 48 : 56,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <img
-              src='/minimalistLogo.png'
-              alt="agentistics"
-              style={{ height: isMobile ? 44 : 64, width: 'auto' }}
-            />
-            {!isMobile && <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
-              {lang === 'pt' ? 'Atualizado em' : 'Updated'}{' '}
-              {filters.harness && filters.harness !== 'claude'
-                ? (derived.lastSessionDate ? format(derived.lastSessionDate, 'MMM d') : lang === 'pt' ? 'hoje' : 'today')
-                : (statsCache.lastComputedDate ? format(parseISO(statsCache.lastComputedDate), 'MMM d') : lang === 'pt' ? 'hoje' : 'today')}
-            </div>}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 10 }}>
-            {!isMobile && (filters.harness ? derived.firstSessionDate : statsCache.firstSessionDate) && (
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', textAlign: 'right' }}>
-                <div>
-                  {lang === 'pt' ? 'Desde' : 'Since'}{' '}
-                  {format(
-                    filters.harness ? derived.firstSessionDate! : parseISO(statsCache.firstSessionDate!),
-                    'MMM d, yyyy'
-                  )}
-                </div>
-                <div style={{ color: 'var(--text-secondary)' }}>
-                  {derived.allTimeTotalSessions.toLocaleString()} {lang === 'pt' ? 'sessões' : 'sessions'}
-                  {filters.harness ? ` · ${HARNESS_LABELS[filters.harness]}` : ''}
-                </div>
-              </div>
-            )}
-
-            {/* Language toggle — hidden on mobile (accessible via preferences) */}
-            {!isMobile && <button
-              onClick={() => {
-                const next = lang === 'pt' ? 'en' : 'pt'
-                setLang(next)
-                if (next === 'pt') setCurrency('BRL')
-                else if (currency === 'BRL') setCurrency('USD')
-              }}
-              style={{
-                height: 32,
-                padding: '0 10px',
-                display: 'flex', alignItems: 'center', gap: 5,
-                borderRadius: 8,
-                border: '1px solid var(--border)',
-                background: 'transparent',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                fontSize: 12,
-                fontFamily: 'inherit',
-                fontWeight: 500,
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
-              }}
-              title={lang === 'pt' ? 'Switch to English' : 'Mudar para Português'}
-            >
-              <Globe size={13} />
-              {lang === 'pt' ? 'EN' : 'PT'}
-            </button>}
-
-            {/* Theme toggle — hidden on mobile (accessible via preferences) */}
-            {!isMobile && <button
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              style={{
-                width: 32, height: 32,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 8,
-                border: '1px solid var(--border)',
-                background: 'transparent',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
-              }}
-              title={theme === 'dark' ? (lang === 'pt' ? 'Tema claro' : 'Light theme') : (lang === 'pt' ? 'Tema escuro' : 'Dark theme')}
-            >
-              {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-            </button>}
-
-            {/* Export report — hidden on mobile; navigates to /export page */}
-            {!isMobile && <button
-              onClick={() => navigate('/export')}
-              style={{
-                height: 32,
-                padding: '0 12px',
-                display: 'flex', alignItems: 'center', gap: 6,
-                borderRadius: 8,
-                border: '1px solid var(--anthropic-orange)50',
-                background: 'var(--anthropic-orange-dim)',
-                color: 'var(--anthropic-orange)',
-                cursor: 'pointer',
-                fontSize: 12,
-                fontFamily: 'inherit',
-                fontWeight: 600,
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--anthropic-orange-dim)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--anthropic-orange)'
-                ;(e.currentTarget as HTMLButtonElement).style.opacity = '0.85'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.background = 'var(--anthropic-orange-dim)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--anthropic-orange)50'
-                ;(e.currentTarget as HTMLButtonElement).style.opacity = '1'
-              }}
-              title={lang === 'pt' ? 'Exportar relatório PDF' : 'Export PDF report'}
-            >
-              <Download size={13} />
-              {lang === 'pt' ? 'Exportar' : 'Export'}
-            </button>}
-
-            {/* Settings — unified modal (Preferences + Live + Environment).
-                On mobile this lives in the bottom "More" sheet instead. */}
-            {!isMobile && <button
-              onClick={() => setShowPrefsModal(true)}
-              style={{
-                width: 32, height: 32,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 8,
-                border: '1px solid var(--border)',
-                background: 'transparent',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
-              }}
-              title={lang === 'pt' ? 'Configurações' : 'Settings'}
-            >
-              <SlidersHorizontal size={14} />
-            </button>}
-
-            {/* Health warnings — on mobile surfaced via the "More" sheet */}
-            {!isMobile && data?.healthIssues && data.healthIssues.length > 0 && (
-              <HealthWarnings issues={data.healthIssues} lang={lang} />
-            )}
-
-            {/* Live updates pill — on mobile surfaced via the "More" sheet */}
-            {!isMobile && <div style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '0 4px 0 10px',
-              height: 32,
-              borderRadius: 8,
-              border: '1px solid var(--border)',
-              background: 'var(--bg-secondary)',
-            }}>
-              {!isMobile && <Activity size={12} style={{ color: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0, transition: 'color 0.2s' }} />}
-              {!isMobile && <span style={{ fontSize: 11, fontWeight: 500, color: liveUpdates ? 'var(--text-primary)' : 'var(--text-tertiary)', whiteSpace: 'nowrap', transition: 'color 0.2s', userSelect: 'none' }}>
-                Live
-              </span>}
-
-              {/* iPhone-style toggle */}
-              <button
-                onClick={() => setLiveUpdates(v => !v)}
-                title={liveUpdates ? 'Pause live updates' : 'Enable live updates'}
-                style={{
-                  position: 'relative', width: 28, height: 16, borderRadius: 8,
-                  border: 'none', background: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-                  cursor: 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0,
-                }}
-              >
-                <span style={{
-                  position: 'absolute', top: 2, left: liveUpdates ? 14 : 2,
-                  width: 12, height: 12, borderRadius: '50%', background: '#fff',
-                  transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-                }} />
-              </button>
-
-              {/* Interval badge — visible when live is on */}
-              {liveUpdates && (
-                <span style={{
-                  fontSize: 10, fontWeight: 700,
-                  color: riskyMode && updateInterval < 10 ? '#ef4444' : 'var(--anthropic-orange)',
-                  userSelect: 'none',
-                }}>
-                  {riskyMode && updateInterval < 10 ? `⚡ ${updateInterval}s` : `${updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`}`}
-                </span>
+        {/* Mobile top bar — logo + bell. On desktop the header is a single row (the filters
+            bar below), with the sidebar carrying identity/config and the filters row carrying
+            live/alerts, so there are no longer two stacked header rows. */}
+        {isMobile && (
+          <div style={{
+            maxWidth: 1400, margin: '0 auto', padding: '0 16px', height: 48,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 44, width: 'auto' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {data?.healthIssues && data.healthIssues.length > 0 && (
+                <HealthWarnings issues={data.healthIssues} lang={lang} />
               )}
-
-            </div>}
-
-            {/* Refresh — on mobile surfaced via the "More" sheet */}
-            {!isMobile && <button
-              onClick={refetch}
-              style={{
-                width: 32, height: 32,
+              <NotificationBell lang={lang} buttonStyle={{
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 8,
-                border: '1px solid var(--border)',
-                background: 'transparent',
-                color: 'var(--text-tertiary)',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
-              onMouseEnter={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--text-tertiary)'
-              }}
-              onMouseLeave={e => {
-                ;(e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)'
-                ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border)'
-              }}
-              title={lang === 'pt' ? 'Atualizar' : 'Refresh'}
-            >
-              <RefreshCw size={14} />
-            </button>}
+                width: 32, height: 32, borderRadius: 8,
+                border: '1px solid var(--border)', background: 'transparent',
+                color: 'var(--text-tertiary)', cursor: 'pointer', position: 'relative',
+              }} />
+            </div>
           </div>
-        </div>
+        )}
+
 
         {/* Filters — full bar, fixed in the sticky header so it's reachable at any
             scroll position. Hidden on /custom. On mobile the bar is collapsible
@@ -1886,21 +2448,29 @@ export default function AppLayout() {
               onTransitionEnd={() => { if (!filtersCollapsed) setFiltersClip(false) }}
             >
               <div style={{ overflow: (filtersCollapsed || filtersClip) ? 'hidden' : 'visible', minHeight: 0 }}>
-                {data.harnesses && data.harnesses.length > 1 && (
-                  <div style={{ padding: '10px 12px 0' }}>
-                    <HarnessSelector harnesses={data.harnesses} lang={lang} isMobile />
-                  </div>
-                )}
                 <FiltersBar
+                  only={filterDimsForRoute}
+                  costBasis={costBasis}
+                  onCostBasisChange={isCentral ? undefined : setCostBasis}
+                  costBasisReady={billingReady.ready && planBasis.basis !== null}
+                  onCostBasisSetup={openBillingSetup}
                   filters={filters}
                   onChange={setFilters}
-                  projects={data.projects}
+                  projects={availableProjects}
                   sessionCountByProject={sessionCountByProject}
                   models={models}
                   modelGroups={modelGroups}
                   modelsInProject={modelsInProject}
+                  users={usersWithMachines}
+                  harnesses={availableHarnesses}
+                  presence={data?.presence}
                   lang={lang}
                   compact
+                  teams={teamsList}
+                  machines={machinesList}
+                  tags={tagsList}
+                  canFilterMembers={canFilterMembers}
+                  onCreateTagFromFilters={createTagFromFilters}
                 />
                 {/* Collapse handle */}
                 <button
@@ -1917,53 +2487,236 @@ export default function AppLayout() {
                 </button>
               </div>
             </div>
+
+            {/* Totals + fleet stats — the mobile counterpart of the desktop action-cluster numbers
+                and the collapsible fleet tab that hangs under the desktop header. Shares fleetOpen
+                with the desktop tab, so the choice survives a resize. */}
+            <div style={{ borderTop: '1px solid var(--border)' }}>
+              <button
+                onClick={toggleFleet}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%', minHeight: 40,
+                  padding: '0 14px', background: 'transparent', border: 'none',
+                  fontFamily: 'inherit', fontSize: 12, cursor: 'pointer',
+                  color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
+                <span style={{ opacity: 0.35 }}>·</span>
+                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
+                <span style={{ opacity: 0.35 }}>·</span>
+                <span title={headerTokensTitle}><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(headerTokens)}</strong> tok</span>
+                <ChevronDown size={16} style={{ marginLeft: 'auto', opacity: 0.6, transform: fleetOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+              </button>
+              {fleetOpen && (() => {
+                const chip: React.CSSProperties = {
+                  display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 999,
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                }
+                const val: React.CSSProperties = { color: 'var(--text-secondary)', fontWeight: 600 }
+                return (
+                  <div style={{
+                    display: 'flex', flexWrap: 'wrap', gap: 6, padding: '2px 14px 10px',
+                    fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    <span style={chip}>{lang === 'pt' ? 'Atualizado' : 'Updated'} <span style={val}>{fleetUpdated}</span></span>
+                    {fleetSince && <span style={chip}><span style={val}>{fleetSince}</span></span>}
+                    {isCentral && (<>
+                      <span style={chip}>
+                        <Users size={11} />
+                        <span style={val}>{memberCount}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineCount}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{offlineCount}</span>
+                      </span>
+                      <span style={chip}>
+                        <Server size={11} />
+                        <span style={val}>{machineCount}</span> {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{machinesOnline}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{machinesOffline}</span>
+                      </span>
+                      <span style={chip}><Users size={11} /> <span style={val}>{teamCount}</span> {lang === 'pt' ? (teamCount === 1 ? 'time' : 'times') : (teamCount === 1 ? 'team' : 'teams')}</span>
+                    </>)}
+                    <span style={chip}><FolderOpen size={11} /> <span style={val}>{projectCount}</span> {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}</span>
+                    <span style={chip}><GitBranch size={11} /> <span style={val}>{repoCount}</span> {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}</span>
+                  </div>
+                )
+              })()}
+            </div>
           </div>
         )}
         {data && !isCustomPage && !isMobile && (
           <div style={{
-            borderTop: '1px solid var(--border)',
-            maxWidth: 1400,
-            margin: '0 auto',
-            padding: '0 32px',
-            width: '100%',
-            boxSizing: 'border-box',
+            maxWidth: 1400, margin: '0 auto', padding: '5px 32px', width: '100%', boxSizing: 'border-box',
+            display: 'flex', alignItems: 'flex-start', gap: 14,
           }}>
-            <FiltersBar
-              filters={filters}
-              onChange={setFilters}
-              projects={data.projects}
-              sessionCountByProject={sessionCountByProject}
-              models={models}
-              modelGroups={modelGroups}
-              modelsInProject={modelsInProject}
-              lang={lang}
-            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <FiltersBar
+                only={filterDimsForRoute}
+                costBasis={costBasis}
+                onCostBasisChange={isCentral ? undefined : setCostBasis}
+                costBasisReady={billingReady.ready && planBasis.basis !== null}
+                onCostBasisSetup={openBillingSetup}
+                filters={filters}
+                onChange={setFilters}
+                projects={availableProjects}
+                sessionCountByProject={sessionCountByProject}
+                models={models}
+                modelGroups={modelGroups}
+                modelsInProject={modelsInProject}
+                users={usersWithMachines}
+                harnesses={availableHarnesses}
+                presence={data?.presence}
+                lang={lang}
+                teams={teamsList}
+                machines={machinesList}
+                tags={tagsList}
+                canFilterMembers={canFilterMembers}
+                onCreateTagFromFilters={createTagFromFilters}
+              />
+            </div>
+
+            {/* Right column: the action cluster (alerts/live/refresh) on top, and the fleet
+                stats strip right-aligned directly beneath it — so "Updated · members · machines ·
+                projects · repos" lines up under the refresh button instead of stretching the bar. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, paddingTop: 3 }}>
+              {/* Filtered totals, immediately left of the action icons */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
+                <span style={{ opacity: 0.35 }}>·</span>
+                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
+                <span style={{ opacity: 0.35 }}>·</span>
+                <span title={headerTokensTitle}><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(headerTokens)}</strong> tok</span>
+              </div>
+              {data?.healthIssues && data.healthIssues.length > 0 && (
+                <HealthWarnings issues={data.healthIssues} lang={lang} />
+              )}
+              <NotificationBell lang={lang} buttonStyle={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 32, height: 32, borderRadius: 8,
+                border: '1px solid var(--border)', background: 'transparent',
+                color: 'var(--text-tertiary)', cursor: 'pointer', position: 'relative',
+              }} />
+              {!isCentral && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px 0 10px', height: 32,
+                  borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-secondary)',
+                }}>
+                  <Activity size={12} style={{ color: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0, transition: 'color 0.2s' }} />
+                  <span style={{ fontSize: 11, fontWeight: 500, color: liveUpdates ? 'var(--text-primary)' : 'var(--text-tertiary)', whiteSpace: 'nowrap', userSelect: 'none' }}>Live</span>
+                  <button
+                    onClick={() => setLiveUpdates(v => !v)}
+                    title={liveUpdates ? 'Pause live updates' : 'Enable live updates'}
+                    style={{ position: 'relative', width: 28, height: 16, borderRadius: 8, border: 'none', background: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', cursor: 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0 }}
+                  >
+                    <span style={{ position: 'absolute', top: 2, left: liveUpdates ? 14 : 2, width: 12, height: 12, borderRadius: '50%', background: '#fff', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+                  </button>
+                  {liveUpdates && (
+                    <span style={{ fontSize: 10, fontWeight: 700, color: riskyMode && updateInterval < 10 ? '#ef4444' : 'var(--anthropic-orange)', userSelect: 'none' }}>
+                      {riskyMode && updateInterval < 10 ? `⚡ ${updateInterval}s` : `${updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`}`}
+                    </span>
+                  )}
+                </div>
+              )}
+              <button
+                onClick={refetch}
+                title={lang === 'pt' ? 'Atualizar' : 'Refresh'}
+                style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', transition: 'all 0.15s' }}
+                onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-primary)'; t.style.borderColor = 'var(--text-tertiary)' }}
+                onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-tertiary)'; t.style.borderColor = 'var(--border)' }}
+              >
+                <RefreshCw size={14} />
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Nav tabs — third row of sticky header (desktop only; mobile uses bottom nav) */}
-        {!isMobile && (
-          <div style={{
-            borderTop: '1px solid var(--border)',
-            maxWidth: 1400,
-            margin: '0 auto',
-            padding: '0 32px',
-            width: '100%',
-            boxSizing: 'border-box',
-            display: 'flex',
-            alignItems: 'center',
-          }}>
-            <NavTabs lang={lang} harnesses={data.harnesses} />
-            <HarnessSelector harnesses={data.harnesses} lang={lang} />
+        {/* Nav moved to the left sidebar (SideNav) on desktop; mobile uses the bottom nav. */}
+
+      {/* Collapsible "fleet stats" tab — hangs BELOW the header (position:absolute top:100%). It
+          lives inside the sticky header so it stays pinned and scrolls down with it; high z-index
+          overlays the page. Expands to show updated/since + members/machines/teams/projects/repos. */}
+      {data && !isCustomPage && !isMobile && (() => {
+        const sep = <span style={{ color: 'var(--border)' }}>·</span>
+        const iconSt: React.CSSProperties = { color: 'var(--text-tertiary)', flexShrink: 0 }
+        return (
+          <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 300, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+            <div style={{ maxWidth: 1400, width: '100%', display: 'flex', justifyContent: 'flex-end', paddingRight: 32, boxSizing: 'border-box', pointerEvents: 'none' }}>
+              <div style={{ pointerEvents: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                <button
+                  onClick={toggleFleet}
+                  title={fleetOpen ? (lang === 'pt' ? 'Minimizar' : 'Collapse') : (lang === 'pt' ? 'Mostrar estatísticas' : 'Show stats')}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 5, padding: '2px 10px 3px',
+                    border: '1px solid var(--border)', borderTop: 'none',
+                    borderRadius: '0 0 8px 8px', background: 'var(--bg-surface)',
+                    color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10.5,
+                  }}
+                >
+                  {lang === 'pt' ? 'Estatísticas' : 'Stats'}
+                  {fleetOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+                {fleetOpen && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '2px 9px',
+                    marginTop: 4, padding: '7px 12px', borderRadius: 8, maxWidth: '80vw',
+                    border: '1px solid var(--border)', background: 'var(--bg-surface)', boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
+                    fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    <span>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{fleetUpdated}</span></span>
+                    {fleetSince && (<>{sep}<span style={{ color: 'var(--text-secondary)' }}>{fleetSince}</span></>)}
+                    {isCentral && (<>
+                      {sep}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Users size={11} style={iconSt} />
+                        <span style={{ color: 'var(--text-secondary)' }}>{memberCount} {lang === 'pt' ? (memberCount === 1 ? 'membro' : 'membros') : (memberCount === 1 ? 'member' : 'members')}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineCount}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{offlineCount}</span>
+                      </span>
+                      {sep}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Server size={11} style={iconSt} />
+                        <span style={{ color: 'var(--text-secondary)' }}>{machineCount} {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={lang === 'pt' ? 'Máquinas online' : 'Machines online'}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{machinesOnline}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={lang === 'pt' ? 'Máquinas offline' : 'Machines offline'}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{machinesOffline}</span>
+                      </span>
+                      {sep}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Users size={11} style={iconSt} />
+                        <span style={{ color: 'var(--text-secondary)' }}>{teamCount} {lang === 'pt' ? (teamCount === 1 ? 'time' : 'times') : (teamCount === 1 ? 'team' : 'teams')}</span>
+                      </span>
+                    </>)}
+                    {sep}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <FolderOpen size={11} style={iconSt} />
+                      <span style={{ color: 'var(--text-secondary)' }}>{projectCount} {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}</span>
+                    </span>
+                    {sep}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <GitBranch size={11} style={iconSt} />
+                      <span style={{ color: 'var(--text-secondary)' }}>{repoCount} {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}</span>
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-        )}
+        )
+      })()}
       </header>
 
       {/* Main content — routed pages render here via <Outlet /> */}
       <main style={{
         maxWidth: 1400,
         margin: '0 auto',
-        padding: isMobile ? '16px 16px 80px' : '24px 32px',
+        width: '100%',
+        boxSizing: 'border-box',
+        flex: 1,
+        // Fill at least the viewport so the footer always sits below the fold (a scroll away),
+        // even on short pages — it never floats up into a half-empty screen.
+        minHeight: '100vh',
+        // The bottom padding clears the fixed nav, so it has to grow with it: installed as a PWA
+        // the bar is 56px + the home-indicator inset, and a flat 80px hid the last card.
+        padding: isMobile ? '16px 16px calc(24px + var(--mobile-nav-h))' : '24px 32px',
         display: 'flex',
         flexDirection: 'column',
         gap: isMobile ? 14 : 20,
@@ -1974,58 +2727,31 @@ export default function AppLayout() {
           statsCache,
           filters, setFilters,
           lang, theme, currency, setCurrency, brlRate,
+          billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
+          comparisons, saveComparisons,
+          tags: tagsList, monthCommitment,
+          chatModel, chatSoundEnabled, chatSoundId,
+          savePreferences,
+          pwaPrompt,
+          onPwaInstalled: () => { setPwaInstalled(true); setPwaPrompt(null) },
+          liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
+          riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
           monthlyBudgetUSD, updateBudget,
           totalInputTokens, totalOutputTokens,
           setExpandedChart, setSelectedSession, setInfoModalIndex,
           infoItems,
           cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
           cardPrecision, setCardPrecision,
-          sessionCountByProject, models, modelGroups, modelsInProject,
+          sessionCountByProject, models, modelGroups, modelsInProject, users: usersWithMachines,
+          harnesses: data.harnesses,
+          isCentral,
+          me: iam?.account,
+          teams: teamsList,
+          machines: machinesList,
+          deniedRepoLabels,
+          refreshDeniedRepoLabels,
         }} />
       </main>
-
-      {/* Unified Settings modal (Preferences + Live + Environment) */}
-      {showPrefsModal && (
-        <PreferencesModal
-          initial={{ lang, theme, currency, cardOrder, cardPrecision, chatModel, chatSoundEnabled, chatSoundId }}
-          onSave={(draft: PrefsDraft) => {
-            setLangState(draft.lang)
-            setThemeState(draft.theme)
-            setCurrencyState(draft.currency)
-            setCardOrder(draft.cardOrder as CardId[])
-            setCardPrecisionState(draft.cardPrecision)
-            if (draft.chatModel) setChatModel(draft.chatModel)
-            setChatSoundEnabled(draft.chatSoundEnabled)
-            setChatSoundId(draft.chatSoundId)
-            fetch('/api/preferences', {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                lang: draft.lang,
-                theme: draft.theme,
-                currency: draft.currency,
-                cardOrder: draft.cardOrder,
-                cardPrecision: draft.cardPrecision,
-                chatModel: draft.chatModel,
-                chatSoundEnabled: draft.chatSoundEnabled,
-                chatSoundId: draft.chatSoundId,
-              }),
-            }).catch(() => {})
-            setShowPrefsModal(false)
-          }}
-          onClose={() => setShowPrefsModal(false)}
-          pwaPrompt={pwaPrompt}
-          onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}
-          liveUpdates={liveUpdates}
-          setLiveUpdates={setLiveUpdates}
-          updateInterval={updateInterval}
-          setUpdateInterval={setUpdateInterval}
-          riskyMode={riskyMode}
-          setRiskyMode={setRiskyMode}
-          highlightUpdates={highlightUpdates}
-          setHighlightUpdates={setHighlightUpdates}
-        />
-      )}
 
       {/* Install Modal — shown once after first data load */}
       {showInstallModal && (
@@ -2035,20 +2761,30 @@ export default function AppLayout() {
           onClose={(dontShowAgain) => {
             setShowInstallModal(false)
             if (dontShowAgain) {
+              setInstallDismissedPref(true)
               try { localStorage.setItem(INSTALL_DISMISSED_KEY, 'true') } catch {}
+              // Persist server-side so it survives incognito windows / a cleared localStorage.
+              fetch('/api/preferences', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ installDismissed: true }),
+              }).catch(() => {})
             }
           }}
           onPwaInstalled={() => { setPwaInstalled(true); setPwaPrompt(null) }}
         />
       )}
 
-      {/* Update available modal */}
-      {updateInfo && (
+      {/* Update available modal — opt-in only, opened via the toast/bell (see
+          'agentistics:open-update-modal'). Never auto-opens: see `showUpdateModal` above. */}
+      {updateInfo && showUpdateModal && (
         <UpdateModal
           current={updateInfo.current}
           latest={updateInfo.latest}
           lang={lang}
-          onClose={() => setUpdateInfo(null)}
+          isCentral={isCentral}
+          isMember={isMember}
+          onClose={() => setShowUpdateModal(false)}
         />
       )}
 
@@ -2112,6 +2848,8 @@ export default function AppLayout() {
           currency={currency}
           brlRate={brlRate}
           lang={lang}
+          central={teamSession?.central === true}
+          workflows={data.workflows}
           onClose={() => setSelectedSession(null)}
         />
       )}
@@ -2136,38 +2874,48 @@ export default function AppLayout() {
         <MobileBottomNav
           lang={lang}
           harnesses={data.harnesses}
-          onSettings={() => setShowPrefsModal(true)}
-          onRefresh={refetch}
+            onRefresh={refetch}
           liveUpdates={liveUpdates}
           onToggleLive={() => setLiveUpdates(v => !v)}
           updateInterval={updateInterval}
           healthIssues={data.healthIssues}
+          isCentral={isCentral}
+          hasWorkflows={(data.workflows?.length ?? 0) > 0}
+          principal={iam?.account}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          onToggleLang={() => { const next = lang === 'pt' ? 'en' : 'pt'; setLang(next); if (next === 'pt') setCurrency('BRL'); else if (currency === 'BRL') setCurrency('USD') }}
         />
       )}
 
-      {/* TTY Chat — floating button + panel, globally available */}
-      <TtyChat
-        lang={lang}
-        chatModel={chatModel}
-        chatSoundEnabled={chatSoundEnabled}
-        chatSoundId={chatSoundId}
-        filters={filters}
-        setFilters={setFilters}
-        onPdfExport={(range) => setPdfDirectExportRange(range)}
-        isMobile={isMobile}
-        onModelSet={(model) => {
-          setChatModel(model)
-          fetch('/api/preferences', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chatModel: model }),
-          }).catch(() => {})
-        }}
-      />
+      {/* TTY Chat (Nay) — floating button + panel. Hidden on a pure central (aggregator with
+          no local harness): the chat needs a locally-installed harness to be meaningful.
+          Also hidden when the server revoked the localChat capability (an exposed instance
+          answers /api/chat-tty and /api/exec with 403 — see server/capability-guard.ts), so the
+          UI never offers an action that cannot work. */}
+      {!teamSession?.aggregatorOnly && teamSession?.capabilities?.localChat !== false && chatOffered && (
+        <TtyChat
+          lang={lang}
+          chatModel={chatModel}
+          chatSoundEnabled={chatSoundEnabled}
+          chatSoundId={chatSoundId}
+          filters={filters}
+          setFilters={setFilters}
+          onPdfExport={(range) => setPdfDirectExportRange(range)}
+          isMobile={isMobile}
+          onModelSet={(model) => {
+            setChatModel(model)
+            fetch('/api/preferences', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chatModel: model }),
+            }).catch(() => {})
+          }}
+        />
+      )}
 
       {/* Footer */}
       <footer style={{
-        marginTop: 64,
         borderTop: '1px solid var(--border)',
         background: 'var(--bg-surface)',
       }}>
@@ -2309,6 +3057,15 @@ export default function AppLayout() {
           </div>
         </div>
       </footer>
+
+      {/* Global notification toasts (auto-dismiss with an exit animation; history in the bell) */}
+      <NotificationToasts lang={lang} />
+
+      {/* Mounted once, at the ROOT: stepUpFetch opens this whenever the server demands re-auth,
+          and every page can trigger that. It used to live inside SideNav — desktop-only chrome —
+          so on a phone the prompter was never registered at all and a protected action just
+          failed with the 403 nobody could answer. */}
+      <StepUpPrompt lang={lang} />
     </div>
   )
 }

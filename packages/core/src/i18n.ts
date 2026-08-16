@@ -222,6 +222,15 @@ export const translations: Record<Lang, Record<string, string>> = {
     'export.chart.messages_abbr': 'Msgs',
     'export.chart.sessions_abbr': 'Sess.',
     'export.chart.tools_abbr': 'Tools',
+    'export.usesHeaderFilters': 'Este relatório usa os filtros do cabeçalho',
+    'export.usesHeaderFiltersDetail': 'Período, projetos, modelos e membros vêm da barra de filtros no topo do painel. Ajuste-os por lá para mudar o que entra no PDF.',
+    'export.activeFilters': 'Filtros ativos',
+    'export.filters.allTime': 'Todo o período',
+    'export.filters.projects': 'projeto(s)',
+    'export.filters.models': 'modelo(s)',
+    'export.filters.members': 'membro(s)',
+    'export.filters.harnesses': 'harness(es)',
+    'export.filters.none': 'Nenhum filtro aplicado',
 
     // HarnessInfoPanel — UI labels
     'harness.panel.data_label': 'dados',
@@ -250,7 +259,10 @@ export const translations: Record<Lang, Record<string, string>> = {
     'harness.panel.install_label': 'Instalar',
     'harness.panel.login_label': 'Login',
     'harness.panel.setup_guide': 'Guia de configuração →',
-    'harness.panel.cost_basis_text': 'Os custos são calculados via calcCost() usando os preços oficiais de API de cada modelo da tabela MODEL_PRICING em @agentistics/core — obtidos da página oficial de preços do provedor. A exibição em BRL usa uma taxa de câmbio ao vivo de /api/rates com fallback fixo quando indisponível.',
+    // Opens with "in API basis" on purpose: with the plan basis active this paragraph would
+    // otherwise assert flatly that the costs on screen ARE calcCost(), which is false. This panel
+    // is not plumbed with the active basis, so it states which basis it is describing instead.
+    'harness.panel.cost_basis_text': 'Em base API, os custos são calculados via calcCost() usando os preços oficiais de API de cada modelo da tabela MODEL_PRICING em @agentistics/core — obtidos da página oficial de preços do provedor. A exibição em BRL usa uma taxa de câmbio ao vivo de /api/rates com fallback fixo quando indisponível. Em base Plano, esse valor vira o A da conta: o custo do plano é C = Σ mensalidade × dias no filtro ÷ 30,44 sobre os dias cobertos, e o múltiplo é A ÷ C — cadastre em Configurações → Cobrança.',
     'harness.panel.cost_na': 'Custo: N/A para este harness — não há dados de tokens ou preços nos arquivos locais.',
     'harness.panel.view_pricing': 'Ver preços do {provider} →',
   },
@@ -475,6 +487,15 @@ export const translations: Record<Lang, Record<string, string>> = {
     'export.chart.messages_abbr': 'Msgs',
     'export.chart.sessions_abbr': 'Sess.',
     'export.chart.tools_abbr': 'Tools',
+    'export.usesHeaderFilters': 'This report uses the header filters',
+    'export.usesHeaderFiltersDetail': 'Date range, projects, models, and members come from the filter bar at the top of the dashboard. Adjust them there to change what goes into the PDF.',
+    'export.activeFilters': 'Active filters',
+    'export.filters.allTime': 'All time',
+    'export.filters.projects': 'project(s)',
+    'export.filters.models': 'model(s)',
+    'export.filters.members': 'member(s)',
+    'export.filters.harnesses': 'harness(es)',
+    'export.filters.none': 'No filters applied',
 
     // HarnessInfoPanel — UI labels
     'harness.panel.data_label': 'data',
@@ -503,7 +524,7 @@ export const translations: Record<Lang, Record<string, string>> = {
     'harness.panel.install_label': 'Install',
     'harness.panel.login_label': 'Login',
     'harness.panel.setup_guide': 'Setup guide →',
-    'harness.panel.cost_basis_text': "Costs are computed via calcCost() using each model's published API pricing from the MODEL_PRICING table in @agentistics/core — sourced from the provider's official pricing page. BRL display uses a live exchange rate fetched from /api/rates with a fixed fallback when the rate is unavailable.",
+    'harness.panel.cost_basis_text': "In API basis, costs are computed via calcCost() using each model's published API pricing from the MODEL_PRICING table in @agentistics/core — sourced from the provider's official pricing page. BRL display uses a live exchange rate fetched from /api/rates with a fixed fallback when the rate is unavailable. In plan basis that figure becomes the A of the calculation: the plan cost is C = Σ monthly × days in filter ÷ 30.44 over the covered days, and the multiple is A ÷ C — register it in Settings → Billing.",
     'harness.panel.cost_na': 'Cost: N/A for this harness — no token or pricing data is available in its local files.',
     'harness.panel.view_pricing': 'View {provider} pricing →',
   },

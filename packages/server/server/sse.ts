@@ -2,10 +2,13 @@ import { join } from 'path'
 import { spawn } from 'child_process'
 import { stat } from 'fs/promises'
 import chokidar from 'chokidar'
-import { SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE, PORT, CODEX_SESSIONS_DIR, GEMINI_DIR, COPILOT_DIR } from './config'
+import { SESSION_META_DIR, PROJECTS_DIR, STATS_CACHE_FILE, PORT, TEAM_CENTRAL, CODEX_SESSIONS_DIR, GEMINI_DIR, COPILOT_DIR, ANTIGRAVITY_BRAIN_DIR, ANTIGRAVITY_CONVERSATIONS_DIR } from './config'
+import { centralManifest, centralHtml } from './central-branding'
 import { invalidateCache } from './data'
 import { mirrorFile } from './archive'
 import { getEnabledAdapters } from './adapters/types'
+import { addStoredNotification } from './notifications-store'
+import type { NotificationSubject } from './notifications-authority'
 
 export type SseController = ReadableStreamDefaultController<Uint8Array>
 
@@ -23,16 +26,57 @@ export function notifySseClients() {
   }
 }
 
+/** Push a user-facing notification to all connected SSE clients (toast + bell).
+ *  Prefer `code` (localized on the frontend) with optional `meta`; `title`/`message`
+ *  are a fallback for pre-localized text. */
+export function broadcastNotification(n: {
+  type: 'error' | 'warning' | 'info' | 'success'
+  code?: string
+  meta?: Record<string, unknown>
+  title?: string
+  message?: string
+  /** What this notification is about, for role/team scoping on a central — see
+   *  notifications-authority.ts. Omit for a genuinely instance-wide notification. */
+  subject?: NotificationSubject
+}) {
+  // Persist FIRST, and independently of whether anyone is listening: a notification raised while
+  // no dashboard is open (or only a phone that is asleep) still belongs in the history. Clients
+  // that receive the SSE event below just refetch — they never write it themselves, so the id is
+  // the server's and every device dismisses the same row.
+  addStoredNotification(n).catch(err => console.error('[notifications] failed to persist', err))
+  // The SSE FRAME carries NOTHING about the notification itself — it is a refresh signal only.
+  // `sseClients` is a flat, unauthenticated broadcast set with no principal attached (unlike
+  // GET /api/notifications, which scopes by `Viewer.entitlement`), so putting `code`/`meta`/
+  // `subject` on the wire here would hand every open tab — any signed-in account, any role — the
+  // full body of a notification the entitlement check in notifications-authority.ts exists to
+  // withhold from it. Every listener (`useNotificationStream.ts`) already just re-fetches the
+  // already-scoped `/api/notifications` on this event; it never reads the payload.
+  const payload = sseEncoder.encode('event: notification\ndata: {}\n\n')
+  for (const ctrl of [...sseClients]) {
+    try {
+      ctrl.enqueue(payload)
+    } catch {
+      sseClients.delete(ctrl)
+    }
+  }
+}
+
 let sseDebounce: ReturnType<typeof setTimeout> | null = null
 
 export function triggerSseNotification() {
   invalidateCache()
   if (sseDebounce) clearTimeout(sseDebounce)
   sseDebounce = setTimeout(notifySseClients, 2000)
+  // Member push-on-change: local data changed → nudge a debounced push to the central so its
+  // aggregate stays fresh while you work. No-op on a central/solo instance.
+  import('./team-uploader').then(m => m.notifyDataChanged()).catch(() => {})
 }
 
+/** Default noise filter for harness roots. */
+const DEFAULT_IGNORED = /(^|[/\\])(\.git|node_modules|plugins|cache|\.tmp|shell_snapshots|skills|memories|log|logs|bin|antigravity|history|ide|pkg)([/\\]|$)/
+
 export async function setupFileWatcher() {
-  const watch = (dir: string) => {
+  const watch = (dir: string, ignored: RegExp = DEFAULT_IGNORED) => {
     const watcher = chokidar.watch(dir, {
       persistent: true,
       ignoreInitial: true,
@@ -41,7 +85,7 @@ export async function setupFileWatcher() {
       // contain huge plugin caches, temp git clones, sqlite logs and snapshots that
       // would saturate the watcher (and throw EINVAL) if traversed.
       depth: 6,
-      ignored: /(^|[/\\])(\.git|node_modules|plugins|cache|\.tmp|shell_snapshots|skills|memories|log|logs|bin|antigravity|history|ide|pkg)([/\\]|$)|\.sqlite/,
+      ignored: (p: string) => ignored.test(p) || /\.sqlite/.test(p),
     })
     watcher.on('all', (event: string, path: string) => {
       // Mirror new/changed source files into the archive before notifying clients,
@@ -66,10 +110,13 @@ export async function setupFileWatcher() {
   // whole data root (adapter.dataRoot). Roots like ~/.codex contain .tmp plugin
   // clones, an 18MB sqlite log, caches, etc.; watching them recursively saturates
   // chokidar and starves the request handler. Claude is already covered above.
+  // Inside brain/<conversation-id>/ only .git / node_modules noise is worth skipping.
+  const ANTIGRAVITY_IGNORED = /(^|[/\\])(\.git|node_modules)([/\\]|$)/
   const HARNESS_SESSION_DIRS: Partial<Record<string, string>> = {
     codex: CODEX_SESSIONS_DIR,
     gemini: join(GEMINI_DIR, 'tmp'),
     copilot: join(COPILOT_DIR, 'session-state'),
+    antigravity: ANTIGRAVITY_BRAIN_DIR,
   }
   try {
     const adapters = await getEnabledAdapters()
@@ -80,7 +127,25 @@ export async function setupFileWatcher() {
       seen.add(dir)
       try {
         await stat(dir)
-        watch(dir)
+        // Antigravity's transcripts live in .system_generated/logs/, which the default
+        // filter's `logs` rule would drop — watch that tree with a narrower filter.
+        watch(dir, adapter.id === 'antigravity' ? ANTIGRAVITY_IGNORED : DEFAULT_IGNORED)
+        if (adapter.id === 'antigravity') {
+          // Antigravity's tokens / model / cost live ONLY in conversations/<id>.db, in a
+          // different tree from the transcripts. Without this, a turn that only updates
+          // gen_metadata (no new transcript step) never refreshes the dashboard.
+          // The `-wal`/`-shm` sidecars agy itself writes are ignored: they change constantly and
+          // carry no data we read (we open the DBs immutable).
+          try {
+            await stat(ANTIGRAVITY_CONVERSATIONS_DIR)
+            if (!seen.has(ANTIGRAVITY_CONVERSATIONS_DIR)) {
+              seen.add(ANTIGRAVITY_CONVERSATIONS_DIR)
+              watch(ANTIGRAVITY_CONVERSATIONS_DIR, /(-wal|-shm|-journal)$/)
+            }
+          } catch {
+            console.log(`[watcher] Skipping ${ANTIGRAVITY_CONVERSATIONS_DIR} (not found)`)
+          }
+        }
       } catch {
         // Directory doesn't exist yet — skip; data.ts re-scans on every request.
         console.log(`[watcher] Skipping ${dir} (not found)`)
@@ -146,12 +211,25 @@ export function serveStatic(pathname: string): Response | null {
   if (!SERVE_STATIC) return null
   const asset = embeddedDist[pathname]
   if (!asset) return null
-  const body =
+  let body =
     asset.encoding === 'base64'
       ? Buffer.from(asset.content, 'base64')
       : asset.content
-  // Service worker and manifest must not be cached aggressively
-  const isSwOrManifest = pathname === '/sw.js' || pathname === '/manifest.webmanifest' || pathname === '/registerSW.js'
+  // A central serves the same bundle as a machine, so its installed PWA was identical in the
+  // dock — same icon, same name. Re-brand the two files the browser reads for that identity as
+  // they go out; the mode is only known at runtime, so it cannot be baked into the build.
+  if (TEAM_CENTRAL && (pathname === '/manifest.webmanifest' || pathname === '/index.html')) {
+    // Read through WHICHEVER encoding the embedder chose. `.webmanifest` was not on its text-
+    // extension list, so it arrived here base64-encoded and a `typeof body === 'string'` guard
+    // skipped the rewrite in silence — the central installed with the machine's icon anyway.
+    const text = typeof body === 'string' ? body : body.toString('utf-8')
+    body = pathname === '/index.html' ? centralHtml(text) : centralManifest(text)
+  }
+  // Service worker, manifest and the app shell must not be cached aggressively — the shell
+  // carries the hashed asset URLs (and now the central branding), so a year-long cache would
+  // pin a rebuilt app to its old bundle.
+  const isSwOrManifest = pathname === '/sw.js' || pathname === '/manifest.webmanifest'
+    || pathname === '/registerSW.js' || pathname === '/index.html'
   const cacheControl = isSwOrManifest ? 'no-cache, no-store, must-revalidate' : 'public, max-age=31536000'
   const extraHeaders: Record<string, string> = pathname === '/sw.js'
     ? { 'Service-Worker-Allowed': '/' }
