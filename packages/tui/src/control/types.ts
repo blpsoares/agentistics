@@ -626,14 +626,17 @@ export interface ControlSession {
   /** When it started, epoch ms. An instant rather than a duration — see `ServiceRuntimeState`. */
   startedAt?: number
   /**
-   * When it was last ALIVE, epoch ms — present only on a row that is NOT running.
+   * When it went OFF, epoch ms — absent while it runs, and absent when nothing recorded an end.
    *
-   * `startedAt` answers when the work began and is the wrong question on a finished conversation:
-   * a block of nineteen `off` rows is read, and ordered, by which of them ended most recently. The
-   * host reads it from the heartbeat (managed) or the conversation's own last activity (closed) and
-   * omits it wherever neither exists — an "off for" with no measurement is left blank, never zero.
+   * `startedAt` answers when the work began and is the wrong question on a finished conversation: a
+   * block of nineteen off rows is read, and ordered, by which of them ended most recently. Two
+   * sources, in order of exactness: the registry's own recorded end, and — for a row the machine
+   * LOST, where nothing was ever written — the last heartbeat stamp, which is the closest thing to
+   * an end time that can exist for a reboot. There is deliberately no fallback to the start: a
+   * start age printed under a heading naming the end is a wrong number rather than a missing one,
+   * and this column has always been allowed to be blank.
    */
-  lastActiveAt?: number
+  endedAt?: number
   attached: boolean
   /** Process ID for live process monitoring. */
   pid?: number

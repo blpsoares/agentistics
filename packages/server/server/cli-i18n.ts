@@ -741,9 +741,9 @@ const PT: CliStrings = {
     // Named for what it means to the READER rather than for what the machine is doing, and it
     // pairs with `precisa de aprovação` above as the distinction it is.
     waiting: 'precisa de você',
-    exited: 'desligada',
-    lost: 'desligada',
-    closed: 'desligada',
+    exited: 'encerrada',
+    lost: 'desconectada',
+    closed: 'fechada',
     external: 'externa',
   },
   sessApprovalBlind: (harness: string) =>

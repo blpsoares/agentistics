@@ -387,7 +387,7 @@ export function sessionRows(
     // measured end sorts last rather than to the top: unknown is not recent.
     const closed = rest.filter(s => !isLive(s) && !isFell(s))
       .slice()
-      .sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0))
+      .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
     // An empty KEY is an absence ("no task"), not a category, and is drawn as one. A FINISHED task
     // says so in its heading and is muted with it: the sessions are still listed and still
     // attachable, so the screen must say why they are set apart rather than merely dimming them.
@@ -935,7 +935,7 @@ export interface SessionColumns {
  * It used to measure from `startedAt`, under a heading that said `started`, which is the wrong
  * question on the only rows that draw it: a block of finished conversations is read by which of
  * them ended most recently, and "started 96h ago" says nothing about whether that one is the work
- * of this morning or of last week. `lastActiveAt` is that instant, and there is NO FALLBACK to the
+ * of this morning or of last week. `endedAt` is that instant, and there is NO FALLBACK to the
  * start time — a start age printed under a heading naming the end is a wrong number rather than a
  * missing one, and this column has always been allowed to be blank.
  *
@@ -943,8 +943,8 @@ export interface SessionColumns {
  * make the column's width depend on the second it was measured in.
  */
 export function sessionAge(s: ControlSession, now: number, ago: (seconds: number) => string): string {
-  if (sessionRunning(s) || s.lastActiveAt === undefined) return ''
-  return ago(Math.max(0, Math.round((now - s.lastActiveAt) / 1000)))
+  if (sessionRunning(s) || s.endedAt === undefined) return ''
+  return ago(Math.max(0, Math.round((now - s.endedAt) / 1000)))
 }
 
 /**
