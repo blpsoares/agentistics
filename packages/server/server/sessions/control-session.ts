@@ -112,6 +112,7 @@ export function toControlSession(
       ? { approvalBlind: s.sessApprovalBlind(harness) }
       : {}),
     ...(v.createdMs !== undefined ? { startedAt: v.createdMs } : {}),
+    ...(v.endedMs !== undefined ? { endedAt: v.endedMs } : {}),
     ...(v.task ? { task: v.task } : {}),
     // Marked BY THE USER — a label, a note or a task. `title` cannot answer this: it always has a
     // value, because the host derives one whenever there is no label. A name typed INSIDE the

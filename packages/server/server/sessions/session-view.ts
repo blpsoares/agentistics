@@ -132,6 +132,7 @@ export interface SessionView {
    */
   recordedRepo?: RepoFacts
   createdMs?: number
+  endedMs?: number
   attached: boolean
   /**
    * The conversation this row could REOPEN, when there is one.
@@ -393,6 +394,11 @@ export function buildSessionViews(o: {
       ...(r.backend
         ? { createdMs: r.backend.createdMs }
         : registryCreatedMs(r.managed?.createdAt)),
+      ...(r.managed?.endedAt && Number.isFinite(Date.parse(r.managed.endedAt))
+        ? { endedMs: Date.parse(r.managed.endedAt) }
+        : r.backend?.lastActivityMs && (finished || r.status === 'exited' || r.status === 'lost')
+          ? { endedMs: r.backend.lastActivityMs }
+          : {}),
       // Reopening a finished session is the whole reason its row is kept. Resolved the same way an
       // external process's conversation is — by harness and directory — and absent when nothing
       // can be resolved, rather than offering a verb with no target.
@@ -599,6 +605,7 @@ export function buildSessionViews(o: {
       status: 'closed' as const,
       label: named ?? c.title,
       createdMs: c.lastActivityMs,
+      endedMs: c.lastActivityMs,
       attached: false,
       approvalDetection: false,
       ...(c.resumable ? { resume: { sessionId: c.sessionId, title: c.title } } : {}),
