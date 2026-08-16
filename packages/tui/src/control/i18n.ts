@@ -332,6 +332,8 @@ export interface ControlStrings {
   toggleActive: string
   /** The detail pane's own switch: it is a pane, not a fact, and a screen is allowed to be a list. */
   toggleDetail: string
+  /** The cascade switch, in the LAYOUT block — it is a way of drawing, not a grouping. */
+  toggleCascade: string
   /** Written on the detail pane itself: the key that puts it away. */
   sessionsDetailHide: string
   /** The menu's layout section, and what the two layouts are called. */
@@ -817,6 +819,7 @@ const EN: ControlStrings = {
   toggleDone: 'finished tasks',
   toggleActive: 'only active',
   toggleDetail: 'detail pane',
+  toggleCascade: 'cascade by directory',
   sessionsDetailHide: 'd hides',
   asideLayout: 'LAYOUT',
   sessionsLayouts: { list: 'list', cards: 'cards' },
@@ -1240,6 +1243,7 @@ const PT: ControlStrings = {
   toggleDone: 'tarefas finalizadas',
   toggleActive: 'apenas ativas',
   toggleDetail: 'painel de detalhe',
+  toggleCascade: 'cascata por diretório',
   sessionsDetailHide: 'd oculta',
   asideLayout: 'FORMATO',
   sessionsLayouts: { list: 'lista', cards: 'cards' },

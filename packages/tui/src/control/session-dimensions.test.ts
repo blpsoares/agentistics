@@ -89,13 +89,16 @@ describe('the table', () => {
     expect(GROUPINGS).toEqual([...ARRANGEMENTS, ...DIMENSION_ORDER])
   })
 
-  it('keeps the CASCADE an arrangement and refuses to make it a dimension', () => {
+  it('refuses to make the CASCADE a dimension, or a grouping at all', () => {
     // A tree node is not a bucket on a dimension: a session belongs to EVERY node on its path, so
     // "filter to `packages`" and "the band `packages`" could never be made to agree. The cross-check
     // below asserts exactly that agreement for every id in `DIMENSION_ORDER`, so promoting `tree`
-    // would either break it or force a false answer into it. It is offered as an arrangement, like
-    // `none`, and this test is what stops it drifting.
-    expect(GROUPINGS).toContain('tree')
+    // would either break it or force a false answer into it.
+    //
+    // It is not offered as a GROUPING either any more: the cascade is a view drawn inside whatever
+    // the bands are, so choosing it must not cost the bands. The id survives in the type because a
+    // preferences file written by an older build still carries it, and is migrated on read.
+    expect(GROUPINGS).not.toContain('tree')
     expect(DIMENSION_ORDER).not.toContain('tree' as SessionDimensionId)
     expect(Object.keys(SESSION_DIMENSIONS)).not.toContain('tree')
   })

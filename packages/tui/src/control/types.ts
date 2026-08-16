@@ -733,6 +733,14 @@ export interface SessionViewPrefs {
    */
   layout?: 'list' | 'cards'
   /**
+   * Draw the directory CASCADE inside each band.
+   *
+   * A VIEW rather than a grouping — see `groupSessions`. Absent reads as off, and a stored
+   * `grouping: 'tree'` from before this existed is rewritten to `none` + cascade on read, so a
+   * machine that had the cascade selected keeps it.
+   */
+  cascade?: boolean
+  /**
    * WHICH PAGE of cards was open, named by the SESSION at the top of it rather than by a number.
    *
    * The fleet re-sorts every five seconds, so "page 2" is a position and a position is not an

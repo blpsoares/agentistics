@@ -118,13 +118,28 @@ export function groupSessions(
   doneTasks: readonly string[] = [],
   order: SessionOrder = DEFAULT_ORDER,
   ctx: DimensionContext = {},
+  /**
+   * Draw the directory CASCADE inside each band — a VIEW, not a grouping.
+   *
+   * It used to be one of the groupings, which forced a choice nobody should have to make: the
+   * cascade answers "which directory is this session in" and the grouping answers "what do these
+   * bands stand for", and picking the tree meant giving up every other band. Composed instead: the
+   * grouping decides the bands, and inside each one the sessions cascade by project and then by the
+   * segments of their `cwd`.
+   *
+   * `tree` survives as a grouping id so a stored preference still parses; the menu no longer offers
+   * it and `migrateSessionFilters` rewrites it to `none` + cascade.
+   */
+  cascade = false,
 ): SessionGroup[] {
-  if (by === 'none') return [{ key: '', label: '', sessions: sortSessions(list, order) }]
   // The CASCADE returns the same shape, already in reading order, with `depth` and `path` on top —
   // which is what lets every consumer below keep working without knowing a tree exists. Dispatched
   // here rather than by each caller, for the same reason `none` is: three surfaces arrange a fleet,
   // and an arrangement one of them has not been told about is one that silently does not exist.
-  if (by === 'tree') return buildSessionTree(list, words, doneTasks, order, ctx)
+  if (by === 'tree' || (cascade && by === 'none')) {
+    return buildSessionTree(list, words, doneTasks, order, ctx)
+  }
+  if (by === 'none') return [{ key: '', label: '', sessions: sortSessions(list, order) }]
 
   const groups = new Map<string, SessionGroup>()
   for (const s of list) {
@@ -142,12 +157,68 @@ export function groupSessions(
 
   // Groups ordered by their most urgent member, so the box holding a blocked session is the one at
   // the top — grouping must not bury the thing the screen exists to surface.
-  return [...groups.values()]
+  const ordered = [...groups.values()]
     .map(g => ({ ...g, sessions: sortSessions(g.sessions, order) }))
     .sort((a, b) => {
       const byRank = sessionRank(a.sessions[0]!) - sessionRank(b.sessions[0]!)
       return byRank !== 0 ? byRank : a.label.localeCompare(b.label)
     })
+  if (!cascade) return ordered
+  // The bands stay exactly as they were — same keys, same order, same `done` marks — and each one's
+  // sessions become the tree they were already in. The band is the parent node, so it keeps its
+  // heading and its rows hang below it.
+  return ordered.flatMap(g => cascadeInside(g, by, words, doneTasks, order, ctx))
+}
+
+/**
+ * One band's sessions, expanded into the directory cascade beneath it — PURE.
+ *
+ * The cascade's own root is the PROJECT. Grouped BY project that root is the band's own name, so it
+ * is dropped and its sessions hang directly under the band — the same rule the `where` column and
+ * the closed block follow, and for the same reason: a heading repeating the heading above it says
+ * nothing and costs a row. Under every other grouping the project IS new information (a task spans
+ * two repositories, a harness spans everything) and stays as the first level.
+ *
+ * The band itself is emitted with `path`, which is what makes `sessionRows` draw it as a branch —
+ * headings and counts included — when it has no sessions of its own.
+ */
+function cascadeInside(
+  g: SessionGroup,
+  by: SessionGrouping,
+  words: DimensionWordBook,
+  doneTasks: readonly string[],
+  order: SessionOrder,
+  ctx: DimensionContext,
+): SessionGroup[] {
+  const sub = buildSessionTree(g.sessions, words, doneTasks, order, ctx)
+  // Keys are prefixed by the band's own, so two folders of the same name under two bands stay two
+  // nodes — the same rule `buildSessionTree` applies to its own paths.
+  const keyed = (x: SessionGroup) => `${g.key}\u0000${x.key}`
+  const roots = sub.filter(x => (x.depth ?? 0) === 0)
+  // Grouped by project there is exactly one root and it is this band. More than one would mean the
+  // band and the project dimension disagreed about which project a row is in, which cannot happen —
+  // both call `bucketKey(s, 'project')` — and if it ever did, keeping the roots is the honest answer.
+  if (by === 'project' && roots.length === 1) {
+    const root = roots[0]!
+    return [
+      { ...g, sessions: root.sessions, depth: 0, path: [g.label] },
+      ...sub.filter(x => x !== root).map(x => ({
+        ...x,
+        key: keyed(x),
+        depth: x.depth ?? 0,
+        path: [g.label, ...(x.path ?? []).slice(1)],
+      })),
+    ]
+  }
+  return [
+    { ...g, sessions: [], depth: 0, path: [g.label] },
+    ...sub.map(x => ({
+      ...x,
+      key: keyed(x),
+      depth: (x.depth ?? 0) + 1,
+      path: [g.label, ...(x.path ?? [])],
+    })),
+  ]
 }
 
 /**
@@ -247,7 +318,12 @@ export function sessionRows(
     group?: SessionGroup,
   ) => {
     if (sessions.length === 0) return
-    if (out.length > 0) out.push({ kind: 'spacer' })
+    // Air BETWEEN bands, never between a node and its own first child: inside the cascade that blank
+    // reads as the end of the block, which is the one thing the guides exist to say correctly. The
+    // last row being a heading shallower than this group's depth is exactly "this hangs off that".
+    const last = out[out.length - 1]
+    const nested = last?.kind === 'heading' && (last.depth ?? 0) < (group?.depth ?? 0)
+    if (out.length > 0 && !nested) out.push({ kind: 'spacer' })
     if (label !== '') {
       out.push({
         kind: 'heading', label, count: sessions.length, ...(muted ? { muted } : {}),
@@ -323,7 +399,9 @@ export function sessionRows(
       // Nothing left under it either: the branch is not merely empty, it is not there. A heading
       // with a name and nothing named is the box-with-a-name-in-it the marked band already refuses.
       if (below > 0) {
-        if (out.length > 0) out.push({ kind: 'spacer' })
+        const last = out[out.length - 1]
+        const nested = last?.kind === 'heading' && (last.depth ?? 0) < (g.depth ?? 0)
+        if (out.length > 0 && !nested) out.push({ kind: 'spacer' })
         out.push({ kind: 'heading', label: head, count: below, ...branch(g, head) })
       }
       return
@@ -1255,7 +1333,7 @@ export type AsideRow =
  * `closed` and `exited` were two of these and asked ONE question — "is it not running" — so ticking
  * either while the other was on appeared to do nothing. They are now `history`.
  */
-export type SessionToggle = 'history' | 'named' | 'done' | 'active' | 'detail'
+export type SessionToggle = 'history' | 'named' | 'done' | 'active' | 'detail' | 'cascade'
 
 /**
  * The aside's rows, in reading order — PURE, so what is drawn and what a click resolves against are
@@ -1335,6 +1413,12 @@ export function asideRows(o: {
       kind: 'layout', value, label: o.layout.words[value], on: value === o.layout.value,
     })
   }
+  // The CASCADE sits with the layout rather than with the groupings, because that is what it is: a
+  // way of DRAWING the rows, orthogonal to what the bands stand for. It was a grouping, which made
+  // "show me the directories" cost every band on the screen.
+  rows.push({
+    kind: 'toggle', toggle: 'cascade', label: o.toggleWords.cascade, on: o.toggles.cascade,
+  })
   rows.push({ kind: 'rule' }, { kind: 'heading', label: o.headings.view })
   for (const g of GROUPINGS) {
     rows.push({ kind: 'group', value: g, label: o.groupWords[g], on: g === o.grouping })
@@ -2682,4 +2766,85 @@ export function closeCellWidth(_rows: readonly ControlSession[], _width: number)
  */
 export function canClose(s: ControlSession): boolean {
   return s.actionable && s.state !== 'closed' && s.state !== 'exited'
+}
+
+// ---------------------------------------------------------------------------
+// the cascade's own lines
+// ---------------------------------------------------------------------------
+
+/** What one level of the cascade costs on the left of a row — a bar and a space, or the connector. */
+export const TREE_CELL = 2
+
+/**
+ * The tree GUIDES for a drawn list — PURE, one string per row, all padded to one width.
+ *
+ * Indentation alone does not read as a tree. The cascade drew its branches two spaces further right
+ * per level and nothing else, so a reader sees a list whose headings wander rightwards: which node
+ * a row hangs off, and where a branch ends, are exactly the two facts the shape is supposed to
+ * carry, and both were left to be inferred from a column position.
+ *
+ * The rules are the ones every tree in every file manager uses, and they are worth stating because
+ * each is load-bearing:
+ *
+ *  - a ROOT gets nothing. Two roots are two trees, and a bar between them would claim a parent that
+ *    does not exist;
+ *  - a branch is `├─` while a sibling follows it at the same level and `└─` when it is the last —
+ *    that is the only thing on screen saying where a subtree ENDS;
+ *  - an ancestor that still has siblings coming keeps a `│` running down through everything under
+ *    it, so a row three levels deep can be traced back to the node it belongs to;
+ *  - SESSION rows are children of their heading, so they carry the same bars one level deeper. A
+ *    heading connected to its parent above rows that are not is a tree drawn half way.
+ *
+ * Every prefix is padded to the widest, so the columns to their right stay in one grid — the table
+ * is read across as much as down, and a ragged left edge would cost that.
+ *
+ * Returns `[]` when nothing is nested, which is every arrangement but the cascade: the caller then
+ * pays no columns at all.
+ */
+export function treeGuides(rows: readonly SessionRow[]): string[] {
+  const deepest = rows.reduce((n, r) => Math.max(n, r.kind === 'heading' ? r.depth ?? 0 : 0), 0)
+  if (deepest === 0) return []
+
+  /** Does another heading at exactly `depth` follow, before one that closes it? */
+  const hasSibling = (from: number, depth: number): boolean => {
+    for (let i = from + 1; i < rows.length; i++) {
+      const r = rows[i]!
+      if (r.kind !== 'heading') continue
+      const d = r.depth ?? 0
+      if (d < depth) return false
+      if (d === depth) return true
+    }
+    return false
+  }
+
+  // `open[d]` — a node at depth `d` is still expecting siblings, so its bar keeps running.
+  const open: boolean[] = []
+  let head = 0
+  const out = rows.map((row, i) => {
+    if (row.kind === 'spacer') return ''
+    if (row.kind === 'heading') {
+      const depth = row.depth ?? 0
+      open.length = depth
+      open[depth] = hasSibling(i, depth)
+      head = depth
+      if (depth === 0) return ''
+      // Level 0 is skipped: its siblings are other ROOTS, and a bar there would join two trees.
+      const bars = open.slice(1, depth).map(more => (more ? '│ ' : '  ')).join('')
+      return `${bars}${open[depth] ? '├─' : '└─'}`
+    }
+    // A session hangs off the last heading, one level deeper than it.
+    if (head === 0) return ''
+    return open.slice(1, head + 1).map(more => (more ? '│ ' : '  ')).join('')
+  })
+
+  // Only the SESSION rows are padded to one width, and that is the whole of the difference between
+  // this and a plain indent: a heading is one string and may sit wherever its branch puts it, so
+  // each level steps right — while the rows under them are a TABLE, read across as much as down,
+  // and a ragged left edge would cost the grid. A heading that was padded too ended up starting a
+  // column to the RIGHT of the branch hanging off it, which draws the hierarchy upside down.
+  const width = out.reduce(
+    (n, p, i) => (rows[i]!.kind === 'session' ? Math.max(n, p.length) : n),
+    0,
+  )
+  return out.map((p, i) => (rows[i]!.kind === 'session' ? p.padEnd(width) : p))
 }

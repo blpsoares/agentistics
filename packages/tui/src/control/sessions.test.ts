@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  attentionOf, detailLines, groupSessions, rowWidth, selectableIndexes, sessionActions, sessionCells,
+  attentionOf, detailLines, groupSessions, rowWidth, treeGuides, selectableIndexes, sessionActions, sessionCells,
   sessionRows, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
   projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
@@ -249,6 +249,49 @@ describe('the CASCADE arrangement', () => {
   const inRepo = (id: string, cwd: string, over: Partial<ControlSession> = {}) => session(id, {
     cwd, project: cwd.split('/').pop() ?? cwd, projectGroup: 'agentistics', projectRoot: ROOT,
     ...over,
+  })
+
+  it('draws INSIDE any grouping — the bands stay, the directories cascade under them', () => {
+    // The whole point of the cascade becoming a view: picking it must not cost the bands. Grouped
+    // by task, each task keeps its heading and its sessions cascade by project and then by folder.
+    const list = [
+      inRepo('a', `${ROOT}/packages/tui`, { task: 'ui' }),
+      inRepo('b', `${ROOT}/packages/web`, { task: 'ui' }),
+      inRepo('c', ROOT, { task: 'ci' }),
+    ]
+    const bands = groupSessions(list, 'task', UNKNOWN, [], DEFAULT_ORDER, {}, true)
+    const labels = bands.map(g => `${'  '.repeat(g.depth ?? 0)}${g.label}`)
+    // Each task band, the project under it, then the folders. `packages` is a node rather than a
+    // compressed chain because two worktrees branch off it — which falls out of the tree's own rule.
+    expect(labels).toEqual([
+      'ci', '  agentistics',
+      'ui', '  agentistics', '    packages', '      tui', '      web',
+    ])
+    // Nothing was dropped or duplicated on the way.
+    expect(bands.flatMap(g => g.sessions.map(x => x.id)).sort()).toEqual(['a', 'b', 'c'])
+  })
+
+  it('drops the cascade root when the band ALREADY names that project', () => {
+    // Grouped by project the cascade's root is the band's own name. Repeating it would be a heading
+    // that says what the heading above it just said — the rule the `where` column follows too.
+    const list = [inRepo('a', `${ROOT}/packages/tui`), inRepo('b', ROOT)]
+    const bands = groupSessions(list, 'project', UNKNOWN, [], DEFAULT_ORDER, {}, true)
+    expect(bands.map(g => g.label)).toEqual(['agentistics', 'packages/tui'])
+    // The session sitting in the checkout itself hangs off the band, not off a repeated root.
+    expect(bands[0]!.sessions.map(x => x.id)).toEqual(['b'])
+    expect(bands[1]!.sessions.map(x => x.id)).toEqual(['a'])
+  })
+
+  it('is the plain cascade when there are no bands to draw it inside', () => {
+    const list = [inRepo('a', `${ROOT}/packages/tui`), inRepo('b', ROOT)]
+    expect(groupSessions(list, 'none', UNKNOWN, [], DEFAULT_ORDER, {}, true))
+      .toEqual(buildSessionTree(list, UNKNOWN))
+  })
+
+  it('changes nothing at all while it is off', () => {
+    const list = [inRepo('a', `${ROOT}/packages/tui`), inRepo('b', ROOT)]
+    expect(groupSessions(list, 'task', UNKNOWN, [], DEFAULT_ORDER, {}, false))
+      .toEqual(groupSessions(list, 'task', UNKNOWN))
   })
 
   it('is served by the tree module, so there is ONE cascade', () => {
@@ -708,7 +751,7 @@ describe('asideRows', () => {
     new: 'New', search: 'Search', group: 'Group',
   }
   const groupWords = { repo: 'repo', none: 'flat', tree: 'cascade', task: 'tasks', harness: 'harness', model: 'model', project: 'project', status: 'state', marked: 'marked' }
-  const toggleWords = { history: 'closed', named: 'named', done: 'done tasks', active: 'only active', detail: 'detail' }
+  const toggleWords = { history: 'closed', named: 'named', done: 'done tasks', active: 'only active', detail: 'detail', cascade: 'cascade' }
   const headings = { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' }
 
   const build = (o: Partial<Parameters<typeof asideRows>[0]> = {}) => asideRows({
@@ -716,7 +759,7 @@ describe('asideRows', () => {
     actionWords: words,
     grouping: 'none',
     groupWords,
-    toggles: { history: false, named: false, done: false, active: false, detail: false },
+    toggles: { history: false, named: false, done: false, active: false, detail: false, cascade: false },
     toggleWords,
     headings,
     layout: LAYOUT,
@@ -733,7 +776,7 @@ describe('asideRows', () => {
   })
 
   it('states every row own state, so nothing must be pressed to be discovered', () => {
-    const rows = build({ grouping: 'task', toggles: { history: true, named: false, done: false, active: false, detail: false } })
+    const rows = build({ grouping: 'task', toggles: { history: true, named: false, done: false, active: false, detail: false, cascade: false } })
     expect(rows.find(r => r.kind === 'group' && r.value === 'task')).toMatchObject({ on: true })
     expect(rows.find(r => r.kind === 'group' && r.value === 'none')).toMatchObject({ on: false })
     expect(rows.find(r => r.kind === 'toggle' && r.toggle === 'history')).toMatchObject({ on: true })
@@ -1223,10 +1266,10 @@ describe('the only-active toggle', () => {
       project: 'project', status: 'state', marked: 'marked',
     },
     layout: LAYOUT,
-    toggles: { history: false, named: false, done: false, active: true, detail: false },
+    toggles: { history: false, named: false, done: false, active: true, detail: false, cascade: false },
     toggleWords: {
       history: 'closed', named: 'named', done: 'done tasks',
-      active: 'only active', detail: 'detail',
+      active: 'only active', detail: 'detail', cascade: 'cascade',
     },
     headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
     ...(showUnfiled ? { tasks: TASK_SECTION } : {}),
@@ -2063,10 +2106,10 @@ describe('asideRows — the layout section', () => {
       project: 'project', status: 'state', marked: 'marked',
     },
     layout: { ...LAYOUT, value },
-    toggles: { history: false, named: false, done: false, active: true, detail: false },
+    toggles: { history: false, named: false, done: false, active: true, detail: false, cascade: false },
     toggleWords: {
       history: 'closed', named: 'named', done: 'done', active: 'active',
-      detail: 'detail',
+      detail: 'detail', cascade: 'cascade',
     },
     headings: { actions: 'ACTIONS', view: 'VIEW', show: 'SHOW' },
   })
@@ -2586,5 +2629,61 @@ describe('the per-row close control', () => {
       expect(closeCellWidth([closed, gone], width)).toBe(0)
       expect(closeCellWidth([], width)).toBe(0)
     }
+  })
+})
+
+describe('treeGuides', () => {
+  const head = (label: string, depth: number): SessionRow =>
+    ({ kind: 'heading', label, count: 1, depth, path: [label] })
+  const row = (id: string): SessionRow => ({ kind: 'session', session: session(id) })
+
+  it('draws nothing at all when nothing is nested', () => {
+    // Every flat arrangement — and then the guide column costs no width.
+    expect(treeGuides([head('a', 0), row('x'), head('b', 0), row('y')])).toEqual([])
+  })
+
+  it('gives a root no connector, because two roots are two trees', () => {
+    const guides = treeGuides([head('proj', 0), head('pkg', 1), row('x')])
+    expect(guides[0]!.trim()).toBe('')
+  })
+
+  it('closes the last branch with └─ and keeps the others open with ├─', () => {
+    const guides = treeGuides([
+      head('proj', 0), head('one', 1), row('x'), head('two', 1), row('y'),
+    ])
+    expect(guides[1]!.trimEnd()).toBe('├─')
+    expect(guides[3]!.trimEnd()).toBe('└─')
+  })
+
+  it('runs an ancestor bar down through everything under it', () => {
+    // `deep` hangs off `one`, which still has `two` coming — so the rows under `deep` have to carry
+    // `one`'s bar, or a row three levels down cannot be traced back to the node it belongs to.
+    const guides = treeGuides([
+      head('proj', 0), head('one', 1), head('deep', 2), row('x'), head('two', 1), row('y'),
+    ])
+    expect(guides[2]!.trimEnd()).toBe('│ └─')
+    expect(guides[3]!.trimEnd()).toBe('│')
+  })
+
+  it('gives a session the same bars as its heading, one level deeper', () => {
+    const guides = treeGuides([head('proj', 0), head('one', 1), row('x'), head('two', 1)])
+    expect(guides[2]!.trimEnd()).toBe('│')
+  })
+
+  it('pads the SESSION guides to one width and leaves the headings free', () => {
+    // The rows are a table and their left edge has to be straight; a heading is one string, and
+    // padding it would start it to the RIGHT of the branch hanging off it — the hierarchy upside
+    // down. So each heading steps right by its own depth while the rows below share a column.
+    const rows = [head('proj', 0), head('one', 1), head('deep', 2), row('x'), head('two', 1), row('y')]
+    const guides = treeGuides(rows)
+    const sessions = guides.filter((_g, i) => rows[i]!.kind === 'session')
+    expect(new Set(sessions.map(g => g.length)).size).toBe(1)
+    expect(guides[0]).toBe('')
+    expect(guides[1]!.length).toBeLessThan(guides[2]!.length)
+  })
+
+  it('leaves a spacer blank', () => {
+    const guides = treeGuides([head('proj', 0), head('one', 1), { kind: 'spacer' }, row('x')])
+    expect(guides[2]!.trim()).toBe('')
   })
 })

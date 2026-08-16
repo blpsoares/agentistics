@@ -42,6 +42,17 @@ const PANE_EDGE_X = 2
 const INDENT = '  '
 
 /**
+ * A stored grouping, as this build understands it.
+ *
+ * `tree` was a grouping before the cascade became a view: it meant "no bands, cascade on". The menu
+ * no longer offers it, so a preference still carrying it is rewritten rather than left selecting a
+ * row that does not exist — the caller turns the cascade on beside this.
+ */
+function groupingOf(stored: SessionGrouping): SessionGrouping {
+  return stored === 'tree' ? 'none' : stored
+}
+
+/**
  * How far down a scrolling region is, one cell per drawn row.
  *
  * A window with no bar is a list whose length is a secret: you cannot tell whether the row under
@@ -74,6 +85,7 @@ import {
   taskCounts, projectCounts, sessionMetric, sessionContext, contextLevel,
   sessionHandle, worktreeName, sessionRunning,
   sessionAge, sessionKeyHelp, keyHelpColumn, keyHelpLines, closeCellWidth, canClose, CLOSE_CELL,
+  treeGuides,
   DEFAULT_ORDER, ACTIVE_STATES, type SessionOrder, type SessionLayout,
   cardGrid, cardPages, pageOfCard, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
   cardHit, cardStep, cardPageRows, cardLabelWidth, CARD_LABEL_GAP, pagerCells, pagerHit,
@@ -212,8 +224,16 @@ export function Sessions({
   /** Store the arrangement, so a restart does not throw away what the user chose. */
   onView: (v: SessionViewPrefs) => void
 }) {
+  // A stored `grouping: 'tree'` predates the cascade being a view: it meant "no bands, cascade on",
+  // which is exactly `none` + cascade. Rewritten on the way in rather than left as a grouping the
+  // menu no longer offers — a machine that had it selected would otherwise be stuck in an
+  // arrangement it cannot see a row for.
   const [grouping, setGrouping] = useState<SessionGrouping>(
-    view?.grouping ?? DEFAULT_SESSION_VIEW.grouping,
+    groupingOf(view?.grouping ?? DEFAULT_SESSION_VIEW.grouping),
+  )
+  /** The directory cascade, drawn INSIDE whatever the bands are. See `groupSessions`. */
+  const [cascade, setCascade] = useState<boolean>(
+    view?.cascade ?? view?.grouping === 'tree',
   )
   /** A list of rows, or a grid of cards. See `cardGrid` for why the grid may refuse. */
   const [layout, setLayout] = useState<SessionLayout>(
@@ -359,14 +379,15 @@ export function Sessions({
     fleet?.finishedTasks ?? [],
     order,
     dimensionCtx,
+    cascade,
     // The heading is passed only when something ACTUALLY fell. `sessionRows` treats an absent word
     // as "there is no such section", so on an ordinary machine the reading order is unchanged
     // rather than carrying an empty block that exists to say nothing.
   ), s.sessionsClosedWord, s.sessionsDoneWord, fleet?.fell ? s.sessionsFellWord : undefined,
      // Absent when nothing is marked, so the band is not merely empty — it does not exist.
      marked.size > 0 ? { ids: marked, label: s.sessionsMarkedBand } : undefined), [
-    fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, query, filters, showNamed,
-    showDone, taskFilter, dimensionCtx, order, words, marked,
+    fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, cascade, query, filters,
+    showNamed, showDone, taskFilter, dimensionCtx, order, words, marked,
   ])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
@@ -489,11 +510,12 @@ export function Sessions({
     layout: { heading: s.asideLayout, words: s.sessionsLayouts, value: layout },
     toggles: {
       history: showHistory, done: showDone,
-      active: onlyActive, named: showNamed, detail: !hideDetail,
+      active: onlyActive, named: showNamed, detail: !hideDetail, cascade,
     },
     toggleWords: {
       history: s.toggleHistory, done: s.toggleDone,
       active: s.toggleActive, named: s.toggleNamed, detail: s.toggleDetail,
+      cascade: s.toggleCascade,
     },
     headings: { actions: s.asideActions, view: s.asideView, show: s.asideShow },
     tasks: {
@@ -758,7 +780,8 @@ export function Sessions({
    * both claim to do the same thing and are written twice are two things that will one day differ.
    */
   const resetView = useCallback(() => {
-    setGrouping(DEFAULT_SESSION_VIEW.grouping)
+    setGrouping(groupingOf(DEFAULT_SESSION_VIEW.grouping))
+    setCascade(DEFAULT_SESSION_VIEW.cascade ?? false)
     setShowDone(DEFAULT_SESSION_VIEW.showDone ?? false)
     // The DEFAULT's own filters, read back through the same migration the restore uses — so the
     // arrangement the app opens on and the one `ctrl+r` returns to are one answer, not two.
@@ -800,6 +823,7 @@ export function Sessions({
     if (row.toggle === 'history') return pressShortcut('history')
     if (row.toggle === 'active') return pressShortcut('active')
     setCursor(0)
+    if (row.toggle === 'cascade') return setCascade(v => !v)
     if (row.toggle === 'done') return setShowDone(v => !v)
     if (row.toggle === 'named') return setShowNamed(v => !v)
     return setHideDetail(v => !v)
@@ -1024,7 +1048,8 @@ export function Sessions({
   useEffect(() => {
     if (restored.current || !view) return
     restored.current = true
-    setGrouping(view.grouping)
+    setGrouping(groupingOf(view.grouping))
+    setCascade(view.cascade ?? view.grouping === 'tree')
     // Absent reads as OFF, which is the point of finishing a task at all.
     setShowDone(view.showDone ?? false)
     // ONE read of the stored filters, through the migration that decides what a file written by an
@@ -1079,10 +1104,11 @@ export function Sessions({
       showDone,
       hideDetail,
       layout,
+      cascade,
       ...(cardAnchor ? { cardAnchor } : {}),
       sort: order,
     } as SessionViewPrefs)
-  }, [grouping, filters, showNamed, showDone, hideDetail,
+  }, [grouping, cascade, filters, showNamed, showDone, hideDetail,
       layout, cardAnchor, order, marked, onView, view])
 
   useEffect(() => {
@@ -1353,6 +1379,16 @@ export function Sessions({
   // even do that, and the single scrolling pane is drawn instead.
   const foldRows = cockpit.aside > 0 ? asideFold(sections, cockpit.band, activeSection) : null
 
+  // The cascade's guide column, measured over the SAME window as the columns below. Empty for every
+  // flat arrangement, and then it costs nothing.
+  const guides = useMemo(() => treeGuides(visible), [visible])
+  // Measured over the SESSION rows, which are the ones padded to a common width — a heading's guide
+  // is as long as its own branch and says nothing about what the table has left.
+  const guideWidth = visible.reduce(
+    (n, r, i) => (r.kind === 'session' ? Math.max(n, (guides[i] ?? '').length) : n),
+    0,
+  )
+
   // Measured across the rows ON SCREEN, so the state, harness and directory columns line up. A
   // single long title thirty rows down must not narrow every visible row to pay for something
   // nobody can see.
@@ -1362,7 +1398,7 @@ export function Sessions({
       // The CONTENT width, not the pane's: measuring against the frame made every column four
       // characters wider than the row it was drawn into, and the table survived only because Ink
       // truncated it. Minus whatever the close control took.
-      listBody - closeCell,
+      listBody - closeCell - guideWidth,
       {
         groupedByTask: grouping === 'task',
         groupedByProject: grouping === 'project',
@@ -1370,7 +1406,7 @@ export function Sessions({
         ...(cockpit.header ? { headings: s.sessionsCols } : {}),
       },
     ),
-    [visible, listBody, closeCell, grouping, cockpit.header, ages, s],
+    [visible, listBody, closeCell, guideWidth, grouping, cockpit.header, ages, s],
   )
 
   // The wizard takes the WHOLE screen rather than the detail strip: it is six questions with a
@@ -1578,6 +1614,9 @@ export function Sessions({
           same measured widths so the heading can never sit over the wrong column. */}
       {cockpit.header && rows.length > 0 && !grid ? (
         <Text dimColor wrap="truncate">
+          {/* Shifted by the cascade's guide column, or the headings sit over the wrong cells the
+              moment the tree is on. */}
+          {' '.repeat(guideWidth)}
           {'  ' + (columns.id > 0 ? padCell(s.sessionsCols.id, columns.id) + '  ' : '')}
           {columns.harness > 0 ? padCell(s.sessionsCols.harness, columns.harness) + '  ' : ''}
           {padCell(s.sessionsCols.state, columns.state)}
@@ -1649,6 +1688,10 @@ export function Sessions({
         <Box flexDirection="column" flexShrink={0} width={listBody}>
           {visible.map((row, i) => {
             const index = offset + i
+            // The cascade's guides, measured over the SAME window the columns are measured over, so
+            // the two agree about how much room is left. Empty for every flat arrangement, which
+            // then pays no columns at all.
+            const guide = guides[i] ?? ''
             if (row.kind === 'spacer') return <Text key={`s${index}`}> </Text>
             if (row.kind === 'heading') {
               // A heading is drawn as a HEADING: accented, bold, with a rule running out to the
@@ -1658,18 +1701,23 @@ export function Sessions({
               // The cascade indents by its branch DEPTH, which is the whole of what the list has to
               // learn about the tree — the rest of this screen never finds out one exists. The card
               // grid, which has no indentation to spend, breadcrumbs the same branch instead.
-              const head = `${INDENT.repeat(row.depth ?? 0)}${row.label}  ${row.count}`
-              const rule = Math.max(0, listBody - head.length - 3)
+              // The guide REPLACES the old two-spaces-per-level indent: it says the same thing
+              // about depth and also says which node this hangs off and whether the branch ends
+              // here, neither of which a column position can carry.
+              const indent = guide || INDENT.repeat(row.depth ?? 0)
+              const head = `${row.label}  ${row.count}`
+              const rule = Math.max(0, listBody - indent.length - head.length - 3)
               return (
                 <Text key={`h${index}`} wrap="truncate">
+                  <Text dimColor>{indent}</Text>
                   <Text color={row.muted ? COLORS.muted : COLORS.secondary} bold={!row.muted}>
-                    {truncate(head, listBody)}
+                    {truncate(head, Math.max(1, listBody - indent.length))}
                   </Text>
                   <Text dimColor>{rule > 0 ? `  ${'─'.repeat(rule)}` : ''}</Text>
                 </Text>
               )
             }
-            return (
+            const rowView = (
               <SessionRowView
                 key={row.session.id}
                 session={row.session}
@@ -1677,9 +1725,18 @@ export function Sessions({
                 marked={marked.has(row.session.id)}
                 ages={ages}
                 columns={columns}
-                width={listBody}
+                width={listBody - guide.length}
                 closeCell={closeCell}
               />
+            )
+            // A session is a CHILD of its heading, so it carries the same bars one level deeper —
+            // a heading joined to its parent above rows that are not is a tree drawn half way.
+            if (!guide) return rowView
+            return (
+              <Box key={row.session.id} flexDirection="row" flexShrink={0}>
+                <Text dimColor>{guide}</Text>
+                {rowView}
+              </Box>
             )
           })}
         </Box>

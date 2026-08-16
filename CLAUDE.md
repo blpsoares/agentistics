@@ -1168,17 +1168,30 @@ packages/tui/src/
     session-order.ts PURE: what a fleet is ordered BY, and the ranking every surface breaks ties
                      on. Below `sessions.ts` so `session-tree.ts` can read it without the two
                      importing each other — `sessions.ts` re-exports every name
-    session-tree.ts  PURE: the CASCADE arrangement (`tree`) — the project as the root and the
-                     segments of each session's `cwd` below it as branches, single-child chains
-                     compressed. It returns the SAME `SessionGroup[]` the flat arrangements return,
-                     already in reading order, with `depth` and `path` on top — which is what lets
-                     `sessionRows`, `cardPages`, `selectableIndexes`, the cursor, the row budget,
-                     the marked band and the search keep working without knowing a tree exists.
-                     `groupSessions` dispatches it in the one line that already special-cases
-                     `none`. `tree` is an ARRANGEMENT and stays OUT of `DIMENSION_ORDER`: a session
+    session-tree.ts  PURE: the CASCADE — the project as the root and the segments of each session's
+                     `cwd` below it as branches, single-child chains compressed. It returns the SAME
+                     `SessionGroup[]` the flat arrangements return, already in reading order, with
+                     `depth` and `path` on top — which is what lets `sessionRows`, `cardPages`,
+                     `selectableIndexes`, the cursor, the row budget, the marked band and the search
+                     keep working without knowing a tree exists. **The cascade is a VIEW, not a
+                     grouping**: it was one of the groupings, so choosing "show me the directories"
+                     cost every band on the screen. `groupSessions` takes a `cascade` flag and draws
+                     the tree INSIDE each band (`cascadeInside`), which composes with every
+                     dimension — the band says what the rows have in common, the cascade says where
+                     each one is. Grouped BY project the cascade's root would repeat the band's own
+                     name, so that one level is dropped; everywhere else the project IS new
+                     information and stays. `tree` survives as a `SessionGroupingId` ONLY so a
+                     stored preference still parses (migrated on read to `none` + cascade) and is
+                     absent from `ARRANGEMENTS`; it may never become a DIMENSION, because a session
                      belongs to EVERY node on its path, so "filter to `packages`" and "the band
                      `packages`" could never agree, and `session-dimensions.test.ts` cross-checks
-                     exactly that agreement for every id in there. Branches are measured against
+                     exactly that agreement for every id in there. **`treeGuides` is what makes it
+                     read as a cascade**: `├─`/`└─` per branch and a `│` running down through every
+                     row under a node that still has siblings — indentation alone leaves "which node
+                     does this hang off" and "where does this branch end" to be inferred from a
+                     column position. Only the SESSION guides are padded to one width (the rows are
+                     a table); a heading steps right by its own depth, and padding it too started it
+                     to the RIGHT of the branch hanging off it. Branches are measured against
                      `ControlSession.projectRoot` — the main checkout's PATH, from
                      `decideRepoFacts`, recorded at spawn — because deriving them by
                      string-matching the project's NAME against the cwd goes wrong wherever a
