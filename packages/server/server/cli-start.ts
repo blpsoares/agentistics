@@ -120,7 +120,7 @@ import { conversationHeldBy } from './sessions/conversation-claim'
 import { liveConversationHolders } from './sessions/live-claims'
 import type { ManagedSession, SpawnPlanError } from './sessions/types'
 import {
-  addSession, newSessionId, patchSession, readRegistry, removeSession, touchSessions,
+  addSession, newSessionId, patchSession, readRegistry, removeSession, retireFallenSessions, touchSessions,
 } from './sessions/registry'
 import { createSessionsPoller, type SessionsPoller } from './sessions/sessions-host'
 import { conversationForProcess, forgetConversations, loadConversations } from './sessions/conversations'
@@ -1449,6 +1449,17 @@ async function spawnManaged(req: {
     ...(await recordedRepo(req.cwd)),
   })
 
+  const convId = planned.plan.conversationId ?? req.resumeId
+  const liveBackend = await backend.list().catch(() => [])
+  const backendIds = new Set(liveBackend.map(b => b.id))
+  await retireFallenSessions({
+    newSessionId: id,
+    conversationId: convId,
+    cwd: req.cwd,
+    harness: req.harness,
+    backendIds,
+  })
+
   const name = req.label ?? id
   if (!req.attach) return { ok: true, id, message: s.sessStartedBg(name) }
   return {
@@ -2585,6 +2596,17 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
         // The old row is RETIRED rather than deleted: it is still a thing that happened, and it
         // stops standing beside its own continuation with the same name on it.
         if (previous) await patchSession(previous.id, { endedAt: new Date().toISOString() })
+
+        const liveBackend = await (await resolveBackend()).list().catch(() => [])
+        const backendIds = new Set(liveBackend.map(b => b.id))
+        await retireFallenSessions({
+          newSessionId: spawned.id,
+          conversationId: req.sessionId,
+          cwd: req.cwd,
+          harness: req.harness,
+          backendIds,
+        })
+
         // The store's view of what is running just changed, and the next poll must see it rather
         // than waiting out the cache and showing the conversation as still closed.
         forgetConversations()
