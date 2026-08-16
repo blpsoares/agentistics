@@ -1653,7 +1653,10 @@ async function restorableSessions(fell: readonly ManagedSession[]): Promise<Rest
   }))
 }
 
-function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
+export function createControlHost(
+  initialLang: CliLang = 'pt',
+  altScreen: Suspendable = { suspend: <T>(fn: () => Promise<T>) => fn() },
+): StartHost {
   let lang = initialLang
   const S = () => cliStrings(lang)
   // Built here so it always reports in the language the host is currently speaking.

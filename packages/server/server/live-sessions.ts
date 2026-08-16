@@ -571,6 +571,8 @@ export interface LiveSnapshot {
   liveProcesses: UnmatchedProcess[]
   /** Map of session_id to current activity status (working, waiting, waiting-approval, exited). */
   liveSessionActivities?: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'>
+  /** Map of session_id to current approval dialog information. */
+  liveApprovals?: Record<string, import('@agentistics/core').LiveApprovalInfo>
   /** Set when this configuration cannot observe host processes AT ALL. An empty list then means
    *  "we cannot know", not "nobody is working", and the UI must say which. */
   liveUnavailable?: LiveUnavailableReason
@@ -634,6 +636,7 @@ export async function getLiveSnapshot(sessions: SessionMeta[]): Promise<LiveSnap
   const snap = resolveLiveSnapshot(procs, sessions)
 
   const liveSessionActivities: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'> = {}
+  const liveApprovals: Record<string, import('@agentistics/core').LiveApprovalInfo> = {}
   try {
     const { createEventStore } = await import('./events/event-store')
     const store = createEventStore()
@@ -659,6 +662,25 @@ export async function getLiveSnapshot(sessions: SessionMeta[]): Promise<LiveSnap
     }
   }
 
-  const result: LiveSnapshot = { ...snap, liveSessionActivities }
+  try {
+    const { createControlHost } = await import('./cli-start')
+    const host = createControlHost()
+    if (host.sessions) {
+      const ctrlSnap = await host.sessions()
+      for (const s of ctrlSnap.sessions) {
+        if (s.canApprove || s.canChoose || (s.dialogOptions && s.dialogOptions.length > 0) || (s.approvalLines && s.approvalLines.length > 0)) {
+          liveApprovals[s.id] = {
+            approvalLines: s.approvalLines,
+            dialogOptions: s.dialogOptions,
+            canApprove: s.canApprove,
+            canChoose: s.canChoose,
+          }
+          liveSessionActivities[s.id] = 'waiting-approval'
+        }
+      }
+    }
+  } catch { /* best effort */ }
+
+  const result: LiveSnapshot = { ...snap, liveSessionActivities, liveApprovals }
   return unavailable ? { ...result, liveUnavailable: unavailable } : result
 }

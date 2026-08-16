@@ -222,6 +222,7 @@ export async function parseSessionJsonl(
   // Maps tool_use_id → tool name for error attribution
   const toolUseIdToName = new Map<string, string>()
   let lastAssistantTs = ''
+  const transcriptParts: string[] = []
   // Per-turn timeline feeding computeActiveTime() — see docs/harness-contract.md. Every
   // timestamped line advances the clock; only a genuine human message opens a turn; Claude Code's
   // own `system`/`turn_duration` line closes one with the duration IT measured.
@@ -307,15 +308,16 @@ export async function parseSessionJsonl(
         // All messages after the first count as interruptions
         if (userMsgs > 1) userInterruptions++
 
-        if (!firstPrompt && contentArr) {
+        if (contentArr) {
           for (const p of contentArr) {
-            if (p.type === 'text' && typeof p.text === 'string') {
-              firstPrompt = (p.text as string).slice(0, 200)
-              break
+            if (p.type === 'text' && typeof p.text === 'string' && p.text.trim()) {
+              transcriptParts.push(p.text.trim())
+              if (!firstPrompt) firstPrompt = p.text.trim().slice(0, 200)
             }
           }
-        } else if (!firstPrompt && typeof msgContent === 'string') {
-          firstPrompt = msgContent.slice(0, 200)
+        } else if (typeof msgContent === 'string' && msgContent.trim()) {
+          transcriptParts.push(msgContent.trim())
+          if (!firstPrompt) firstPrompt = msgContent.trim().slice(0, 200)
         }
       }
     } else if (e.type === 'assistant') {
@@ -339,6 +341,9 @@ export async function parseSessionJsonl(
       const toolsInMessage: string[] = []
       if (Array.isArray(msg?.content)) {
         for (const p of msg!.content as Record<string, unknown>[]) {
+          if (p.type === 'text' && typeof p.text === 'string' && p.text.trim()) {
+            transcriptParts.push(p.text.trim())
+          }
           if (p.type === 'tool_use' && typeof p.name === 'string') {
             const toolName = p.name as string
             toolCounts[toolName] = (toolCounts[toolName] ?? 0) + 1
@@ -442,6 +447,7 @@ export async function parseSessionJsonl(
     ...(contextTokens > 0 ? { context_tokens: contextTokens } : {}),
     first_prompt: firstPrompt,
     title: sessionTitle || undefined,
+    transcript_text: transcriptParts.join(' ').replace(/\s+/g, ' ').slice(0, 200000) || undefined,
     user_interruptions: userInterruptions,
     user_response_times: userResponseTimes,
     tool_errors: toolErrors,

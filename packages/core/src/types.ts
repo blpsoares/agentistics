@@ -181,6 +181,8 @@ export interface SessionMeta {
    *  the transcript; we surface it as the session's display name. Falls back to `first_prompt`
    *  in the UI when absent (older sessions, non-Claude harnesses). */
   title?: string
+  /** Concatenated user & assistant conversation messages text for full-text search across sessions. */
+  transcript_text?: string
   /**
    * The name the USER gave this session in the session manager, and their own note.
    *
@@ -457,6 +459,7 @@ export interface AppData {
   /** Assistants running right now that have no persisted session yet (e.g. an agy that has not
    *  completed its first turn). Carries no metrics — there is nothing measured yet. */
   liveProcesses?: LiveProcess[]
+  liveApprovals?: Record<string, LiveApprovalInfo>
   /** Why this machine cannot observe running assistants AT ALL. Set only when detection is
    *  structurally impossible here (not Linux, no /proc, a container that cannot see the host's
    *  processes, or one whose uid may not read their cwd). An empty list then means "we cannot
@@ -477,6 +480,13 @@ export type LiveUnavailableReason =
   | 'permission-denied'
   /** This exposure profile has revoked local host power (`CAPS.localProcesses`). */
   | 'capability-off'
+
+export interface LiveApprovalInfo {
+  approvalLines?: string[]
+  dialogOptions?: Array<{ number: number; label: string }>
+  canApprove?: boolean
+  canChoose?: boolean
+}
 
 /**
  * Drops any `dailyActivity`/`dailyModelTokens` entry whose `date` is missing or not a string.
