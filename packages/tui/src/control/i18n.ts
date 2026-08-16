@@ -734,7 +734,7 @@ const EN: ControlStrings = {
   sessionsPaneRestore: 'last time',
   restoreTitle: (n: number) =>
     n === 1 ? 'Your last session was this one:' : `Your last ${n} sessions were these:`,
-  restoreAnswer: 'enter starts them in the background · esc leaves them closed',
+  restoreAnswer: 'enter / R reopens active · L / tab go to list · esc ignore',
   sessionsKeyWhat: {
     move: 'move the cursor',
     open: 'switch between the menu and the list',
@@ -1153,7 +1153,7 @@ const PT: ControlStrings = {
   sessionsPaneRestore: 'da última vez',
   restoreTitle: (n: number) =>
     n === 1 ? 'Sua última sessão foi esta:' : `Suas últimas ${n} sessões foram estas:`,
-  restoreAnswer: 'enter inicia em background · esc deixa fechadas',
+  restoreAnswer: 'enter / R reabre as ativas · L / tab ir para a listagem · esc ignora',
   sessionsKeyWhat: {
     move: 'move o cursor',
     open: 'alterna entre o menu e a lista',
