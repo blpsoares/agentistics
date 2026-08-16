@@ -1,3 +1,5 @@
+
+
 <p align="center">
   <img src="packages/web/public/logo.png" alt="agentistics" width="180" />
 </p>
@@ -269,7 +271,7 @@ A central can be published behind a tunnel. `AGENTISTICS_EXPOSURE` selects a pro
 profile is the only thing that decides a capability; no opt-in re-enables host power on `public`.
 
 ```bash
-agentop doctor --exposed     # run this BEFORE opening a tunnel
+./central.sh doctor --exposed   # run this BEFORE opening a tunnel
 ```
 
 A check that could not be verified reports `fail`, never a reassuring `pass`.
