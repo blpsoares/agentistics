@@ -43,7 +43,6 @@ async function readLocalLiveSnapshot(sessions: SessionMeta[]): Promise<{
   liveSessionIds: string[]
   liveProcesses: LiveProcess[]
   liveSessionActivities?: Record<string, 'working' | 'waiting' | 'waiting-approval' | 'exited'>
-  liveApprovals?: Record<string, import('@agentistics/core').LiveApprovalInfo>
   liveUnavailable?: LiveUnavailableReason
 }> {
   if (!CAPS.localProcesses) {
@@ -1297,66 +1296,6 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       } catch {
         return new Response(JSON.stringify({ liveSessionIds: [], liveProcesses: [] }), {
           status: 200,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        })
-      }
-    }
-
-    if (url.pathname === '/api/session-answer' && req.method === 'POST') {
-      try {
-        const body = await req.json() as { id?: string; choice?: number }
-        if (!body.id || typeof body.id !== 'string') {
-          return new Response(JSON.stringify({ ok: false, message: 'Missing session id' }), {
-            status: 400,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-          })
-        }
-        const { createControlHost } = await import('./cli-start')
-        const ctrl = createControlHost()
-        if (!ctrl.answerSession) {
-          return new Response(JSON.stringify({ ok: false, message: 'Answer session not supported' }), {
-            status: 400,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-          })
-        }
-        const result = await ctrl.answerSession(body.id, body.choice)
-        return new Response(JSON.stringify(result), {
-          status: result.ok ? 200 : 400,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        })
-      } catch (err) {
-        return new Response(JSON.stringify({ ok: false, message: err instanceof Error ? err.message : String(err) }), {
-          status: 500,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        })
-      }
-    }
-
-    if (url.pathname === '/api/session-prompt' && req.method === 'POST') {
-      try {
-        const body = await req.json() as { id?: string; text?: string }
-        if (!body.id || typeof body.id !== 'string' || !body.text) {
-          return new Response(JSON.stringify({ ok: false, message: 'Missing session id or text' }), {
-            status: 400,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-          })
-        }
-        const { createControlHost } = await import('./cli-start')
-        const ctrl = createControlHost()
-        if (!ctrl.promptSession) {
-          return new Response(JSON.stringify({ ok: false, message: 'Prompt session not supported' }), {
-            status: 400,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-          })
-        }
-        const result = await ctrl.promptSession(body.id, body.text)
-        return new Response(JSON.stringify(result), {
-          status: result.ok ? 200 : 400,
-          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        })
-      } catch (err) {
-        return new Response(JSON.stringify({ ok: false, message: err instanceof Error ? err.message : String(err) }), {
-          status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }

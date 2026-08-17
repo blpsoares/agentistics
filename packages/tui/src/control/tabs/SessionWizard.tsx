@@ -466,24 +466,6 @@ function ProjectSearch({ host, strings: s, width, height, isActive, onPick }: {
   }, [host, query])
 
   const list = options ?? []
-
-  const sourceWord = useCallback((o: ProjectOption): string =>
-    o.source === 'cwd' ? s.wizSourceCwd
-      : o.source === 'typed' ? s.wizSourceTyped
-      : o.source === 'history' ? s.wizSourceHistory
-      : o.source === 'repo' ? s.wizSourceRepo
-      : '', [s])
-
-  const table: ProjectRow[] = useMemo(() => list.map(o => ({
-    name: o.label, repo: o.repo ?? '', path: o.detail, why: sourceWord(o),
-  })), [list, sourceWord])
-
-  const picks = useMemo(() => projectPickRows(table, s.wizNoRepo), [table, s.wizNoRepo])
-  const flat = picks.rows
-  const visualIndices = useMemo(() => flat
-    .filter((r): r is { kind: 'project'; row: ProjectRow; index: number } => r.kind === 'project')
-    .map(r => r.index), [flat])
-
   const at = list.length === 0 ? 0 : Math.min(index, list.length - 1)
 
   useInput((input, key) => {
@@ -496,11 +478,8 @@ function ProjectSearch({ host, strings: s, width, height, isActive, onPick }: {
     if (key.backspace || key.delete) { setQuery(v => v.slice(0, -1)); return }
     if (key.upArrow || key.downArrow) {
       const nav: NavKey = { input, upArrow: key.upArrow, downArrow: key.downArrow }
-      const currentVis = visualIndices.indexOf(at)
-      const baseIdx = currentVis >= 0 ? currentVis : 0
-      const nextVis = resolveListKey(nav, baseIdx, Math.max(1, visualIndices.length))
-      const nextAt = visualIndices[nextVis] ?? 0
-      if (nextAt !== at) setIndex(nextAt)
+      const next = resolveListKey(nav, at, Math.max(1, list.length))
+      if (next !== at) setIndex(next)
       return
     }
     if (key.ctrl && input === 'u') { setQuery(''); return }
@@ -512,6 +491,24 @@ function ProjectSearch({ host, strings: s, width, height, isActive, onPick }: {
   // Label, hint, the field itself — and the table's header row.
   const page = Math.max(1, height - 4)
 
+  // A folder that was merely FOUND on disk must not read like one you have worked in — the words
+  // are the only thing distinguishing them, since both are just a directory name on a row.
+  const sourceWord = (o: ProjectOption): string =>
+    o.source === 'cwd' ? s.wizSourceCwd
+      : o.source === 'typed' ? s.wizSourceTyped
+      : o.source === 'history' ? s.wizSourceHistory
+      : o.source === 'repo' ? s.wizSourceRepo
+      : ''
+
+  const table: ProjectRow[] = list.map(o => ({
+    name: o.label, repo: o.repo ?? '', path: o.detail, why: sourceWord(o),
+  }))
+  // Grouped by REPOSITORY, which is the shape of the question: three worktrees of one repo are
+  // three answers to "which checkout", and a flat list mixed them in among unrelated folders that
+  // merely sorted nearby. The repo COLUMN then goes — the heading over the row already says it,
+  // the same rule the sessions list follows for its task cell — and the path gets the width back.
+  const picks = projectPickRows(table, s.wizNoRepo)
+  const flat = picks.rows
   // Windowed over the DRAWN rows, not the projects: headings take rows too, and paging by project
   // count scrolls the selection off a list whose real length is larger than the number it counted.
   const cursorAt = Math.max(0, flat.findIndex(r => r.kind === 'project' && r.index === at))
