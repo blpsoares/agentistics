@@ -1,4 +1,4 @@
-import { test, expect } from 'bun:test'
+import { test, expect, describe, beforeEach, afterEach } from 'bun:test'
 import {
   agentWsUrl, backoffDelay, BACKOFF_MS, fingerprintOf, shouldTeardown, decodeAgentFrame,
 } from './team-agent-client'
@@ -225,4 +225,91 @@ test('the socket state maps are left empty by these tests — no cross-test leak
   // test (or a later run in a different order) can never observe another's socket state.
   expect([...S.activeWs.keys()].filter(k => k.startsWith('c_aaaaaaaaaaa'))).toEqual([])
   expect([...S.backoffIdx.keys()].filter(k => k.startsWith('c_aaaaaaaaaaa'))).toEqual([])
+})
+
+// ---------------------------------------------------------------------------
+// resolveMemberIdentity — best-effort whoami resolution, including machineName
+// ---------------------------------------------------------------------------
+
+import { resolveMemberIdentity } from './team-agent-client'
+import type { TeamConfig } from '@agentistics/core'
+import type { TeamConfigMutator } from './preferences'
+
+function fakeConn(port: number, extra: Partial<TeamConnection> = {}): TeamConnection {
+  return {
+    id: 'c_test', endpoint: `http://127.0.0.1:${port}`, org: 'default', user: '',
+    token: 'tok', deniedRepos: [], ...extra,
+  }
+}
+
+/** Same in-memory fake `team-uploader.test.ts` uses — never touches the real preferences file. */
+function fakeStore(conn: TeamConnection): {
+  store: TeamConfig
+  update: typeof import('./preferences').updateTeamConfig
+} {
+  let store: TeamConfig = { schema: 2, mode: 'member', connections: [conn] }
+  const update = (async (mutate: TeamConfigMutator) => {
+    const next = mutate(store)
+    if (next !== undefined) store = next
+    return store
+  }) as typeof import('./preferences').updateTeamConfig
+  return { get store() { return store }, update } as never
+}
+
+describe('resolveMemberIdentity', () => {
+  test('resolves BOTH user and machineName from one whoami call when both are missing', async () => {
+    await using server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ ok: true, user: 'resolved-name', org: 'default', machineName: 'laptop-b' }),
+    })
+    const conn = fakeConn(server.port!)
+    const fx = fakeStore(conn)
+
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update })
+
+    expect(fx.store.connections[0]?.user).toBe('resolved-name')
+    expect(fx.store.connections[0]?.machineName).toBe('laptop-b')
+  })
+
+  test('a connection whose user is already resolved but whose machineName is still missing gets machineName backfilled', async () => {
+    await using server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ ok: true, user: 'already-resolved', org: 'default', machineName: 'laptop-b' }),
+    })
+    const conn = fakeConn(server.port!, { user: 'already-resolved' })
+    const fx = fakeStore(conn)
+
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update })
+
+    expect(fx.store.connections[0]?.machineName).toBe('laptop-b')
+  })
+
+  test('a connection with BOTH already resolved keeps its machineName when a later call reaches a central that omits it', async () => {
+    await using server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ ok: true, user: 'already-resolved', org: 'default' }), // no machineName this time
+    })
+    const conn = fakeConn(server.port!, { user: 'already-resolved', machineName: 'laptop-b' })
+    const fx = fakeStore(conn)
+
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update })
+
+    // Its existing machineName survives — a response that merely OMITS the field is not evidence
+    // the central un-named the machine, the same non-destructive rule `applyProjectFacts` follows.
+    expect(fx.store.connections[0]?.machineName).toBe('laptop-b')
+  })
+
+  test('a connection with BOTH already resolved never calls the central at all', async () => {
+    let hits = 0
+    await using server = Bun.serve({
+      port: 0,
+      fetch: () => { hits++; return Response.json({ ok: true, user: 'x', org: 'default' }) },
+    })
+    const conn = fakeConn(server.port!, { user: 'already-resolved', machineName: 'laptop-b' })
+    const fx = fakeStore(conn)
+
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update })
+
+    expect(hits).toBe(0)
+  })
 })

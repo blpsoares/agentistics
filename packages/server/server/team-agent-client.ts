@@ -247,13 +247,28 @@ function stopLiveReporting(connId: string): void {
 
 /**
  * Best-effort: this connection's `user` (the display name, resolved from GET /api/team/whoami)
- * is still unresolved — try again. Fires on every reconcile cycle while `conn.user === ''`, so a
- * connection added while its central was briefly down keeps retrying instead of pushing nothing
- * forever with no path to a name. Never overlaps two in-flight calls for the same connection id.
- * Never throws; updates preferences via `updateTeamConfig` so a concurrent writer (e.g. the
- * uploader resolving the SAME connection, or the user editing Settings) cannot be clobbered.
+ * is still unresolved — try again. Fires on every reconcile cycle while `conn.user === ''` OR
+ * `conn.machineName` is still unset — a connection whose USER resolved fine can still be missing
+ * its machineName forever otherwise: made against a central release that predates the field, or
+ * whose first whoami raced a central that had not minted one yet. That left the header's central
+ * pill showing the ACCOUNT in the machine's place, with no cycle that would ever ask again — see
+ * the header docs in CLAUDE.md's `packages/tui` section.
+ *
+ * A connection with BOTH already resolved never calls the central at all — this loop runs every
+ * 5s, and the ordinary case (a healthy, fully-resolved connection) must cost nothing.
+ *
+ * Never overlaps two in-flight calls for the same connection id. Never throws; updates
+ * preferences via `updateTeamConfig` so a concurrent writer (e.g. the uploader resolving the SAME
+ * connection, or the user editing Settings) cannot be clobbered.
+ *
+ * `deps.updateTeamConfig` is injectable for tests — the default touches the developer's real
+ * ~/.agentistics/preferences.json, which a test must never do.
  */
-async function resolveMemberIdentity(conn: TeamConnection): Promise<void> {
+export async function resolveMemberIdentity(
+  conn: TeamConnection,
+  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+): Promise<void> {
+  if (conn.user && conn.machineName) return
   if (resolvingUser.has(conn.id)) return
   resolvingUser.add(conn.id)
   try {
@@ -266,9 +281,12 @@ async function resolveMemberIdentity(conn: TeamConnection): Promise<void> {
       signal: AbortSignal.timeout(5_000),
     })
     if (!res.ok) return
-    const json = await res.json() as { ok?: boolean; user?: string }
+    const json = await res.json() as { ok?: boolean; user?: string; machineName?: unknown }
     if (!json.ok || typeof json.user !== 'string' || !json.user) return
-    await persistConnectionUser(conn.id, json.user)
+    const machineName = typeof json.machineName === 'string' && json.machineName
+      ? json.machineName
+      : undefined
+    await persistConnectionUser(conn.id, json.user, machineName, deps)
   } catch {
     // best-effort — retried on the next reconcile cycle
   } finally {
@@ -276,19 +294,30 @@ async function resolveMemberIdentity(conn: TeamConnection): Promise<void> {
   }
 }
 
-/** Read-modify-write JUST this connection's `user`, inside preferences.ts's single write chain
- *  (`updateTeamConfig`) so it can never race another writer (e.g. the connection being removed,
- *  or Settings saving a label edit) into a stale array. No-op (no write) once the value already
- *  matches, or once the connection is gone from preferences. */
-async function persistConnectionUser(connId: string, user: string): Promise<void> {
+/** Read-modify-write THIS connection's `user` and, when resolved, its `machineName` — inside
+ *  preferences.ts's single write chain (`updateTeamConfig`) so it can never race another writer
+ *  (e.g. the connection being removed, or Settings saving a label edit) into a stale array.
+ *  No-op (no write) once both values already match, or once the connection is gone from
+ *  preferences. `machineName` is written only when resolved (`undefined` leaves the stored value
+ *  untouched) — a central response that merely omits the field is never evidence it un-named the
+ *  machine, the same non-destructive rule `applyProjectFacts` follows for `git_remote`. */
+async function persistConnectionUser(
+  connId: string,
+  user: string,
+  machineName: string | undefined,
+  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+): Promise<void> {
+  const _updateTeamConfig = deps.updateTeamConfig ?? updateTeamConfig
   try {
-    await updateTeamConfig(current => {
+    await _updateTeamConfig(current => {
       const existing = current.connections ?? []
       const idx = existing.findIndex(c => c.id === connId)
       if (idx === -1) return undefined // removed meanwhile — nothing to update
-      if (existing[idx]!.user === user) return undefined // already current
+      const userChanged = existing[idx]!.user !== user
+      const nameChanged = machineName !== undefined && existing[idx]!.machineName !== machineName
+      if (!userChanged && !nameChanged) return undefined // already current
       const next = existing.slice()
-      next[idx] = { ...next[idx]!, user }
+      next[idx] = { ...next[idx]!, user, ...(machineName !== undefined ? { machineName } : {}) }
       return normalizeTeamConfig({ ...current, connections: next })
     })
   } catch {
@@ -369,7 +398,7 @@ function openConnection(conn: TeamConnection): void {
         if (decision.refreshDashboard) m.notifySseClients()
       }).catch(() => { /* best-effort */ })
     }
-    if (decision.userUpdate !== null) void persistConnectionUser(conn.id, decision.userUpdate)
+    if (decision.userUpdate !== null) void persistConnectionUser(conn.id, decision.userUpdate, undefined)
   })
 
   socket.addEventListener('close', () => { handleSocketClose(conn.id, socket) })
@@ -482,7 +511,7 @@ async function reconcileConnection(): Promise<void> {
     if (!live || live.readyState > WebSocket.OPEN) {
       openConnection(conn)
     }
-    if (!conn.user) {
+    if (!conn.user || !conn.machineName) {
       void resolveMemberIdentity(conn)
     }
   }

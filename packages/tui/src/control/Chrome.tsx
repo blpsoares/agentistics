@@ -113,19 +113,16 @@ function HeaderTag({ meta }: { meta: HeaderMeta }) {
   return (
     <Text>
       <Text dimColor>{meta.text}</Text>
-      {/* WHICH machine, and whether its link is alive. In `secondary` rather than dim: it is the
-          thing a person scans for when two terminals look identical, so it has to be findable at a
-          glance without competing with the waiting counter's accent. */}
-      {/* The link's own dot, and it is the ONLY coloured thing in this cell: green while the last
-          push landed, amber while it is merely quiet, red when the central refused or cannot be
-          reached. A `stale` link is deliberately not red — the central owns the push cadence and
-          may simply have nothing to say, and a warning that cries wolf is one people stop reading.
-          The state is said in words on the connection card too; colour never carries it alone. */}
+      {/* WHICH machine, and whether its link is alive. The dot AND the text share the link's own
+          colour — green while the last push landed, amber while it is merely quiet, red when the
+          central refused or cannot be reached. They used to disagree: the dot carried the state
+          and the text sat in a fixed indigo that reads as violet on most terminals, so a failing
+          link and a healthy one were printed in the exact same colour except for one character. A
+          `stale` link is deliberately not red — the central owns the push cadence and may simply
+          have nothing to say, and a warning that cries wolf is one people stop reading. The state
+          is said in words on the connection card too; colour never carries it alone. */}
       {meta.machine ? (
-        <>
-          <Text color={LINK_COLOR[meta.machineState ?? 'ok']}>{' · ●'}</Text>
-          <Text color={COLORS.secondary}>{` ${meta.machine}`}</Text>
-        </>
+        <Text color={LINK_COLOR[meta.machineState ?? 'ok']}>{` · ● ${meta.machine}`}</Text>
       ) : null}
       {meta.alert ? <Text color={COLORS.accent} bold>{` · ${meta.alert}`}</Text> : null}
       {/* The parallel-sessions budget. Dim while there is room, `danger` once the ceiling is close
