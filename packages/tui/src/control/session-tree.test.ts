@@ -42,7 +42,7 @@ const inRepo = (id: string, cwd: string, over: Partial<ControlSession> = {}): Co
   stateLabel: 'waiting',
   actionable: true,
   attached: false,
-  searchText: id,
+  searchFields: { name: id, folder: '', harness: '', note: '', task: '', prompt: '' },
   ...over,
 })
 
@@ -57,7 +57,7 @@ const loose = (id: string, cwd: string, over: Partial<ControlSession> = {}): Con
   stateLabel: 'waiting',
   actionable: true,
   attached: false,
-  searchText: id,
+  searchFields: { name: id, folder: '', harness: '', note: '', task: '', prompt: '' },
   ...over,
 })
 

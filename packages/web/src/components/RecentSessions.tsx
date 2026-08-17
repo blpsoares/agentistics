@@ -3,6 +3,9 @@ import type { SessionMeta } from '@agentistics/core'
 import { sessionTime } from '../lib/sessionTime'
 import { formatProjectName, repoShortName, sessionLabel, sessionTokenTotal } from '@agentistics/core'
 import type { SessionActivity } from '../lib/sessionNotifications'
+import type { FleetActionId, FleetRow } from '../lib/fleet'
+import { encodeProjectDir, transcriptSource, transcriptUnavailableNote, type TranscriptMessage } from '../lib/sessionTranscript'
+import { SessionActionBar } from './SessionActionBar'
 import { resumeCommand } from '../lib/resumeCommand'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { format, parseISO } from 'date-fns'
@@ -11,7 +14,6 @@ import {
   ChevronRight,
   ChevronsLeft,
   Terminal,
-  Send,
   Check,
   Copy,
   ChevronsRight,
@@ -50,6 +52,18 @@ interface Props {
   activities?: Record<string, SessionActivity>
   viewMode?: 'list' | 'grid'
   onViewModeChange?: (mode: 'list' | 'grid') => void
+  /**
+   * The LIVE fleet, keyed by the stored session id it is driving — see `lib/fleet.ts`.
+   *
+   * Optional, and its absence is what makes this component reusable outside the Sessions page: the
+   * repo, project and custom-layout surfaces render the same rows as HISTORY and have no business
+   * offering to kill anything. A row with no fleet entry simply draws no action bar; it is never
+   * given a disabled one, because "agentop does not host this conversation" is a different fact
+   * from "this page did not ask".
+   */
+  fleet?: Map<string, FleetRow>
+  onFleetAction?: (req: { id: string; action: FleetActionId; text?: string; choice?: number })
+    => Promise<{ ok: boolean; message: string }>
   title?: React.ReactNode
   subtitle?: React.ReactNode
   topActions?: React.ReactNode
@@ -343,10 +357,6 @@ function isNayChatSession(projectPath: string): boolean {
   return projectPath.includes('.agentistics/nay-chat')
 }
 
-function encodeProjectDir(projectPath: string): string {
-  return projectPath.replace(/[^a-zA-Z0-9-]/g, '-')
-}
-
 function openSession(s: SessionMeta, e: React.MouseEvent) {
   e.stopPropagation()
   if (isNayChatSession(s.project_path)) {
@@ -417,7 +427,7 @@ function getSessionBucketKey(
 
 const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
 
-export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities, viewMode: externalViewMode, onViewModeChange, title, subtitle, topActions }: Props) {
+export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities, viewMode: externalViewMode, onViewModeChange, fleet, onFleetAction, title, subtitle, topActions }: Props) {
   const t = T[lang]
 
   // Grouping state (default 'project' to match agentop session ls)
@@ -448,20 +458,6 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
 
   // Per-group pagination state
   const [groupPages, setGroupPages] = useState<Record<string, number>>({})
-
-  // Batch selection state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  function toggleSelect(id: string) {
-    setSelectedIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-  const [openWarningModal, setOpenWarningModal] = useState<string[] | null>(null)
-  const [promptModal, setPromptModal] = useState<boolean>(false)
-  const [batchPromptText, setBatchPromptText] = useState('')
 
   // Collapsed groups accordion map
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
@@ -697,31 +693,6 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
               ))}
             </div>
 
-            {/* Select all — over everything the filters and search left standing, NOT one page.
-                With bands and per-group paging there is no single "page" this could mean. */}
-            <button
-              onClick={() => {
-                if (selectedIds.size === filteredAndSorted.length && filteredAndSorted.length > 0) {
-                  setSelectedIds(new Set())
-                } else {
-                  setSelectedIds(new Set(filteredAndSorted.map(s => s.session_id)))
-                }
-              }}
-              style={{
-                padding: '4px 10px',
-                borderRadius: 6,
-                border: '1px solid var(--border-subtle)',
-                background: 'var(--bg-elevated)',
-                color: 'var(--text-secondary)',
-                fontSize: 11,
-                cursor: 'pointer',
-                marginLeft: 4,
-              }}
-            >
-              {selectedIds.size === filteredAndSorted.length && filteredAndSorted.length > 0
-                ? (lang === 'pt' ? 'Desmarcar todas' : 'Deselect all')
-                : (lang === 'pt' ? 'Selecionar todas' : 'Select all')}
-            </button>
           </div>
 
           {/* Search Input & View Mode */}
@@ -888,8 +859,8 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
                           onSelect={onSelect}
                           isPinned={pinnedIds?.has(s.session_id)}
                           state={activities?.[s.session_id]}
-                          selected={selectedIds.has(s.session_id)}
-                          onToggleSelect={toggleSelect}
+                          fleetRow={fleet?.get(s.session_id)}
+                          onFleetAction={onFleetAction}
                           viewMode={viewMode}
                         />
                       ))}
@@ -973,8 +944,8 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
               onSelect={onSelect}
               isPinned={pinnedIds?.has(s.session_id)}
               state={activities?.[s.session_id]}
-              selected={selectedIds.has(s.session_id)}
-              onToggleSelect={toggleSelect}
+              fleetRow={fleet?.get(s.session_id)}
+              onFleetAction={onFleetAction}
               viewMode={viewMode}
             />
           ))}
@@ -1032,203 +1003,6 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
         </div>
       )}
 
-      {/* Sticky Floating Mass Action Bar */}
-      {selectedIds.size > 0 && (
-        <div
-          style={{
-            position: 'sticky',
-            bottom: 16,
-            zIndex: 100,
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--anthropic-orange, #e8690b)',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.25)',
-            borderRadius: 12,
-            padding: '12px 18px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-            flexWrap: 'wrap',
-          }}
-        >
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-            {lang === 'pt' ? `${selectedIds.size} sessão(ões) selecionada(s)` : `${selectedIds.size} session(s) selected`}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {/* Mandar Prompt */}
-            <button
-              onClick={() => setPromptModal(true)}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 6,
-                background: 'var(--anthropic-orange)',
-                color: '#fff',
-                border: 'none',
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              {lang === 'pt' ? '💬 Enviar Prompt' : '💬 Send Prompt'}
-            </button>
-
-            {/* Desligar */}
-            <button
-              onClick={() => {
-                for (const id of selectedIds) {
-                  fetch(`/api/session/kill`, { method: 'POST', body: JSON.stringify({ id }) }).catch(() => {})
-                }
-                setSelectedIds(new Set())
-              }}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 6,
-                background: 'rgba(239, 68, 68, 0.15)',
-                color: '#ef4444',
-                border: '1px solid rgba(239, 68, 68, 0.3)',
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              {lang === 'pt' ? '🛑 Desligar' : '🛑 Kill'}
-            </button>
-
-            {/* Reabrir */}
-            <button
-              onClick={() => {
-                const selectedSessions = sessions.filter(s => selectedIds.has(s.session_id))
-                const open = selectedSessions.filter(s => pinnedIds?.has(s.session_id))
-                if (open.length > 0) {
-                  setOpenWarningModal(open.map(s => sessionLabel(s) || s.session_id))
-                } else {
-                  for (const s of selectedSessions) {
-                    fetch(`/api/session/start`, { method: 'POST', body: JSON.stringify({ resumeId: s.session_id, harness: s.harness, cwd: s.project_path }) }).catch(() => {})
-                  }
-                  setSelectedIds(new Set())
-                }
-              }}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 6,
-                background: 'rgba(34, 197, 94, 0.15)',
-                color: '#22c55e',
-                border: '1px solid rgba(34, 197, 94, 0.3)',
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              {lang === 'pt' ? '🔄 Reabrir' : '🔄 Reopen'}
-            </button>
-
-            {/* Clear selection */}
-            <button
-              onClick={() => setSelectedIds(new Set())}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 6,
-                background: 'transparent',
-                color: 'var(--text-tertiary)',
-                border: '1px solid var(--border-subtle)',
-                fontSize: 12,
-                cursor: 'pointer',
-              }}
-            >
-              {lang === 'pt' ? 'Limpar seleção' : 'Clear selection'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Warning Modal */}
-      {openWarningModal && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.6)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
-        }}>
-          <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
-            padding: 24, maxWidth: 480, width: '100%', display: 'flex', flexDirection: 'column', gap: 16
-          }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>
-              {lang === 'pt' ? 'Aviso: Não é possível reabrir' : 'Warning: Cannot reopen'}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-              {lang === 'pt'
-                ? 'As seguintes sessões já estão abertas e não podem ser religadas:'
-                : 'The following sessions are already open and cannot be restarted:'}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--bg-elevated)', padding: 12, borderRadius: 8 }}>
-              {openWarningModal.map(name => (
-                <div key={name} style={{ fontSize: 13, fontWeight: 600, color: 'var(--anthropic-orange)' }}>
-                  • {name}
-                </div>
-              ))}
-            </div>
-            <button
-              onClick={() => setOpenWarningModal(null)}
-              style={{
-                alignSelf: 'flex-end', padding: '8px 18px', borderRadius: 8,
-                background: 'var(--anthropic-orange)', color: '#fff', border: 'none',
-                fontWeight: 600, fontSize: 13, cursor: 'pointer'
-              }}
-            >
-              {lang === 'pt' ? 'Entendido' : 'OK'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Prompt Modal */}
-      {promptModal && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.6)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
-        }}>
-          <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
-            padding: 24, maxWidth: 500, width: '100%', display: 'flex', flexDirection: 'column', gap: 16
-          }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
-              {lang === 'pt' ? `Enviar prompt para ${selectedIds.size} sessões` : `Send prompt to ${selectedIds.size} sessions`}
-            </div>
-            <textarea
-              value={batchPromptText}
-              onChange={e => setBatchPromptText(e.target.value)}
-              placeholder={lang === 'pt' ? 'Digite a instrução para as sessões selecionadas...' : 'Type prompt for selected sessions...'}
-              rows={4}
-              style={{
-                width: '100%', boxSizing: 'border-box', padding: 10, borderRadius: 8,
-                border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-                color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 13, outline: 'none'
-              }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-              <button
-                onClick={() => { setPromptModal(false); setBatchPromptText('') }}
-                style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13 }}
-              >
-                {lang === 'pt' ? 'Cancelar' : 'Cancel'}
-              </button>
-              <button
-                onClick={() => {
-                  for (const id of selectedIds) {
-                    fetch(`/api/session/prompt`, { method: 'POST', body: JSON.stringify({ id, prompt: batchPromptText }) }).catch(() => {})
-                  }
-                  setPromptModal(false)
-                  setBatchPromptText('')
-                  setSelectedIds(new Set())
-                }}
-                style={{ padding: '8px 16px', borderRadius: 8, background: 'var(--anthropic-orange)', color: '#fff', border: 'none', fontWeight: 600, cursor: 'pointer', fontSize: 13 }}
-              >
-                {lang === 'pt' ? 'Enviar' : 'Send'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
@@ -1453,8 +1227,8 @@ function SessionCard({
   onSelect,
   isPinned,
   state,
-  selected,
-  onToggleSelect,
+  fleetRow,
+  onFleetAction,
   viewMode = 'list',
 }: {
   s: SessionMeta
@@ -1463,9 +1237,10 @@ function SessionCard({
   isPinned?: boolean
   /** What this session is doing right now; absent when it is not live. */
   state?: SessionActivity
-  /** Whether this row is in the batch selection. */
-  selected?: boolean
-  onToggleSelect?: (id: string) => void
+  /** The live fleet row driving this conversation, when one is. Absent = no action bar. */
+  fleetRow?: FleetRow
+  onFleetAction?: (req: { id: string; action: FleetActionId; text?: string; choice?: number })
+    => Promise<{ ok: boolean; message: string }>
   viewMode?: 'list' | 'grid'
 }) {
   const t = T[lang]
@@ -1477,50 +1252,6 @@ function SessionCard({
 
   const cmd = resumeCommand(s)
   const [showResumeModal, setShowResumeModal] = useState(false)
-  const [promptText, setPromptText] = useState('')
-  const [sendingPrompt, setSendingPrompt] = useState(false)
-  const [promptFeedback, setPromptFeedback] = useState<{ ok: boolean; msg: string } | null>(null)
-
-  async function handleSendPrompt(e?: React.FormEvent) {
-    if (e) {
-      e.preventDefault()
-      e.stopPropagation()
-    }
-    const text = promptText.trim()
-    if (!text || sendingPrompt) return
-
-    setSendingPrompt(true)
-    setPromptFeedback(null)
-    try {
-      const res = await fetch('/api/sessions/prompt', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: s.session_id, prompt: text }),
-      })
-      const json = await res.json() as { ok?: boolean; message?: string; error?: string }
-      if (res.ok && json.ok) {
-        setPromptFeedback({
-          ok: true,
-          msg: lang === 'pt' ? 'Prompt enviado para a sessão!' : 'Prompt sent to terminal!',
-        })
-        setPromptText('')
-      } else {
-        setPromptFeedback({
-          ok: false,
-          msg: json.error || (lang === 'pt' ? 'Erro ao enviar.' : 'Failed to send.'),
-        })
-      }
-    } catch (err: any) {
-      setPromptFeedback({
-        ok: false,
-        msg: err?.message || (lang === 'pt' ? 'Erro de rede.' : 'Network error.'),
-      })
-    } finally {
-      setSendingPrompt(false)
-      setTimeout(() => setPromptFeedback(null), 4000)
-    }
-  }
-
   const [showDetails, setShowDetails] = useState(false)
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string; timestamp?: number | string; tools?: string[] }[] | null>(null)
   const [loadingMsgs, setLoadingMsgs] = useState(false)
@@ -1549,21 +1280,38 @@ function SessionCard({
   }, [showDetails])
 
   const isLiveSession = Boolean(isPinned || cmd)
-  const isWaitingForInput = isLiveSession && (state === 'waiting' || state === 'waiting-approval')
   const titleName = s.title || (s.project_path ? formatProjectName(s.project_path) : '') || s.session_id.slice(0, 8)
+  // Where this harness's messages are read from, or the sentence saying they are never captured.
+  const source = useMemo(
+    () => transcriptSource({ session_id: s.session_id, project_path: s.project_path, harness: s.harness }),
+    [s.session_id, s.project_path, s.harness],
+  )
+  const transcriptUnavailable = source.kind === 'unavailable'
+    ? transcriptUnavailableNote(source.harness, lang)
+    : null
 
   useEffect(() => {
     if (!showDetails) return
 
+    // The reader is the HARNESS's own (`lib/sessionTranscript.ts`). This used to POST at
+    // `/api/sessions/<id>/messages`, a route that has never existed here: it 404s, the
+    // `r.ok ? r.json() : []` turns that into an empty array, and the panel reported "no recent
+    // messages" on a live session with sixty-five of them. A confident emptiness produced by a
+    // request nobody answered is the same defect as a confident zero for a metric nobody can
+    // produce, so a harness with NO reader now says so instead (`transcriptUnavailable`).
+    if (source.kind === 'unavailable') { setMessages([]); setLoadingMsgs(false); return }
+
     let interval: ReturnType<typeof setInterval> | null = null
     const fetchMsgs = () => {
-      fetch(`/api/sessions/${encodeURIComponent(s.session_id)}/messages?harness=${encodeURIComponent(s.harness || 'claude')}&projectPath=${encodeURIComponent(s.project_path || '')}`)
-        .then(r => r.ok ? r.json() : [])
-        .then((msgs: any[]) => {
-          if (Array.isArray(msgs)) setMessages(msgs)
-          else setMessages([])
+      fetch(source.url)
+        .then(r => r.ok ? r.json() : null)
+        .then((msgs: unknown) => {
+          // `null` = the request was refused or failed. Keeping the LAST known list beats replacing
+          // it with an emptiness the server never asserted.
+          if (Array.isArray(msgs)) setMessages(msgs as TranscriptMessage[])
+          else setMessages(prev => prev ?? [])
         })
-        .catch(() => setMessages([]))
+        .catch(() => setMessages(prev => prev ?? []))
         .finally(() => setLoadingMsgs(false))
     }
 
@@ -1582,7 +1330,7 @@ function SessionCard({
       es.close()
       if (interval) clearInterval(interval)
     }
-  }, [showDetails, s.session_id, s.harness, s.project_path, isLiveSession])
+  }, [showDetails, s.session_id, s.harness, s.project_path, isLiveSession, source])
   const isList = viewMode === 'list'
 
   return (
@@ -1614,16 +1362,6 @@ function SessionCard({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
               {/* Left Group: Badges & Title */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 200 }}>
-                {onToggleSelect && (
-                  <input
-                    type="checkbox"
-                    checked={Boolean(selected)}
-                    onChange={e => { e.stopPropagation(); onToggleSelect(s.session_id) }}
-                    onClick={e => e.stopPropagation()}
-                    aria-label={lang === 'pt' ? 'Selecionar sessão' : 'Select session'}
-                    style={{ cursor: 'pointer', width: 16, height: 16, flexShrink: 0, accentColor: 'var(--anthropic-orange)' }}
-                  />
-                )}
                 {/* Status Badge */}
                 <span
                   style={{
@@ -1761,7 +1499,9 @@ function SessionCard({
                         {loadingMsgs ? (
                           <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{lang === 'pt' ? 'Carregando...' : 'Loading...'}</div>
                         ) : !messages || messages.length === 0 ? (
-                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>{lang === 'pt' ? 'Nenhuma mensagem recente' : 'No recent messages'}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', lineHeight: 1.5 }}>
+                            {transcriptUnavailable ?? (lang === 'pt' ? 'Nenhuma mensagem recente' : 'No recent messages')}
+                          </div>
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
                             {messages.slice(-3).map((m, mi) => (
@@ -1971,7 +1711,9 @@ function SessionCard({
                         {loadingMsgs ? (
                           <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{lang === 'pt' ? 'Carregando...' : 'Loading...'}</div>
                         ) : !messages || messages.length === 0 ? (
-                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>{lang === 'pt' ? 'Nenhuma mensagem recente' : 'No recent messages'}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', lineHeight: 1.5 }}>
+                            {transcriptUnavailable ?? (lang === 'pt' ? 'Nenhuma mensagem recente' : 'No recent messages')}
+                          </div>
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 160, overflowY: 'auto' }}>
                             {messages.slice(-3).map((m, mi) => (
@@ -2026,80 +1768,15 @@ function SessionCard({
           </>
         )}
 
-        {/* Live Session Interactive Short Prompt Resizable Textarea Form (only when waiting for user response) */}
-        {isWaitingForInput && (
-          <div style={{ paddingTop: 2 }}>
-            <form
-              onSubmit={handleSendPrompt}
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                display: 'flex',
-                alignItems: 'flex-end',
-                gap: 8,
-                background: 'var(--bg-card)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 6,
-                padding: '6px 8px',
-              }}
-            >
-              <textarea
-                rows={1}
-                value={promptText}
-                onChange={e => setPromptText(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    handleSendPrompt()
-                  }
-                }}
-                placeholder={lang === 'pt' ? 'Enviar short prompt...' : 'Send short prompt...'}
-                style={{
-                  flex: 1,
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  fontSize: 12,
-                  color: 'var(--text-primary)',
-                  fontFamily: 'inherit',
-                  resize: 'vertical',
-                  minHeight: 36,
-                  maxHeight: 140,
-                  padding: '2px 4px',
-                  boxSizing: 'border-box',
-                }}
-              />
-              <button
-                type="submit"
-                disabled={sendingPrompt || !promptText.trim()}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  padding: '6px 12px',
-                  borderRadius: 5,
-                  border: 'none',
-                  background: 'var(--anthropic-orange)',
-                  color: '#fff',
-                  fontSize: 11,
-                  fontWeight: 600,
-                  cursor: sendingPrompt || !promptText.trim() ? 'not-allowed' : 'pointer',
-                  opacity: sendingPrompt || !promptText.trim() ? 0.5 : 1,
-                  fontFamily: 'inherit',
-                  flexShrink: 0,
-                  alignSelf: 'flex-end',
-                }}
-              >
-                <Send size={11} />
-                <span>{lang === 'pt' ? 'Enviar' : 'Send'}</span>
-              </button>
-            </form>
-            {promptFeedback && (
-              <div style={{ fontSize: 11, color: promptFeedback.ok ? '#22c55e' : '#ef4444', fontStyle: 'italic', marginTop: 4 }}>
-                {promptFeedback.msg}
-              </div>
-            )}
+        {/* What can actually be done with this session, from `/api/fleet`.
+            It replaced a checkbox and a prompt box that posted to routes which did not exist —
+            every press was silently inert, which is indistinguishable from a broken control. */}
+        {fleetRow && onFleetAction && (
+          <div onClick={e => e.stopPropagation()}>
+            <SessionActionBar row={fleetRow} lang={lang} act={onFleetAction} />
           </div>
         )}
+
       </div>
     </>
   )

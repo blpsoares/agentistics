@@ -45,6 +45,7 @@ import type {
   ControlHost,
   ControlService,
   ControlSessions,
+  TranscriptSearch,
   CentralLinkState,
   ControlStatus,
   LogSource,
@@ -109,6 +110,7 @@ import { approvalFor, choiceKey } from './sessions/approval-spec'
 // implementation, for the reason `task-reopen.ts` exists.
 import { renameInHarness, renameMessage } from './sessions/rename'
 import { needsChoice, parseDialogOptions } from './sessions/dialog-choice'
+import { liveTranscriptDeps, runTranscriptSearch } from './sessions/transcript-run'
 import { rulesFor } from './sessions/attention-rules'
 import { planCrashGroup, planFellOffer } from './sessions/crash-group'
 import { loadHarnessSessions } from './sessions/harness-sessions'
@@ -1264,7 +1266,7 @@ function makeSuspend(altScreen: Suspendable, strings: () => CliStrings): Suspend
 // ---------------------------------------------------------------------------
 
 /** The host, plus the language it currently speaks (runStart needs it after the app exits). */
-interface StartHost extends ControlHost {
+export interface StartHost extends ControlHost {
   readonly lang: CliLang
 }
 
@@ -1653,7 +1655,17 @@ async function restorableSessions(fell: readonly ManagedSession[]): Promise<Rest
   }))
 }
 
-function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
+/**
+ * The host, exported so the WEB dashboard's session routes act through the same object the cockpit
+ * does (`sessions/fleet-web.ts`).
+ *
+ * The alternative was a second set of session verbs living in `index.ts`, which is the drift
+ * `task-reopen.ts` was extracted to end: `answerSession` alone re-reads the frame, re-parses the
+ * options and refuses a numbered dialog on a harness with no verified way to pick — a browser copy
+ * of that would be a button that approves the highlighted row. Only `suspend`-requiring actions
+ * (`central.sh init`) need a real terminal, and the web host is never asked for one.
+ */
+export function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
   let lang = initialLang
   const S = () => cliStrings(lang)
   // Built here so it always reports in the language the host is currently speaking.
@@ -1678,6 +1690,15 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
    */
   let lastStatus: ControlStatus | null = null
   const remember = (next: ControlStatus): ControlStatus => (lastStatus = next)
+
+  /**
+   * The most recent fall the user has already been ASKED about — see `ControlHost.dismissFall`.
+   *
+   * Here, and not in the sessions screen, for the reason `lastStatus` is here: the host outlives
+   * the Ink app, and attaching to a session unmounts it. A flag held in the screen is answered,
+   * forgotten on the way into the session, and asked again on the way out.
+   */
+  let dismissedFallMs: number | null = null
 
   /** Has the archive consent never been answered? Used only to append a hint, so it fails open. */
   const archivePending = async (): Promise<boolean> => {
@@ -1787,7 +1808,11 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       return {
         ...(name ? { machineName: name } : {}),
         ...(account ? { accountName: account } : {}),
-        ...(name ? { linkState: linkStateOf(first?.errKind, lastOk) } : {}),
+        // Gated on `first` existing (there IS a connection), never on `name`: a central that never
+        // resolved this token's machine name still answers whoami with an org and a latency, and
+        // the header must draw the account + dot from those alone rather than going blank because
+        // one field of three could not be named.
+        ...(first ? { linkState: linkStateOf(first?.errKind, lastOk) } : {}),
         ...(ms !== undefined ? { pushMs: ms } : {}),
       }
     } catch {
@@ -2368,6 +2393,23 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
      * would have no previous frame to compare against, so no session could ever be seen to move and
      * every waiting one would ring the bell every five seconds.
      */
+    /**
+     * The deep half of the sessions search — see `ControlHost.searchTranscripts`.
+     *
+     * Deliberately NOT folded into `sessions()`: that runs every 5 seconds, and reading 475 MB on
+     * a timer to answer a question nobody asked is the difference between a search and a disk
+     * burner. It is called only while the search field holds something, and the screen debounces.
+     */
+    async searchTranscripts(query: string): Promise<TranscriptSearch> {
+      const r = await runTranscriptSearch(query, liveTranscriptDeps())
+      return {
+        ids: r.ids,
+        covered: r.covered,
+        failed: r.failed,
+        ...(r.unavailable ? { unavailable: r.unavailable } : {}),
+      }
+    },
+
     async sessions(): Promise<ControlSessions> {
       // `S()` rather than `this.lang`: the language is a closure variable `setLang` reassigns, and
       // reading it through `this` would break the moment a caller detached the method.
@@ -2391,7 +2433,14 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       // SAME selection the count below reports. Read off the snapshot the poll already produced
       // rather than recomputed, so the screen cannot be shown two answers to one question while a
       // poll is in flight.
-      const restorable = await restorableSessions(snap.fell?.entries ?? [])
+      // …and withheld once the user has ANSWERED this fall. `restorable` is what raises the modal,
+      // so the dismissal is applied here rather than in the screen: the screen is remounted from
+      // scratch on every attach/detach and cannot remember anything. `fell` itself is left intact —
+      // the summary row and the list's own section keep saying what happened, because dismissing
+      // the offer is a statement about the QUESTION, not about the event.
+      const fellAt = snap.fell?.atMs
+      const answered = fellAt !== undefined && dismissedFallMs !== null && fellAt <= dismissedFallMs
+      const restorable = answered ? [] : await restorableSessions(snap.fell?.entries ?? [])
       return {
         ...(restorable.length > 0 ? { restorable } : {}),
         sessions: snap.sessions.map((v, i) => toControlSession(v, s, facts[i])),
@@ -2464,6 +2513,17 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
      * listed, and `endedAt` is exactly what keeps it out of the next crash group while leaving it
      * individually reopenable.
      */
+    /**
+     * The user has answered the offer for the fall at `atMs` — stop raising it.
+     *
+     * Monotonic (`Math.max`), so a poll that re-anchors onto an OLDER cluster — which
+     * `planCrashGroup` deliberately permits, with no maximum age — cannot lower the watermark and
+     * bring the modal back naming a fall from three days ago.
+     */
+    dismissFall(atMs: number): void {
+      dismissedFallMs = dismissedFallMs === null ? atMs : Math.max(dismissedFallMs, atMs)
+    },
+
     async restoreSessions(ids: string[], accept: boolean): Promise<ActionResult> {
       const s = S()
       const registry = await readRegistry()

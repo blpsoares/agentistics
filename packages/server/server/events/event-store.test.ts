@@ -7,6 +7,7 @@
  * real store rather than only in the planner.
  */
 
+import { emptySearchFields } from '@agentistics/tui/control/search-scope'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -110,7 +111,7 @@ describe('the producer against a real store', () => {
 
   const view = (o: Record<string, unknown>) => ({
     id: 's1', cwd: '/w', status: 'running' as const, attached: false,
-    approvalDetection: true, searchText: '', ...o,
+    approvalDetection: true, searchFields: emptySearchFields(), ...o,
   }) as SessionSnapshot['sessions'][number]
 
   const producerOver = (snaps: SessionSnapshot[], file: string) => {

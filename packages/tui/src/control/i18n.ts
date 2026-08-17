@@ -220,6 +220,19 @@ export interface ControlStrings {
    */
   sessionsCount: (shown: number, total: number) => string
   sessionsWaitingCount: (n: number) => string
+  /**
+   * The waiting cell when the list is NOT showing everything that is waiting.
+   *
+   * `attention` is counted over the whole fleet — it has to be, because the header carries it on
+   * every tab — while this row sits directly above a FILTERED list. Printing the fleet's figure
+   * here made the row claim something the rows under it contradict, which is the same defect the
+   * `shown` cell already records: "the header used to read the fleet's length, so with `only
+   * active` on it announced 44 over a screen showing ten".
+   *
+   * Both numbers, never just the visible one: a session that needs you and is being withheld by a
+   * search is the one thing on this screen that must not go quiet.
+   */
+  sessionsWaitingSplit: (shown: number, total: number) => string
   sessionsGroupBy: string
   /** Labels the summary row's filter cell, so a grouping and a filter are told apart by WORD. */
   sessionsFilterBy: string
@@ -359,12 +372,29 @@ export interface ControlStrings {
   >
   /** States the active search on the summary row, and how to drop it. */
   sessionsSearching: (query: string) => string
+  /** The per-scope depth line under the search field. */
+  searchScope: Record<'name' | 'folder' | 'harness' | 'note' | 'task' | 'prompt' | 'transcript', string>
+  searchDepthLabel: string
+  searchRunning: string
+  /** Named in words, never rendered as a zero — see `TranscriptSearch.unavailable`. */
+  searchNoGrep: string
+  searchNoTranscripts: string
+  searchCovered: (harnesses: string) => string
+  searchFailed: (harnesses: string) => string
   /** How long ago, from a whole number of SECONDS — the caller does the clock arithmetic so this
    *  stays a pure formatter. */
   sessionsAgo: (seconds: number) => string
   /** The external row's own sentence, in the detail pane. */
   sessionsExternalNote: string
   sessionsClosedNote: string
+  /**
+   * This build cannot run session verbs at all — no backend on this platform, or a host that does
+   * not implement them. Said in words rather than answered with a dead button: a control that is
+   * silently inert is indistinguishable from a broken one.
+   */
+  sessionsNoHost: string
+  /** Reopen was asked for on a row whose conversation cannot be resolved. */
+  sessionsReopenNone: string
   keySessionsGroup: string
   keySessionsAttach: string
   /** How to put the arrangement back to how the app opens on a fresh machine. */
@@ -683,6 +713,10 @@ const EN: ControlStrings = {
     ? (total === 1 ? '1 session' : `${total} sessions`)
     : `${shown} on screen · ${total} known`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
+  sessionsWaitingSplit: (shown: number, total: number) =>
+    (shown === 0
+      ? `none on screen · ${total} waiting on you`
+      : `${shown} on screen · ${total} waiting on you`),
   sessionsGroupBy: 'GROUP',
   sessionsFilterBy: 'FILTER',
   sessionsFilterActive: 'running only',
@@ -859,6 +893,16 @@ const EN: ControlStrings = {
     unknown: 'external',
   },
   sessionsSearching: q => `search: ${q} · esc clears`,
+  searchScope: {
+    name: 'name', folder: 'folder', harness: 'harness',
+    note: 'note', task: 'task', prompt: 'prompt', transcript: 'transcript',
+  },
+  searchDepthLabel: 'found in',
+  searchRunning: 'reading transcripts…',
+  searchNoGrep: 'transcripts not searched — grep is not available here',
+  searchNoTranscripts: 'transcripts not searched — none on this machine',
+  searchCovered: h => `transcripts: ${h}`,
+  searchFailed: h => `could not read: ${h}`,
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `${sec}s ago`
     const min = Math.round(sec / 60)
@@ -867,6 +911,8 @@ const EN: ControlStrings = {
   },
   sessionsExternalNote: 'started outside agentop — listed, but it cannot be attached or stopped here.',
   sessionsClosedNote: 'not running — reopen it to pick this conversation back up.',
+  sessionsNoHost: 'session control is not available on this machine.',
+  sessionsReopenNone: 'no conversation to reopen — nothing on this machine resolves this row.',
   keySessionsGroup: 'v group',
   keySessionsAttach: 'o attach',
   keySessionsReset: '^r reset view',
@@ -1127,6 +1173,10 @@ const PT: ControlStrings = {
     ? (total === 1 ? '1 sessão' : `${total} sessões`)
     : `${shown} na tela · ${total} conhecidas`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
+  sessionsWaitingSplit: (shown: number, total: number) =>
+    (shown === 0
+      ? `nenhuma na tela · ${total} esperando por você`
+      : `${shown} na tela · ${total} esperando por você`),
   sessionsGroupBy: 'AGRUPAR',
   sessionsFilterBy: 'FILTRO',
   sessionsFilterActive: 'só as ativas',
@@ -1291,6 +1341,16 @@ const PT: ControlStrings = {
     unknown: 'externa',
   },
   sessionsSearching: q => `busca: ${q} · esc limpa`,
+  searchScope: {
+    name: 'nome', folder: 'pasta', harness: 'harness',
+    note: 'nota', task: 'tarefa', prompt: 'prompt', transcript: 'transcript',
+  },
+  searchDepthLabel: 'achado em',
+  searchRunning: 'lendo transcripts…',
+  searchNoGrep: 'transcripts não buscados — não há grep aqui',
+  searchNoTranscripts: 'transcripts não buscados — nenhum nesta máquina',
+  searchCovered: h => `transcripts: ${h}`,
+  searchFailed: h => `não deu pra ler: ${h}`,
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `há ${sec}s`
     const min = Math.round(sec / 60)
@@ -1299,6 +1359,8 @@ const PT: ControlStrings = {
   },
   sessionsExternalNote: 'iniciada fora do agentop — listada, mas não dá para anexar nem parar por aqui.',
   sessionsClosedNote: 'não está rodando — reabra para retomar esta conversa.',
+  sessionsNoHost: 'o controle de sessões não está disponível nesta máquina.',
+  sessionsReopenNone: 'nenhuma conversa para reabrir — nada nesta máquina resolve esta linha.',
   keySessionsGroup: 'v agrupar',
   keySessionsAttach: 'o anexar',
   keySessionsReset: '^r restaurar view',
