@@ -12,6 +12,7 @@ import { Section } from '../components/Section'
 import { RecentSessions } from '../components/RecentSessions'
 import { lastActivityMs, liveEmptyNotice } from '../lib/sessionLive'
 import { resumeCommand } from '../lib/resumeCommand'
+import { useIsMobile } from '../hooks/useIsMobile'
 import {
   getNotificationSettings,
   saveNotificationSettings,
@@ -30,6 +31,7 @@ export default function SessionsPage() {
   const { data, derived, lang, setSelectedSession, isCentral } = ctx
   const pt = lang === 'pt'
   const navigate = useNavigate()
+  const isMobile = useIsMobile()
 
   // Real-time open-session detection.
   const [liveIdList, setLiveIdList] = useState<string[]>(data.liveSessionIds ?? [])
@@ -148,13 +150,14 @@ export default function SessionsPage() {
             padding: '16px 20px',
             marginBottom: 16,
             display: 'flex',
-            alignItems: 'center',
+            flexDirection: isMobile ? 'column' : 'row',
+            alignItems: isMobile ? 'stretch' : 'center',
             justifyContent: 'space-between',
             gap: 16,
             flexWrap: 'wrap',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 280 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: isMobile ? 0 : 280 }}>
             <div
               style={{
                 width: 38,
@@ -184,14 +187,23 @@ export default function SessionsPage() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <div style={{
+            display: 'flex',
+            flexDirection: isMobile ? 'column' : 'row',
+            alignItems: isMobile ? 'stretch' : 'center',
+            gap: 8,
+            flexShrink: 0,
+            width: isMobile ? '100%' : undefined,
+          }}>
             <button
               onClick={handleEnableNotifications}
               style={{
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: isMobile ? 'center' : 'flex-start',
                 gap: 6,
                 padding: '8px 16px',
+                minHeight: isMobile ? 44 : undefined,
                 borderRadius: 8,
                 background: 'var(--anthropic-orange)',
                 color: '#fff',
@@ -210,8 +222,10 @@ export default function SessionsPage() {
               style={{
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: isMobile ? 'center' : 'flex-start',
                 gap: 4,
                 padding: '8px 12px',
+                minHeight: isMobile ? 44 : undefined,
                 borderRadius: 8,
                 border: '1px solid var(--border-subtle)',
                 background: 'transparent',
@@ -229,6 +243,7 @@ export default function SessionsPage() {
               onClick={handleDismissPrompt}
               style={{
                 padding: '8px 12px',
+                minHeight: isMobile ? 44 : undefined,
                 borderRadius: 8,
                 border: '1px solid var(--border-subtle)',
                 background: 'transparent',

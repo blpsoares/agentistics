@@ -369,7 +369,11 @@ export function TabSelect<T extends string>({
 
 export function PrefRow({ label, sub, children }: { label: string; sub?: string; children: React.ReactNode }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 12 }}>
+    // flexWrap: 'wrap' is a no-op whenever a row's label + children already fit on one line (every
+    // existing caller) and only kicks in once they don't — e.g. CentralAdminPanel's push-interval
+    // row (select + Express checkbox + save status), which sits right at the edge of a 390px
+    // viewport. Wrapping there beats a silent horizontal overflow.
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 12, flexWrap: 'wrap' }}>
       <div>
         <div style={{ fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500 }}>{label}</div>
         {sub && <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }}>{sub}</div>}
