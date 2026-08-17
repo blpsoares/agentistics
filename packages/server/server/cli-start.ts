@@ -1787,7 +1787,11 @@ function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartH
       return {
         ...(name ? { machineName: name } : {}),
         ...(account ? { accountName: account } : {}),
-        ...(name ? { linkState: linkStateOf(first?.errKind, lastOk) } : {}),
+        // Gated on `first` existing (there IS a connection), never on `name`: a central that never
+        // resolved this token's machine name still answers whoami with an org and a latency, and
+        // the header must draw the account + dot from those alone rather than going blank because
+        // one field of three could not be named.
+        ...(first ? { linkState: linkStateOf(first?.errKind, lastOk) } : {}),
         ...(ms !== undefined ? { pushMs: ms } : {}),
       }
     } catch {
