@@ -2577,6 +2577,24 @@ describe('the header count', () => {
     expect(en.sessionsCount(0, 44)).toBe('0 on screen · 44 known')
     expect(pt.sessionsCount(0, 44)).toBe('0 na tela · 44 conhecidas')
   })
+
+  it('the WAITING cell names both populations once they disagree', () => {
+    // Same defect as the count cell above, one cell over, and it outlived the fix: `attention` is
+    // counted over the WHOLE fleet — the header carries it on every tab and must — while this row
+    // sits directly above a FILTERED list. Measured on a real machine with a search active: the
+    // row read "2 waiting on you" over zero such rows.
+    expect(en.sessionsWaitingSplit(0, 2)).toBe('none on screen · 2 waiting on you')
+    expect(pt.sessionsWaitingSplit(0, 2)).toBe('nenhuma na tela · 2 esperando por você')
+    expect(en.sessionsWaitingSplit(1, 3)).toBe('1 on screen · 3 waiting on you')
+    expect(pt.sessionsWaitingSplit(1, 3)).toBe('1 na tela · 3 esperando por você')
+  })
+
+  it('keeps the short sentence when the screen shows everything that is waiting', () => {
+    // The split is an explanation, and an explanation for a discrepancy that does not exist is
+    // noise — the same reason `sessionsCount` drops its second number at `9 of 9`.
+    expect(en.sessionsWaitingCount(2)).toBe('2 waiting on you')
+    expect(pt.sessionsWaitingCount(1)).toBe('1 esperando por você')
+  })
 })
 
 describe('the wizard name step', () => {

@@ -1264,6 +1264,30 @@ export interface ControlHost {
   restoreSessions?(ids: string[], accept: boolean): Promise<ActionResult>
 
   /**
+   * Remember that the user has ALREADY been asked about the fall that happened at `atMs`.
+   *
+   * It lives on the HOST because the host is the only thing here that outlives the Ink app.
+   * Attaching to a session is a `ControlExit`: the app unmounts, `runStart` hands over the terminal
+   * and then LOOPS, mounting a brand-new React tree that lands on the sessions tab. Every piece of
+   * component state dies with the old tree, so an "already asked" flag held in a `useState` is
+   * answered, forgotten, and asked again the moment the user detaches — which is exactly the
+   * reported bug, and the same reason `lastStatus` is kept out here.
+   *
+   * Keyed by the fall's INSTANT and compared with `>`, never a bare boolean:
+   *  - the offer is capped at 8 rows and only the rows that were SHOWN get retired, so the next
+   *    poll legitimately re-anchors onto the remainder — same event, and it must not re-ask;
+   *  - once a cluster is retired, `planCrashGroup` re-anchors onto the next-newest one, which the
+   *    module deliberately allows to be days old. That is a DIFFERENT `atMs` and an older one, so
+   *    `>` withholds it — a three-day-old fall presented as though it just happened is precisely
+   *    the "sessions that make no sense" half of the report;
+   *  - a genuine new crash while the cockpit is open stamps a NEWER `atMs` and is still announced.
+   *
+   * In memory, deliberately: closing the terminal and coming back is the moment the offer exists
+   * for, so a fresh `agentop` must ask again.
+   */
+  dismissFall?(atMs: number): void
+
+  /**
    * The harnesses this machine can actually START, with what each of them accepts.
    *
    * Derived by the host from the spawn specs, so a harness with no spec is ABSENT from the wizard

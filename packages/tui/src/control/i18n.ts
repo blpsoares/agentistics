@@ -220,6 +220,19 @@ export interface ControlStrings {
    */
   sessionsCount: (shown: number, total: number) => string
   sessionsWaitingCount: (n: number) => string
+  /**
+   * The waiting cell when the list is NOT showing everything that is waiting.
+   *
+   * `attention` is counted over the whole fleet — it has to be, because the header carries it on
+   * every tab — while this row sits directly above a FILTERED list. Printing the fleet's figure
+   * here made the row claim something the rows under it contradict, which is the same defect the
+   * `shown` cell already records: "the header used to read the fleet's length, so with `only
+   * active` on it announced 44 over a screen showing ten".
+   *
+   * Both numbers, never just the visible one: a session that needs you and is being withheld by a
+   * search is the one thing on this screen that must not go quiet.
+   */
+  sessionsWaitingSplit: (shown: number, total: number) => string
   sessionsGroupBy: string
   /** Labels the summary row's filter cell, so a grouping and a filter are told apart by WORD. */
   sessionsFilterBy: string
@@ -683,6 +696,10 @@ const EN: ControlStrings = {
     ? (total === 1 ? '1 session' : `${total} sessions`)
     : `${shown} on screen · ${total} known`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 waiting on you' : `${n} waiting on you`),
+  sessionsWaitingSplit: (shown: number, total: number) =>
+    (shown === 0
+      ? `none on screen · ${total} waiting on you`
+      : `${shown} on screen · ${total} waiting on you`),
   sessionsGroupBy: 'GROUP',
   sessionsFilterBy: 'FILTER',
   sessionsFilterActive: 'running only',
@@ -1127,6 +1144,10 @@ const PT: ControlStrings = {
     ? (total === 1 ? '1 sessão' : `${total} sessões`)
     : `${shown} na tela · ${total} conhecidas`),
   sessionsWaitingCount: (n: number) => (n === 1 ? '1 esperando por você' : `${n} esperando por você`),
+  sessionsWaitingSplit: (shown: number, total: number) =>
+    (shown === 0
+      ? `nenhuma na tela · ${total} esperando por você`
+      : `${shown} na tela · ${total} esperando por você`),
   sessionsGroupBy: 'AGRUPAR',
   sessionsFilterBy: 'FILTRO',
   sessionsFilterActive: 'só as ativas',
