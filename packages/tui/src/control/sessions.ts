@@ -9,6 +9,7 @@
  */
 
 import { PANE_FRAME_Y } from './chrome.ts'
+import { matchesQuery, matchScopes, scopeCounts, type ScopeCounts, type SearchScope } from './search-scope'
 import {
   ACTIVE_STATES, OFF_STATE, GROUPINGS, SESSION_STATES, SESSION_STATE_CHOICES, SESSION_DIMENSIONS,
   UNFILED,
@@ -53,10 +54,47 @@ export {
  * would be a search that cannot find the thing it was most likely opened to find. `searchText` is
  * composed by the host and already carries a closed conversation's opening prompt.
  */
-export function filterSessions(list: readonly ControlSession[], query: string): ControlSession[] {
-  const q = query.trim().toLowerCase()
-  if (q === '') return [...list]
-  return list.filter(v => v.searchText.includes(q))
+export function filterSessions(
+  list: readonly ControlSession[],
+  query: string,
+  transcriptHits?: ReadonlySet<string>,
+): ControlSession[] {
+  if (query.trim() === '') return [...list]
+  return list.filter(v => matchesQuery(v.searchFields, query, {
+    transcript: transcriptOf(v, transcriptHits),
+  }))
+}
+
+/**
+ * Whether the transcript search named this row's conversation.
+ *
+ * Only an EXACT link counts — see the same rule, and the same reason, in `session-view.ts`.
+ */
+export function transcriptOf(v: ControlSession, hits?: ReadonlySet<string>): boolean {
+  if (!hits || hits.size === 0) return false
+  return (v.conversationId !== undefined && hits.has(v.conversationId))
+    || (v.resume !== undefined && hits.has(v.resume.sessionId))
+}
+
+/** The scopes one row matched, in reading order — what a row prints beside itself. */
+export function rowScopes(
+  v: ControlSession,
+  query: string,
+  transcriptHits?: ReadonlySet<string>,
+): SearchScope[] {
+  return matchScopes(v.searchFields, query, { transcript: transcriptOf(v, transcriptHits) })
+}
+
+/** How deep the search went: how many rows carry the query in each scope. */
+export function searchDepth(
+  list: readonly ControlSession[],
+  query: string,
+  transcriptHits?: ReadonlySet<string>,
+): ScopeCounts {
+  return scopeCounts(
+    list.map(v => ({ fields: v.searchFields, transcript: transcriptOf(v, transcriptHits) })),
+    query,
+  )
 }
 
 export function attentionOf(list: readonly ControlSession[]): number {

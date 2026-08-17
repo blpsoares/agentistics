@@ -1,3 +1,4 @@
+import { emptySearchFields } from '@agentistics/tui/control/search-scope'
 import { describe, expect, test } from 'bun:test'
 import type { ControlSession, SessionState } from '@agentistics/tui/control'
 import {
@@ -43,7 +44,7 @@ function session(o: Partial<ControlSession> & { id: string }): ControlSession {
     state,
     actionable: true,
     attached: false,
-    searchText: '',
+    searchFields: emptySearchFields(),
     ...o,
   }
 }
