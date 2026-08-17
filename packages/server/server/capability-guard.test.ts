@@ -25,6 +25,14 @@ describe('routeCapability', () => {
     expect(routeCapability('/api/exec')).toBe('localShell')
   })
 
+  it('maps the session fleet routes to localShell', () => {
+    // Reading the fleet CAPTURES each live session's screen and acting on it types keystrokes into
+    // a terminal on this host. That is shell access under another name, so it must be unreachable
+    // on an exposed profile whoever is authenticated.
+    expect(routeCapability('/api/fleet')).toBe('localShell')
+    expect(routeCapability('/api/fleet/act')).toBe('localShell')
+  })
+
   it('maps the local chat routes', () => {
     expect(routeCapability('/api/chat-tty')).toBe('localChat')
     expect(routeCapability('/api/chat-harnesses')).toBe('localChat')

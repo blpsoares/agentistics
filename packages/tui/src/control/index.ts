@@ -164,6 +164,7 @@ export type {
   ControlService,
   ControlSession,
   ControlSessions,
+  TranscriptSearch,
   ControlStatus,
   LogSource,
   RuntimeId,

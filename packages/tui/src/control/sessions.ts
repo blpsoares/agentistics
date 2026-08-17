@@ -9,6 +9,8 @@
  */
 
 import { PANE_FRAME_Y } from './chrome.ts'
+import type { ControlStrings } from './i18n'
+import { matchesQuery, matchScopes, scopeCounts, type ScopeCounts, type SearchScope } from './search-scope'
 import {
   ACTIVE_STATES, OFF_STATE, GROUPINGS, SESSION_STATES, SESSION_STATE_CHOICES, SESSION_DIMENSIONS,
   UNFILED,
@@ -53,10 +55,47 @@ export {
  * would be a search that cannot find the thing it was most likely opened to find. `searchText` is
  * composed by the host and already carries a closed conversation's opening prompt.
  */
-export function filterSessions(list: readonly ControlSession[], query: string): ControlSession[] {
-  const q = query.trim().toLowerCase()
-  if (q === '') return [...list]
-  return list.filter(v => v.searchText.includes(q))
+export function filterSessions(
+  list: readonly ControlSession[],
+  query: string,
+  transcriptHits?: ReadonlySet<string>,
+): ControlSession[] {
+  if (query.trim() === '') return [...list]
+  return list.filter(v => matchesQuery(v.searchFields, query, {
+    transcript: transcriptOf(v, transcriptHits),
+  }))
+}
+
+/**
+ * Whether the transcript search named this row's conversation.
+ *
+ * Only an EXACT link counts — see the same rule, and the same reason, in `session-view.ts`.
+ */
+export function transcriptOf(v: ControlSession, hits?: ReadonlySet<string>): boolean {
+  if (!hits || hits.size === 0) return false
+  return (v.conversationId !== undefined && hits.has(v.conversationId))
+    || (v.resume !== undefined && hits.has(v.resume.sessionId))
+}
+
+/** The scopes one row matched, in reading order — what a row prints beside itself. */
+export function rowScopes(
+  v: ControlSession,
+  query: string,
+  transcriptHits?: ReadonlySet<string>,
+): SearchScope[] {
+  return matchScopes(v.searchFields, query, { transcript: transcriptOf(v, transcriptHits) })
+}
+
+/** How deep the search went: how many rows carry the query in each scope. */
+export function searchDepth(
+  list: readonly ControlSession[],
+  query: string,
+  transcriptHits?: ReadonlySet<string>,
+): ScopeCounts {
+  return scopeCounts(
+    list.map(v => ({ fields: v.searchFields, transcript: transcriptOf(v, transcriptHits) })),
+    query,
+  )
 }
 
 export function attentionOf(list: readonly ControlSession[]): number {
@@ -804,6 +843,32 @@ export function sessionActions(
     { action: 'group', enabled: true },
   ]
 }
+
+/**
+ * The already-localized word for every verb, in ONE place.
+ *
+ * It lived inside `tabs/Sessions.tsx` while the cockpit was the only thing offering these verbs.
+ * The web Sessions page offers the same set, resolved by the same `sessionActions`, and a second
+ * copy of the wording is a second place for "Answer its question" to drift back into "Approve" —
+ * which is exactly the promise the keystroke cannot keep. It lives here, beside the decision it
+ * names, so both surfaces read one map.
+ */
+export const actionWords = (s: ControlStrings): Record<SessionAction, string> => ({
+  attach: s.actSessions.attach,
+  resume: s.actSessions.resume,
+  approve: s.actSessions.approve,
+  prompt: s.actSessions.prompt,
+  rename: s.actSessions.rename,
+  note: s.actSessions.note,
+  task: s.actSessions.task,
+  kill: s.actSessions.kill,
+  openTask: s.actSessions.openTask,
+  reopenFell: s.actSessions.reopenFell,
+  finishTask: s.actSessions.finishTask,
+  new: s.actSessions.newSession,
+  search: s.actSessions.search,
+  group: s.actSessions.group,
+})
 
 /** The already-localized labels for those verbs, in the order they are offered. */
 export function actionLabels(

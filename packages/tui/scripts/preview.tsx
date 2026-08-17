@@ -646,10 +646,13 @@ const FAKE_FLEET: ControlSessions = {
 
 /** The preview's fixtures say what they ARE; the searchable blob is derived, exactly as the host
  *  derives it, so the two can never disagree about what a row can be found by. */
-function withSearchText(rows: Array<Omit<ControlSession, 'searchText'>>): ControlSession[] {
+function withSearchText(rows: Array<Omit<ControlSession, 'searchFields'>>): ControlSession[] {
   return rows.map(r => ({
     ...r,
-    searchText: [r.title, r.harness, r.cwd, r.note, r.task].filter(Boolean).join(' ').toLowerCase(),
+    searchFields: {
+      name: r.title ?? '', folder: r.cwd ?? '', harness: r.harness ?? '',
+      note: r.note ?? '', task: r.task ?? '', prompt: '',
+    },
   }))
 }
 

@@ -8,6 +8,7 @@
  */
 
 import type { CliLang } from './lang'
+import type { SearchFields } from './search-scope'
 // The default ARRANGEMENT is derived from the dimension vocabulary rather than written out beside
 // it. `session-dimensions.ts` imports this file for TYPES only, so this is the one value direction.
 import {
@@ -603,9 +604,10 @@ export interface ControlSession {
     used: string
     window: string
   }
-  /** Everything this row can be found by, already lowercased — including a closed conversation's
-   *  opening prompt, which is what a person remembers about work they put down. */
-  searchText: string
+  /** Everything this row can be found by, KEPT APART BY WHAT IT IS — including a closed
+   *  conversation's opening prompt, which is what a person remembers about work they put down.
+   *  Separate fields are what let the screen say WHICH of them a query matched. */
+  searchFields: SearchFields
   state: SessionState
   /** Already-localized state word, e.g. "needs approval". */
   stateLabel: string
@@ -815,6 +817,25 @@ export interface RestoreCandidate {
    * whatever it was when the host last looked.
    */
   startedAt?: number
+}
+
+/**
+ * The answer to "which conversations said this", plus what it could NOT look at.
+ *
+ * `unavailable` and an empty `ids` are different answers and the screen must render them
+ * differently — the same rule `LiveUnavailableReason` exists for. `covered` is what the header may
+ * honestly claim: reporting "transcript 0" while only one of six harnesses was reachable is the
+ * confident zero this product refuses everywhere else.
+ */
+export interface TranscriptSearch {
+  /** Conversation ids whose transcript carries the query. */
+  ids: ReadonlySet<string>
+  /** The harnesses actually walked. */
+  covered: readonly string[]
+  /** Harnesses whose search errored — their conversations are missing from `ids`. */
+  failed: readonly string[]
+  /** Set only when nothing was searched at all. */
+  unavailable?: 'no-grep' | 'no-transcripts'
 }
 
 export interface ControlSessions {
@@ -1154,6 +1175,21 @@ export interface ControlHost {
   sessions?(): Promise<ControlSessions>
 
   /**
+   * Which conversations SAID this — the deep half of the sessions search.
+   *
+   * Reads the transcripts on THIS machine and answers with conversation ids only. The text is
+   * never carried: it does not go on a session row, it does not reach the web dashboard, and it
+   * cannot reach a central. A previous attempt put it on `SessionMeta` and shipped whole
+   * conversations to a central in the member push — see the header of `transcript-search.ts`.
+   *
+   * OPTIONAL like `sessions`: a host that cannot search transcripts here (no `grep`, no
+   * transcripts, not this platform) says so through `TranscriptSearch.unavailable`, and the screen
+   * states it in words. An empty result with no reason is a real "nothing said this" — the two must
+   * stay distinguishable, exactly as `liveUnavailable` keeps them apart for live sessions.
+   */
+  searchTranscripts?(query: string): Promise<TranscriptSearch>
+
+  /**
    * What it takes to attach to a session, or `null` when this one cannot be attached.
    *
    * Returned rather than PERFORMED, exactly as the backend's own `attachCommand` is: attaching needs
@@ -1262,6 +1298,30 @@ export interface ControlHost {
    * stay listed and individually reopenable either way, so nothing is destroyed by saying no.
    */
   restoreSessions?(ids: string[], accept: boolean): Promise<ActionResult>
+
+  /**
+   * Remember that the user has ALREADY been asked about the fall that happened at `atMs`.
+   *
+   * It lives on the HOST because the host is the only thing here that outlives the Ink app.
+   * Attaching to a session is a `ControlExit`: the app unmounts, `runStart` hands over the terminal
+   * and then LOOPS, mounting a brand-new React tree that lands on the sessions tab. Every piece of
+   * component state dies with the old tree, so an "already asked" flag held in a `useState` is
+   * answered, forgotten, and asked again the moment the user detaches — which is exactly the
+   * reported bug, and the same reason `lastStatus` is kept out here.
+   *
+   * Keyed by the fall's INSTANT and compared with `>`, never a bare boolean:
+   *  - the offer is capped at 8 rows and only the rows that were SHOWN get retired, so the next
+   *    poll legitimately re-anchors onto the remainder — same event, and it must not re-ask;
+   *  - once a cluster is retired, `planCrashGroup` re-anchors onto the next-newest one, which the
+   *    module deliberately allows to be days old. That is a DIFFERENT `atMs` and an older one, so
+   *    `>` withholds it — a three-day-old fall presented as though it just happened is precisely
+   *    the "sessions that make no sense" half of the report;
+   *  - a genuine new crash while the cockpit is open stamps a NEWER `atMs` and is still announced.
+   *
+   * In memory, deliberately: closing the terminal and coming back is the moment the offer exists
+   * for, so a fresh `agentop` must ask again.
+   */
+  dismissFall?(atMs: number): void
 
   /**
    * The harnesses this machine can actually START, with what each of them accepts.

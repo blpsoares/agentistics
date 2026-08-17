@@ -35,7 +35,7 @@ import type { TuiStrings } from '../i18n'
  * archive setting preserves (`archiveMode`, the config pane's `history` row), and what it preserves
  * is precisely the rows this screen lists.
  */
-export type DashboardScreenId = 'overview' | 'projects' | 'history' | 'costs' | 'harnesses' | 'hardware'
+export type DashboardScreenId = 'overview' | 'projects' | 'history' | 'costs' | 'harnesses'
 
 export const DASHBOARD_SCREENS: readonly DashboardScreenId[] = [
   'overview',
@@ -43,7 +43,6 @@ export const DASHBOARD_SCREENS: readonly DashboardScreenId[] = [
   'history',
   'costs',
   'harnesses',
-  'hardware',
 ] as const
 
 /**
@@ -90,7 +89,6 @@ export function screenLabels(s: TuiStrings): Record<DashboardScreenId, string> {
     history: s.history,
     costs: s.costs,
     harnesses: s.harnesses,
-    hardware: s.hardware,
   }
 }
 
@@ -347,8 +345,8 @@ export function listPlan(height: number, total: number): ListPlan {
  *
  * It exists so the KEYBOARD can clamp: an unbounded page counter takes as many presses to come back
  * as it took to run past the end, and correcting it where the rows are drawn is one frame too late.
- * The screens that page nothing report 0, which reads as a single page and no keys — `overview` and
- * `hardware` draw no list, and `harnesses` cannot have more rows than there are harnesses.
+ * The screens that page nothing report 0, which reads as a single page and no keys — `overview`
+ * draws no list, and `harnesses` cannot have more rows than there are harnesses.
  */
 export function pageableTotal(id: DashboardScreenId, data: AppData | null): number {
   if (!data) return 0
