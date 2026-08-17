@@ -12,18 +12,32 @@ import { loadavg, totalmem, freemem, cpus } from 'node:os'
 import { HOME_DIR } from './config'
 import {
   calculateProcCpu,
+  isOtelWatcherCmdline,
   parseDiskUsage,
   parseProcRss,
   parseProcStat,
+  resolveServiceState,
   type DiskUsage,
   type ProcStatSample,
+  type ServiceHosting,
+  type ServiceRunState,
 } from './hardware-pure'
+import { otelWatcherHosted } from './watcher-state'
 import { procAvailable } from './sessions/proc-liveness'
+import { readManagedSessionHardware, type ManagedSessionsSnapshot } from './hardware-sessions'
 
 export interface ProcessMetrics {
   pid: number | null
   name: string
   running: boolean
+  /**
+   * The honest three-way answer. `running` above is kept as the boolean older readers (the TUI
+   * hardware screen) already consume; `unknown` reads as `false` there, which is the same shape it
+   * had before — but a reader that knows about this field can say "cannot tell" instead of "off".
+   */
+  state?: ServiceRunState
+  /** Where a running service lives. `in-process` means its CPU/RSS are the server's own. */
+  hosting?: ServiceHosting
   cpuPercent: number | null
   rssBytes: number | null
 }
@@ -63,6 +77,13 @@ export interface HardwareResourcesSnapshot {
   procAvailable: boolean
   host: HostMetricsSnapshot
   agentop: AgentopMetricsSnapshot
+  /**
+   * The managed fleet's own footprint. It travels on THIS snapshot rather than on
+   * `/api/live-sessions`, whose payload is host-process detection for the dashboard's session rows
+   * and carries no per-session hardware at all — reading it as if it did is what made this surface
+   * report zero sessions on a machine running six.
+   */
+  sessions: ManagedSessionsSnapshot
   sampledAtMs: number
 }
 
@@ -198,11 +219,20 @@ export async function readHostMetrics(): Promise<HostMetricsSnapshot> {
 }
 
 /**
- * Scan for otel-watcher daemon process PID if running.
+ * Look for an otel-watcher running as a process of its OWN.
+ *
+ * Two things this used to get wrong, both of which reported a running watcher as stopped:
+ *  - it returned early unless `OTEL_EXPORTER_OTLP_ENDPOINT` was set in the SERVER's environment.
+ *    That is an environment variable of this process and says nothing about another one: a watcher
+ *    started as its own service (`agentop watch`, a systemd unit) has its own environment.
+ *  - it could only ever find a SEPARATE process, and under `agentop server` the watcher is imported
+ *    into the server's own process (bin/cli.ts) — the normal case has no second pid at all. That
+ *    half is answered by `otelWatcherHosted()`, not here.
+ *
+ * Returns `scanned: false` when the process list could not be read: that is "cannot tell", and the
+ * caller must not turn it into "stopped".
  */
-async function findOtelWatcherPid(serverPid: number): Promise<number | null> {
-  // If OTEL exporter isn't configured or we're on a non-Linux system, otel-watcher isn't running
-  if (!process.env.OTEL_EXPORTER_OTLP_ENDPOINT) return null
+async function findOtelWatcherPid(serverPid: number): Promise<{ pid: number | null; scanned: boolean }> {
   try {
     const { readdir } = await import('node:fs/promises')
     const pids = await readdir('/proc')
@@ -212,13 +242,14 @@ async function findOtelWatcherPid(serverPid: number): Promise<number | null> {
       if (pid === serverPid) continue
       try {
         const cmdline = await readFile(`/proc/${pid}/cmdline`, 'utf8')
-        if (cmdline.includes('watcher.ts') || cmdline.includes('otel-watcher')) {
-          return pid
-        }
+        // argv is NUL-separated; a trailing NUL leaves an empty tail the parser drops.
+        if (isOtelWatcherCmdline(cmdline.split('\0'))) return { pid, scanned: true }
       } catch { /* process gone or unreadable */ }
     }
-  } catch { /* no /proc */ }
-  return null
+    return { pid: null, scanned: true }
+  } catch {
+    return { pid: null, scanned: false }
+  }
 }
 
 const CENTRAL_FILTER = 'label=com.docker.compose.project=team-mode'
@@ -334,7 +365,8 @@ export async function readAgentopMetrics(
     prevStatsMap.set(serverPid, serverStat)
   }
 
-  const watcherPid = await findOtelWatcherPid(serverPid)
+  const { pid: watcherPid, scanned } = await findOtelWatcherPid(serverPid)
+  const watcher = resolveServiceState({ inProcess: otelWatcherHosted(), scanned, pid: watcherPid })
   let watcherCpuPercent: number | null = null
   let watcherRss: number | null = null
 
@@ -352,14 +384,20 @@ export async function readAgentopMetrics(
     pid: serverPid,
     name: 'agentop server',
     running: true,
+    state: 'running',
+    hosting: 'in-process',
     cpuPercent: serverCpuPercent,
     rssBytes: serverRss,
   }
 
   const watcherProc: ProcessMetrics = {
+    // In-process: it has no pid of its own, it has the SERVER's — reporting one would invite the
+    // reader to `kill` it, and the figures beside it are already counted under `agentop server`.
     pid: watcherPid,
     name: 'otel-watcher',
-    running: watcherPid !== null,
+    running: watcher.state === 'running',
+    state: watcher.state,
+    ...(watcher.hosting ? { hosting: watcher.hosting } : {}),
     cpuPercent: watcherCpuPercent,
     rssBytes: watcherRss,
   }
@@ -401,10 +439,13 @@ export async function getHardwareSnapshot(
         dockerAvailable: false,
       }
 
+  const sessions = await readManagedSessionHardware(prevStatsMap, sampledAtMs)
+
   return {
     procAvailable: canReadProc,
     host,
     agentop,
+    sessions,
     sampledAtMs,
   }
 }
