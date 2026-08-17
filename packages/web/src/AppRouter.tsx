@@ -13,7 +13,6 @@ const MembersPage = lazy(() => import('./pages/MembersPage'))
 const TagsPage = lazy(() => import('./pages/TagsPage'))
 const TagDetailPage = lazy(() => import('./pages/TagDetailPage'))
 const ToolsPage = lazy(() => import('./pages/ToolsPage'))
-const TracesPage = lazy(() => import('./pages/TracesPage'))
 const CustomPage = lazy(() => import('./pages/CustomPage'))
 const ComparePage = lazy(() => import('./pages/ComparePage'))
 const ExportPage = lazy(() => import('./pages/ExportPage'))
@@ -67,7 +66,6 @@ export default function AppRouter() {
           <Route path="tags" element={<Suspense fallback={<PageFallback />}><TagsPage /></Suspense>} />
           <Route path="tags/:id" element={<Suspense fallback={<PageFallback />}><TagDetailPage /></Suspense>} />
           <Route path="tools" element={<Suspense fallback={<PageFallback />}><ToolsPage /></Suspense>} />
-          <Route path="traces" element={<Suspense fallback={<PageFallback />}><TracesPage /></Suspense>} />
           <Route path="custom" element={<Suspense fallback={<PageFallback />}><CustomPage /></Suspense>} />
           {/* Hardware stopped being a page — it is a modal opened from the sticky header (and from
               the mobile "More" sheet). The route is kept as a redirect so an existing bookmark
