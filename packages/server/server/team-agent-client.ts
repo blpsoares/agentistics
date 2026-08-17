@@ -163,6 +163,25 @@ const backoffIdx = new Map<string, number>()
 const credFingerprint = new Map<string, string>()
 /** Connection ids with a whoami resolution currently in flight — never overlap two for the same id. */
 const resolvingUser = new Set<string>()
+/**
+ * When each connection's identity was last ATTEMPTED (success or failure), so the reconcile
+ * loop's 5s poll cannot retry more often than `IDENTITY_RETRY_COOLDOWN_MS`.
+ *
+ * Real incident: this loop calls `resolveMemberIdentity` every 5s while a connection is missing
+ * `machineName`, gated only by `resolvingUser` — which clears the instant a FAILED call returns,
+ * so nothing stopped the very next tick from trying again. A central that briefly 429s whoami got
+ * hit again 5s later, and hit again 5s after that — which is exactly what RENEWS a soft
+ * per-account rate-limit window (`rate-limit.ts`'s own design: "per-account lockout must stay
+ * soft, or it becomes a DoS against a colleague"). Retried at 5s forever, THIS loop was the
+ * colleague — a lockout that should have expired in under three minutes was kept alive
+ * indefinitely by our own retries. `resolvingUser` answers "is one running right now"; this
+ * answers the different question a cooldown needs: "did one run TOO RECENTLY".
+ */
+const lastIdentityAttemptMs = new Map<string, number>()
+/** Floor between two whoami attempts for the SAME connection — comfortably above any rate-limit
+ *  window this product's centrals are known to apply (measured: up to ~3 minutes), so a soft
+ *  lockout gets the silence it needs to expire instead of being renewed by our own polling. */
+const IDENTITY_RETRY_COOLDOWN_MS = 5 * 60_000
 
 /**
  * How often the member reports its open assistants to the central. Must stay comfortably below
@@ -257,20 +276,28 @@ function stopLiveReporting(connId: string): void {
  * A connection with BOTH already resolved never calls the central at all — this loop runs every
  * 5s, and the ordinary case (a healthy, fully-resolved connection) must cost nothing.
  *
- * Never overlaps two in-flight calls for the same connection id. Never throws; updates
- * preferences via `updateTeamConfig` so a concurrent writer (e.g. the uploader resolving the SAME
- * connection, or the user editing Settings) cannot be clobbered.
+ * Never overlaps two in-flight calls for the same connection id, and never retries the SAME
+ * connection more than once per `IDENTITY_RETRY_COOLDOWN_MS` regardless of whether the previous
+ * attempt succeeded, failed, or errored — a failure must cost the same silence a success would,
+ * or every 5s reconcile tick re-triggers it and a central's rate limit never gets the chance to
+ * expire. Never throws; updates preferences via `updateTeamConfig` so a concurrent writer (e.g.
+ * the uploader resolving the SAME connection, or the user editing Settings) cannot be clobbered.
  *
  * `deps.updateTeamConfig` is injectable for tests — the default touches the developer's real
- * ~/.agentistics/preferences.json, which a test must never do.
+ * ~/.agentistics/preferences.json, which a test must never do. `deps.now` is injectable so the
+ * cooldown can be tested without a real 5-minute wait.
  */
 export async function resolveMemberIdentity(
   conn: TeamConnection,
-  deps: { updateTeamConfig?: typeof updateTeamConfig } = {},
+  deps: { updateTeamConfig?: typeof updateTeamConfig; now?: () => number } = {},
 ): Promise<void> {
   if (conn.user && conn.machineName) return
   if (resolvingUser.has(conn.id)) return
+  const now = deps.now ?? Date.now
+  const last = lastIdentityAttemptMs.get(conn.id)
+  if (last !== undefined && now() - last < IDENTITY_RETRY_COOLDOWN_MS) return
   resolvingUser.add(conn.id)
+  lastIdentityAttemptMs.set(conn.id, now())
   try {
     const endpoint = conn.endpoint.replace(/\/+$/, '')
     const headers: Record<string, string> = {}

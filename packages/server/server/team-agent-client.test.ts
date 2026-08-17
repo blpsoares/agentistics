@@ -235,9 +235,13 @@ import { resolveMemberIdentity } from './team-agent-client'
 import type { TeamConfig } from '@agentistics/core'
 import type { TeamConfigMutator } from './preferences'
 
+let fakeConnCounter = 0
+/** A unique `id` per call by default — `resolveMemberIdentity`'s retry cooldown is keyed by
+ *  connection id in MODULE-level state shared across every test in this file, so two tests
+ *  reusing one id would have the first test's attempt silently cool down the second's. */
 function fakeConn(port: number, extra: Partial<TeamConnection> = {}): TeamConnection {
   return {
-    id: 'c_test', endpoint: `http://127.0.0.1:${port}`, org: 'default', user: '',
+    id: `c_test_${fakeConnCounter++}`, endpoint: `http://127.0.0.1:${port}`, org: 'default', user: '',
     token: 'tok', deniedRepos: [], ...extra,
   }
 }
@@ -297,6 +301,30 @@ describe('resolveMemberIdentity', () => {
     // Its existing machineName survives — a response that merely OMITS the field is not evidence
     // the central un-named the machine, the same non-destructive rule `applyProjectFacts` follows.
     expect(fx.store.connections[0]?.machineName).toBe('laptop-b')
+  })
+
+  test('a connection retried immediately after a FAILED attempt does not call the central again — cooldown, not just an in-flight guard', async () => {
+    // Real incident: the reconcile loop calls this every 5s while machineName stays unresolved,
+    // with no floor beyond "not currently in flight". A central that briefly 429s whoami got hit
+    // again 5s later, which is exactly what RENEWS a soft per-account rate-limit window — the
+    // loop kept the lockout alive against itself, forever, because failure was indistinguishable
+    // from "never tried". `resolvingUser`'s in-flight guard clears the instant the failed call
+    // returns, so it does nothing to prevent the very next reconcile tick from trying again.
+    let hits = 0
+    await using server = Bun.serve({
+      port: 0,
+      fetch: () => { hits++; return new Response('rate limited', { status: 429 }) },
+    })
+    // A connection id unique to this test — the cooldown map is module-level state shared across
+    // every test in this file, and reusing `c_test` would inherit an attempt timestamp another
+    // test already recorded for that id.
+    const conn = fakeConn(server.port!, { id: 'c_cooldown_test', user: 'already-resolved' })
+    const fx = fakeStore(conn)
+
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update }) // fails, 429
+    expect(hits).toBe(1)
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update }) // retried "5s later"
+    expect(hits).toBe(1) // still 1 — withheld by the cooldown, not sent again
   })
 
   test('a connection with BOTH already resolved never calls the central at all', async () => {
