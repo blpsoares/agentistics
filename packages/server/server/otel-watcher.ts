@@ -27,6 +27,7 @@
 
 import { join } from 'path'
 import chokidar from 'chokidar'
+import { markOtelWatcherHosted } from './watcher-state'
 
 // OpenTelemetry imports
 
@@ -572,6 +573,9 @@ async function rebuildSnapshot(): Promise<void> {
 // Main
 
 async function main() {
+  // The hardware surface asks whether the watcher is running. Under `agentop server` it runs INSIDE
+  // that process, so there is no pid to find — see watcher-state.ts.
+  markOtelWatcherHosted()
   console.log('╔══════════════════════════════════════════════╗')
   console.log('║       Claude Stats — Watcher / Daemon       ║')
   console.log('╚══════════════════════════════════════════════╝')

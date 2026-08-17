@@ -19,7 +19,6 @@ const ComparePage = lazy(() => import('./pages/ComparePage'))
 const ExportPage = lazy(() => import('./pages/ExportPage'))
 const SessionsPage = lazy(() => import('./pages/SessionsPage'))
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'))
-const HardwarePage = lazy(() => import('./pages/HardwarePage').then(m => ({ default: m.HardwarePage })))
 const SettingsPage = lazy(() => import('./pages/settings/SettingsPage'))
 const PreferencesSettings = lazy(() => import('./pages/settings/PreferencesSettings'))
 const NotificationsSettings = lazy(() => import('./pages/settings/NotificationsSettings'))
@@ -70,7 +69,10 @@ export default function AppRouter() {
           <Route path="tools" element={<Suspense fallback={<PageFallback />}><ToolsPage /></Suspense>} />
           <Route path="traces" element={<Suspense fallback={<PageFallback />}><TracesPage /></Suspense>} />
           <Route path="custom" element={<Suspense fallback={<PageFallback />}><CustomPage /></Suspense>} />
-          <Route path="hardware" element={<Suspense fallback={<PageFallback />}><HardwarePage /></Suspense>} />
+          {/* Hardware stopped being a page — it is a modal opened from the sticky header (and from
+              the mobile "More" sheet). The route is kept as a redirect so an existing bookmark
+              lands somewhere rather than on a blank screen: this router has no catch-all. */}
+          <Route path="hardware" element={<Navigate to="/" replace />} />
           <Route path="compare" element={<Suspense fallback={<PageFallback />}><ComparePage /></Suspense>} />
           <Route path="export" element={<Suspense fallback={<PageFallback />}><ExportPage /></Suspense>} />
           <Route path="settings" element={<Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>}>
