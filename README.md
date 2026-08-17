@@ -272,7 +272,10 @@ profile is the only thing that decides a capability; no opt-in re-enables host p
 agentop doctor --exposed     # run this BEFORE opening a tunnel
 ```
 
-A check that could not be verified reports `fail`, never a reassuring `pass`.
+A check that could not be verified reports `fail`, never a reassuring `pass`. On a Docker central
+run it from inside the container instead — `./central.sh doctor --exposed` — where `central.env` is
+the live environment **and** the database is reachable, so the owner-MFA and machine-token checks
+actually run. On the host they cannot, and unverified counts as a failure.
 
 → [docs/exposure.md](docs/exposure.md) · [SECURITY.md](SECURITY.md)
 

@@ -203,8 +203,13 @@ That scoping is enforced server-side in `team-scope.ts` and asserted in `authz-g
 
 ## 9. Go-live checklist
 
-Run `./central.sh doctor --exposed` (or `agentop central doctor --exposed`). It must print
-no `✗`.
+Run `./central.sh doctor --exposed`. It must print no `✗`.
+
+There is no `agentop central doctor` — `CENTRAL_ACTIONS` in `cli-central.ts` does not carry one, so
+a central deployed from the released binary has no in-container preflight and no `central.sh` to
+reach it with. Run `agentop doctor --exposed` on the host there: it finds the same `central.env`
+(`~/.agentistics/central/`) and names the file it read, but cannot reach the database, so the
+owner-MFA and machine-token checks report as unverified — which is a failure, deliberately.
 
 Then verify from outside, against the real hostname:
 
