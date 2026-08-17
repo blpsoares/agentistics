@@ -1,3 +1,4 @@
+import { emptySearchFields } from '@agentistics/tui/control/search-scope'
 import { describe, expect, it } from 'bun:test'
 import { cliStrings } from '../cli-i18n'
 import { toControlSession } from './control-session'
@@ -15,7 +16,7 @@ function view(over: Partial<SessionView> = {}): SessionView {
     status: 'lost',
     attached: false,
     approvalDetection: true,
-    searchText: '',
+    searchFields: emptySearchFields(),
     ...over,
   }
 }

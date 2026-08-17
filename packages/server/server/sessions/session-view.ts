@@ -9,6 +9,7 @@
  */
 
 import type { HarnessId } from '@agentistics/core'
+import { matchesQuery, type SearchFields } from '@agentistics/tui/control/search-scope'
 import { type HarnessProcess, sessionAtCwd } from '../live-sessions'
 import { rulesFor } from './attention-rules'
 import type { DialogOption } from './dialog-choice'
@@ -164,13 +165,19 @@ export interface SessionView {
    */
   approvalDetection: boolean
   /**
-   * Everything about this row worth searching, lowercased and joined.
+   * Everything about this row worth searching, KEPT APART BY WHAT IT IS.
    *
    * Composed HERE so the search reaches a closed conversation's OPENING PROMPT — which is what a
    * person actually remembers about something they closed ("the one where I asked about the
    * migration") — without the screen having to hold conversation text it never renders.
+   *
+   * It used to be one lowercased blob (`searchText`) tested with `.includes()`. That found the row
+   * and then could not say why it was there: a query matched the folder, the harness, the note or
+   * the prompt indistinguishably, so the reader had to open the session to learn which. Separate
+   * fields cost nothing at the predicate — `matchScopes` still walks them all — and are what let
+   * the screen print the scope beside each row and count the depth in the header.
    */
-  searchText: string
+  searchFields: SearchFields
 }
 
 export function needsAttention(a?: SessionActivity): boolean {
@@ -231,9 +238,9 @@ export function managedIdOfProcess(
   return (tmux ? idFromTmuxName(tmux) : null) ?? undefined
 }
 
-/** Everything a row can be found by, in one lowercased blob. */
-function searchTextOf(...parts: Array<string | undefined>): string {
-  return parts.filter(Boolean).join(' ').toLowerCase()
+/** One searchable dimension, from whatever parts of a row carry it. */
+function scopeText(...parts: Array<string | undefined>): string {
+  return parts.filter(Boolean).join(' ')
 }
 
 /**
@@ -241,11 +248,34 @@ function searchTextOf(...parts: Array<string | undefined>): string {
  *
  * One function rather than a filter per status: a search that quietly skipped closed conversations
  * would be a search that cannot find the thing it was most likely opened to find.
+ *
+ * `transcriptHits` is the set of conversations whose TEXT carries the query, resolved separately
+ * against the disk (`transcript-run.ts`) because no row holds its own conversation. Omitted, the
+ * search is exactly what it always was — the transcript scope simply never matches.
  */
-export function filterSessions(views: readonly SessionView[], query: string): SessionView[] {
-  const q = query.trim().toLowerCase()
-  if (q === '') return [...views]
-  return views.filter(v => v.searchText.includes(q))
+export function filterSessions(
+  views: readonly SessionView[],
+  query: string,
+  transcriptHits?: ReadonlySet<string>,
+): SessionView[] {
+  if (query.trim() === '') return [...views]
+  return views.filter(v => matchesQuery(v.searchFields, query, {
+    transcript: hasTranscriptHit(v, transcriptHits),
+  }))
+}
+
+/**
+ * Whether the transcript search named THIS row's conversation.
+ *
+ * Only an EXACT link counts. A row knows its conversation when the registry recorded the id at
+ * spawn or the harness's own file names our tmux session; where it does not, the fleet's fallback
+ * is a harness-and-directory inference, and accepting that here would mark every session in one
+ * worktree as matching because a sibling's transcript happened to contain the word.
+ */
+function hasTranscriptHit(v: SessionView, hits?: ReadonlySet<string>): boolean {
+  if (!hits || hits.size === 0) return false
+  return (v.conversationId !== undefined && hits.has(v.conversationId))
+    || (v.resume !== undefined && hits.has(v.resume.sessionId))
 }
 
 export function buildSessionViews(o: {
@@ -445,9 +475,14 @@ export function buildSessionViews(o: {
       approvalDetection: harness !== undefined && rulesFor(harness) !== undefined,
       // The harness's own name is searchable too: it is the name the person reading this screen may
       // well be the only one they remember, having typed it inside the session.
-      searchText: searchTextOf(
-        harness, r.managed?.cwd, r.managed?.label, ownName, r.managed?.note, r.managed?.task,
-      ),
+      searchFields: {
+        name: scopeText(r.managed?.label, ownName),
+        folder: scopeText(r.managed?.cwd),
+        harness: scopeText(harness),
+        note: scopeText(r.managed?.note),
+        task: scopeText(r.managed?.task),
+        prompt: '',
+      },
     }
   })
 
@@ -554,7 +589,14 @@ export function buildSessionViews(o: {
       ...(conv?.contextTokens !== undefined && conv.contextWindow !== undefined
         ? { contextTokens: conv.contextTokens, contextWindow: conv.contextWindow }
         : {}),
-      searchText: searchTextOf(p.harness, p.cwd, ownName, conv?.title, conv?.firstPrompt),
+      searchFields: {
+        name: scopeText(ownName, conv?.title),
+        folder: scopeText(p.cwd),
+        harness: scopeText(p.harness),
+        note: '',
+        task: '',
+        prompt: scopeText(conv?.firstPrompt),
+      },
     }
   })
 
@@ -628,10 +670,18 @@ export function buildSessionViews(o: {
       ...(c.contextTokens !== undefined && c.contextWindow !== undefined
         ? { contextTokens: c.contextTokens, contextWindow: c.contextWindow }
         : {}),
-      // The typed name goes into the search text TOO, or the row is displayed under a name that
-      // cannot be used to find it — which is the complaint arriving by the other door.
-      searchText: searchTextOf(c.harness, c.cwd, named ?? c.title, c.firstPrompt)
-        + (named && named !== c.title ? ` ${c.title.toLowerCase()}` : ''),
+      // BOTH names are searchable, or the row is displayed under a name that cannot be used to
+      // find it — which is the complaint arriving by the other door. They share the `name` scope:
+      // which of the two the user typed is not a distinction worth reporting, and the row already
+      // says which place the name it is SHOWING came from.
+      searchFields: {
+        name: scopeText(named, named !== c.title ? c.title : undefined),
+        folder: scopeText(c.cwd),
+        harness: scopeText(c.harness),
+        note: '',
+        task: '',
+        prompt: scopeText(c.firstPrompt),
+      },
       }
     })
 
