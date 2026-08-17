@@ -1264,7 +1264,7 @@ function makeSuspend(altScreen: Suspendable, strings: () => CliStrings): Suspend
 // ---------------------------------------------------------------------------
 
 /** The host, plus the language it currently speaks (runStart needs it after the app exits). */
-interface StartHost extends ControlHost {
+export interface StartHost extends ControlHost {
   readonly lang: CliLang
 }
 
@@ -1653,7 +1653,17 @@ async function restorableSessions(fell: readonly ManagedSession[]): Promise<Rest
   }))
 }
 
-function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
+/**
+ * The host, exported so the WEB dashboard's session routes act through the same object the cockpit
+ * does (`sessions/fleet-web.ts`).
+ *
+ * The alternative was a second set of session verbs living in `index.ts`, which is the drift
+ * `task-reopen.ts` was extracted to end: `answerSession` alone re-reads the frame, re-parses the
+ * options and refuses a numbered dialog on a harness with no verified way to pick — a browser copy
+ * of that would be a button that approves the highlighted row. Only `suspend`-requiring actions
+ * (`central.sh init`) need a real terminal, and the web host is never asked for one.
+ */
+export function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
   let lang = initialLang
   const S = () => cliStrings(lang)
   // Built here so it always reports in the language the host is currently speaking.
