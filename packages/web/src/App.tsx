@@ -1754,12 +1754,22 @@ export default function AppLayout() {
         lang: lang === 'pt' ? 'pt' : 'en',
       })
     : null
-  const headerCostTitle = headerPlanBasis
-    ? [
-        lang === 'pt' ? 'Custo do seu plano no período medido' : 'Your plan cost over the measured period',
-        headerCostScope,
-      ].filter(Boolean).join(' · ')
-    : (lang === 'pt' ? 'Estimativa a preços de API' : 'API-price estimate')
+  // The strip's totals (sessions/cost/tokens) all narrow to online members BY DEFAULT on a
+  // central whose operator turned off `includeOfflineData` — nobody chose that on this screen, so
+  // it needs the same disclosure `planScopeNote` gives a plan-basis figure. An explicit "Offline"
+  // presence pill already reads as a filter the user picked and needs no extra sentence.
+  const presenceScopeNote = derived?.presenceScope.isPolicyDefault
+    ? (lang === 'pt' ? 'somente membros online (política do central)' : 'online members only (central policy)')
+    : null
+  const headerCostTitle = [
+    headerPlanBasis
+      ? [
+          lang === 'pt' ? 'Custo do seu plano no período medido' : 'Your plan cost over the measured period',
+          headerCostScope,
+        ].filter(Boolean).join(' · ')
+      : (lang === 'pt' ? 'Estimativa a preços de API' : 'API-price estimate'),
+    presenceScopeNote,
+  ].filter(Boolean).join(' · ')
 
   /**
    * The header's token figure and the sentence explaining it.
@@ -1771,7 +1781,8 @@ export default function AppLayout() {
    */
   const headerTokens = derived ? totalTokens(derived.tokenTotals) : 0
   const headerTokensTitle = derived
-    ? totalTokensExplained(derived.tokenTotals, lang === 'pt' ? 'pt' : 'en')
+    ? [totalTokensExplained(derived.tokenTotals, lang === 'pt' ? 'pt' : 'en'), presenceScopeNote]
+        .filter(Boolean).join(' · ')
     : ''
 
   const models = useMemo(() => {

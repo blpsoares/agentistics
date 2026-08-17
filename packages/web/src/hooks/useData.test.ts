@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats } from './useData'
-import { EMPTY_TOKENS, mergeStatsCaches } from '@agentistics/core'
+import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats, resolvePresenceScope } from './useData'
+import { EMPTY_TOKENS, mergeStatsCaches, totalTokens } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
 import type { SessionMeta } from '@agentistics/core'
 import { format, subDays } from 'date-fns'
@@ -1381,5 +1381,124 @@ describe('the Claude harness chip reads the cache, not only the surviving sessio
     // cannot serve a selection that also contains a harness the cache knows nothing about.
     const mixed = computeDerivedStats(data, filters({ harnesses: ['claude', 'codex'] }))!
     expect(mixed.totalSessions).toBe(1)
+  })
+})
+
+describe('resolvePresenceScope', () => {
+  const presence: Record<string, import('@agentistics/core').MemberPresence> = {
+    'Online Person': { online: true, lastSeenAt: null, latencyMs: 0 },
+    'Offline Person': { online: false, lastSeenAt: null, latencyMs: null },
+  }
+
+  const filters = (over: Partial<import('@agentistics/core').Filters> = {}): import('@agentistics/core').Filters =>
+    ({ dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], ...over })
+
+  test('no presence data at all → no scoping', () => {
+    const scope = resolvePresenceScope({ presence: undefined, includeOfflineData: false }, filters())
+    expect(scope.effective).toBeNull()
+    expect(scope.isPolicyDefault).toBe(false)
+    expect(scope.allowedUsers).toBeNull()
+  })
+
+  test('includeOfflineData !== false → no default narrowing even with presence data', () => {
+    const scope = resolvePresenceScope({ presence, includeOfflineData: true }, filters())
+    expect(scope.effective).toBeNull()
+    expect(scope.allowedUsers).toBeNull()
+  })
+
+  test('includeOfflineData === false and no explicit filter → defaults to online-only, and SAYS it is a default', () => {
+    const scope = resolvePresenceScope({ presence, includeOfflineData: false }, filters())
+    expect(scope.effective).toBe('online')
+    expect(scope.isPolicyDefault).toBe(true)
+    expect(scope.allowedUsers).toEqual(new Set(['Online Person']))
+  })
+
+  test('an explicit filters.presence wins and is NOT a policy default', () => {
+    const scope = resolvePresenceScope({ presence, includeOfflineData: false }, filters({ presence: 'offline' }))
+    expect(scope.effective).toBe('offline')
+    expect(scope.isPolicyDefault).toBe(false)
+    expect(scope.allowedUsers).toEqual(new Set(['Offline Person']))
+  })
+
+  test('an explicit filter can also just restate the default — still not a policy default', () => {
+    const scope = resolvePresenceScope({ presence, includeOfflineData: false }, filters({ presence: 'online' }))
+    expect(scope.isPolicyDefault).toBe(false)
+  })
+})
+
+describe('the header total never exceeds — and is never disconnected from — a presence-scoped member drill-down', () => {
+  // Regression: the header (`derived.totalCostUSD` / `tokenTotals` / `totalSessions`) is built
+  // from `effectiveStatsCache`, which silently drops an offline member's statsCache whenever the
+  // central's `includeOfflineData` policy defaults to online-only — while `MembersPage` read
+  // `data.machineStatsCaches` / `userStatsCaches` directly, un-scoped by presence, so a member the
+  // header excluded still showed its full, all-time history on its own row: a small "total" next
+  // to one of its own (excluded) parts, dwarfing it, with nothing on screen explaining why.
+  //
+  // This test pins the HEADER half of the fix: with the policy default in effect, the header's
+  // totals must equal exactly the online member's cache (never silently include the offline one,
+  // and never silently drop the online one either).
+  const onlineCache: import('@agentistics/core').StatsCache = {
+    version: 1, lastComputedDate: '2026-07-01',
+    dailyActivity: [{ date: '2026-07-01', sessionCount: 3, messageCount: 30, toolCallCount: 0 }],
+    dailyModelTokens: [],
+    modelUsage: {
+      'claude-sonnet-4-5': {
+        inputTokens: 1_000, outputTokens: 500,
+        cacheReadInputTokens: 2_000, cacheCreationInputTokens: 100,
+        webSearchRequests: 0, costUSD: 0,
+      },
+    },
+    totalSessions: 3, totalMessages: 30, hourCounts: {},
+  } as unknown as import('@agentistics/core').StatsCache
+
+  // The offline member's deep history dwarfs the online one's — exactly the shape of the reported
+  // bug (93.9M tok header vs. 23.4B tok on one excluded member's own row).
+  const offlineCache: import('@agentistics/core').StatsCache = {
+    version: 1, lastComputedDate: '2026-07-01',
+    dailyActivity: [{ date: '2026-07-01', sessionCount: 400, messageCount: 4000, toolCallCount: 0 }],
+    dailyModelTokens: [],
+    modelUsage: {
+      'claude-sonnet-4-5': {
+        inputTokens: 5_000_000_000, outputTokens: 2_000_000_000,
+        cacheReadInputTokens: 15_000_000_000, cacheCreationInputTokens: 1_000_000_000,
+        webSearchRequests: 0, costUSD: 0,
+      },
+    },
+    totalSessions: 400, totalMessages: 4000, hourCounts: {},
+  } as unknown as import('@agentistics/core').StatsCache
+
+  const presence: Record<string, import('@agentistics/core').MemberPresence> = {
+    'Online Person': { online: true, lastSeenAt: null, latencyMs: 0 },
+    'Offline Person': { online: false, lastSeenAt: null, latencyMs: null },
+  }
+
+  const data = {
+    statsCache: onlineCache, // the viewing central's own local cache, not used once user caches resolve
+    presence,
+    includeOfflineData: false,
+    userStatsCaches: { 'Online Person': onlineCache, 'Offline Person': offlineCache },
+    sessions: [],
+    allSessions: [],
+    projects: [],
+    harnesses: ['claude'],
+  } as unknown as import('@agentistics/core').AppData
+
+  const filters = (over: Partial<import('@agentistics/core').Filters> = {}): import('@agentistics/core').Filters =>
+    ({ dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], ...over })
+
+  test('by default (policy narrows, nothing explicit) the header totals are exactly the online member\'s cache', () => {
+    const d = computeDerivedStats(data, filters())!
+    expect(d.presenceScope.isPolicyDefault).toBe(true)
+    const onlineTokens = 1_000 + 500 + 2_000 + 100
+    expect(totalTokens(d.tokenTotals)).toBe(onlineTokens)
+    expect(d.totalSessions).toBe(3)
+  })
+
+  test('explicitly asking for offline flips the header to the (huge) offline member\'s cache — consistently, not partially', () => {
+    const d = computeDerivedStats(data, filters({ presence: 'offline' }))!
+    expect(d.presenceScope.isPolicyDefault).toBe(false)
+    const offlineTokens = 5_000_000_000 + 2_000_000_000 + 15_000_000_000 + 1_000_000_000
+    expect(totalTokens(d.tokenTotals)).toBe(offlineTokens)
+    expect(d.totalSessions).toBe(400)
   })
 })
