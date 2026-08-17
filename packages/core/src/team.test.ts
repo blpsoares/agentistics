@@ -285,6 +285,32 @@ test('migrateTeamConfig: an already-migrated config is preserved, ids intact', (
   expect(again.connections).toHaveLength(1)
 })
 
+test('migrateTeamConfig: re-sanitizing an already-migrated config PRESERVES machineName', () => {
+  // Real incident: the sanitize-in-place branch rebuilds each connection field by field and
+  // never listed `machineName` among them (unlike `pushIntervalSec`/`label`/`addedAt`/
+  // `authFailedAt`, which ARE preserved) — so it was silently dropped on every single write,
+  // because `readEffective` runs the CURRENT on-disk state through this exact function before
+  // any mutate callback even sees it. A connection whose name the central had just resolved
+  // read as unresolved again the moment ANYTHING else wrote to preferences.json — a session-view
+  // change, a language toggle, anything — not only writes that touch the connection itself.
+  const first = migrateTeamConfig({
+    mode: 'member',
+    connections: [{ id: 'c_x', endpoint: 'http://c:48080', token: 't', machineName: 'Dell-elmd' }],
+  })
+  expect(first.connections[0]!.machineName).toBe('Dell-elmd')
+  // The exact re-entrant call `readEffective` makes on every write: run what is already on disk
+  // (an already-migrated shape) back through migrateTeamConfig before any mutate callback sees it.
+  const again = migrateTeamConfig(first)
+  expect(again.connections[0]!.machineName).toBe('Dell-elmd')
+})
+
+test('migrateTeamConfig: a non-string machineName on the wire is dropped, not coerced', () => {
+  const out = migrateTeamConfig({
+    mode: 'member', connections: [{ id: 'c_x', endpoint: 'http://c:48080', token: 't', machineName: 42 }],
+  })
+  expect(out.connections[0]!.machineName).toBeUndefined()
+})
+
 test('migrateTeamConfig: junk input yields the default solo config', () => {
   for (const raw of [undefined, null, 'nope', 42, []]) {
     expect(migrateTeamConfig(raw).connections).toEqual([])

@@ -1,4 +1,4 @@
-import { test, expect } from 'bun:test'
+import { test, expect, describe, beforeEach, afterEach } from 'bun:test'
 import {
   agentWsUrl, backoffDelay, BACKOFF_MS, fingerprintOf, shouldTeardown, decodeAgentFrame,
 } from './team-agent-client'
@@ -225,4 +225,119 @@ test('the socket state maps are left empty by these tests — no cross-test leak
   // test (or a later run in a different order) can never observe another's socket state.
   expect([...S.activeWs.keys()].filter(k => k.startsWith('c_aaaaaaaaaaa'))).toEqual([])
   expect([...S.backoffIdx.keys()].filter(k => k.startsWith('c_aaaaaaaaaaa'))).toEqual([])
+})
+
+// ---------------------------------------------------------------------------
+// resolveMemberIdentity — best-effort whoami resolution, including machineName
+// ---------------------------------------------------------------------------
+
+import { resolveMemberIdentity } from './team-agent-client'
+import type { TeamConfig } from '@agentistics/core'
+import type { TeamConfigMutator } from './preferences'
+
+let fakeConnCounter = 0
+/** A unique `id` per call by default — `resolveMemberIdentity`'s retry cooldown is keyed by
+ *  connection id in MODULE-level state shared across every test in this file, so two tests
+ *  reusing one id would have the first test's attempt silently cool down the second's. */
+function fakeConn(port: number, extra: Partial<TeamConnection> = {}): TeamConnection {
+  return {
+    id: `c_test_${fakeConnCounter++}`, endpoint: `http://127.0.0.1:${port}`, org: 'default', user: '',
+    token: 'tok', deniedRepos: [], ...extra,
+  }
+}
+
+/** Same in-memory fake `team-uploader.test.ts` uses — never touches the real preferences file. */
+function fakeStore(conn: TeamConnection): {
+  store: TeamConfig
+  update: typeof import('./preferences').updateTeamConfig
+} {
+  let store: TeamConfig = { schema: 2, mode: 'member', connections: [conn] }
+  const update = (async (mutate: TeamConfigMutator) => {
+    const next = mutate(store)
+    if (next !== undefined) store = next
+    return store
+  }) as typeof import('./preferences').updateTeamConfig
+  return { get store() { return store }, update } as never
+}
+
+describe('resolveMemberIdentity', () => {
+  test('resolves BOTH user and machineName from one whoami call when both are missing', async () => {
+    await using server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ ok: true, user: 'resolved-name', org: 'default', machineName: 'laptop-b' }),
+    })
+    const conn = fakeConn(server.port!)
+    const fx = fakeStore(conn)
+
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update })
+
+    expect(fx.store.connections[0]?.user).toBe('resolved-name')
+    expect(fx.store.connections[0]?.machineName).toBe('laptop-b')
+  })
+
+  test('a connection whose user is already resolved but whose machineName is still missing gets machineName backfilled', async () => {
+    await using server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ ok: true, user: 'already-resolved', org: 'default', machineName: 'laptop-b' }),
+    })
+    const conn = fakeConn(server.port!, { user: 'already-resolved' })
+    const fx = fakeStore(conn)
+
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update })
+
+    expect(fx.store.connections[0]?.machineName).toBe('laptop-b')
+  })
+
+  test('a connection with BOTH already resolved keeps its machineName when a later call reaches a central that omits it', async () => {
+    await using server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ ok: true, user: 'already-resolved', org: 'default' }), // no machineName this time
+    })
+    const conn = fakeConn(server.port!, { user: 'already-resolved', machineName: 'laptop-b' })
+    const fx = fakeStore(conn)
+
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update })
+
+    // Its existing machineName survives — a response that merely OMITS the field is not evidence
+    // the central un-named the machine, the same non-destructive rule `applyProjectFacts` follows.
+    expect(fx.store.connections[0]?.machineName).toBe('laptop-b')
+  })
+
+  test('a connection retried immediately after a FAILED attempt does not call the central again — cooldown, not just an in-flight guard', async () => {
+    // Real incident: the reconcile loop calls this every 5s while machineName stays unresolved,
+    // with no floor beyond "not currently in flight". A central that briefly 429s whoami got hit
+    // again 5s later, which is exactly what RENEWS a soft per-account rate-limit window — the
+    // loop kept the lockout alive against itself, forever, because failure was indistinguishable
+    // from "never tried". `resolvingUser`'s in-flight guard clears the instant the failed call
+    // returns, so it does nothing to prevent the very next reconcile tick from trying again.
+    let hits = 0
+    await using server = Bun.serve({
+      port: 0,
+      fetch: () => { hits++; return new Response('rate limited', { status: 429 }) },
+    })
+    // A connection id unique to this test — the cooldown map is module-level state shared across
+    // every test in this file, and reusing `c_test` would inherit an attempt timestamp another
+    // test already recorded for that id.
+    const conn = fakeConn(server.port!, { id: 'c_cooldown_test', user: 'already-resolved' })
+    const fx = fakeStore(conn)
+
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update }) // fails, 429
+    expect(hits).toBe(1)
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update }) // retried "5s later"
+    expect(hits).toBe(1) // still 1 — withheld by the cooldown, not sent again
+  })
+
+  test('a connection with BOTH already resolved never calls the central at all', async () => {
+    let hits = 0
+    await using server = Bun.serve({
+      port: 0,
+      fetch: () => { hits++; return Response.json({ ok: true, user: 'x', org: 'default' }) },
+    })
+    const conn = fakeConn(server.port!, { user: 'already-resolved', machineName: 'laptop-b' })
+    const fx = fakeStore(conn)
+
+    await resolveMemberIdentity(conn, { updateTeamConfig: fx.update })
+
+    expect(hits).toBe(0)
+  })
 })

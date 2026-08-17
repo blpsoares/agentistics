@@ -367,13 +367,19 @@ export function headerMeta(input: HeaderMetaInput): HeaderMeta {
   // fact and split apart they would drop independently, leaving a latency belonging to no named
   // machine. Drawn only when there IS a central: on a solo box every piece of this is absent, and a
   // dot with nothing to say about a connection that does not exist is worse than no dot.
-  const machine = machineName
+  // Gated on LINKSTATE, not on `machineName`: the central resolves the name from `whoami`, and a
+  // token whose central never returned one (or an older central that predates the field) leaves
+  // `machineName` absent while `accountName`, `linkState` and `pushMs` are all real — gating on the
+  // name dropped the whole cell, dot included, over one missing piece of a fact otherwise known.
+  // `linkState` is the right presence signal because it is set (in `cli-start.ts`) exactly when
+  // there IS a connection, independent of whether that connection could be named.
+  const machine = linkState !== undefined
     ? [machineName, accountName, pushMs !== undefined ? `${pushMs}ms` : '']
         .filter(Boolean).join(' · ')
     : ''
 
   const level = memory ? loadLevel(memory.percent) : undefined
-  const linked = machine ? { machineState: linkState ?? 'ok' } : {}
+  const linked = linkState !== undefined ? { machineState: linkState } : {}
   const full = {
     text, machine, alert, update, memory: mem, memoryRed: red, ...linked,
     ...(level ? { memoryLevel: level } : {}),

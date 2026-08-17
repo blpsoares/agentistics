@@ -314,6 +314,14 @@ export function migrateTeamConfig(raw: unknown): TeamConfig {
         ...(typeof entry.label === 'string' ? { label: entry.label } : {}),
         ...(typeof entry.addedAt === 'string' ? { addedAt: entry.addedAt } : {}),
         ...(typeof entry.authFailedAt === 'string' ? { authFailedAt: entry.authFailedAt } : {}),
+        // Missing here silently dropped the field on EVERY write, not only ones touching the
+        // connection itself: `readEffective` runs whatever is already on disk through this exact
+        // reconstruction before any mutate callback ever sees `current` — so a name the central
+        // had just resolved read as unresolved again the instant anything else wrote to
+        // preferences.json (a session-view change, a language toggle, a note). Measured live:
+        // `resolveMemberIdentity` persisted it correctly and a raw disk read confirmed it at
+        // +200ms; by +2.2s, with no OTHER write traced anywhere in that window, it was gone.
+        ...(typeof entry.machineName === 'string' && entry.machineName ? { machineName: entry.machineName } : {}),
       })
     }
     // An EMPTY sanitized array is NOT proof of "solo", and treating it as authoritative was a
