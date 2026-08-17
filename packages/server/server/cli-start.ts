@@ -1691,6 +1691,15 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
   let lastStatus: ControlStatus | null = null
   const remember = (next: ControlStatus): ControlStatus => (lastStatus = next)
 
+  /**
+   * The most recent fall the user has already been ASKED about — see `ControlHost.dismissFall`.
+   *
+   * Here, and not in the sessions screen, for the reason `lastStatus` is here: the host outlives
+   * the Ink app, and attaching to a session unmounts it. A flag held in the screen is answered,
+   * forgotten on the way into the session, and asked again on the way out.
+   */
+  let dismissedFallMs: number | null = null
+
   /** Has the archive consent never been answered? Used only to append a hint, so it fails open. */
   const archivePending = async (): Promise<boolean> => {
     try {
@@ -2424,7 +2433,14 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       // SAME selection the count below reports. Read off the snapshot the poll already produced
       // rather than recomputed, so the screen cannot be shown two answers to one question while a
       // poll is in flight.
-      const restorable = await restorableSessions(snap.fell?.entries ?? [])
+      // …and withheld once the user has ANSWERED this fall. `restorable` is what raises the modal,
+      // so the dismissal is applied here rather than in the screen: the screen is remounted from
+      // scratch on every attach/detach and cannot remember anything. `fell` itself is left intact —
+      // the summary row and the list's own section keep saying what happened, because dismissing
+      // the offer is a statement about the QUESTION, not about the event.
+      const fellAt = snap.fell?.atMs
+      const answered = fellAt !== undefined && dismissedFallMs !== null && fellAt <= dismissedFallMs
+      const restorable = answered ? [] : await restorableSessions(snap.fell?.entries ?? [])
       return {
         ...(restorable.length > 0 ? { restorable } : {}),
         sessions: snap.sessions.map((v, i) => toControlSession(v, s, facts[i])),
@@ -2497,6 +2513,17 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
      * listed, and `endedAt` is exactly what keeps it out of the next crash group while leaving it
      * individually reopenable.
      */
+    /**
+     * The user has answered the offer for the fall at `atMs` — stop raising it.
+     *
+     * Monotonic (`Math.max`), so a poll that re-anchors onto an OLDER cluster — which
+     * `planCrashGroup` deliberately permits, with no maximum age — cannot lower the watermark and
+     * bring the modal back naming a fall from three days ago.
+     */
+    dismissFall(atMs: number): void {
+      dismissedFallMs = dismissedFallMs === null ? atMs : Math.max(dismissedFallMs, atMs)
+    },
+
     async restoreSessions(ids: string[], accept: boolean): Promise<ActionResult> {
       const s = S()
       const registry = await readRegistry()

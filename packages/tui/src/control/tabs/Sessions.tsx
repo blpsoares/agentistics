@@ -464,6 +464,11 @@ export function Sessions({
    */
   const restorable = fleet?.restorable ?? []
   const restoring = !restoreAsked && restorable.length > 0 && Boolean(host.restoreSessions)
+  // The instant the offer is ABOUT, so answering it can be recorded against that event rather than
+  // as a bare "asked once". `fell` and `restorable` come from one selection, so this is the same
+  // fall the rows below belong to; `Date.now()` is the fallback only when a host supplies rows with
+  // no fall beside them, where "this moment" is the most that can honestly be claimed.
+  const fellAtMs = fleet?.fell?.atMs ?? Date.now()
 
   /** Whether typing into the selected row is a thing that can work — the same rule
    *  `sessionActions` applies, read once so the footer and the verb cannot disagree. */
@@ -1570,13 +1575,20 @@ export function Sessions({
           isActive={isActive}
           onAnswer={action => {
             setRestoreAsked(true)
+            // ALL THREE answers are recorded on the HOST, which outlives this mount. `restoreAsked`
+            // alone is not enough and never was: attaching to a session unmounts the whole app and
+            // `runStart` mounts a fresh one on the sessions tab, so the flag dies between the
+            // answer and the return and the offer greets the user again — with different rows,
+            // because by then the poll has re-anchored onto whatever the first answer left behind.
+            // `list` is the case that made it unmissable: it reaches no host call at all, so before
+            // this it dismissed the modal with zero durable effect.
+            host.dismissFall?.(fellAtMs)
             if (action === 'accept' || action === 'decline') {
               const restore = host.restoreSessions
               if (!restore) return
               void run(() => restore.call(host, restorable.map(r => r.id), action === 'accept'))
                 .then(onRefreshFleet)
             }
-            // If action === 'list', setRestoreAsked(true) hides the offer banner so user lands straight on the list of recent sessions
           }}
         />
       </Box>
@@ -1726,6 +1738,9 @@ export function Sessions({
           // read the fleet's length, so with `only active` on it announced 44 over a screen showing
           // ten — a number describing a screen nobody is looking at.
           shown={rows.reduce((n, r) => n + (r.kind === 'session' ? 1 : 0), 0)}
+          // Counted from the SAME drawn rows, for the same reason `shown` is.
+          waitingShown={rows.reduce((n, r) => n + (r.kind === 'session'
+            && (r.session.state === 'waiting' || r.session.state === 'waiting-approval') ? 1 : 0), 0)}
           query={query}
           depth={depth}
           scope={projectFilter ?? taskFilter ?? ''}
@@ -1954,7 +1969,8 @@ export function Sessions({
  * to state the answer, so a glance tells you why the list looks the way it does.
  */
 function SummaryRow({
-  fleet, grouping, strings: s, width, showHistory, showNamed, onlyActive, shown, query, depth, scope, fell,
+  fleet, grouping, strings: s, width, showHistory, showNamed, onlyActive, shown, waitingShown,
+  query, depth, scope, fell,
 }: {
   fleet: ControlSessions | null | undefined
   grouping: SessionGrouping
@@ -1967,6 +1983,14 @@ function SummaryRow({
   onlyActive: boolean
   /** Rows actually drawn, counted from the drawn list rather than from the fleet. */
   shown: number
+  /**
+   * How many of those drawn rows are WAITING on a person.
+   *
+   * Counted from the drawn list for the same reason `shown` is. `fleet.attention` is a fleet-wide
+   * figure — the header carries it on every tab and must — but printed unqualified above a
+   * FILTERED list it claims something the rows underneath contradict.
+   */
+  waitingShown: number
   /** The active search, or `''`. Stated HERE because a list narrowed silently reads as an empty one. */
   query: string
   /** The per-scope depth of the current search — empty when nothing is being searched. */
@@ -2020,7 +2044,15 @@ function SummaryRow({
     group: narrowed || `${s.sessionsGroupBy} ${s.sessionsGroupings[grouping]}`,
     hiding: filters.length > 0 ? `${s.sessionsFilterBy} ${filters.join(', ')}` : '',
     count: s.sessionsCount(shown, fleet?.sessions.length ?? 0),
-    waiting: waiting > 0 ? s.sessionsWaitingCount(waiting) : '',
+    // The fleet's figure alone was a claim the list below could not support: with a search on,
+    // this row read "2 waiting on you" over zero such rows (measured). When the two agree it stays
+    // the short sentence; when they do not it names BOTH, because a session needing you that a
+    // filter is withholding is the one thing on this screen that must not go quiet.
+    waiting: waiting > 0
+      ? (waitingShown === waiting
+        ? s.sessionsWaitingCount(waiting)
+        : s.sessionsWaitingSplit(waitingShown, waiting))
+      : '',
     fell,
     width,
   })
