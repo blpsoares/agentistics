@@ -359,6 +359,15 @@ export interface ControlStrings {
   >
   /** States the active search on the summary row, and how to drop it. */
   sessionsSearching: (query: string) => string
+  /** The per-scope depth line under the search field. */
+  searchScope: Record<'name' | 'folder' | 'harness' | 'note' | 'task' | 'prompt' | 'transcript', string>
+  searchDepthLabel: string
+  searchRunning: string
+  /** Named in words, never rendered as a zero — see `TranscriptSearch.unavailable`. */
+  searchNoGrep: string
+  searchNoTranscripts: string
+  searchCovered: (harnesses: string) => string
+  searchFailed: (harnesses: string) => string
   /** How long ago, from a whole number of SECONDS — the caller does the clock arithmetic so this
    *  stays a pure formatter. */
   sessionsAgo: (seconds: number) => string
@@ -867,6 +876,16 @@ const EN: ControlStrings = {
     unknown: 'external',
   },
   sessionsSearching: q => `search: ${q} · esc clears`,
+  searchScope: {
+    name: 'name', folder: 'folder', harness: 'harness',
+    note: 'note', task: 'task', prompt: 'prompt', transcript: 'transcript',
+  },
+  searchDepthLabel: 'found in',
+  searchRunning: 'reading transcripts…',
+  searchNoGrep: 'transcripts not searched — grep is not available here',
+  searchNoTranscripts: 'transcripts not searched — none on this machine',
+  searchCovered: h => `transcripts: ${h}`,
+  searchFailed: h => `could not read: ${h}`,
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `${sec}s ago`
     const min = Math.round(sec / 60)
@@ -1301,6 +1320,16 @@ const PT: ControlStrings = {
     unknown: 'externa',
   },
   sessionsSearching: q => `busca: ${q} · esc limpa`,
+  searchScope: {
+    name: 'nome', folder: 'pasta', harness: 'harness',
+    note: 'nota', task: 'tarefa', prompt: 'prompt', transcript: 'transcript',
+  },
+  searchDepthLabel: 'achado em',
+  searchRunning: 'lendo transcripts…',
+  searchNoGrep: 'transcripts não buscados — não há grep aqui',
+  searchNoTranscripts: 'transcripts não buscados — nenhum nesta máquina',
+  searchCovered: h => `transcripts: ${h}`,
+  searchFailed: h => `não deu pra ler: ${h}`,
   sessionsAgo: (sec: number) => {
     if (sec < 60) return `há ${sec}s`
     const min = Math.round(sec / 60)

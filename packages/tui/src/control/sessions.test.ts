@@ -56,7 +56,7 @@ const session = (id: string, over: Partial<ControlSession> = {}): ControlSession
   stateLabel: 'waiting',
   actionable: true,
   attached: false,
-  searchText: id,
+  searchFields: { name: id, folder: '', harness: '', note: '', task: '', prompt: '' },
   ...over,
 })
 

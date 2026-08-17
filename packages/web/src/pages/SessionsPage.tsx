@@ -17,6 +17,7 @@ import type { SessionMeta } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { RecentSessions } from '../components/RecentSessions'
 import { useFleet, useFleetIndex } from '../lib/fleet'
+import { useIsMobile } from '../hooks/useIsMobile'
 import {
   getNotificationSettings,
   saveNotificationSettings,
@@ -35,6 +36,7 @@ export default function SessionsPage() {
   const { data, derived, lang, setSelectedSession, isCentral } = ctx
   const pt = lang === 'pt'
   const navigate = useNavigate()
+  const isMobile = useIsMobile()
 
   // Real-time open-session detection: which stored conversations have a live process behind them,
   // and what each of those is doing.
@@ -132,6 +134,7 @@ export default function SessionsPage() {
   const btn: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
+    justifyContent: isMobile ? 'center' : 'flex-start',
     gap: 6,
     padding: '8px 12px',
     borderRadius: 8,
@@ -142,6 +145,7 @@ export default function SessionsPage() {
     fontWeight: 500,
     cursor: 'pointer',
     fontFamily: 'inherit',
+    minHeight: isMobile ? 44 : undefined,
   }
 
   return (
@@ -157,7 +161,8 @@ export default function SessionsPage() {
             padding: '16px 20px',
             marginBottom: 12,
             display: 'flex',
-            alignItems: 'center',
+            flexDirection: isMobile ? 'column' : 'row',
+            alignItems: isMobile ? 'stretch' : 'center',
             justifyContent: 'space-between',
             gap: 16,
             flexWrap: 'wrap',
@@ -187,7 +192,7 @@ export default function SessionsPage() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', gap: 8, flexShrink: 0, flexWrap: 'wrap', width: isMobile ? '100%' : undefined }}>
             <button
               onClick={handleEnableNotifications}
               style={{ ...btn, background: 'var(--anthropic-orange)', color: '#fff', border: 'none', fontWeight: 600 }}

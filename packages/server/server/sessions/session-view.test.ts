@@ -187,7 +187,7 @@ describe("what the harness says about its OWN session", () => {
     })
     expect(v!.harnessName).toBe('principal do cockpit')
     // And it is SEARCHABLE, because it may be the only name the person remembers.
-    expect(v!.searchText).toContain('principal do cockpit')
+    expect(v!.searchFields.name).toContain('principal do cockpit')
   })
 
   it('carries nothing for a name the harness invented for itself', () => {
@@ -240,8 +240,8 @@ describe("what the harness says about its OWN session", () => {
     })
     expect(views[0]!.label).toBe('MAIN')
     // Findable by BOTH: the name it now shows, and the one it used to show.
-    expect(views[0]!.searchText).toContain('main')
-    expect(views[0]!.searchText).toContain('cockpit')
+    expect(views[0]!.searchFields.name.toLowerCase()).toContain('main')
+    expect(views[0]!.searchFields.name.toLowerCase()).toContain('cockpit')
   })
 
   it('a conversation whose record is ALIVE is running, not closed', () => {

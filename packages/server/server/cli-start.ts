@@ -45,6 +45,7 @@ import type {
   ControlHost,
   ControlService,
   ControlSessions,
+  TranscriptSearch,
   CentralLinkState,
   ControlStatus,
   LogSource,
@@ -109,6 +110,7 @@ import { approvalFor, choiceKey } from './sessions/approval-spec'
 // implementation, for the reason `task-reopen.ts` exists.
 import { renameInHarness, renameMessage } from './sessions/rename'
 import { needsChoice, parseDialogOptions } from './sessions/dialog-choice'
+import { liveTranscriptDeps, runTranscriptSearch } from './sessions/transcript-run'
 import { rulesFor } from './sessions/attention-rules'
 import { planCrashGroup, planFellOffer } from './sessions/crash-group'
 import { loadHarnessSessions } from './sessions/harness-sessions'
@@ -2378,6 +2380,23 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
      * would have no previous frame to compare against, so no session could ever be seen to move and
      * every waiting one would ring the bell every five seconds.
      */
+    /**
+     * The deep half of the sessions search — see `ControlHost.searchTranscripts`.
+     *
+     * Deliberately NOT folded into `sessions()`: that runs every 5 seconds, and reading 475 MB on
+     * a timer to answer a question nobody asked is the difference between a search and a disk
+     * burner. It is called only while the search field holds something, and the screen debounces.
+     */
+    async searchTranscripts(query: string): Promise<TranscriptSearch> {
+      const r = await runTranscriptSearch(query, liveTranscriptDeps())
+      return {
+        ids: r.ids,
+        covered: r.covered,
+        failed: r.failed,
+        ...(r.unavailable ? { unavailable: r.unavailable } : {}),
+      }
+    },
+
     async sessions(): Promise<ControlSessions> {
       // `S()` rather than `this.lang`: the language is a closure variable `setLang` reassigns, and
       // reading it through `this` would break the moment a caller detached the method.

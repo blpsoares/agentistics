@@ -8,6 +8,7 @@
  */
 
 import type { CliLang } from './lang'
+import type { SearchFields } from './search-scope'
 // The default ARRANGEMENT is derived from the dimension vocabulary rather than written out beside
 // it. `session-dimensions.ts` imports this file for TYPES only, so this is the one value direction.
 import {
@@ -603,9 +604,10 @@ export interface ControlSession {
     used: string
     window: string
   }
-  /** Everything this row can be found by, already lowercased — including a closed conversation's
-   *  opening prompt, which is what a person remembers about work they put down. */
-  searchText: string
+  /** Everything this row can be found by, KEPT APART BY WHAT IT IS — including a closed
+   *  conversation's opening prompt, which is what a person remembers about work they put down.
+   *  Separate fields are what let the screen say WHICH of them a query matched. */
+  searchFields: SearchFields
   state: SessionState
   /** Already-localized state word, e.g. "needs approval". */
   stateLabel: string
@@ -815,6 +817,25 @@ export interface RestoreCandidate {
    * whatever it was when the host last looked.
    */
   startedAt?: number
+}
+
+/**
+ * The answer to "which conversations said this", plus what it could NOT look at.
+ *
+ * `unavailable` and an empty `ids` are different answers and the screen must render them
+ * differently — the same rule `LiveUnavailableReason` exists for. `covered` is what the header may
+ * honestly claim: reporting "transcript 0" while only one of six harnesses was reachable is the
+ * confident zero this product refuses everywhere else.
+ */
+export interface TranscriptSearch {
+  /** Conversation ids whose transcript carries the query. */
+  ids: ReadonlySet<string>
+  /** The harnesses actually walked. */
+  covered: readonly string[]
+  /** Harnesses whose search errored — their conversations are missing from `ids`. */
+  failed: readonly string[]
+  /** Set only when nothing was searched at all. */
+  unavailable?: 'no-grep' | 'no-transcripts'
 }
 
 export interface ControlSessions {
@@ -1152,6 +1173,21 @@ export interface ControlHost {
    * contract exists to prevent.
    */
   sessions?(): Promise<ControlSessions>
+
+  /**
+   * Which conversations SAID this — the deep half of the sessions search.
+   *
+   * Reads the transcripts on THIS machine and answers with conversation ids only. The text is
+   * never carried: it does not go on a session row, it does not reach the web dashboard, and it
+   * cannot reach a central. A previous attempt put it on `SessionMeta` and shipped whole
+   * conversations to a central in the member push — see the header of `transcript-search.ts`.
+   *
+   * OPTIONAL like `sessions`: a host that cannot search transcripts here (no `grep`, no
+   * transcripts, not this platform) says so through `TranscriptSearch.unavailable`, and the screen
+   * states it in words. An empty result with no reason is a real "nothing said this" — the two must
+   * stay distinguishable, exactly as `liveUnavailable` keeps them apart for live sessions.
+   */
+  searchTranscripts?(query: string): Promise<TranscriptSearch>
 
   /**
    * What it takes to attach to a session, or `null` when this one cannot be attached.
