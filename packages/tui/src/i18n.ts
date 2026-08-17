@@ -29,7 +29,6 @@ export interface TuiStrings {
   history: string
   costs: string
   harnesses: string
-  hardware: string
   /** The word naming the screen strip, like the log viewer's `SOURCE`. */
   viewLabel: string
 
@@ -89,7 +88,6 @@ const en: TuiStrings = {
   history: 'History',
   costs: 'Costs',
   harnesses: 'Harnesses',
-  hardware: 'Hardware',
   viewLabel: 'VIEW',
 
   cost: 'cost',
@@ -135,7 +133,6 @@ const pt: TuiStrings = {
   history: 'Histórico',
   costs: 'Custos',
   harnesses: 'Assistentes',
-  hardware: 'Hardware',
   viewLabel: 'TELA',
 
   cost: 'custo',

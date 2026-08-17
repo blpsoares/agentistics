@@ -257,9 +257,9 @@ describe('paging', () => {
   test('only the three list screens page at all', () => {
     const data = { sessions: [], projects: [], harnesses: [] } as never
     for (const id of DASHBOARD_SCREENS) {
-      // overview / harnesses / hardware draw no list, so their pager keys do nothing by arithmetic
+      // overview / harnesses draw no list, so their pager keys do nothing by arithmetic
       // rather than by a special case in the keyboard.
-      if (id === 'overview' || id === 'harnesses' || id === 'hardware') {
+      if (id === 'overview' || id === 'harnesses') {
         expect(pageableTotal(id, data)).toBe(0)
       }
     }

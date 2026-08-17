@@ -22,7 +22,6 @@ import { Projects } from '../screens/Projects'
 import { History } from '../screens/History'
 import { Costs } from '../screens/Costs'
 import { Harnesses } from '../screens/Harnesses'
-import { Hardware } from '../screens/Hardware'
 import { FilterOverlay } from '../overlays/Overlays'
 import { Divider } from '../control/Surface'
 import { fitsBeside, sourceRowText } from '../control/surface.ts'
@@ -42,7 +41,6 @@ export { applyHarnessFilter } from './view'
 export interface DashboardViewProps {
   /** `null` while nothing has been read yet — a different sentence from "there is nothing". */
   data: AppData | null
-  apiBase?: string | null
   s: TuiStrings
   width: number
   height: number
@@ -57,7 +55,7 @@ export interface DashboardViewProps {
   notice?: string
 }
 
-export function DashboardView({ data, apiBase, s, width, height, nav, connection, notice }: DashboardViewProps) {
+export function DashboardView({ data, s, width, height, nav, connection, notice }: DashboardViewProps) {
   const rows = dashboardRows(height)
   const fit = stripFit(s, nav.screen, width)
 
@@ -73,7 +71,7 @@ export function DashboardView({ data, apiBase, s, width, height, nav, connection
       ? <Box marginTop={1}><Text color={COLORS.muted}>{notice}</Text></Box>
       : !view
         ? <Box marginTop={1}><Text color={COLORS.accent}>{s.loading}…</Text></Box>
-        : <Screen id={nav.screen} data={view} apiBase={apiBase} s={s} width={width} height={rows.body} streak={streak} page={nav.page} />
+        : <Screen id={nav.screen} data={view} s={s} width={width} height={rows.body} streak={streak} page={nav.page} />
 
   return (
     // `flexShrink={0}`: the budget above is this view's contract with whatever frames it, and a Box
@@ -98,10 +96,9 @@ export function DashboardView({ data, apiBase, s, width, height, nav, connection
   )
 }
 
-function Screen({ id, data, apiBase, s, width, height, streak, page }: {
+function Screen({ id, data, s, width, height, streak, page }: {
   id: DashboardNav['screen']
   data: AppData
-  apiBase?: string | null
   s: TuiStrings
   width: number
   height: number
@@ -115,7 +112,6 @@ function Screen({ id, data, apiBase, s, width, height, streak, page }: {
     case 'history': return <History data={data} s={s} width={width} height={height} page={page} />
     case 'costs': return <Costs data={data} s={s} width={width} height={height} page={page} />
     case 'harnesses': return <Harnesses data={data} s={s} width={width} height={height} />
-    case 'hardware': return <Hardware data={data} apiBase={apiBase ?? null} s={s} width={width} height={height} />
   }
 }
 
