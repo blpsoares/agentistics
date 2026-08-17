@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import {
   calculateProcCpu,
+  isOtelWatcherCmdline,
   parseDiskUsage,
   parseProcRss,
   parseProcStat,
+  resolveServiceState,
 } from './hardware-pure'
 
 describe('hardware-pure', () => {
@@ -82,6 +84,47 @@ RssAnon:\t   20000 kB`
       expect(usage.totalBytes).toBeNull()
       expect(usage.usedBytes).toBeNull()
       expect(usage.freeBytes).toBeNull()
+    })
+  })
+
+  describe('resolveServiceState', () => {
+    test('a watcher imported into this process is running, and hosted here', () => {
+      // The normal `agentop server` case: no second pid exists, and a scan can only come back empty.
+      expect(resolveServiceState({ inProcess: true, scanned: true, pid: null }))
+        .toEqual({ state: 'running', hosting: 'in-process' })
+    })
+
+    test('a watcher found in the process list is running as its own process', () => {
+      expect(resolveServiceState({ inProcess: false, scanned: true, pid: 4242 }))
+        .toEqual({ state: 'running', hosting: 'separate' })
+    })
+
+    test('a scan that could not be performed is unknown, never stopped', () => {
+      expect(resolveServiceState({ inProcess: false, scanned: false, pid: null }))
+        .toEqual({ state: 'unknown', hosting: null })
+    })
+
+    test('a completed scan that found nothing is a real stopped', () => {
+      expect(resolveServiceState({ inProcess: false, scanned: true, pid: null }))
+        .toEqual({ state: 'stopped', hosting: null })
+    })
+  })
+
+  describe('isOtelWatcherCmdline', () => {
+    test('matches the source daemon and the compiled binary', () => {
+      expect(isOtelWatcherCmdline(['bun', 'run', '/app/packages/server/server/otel-watcher.ts'])).toBeTrue()
+      expect(isOtelWatcherCmdline(['/home/u/.local/bin/agentop', 'watch'])).toBeTrue()
+      expect(isOtelWatcherCmdline(['bun', 'run', '/app/packages/server/watcher.ts'])).toBeTrue()
+    })
+
+    test('never matches `agentop events watch` — a different command entirely', () => {
+      expect(isOtelWatcherCmdline(['agentop', 'events', 'watch'])).toBeFalse()
+    })
+
+    test('an empty or unrelated argv is not the watcher', () => {
+      expect(isOtelWatcherCmdline([])).toBeFalse()
+      expect(isOtelWatcherCmdline(['', ''])).toBeFalse()
+      expect(isOtelWatcherCmdline(['node', 'server.js'])).toBeFalse()
     })
   })
 })

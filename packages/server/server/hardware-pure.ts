@@ -6,6 +6,55 @@
  * 2. Unparseable or absent metrics yield `null` (never a fake 0).
  */
 
+/**
+ * What is known about a service's process, as three answers rather than two.
+ *
+ * `unknown` is the one that has to exist: this machine may be unable to LOOK (no `/proc`), and
+ * "nothing is running" and "I cannot tell" are different sentences — the same N/A-versus-a-
+ * confident-0 rule `HARNESS_CAPABILITIES` applies to metrics and `liveEmptyNotice` to live sessions.
+ */
+export type ServiceRunState = 'running' | 'stopped' | 'unknown'
+
+/** Where a running service lives: inside this very process, or as a process of its own. */
+export type ServiceHosting = 'in-process' | 'separate'
+
+/**
+ * Decide the watcher's state from what could actually be observed — PURE.
+ *
+ * `inProcess` outranks everything: under `agentop server` the watcher is an import into the server's
+ * own process (bin/cli.ts), so there is no second pid and a scan can only ever come back empty.
+ * A scan that could NOT be performed yields `unknown`, never `stopped`.
+ */
+export function resolveServiceState(facts: {
+  inProcess: boolean
+  /** Whether the process list could be read at all. */
+  scanned: boolean
+  pid: number | null
+}): { state: ServiceRunState; hosting: ServiceHosting | null } {
+  if (facts.inProcess) return { state: 'running', hosting: 'in-process' }
+  if (facts.pid !== null) return { state: 'running', hosting: 'separate' }
+  if (!facts.scanned) return { state: 'unknown', hosting: null }
+  return { state: 'stopped', hosting: null }
+}
+
+/**
+ * Whether a `/proc/<pid>/cmdline` names the OTel watcher — PURE.
+ *
+ * The argv is NUL-separated; the caller splits it. Three shapes exist and all three are real:
+ * `bun run .../otel-watcher.ts` (source), `agentop watch` (the compiled binary), and the legacy
+ * `watcher.ts` path. `agentop events watch` is a DIFFERENT command (the event channel) and must not
+ * match, so `watch` counts only as the command word — the argument right after the binary.
+ */
+export function isOtelWatcherCmdline(argv: readonly string[]): boolean {
+  const args = argv.filter(Boolean)
+  if (args.length === 0) return false
+  if (args.some(a => a.includes('otel-watcher') || a.endsWith('/watcher.ts'))) return true
+  const bin = args[0] ?? ''
+  if (!/(^|\/)agentop$/.test(bin)) return false
+  // `agentop watch`, and nothing that merely contains the word further along the line.
+  return args[1] === 'watch'
+}
+
 export interface ProcStatSample {
   pid: number
   utime: number

@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import type { SessionMeta } from '@agentistics/core'
 import { sessionTime } from '../lib/sessionTime'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { formatProjectName, repoShortName, sessionLabel, sessionTokenTotal } from '@agentistics/core'
 import type { SessionActivity } from '../lib/sessionNotifications'
 import { resumeCommand } from '../lib/resumeCommand'
@@ -277,11 +278,13 @@ function PillButton({
   onClick: () => void
   children: React.ReactNode
 }) {
+  const isMobile = useIsMobile()
   return (
     <button
       onClick={onClick}
       style={{
-        padding: '4px 10px',
+        padding: isMobile ? '4px 12px' : '4px 10px',
+        minHeight: isMobile ? 44 : undefined,
         borderRadius: 999,
         border: active
           ? '1px solid var(--anthropic-orange, #e8690b)'
@@ -313,6 +316,7 @@ function IconButton({
   title?: string
   children: React.ReactNode
 }) {
+  const isMobile = useIsMobile()
   return (
     <button
       onClick={onClick}
@@ -322,8 +326,8 @@ function IconButton({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 28,
-        height: 28,
+        width: isMobile ? 44 : 28,
+        height: isMobile ? 44 : 28,
         borderRadius: 6,
         border: '1px solid var(--border-subtle)',
         background: 'transparent',
@@ -419,6 +423,7 @@ const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
 
 export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities, viewMode: externalViewMode, onViewModeChange, title, subtitle, topActions }: Props) {
   const t = T[lang]
+  const isMobile = useIsMobile()
 
   // Grouping state (default 'project' to match agentop session ls)
   const [groupBy, setGroupBy] = useState<SessionGrouping>('project')
@@ -725,8 +730,8 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
           </div>
 
           {/* Search Input & View Mode */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <div style={{ position: 'relative', width: 180 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, width: isMobile ? '100%' : undefined }}>
+            <div style={{ position: 'relative', width: isMobile ? '100%' : 180, flex: isMobile ? 1 : undefined }}>
               <Search
                 size={12}
                 style={{
@@ -1061,6 +1066,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
               onClick={() => setPromptModal(true)}
               style={{
                 padding: '6px 12px',
+                minHeight: isMobile ? 44 : undefined,
                 borderRadius: 6,
                 background: 'var(--anthropic-orange)',
                 color: '#fff',
@@ -1083,6 +1089,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
               }}
               style={{
                 padding: '6px 12px',
+                minHeight: isMobile ? 44 : undefined,
                 borderRadius: 6,
                 background: 'rgba(239, 68, 68, 0.15)',
                 color: '#ef4444',
@@ -1111,6 +1118,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
               }}
               style={{
                 padding: '6px 12px',
+                minHeight: isMobile ? 44 : undefined,
                 borderRadius: 6,
                 background: 'rgba(34, 197, 94, 0.15)',
                 color: '#22c55e',
@@ -1128,6 +1136,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
               onClick={() => setSelectedIds(new Set())}
               style={{
                 padding: '6px 12px',
+                minHeight: isMobile ? 44 : undefined,
                 borderRadius: 6,
                 background: 'transparent',
                 color: 'var(--text-tertiary)',
@@ -1146,11 +1155,16 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
       {openWarningModal && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.6)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+          display: 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'center',
+          padding: isMobile ? 0 : 20,
         }}>
           <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
-            padding: 24, maxWidth: 480, width: '100%', display: 'flex', flexDirection: 'column', gap: 16
+            background: 'var(--bg-card)', border: isMobile ? 'none' : '1px solid var(--border)',
+            borderRadius: isMobile ? 0 : 12,
+            padding: 24, maxWidth: isMobile ? '100%' : 480, width: '100%',
+            height: isMobile ? '100%' : undefined,
+            display: 'flex', flexDirection: 'column', gap: 16,
+            boxSizing: 'border-box',
           }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>
               {lang === 'pt' ? 'Aviso: Não é possível reabrir' : 'Warning: Cannot reopen'}
@@ -1185,11 +1199,16 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
       {promptModal && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.6)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+          display: 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'center',
+          padding: isMobile ? 0 : 20,
         }}>
           <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12,
-            padding: 24, maxWidth: 500, width: '100%', display: 'flex', flexDirection: 'column', gap: 16
+            background: 'var(--bg-card)', border: isMobile ? 'none' : '1px solid var(--border)',
+            borderRadius: isMobile ? 0 : 12,
+            padding: 24, maxWidth: isMobile ? '100%' : 500, width: '100%',
+            height: isMobile ? '100%' : undefined,
+            display: 'flex', flexDirection: 'column', gap: 16,
+            boxSizing: 'border-box',
           }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
               {lang === 'pt' ? `Enviar prompt para ${selectedIds.size} sessões` : `Send prompt to ${selectedIds.size} sessions`}

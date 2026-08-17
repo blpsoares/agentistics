@@ -3,6 +3,7 @@ import { Loader2, Server } from 'lucide-react'
 import { TeamMembers } from '../TeamMembers'
 import { PUSH_INTERVAL, type MemberPresence } from '@agentistics/core'
 import { SectionHeader, Divider, PrefRow } from '../../pages/settings/primitives'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 /**
  * CentralAdminPanel — the team-central branch of the old `TeamSettings.tsx`, lifted verbatim
@@ -77,6 +78,7 @@ function IntervalSelect({ value, onChange, options, disabled = false }: {
 
 export function CentralAdminPanel({ lang, presence }: CentralAdminPanelProps) {
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
   const [centralInterval, setCentralInterval] = useState<number>(PUSH_INTERVAL.DEFAULT_SEC)
   const [express, setExpress] = useState(false)
   const [intervalSaving, setIntervalSaving] = useState(false)
@@ -137,7 +139,7 @@ export function CentralAdminPanel({ lang, presence }: CentralAdminPanelProps) {
 
       <SectionHeader label={pt ? 'Configurações de envio' : 'Push settings'} />
       <PrefRow label={c('pushInterval', lang)} sub={c('pushIntervalSubCentral', lang)}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
           <IntervalSelect
             value={centralInterval}
             onChange={handleCentralIntervalChange}

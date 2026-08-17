@@ -18,8 +18,11 @@ import { Box, Text, useInput } from 'ink'
 import type {
   ActionResult, ControlExit, ControlHost, ControlSession, ControlSessions, RestoreCandidate,
   SessionState, SessionViewPrefs,
+  TranscriptSearch,
 } from '../types'
 import type { ControlStrings } from '../i18n'
+import { searchDepthText } from '../search-scope'
+import { searchDepth } from '../sessions'
 import { sessionWordBook } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
 import { DEFAULT_SESSION_VIEW } from '../types'
@@ -206,6 +209,9 @@ type Ask =
   /** Killing multiple selected sessions. */
   | { kind: 'batchKill'; sessions: ControlSession[] }
 
+/** How long the typing must settle before the disk is walked. */
+const TRANSCRIPT_DEBOUNCE_MS = 300
+
 export function Sessions({
   host, fleet, strings: s, width, height, isActive, run, onChrome, onExit, onRefreshFleet,
   view, onView,
@@ -257,6 +263,42 @@ export function Sessions({
   const [cursor, setCursor] = useState(0)
   const [ask, setAsk] = useState<Ask | null>(null)
   const [query, setQuery] = useState('')
+  /**
+   * The deep half of the search — conversation ids whose TEXT carries the query.
+   *
+   * Held apart from `query` because it arrives LATER: the rows filter on the six in-memory scopes
+   * the instant you type, and the transcript hits fold in when the disk answers. `null` means the
+   * question has not been answered yet for the current query, which is why the depth line says
+   * "reading transcripts…" instead of a `0` that becomes 47 a moment later.
+   */
+  const [transcript, setTranscript] = useState<TranscriptSearch | null>(null)
+  const [searchingText, setSearchingText] = useState(false)
+
+  /**
+   * Ask the disk, once the typing settles.
+   *
+   * DEBOUNCED because each run walks the transcript roots (475 MB on the machine this was measured
+   * on, ~255 ms through grep), and firing per keystroke would queue a run for every character of a
+   * word. The reply is DISCARDED when the query has moved on — `cancelled` rather than a bare
+   * `setState`, or a slow answer for `doc` lands on top of the answer for `docker` and the depth
+   * line reports the wrong search.
+   */
+  useEffect(() => {
+    const q = query.trim()
+    if (q === '' || !host.searchTranscripts) { setTranscript(null); setSearchingText(false); return }
+
+    let cancelled = false
+    setSearchingText(true)
+    const timer = setTimeout(() => {
+      host.searchTranscripts!(q)
+        .then(r => { if (!cancelled) { setTranscript(r); setSearchingText(false) } })
+        // A failed deep search must not take the list with it: the six in-memory scopes are still
+        // a perfectly good search, so the row count stays right and only the transcript half is lost.
+        .catch(() => { if (!cancelled) { setTranscript(null); setSearchingText(false) } })
+    }, TRANSCRIPT_DEBOUNCE_MS)
+
+    return () => { cancelled = true; clearTimeout(timer); }
+  }, [query, host])
   const [showDone, setShowDone] = useState(view?.showDone ?? DEFAULT_SESSION_VIEW.showDone ?? false)
   /**
    * What the list is narrowed to, per dimension — the ONE source, and the whole answer.
@@ -379,6 +421,7 @@ export function Sessions({
         // session falls in — every session of a finished task still wears its own state.
         && (showDone || taskFilter !== null || !(v.task && done.has(v.task)))),
       query,
+      transcript?.ids,
     ),
     grouping,
     words,
@@ -392,9 +435,26 @@ export function Sessions({
   ), s.sessionsClosedWord, s.sessionsDoneWord, fleet?.fell ? s.sessionsFellWord : undefined,
      // Absent when nothing is marked, so the band is not merely empty — it does not exist.
      marked.size > 0 ? { ids: marked, label: s.sessionsMarkedBand } : undefined), [
-    fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, cascade, query, filters,
+    fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, cascade, query, transcript, filters,
     showNamed, showDone, taskFilter, dimensionCtx, order, words, marked,
   ])
+
+  /**
+   * How deep the current search went — counted over the SAME rows the screen filtered, so the
+   * numbers on the header and the rows under it can never disagree.
+   */
+  const depth = useMemo(() => {
+    if (query.trim() === '') return ''
+    return searchDepthText(
+      searchDepth(fleet?.sessions ?? [], query, transcript?.ids),
+      { scope: s.searchScope, noGrep: s.searchNoGrep, noTranscripts: s.searchNoTranscripts },
+      {
+        running: searchingText,
+        runningWord: s.searchRunning,
+        ...(transcript?.unavailable ? { unavailable: transcript.unavailable } : {}),
+      },
+    )
+  }, [fleet?.sessions, query, transcript, searchingText, s])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
 
@@ -1705,6 +1765,7 @@ export function Sessions({
           waitingShown={rows.reduce((n, r) => n + (r.kind === 'session'
             && (r.session.state === 'waiting' || r.session.state === 'waiting-approval') ? 1 : 0), 0)}
           query={query}
+          depth={depth}
           scope={projectFilter ?? taskFilter ?? ''}
           fell={fleet?.fell && fellAgo ? s.sessionsFellNote(fleet.fell.count, fellAgo) : ''}
         />
@@ -1932,7 +1993,7 @@ export function Sessions({
  */
 function SummaryRow({
   fleet, grouping, strings: s, width, showHistory, showNamed, onlyActive, shown, waitingShown,
-  query, scope, fell,
+  query, depth, scope, fell,
 }: {
   fleet: ControlSessions | null | undefined
   grouping: SessionGrouping
@@ -1955,6 +2016,8 @@ function SummaryRow({
   waitingShown: number
   /** The active search, or `''`. Stated HERE because a list narrowed silently reads as an empty one. */
   query: string
+  /** The per-scope depth of the current search — empty when nothing is being searched. */
+  depth: string
   /** The active task or project scope, already localized, or `''`. */
   scope: string
   /**
@@ -1995,7 +2058,11 @@ function SummaryRow({
   // or a drill-down is a reason the list in front of you is short, and a list that is short for a
   // reason nobody stated is one people read as broken. It carries the key that drops it, because
   // the whole complaint was not being able to get back.
-  const narrowed = query ? s.sessionsSearching(query) : scope
+  // The depth rides on the SAME row as the search announcement rather than taking one of its own:
+  // an extra row here is a row the list loses, and `summaryCells` already measures and truncates
+  // this one. It goes after the query and before `esc clears`, which is the reading order —
+  // what you searched, how deep it went, how to get out.
+  const narrowed = query ? `${s.sessionsSearching(query)}${depth ? ` · ${depth}` : ''}` : scope
   const cells = summaryCells({
     group: narrowed || `${s.sessionsGroupBy} ${s.sessionsGroupings[grouping]}`,
     hiding: filters.length > 0 ? `${s.sessionsFilterBy} ${filters.join(', ')}` : '',

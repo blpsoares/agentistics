@@ -35,6 +35,7 @@ import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
 import { NotificationToasts } from './components/NotificationToasts'
 import { NotificationBell } from './components/NotificationBell'
+import { HardwareModal } from './components/HardwareModal'
 import { useNotificationStream } from './hooks/useNotificationStream'
 import { pushNotification } from './lib/notifications'
 import { RecentSessions } from './components/RecentSessions'
@@ -631,12 +632,14 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
 }
 
 function MobileBottomNav({
-  lang, harnesses, onRefresh, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral, hasWorkflows,
+  lang, harnesses, onRefresh, onOpenHardware, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral, hasWorkflows,
   principal, theme, onToggleTheme, onToggleLang,
 }: {
   lang: Lang
   harnesses?: HarnessId[]
   onRefresh: () => void
+  /** Hardware is a modal, not a destination — on mobile its entry point is a tile in this sheet. */
+  onOpenHardware: () => void
   liveUpdates: boolean
   onToggleLive: () => void
   updateInterval: number
@@ -697,7 +700,6 @@ function MobileBottomNav({
     { key: 'top', label: pt ? 'Top' : 'Top', icon: Trophy, onClick: () => { closeSheet(); navigate('/top') }, active: location.pathname.startsWith('/top') },
     { key: 'tags', label: 'Tags', icon: TagIcon, onClick: () => { closeSheet(); navigate('/tags') }, active: location.pathname.startsWith('/tags') },
     { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { closeSheet(); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
-    { key: 'hardware', label: pt ? 'Hardware' : 'Hardware', icon: Cpu, onClick: () => { closeSheet(); navigate('/hardware') }, active: location.pathname.startsWith('/hardware') },
     { key: 'traces', label: 'Pipelines', icon: WorkflowIcon, onClick: () => { closeSheet(); navigate('/traces') }, active: location.pathname.startsWith('/traces') },
     { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { closeSheet(); navigate('/export') }, active: location.pathname.startsWith('/export') },
     // Unconditional: the page's filter mode compares two SCOPES and needs no second harness.
@@ -713,6 +715,8 @@ function MobileBottomNav({
       badge: liveUpdates ? (updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`) : undefined,
     } as Tile]),
     { key: 'refresh', label: pt ? 'Atualizar' : 'Refresh', icon: RefreshCw, onClick: () => { onRefresh(); closeSheet() } },
+    // An overlay, so it belongs with the actions: nothing in the bottom bar can be "on /hardware".
+    { key: 'hardware', label: 'Hardware', icon: Cpu, onClick: () => { closeSheet(); onOpenHardware() } },
     { key: 'settings', label: pt ? 'Ajustes' : 'Settings', icon: SlidersHorizontal, onClick: () => { closeSheet(); navigate('/settings') }, active: location.pathname.startsWith('/settings') },
     // Theme and language live here because the sidebar that hosts them on desktop is not
     // rendered on mobile. Neither closes the sheet — you toggle and immediately re-judge.
@@ -1008,7 +1012,6 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
     { to: '/traces',    labelPt: 'Pipelines',    labelEn: 'Pipelines',    icon: <WorkflowIcon size={17} /> },
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={17} /> },
-    { to: '/hardware',  labelPt: 'Hardware',     labelEn: 'Hardware',     icon: <Cpu size={17} /> },
     // Unconditional — see the mobile tile: comparing two filter scopes needs no second harness.
     { to: '/compare', labelPt: 'Comparar', labelEn: 'Compare', icon: <GitCompare size={17} /> },
   ]
@@ -1754,12 +1757,22 @@ export default function AppLayout() {
         lang: lang === 'pt' ? 'pt' : 'en',
       })
     : null
-  const headerCostTitle = headerPlanBasis
-    ? [
-        lang === 'pt' ? 'Custo do seu plano no período medido' : 'Your plan cost over the measured period',
-        headerCostScope,
-      ].filter(Boolean).join(' · ')
-    : (lang === 'pt' ? 'Estimativa a preços de API' : 'API-price estimate')
+  // The strip's totals (sessions/cost/tokens) all narrow to online members BY DEFAULT on a
+  // central whose operator turned off `includeOfflineData` — nobody chose that on this screen, so
+  // it needs the same disclosure `planScopeNote` gives a plan-basis figure. An explicit "Offline"
+  // presence pill already reads as a filter the user picked and needs no extra sentence.
+  const presenceScopeNote = derived?.presenceScope.isPolicyDefault
+    ? (lang === 'pt' ? 'somente membros online (política do central)' : 'online members only (central policy)')
+    : null
+  const headerCostTitle = [
+    headerPlanBasis
+      ? [
+          lang === 'pt' ? 'Custo do seu plano no período medido' : 'Your plan cost over the measured period',
+          headerCostScope,
+        ].filter(Boolean).join(' · ')
+      : (lang === 'pt' ? 'Estimativa a preços de API' : 'API-price estimate'),
+    presenceScopeNote,
+  ].filter(Boolean).join(' · ')
 
   /**
    * The header's token figure and the sentence explaining it.
@@ -1771,7 +1784,8 @@ export default function AppLayout() {
    */
   const headerTokens = derived ? totalTokens(derived.tokenTotals) : 0
   const headerTokensTitle = derived
-    ? totalTokensExplained(derived.tokenTotals, lang === 'pt' ? 'pt' : 'en')
+    ? [totalTokensExplained(derived.tokenTotals, lang === 'pt' ? 'pt' : 'en'), presenceScopeNote]
+        .filter(Boolean).join(' · ')
     : ''
 
   const models = useMemo(() => {
@@ -1930,6 +1944,10 @@ export default function AppLayout() {
   const projectCount = data?.projects?.length ?? 0
   const teamCount = teamsList.length
   const repoCount = useMemo(() => new Set((data?.sessions ?? []).map(s => s.git_remote).filter(Boolean)).size, [data])
+  // Hardware is an OVERLAY, not a route: it answers "what is this machine doing right now", which
+  // is asked from wherever you are and then dismissed. Desktop opens it from the header icon;
+  // mobile from the "More" sheet, where every other header action lives.
+  const [hardwareOpen, setHardwareOpen] = useState(false)
   // Collapsible "fleet stats" tab below the header (updated/members/machines/teams/projects/repos).
   const [fleetOpen, setFleetOpen] = useState<boolean>(() => {
     try { return localStorage.getItem('agentistics-fleet-open') !== '0' } catch { return true }
@@ -2590,6 +2608,19 @@ export default function AppLayout() {
               {data?.healthIssues && data.healthIssues.length > 0 && (
                 <HealthWarnings issues={data.healthIssues} lang={lang} />
               )}
+              {/* Hardware — an overlay, beside the other header actions rather than in the sidebar,
+                  because it is a question about this machine and not a place to go. */}
+              <button
+                onClick={() => setHardwareOpen(true)}
+                title={lang === 'pt' ? 'Recursos de hardware' : 'Hardware resources'}
+                aria-label={lang === 'pt' ? 'Recursos de hardware' : 'Hardware resources'}
+                aria-haspopup="dialog"
+                style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', transition: 'all 0.15s' }}
+                onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-primary)'; t.style.borderColor = 'var(--text-tertiary)' }}
+                onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-tertiary)'; t.style.borderColor = 'var(--border)' }}
+              >
+                <Cpu size={14} />
+              </button>
               <NotificationBell lang={lang} buttonStyle={{
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 width: 32, height: 32, borderRadius: 8,
@@ -2869,12 +2900,15 @@ export default function AppLayout() {
         />
       )}
 
+      {hardwareOpen && <HardwareModal lang={lang} onClose={() => setHardwareOpen(false)} />}
+
       {/* Mobile bottom navigation bar */}
       {isMobile && (
         <MobileBottomNav
           lang={lang}
           harnesses={data.harnesses}
             onRefresh={refetch}
+          onOpenHardware={() => setHardwareOpen(true)}
           liveUpdates={liveUpdates}
           onToggleLive={() => setLiveUpdates(v => !v)}
           updateInterval={updateInterval}
