@@ -374,6 +374,14 @@ export interface ControlStrings {
   /** The external row's own sentence, in the detail pane. */
   sessionsExternalNote: string
   sessionsClosedNote: string
+  /**
+   * This build cannot run session verbs at all — no backend on this platform, or a host that does
+   * not implement them. Said in words rather than answered with a dead button: a control that is
+   * silently inert is indistinguishable from a broken one.
+   */
+  sessionsNoHost: string
+  /** Reopen was asked for on a row whose conversation cannot be resolved. */
+  sessionsReopenNone: string
   keySessionsGroup: string
   keySessionsAttach: string
   /** How to put the arrangement back to how the app opens on a fresh machine. */
@@ -886,6 +894,8 @@ const EN: ControlStrings = {
   },
   sessionsExternalNote: 'started outside agentop — listed, but it cannot be attached or stopped here.',
   sessionsClosedNote: 'not running — reopen it to pick this conversation back up.',
+  sessionsNoHost: 'session control is not available on this machine.',
+  sessionsReopenNone: 'no conversation to reopen — nothing on this machine resolves this row.',
   keySessionsGroup: 'v group',
   keySessionsAttach: 'o attach',
   keySessionsReset: '^r reset view',
@@ -1328,6 +1338,8 @@ const PT: ControlStrings = {
   },
   sessionsExternalNote: 'iniciada fora do agentop — listada, mas não dá para anexar nem parar por aqui.',
   sessionsClosedNote: 'não está rodando — reabra para retomar esta conversa.',
+  sessionsNoHost: 'o controle de sessões não está disponível nesta máquina.',
+  sessionsReopenNone: 'nenhuma conversa para reabrir — nada nesta máquina resolve esta linha.',
   keySessionsGroup: 'v agrupar',
   keySessionsAttach: 'o anexar',
   keySessionsReset: '^r restaurar view',

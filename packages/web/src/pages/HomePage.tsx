@@ -28,7 +28,6 @@ import { ProjectsList } from '../components/ProjectsList'
 import { TagCloud } from '../components/TagCloud'
 import { ToolMetricsPanel } from '../components/ToolMetricsPanel'
 import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
-import { RecentSessions } from '../components/RecentSessions'
 import { TopBoards } from '../components/TopBoards'
 import { capable, HARNESS_LABELS, HARNESS_PROVIDERS } from '../lib/harness'
 import { StreakBreakdownButton } from '../components/StreakBreakdownButton'
@@ -335,10 +334,11 @@ export default function HomePage() {
         <AgentMetricsPanel invocations={derived.agentInvocations} agentTypeBreakdown={derived.agentTypeBreakdown} totalInvocations={derived.totalAgentInvocations} totalTokens={derived.totalAgentTokens} totalCostUSD={derived.totalAgentCostUSD} totalDurationMs={derived.totalAgentDurationMs} currency={currency} brlRate={brlRate} planFactor={claudePlanFactor} lang={lang} harness={filters.harness} />
       </Section>
 
-      {/* Recent sessions */}
-      <Section flashId="sessions-list" title={<><Clock size={14} /> {lang === 'pt' ? 'Sessões recentes' : 'Recent sessions'}</>}>
-        <RecentSessions sessions={derived.filteredSessions} lang={lang} onSelect={setSelectedSession} />
-      </Section>
+      {/* Sessions are NOT here. They have their own page (`/sessions`), which is registered
+          unconditionally in both the desktop SideNav and the mobile bottom nav and is the only
+          surface that can offer what to DO with a session — the live fleet, its state and its
+          verbs. Home listing them too meant the same rows in two places, one of them inert, and
+          the page that owns them one click away. */}
     </>
   )
 }

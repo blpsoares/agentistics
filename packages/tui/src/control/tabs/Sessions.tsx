@@ -84,6 +84,7 @@ import {
   QUESTION_ROWS, askRows, fitApprovalPreview, actionLabels, asideRows, asideSelectable,
   asideRowKey, resolveAsideCursor,
   enabledActionIndexes, filterSessions,
+  actionWords as ACTION_WORDS,
   sessionActions, sessionsCockpit, summaryCells, sessionColumns, padCell,
   taskCounts, projectCounts, sessionMetric, sessionContext, contextLevel,
   sessionHandle, worktreeName, sessionRunning,
@@ -144,30 +145,6 @@ const STATE_COLOR: Record<SessionState, string | undefined> = {
   closed: COLORS.muted,
 }
 
-/**
- * The already-localized word for every verb, in ONE place.
- *
- * It was written out twice — once for the action row and once for the aside menu — and the two are
- * `Record<SessionAction, string>`s of the same map, so adding a verb meant finding both copies. The
- * compiler catches a missing key, which is exactly why the duplicate was cheap enough to survive
- * three verbs and then cost an afternoon on the fourth.
- */
-const ACTION_WORDS = (s: ControlStrings): Record<SessionAction, string> => ({
-  attach: s.actSessions.attach,
-  resume: s.actSessions.resume,
-  approve: s.actSessions.approve,
-  prompt: s.actSessions.prompt,
-  rename: s.actSessions.rename,
-  note: s.actSessions.note,
-  task: s.actSessions.task,
-  kill: s.actSessions.kill,
-  openTask: s.actSessions.openTask,
-  reopenFell: s.actSessions.reopenFell,
-  finishTask: s.actSessions.finishTask,
-  new: s.actSessions.newSession,
-  search: s.actSessions.search,
-  group: s.actSessions.group,
-})
 
 /**
  * A question this screen is asking. While one is open it reports `capture`, so the global keys stand

@@ -9,6 +9,7 @@
  */
 
 import { PANE_FRAME_Y } from './chrome.ts'
+import type { ControlStrings } from './i18n'
 import { matchesQuery, matchScopes, scopeCounts, type ScopeCounts, type SearchScope } from './search-scope'
 import {
   ACTIVE_STATES, OFF_STATE, GROUPINGS, SESSION_STATES, SESSION_STATE_CHOICES, SESSION_DIMENSIONS,
@@ -842,6 +843,32 @@ export function sessionActions(
     { action: 'group', enabled: true },
   ]
 }
+
+/**
+ * The already-localized word for every verb, in ONE place.
+ *
+ * It lived inside `tabs/Sessions.tsx` while the cockpit was the only thing offering these verbs.
+ * The web Sessions page offers the same set, resolved by the same `sessionActions`, and a second
+ * copy of the wording is a second place for "Answer its question" to drift back into "Approve" —
+ * which is exactly the promise the keystroke cannot keep. It lives here, beside the decision it
+ * names, so both surfaces read one map.
+ */
+export const actionWords = (s: ControlStrings): Record<SessionAction, string> => ({
+  attach: s.actSessions.attach,
+  resume: s.actSessions.resume,
+  approve: s.actSessions.approve,
+  prompt: s.actSessions.prompt,
+  rename: s.actSessions.rename,
+  note: s.actSessions.note,
+  task: s.actSessions.task,
+  kill: s.actSessions.kill,
+  openTask: s.actSessions.openTask,
+  reopenFell: s.actSessions.reopenFell,
+  finishTask: s.actSessions.finishTask,
+  new: s.actSessions.newSession,
+  search: s.actSessions.search,
+  group: s.actSessions.group,
+})
 
 /** The already-localized labels for those verbs, in the order they are offered. */
 export function actionLabels(

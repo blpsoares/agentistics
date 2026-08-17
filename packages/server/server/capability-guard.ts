@@ -32,6 +32,13 @@ const EXACT: ReadonlyMap<string, keyof Capabilities> = new Map<string, keyof Cap
   // deployment that should read a transcript but not this.
   ['/api/billing/detect', 'localTranscripts'],
   ['/api/hardware-resources', 'localProcesses'],
+  // The session fleet, and acting on it. `/api/fleet` alone captures each live session's SCREEN —
+  // a coding assistant's terminal, transcript and all — and `/api/fleet/act` types into it, sends
+  // it a keystroke that answers a permission prompt, or kills it. That is shell access with extra
+  // steps, so it rides `localShell` rather than the softer `localChat`: there is no deployment
+  // that should expose someone's keyboard to the internet and a shell is the honest name for it.
+  ['/api/fleet', 'localShell'],
+  ['/api/fleet/act', 'localShell'],
 ])
 
 /** Prefix (no trailing slash) → capability. Matches `<prefix>` and `<prefix>/…` only. */

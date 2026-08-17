@@ -68,7 +68,13 @@ import { validateSecret, ensureSessionSecret } from './secret-store'
 import { requiresStepUp, verifyStepUp, STEPUP_HEADER } from './stepup'
 import { writeAudit, ensureAuditIndexes, listAudit } from './audit'
 import { safeError } from './errors'
-import { LIMITS } from './limits'
+import { LIMITS, readJsonLimited } from './limits'
+// Type only, and from the LEAF: `sessions/fleet-web.ts` reaches `cli-start.ts` and through it Ink
+// and React, so this server names only `fleet-row.ts` — the two handlers load the implementation by
+// dynamic import. Naming `fleet-web` here even in a type position measurably pulled that graph in.
+import type { FleetActionRequest } from './sessions/fleet-row'
+// Type only: the module itself reaches `cli-start` → `@agentistics/tui/control` → Ink, and is
+// loaded by dynamic import inside the two /api/fleet handlers.
 import { canSeeMemberNames } from './iam-view'
 import { buildNotificationAuthorityContext } from './notifications-context'
 import {
@@ -981,6 +987,50 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         }
         return new Response(JSON.stringify({ ok: false, error: 'unknown action' }), {
           status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // The session FLEET, for the web Sessions page — the same rows the cockpit draws and
+    // `agentop session ls` prints, with the same `sessionActions` decision about what each one may
+    // take. A central never answers it: it aggregates many machines and hosts none of their
+    // sessions, so a fleet read there would be this box's own processes under someone else's page.
+    // `capability-guard.ts` has already refused both paths on an exposed profile.
+    if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act') {
+      if (TEAM_CENTRAL) {
+        return new Response(JSON.stringify({ error: 'fleet_central' }), {
+          status: 404,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    if (url.pathname === '/api/fleet' && req.method === 'GET') {
+      const { readFleet, fleetLang } = await import('./sessions/fleet-web')
+      const payload = await readFleet(fleetLang(url.searchParams.get('lang')))
+      return new Response(JSON.stringify(payload), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    if (url.pathname === '/api/fleet/act' && req.method === 'POST') {
+      try {
+        const { runFleetAction, fleetLang } = await import('./sessions/fleet-web')
+        const body = await readJsonLimited<FleetActionRequest>(req, LIMITS.bodyBytes)
+        if (!body.ok) {
+          return new Response(JSON.stringify({ ok: false, message: 'bad_request' }), {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const out = await runFleetAction(fleetLang(url.searchParams.get('lang')), body.value)
+        return new Response(JSON.stringify(out), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       } catch (err) {
