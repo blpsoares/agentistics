@@ -6,7 +6,7 @@ import { useOutletContext } from 'react-router-dom'
 import { Users, Search, Monitor, User as UserIcon, GitBranch, FolderOpen, Cpu, Terminal } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { fmt, fmtCost, formatModel, repoShortName, type HarnessId } from '@agentistics/core'
-import { aggregateMemberMetrics, withStatsCacheTotals, LOCAL_KEY, type MemberGroupBy, type MemberMetrics } from '../lib/member-metrics'
+import { aggregateMemberMetrics, withStatsCacheTotals, presenceFilterCaches, LOCAL_KEY, type MemberGroupBy, type MemberMetrics } from '../lib/member-metrics'
 import { cacheTotalsUsable } from '../lib/topUsage'
 import { MetricNote } from '../components/MetricNote'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
@@ -43,14 +43,19 @@ export default function MembersPage() {
   // are all gone still has real history in the cache, and filtering first would delete them.
   const rows = useMemo(() => {
     const base = aggregateMemberMetrics(derived.filteredSessions, groupBy)
-    const caches = groupBy === 'machine' ? data?.machineStatsCaches : data?.userStatsCaches
+    const rawCaches = groupBy === 'machine' ? data?.machineStatsCaches : data?.userStatsCaches
+    // Scope the caches to the SAME presence the header total is built from — otherwise a
+    // machine/member the header excludes by the central's "online only" default kept showing
+    // its full, all-time history here, dwarfing the header's own number with nothing on screen
+    // explaining either one. See `presenceFilterCaches`.
+    const caches = presenceFilterCaches(rawCaches, groupBy, derived.presenceScope.allowedUsers, data?.machineOwners)
     return withStatsCacheTotals(
       base,
       derived.filteredSessions,
       groupBy,
       cacheTotalsUsable(filters) ? caches : undefined,
     ).filter(r => r.sessions > 0 || r.totalTokens > 0 || r.costUSD > 0)
-  }, [derived.filteredSessions, groupBy, data?.machineStatsCaches, data?.userStatsCaches, filters])
+  }, [derived.filteredSessions, derived.presenceScope, groupBy, data?.machineStatsCaches, data?.userStatsCaches, data?.machineOwners, filters])
 
   /** The signed-in principal, matched the way the rest of the app keys a member: by display name
    *  (the token doc `user`, which follows the owner account's name). Undefined off a central. */

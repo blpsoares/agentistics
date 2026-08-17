@@ -959,6 +959,50 @@ export function repositoryGitTotals(
 
 
 /**
+ * The presence scope every scoped aggregate (header totals, per-member/-machine cache totals)
+ * must agree on. An explicit `filters.presence` always wins; otherwise a central whose operator
+ * turned OFF `includeOfflineData` narrows to online members by DEFAULT — a policy decision, not
+ * something the viewer asked for on this screen.
+ *
+ * `isPolicyDefault` is what lets a consumer decide whether the narrowing needs a label: a viewer
+ * who explicitly picked the "Offline" pill already knows their total is scoped, but nobody chose
+ * the silent default, and CLAUDE.md's own rule is that an unexplained smaller total reads as a
+ * bug. Any surface that reads a presence-scoped aggregate (a statsCache merge, a per-row cache
+ * substitution) must resolve scope through THIS function — a second inline copy is exactly how
+ * the header and the Members drill-down disagreed: the header excluded an offline machine's
+ * history from its total while the machine's own row kept substituting that history whole,
+ * unfiltered, with nothing on screen explaining why one dwarfed the other.
+ */
+export interface PresenceScope {
+  /** The presence actually being enforced, or null when nothing narrows the scope. */
+  effective: 'online' | 'offline' | null
+  /** True when `effective` came from the central's policy default rather than an explicit
+   *  `filters.presence` choice. */
+  isPolicyDefault: boolean
+  /** Display names ("user") allowed under `effective`, or null when there is no scoping. */
+  allowedUsers: Set<string> | null
+}
+
+export function resolvePresenceScope(
+  data: Pick<AppData, 'presence' | 'includeOfflineData'> | null | undefined,
+  filters: Filters,
+): PresenceScope {
+  const presence = data?.presence
+  const effective: 'online' | 'offline' | null =
+    filters.presence ?? (presence && data?.includeOfflineData === false ? 'online' : null)
+  const isPolicyDefault = effective !== null && filters.presence == null
+  const allowedUsers: Set<string> | null =
+    effective && presence
+      ? new Set(
+          Object.entries(presence)
+            .filter(([, p]) => (effective === 'online' ? p.online : !p.online))
+            .map(([name]) => name),
+        )
+      : null
+  return { effective, isPolicyDefault, allowedUsers }
+}
+
+/**
  * The whole derivation, as a PURE function of (data, filters, tags).
  *
  * Extracted from the hook so it can be called N TIMES for N scopes — the compare page derives one
@@ -994,20 +1038,12 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
     const machinesFiltered = (filters.machines ?? []).length > 0
     const modelSet = filters.models && filters.models.length > 0 ? new Set(filters.models) : null
 
-    // Presence scope — team/central: restrict to online/offline members
-    // Effective presence: an explicit filter wins; otherwise the central policy
-    // (includeOfflineData === false → online-only by default). null = all members.
-    const presence = data.presence
-    const effectivePresence: 'online' | 'offline' | null =
-      filters.presence ?? (presence && data.includeOfflineData === false ? 'online' : null)
-    const presenceAllowedUsers: Set<string> | null =
-      effectivePresence && presence
-        ? new Set(
-            Object.entries(presence)
-              .filter(([, p]) => (effectivePresence === 'online' ? p.online : !p.online))
-              .map(([name]) => name),
-          )
-        : null
+    // Presence scope — team/central: restrict to online/offline members. Resolved through the
+    // single shared `resolvePresenceScope` so every scoped aggregate (this function's totals, the
+    // Members page's per-row cache substitution) agrees on the same scope — see its docstring.
+    const presenceScope = resolvePresenceScope(data, filters)
+    const effectivePresence = presenceScope.effective
+    const presenceAllowedUsers = presenceScope.allowedUsers
 
     // Harness filter — applied first so all downstream filters compose on top
     // Compose (all AND predicates): presence scope → legacy single-harness field (now always
@@ -1808,6 +1844,7 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
       : filteredSessions.length > 0 ? 1 : 0
 
     return {
+      presenceScope,
       totalMessages,
       totalSessions,
       allTimeTotalSessions,

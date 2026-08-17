@@ -1,5 +1,5 @@
-import { test, expect } from 'bun:test'
-import { aggregateMemberMetrics, withStatsCacheTotals } from './member-metrics'
+import { test, expect, describe } from 'bun:test'
+import { aggregateMemberMetrics, withStatsCacheTotals, presenceFilterCaches } from './member-metrics'
 import type { SessionMeta, StatsCache } from '@agentistics/core'
 
 const cache = (over: Partial<StatsCache>): StatsCache => ({
@@ -111,4 +111,57 @@ test('a row whose totals come from the statsCache SAYS SO, because the parts sto
 test('a session-only row does not claim cache totals', () => {
   // No caches passed → nothing was substituted → nothing to disclose.
   expect(aggregateMemberMetrics([sess({})], 'machine')[0]!.totalsFromCache).toBeFalsy()
+})
+
+// presenceFilterCaches — the header-vs-drilldown consistency fix.
+//
+// Regression: a machine excluded from the header's total by the central's default "online only"
+// scope (`resolvePresenceScope`'s `presenceAllowedUsers`) still had its own row substituted from
+// its FULL, all-time cache in MembersPage, because `withStatsCacheTotals` was handed the raw,
+// presence-unfiltered `data.machineStatsCaches` — a huge unscoped number sitting beside a small
+// scoped "total" with nothing on screen explaining either one.
+
+describe('presenceFilterCaches', () => {
+  test('drops a machine whose owner is not in the allowed set', () => {
+    const caches = { alienware: deep, dell: deep }
+    const machineOwners = {
+      alienware: { user: 'Bryan Soares', teamIds: [] },
+      dell: { user: 'Offline Person', teamIds: [] },
+    }
+    const out = presenceFilterCaches(caches, 'machine', new Set(['Bryan Soares']), machineOwners)
+    expect(Object.keys(out!)).toEqual(['alienware'])
+  })
+
+  test('grouping by user keys the allow-check on the row key directly (no machineOwners needed)', () => {
+    const caches = { 'Bryan Soares': deep, 'Offline Person': deep }
+    const out = presenceFilterCaches(caches, 'user', new Set(['Bryan Soares']), undefined)
+    expect(Object.keys(out!)).toEqual(['Bryan Soares'])
+  })
+
+  test('null allowedUsers (no presence scoping) is a no-op', () => {
+    const caches = { alienware: deep }
+    expect(presenceFilterCaches(caches, 'machine', null, {})).toBe(caches)
+  })
+
+  test('undefined caches stays undefined', () => {
+    expect(presenceFilterCaches(undefined, 'machine', new Set(['x']), {})).toBeUndefined()
+  })
+
+  test('end-to-end: an excluded machine falls back to its (empty) session total instead of the deep cache', () => {
+    const sessions = [sess({ memberId: 'dell', user: 'Offline Person' })]
+    const base = aggregateMemberMetrics(sessions, 'machine')
+    const rawCaches = { dell: deep }
+    const machineOwners = { dell: { user: 'Offline Person', teamIds: [] } }
+
+    // No scoping: the row is inflated to the deep, all-time cache.
+    const unscoped = withStatsCacheTotals(base, sessions, 'machine', rawCaches)
+    expect(unscoped[0]!.sessions).toBe(472)
+
+    // Scoped to online members only, and "Offline Person" is not among them: the row keeps its
+    // real (one-session) total instead of borrowing the excluded machine's full history.
+    const scopedCaches = presenceFilterCaches(rawCaches, 'machine', new Set(['Bryan Soares']), machineOwners)
+    const scoped = withStatsCacheTotals(base, sessions, 'machine', scopedCaches)
+    expect(scoped[0]!.sessions).toBe(1)
+    expect(scoped[0]!.totalTokens).toBeLessThan(unscoped[0]!.totalTokens)
+  })
 })

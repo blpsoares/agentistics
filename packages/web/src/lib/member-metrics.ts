@@ -372,3 +372,33 @@ export function withStatsCacheTotals(
     }
   }).sort((a, b) => (b.sessions - a.sessions) || (b.costUSD - a.costUSD) || a.key.localeCompare(b.key))
 }
+
+/**
+ * Narrows a cache map to the SAME presence scope the header total is built from
+ * (`resolvePresenceScope` in `hooks/useData.ts`), before it reaches `withStatsCacheTotals`.
+ *
+ * Without this, a machine/member excluded from the header's total by the central's
+ * "online only" default kept its own row substituted from its FULL, all-time cache — a huge,
+ * unscoped number sitting beside a small "total" with nothing on screen explaining either one.
+ * `withStatsCacheTotals` already leaves a row alone when its key is absent from `caches`, so
+ * dropping the excluded keys here is enough: that row falls back to its session-based total,
+ * which — since `presenceAllowedUsers` is resolved at the PERSON level, exactly like the
+ * session-list filter upstream — is only ever non-zero when the owner is actually in scope.
+ *
+ * `allowedUsers: null` means "no scoping" (no presence data, or an explicit filter already
+ * narrowed the session list some other way) and is a no-op.
+ */
+export function presenceFilterCaches(
+  caches: Record<string, StatsCache> | undefined,
+  groupBy: MemberGroupBy,
+  allowedUsers: Set<string> | null,
+  machineOwners: Record<string, { user: string; teamIds: string[] }> | undefined,
+): Record<string, StatsCache> | undefined {
+  if (!caches || !allowedUsers) return caches
+  const out: Record<string, StatsCache> = {}
+  for (const [key, cache] of Object.entries(caches)) {
+    const owner = groupBy === 'machine' ? (machineOwners?.[key]?.user ?? '') : key
+    if (allowedUsers.has(owner)) out[key] = cache
+  }
+  return out
+}
