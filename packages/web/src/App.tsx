@@ -16,6 +16,7 @@ import {
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import { usePlanBasis } from './hooks/usePlanBasis'
 import { planScopeHarnesses, planScopeNote } from './lib/costBasis'
+import { DEFAULT_CARD_ORDER, migrateCardOrder, type CardId } from './lib/cardOrder'
 import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
@@ -1342,32 +1343,12 @@ export default function AppLayout() {
     } catch { /* ignore quota/disabled storage */ }
   }, [])
 
-  type CardId = 'messages' | 'sessions' | 'tool-calls' | 'input-tokens' | 'output-tokens' | 'cost' | 'streak' | 'longest-session' | 'commits' | 'files'
-  const DEFAULT_CARD_ORDER: CardId[] = [
-    'messages', 'sessions', 'tool-calls', 'input-tokens', 'output-tokens',
-    'cost', 'streak', 'longest-session', 'commits', 'files',
-  ]
-  // Merges a saved card order with the default, inserting new cards at their default position.
-  function mergeCardOrder(saved: string[]): CardId[] {
-    const savedSet = new Set(saved)
-    const merged = saved.filter(id => DEFAULT_CARD_ORDER.includes(id as CardId)) as CardId[]
-    for (let i = 0; i < DEFAULT_CARD_ORDER.length; i++) {
-      const id = DEFAULT_CARD_ORDER[i]!
-      if (savedSet.has(id)) continue
-      let insertPos = merged.length
-      for (let j = i - 1; j >= 0; j--) {
-        const pred = DEFAULT_CARD_ORDER[j]!
-        const predIdx = merged.indexOf(pred)
-        if (predIdx >= 0) { insertPos = predIdx + 1; break }
-      }
-      merged.splice(insertPos, 0, id)
-    }
-    return merged
-  }
+  // The card id set and its migration are PURE and tested (`lib/cardOrder.ts`) — the order is
+  // persisted, so a renamed id is a stored contract, not an implementation detail.
   const [cardOrder, setCardOrder] = useState<CardId[]>(() => {
     try {
       const saved = localStorage.getItem('claude-stats-card-order')
-      if (saved) return mergeCardOrder(JSON.parse(saved))
+      if (saved) return migrateCardOrder(JSON.parse(saved))
     } catch {}
     return DEFAULT_CARD_ORDER
   })
@@ -1542,7 +1523,7 @@ export default function AppLayout() {
       if (prefs.lang) setLangState(prefs.lang)
       if (prefs.theme) setThemeState(prefs.theme)
       if (prefs.currency) setCurrencyState(prefs.currency)
-      if (prefs.cardOrder) setCardOrder(mergeCardOrder(prefs.cardOrder))
+      if (prefs.cardOrder) setCardOrder(migrateCardOrder(prefs.cardOrder))
       if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
       if (prefs.chatSoundEnabled !== undefined) setChatSoundEnabled(prefs.chatSoundEnabled)
       setInstallDismissedPref(prefs.installDismissed === true)
@@ -2180,29 +2161,30 @@ export default function AppLayout() {
           ? 'O máximo entre as duas fontes é usado para capturar também arquivos editados fora de um repositório git. Arquivos binários ficam de fora (git numstat marca "-"). Harnesses que não registram diffs mostram N/A em vez de 0.'
           : 'The max of the two sources is used so files edited outside a git repository are still counted. Binary files are excluded (git numstat writes "-"). Harnesses that record no diffs show N/A rather than 0.',
       },
+      // ONE item, because there is now one card. It used to be two — input and output — which is
+      // exactly the pair that adds up to 0,34 % of the volume on a real machine, and the two
+      // cache counters that make up the rest had no card and no explanation anywhere on this page.
       {
-        label: pt ? 'Tokens de entrada' : 'Input tokens',
+        label: 'Tokens',
         source: twoPaths(
-          '~/.claude/stats-cache.json → modelUsage[model].inputTokens',
-          'input_tokens de cada sessão'),
+          '~/.claude/stats-cache.json → modelUsage[model].{input,output,cacheRead,cacheCreation}Tokens',
+          pt ? 'os quatro contadores de cada sessão' : "each session's four counters"),
         formula: pt
-          ? 'Sem filtro de escopo: Σ modelUsage[modelo].inputTokens\nCom filtro: Σ input_tokens das sessões filtradas'
-          : 'No scope filter: Σ modelUsage[model].inputTokens\nFiltered: Σ input_tokens of the filtered sessions',
+          ? 'Total = entrada + saída + leitura de cache + escrita de cache\n\n'
+            + 'Vem do MESMO recorte de uso por modelo de onde sai o custo,\n'
+            + 'então os tokens e o dinheiro ao lado descrevem sempre\n'
+            + 'as mesmas chamadas — sob qualquer filtro.'
+          : 'Total = input + output + cache read + cache write\n\n'
+            + 'Read from the SAME filtered model usage the cost is priced\n'
+            + 'from, so the tokens and the money beside them always describe\n'
+            + 'the same set of turns — under any filter.',
         note: pt
-          ? `Tokens enviados ao modelo (seu prompt + contexto). NÃO inclui tokens de cache — leitura e escrita de cache são contadas à parte e têm preço próprio. ${CLAUDE_ONLY}`
-          : `Tokens sent to the model (your prompt + context). Does NOT include cache tokens — cache reads and writes are counted separately and priced on their own. ${CLAUDE_ONLY}`,
-      },
-      {
-        label: pt ? 'Tokens de saída' : 'Output tokens',
-        source: twoPaths(
-          '~/.claude/stats-cache.json → modelUsage[model].outputTokens',
-          'output_tokens de cada sessão'),
-        formula: pt
-          ? 'Sem filtro de escopo: Σ modelUsage[modelo].outputTokens\nCom filtro: Σ output_tokens das sessões filtradas'
-          : 'No scope filter: Σ modelUsage[model].outputTokens\nFiltered: Σ output_tokens of the filtered sessions',
-        note: pt
-          ? `Tokens gerados pelo modelo nas respostas — a parte mais cara da conta (tipicamente ~5× o preço da entrada). ${CLAUDE_ONLY}`
-          : `Tokens the model generated in its replies — the most expensive part of the bill (typically ~5× the input price). ${CLAUDE_ONLY}`,
+          ? 'São quatro preços diferentes, não um só: leitura de cache custa ~10× menos que entrada nova, '
+            + 'e escrita custa um prêmio. Numa máquina real a leitura de cache é ~96% do volume — por isso '
+            + `um total de bilhões de tokens convive com uma conta modesta. ${CLAUDE_ONLY}`
+          : 'These are four different prices, not one: a cache read costs ~10× less than fresh input, '
+            + 'and a write pays a premium. On a real machine cache reads are ~96% of the volume — which is '
+            + `why a total in the billions sits next to a modest bill. ${CLAUDE_ONLY}`,
       },
     ]
   }, [filters.projects.length, filters.repos?.length, filters.models.length,

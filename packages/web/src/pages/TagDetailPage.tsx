@@ -5,7 +5,10 @@ import {
 } from 'recharts'
 import { format, parseISO } from 'date-fns'
 import { ArrowLeft, Pencil, Trash2, CalendarRange } from 'lucide-react'
-import { fmt, fmtCost, formatModel, formatProjectName, repoShortName, totalTokens as totalTokensOf } from '@agentistics/core'
+import {
+  TOKEN_PARTS, fmt, fmtCost, formatModel, formatProjectName, repoShortName,
+  tokenHelp, tokenLabel, totalTokens as totalTokensOf, totalTokensExplained,
+} from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import type { TokenBreakdown } from '@agentistics/core'
 import { MetricNote } from '../components/MetricNote'
@@ -112,9 +115,9 @@ const iconBtn: React.CSSProperties = {
 }
 
 /** The KPI tile used across the app: big number over an uppercase caption. */
-function StatTile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function StatTile({ label, value, accent, title }: { label: string; value: string; accent?: boolean; title?: string }) {
   return (
-    <div style={{
+    <div title={title} style={{
       display: 'flex', flexDirection: 'column', gap: 3, padding: '12px 14px', minWidth: 0,
       background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)',
     }}>
@@ -414,20 +417,25 @@ export default function TagDetailPage() {
           <StatTile label={pt ? 'Custo' : 'Cost'} value={fmtCost(tag.aggregate.costUSD, currency, brlRate)} accent />
           <StatTile label={pt ? 'Sessões' : 'Sessions'} value={tag.aggregate.sessions.toLocaleString()} />
           <StatTile label="Tokens" value={fmt(totalTokens)} />
-          <StatTile label={pt ? 'Tokens entrada' : 'Tokens in'} value={fmt(tag.aggregate.inputTokens)} />
-          <StatTile label={pt ? 'Tokens saída' : 'Tokens out'} value={fmt(tag.aggregate.outputTokens)} />
+          {/* All FOUR counters, each named. This used to be the total plus input and output alone,
+              with a note underneath explaining why the two did not add up to the first — an
+              apology for a missing number rather than the number. The cache pair it was
+              apologising for is usually most of the volume, so it is the half that explains both
+              the size of the total and the modesty of the cost beside it. */}
+          {TOKEN_PARTS.map(part => (
+            <StatTile
+              key={part}
+              label={tokenLabel(part, pt ? 'pt' : 'en')}
+              value={fmt(tag.aggregate.tokens[part])}
+              title={tokenHelp(part, pt ? 'pt' : 'en')}
+            />
+          ))}
           {/* Counts, not names — so they need no redaction and stay honest even when the machine
               buckets below collapse several unseeable ones into a single "other". */}
           <StatTile label={pt ? 'Membros' : 'Members'} value={(detail?.stats.distinctMembers ?? 0).toLocaleString()} />
           <StatTile label={pt ? 'Máquinas' : 'Machines'} value={(detail?.stats.distinctMachines ?? 0).toLocaleString()} />
         </div>
-        {/* Three token tiles side by side and only the first is the total — without this the
-            obvious reading is that the other two should add up to it. */}
-        <MetricNote>
-          {pt
-            ? '"Tokens" soma os quatro contadores cobrados. As duas caixas ao lado — entrada e saída — são só dois deles; o resto é leitura e escrita de cache, normalmente a maior parte do volume. Por isso entrada + saída não fecha com o total.'
-            : '"Tokens" adds all four billed counters. The two tiles beside it — in and out — are only two of them; the rest is cache read and cache write, usually most of the volume. That is why in + out does not add up to the total.'}
-        </MetricNote>
+        <MetricNote>{totalTokensExplained(tag.aggregate.tokens, pt ? 'pt' : 'en')}</MetricNote>
         {/* A tag whose sources resolve to nothing is a real, common state (a brand-new grouping, or
             one whose machines have not pushed yet) — say so instead of showing five zeros. */}
         {empty && (

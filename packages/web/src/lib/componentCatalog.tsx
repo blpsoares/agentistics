@@ -3,7 +3,7 @@ import {
   MessageSquare, Zap, Clock, Flame, GitCommit,
   Wrench, FileCode, TrendingUp, BarChart2,
   Download, Upload, Trophy, Bot, Target, FolderOpen, Layers,
-  Activity, CalendarDays, CalendarClock, Gauge, Crown, Sigma,
+  Activity, CalendarDays, CalendarClock, Gauge, Crown, Sigma, Coins,
 } from 'lucide-react'
 import type { AppContext } from './app-context'
 import { sessionTime } from './sessionTime'
@@ -25,6 +25,7 @@ import { AgentMetricsPanel } from '../components/AgentMetricsPanel'
 import { RecentSessions } from '../components/RecentSessions'
 import { TopBoards } from '../components/TopBoards'
 import { TokenTotalsPanel } from '../components/TokenTotalsPanel'
+import { TokenStatCard } from '../components/TokenStatCard'
 import { Section } from '../components/Section'
 
 /**
@@ -218,6 +219,25 @@ export const CATALOG: CatalogItem[] = [
       />
     ),
   },
+  {
+    // The whole token story in one tile: the total plus all four billed counters. Wider and taller
+    // than a single-figure KPI by default, because it carries five numbers rather than one.
+    id: 'kpi.tokens', labelPt: 'Tokens (completo)', labelEn: 'Tokens (full breakdown)', category: 'kpi',
+    icon: Coins, defaultW: 4, defaultH: 4, minW: 3, minH: 3,
+    render: (ctx) => (
+      <TokenStatCard
+        lang={ctx.lang === 'pt' ? 'pt' : 'en'}
+        tokens={ctx.derived.tokenTotals}
+        accent="var(--accent-blue)"
+        fullPrecision={ctx.cardPrecision['kpi.tokens'] ?? false}
+        onTogglePrecision={() => ctx.setCardPrecision('kpi.tokens', !(ctx.cardPrecision['kpi.tokens'] ?? false))}
+      />
+    ),
+  },
+  // The two counters below stay as their own placeable tiles: a custom layout is SAVED, and
+  // removing a component id would empty a slot somebody had arranged deliberately. They are the
+  // conversational pair (`input + output`) — a fraction of the volume — so the full tile above is
+  // the one to reach for; these remain for a layout that wants exactly one of them.
   {
     id: 'kpi.input-tokens', labelPt: 'Tokens de entrada', labelEn: 'Input tokens', category: 'kpi',
     icon: Download, defaultW: 3, defaultH: 3, minW: 2, minH: 2,
