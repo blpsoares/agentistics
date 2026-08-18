@@ -625,9 +625,10 @@ cumulative input 44.3M against a context of 455k, so a gauge built from the tota
 **codex** — `last_token_usage.input_tokens`, which already includes the cached portion, NOT the
 cumulative `total_token_usage`; **kimi** — the input side of one per-turn `usage.record`, from the
 **main** agent only and chosen by timestamp (a subagent runs its own, emptier window, and file read
-order must not decide the answer); **antigravity** — protobuf field `1.4.5`, already documented as
-"a gauge, never a sum", off the last row. **gemini** and **copilot** are `false`: gemini's chat
-files carry no token data at all, and copilot reports tokens only cumulatively at shutdown.
+order must not decide the answer); **antigravity** — protobuf field `1.9.10.1`, off the last row,
+with the window agy declares beside it in `1.9.10.4`. **gemini** and **copilot** are `false`:
+gemini's chat files carry no token data at all, and copilot reports tokens only cumulatively at
+shutdown.
 
 **The window** is `resolveContextWindow` (`packages/core/src/contextWindows.ts`) — the
 `MODEL_PRICING` provenance rule applied to a different number. `ContextWindow` requires
@@ -635,11 +636,16 @@ files carry no token data at all, and copilot reports tokens only cumulatively a
 the table draws no bar**. That is deliberate: an absent gauge is visible, a wrong percentage is not,
 and the same 212.959 tokens is 106% of a 200k window and 21% of a 1M one. Two consequences:
 - **A harness that states its own window outranks the table.** Codex writes `model_context_window`
-  into every `token_count` event → `SessionMeta.context_window`. It knows the deployment and any
-  per-session cap; a model id cannot express either.
+  into every `token_count` event → `SessionMeta.context_window`, and **Antigravity states it too**,
+  in protobuf field `1.9.10.4` beside its gauge. It knows the deployment and any per-session cap; a
+  model id cannot express either — measured on one machine, agy ran `gemini-3.6-flash` under a
+  128.000 window on some conversations and 256.000 on others, which no table keyed by model id
+  could ever have told apart.
 - **OpenAI and Google models are absent** (checked 2026-08-14: neither publishes a citable input
-  token limit). So Antigravity's Gemini conversations and Kimi's routed models measure a context and
-  still draw no bar. Add them the day the figures can be cited, never before.
+  token limit). So Kimi's routed models measure a context and still draw no bar. Add them the day
+  the figures can be cited, never before. Antigravity is the case that shows the table is not the
+  only way out: it draws a bar with no row here at all, because the harness declares the window
+  itself.
 
 **Known limitation, stated rather than papered over:** Claude Code can run `claude-opus-5` under a
 200k session cap (its `opus[1m]` picker) and the transcript records only `claude-opus-5` — no
@@ -675,10 +681,22 @@ a conversation with no genuine user turn is dropped (same principle as the Gemin
 **Tokens / model / cost are REAL for agy.** They come from `conversations/<conversation-id>.db`
 (SQLite), table `gen_metadata`, column `data` — a protobuf blob per LLM call, decoded by the pure,
 dependency-free `adapters/antigravity-protobuf.ts`. Verified wire layout:
-`1.4.1` input, `1.4.2` cache read, `1.4.3` output, `1.4.5` context-size gauge, `1.4.9` thinking,
-`1.4.10` completion, `1.19` technical model id, `1.21` display name. Rules:
+`1.4.1` the CONSTANT system-instruction size, `1.4.2` input, `1.4.3` output, `1.4.5` cache read,
+`1.4.9` thinking, `1.4.10` completion, `1.9.10.1` context-size gauge, `1.9.10.4` the declared
+context window, `1.19` technical model id, `1.21` display name. Rules:
 - **`1.4.3` already includes `1.4.9`** — never add thinking on top of output.
-- **`1.4.5` is a gauge, never a sum** — it is the context size at that call.
+- **`1.9.10.1` is a gauge, never a sum** — it is the context size at that call.
+- **`1.4.1` is a CONSTANT and belongs in no sum.** This mapping was wrong for a release and the
+  bug was invisible from inside: the first reader took `1.4.1` as input, `1.4.2` as cache and
+  `1.4.5` as the gauge, and every number it produced looked plausible. It was off by **4,8x in
+  tokens and 6,3x in cost** (52,6 mi / R$111 against a billed ~250 mi / R$703). What exposed it was
+  a comparison with the provider's own console — and what would have caught it earlier is in the
+  data itself: **`1.4.1` was the same 1072 on all 2.966 rows** (`min === max`), and a per-call
+  counter cannot be constant. When adopting a field from an undocumented binary format, check that
+  the values VARY the way the thing they claim to count varies, and reconcile the total against a
+  bill before trusting it. The mapping above is pinned by tests and by the arithmetic recorded in
+  `antigravity-protobuf.ts`'s header (input/cache/output and the 80,6 % cache share all land within
+  a few percent of the console's figures for the same project; no other assignment is close).
 - agy records **no cache-write** counter, so `cache_creation_input_tokens` stays 0.
 - `model` is the dominant `1.19` across the conversation's rows (e.g. `gemini-3.6-flash`; agy can
   also drive Claude models, e.g. `claude-opus-4-6-thinking`). **Cost is `calcCost()` only** —

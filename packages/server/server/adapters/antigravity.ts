@@ -89,9 +89,11 @@ function closeQuietly(db: any): void {
 /**
  * Sum every `gen_metadata` row of one conversation into token totals.
  *
- * Per the verified wire format: input += f1, cache_read += f2, output += f3. Field 3 ALREADY
- * contains the thinking tokens (f9), so f9 is never added; field 5 is a context-size gauge and
- * is never summed. The model id is the most frequent f19 across the rows (a conversation can
+ * Per the verified wire format: input += f1.4.2, cache_read += f1.4.5, output += f1.4.3. Field
+ * 1.4.3 ALREADY contains the thinking tokens (f1.4.9), so f1.4.9 is never added; f1.4.1 is the
+ * CONSTANT system-instruction size and belongs in no sum at all. The context gauge (f1.9.10.1) and
+ * the window agy declares (f1.9.10.4) are levels, read off the last row that carried them rather
+ * than accumulated. The model id is the most frequent f1.19 across the rows (a conversation can
  * switch models mid-way; the dominant one is the honest single label).
  *
  * A missing / locked / corrupt DB yields null → the session reports zero tokens.
@@ -116,10 +118,12 @@ export async function readAntigravityTokensFromFile(
     let cachedTokens = 0
     let outputTokens = 0
     let rowCount = 0
-    // The gauge, off the LAST row that carried one — never accumulated. `SELECT` with no ORDER BY
-    // walks the table in rowid order, which is insertion order, so the last row is the newest
-    // generation. A row with no `1.4.5` leaves the previous reading standing rather than zeroing it.
+    // The gauge and the window agy declares beside it, off the LAST row that carried each — never
+    // accumulated. `SELECT` with no ORDER BY walks the table in rowid order, which is insertion
+    // order, so the last row is the newest generation. A row missing either one leaves the previous
+    // reading standing rather than zeroing it.
     let contextTokens = 0
+    let contextWindow = 0
     const modelCounts = new Map<string, number>()
     const byModel: Record<string, { inputTokens: number; cachedTokens: number; outputTokens: number }> = {}
     for (const row of rows) {
@@ -129,7 +133,8 @@ export async function readAntigravityTokensFromFile(
       )
       if (!meta) continue
       rowCount++
-      if (meta.totalContextTokens > 0) contextTokens = meta.totalContextTokens
+      if (meta.contextTokens > 0) contextTokens = meta.contextTokens
+      if (meta.contextWindow > 0) contextWindow = meta.contextWindow
       inputTokens += meta.inputTokens
       cachedTokens += meta.cachedTokens
       outputTokens += meta.outputTokens
@@ -148,6 +153,7 @@ export async function readAntigravityTokensFromFile(
     return {
       inputTokens, cachedTokens, outputTokens, modelId, byModel, rowCount,
       ...(contextTokens > 0 ? { contextTokens } : {}),
+      ...(contextWindow > 0 ? { contextWindow } : {}),
     }
   } catch {
     return null
