@@ -5,6 +5,10 @@
 #
 # With this overlay the central also reads the host's own harness dirs and attributes that
 # usage to AGENTISTICS_CENTRAL_USER. Mounts are read-only; the app never writes to them.
+#
+# Run directly with:
+#   docker compose -f docker/central.yml -f docker/central.localdb.yml \
+#     -f docker/central.selfcontrib.yml --env-file central.env up -d
 services:
   app:
     volumes:

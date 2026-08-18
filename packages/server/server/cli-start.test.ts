@@ -9,6 +9,7 @@ import {
   parseContainerFacts,
   parseElapsedSeconds,
   pidsToKill,
+  centralStartNotes,
   startOptionsFor,
   targetRuntimes,
 } from './cli-start'
@@ -250,13 +251,47 @@ test('the Docker central offers one shape — background — with no plan or a D
 // binary directly instead of Docker — see `planCentralStart` in cli-central.ts. It offers BOTH
 // shapes, neither of which carries `offersBoot`: foreground because it holds the terminal, and
 // background because no native-central systemd unit exists yet (see the field's own doc).
-test('a native-capable central offers foreground AND background, neither with a boot unit', () => {
-  const options = startOptionsFor('central', EN, { centralPlan: 'native' })
-  expect(options).toEqual([
-    { runtime: 'central', how: 'fg', label: EN.optCentralNativeForeground, hint: EN.optCentralNativeForegroundHint },
-    { runtime: 'central', how: 'bg', label: EN.optCentralNativeBackground, hint: EN.optCentralNativeBackgroundHint },
-  ])
-  expect(options.every(o => o.offersBoot === undefined)).toBe(true)
+test('a native-capable central offers foreground AND background, and only the detached one boots', () => {
+  const opts = startOptionsFor('central', EN, { centralPlan: 'native' })
+  expect(opts.map(o => o.how)).toEqual(['fg', 'bg'])
+  // A foreground start holds the terminal, so "bring it back at boot" is not a thing it can be.
+  expect(opts[0]!.offersBoot).toBeUndefined()
+  // The detached one DOES now: `serviceCommandFor` composes the unit from the configured central
+  // runtime, so a natively started central gets a unit that runs it natively. It used to install
+  // the Docker one — a boot mechanism that did not match what was actually running — which is why
+  // the option was withheld entirely.
+  expect(opts[1]!.offersBoot).toBe(true)
+  expect(opts.every(o => o.centralRuntime === 'native')).toBe(true)
+})
+
+// One verb per SHAPE. The screen used to show a single "Start" whose meaning was inferred from
+// what happened to be on disk, so a user holding a checkout could not ask for the published image.
+test('every available central shape becomes its own start verb', () => {
+  const opts = startOptionsFor('central', EN, {
+    centralRuntimes: [
+      { id: 'docker-image', available: true },
+      { id: 'docker-build', available: true },
+      { id: 'native', available: false, reason: 'bundled-mongo' },
+    ],
+  })
+  expect(opts.map(o => o.centralRuntime)).toEqual(['docker-image', 'docker-build'])
+  // A Docker central's `up` returns once the container is up: there is no attached shape to offer.
+  expect(opts.every(o => o.how === 'bg')).toBe(true)
+})
+
+// The other half of "a verb that cannot work is not offered": an absence with no explanation reads
+// as a broken screen.
+test('a withheld shape is explained in a sentence rather than offered and refused', () => {
+  const notes = centralStartNotes([
+    { id: 'docker-image', available: true },
+    { id: 'docker-build', available: false, reason: 'no-checkout' },
+    { id: 'native', available: false, reason: 'bundled-mongo' },
+  ], EN)
+  expect(notes).toHaveLength(2)
+  expect(notes[0]).toContain('checkout')
+  expect(notes[1]).toContain('external database')
+  expect(centralStartNotes(undefined, EN)).toEqual([])
+  expect(centralStartNotes([{ id: 'native', available: true }], EN)).toEqual([])
 })
 
 // Everything that has to happen AROUND a start is stated with the start, because this side is the

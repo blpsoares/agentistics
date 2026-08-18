@@ -66,7 +66,7 @@ export type ServiceId = 'agentistics' | 'central'
  * One concrete way to run a logical service — an implementation detail of the host.
  *
  * `local` is the native process, `machine` is the same program inside a container
- * (docker-compose.machine.yml), and `central` is the team central's container. A `RuntimeId`
+ * (docker/machine.yml), and `central` is the team central's container. A `RuntimeId`
  * appears in the contract only where an action or a log genuinely has to name ONE of them: the
  * conflict case (both runtimes of `agentistics` up at once), a start option, and the full-screen
  * Logs screen's source selector.
@@ -80,6 +80,23 @@ export type RuntimeId = 'local' | 'machine' | 'central'
  * they are the words the CLI, the compose files and the docs already use.
  */
 export type ServiceRuntime = 'native' | 'docker'
+
+/**
+ * One concrete way to BRING UP a central — a second dimension from `RuntimeId`, and not a
+ * duplicate of it.
+ *
+ * `RuntimeId` answers "which of this box's things is this row about"; this answers "which shape of
+ * the same central". The three are genuinely different deployments of one program: build the image
+ * from a checkout, pull the published one, or run the binary itself with no Docker at all. The
+ * cockpit needs the distinction because it offers them as separate start verbs — the screen used
+ * to show ONE "Start" whose meaning was inferred from what happened to be on disk, so a user with
+ * a clone could not ask for the published image and had nowhere to see why.
+ *
+ * Declared here rather than imported: the dependency direction is `server -> tui`, so this package
+ * may not reach into `packages/server`. `central-runtime.test.ts` cross-checks this union against
+ * the server's `CENTRAL_RUNTIMES`, which is what stops the two definitions drifting.
+ */
+export type CentralRuntimeId = 'docker-build' | 'docker-image' | 'native'
 
 /**
  * Anything an action or a log read can name: a logical service, or one exact runtime of one.
@@ -146,6 +163,15 @@ export type StartHow = 'fg' | 'bg'
 export interface StartRequest {
   runtime: RuntimeId
   how?: StartHow
+  /**
+   * For `central` only: which SHAPE of central to bring up.
+   *
+   * Absent means "whatever this central is configured with", which is what every start meant
+   * before the cockpit offered the choice — so an existing deployment keeps coming up exactly as
+   * it did. The host turns it into the same `--image` / `--build` / `--native` the CLI takes, so
+   * pressing a verb here and typing the command are one code path.
+   */
+  centralRuntime?: CentralRuntimeId
 }
 
 /**
@@ -349,6 +375,19 @@ export interface ControlService {
   bootOptions: BootOption[]
   /** The starts this box can perform right now. ALWAYS EMPTY while the service is up. */
   startOptions: StartOption[]
+  /**
+   * Already-localized sentences naming the starts this box CANNOT perform, and why.
+   *
+   * The absent-beats-present-and-failing rule says a verb that cannot work is not offered. On its
+   * own that leaves the opposite problem: a central offering one way to start when the operator
+   * knows there are three reads as a broken screen, and nothing on it says `--native` is missing
+   * because the database is the bundled one. So the verbs stay absent and the REASONS are said, in
+   * the detail pane, where there is room for a sentence.
+   *
+   * Empty whenever nothing is withheld — never a "nothing is blocked" line, which is a row spent
+   * on the absence of news.
+   */
+  startNotes?: string[]
   /**
    * The restarts this box can perform right now — the plain bounce, plus a rebuild wherever the
    * pieces a rebuild needs are actually here. ALWAYS EMPTY while the service is down.

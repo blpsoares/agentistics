@@ -70,7 +70,8 @@ import type {
 import { DEFAULT_SESSION_VIEW } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
 import { readPreferences, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
-import { centralStartPlan, runCentral, type CentralStartPlan } from './cli-central'
+import { centralRuntimeChoices, centralStartPlan, runCentral, type CentralStartPlan } from './cli-central'
+import { flagFor, type CentralRuntimeId, type CentralRuntimeOption } from './central-runtime'
 import { onOutputLine, publishLines, streamCommand } from './cli-stream'
 import {
   centralRebuildArgs,
@@ -152,7 +153,7 @@ const GR = `${ESC}[92m`
 const YE = `${ESC}[33m`
 
 const CENTRAL_PROJECT = 'team-mode'      // central.sh: PROJECT=${PROJECT:-team-mode}
-const MACHINE_IMAGE = 'agentistics-machine' // docker-compose.machine.yml: image
+const MACHINE_IMAGE = 'agentistics-machine' // docker/machine.yml: image
 const CENTRAL_FILTER = `label=com.docker.compose.project=${CENTRAL_PROJECT}`
 const MACHINE_FILTER = `ancestor=${MACHINE_IMAGE}`
 
@@ -294,6 +295,15 @@ export interface StartFacts {
    * would be a verb that fails on principle.
    */
   centralPlan?: CentralStartPlan
+  /**
+   * Every way a central could be brought up here, available or not — `centralRuntimeOptions`.
+   *
+   * When present it REPLACES the `centralPlan` inference for the central's start verbs: the screen
+   * offers one start per available shape instead of the single "Start" whose meaning was decided
+   * by whatever happened to be on disk. `centralPlan` stays, because it answers a different
+   * question that has not changed — whether the start needs the real terminal.
+   */
+  centralRuntimes?: CentralRuntimeOption[]
 }
 
 /**
@@ -347,20 +357,18 @@ export function startOptionsFor(runtime: RuntimeId, s: CliStrings, facts: StartF
         },
       ]
     case 'central': {
-      if (facts.centralPlan === 'native') {
-        return [
-          {
-            runtime: 'central', how: 'fg', label: s.optCentralNativeForeground, hint: s.optCentralNativeForegroundHint,
-          },
-          {
-            runtime: 'central', how: 'bg', label: s.optCentralNativeBackground, hint: s.optCentralNativeBackgroundHint,
-            // No native-central systemd unit exists (`agentop-central` always runs `central.sh up`,
-            // the Docker path) — installing that unit for a process started natively would claim a
-            // boot mechanism that does not match what is actually running. Absent beats a boot
-            // toggle that quietly does nothing.
-          },
-        ]
+      // The shapes this box can actually bring up, each its own verb. A central has three, they
+      // are genuinely different deployments, and the screen used to show one "Start" that picked
+      // between them by inference — so a user holding a checkout could not ask for the published
+      // image, and nothing said why the option they expected was missing.
+      const runtimes = facts.centralRuntimes?.filter(r => r.available).map(r => r.id)
+      if (runtimes && runtimes.length > 0) {
+        return runtimes.flatMap(id => centralStartsFor(id, s))
       }
+
+      // No runtime list supplied (a caller that predates it, or a status read that failed): keep
+      // exactly the behaviour that existed before, decided by `centralPlan`.
+      if (facts.centralPlan === 'native') return centralStartsFor('native', s)
       return [
         {
           runtime: 'central', how: 'bg', label: s.optCentral, hint: s.optCentralHint, offersBoot: true,
@@ -368,6 +376,67 @@ export function startOptionsFor(runtime: RuntimeId, s: CliStrings, facts: StartF
       ]
     }
   }
+}
+
+/**
+ * The starts ONE central shape offers.
+ *
+ * Only the native one has two, and the asymmetry is real rather than an omission: `docker compose
+ * up -d` returns once the container is up, so there is no attached variant to offer, while the
+ * native server holds the terminal until you stop it and therefore has both shapes.
+ *
+ * `offersBoot` follows the same rule it does everywhere — never on a foreground option, and only
+ * where a boot mechanism genuinely exists for what was started. Both Docker shapes register the
+ * `agentop-central` unit; the native background start now does too, because `serviceCommandFor`
+ * composes the unit from the SAME configured runtime rather than always writing the Docker one.
+ */
+function centralStartsFor(id: CentralRuntimeId, s: CliStrings): StartOption[] {
+  switch (id) {
+    case 'docker-image':
+      return [{
+        runtime: 'central', centralRuntime: 'docker-image', how: 'bg',
+        label: s.optCentralImage, hint: s.optCentralImageHint, offersBoot: true,
+      }]
+    case 'docker-build':
+      return [{
+        runtime: 'central', centralRuntime: 'docker-build', how: 'bg',
+        label: s.optCentralBuild, hint: s.optCentralBuildHint, offersBoot: true,
+      }]
+    case 'native':
+      return [
+        {
+          runtime: 'central', centralRuntime: 'native', how: 'fg',
+          label: s.optCentralNativeForeground, hint: s.optCentralNativeForegroundHint,
+        },
+        {
+          runtime: 'central', centralRuntime: 'native', how: 'bg',
+          label: s.optCentralNativeBackground, hint: s.optCentralNativeBackgroundHint,
+          offersBoot: true,
+        },
+      ]
+  }
+}
+
+/**
+ * PURE: the sentences naming the central shapes this box CANNOT start, and why.
+ *
+ * The verbs stay absent — a control that fails on principle is worse than a missing one — but an
+ * absence with no explanation reads as a broken screen. This is the other half: said once, in the
+ * detail pane, where a sentence fits.
+ */
+export function centralStartNotes(runtimes: CentralRuntimeOption[] | undefined, s: CliStrings): string[] {
+  if (!runtimes) return []
+  const notes: string[] = []
+  for (const r of runtimes) {
+    if (r.available || !r.reason) continue
+    if (r.id === 'docker-image' && r.reason === 'no-docker') notes.push(s.centralBlockedImageNoDocker)
+    else if (r.id === 'docker-build' && r.reason === 'no-docker') notes.push(s.centralBlockedBuildNoDocker)
+    else if (r.id === 'docker-build' && r.reason === 'no-checkout') notes.push(s.centralBlockedBuildNoCheckout)
+    else if (r.id === 'native' && r.reason === 'bundled-mongo') notes.push(s.centralBlockedNativeBundled)
+    else if (r.id === 'native' && r.reason === 'no-env') notes.push(s.centralBlockedNativeNoEnv)
+    else notes.push(`${flagFor(r.id)}: ${r.reason}`)
+  }
+  return notes
 }
 
 /**
@@ -432,7 +501,7 @@ export interface BootMechanism {
   on: boolean
   /**
    * Whether the unit could be WRITTEN here — its `ExecStart` needs a file that only a repo checkout
-   * has (`central.sh`, `docker-compose.machine.yml`). False means no enable verb is offered, rather
+   * has (`central.sh`, `docker/machine.yml`). False means no enable verb is offered, rather
    * than one that writes a unit systemd would then restart every five seconds forever.
    */
   installable: boolean
@@ -522,6 +591,7 @@ export function buildService(
     bootOptions?: BootOption[]
     rebuild?: RebuildAbility
     centralPlan?: CentralStartPlan
+    centralRuntimes?: CentralRuntimeOption[]
     /** Pids of extra copies of this service that hold no port — see `idle-servers.ts`. */
     idlePids?: number[]
   } = {},
@@ -549,7 +619,13 @@ export function buildService(
     // The single most important line in the model: while anything is up there is nothing to start.
     startOptions: up.length > 0
       ? []
-      : runtimes.filter(r => r.available).flatMap(r => startOptionsFor(r.id, s, { centralPlan: facts.centralPlan })),
+      : runtimes.filter(r => r.available).flatMap(r => startOptionsFor(r.id, s, {
+          centralPlan: facts.centralPlan,
+          centralRuntimes: facts.centralRuntimes,
+        })),
+    // The other half of "a verb that cannot work is not offered": what was withheld, and why.
+    // Only the central has shapes to withhold, so every other row carries nothing here.
+    startNotes: id === 'central' ? centralStartNotes(facts.centralRuntimes, s) : undefined,
     // …and its mirror: nothing to restart until something is running.
     restartOptions: up.length > 0 ? restartOptionsFor(id, up, s, facts.rebuild ?? {}) : [],
     stopOptions: up.length > 1
@@ -821,7 +897,7 @@ function startBackground(): string {
 
 /** The machine container's compose file, which only exists inside a repo checkout. */
 function machineComposePath(): string {
-  return join(process.cwd(), 'docker-compose.machine.yml')
+  return join(process.cwd(), 'docker', 'machine.yml')
 }
 
 /**
@@ -1843,7 +1919,7 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
    */
   const serviceRows = async (): Promise<ControlService[]> => {
     const s = S()
-    const [local, central, machine, bootAgentistics, bootMachine, bootCentral, repo, machineCompose, centralPlan] = await Promise.all([
+    const [local, central, machine, bootAgentistics, bootMachine, bootCentral, repo, machineCompose, centralPlan, centralRuntimes] = await Promise.all([
       isServerRunning(),
       dockerState(CENTRAL_FILTER, s),
       dockerState(MACHINE_FILTER, s),
@@ -1860,6 +1936,9 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       // Whether `central up` would be Docker or native here — the one fact that decides whether a
       // native start option even exists (see `StartFacts.centralPlan`).
       centralStartPlan(),
+      // …and every SHAPE it could take, available or not. One probe feeds both the verbs the row
+      // offers and the sentences the detail pane says about the ones it does not.
+      centralRuntimeChoices(),
     ])
     // Asked whatever the runtime state says: the case this exists for is a second server running
     // while the row reads perfectly healthy, so gating it on `local` would skip exactly the machine
@@ -1891,7 +1970,7 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       state: machine.state,
       available: machine.available,
       reason: machine.reason,
-      // Host networking (docker-compose.machine.yml): the container's ports land directly on the
+      // Host networking (docker/machine.yml): the container's ports land directly on the
       // host, which is why it publishes nothing and its URLs are the native ones.
       ...(machine.state === 'up' ? { ...localUrls, ...machineProc } : {}),
     }
@@ -1968,6 +2047,7 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
         }], s, bootSupported, s.svcCentral),
         rebuild: { central: true },
         centralPlan,
+        centralRuntimes,
       }),
     ]
   }
@@ -2056,12 +2136,26 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       const s = S()
 
       if (req.runtime === 'central') {
-        const plan = await centralStartPlan()
+        // The verb the user pressed names the SHAPE, and it travels as the very flag the CLI takes
+        // — pressing "Start (docker · published image)" here and typing `agentop central up
+        // --image` are one code path, which is what stops the two surfaces drifting into offering
+        // different deployments. Absent means "whatever this central is configured with", exactly
+        // as every start meant before the choice existed.
+        const chosen = req.centralRuntime
+        const args = chosen ? [flagFor(chosen)] : []
+
+        // Which shape needs the real terminal is a separate question from which shape it is, and
+        // `centralStartPlan` still answers it — except when the user has just told us, in which
+        // case their answer outranks what is on disk.
+        const plan = chosen
+          ? (chosen === 'native' ? 'native' : chosen === 'docker-build' ? 'script' : 'image')
+          : await centralStartPlan()
+
         // Native + background is the one shape that neither streams nor suspends: it returns
         // immediately with the server detached, so its own prints (which side, which port, the log
         // path) are just captured for the status line like any other quick action.
         if (plan === 'native' && req.how === 'bg') {
-          const { value: code } = await captureOutput(() => runCentral('up', [], { detached: true }))
+          const { value: code } = await captureOutput(() => runCentral('up', args, { detached: true }))
           return code === 0
             ? { ok: true, message: s.centralStarted }
             : { ok: false, message: s.centralFailed }
@@ -2072,8 +2166,8 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
         // nothing to answer, which is what the pane is for.
         const streamable = plan === 'script' || plan === 'image'
         const code = streamable
-          ? await streamOutput(() => runCentral('up', [], { streamed: true }))
-          : await suspend(() => runCentral('up', []))
+          ? await streamOutput(() => runCentral('up', args, { streamed: true }))
+          : await suspend(() => runCentral('up', args))
         return code === 0
           ? { ok: true, message: s.centralStarted }
           : { ok: false, message: s.centralFailed }

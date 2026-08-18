@@ -139,12 +139,20 @@ Setup:
 
 Central:
   agentop central <up|init|down|logs|status|restart|pull|setup-token|reset-password>
-    \`up\` accepts -y/--yes or -n/--no (answer "re-run interactive setup?" up front, for
+    HOW it runs is your choice, and \`up\` takes it as a flag:
+      --image    Docker, published image (ghcr.io/blpsoares/agentistics) — no checkout needed
+      --build    Docker, built from this checkout (central.sh)
+      --native   the agentop binary IS the server — no Docker; needs an external MONGO_URL
+      --bg       native only: detach instead of holding this terminal
+    Unstated, it uses whatever \`agentop central init\` recorded, and failing that the same
+    default as before (a checkout builds; otherwise the database decides). A shape that cannot
+    work here is refused in a sentence, never silently swapped for another.
+    \`up\` also accepts -y/--yes or -n/--no (answer "re-run interactive setup?" up front, for
     unattended runs; both together is refused) and --no-cache/--cache (build the image from
     scratch, or reuse Docker's layer cache — cached by default on a plain \`up\`).
-    Manage the team central via Docker. In a repo checkout it uses central.sh; from the
-    standalone binary it pulls the published image (ghcr.io/blpsoares/agentistics) and
-    materializes a compose in ~/.agentistics/central — no clone required.
+    \`init\` asks for the port, org, bind interface, database and the shape above, and writes
+    central.env (chmod 600). Publishing it on the internet is a separate step and a separate
+    set of variables — see docs/exposure.md.
     setup-token reissues the one-time OWNER setup token (for when the boot that printed it
     scrolled away), running where the database is reachable. Refused once an owner exists.
     reset-password --email <address> resets an account's password from the host — there is no
@@ -213,10 +221,18 @@ Autostart:
              update-check hook to ~/.bashrc)
     disable  Stop and remove the service
     status   Show enabled/active state (omit mode to list all)
+    Manager: systemd user units on Linux, launchd user agents on macOS, or pm2 anywhere it is
+    installed (never chosen by default — it is your process list). None of them needs root, and
+    each names the one step it cannot take for you so a reboot really does bring the service
+    back: linger on systemd, login-not-boot on launchd, \`pm2 save\` + \`pm2 startup\` on pm2.
+    \`central\` follows the shape that central was configured with, so a natively started
+    central gets a unit that starts it natively rather than one that starts Docker.
 
 Examples:
   agentop start
   agentop setup
+  agentop central up --image        # a central from the published image, no clone
+  agentop central up --native --bg  # a central on Atlas, detached, no Docker
   agentop server
   agentop server --port 4000
   agentop restart server

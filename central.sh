@@ -4,7 +4,7 @@
 #
 # Wraps `docker compose` with the project name and env file pre-set, and can
 # generate central.env interactively (auto-filling secrets with openssl).
-# See docs/DEPLOY.md for details.
+# See docs/central-deploy.md for details.
 #
 # Usage: ./central.sh <command>
 #
@@ -42,7 +42,7 @@
 set -euo pipefail
 
 # Run from the directory this script lives in, so relative paths (central.env,
-# docker-compose.yml) resolve regardless of where you invoke it from.
+# docker/central.yml) resolve regardless of where you invoke it from.
 cd "$(dirname "$0")"
 
 PROJECT="${PROJECT:-team-mode}"
@@ -88,12 +88,12 @@ migrate_volume_ownership() {
 }
 
 compose_files() {
-  local files="-f docker-compose.yml"
-  uses_local_db && files="$files -f docker-compose.localdb.yml"
+  local files="-f docker/central.yml"
+  uses_local_db && files="$files -f docker/central.localdb.yml"
   # Only a self-contributing central mounts the host harness dirs. A dedicated central gets no
   # host filesystem access at all — which is what makes it safe to expose.
   if [ -f "$ENV_FILE" ] && grep -qE '^AGENTISTICS_CENTRAL_USER=.+' "$ENV_FILE" 2>/dev/null; then
-    files="$files -f docker-compose.selfcontrib.yml"
+    files="$files -f docker/central.selfcontrib.yml"
   fi
   printf '%s' "$files"
 }
@@ -386,7 +386,7 @@ case "$cmd" in
     compose up -d --force-recreate --remove-orphans
     echo
     if uses_local_db; then
-      echo "Database: bundled local Mongo (docker-compose.localdb.yml)."
+      echo "Database: bundled local Mongo (docker/central.localdb.yml)."
     else
       echo "Database: external MONGO_URL — local Mongo NOT started."
     fi

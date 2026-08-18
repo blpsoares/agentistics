@@ -22,7 +22,7 @@ const _D  = `${_ESC}[2m`
 const _Y  = `${_ESC}[33m`
 const _RD = `${_ESC}[91m`
 
-// central.sh sets PROJECT=${PROJECT:-team-mode}; docker-compose.machine.yml builds `agentistics-machine`.
+// central.sh sets PROJECT=${PROJECT:-team-mode}; docker/machine.yml builds `agentistics-machine`.
 const CENTRAL_PROJECT = 'team-mode'
 const MACHINE_IMAGE = 'agentistics-machine'
 
@@ -307,11 +307,11 @@ async function restartRunningServices(newBin: string): Promise<RestartOutcome> {
   }
 
   // 3) Machine-in-Docker: recreate. The machine image is built from a repo checkout
-  //    (docker-compose.machine.yml), so this only applies when that compose is reachable —
+  //    (docker/machine.yml), so this only applies when that compose is reachable —
   //    and when it isn't, the container KEEPS RUNNING THE OLD VERSION, which is a failure,
   //    not a footnote.
   if (await dockerRunning(`ancestor=${MACHINE_IMAGE}`)) {
-    const compose = join(process.cwd(), 'docker-compose.machine.yml')
+    const compose = join(process.cwd(), 'docker', 'machine.yml')
     if (await Bun.file(compose).exists()) {
       process.stdout.write('  Recreating the machine container (Docker)…\n')
       const code = await shInherit(['docker', 'compose', '-f', compose, 'up', '-d', '--build'])
@@ -319,7 +319,7 @@ async function restartRunningServices(newBin: string): Promise<RestartOutcome> {
       didSomething = true
     } else {
       failures.push(
-        'machine container: docker-compose.machine.yml not found here — it still runs the old version ' +
+        'machine container: docker/machine.yml not found here — it still runs the old version ' +
         '(re-run `agentop start` from the repo)',
       )
     }

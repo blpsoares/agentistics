@@ -1,9 +1,11 @@
-# Optional local-Mongo overlay. Merged on top of docker-compose.yml ONLY when the central uses
-# the bundled database (i.e. MONGO_URL is empty or points at the internal `mongo` service).
-# central.sh includes this file automatically; when MONGO_URL is an external cluster
-# (e.g. mongodb+srv://…@atlas/) it is omitted, so no local Mongo container is started and the
-# app does not wait on one. Run directly with:
-#   docker compose -f docker-compose.yml -f docker-compose.localdb.yml up -d
+# Optional local-Mongo overlay. Merged on top of docker/central.yml (build) or
+# docker/central.image.yml (published image) ONLY when the central uses the bundled database
+# (i.e. MONGO_URL is empty or points at the internal `mongo` service). central.sh includes this
+# file automatically; when MONGO_URL is an external cluster (e.g. mongodb+srv://…@atlas/) it is
+# omitted, so no local Mongo container is started and the app does not wait on one.
+#
+# Run directly with:
+#   docker compose -f docker/central.yml -f docker/central.localdb.yml --env-file central.env up -d
 services:
   mongo:
     image: mongo:7
