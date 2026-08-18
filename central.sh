@@ -155,7 +155,9 @@ print_owner_setup_hint() {
   if [ -n "$token" ]; then
     echo "  setup token: $token"
   else
-    echo "  Read it with: docker compose -p $PROJECT logs app | grep -A6 'OWNER SETUP'"
+    # Not a bare `docker compose logs`: without -f and --env-file that resolves no project from
+    # an arbitrary directory and prints nothing. This script is the thing that can always do it.
+    echo "  Lost it? Reissue with:  ./central.sh setup-token"
   fi
   echo
   echo "  There is no shared team password — everyone else gets their own account, invited by the owner."
