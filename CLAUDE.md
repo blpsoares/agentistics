@@ -2,6 +2,12 @@
 
 Local analytics dashboard for AI coding assistants. Visualizes tokens, costs, activity, projects, and agent metrics based on data from `~/.claude/`.
 
+## Process rules live in AGENTS.md, not here
+
+Issue/PR/Project-board/Discussion workflow rules are harness-agnostic and live in `AGENTS.md` at
+the repo root — read it before opening an Issue, starting implementation work, or submitting a PR.
+This file stays Claude-Code-specific implementation memory and does not duplicate those rules.
+
 ## Language convention
 
 **Everything in this project is in English**: code, comments, commit messages, PR titles and descriptions, documentation, and this file.

@@ -1,0 +1,28 @@
+name: Require linked issue
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  check-linked-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the PR references an issue
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          if echo "$PR_LABELS" | grep -qi "no-issue-needed"; then
+            echo "Exempt via the 'no-issue-needed' label."
+            exit 0
+          fi
+          if echo "$PR_BODY" | grep -qiE '(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]*:?[[:space:]]*#[0-9]+'; then
+            echo "Found a linked issue reference."
+            exit 0
+          fi
+          echo "::error::This PR must reference an issue (e.g. 'Closes #123' in the description) or carry the 'no-issue-needed' label for trivial changes. See AGENTS.md."
+          exit 1
