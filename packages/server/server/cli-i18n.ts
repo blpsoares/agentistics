@@ -283,6 +283,18 @@ export interface CliStrings {
   optDockerBackgroundHint: string
   optCentral: string
   optCentralHint: string
+  /** One verb per SHAPE of central. They are separate deployments of one program, so they get
+   *  separate labels — "Start" alone left the user to infer which one this box would pick. */
+  optCentralImage: string
+  optCentralImageHint: string
+  optCentralBuild: string
+  optCentralBuildHint: string
+  /** Why a shape is NOT offered. The verb stays absent; the reason is said in the detail pane. */
+  centralBlockedImageNoDocker: string
+  centralBlockedBuildNoDocker: string
+  centralBlockedBuildNoCheckout: string
+  centralBlockedNativeBundled: string
+  centralBlockedNativeNoEnv: string
   /** A native central (external Mongo, standalone path) — foreground, Ctrl-C to stop. */
   optCentralNativeForeground: string
   optCentralNativeForegroundHint: string
@@ -442,7 +454,7 @@ const EN: CliStrings = {
   restartedAll: 'restarted all running services.',
   restartedDone: 'service restarted.',
   restartFailed: "that didn't come back up — see the output above for why.",
-  noComposeFrom: (dir) => `couldn't find docker-compose.machine.yml in ${dir}.`,
+  noComposeFrom: (dir) => `couldn't find docker/machine.yml in ${dir}.`,
   runFromRepo: 'Run agentop start from the agentistics repo to use Docker.',
   buildingMachine: 'building & starting the machine container…',
 
@@ -599,6 +611,15 @@ const EN: CliStrings = {
   optDockerBackgroundHint: 'detached — the same server, in a container',
   optCentral: 'Start',
   optCentralHint: 'the team central, in Docker',
+  optCentralImage: 'Start (docker · published image)',
+  optCentralImageHint: 'pulls ghcr.io/blpsoares/agentistics — no build, no checkout needed',
+  optCentralBuild: 'Start (docker · build from source)',
+  optCentralBuildHint: 'builds the image from this checkout, then recreates the container',
+  centralBlockedImageNoDocker: 'Published image: needs Docker, and `docker` is not on PATH here.',
+  centralBlockedBuildNoDocker: 'Build from source: needs Docker, and `docker` is not on PATH here.',
+  centralBlockedBuildNoCheckout: 'Build from source: needs an agentistics checkout — this is the installed binary. The published image runs the same central.',
+  centralBlockedNativeBundled: 'Native: needs an external database. This central uses the bundled Mongo, which only Docker starts — re-run setup and choose an external URI to switch.',
+  centralBlockedNativeNoEnv: 'Native: this central is not configured yet, so its database is unknown.',
   optCentralNativeForeground: 'Start (this terminal)',
   optCentralNativeForegroundHint: 'runs here until you quit — no Docker needed',
   optCentralNativeBackground: 'Start (background)',
@@ -720,7 +741,7 @@ const PT: CliStrings = {
   restartedAll: 'todos os serviços no ar foram reiniciados.',
   restartedDone: 'serviço reiniciado.',
   restartFailed: 'não voltou a rodar — veja a saída acima para saber o motivo.',
-  noComposeFrom: (dir) => `não achei docker-compose.machine.yml em ${dir}.`,
+  noComposeFrom: (dir) => `não achei docker/machine.yml em ${dir}.`,
   runFromRepo: 'Rode agentop start de dentro do repo agentistics para usar Docker.',
   buildingMachine: 'buildando & subindo o container da máquina…',
 
@@ -871,6 +892,15 @@ const PT: CliStrings = {
   optDockerBackgroundHint: 'destacado — o mesmo server, em um container',
   optCentral: 'Iniciar',
   optCentralHint: 'a central do time, em Docker',
+  optCentralImage: 'Iniciar (docker · imagem publicada)',
+  optCentralImageHint: 'baixa ghcr.io/blpsoares/agentistics — sem build, sem clone do repo',
+  optCentralBuild: 'Iniciar (docker · build do código)',
+  optCentralBuildHint: 'constrói a imagem a partir deste checkout e recria o container',
+  centralBlockedImageNoDocker: 'Imagem publicada: precisa de Docker, e `docker` não está no PATH aqui.',
+  centralBlockedBuildNoDocker: 'Build do código: precisa de Docker, e `docker` não está no PATH aqui.',
+  centralBlockedBuildNoCheckout: 'Build do código: precisa de um checkout do agentistics — aqui só existe o binário instalado. A imagem publicada roda a mesma central.',
+  centralBlockedNativeBundled: 'Nativo: precisa de um banco externo. Esta central usa o Mongo embutido, que só o Docker sobe — refaça o setup e escolha uma URI externa para trocar.',
+  centralBlockedNativeNoEnv: 'Nativo: esta central ainda não foi configurada, então o banco é desconhecido.',
   optCentralNativeForeground: 'Iniciar (neste terminal)',
   optCentralNativeForegroundHint: 'roda aqui até você sair — sem Docker',
   optCentralNativeBackground: 'Iniciar (background)',

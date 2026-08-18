@@ -127,7 +127,7 @@ repaints it. `tab` cycles the panes (services → config → actions) and the ac
 - **A long action streams into the detail pane**, titled with the verb you pressed, while the lists
   stay standing beside it. `esc` puts the facts back.
 - The **Docker** option mounts the host's harness dirs read-only — run the machine in Docker **or**
-  natively, not both. See [Machine in Docker](DEPLOY.md#machine-in-docker).
+  natively, not both. See [a machine in Docker](central-deploy.md#a-machine-in-docker).
 
 The footer always names the keys that work *in the current focus*; it is the only documentation the
 screen has, so a hint for a key that does nothing there is a bug.
@@ -299,7 +299,7 @@ agentop watch
 Manage the **Team Mode central** — the Docker service that aggregates metrics from
 many members. This is a thin wrapper over the repo's `central.sh`, so it needs to
 run from an agentistics checkout (the compiled binary alone doesn't ship the
-Compose stack). Full deployment details live in [docs/DEPLOY.md](DEPLOY.md).
+Compose stack). Full deployment details live in [docs/central-deploy.md](central-deploy.md).
 
 ```bash
 agentop central <up|init|down|logs|status|restart|pull>

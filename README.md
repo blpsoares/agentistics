@@ -257,7 +257,7 @@ makes two things possible:
   by **keyless GitHub OIDC** against a registered-repos allowlist. The central stamps the repository
   itself, so a runner cannot mis-report which repo it ran for. See [docs/github-actions.md](docs/github-actions.md).
 
-→ [docs/architecture.md](docs/architecture.md) · [docs/DEPLOY.md](docs/DEPLOY.md) · [docs/security.md](docs/security.md)
+→ [docs/architecture.md](docs/architecture.md) · [docs/central-deploy.md](docs/central-deploy.md) · [docs/security.md](docs/security.md)
 
 ---
 
@@ -383,7 +383,7 @@ claude mcp list   # should show "agentistics"
 | [docs/architecture.md](docs/architecture.md) | Structure, request lifecycle, build pipeline |
 | [docs/security.md](docs/security.md) | Threat model, trust boundaries, the limits of each control |
 | [docs/exposure.md](docs/exposure.md) | Publishing a central safely |
-| [docs/DEPLOY.md](docs/DEPLOY.md) | Central deployment, `central.sh`, env vars |
+| [docs/central-deploy.md](docs/central-deploy.md) | Running a central: every shape, `central.sh`, env vars |
 | [docs/github-actions.md](docs/github-actions.md) | CI ingest, OIDC, repo-bound tokens |
 | [docs/harness-contract.md](docs/harness-contract.md) | What each metric must MEAN across harnesses |
 | [docs/data-sources.md](docs/data-sources.md) | Data sources, JSONL parsing, `SessionMeta` |

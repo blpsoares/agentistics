@@ -2,20 +2,37 @@
  * autostart — register agentop to start with the system, plus a lightweight
  * terminal/boot update-check hook.
  *
- * Linux is implemented fully via systemd *user* services (no root required):
- * a unit is written to ~/.config/systemd/user/agentop-<mode>.service, enabled
- * with `systemctl --user enable --now`, and `loginctl enable-linger` is set for
- * the current user so the service also starts at boot without an active login.
+ * THREE managers, chosen by `service-manager.ts`: systemd *user* services on Linux, launchd *user*
+ * agents on macOS, and pm2 anywhere it is installed. None of them needs root. macOS used to print
+ * a paragraph of manual steps and Windows still does — the difference is that the launchd recipe
+ * was already written down in the docs, which means the product knew the answer and made the user
+ * transcribe it.
  *
- * macOS (launchd) and Windows (Task Scheduler / startup) are not yet wired up —
- * those platforms return a clear, non-throwing message describing the manual
- * step instead.
+ * The `central` mode is the one with a second dimension: WHICH SHAPE of central this box runs
+ * (`central-runtime.ts`). It decides both the command and — through `keepsRunning` — the kind of
+ * unit. A native central holds the terminal, so it is a normal long-running service; a Docker one
+ * returns as soon as the container is up, and registering THAT as a long-running service produces
+ * a unit that reads inactive(dead) one second after a perfectly successful start.
  */
 
 import { homedir, platform, userInfo } from 'os'
 import { join, resolve } from 'path'
 import { mkdir, writeFile, readFile, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
+import type { CentralRuntimeId } from './central-runtime'
+import {
+  availableServiceManagers,
+  bootCaveat,
+  defaultServiceManager,
+  launchdPlist,
+  launchdPlistName,
+  pm2DeleteArgs,
+  pm2StartArgs,
+  systemdUnit,
+  type ServiceManagerFacts,
+  type ServiceManagerId,
+  type ServiceSpec,
+} from './service-manager'
 
 export type AutostartMode = 'server' | 'central' | 'watch' | 'machine'
 
@@ -94,7 +111,7 @@ function findCentralScript(): string | null {
 }
 
 /**
- * Locate `docker-compose.machine.yml`, the same way `findCentralScript` locates `central.sh` — it
+ * Locate `docker/machine.yml`, the same way `findCentralScript` locates `central.sh` — it
  * only exists in a repo checkout, so a boot unit for the Docker `machine` runtime can only be
  * written from one. Returns null otherwise, which `serviceCommandFor('machine')` turns into a
  * refusal rather than a unit whose `ExecStart` cannot resolve.
@@ -105,7 +122,7 @@ function findMachineCompose(): string | null {
     process.cwd(),
   ]
   for (const dir of candidates) {
-    const compose = join(dir, 'docker-compose.machine.yml')
+    const compose = join(dir, 'docker', 'machine.yml')
     if (existsSync(compose)) return compose
   }
   return null
@@ -117,7 +134,18 @@ function findMachineCompose(): string | null {
  * installed binary there is nothing to point at. Null means the caller must REFUSE — the same
  * rule the control center applies to a rebuild it cannot perform: absent beats present-and-failing.
  */
-export function serviceCommandFor(mode: AutostartMode): string | null {
+export interface ServiceCommandOpts {
+  /**
+   * For `central`: the shape this box is configured to run.
+   *
+   * Absent keeps the historical answer exactly — `bash central.sh up` in a checkout — so an
+   * existing unit is regenerated as the same unit. Named, it decides both the command and whether
+   * the service is long-running.
+   */
+  centralRuntime?: CentralRuntimeId
+}
+
+export function serviceCommandFor(mode: AutostartMode, opts: ServiceCommandOpts = {}): string | null {
   const bin = process.execPath
   switch (mode) {
     case 'server':
@@ -126,7 +154,25 @@ export function serviceCommandFor(mode: AutostartMode): string | null {
       return `${bin} watch`
     case 'central': {
       const script = findCentralScript()
-      return script ? `bash ${script} up` : null
+      switch (opts.centralRuntime) {
+        case 'native':
+          // The binary IS the server on this path, and `central up` runs it in the foreground —
+          // which is precisely the shape a service wants.
+          return `${bin} central up --native`
+        case 'docker-image':
+          // `-n` states the answer to central.sh's "re-run interactive setup?" up front. At boot
+          // stdin is not a tty so it would not have been asked, but a unit that depends on that
+          // accident is a unit that hangs the day someone runs it by hand.
+          return `${bin} central up --image -n`
+        case 'docker-build':
+          return script ? `bash ${script} up -n` : null
+        default:
+          // Unstated: the checkout wins, exactly as before. Without one, fall through to the
+          // published image rather than refusing — `agentop autostart central enable` used to be
+          // impossible from an installed binary, which is the ONE configuration where the user has
+          // no `central.sh` to write a unit around by hand either.
+          return script ? `bash ${script} up` : `${bin} central up -n`
+      }
     }
     case 'machine': {
       // No `--build`: the boot-time unit brings back whatever image is already there. A rebuild
@@ -135,6 +181,54 @@ export function serviceCommandFor(mode: AutostartMode): string | null {
       const compose = findMachineCompose()
       return compose ? `docker compose -f ${compose} up -d` : null
     }
+  }
+}
+
+/**
+ * Does this mode's command stay in the FOREGROUND for as long as the service runs?
+ *
+ * See `service-manager.ts` — this is the field that decides `Type=simple` versus
+ * `Type=oneshot` + `RemainAfterExit=yes`, launchd's `KeepAlive`, and pm2's `--no-autorestart`.
+ */
+export function serviceKeepsRunning(mode: AutostartMode, opts: ServiceCommandOpts = {}): boolean {
+  switch (mode) {
+    case 'server':
+    case 'watch':
+      return true
+    case 'machine':
+      return false
+    case 'central':
+      // Only the native central is the process. Both Docker shapes return once the container is up.
+      return opts.centralRuntime === 'native'
+  }
+}
+
+/** The full description of one registration, in the terms every manager needs. */
+export function serviceSpecFor(mode: AutostartMode, opts: ServiceCommandOpts = {}): ServiceSpec | null {
+  const command = serviceCommandFor(mode, opts)
+  if (!command) return null
+  return {
+    name: `agentop-${mode}`,
+    description: `agentop ${mode} (agentistics autostart)`,
+    command,
+    keepsRunning: serviceKeepsRunning(mode, opts),
+  }
+}
+
+/** Which managers this box has. One `--version` probe each, none of them fatal. */
+export async function serviceManagerFacts(): Promise<ServiceManagerFacts> {
+  const has = async (bin: string) => {
+    const res = await run([bin, '--version'])
+    return res.code === 0
+  }
+  const plat = platform()
+  return {
+    platform: plat,
+    // Only probed where it could exist: a `systemctl --version` on macOS is a spawn that always
+    // fails, on every status refresh.
+    systemctl: plat === 'linux' ? await has('systemctl') : false,
+    launchctl: plat === 'darwin' ? existsSync('/bin/launchctl') : false,
+    pm2: await has('pm2'),
   }
 }
 
@@ -154,23 +248,10 @@ function unitPath(mode: AutostartMode): string {
   return join(homedir(), '.config', 'systemd', 'user', unitName(mode))
 }
 
-function unitContents(mode: AutostartMode, command: string): string {
-  return [
-    '[Unit]',
-    `Description=agentop ${mode} (agentistics autostart)`,
-    'After=network-online.target',
-    'Wants=network-online.target',
-    '',
-    '[Service]',
-    'Type=simple',
-    `ExecStart=${command}`,
-    'Restart=on-failure',
-    'RestartSec=5',
-    '',
-    '[Install]',
-    'WantedBy=default.target',
-    '',
-  ].join('\n')
+/** The unit text, composed by `service-manager.ts` so the Type/RemainAfterExit rule lives in one
+ *  tested place rather than being restated per manager. */
+function unitContents(spec: ServiceSpec): string {
+  return systemdUnit(spec)
 }
 
 /**
@@ -275,27 +356,79 @@ export async function uninstallUpdateHook(): Promise<AutostartResult> {
     : { ok: true, message: 'Update-check hook not present in any shell rc — nothing to remove.' }
 }
 
-/** Enables an agentop autostart service for the given mode (Linux/systemd). */
-export async function enableAutostart(mode: AutostartMode): Promise<AutostartResult> {
-  if (platform() !== 'linux') return notSupported('enable')
+/** Where a launchd agent's plist lives, and where its output goes. */
+function launchdPaths(spec: ServiceSpec) {
+  return {
+    plist: join(homedir(), 'Library', 'LaunchAgents', launchdPlistName(spec)),
+    stdout: join(homedir(), '.agentistics', `${spec.name}.log`),
+    stderr: join(homedir(), '.agentistics', `${spec.name}.err`),
+  }
+}
 
-  // Refuse before writing anything. A unit whose ExecStart cannot resolve is not a partial
-  // success — it is a service systemd restarts every 5 seconds for the life of the machine.
-  const command = serviceCommandFor(mode)
-  if (!command) {
-    const missing = mode === 'machine' ? 'docker-compose.machine.yml' : 'central.sh'
+/** The sentence naming what the user must still do for a REBOOT to bring this back. */
+function bootCaveatText(id: ServiceManagerId, spec: ServiceSpec): string {
+  switch (bootCaveat(id)) {
+    case 'linger':
+      return '' // handled inline: agentop attempts `loginctl enable-linger` and reports the result.
+    case 'login-only':
+      return 'Note: a launchd USER agent starts when you log in, not at boot. For a service that ' +
+        'runs with no one logged in, install it as a LaunchDaemon under /Library/LaunchDaemons ' +
+        '(that needs root).'
+    case 'pm2-startup':
+      return `Note: pm2 does not survive a reboot on its own. Run \`pm2 save\`, then \`pm2 startup\` ` +
+        'and execute the command it prints (it needs root once).'
+  }
+}
+
+export interface AutostartOptions {
+  /** Which init system to register with. Defaults to the platform's own; pm2 never by default. */
+  manager?: ServiceManagerId
+  /** For `central`: the shape it runs as. Decides the command AND the unit type. */
+  centralRuntime?: CentralRuntimeId
+}
+
+/** Refusal shared by every manager: this box cannot run this mode at all. */
+function cannotResolve(mode: AutostartMode): AutostartResult {
+  const missing = mode === 'machine' ? 'docker/machine.yml' : 'central.sh'
+  return {
+    ok: false,
+    message: `Cannot enable agentop-${mode} here: ${missing} was not found. ` +
+      `That file lives in the repository checkout, so run this from one ` +
+      `(the installed binary has nothing to point the service at).`,
+  }
+}
+
+/** Enables an agentop autostart service for the given mode, on whichever manager fits. */
+export async function enableAutostart(mode: AutostartMode, opts: AutostartOptions = {}): Promise<AutostartResult> {
+  const facts = await serviceManagerFacts()
+  const manager = opts.manager ?? defaultServiceManager(facts)
+  if (!manager) return notSupported('enable')
+  if (opts.manager && !availableServiceManagers(facts).includes(opts.manager)) {
     return {
       ok: false,
-      message: `Cannot enable agentop-${mode} here: ${missing} was not found. ` +
-        `That file lives in the repository checkout, so run this from one ` +
-        `(the installed binary has nothing to point the service at).`,
+      message: opts.manager === 'pm2'
+        ? 'pm2 is not installed — `npm install -g pm2`, then run this again.'
+        : `${opts.manager} is not available on this machine (${facts.platform}).`,
     }
   }
 
+  // Refuse before writing anything. A unit whose ExecStart cannot resolve is not a partial
+  // success — it is a service the manager retries every few seconds for the life of the machine.
+  const spec = serviceSpecFor(mode, opts)
+  if (!spec) return cannotResolve(mode)
+
+  switch (manager) {
+    case 'systemd': return enableSystemd(mode, spec)
+    case 'launchd': return enableLaunchd(spec)
+    case 'pm2': return enablePm2(spec)
+  }
+}
+
+async function enableSystemd(mode: AutostartMode, spec: ServiceSpec): Promise<AutostartResult> {
   const path = unitPath(mode)
   try {
     await mkdir(join(homedir(), '.config', 'systemd', 'user'), { recursive: true })
-    await writeFile(path, unitContents(mode, command), 'utf8')
+    await writeFile(path, unitContents(spec), 'utf8')
   } catch (err: any) {
     return { ok: false, message: `Could not write unit file ${path}: ${err?.message ?? err}` }
   }
@@ -331,6 +464,59 @@ export async function enableAutostart(mode: AutostartMode): Promise<AutostartRes
 }
 
 /**
+ * macOS: a launchd USER agent under ~/Library/LaunchAgents.
+ *
+ * `bootstrap gui/<uid>` is the modern verb; `load` is deprecated and silently does nothing on
+ * recent macOS for an agent already bootstrapped. Both are attempted, in that order, and a failure
+ * of the second is not reported as a failure of the whole — the plist is written either way, and
+ * it takes effect at the next login regardless.
+ */
+async function enableLaunchd(spec: ServiceSpec): Promise<AutostartResult> {
+  const paths = launchdPaths(spec)
+  try {
+    await mkdir(join(homedir(), 'Library', 'LaunchAgents'), { recursive: true })
+    await mkdir(join(homedir(), '.agentistics'), { recursive: true })
+    await writeFile(paths.plist, launchdPlist(spec, { stdoutPath: paths.stdout, stderrPath: paths.stderr }), 'utf8')
+  } catch (err: any) {
+    return { ok: false, message: `Could not write ${paths.plist}: ${err?.message ?? err}` }
+  }
+
+  const lines = [`Wrote ${paths.plist}`]
+  const uid = String(process.getuid?.() ?? '')
+  const boot = await run(['launchctl', 'bootstrap', `gui/${uid}`, paths.plist])
+  if (boot.code === 0) {
+    lines.push(`Loaded ${launchdPlistName(spec)} — it starts at every login, and now.`)
+  } else {
+    const legacy = await run(['launchctl', 'load', '-w', paths.plist])
+    lines.push(legacy.code === 0
+      ? `Loaded ${launchdPlistName(spec)} — it starts at every login, and now.`
+      : `Wrote the agent, but launchctl would not load it now (${boot.stderr || `exit ${boot.code}`}). ` +
+        'It still takes effect at your next login.')
+  }
+  lines.push(`Logs: ${paths.stdout}`)
+  lines.push(bootCaveatText('launchd', spec))
+
+  const hook = await installUpdateHook()
+  lines.push(hook.message)
+  return { ok: true, message: lines.filter(Boolean).join('\n') }
+}
+
+/** pm2: explicit opt-in, on any platform that has it. */
+async function enablePm2(spec: ServiceSpec): Promise<AutostartResult> {
+  const res = await run(pm2StartArgs(spec))
+  if (res.code !== 0) {
+    return { ok: false, message: `pm2 start failed: ${res.stderr || res.stdout || `exit ${res.code}`}` }
+  }
+  const lines = [
+    `Started ${spec.name} under pm2.`,
+    bootCaveatText('pm2', spec),
+  ]
+  const hook = await installUpdateHook()
+  lines.push(hook.message)
+  return { ok: true, message: lines.filter(Boolean).join('\n') }
+}
+
+/**
  * Options for `disableAutostart`.
  *
  * `stop` is the whole of it, and it exists because the two callers mean genuinely different things.
@@ -348,9 +534,13 @@ export interface DisableOptions {
 /** Disables and removes an agentop autostart service for the given mode. */
 export async function disableAutostart(
   mode: AutostartMode,
-  opts: DisableOptions = {},
+  opts: DisableOptions & AutostartOptions = {},
 ): Promise<AutostartResult> {
-  if (platform() !== 'linux') return notSupported('disable')
+  const facts = await serviceManagerFacts()
+  const manager = opts.manager ?? defaultServiceManager(facts)
+  if (!manager) return notSupported('disable')
+  if (manager === 'launchd') return disableLaunchd(mode, opts)
+  if (manager === 'pm2') return disablePm2(mode)
 
   const stop = opts.stop ?? true
   const lines: string[] = []
@@ -380,6 +570,53 @@ export async function disableAutostart(
 
   await run(['systemctl', '--user', 'daemon-reload'])
   return { ok: true, message: lines.join('\n') }
+}
+
+/**
+ * The launchd inverse: unload the agent, then remove its plist.
+ *
+ * `bootout` is the modern verb and `unload` the deprecated one, tried in that order — the same
+ * pairing `enableLaunchd` uses, for the same reason. Removing the plist is what makes it not come
+ * back; failing to unload only means it keeps running until the next logout, which is stated
+ * rather than reported as success.
+ */
+async function disableLaunchd(mode: AutostartMode, opts: DisableOptions): Promise<AutostartResult> {
+  const spec = serviceSpecFor(mode, opts as AutostartOptions)
+  // A registration can be removed even when its command no longer resolves (the checkout moved),
+  // so fall back to the bare name rather than refusing to clean up.
+  const name = spec?.name ?? `agentop-${mode}`
+  const plistName = `com.agentistics.${name}.plist`
+  const plist = join(homedir(), 'Library', 'LaunchAgents', plistName)
+  const lines: string[] = []
+
+  if (opts.stop ?? true) {
+    const uid = String(process.getuid?.() ?? '')
+    const out = await run(['launchctl', 'bootout', `gui/${uid}/com.agentistics.${name}`])
+    if (out.code !== 0) await run(['launchctl', 'unload', '-w', plist])
+  }
+
+  try {
+    await unlink(plist)
+    lines.push(`Removed ${plist} — it will not start at login any more.`)
+  } catch (err: any) {
+    lines.push(err?.code === 'ENOENT'
+      ? `No launchd agent at ${plist}.`
+      : `Could not remove ${plist}: ${err?.message ?? err}`)
+  }
+  return { ok: true, message: lines.join('\n') }
+}
+
+/** The pm2 inverse: `pm2 delete`. `pm2 save` is the user's to run — see `bootCaveat`. */
+async function disablePm2(mode: AutostartMode): Promise<AutostartResult> {
+  const name = `agentop-${mode}`
+  const res = await run(pm2DeleteArgs({ name, description: '', command: '', keepsRunning: true }))
+  if (res.code !== 0) {
+    return { ok: true, message: `pm2 had no process named ${name} (${res.stderr || `exit ${res.code}`}).` }
+  }
+  return {
+    ok: true,
+    message: `Deleted ${name} from pm2.\nRun \`pm2 save\` so the removal survives a reboot.`,
+  }
 }
 
 /**

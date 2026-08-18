@@ -35,6 +35,7 @@ import {
 import { parseCapabilities, centralCanForget } from './team-capabilities'
 import { planRulesReconcile, computeLedger, loadRulesState, saveRulesState } from './team-rules'
 import { runForgetSequence, loadForgetJournal, type ForgetJournal, type ForgetProgress } from './team-forget-client'
+import { MAX_BATCH_SIZE, clampBatchSize, ingestTimeoutMs, nextBatchSize } from './ingest-batch'
 
 /** This machine's local workflow runs (computed metrics only — no chat/prompt text). Fallback
  *  source when `buildApiResponse` could not be run (see `buildPushContext`). Mirrors the
@@ -594,7 +595,21 @@ async function recordSentRunIds(connId: string, runs: readonly WorkflowRun[]): P
   }
 }
 
-const BATCH_SIZE = 200
+/**
+ * Per-connection batch size, adapted by `nextBatchSize` from what the central actually manages.
+ *
+ * In memory only: a restart re-probes from `MAX_BATCH_SIZE`, which is the right default for a
+ * central that has since been fixed or moved, and costs one shrink cycle on one that has not.
+ */
+const _batchSize = new Map<string, number>()
+
+function batchSizeFor(connId: string): number {
+  return clampBatchSize(_batchSize.get(connId) ?? MAX_BATCH_SIZE)
+}
+
+function recordBatchOutcome(connId: string, outcome: 'ok' | 'failed'): void {
+  _batchSize.set(connId, nextBatchSize(batchSizeFor(connId), outcome))
+}
 
 // ---------------------------------------------------------------------------
 // Shared push-cycle context — built ONCE per cycle window and reused by every connection's
@@ -631,7 +646,8 @@ export interface PushCycleContext {
   builtAt: number
   /** Ingest fetch timeout override, in ms — injectable for tests so a "central that never
    *  responds" regression test doesn't have to wait out the real production timeout. Production
-   *  code never sets this; `pushOnceDetailed` falls back to `DEFAULT_INGEST_TIMEOUT_MS`. */
+   *  code never sets this; `pushOnceDetailed` derives the budget from the batch via
+   *  `ingestTimeoutMs` (ingest-batch.ts). */
   ingestTimeoutMs?: number
 }
 
@@ -640,9 +656,13 @@ export interface PushCycleContext {
  *  respond — common, not exotic — and `runConnectionPushCycle` holds a concurrency-cap slot
  *  across that fetch, so two such centrals permanently occupy both slots and every OTHER
  *  connection blocks in `acquireSlot()` forever, with no error and a `lastSuccessAt` that is
- *  only ever set, never aged out. 15s is generous enough for a legitimately slow link pushing a
- *  full 200-session batch, while still guaranteeing the slot is released. */
-const DEFAULT_INGEST_TIMEOUT_MS = 15_000
+ *  only ever set, never aged out.
+ *
+ *  It is NOT a flat number any more. A flat 15s was stated here beside a `BATCH_SIZE` of 200
+ *  chosen elsewhere, with nothing checking that one fits the other — and it did not: a real
+ *  central costs ~195 ms/session, so those 200 needed ~39s and every first push aborted, forever,
+ *  because the sent-state only advances on an ACCEPTED batch. `ingestTimeoutMs` (ingest-batch.ts)
+ *  now derives the budget from the batch, and is the only place either number is decided. */
 
 let _cachedContext: PushCycleContext | null = null
 let _contextPromise: Promise<PushCycleContext> | null = null
@@ -884,7 +904,9 @@ export async function pushOnceDetailed(
     if (!user) return { count: 0 } // still unresolved this cycle — retried next time
   }
   const endpoint = conn.endpoint.replace(/\/+$/, '')
-  const ingestTimeoutMs = ctx.ingestTimeoutMs ?? DEFAULT_INGEST_TIMEOUT_MS
+  // The budget for a request carrying `n` sessions. A test may pin it flat; production always
+  // derives it, so the batch and its timeout cannot be chosen independently again.
+  const timeoutFor = (n: number) => ctx.ingestTimeoutMs ?? ingestTimeoutMs(n)
 
   try {
     const rules = shareRulesOf(conn.shareMode, conn.sources)
@@ -987,7 +1009,7 @@ export async function pushOnceDetailed(
             method: 'POST',
             headers,
             body: JSON.stringify({ org: conn.org, user, sessions: [], statsCache, workflows }),
-            signal: AbortSignal.timeout(ingestTimeoutMs),
+            signal: AbortSignal.timeout(timeoutFor(0)),
           })
           // A reachable central (even a non-2xx that isn't auth) counts as contact for the pill.
           if (res.ok) {
@@ -1013,8 +1035,12 @@ export async function pushOnceDetailed(
 
     let pushed = 0
 
-    for (let i = 0; i < toSend.length; i += BATCH_SIZE) {
-      const batch = toSend.slice(i, i + BATCH_SIZE)
+    // Read ONCE for the whole loop: every batch of this push is the size the previous push earned,
+    // and adapting mid-loop would make the same cycle send batches of different sizes for no
+    // reason a reader could follow.
+    const batchSize = batchSizeFor(conn.id)
+    for (let i = 0; i < toSend.length; i += batchSize) {
+      const batch = toSend.slice(i, i + batchSize)
       let res: Response
       try {
         res = await fetch(`${endpoint}/api/team/ingest`, {
@@ -1022,10 +1048,15 @@ export async function pushOnceDetailed(
           headers,
           // Attach the statsCache/workflows to the first batch only (idempotent upsert on the central).
           body: JSON.stringify({ org: conn.org, user, sessions: batch, ...(i === 0 ? { statsCache, workflows } : {}) }),
-          signal: AbortSignal.timeout(ingestTimeoutMs),
+          signal: AbortSignal.timeout(timeoutFor(batch.length)),
         })
       } catch (fetchErr) {
         const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
+        // The central did not answer in the budget this batch was given, so the batch is too big
+        // for it — shrink, and let the next cycle prove the smaller one. Without this a central
+        // slower than PER_SESSION_MS assumes would retry an impossible request forever, which is
+        // the shape of the bug this module exists to have fixed once.
+        recordBatchOutcome(conn.id, 'failed')
         warnPushError(conn.id, msg)
         void notifyPushError(conn, 'net')
         return { count: pushed, error: msg }
@@ -1050,6 +1081,8 @@ export async function pushOnceDetailed(
       const current = await loadSentState(conn.id)
       await saveSentState(conn.id, { ...current, ...batchSent })
       pushed += batch.length
+      // The central absorbed a batch this size inside its budget — earn a slightly larger one.
+      recordBatchOutcome(conn.id, 'ok')
       markPushSuccess(conn.id)
       clearPushError(conn.id)
       void notifyPushRecovered(conn)

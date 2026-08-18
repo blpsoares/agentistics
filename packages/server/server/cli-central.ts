@@ -28,6 +28,20 @@ import { version as APP_VERSION } from '../../../package.json'
 import { input, confirm, select } from './cli-ui'
 import { createChunkSink, pumpStream } from './cli-stream'
 import { parseRebuildFlags } from './rebuild-flags'
+import {
+  CENTRAL_RUNTIMES,
+  centralRuntimeOptions,
+  flagFor,
+  parseCentralUpFlags,
+  parseStoredRuntime,
+  resolveCentralRuntime,
+  RUNTIME_ENV_KEY,
+  type CentralRuntimeBlock,
+  type CentralRuntimeFacts,
+  type CentralRuntimeId,
+  type CentralRuntimeOption,
+  type CentralStartHow,
+} from './central-runtime'
 
 /** The central.sh subcommands this handler forwards / implements. */
 export const CENTRAL_ACTIONS = ['up', 'init', 'down', 'logs', 'status', 'restart', 'pull', 'setup-token', 'reset-password'] as const
@@ -139,9 +153,87 @@ async function runCentralRepo(
   }
 }
 
+/** Is `docker` on PATH? Cheap, and the only prerequisite either Docker runtime has. */
+async function hasDocker(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(['docker', '--version'], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' })
+    return (await proc.exited) === 0
+  } catch {
+    return false
+  }
+}
+
+/** Where this box keeps the central's config: beside `central.sh` in a checkout, else the
+ *  standalone directory. It follows the CHECKOUT, not the runtime — choosing `--image` inside a
+ *  repo still configures that repo's central, rather than silently starting a different one. */
+function centralEnvFile(script: string | null): string {
+  return script ? repoEnvFile(script) : join(STANDALONE_DIR, 'central.env')
+}
+
+/** Everything `resolveCentralRuntime` needs, gathered from this box. */
+export async function centralRuntimeFacts(): Promise<CentralRuntimeFacts> {
+  const script = findCentralScript()
+  const envFile = centralEnvFile(script)
+  const exists = existsSync(envFile)
+  return {
+    script: Boolean(script),
+    docker: await hasDocker(),
+    envFile: exists,
+    mongoUrl: exists ? (await readEnvValue(envFile, 'MONGO_URL')) ?? '' : '',
+  }
+}
+
+/** The runtime this central is CONFIGURED with, when its env file records one. */
+export async function storedCentralRuntime(): Promise<CentralRuntimeId | undefined> {
+  const envFile = centralEnvFile(findCentralScript())
+  if (!existsSync(envFile)) return undefined
+  return parseStoredRuntime(await readEnvValue(envFile, RUNTIME_ENV_KEY))
+}
+
+/** The runtimes this box can offer, for a surface that wants to list them (the CLI's picker, the
+ *  control center's start verbs). One resolution, two front doors. */
+export async function centralRuntimeChoices(): Promise<CentralRuntimeOption[]> {
+  return centralRuntimeOptions(await centralRuntimeFacts())
+}
+
+/** One line saying why a runtime cannot be used here. English — this is the CLI's own voice; the
+ *  control center renders the same codes through its own strings. */
+export function centralRuntimeBlockText(
+  id: CentralRuntimeId,
+  reason: CentralRuntimeBlock | 'none-available',
+): string {
+  switch (reason) {
+    case 'no-docker':
+      return `${flagFor(id)} needs Docker, and \`docker\` is not on PATH here.`
+    case 'no-checkout':
+      return `${flagFor(id)} builds the image from source, and there is no agentistics checkout here. ` +
+        'Use --image to run the published one instead, or run this from a clone of the repository.'
+    case 'no-env':
+      return 'This central is not configured yet — run `agentop central init` first.'
+    case 'bundled-mongo':
+      return `${flagFor(id)} runs the server itself, with no Docker and no bundled database, so it needs ` +
+        'an external MONGO_URL (Atlas, or a Mongo you run yourself). Re-run `agentop central init` ' +
+        'and choose the external-URI option to switch.'
+    case 'none-available':
+      return 'Nothing on this box can run a central: there is no Docker, and no external database ' +
+        'is configured for a native one. Install Docker, or run `agentop central init` and point ' +
+        'MONGO_URL at an external cluster.'
+  }
+}
+
 /**
- * Dispatch a central action. Uses the repo's central.sh when present (unchanged behavior),
- * otherwise falls back to the standalone Docker-image path so it works from anywhere.
+ * Dispatch a central action, under the runtime the user asked for or the one this box defaults to.
+ *
+ * The runtime used to be pure inference — a checkout meant `central.sh`, no checkout meant the
+ * published image — which made two perfectly reasonable requests impossible to express: running
+ * the published image from inside a clone, and running the server natively anywhere. It is now
+ * `central-runtime.ts`'s decision, taken from `--image` / `--build` / `--native`, else from the
+ * `AGENTISTICS_CENTRAL_RUNTIME` the setup wizard recorded, else from the same default the old
+ * inference produced (which `central-runtime.test.ts` pins against `planCentralStart`).
+ *
+ * A REQUESTED runtime that cannot work here is refused in a sentence, never downgraded: a
+ * `--native` that quietly became a Docker start would be a central running under a shape its
+ * operator did not choose, with nothing on screen saying so.
  */
 export async function runCentral(
   action: string,
@@ -155,9 +247,48 @@ export async function runCentral(
     return 1
   }
 
+  const parsed = parseCentralUpFlags(extraArgs)
+  if (!parsed.ok) {
+    process.stderr.write(`${parsed.conflict[0]} and ${parsed.conflict[1]} contradict each other — pass one.\n`)
+    return 1
+  }
+  const { runtime: requested, how } = parsed.flags
+  const rest = parsed.rest
+
   const script = findCentralScript()
-  if (script) return runCentralRepo(script, action, extraArgs, opts)
-  return runCentralStandalone(action, extraArgs, opts)
+  const envFile = centralEnvFile(script)
+
+  // `init` is what CREATES the configuration the resolution below reads, so it can never be gated
+  // on it. It runs wherever the env file lives, on either path.
+  if (action === 'init') {
+    if (script) return runCentralRepo(script, action, rest, opts)
+    return runCentralStandalone('init', rest, opts, 'docker-image')
+  }
+
+  const facts = await centralRuntimeFacts()
+  const stored = facts.envFile
+    ? parseStoredRuntime(await readEnvValue(envFile, RUNTIME_ENV_KEY))
+    : undefined
+  const resolution = resolveCentralRuntime(requested ?? stored, facts)
+
+  if (!resolution.ok) {
+    // An `up` on an UNCONFIGURED box is not a failure — it is the first run, and the standalone
+    // path's own flow offers to create central.env. Only a genuine impossibility stops here.
+    if (resolution.reason === 'no-env' && action === 'up') {
+      return runCentralStandalone(action, rest, opts, 'docker-image', how)
+    }
+    process.stderr.write(`${centralRuntimeBlockText(resolution.id ?? 'docker-image', resolution.reason)}\n`)
+    return 1
+  }
+
+  switch (resolution.id) {
+    case 'docker-build':
+      // central.sh owns this path entirely, including its own overlay selection and its prompts.
+      return runCentralRepo(script!, action, rest, opts)
+    case 'docker-image':
+    case 'native':
+      return runCentralStandalone(action, rest, opts, resolution.id, how)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -217,11 +348,92 @@ export async function centralStartPlan(): Promise<CentralStartPlan> {
 // Standalone path — no repo, pull the published image
 // ---------------------------------------------------------------------------
 
-/** Compose file that PULLS the published image instead of building from source. Host harness
- *  dirs are intentionally NOT mounted here (self-contribution is a repo/advanced feature) so a
- *  dedicated central never fails on a missing ~/.codex etc. Values come from central.env. */
+/**
+ * Compose file that PULLS the published image instead of building from source — the no-repo path.
+ *
+ * It is the twin of `docker/central.image.yml` in the repository, and `standalone-compose.test.ts`
+ * holds them to that: every `AGENTISTICS_*` variable, the data-volume mount path and the bind
+ * default must match. The test exists because BOTH of those went wrong here while the repo file
+ * was right, and neither failure was visible from the outside:
+ *
+ *  • None of the exposure variables were passed through, so `AGENTISTICS_EXPOSURE=public` in
+ *    central.env did nothing at all. The instance kept the `lan` profile — local shell, local chat
+ *    and the host transcript readers all reachable — while its operator had configured it as
+ *    public and had no way to tell from the app.
+ *  • The data volume was mounted at /root/.agentistics while the image runs as uid 10001 with
+ *    HOME=/data, so the app wrote to the container's own writable layer. Every `agentop central
+ *    up` passes `--force-recreate`, which is exactly what throws that layer away: the archive
+ *    consent gate reappeared on a central that had already answered it, and the sync state was
+ *    rebuilt from nothing each time.
+ *
+ * Host harness dirs are intentionally NOT mounted (self-contribution is a repo/advanced feature),
+ * so a dedicated central never fails on a missing ~/.codex and an exposed one is not holding
+ * every raw transcript on the machine. Values come from central.env.
+ */
 export const STANDALONE_COMPOSE = `# Generated by \`agentop central\` — pulls the published central image (no repo needed).
 # Managed file: re-created on each \`agentop central up\`. Edit central.env, not this file.
+# Its reviewable source is docker/central.image.yml in the agentistics repository.
+name: team-mode
+
+services:
+  app:
+    image: \${AGENTISTICS_IMAGE:-ghcr.io/blpsoares/agentistics:latest}
+    environment:
+      MONGO_URL: \${MONGO_URL:-mongodb://mongo:27017/?replicaSet=rs0}
+      MONGO_DB: \${MONGO_DB:-agentistics}
+      AGENTISTICS_TEAM_CENTRAL: "1"
+      AGENTISTICS_TEAM_ORG: \${AGENTISTICS_TEAM_ORG:-default}
+      AGENTISTICS_TEAM_PASSWORD: \${AGENTISTICS_TEAM_PASSWORD:-}
+      AGENTISTICS_TEAM_SESSION_SECRET: \${AGENTISTICS_TEAM_SESSION_SECRET:-}
+      AGENTISTICS_TEAM_INGEST_TOKEN: \${AGENTISTICS_TEAM_INGEST_TOKEN:-}
+      # Exposure — every one of these must be reachable from central.env, or a documented
+      # setting silently does nothing. See docs/exposure.md.
+      AGENTISTICS_EXPOSURE: \${AGENTISTICS_EXPOSURE:-}
+      AGENTISTICS_ALLOW_LOCAL_SHELL: \${AGENTISTICS_ALLOW_LOCAL_SHELL:-}
+      AGENTISTICS_TRUST_PROXY: \${AGENTISTICS_TRUST_PROXY:-}
+      AGENTISTICS_TEAM_TLS: \${AGENTISTICS_TEAM_TLS:-}
+      AGENTISTICS_ALLOWED_ORIGINS: \${AGENTISTICS_ALLOWED_ORIGINS:-}
+      AGENTISTICS_INGEST_ONLY: \${AGENTISTICS_INGEST_ONLY:-}
+      AGENTISTICS_OIDC_AUDIENCE: \${AGENTISTICS_OIDC_AUDIENCE:-}
+      AGENTISTICS_OIDC_ISSUER: \${AGENTISTICS_OIDC_ISSUER:-}
+      PORT: "47291"
+      SERVE_STATIC: "1"
+    ports:
+      # Loopback by default: a generated file must never be what puts a central on the network.
+      - "\${BIND_IP:-127.0.0.1}:\${APP_PORT:-48080}:47291"
+    volumes:
+      # /data/.agentistics — the image runs as uid 10001 with HOME=/data (see Dockerfile).
+      - agentistics_data:/data/.agentistics
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:47291/api/health'); process.exit(r.ok ? 0 : 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  agentistics_data:
+`
+
+/**
+ * The bundled-Mongo overlay, merged only when MONGO_URL targets the internal `mongo` service —
+ * the same rule `central.sh` applies with `docker/central.localdb.yml`, and the reason `app`
+ * above carries no `depends_on`: with an external cluster there is no local Mongo to depend on,
+ * and a `depends_on` naming a service no compose file defines is a hard error rather than a
+ * skipped condition.
+ */
+export const STANDALONE_LOCALDB_COMPOSE = `# Generated by \`agentop central\` — the bundled MongoDB.
+# Managed file: re-created on each \`agentop central up\`. Edit central.env, not this file.
+# Its reviewable source is docker/central.localdb.yml in the agentistics repository.
 services:
   mongo:
     image: mongo:7
@@ -238,32 +450,12 @@ services:
       - mongo_data:/data/db
 
   app:
-    image: \${AGENTISTICS_IMAGE:-ghcr.io/blpsoares/agentistics:latest}
     depends_on:
       mongo:
         condition: service_healthy
-    environment:
-      MONGO_URL: \${MONGO_URL:-mongodb://mongo:27017/?replicaSet=rs0}
-      MONGO_DB: \${MONGO_DB:-agentistics}
-      AGENTISTICS_TEAM_CENTRAL: "1"
-      AGENTISTICS_TEAM_ORG: \${AGENTISTICS_TEAM_ORG:-default}
-      AGENTISTICS_TEAM_PASSWORD: \${AGENTISTICS_TEAM_PASSWORD:-}
-      AGENTISTICS_TEAM_SESSION_SECRET: \${AGENTISTICS_TEAM_SESSION_SECRET:-}
-      AGENTISTICS_TEAM_INGEST_TOKEN: \${AGENTISTICS_TEAM_INGEST_TOKEN:-}
-      PORT: "47291"
-      SERVE_STATIC: "1"
-    ports:
-      - "\${BIND_IP:-0.0.0.0}:\${APP_PORT:-48080}:47291"
-    # Writable data dir (preferences, consolidate store). A named volume so it survives the
-    # \`--force-recreate\` that every \`agentop central up\` does — otherwise the archive-mode
-    # consent gate + install prompt reappear on every up.
-    volumes:
-      - agentistics_data:/root/.agentistics
-    restart: unless-stopped
 
 volumes:
   mongo_data:
-  agentistics_data:
 `
 
 const hex = (bytes: number) => randomBytes(bytes).toString('hex')
@@ -278,6 +470,11 @@ export interface CentralEnvOpts {
   /** External Mongo connection string (Atlas/remote). When set, the central runs NATIVELY (no
    *  Docker, no bundled Mongo). When omitted, the bundled Docker Mongo service is used. */
   mongoUrl?: string
+  /** How this central is brought up here. Recorded so every later `up`, `restart`, `logs` and
+   *  `status` resolves the same way the first one did — otherwise the answer would be re-inferred
+   *  from what happens to be on disk, and a central deployed from the published image would start
+   *  building from source the day someone cloned the repo beside it. */
+  runtime?: CentralRuntimeId
 }
 
 /** Connection string for the bundled Docker Mongo service (single-node replica set). */
@@ -307,11 +504,16 @@ export function looksLikeMongoUri(raw: string): boolean {
  */
 export function buildCentralEnv(opts: CentralEnvOpts = {}): string {
   const port = opts.port || '48080'
-  const bind = opts.bind || '0.0.0.0'
+  // Loopback, not 0.0.0.0. A generated file must never be the thing that puts a central on the
+  // network: the compose files default to 127.0.0.1 for exactly that reason, and a wizard writing
+  // 0.0.0.0 over the top of them made the documented default a fiction. Widening it is a line the
+  // operator edits, or an answer they give the prompt — never one they inherit.
+  const bind = opts.bind || '127.0.0.1'
   const org = opts.org || 'default'
   const sessionSecret = opts.sessionSecret || hex(32)
   const ingest = opts.ingestToken ?? ''
   const mongoUrl = opts.mongoUrl?.trim() || BUNDLED_MONGO_URL
+  const runtime = opts.runtime
   return (
     `# agentistics Team Mode — generated by \`agentop central\`. Holds secrets; keep it private.\n` +
     `APP_PORT=${port}\n` +
@@ -322,24 +524,33 @@ export function buildCentralEnv(opts: CentralEnvOpts = {}): string {
     `AGENTISTICS_TEAM_ORG=${org}\n` +
     `AGENTISTICS_TEAM_SESSION_SECRET=${sessionSecret}\n` +
     `AGENTISTICS_TEAM_INGEST_TOKEN=${ingest}\n` +
-    `AGENTISTICS_CENTRAL_USER=\n`
+    `AGENTISTICS_CENTRAL_USER=\n` +
+    (runtime
+      ? `# Read by the agentop CLI only — no compose passes it into the container.\n` +
+        `${RUNTIME_ENV_KEY}=${runtime}\n`
+      : '') +
+    `# Exposure — see docs/exposure.md. Unset means \`lan\`; an unknown value fails closed to\n` +
+    `# \`public\`. Set AGENTISTICS_TEAM_TLS=1 and AGENTISTICS_TRUST_PROXY=1 when TLS is terminated\n` +
+    `# in front of this instance and that proxy is the only way in.\n` +
+    `AGENTISTICS_EXPOSURE=lan\n`
   )
 }
 
 /** docker compose for the standalone central, with project + env-file + compose-file pre-set. */
-function composeArgs(envFile: string, composeFile: string, rest: string[]): string[] {
-  return ['docker', 'compose', '-p', PROJECT, '--env-file', envFile, '-f', composeFile, ...rest]
+function composeArgs(envFile: string, composeFiles: readonly string[], rest: string[]): string[] {
+  const files = composeFiles.flatMap(f => ['-f', f])
+  return ['docker', 'compose', '-p', PROJECT, '--env-file', envFile, ...files, ...rest]
 }
 
 async function runCompose(
   envFile: string,
-  composeFile: string,
+  composeFiles: readonly string[],
   rest: string[],
   opts: CentralRunOptions = {},
 ): Promise<number> {
   const streamed = opts.streamed === true
   try {
-    const proc = Bun.spawn(composeArgs(envFile, composeFile, rest), {
+    const proc = Bun.spawn(composeArgs(envFile, composeFiles, rest), {
       ...childIo(streamed),
       // Plain progress while streamed: docker's fancy renderer redraws its step table with cursor
       // moves, which a pane cannot hold — see cli-stream.ts.
@@ -359,38 +570,101 @@ async function runCompose(
   }
 }
 
+/** The human name of each runtime, for the picker and for anything reporting what it will do. */
+export function centralRuntimeLabel(id: CentralRuntimeId): string {
+  switch (id) {
+    case 'docker-image': return 'Docker, published image — pulls ghcr.io/blpsoares/agentistics (no checkout needed)'
+    case 'docker-build': return 'Docker, built from this checkout — central.sh, the image is built here'
+    case 'native': return 'Native — the agentop binary IS the server (no Docker; needs an external database)'
+  }
+}
+
+/**
+ * Ask HOW this central should run, listing only what this box can actually do.
+ *
+ * An unavailable runtime is stated in a SENTENCE above the list rather than offered and refused.
+ * A row that cannot be picked explains nothing on its own, and a row that can be picked and then
+ * fails is worse — it is a verb the screen promised. The same rule the control center applies to a
+ * rebuild it cannot perform.
+ *
+ * With exactly one option there is no question to ask: it is announced and taken.
+ */
+async function askRuntime(facts: CentralRuntimeFacts, fallback: CentralRuntimeId): Promise<CentralRuntimeId> {
+  const options = centralRuntimeOptions(facts)
+  const available = options.filter(o => o.available)
+  const blocked = options.filter(o => !o.available)
+
+  if (blocked.length > 0) {
+    process.stdout.write('\n  Not available on this machine:\n')
+    for (const o of blocked) {
+      process.stdout.write(`    - ${flagFor(o.id)}: ${centralRuntimeBlockText(o.id, o.reason!)}\n`)
+    }
+  }
+  if (available.length === 0) return fallback
+  if (available.length === 1) {
+    process.stdout.write(`\n  How it runs: ${centralRuntimeLabel(available[0]!.id)}\n`)
+    return available[0]!.id
+  }
+
+  return select<CentralRuntimeId>({
+    message: 'How should this central run',
+    choices: available.map(o => ({ name: centralRuntimeLabel(o.id), value: o.id })),
+  })
+}
+
 /** Interactively generate central.env (secrets auto-filled). Called on first `up`, or `init`. */
 async function initEnv(envFile: string): Promise<void> {
   process.stdout.write(`\nSetting up ${envFile} — press Enter to accept the [default] / auto-generate.\n\n`)
-  const port = await input('Host port (APP_PORT)', { default: '48080' })
-  const org = await input('Org name (AGENTISTICS_TEAM_ORG)', { default: 'default' })
-  const bind = await input('Bind IP (BIND_IP, blank = 0.0.0.0 all interfaces)', { default: '0.0.0.0' })
+  const existing = existsSync(envFile) ? await loadEnvFile(envFile) : {}
+  const port = await input('Host port (APP_PORT)', { default: existing.APP_PORT || '48080' })
+  const org = await input('Org name (AGENTISTICS_TEAM_ORG)', { default: existing.AGENTISTICS_TEAM_ORG || 'default' })
+  // The default is whatever this central already binds to, and 127.0.0.1 only on a first run.
+  // Re-running the wizard must not be able to take a working LAN central off the network by
+  // accident, and it must not be able to put a loopback one onto it either.
+  process.stdout.write(
+    '  Bind IP: 127.0.0.1 = this host only (right behind a tunnel or a reverse proxy).\n' +
+    '           0.0.0.0 = every interface, LAN included. A tailnet address serves only peers.\n',
+  )
+  const bind = await input('Bind IP (BIND_IP)', { default: existing.BIND_IP || '127.0.0.1' })
 
-  // Database: bundled Docker Mongo, or an external URI (Atlas/remote) → runs natively, no Docker.
+  // Database: bundled Docker Mongo, or an external URI (Atlas/remote).
   const db = await select<'bundled' | 'external'>({
     message: 'Database',
     choices: [
       { name: 'Bundled Mongo (Docker starts it for you)', value: 'bundled' },
-      { name: 'External URI — Atlas/remote (runs natively, no Docker)', value: 'external' },
+      { name: 'External URI — Atlas, or a Mongo you run yourself', value: 'external' },
     ],
   })
   let mongoUrl: string | undefined
   if (db === 'external') {
     for (;;) {
-      const uri = await input('Mongo connection URI (mongodb+srv://…)', { default: '' })
+      const uri = await input('Mongo connection URI (mongodb+srv://…)', { default: existing.MONGO_URL || '' })
       if (looksLikeMongoUri(uri)) { mongoUrl = uri.trim(); break }
       process.stdout.write('  Invalid URI — must start with mongodb:// or mongodb+srv://\n')
     }
-    process.stdout.write('  -> external DB: the central will run natively (no Docker, no local Mongo).\n')
   }
 
-  const env = buildCentralEnv({ port, org, bind, mongoUrl })
+  // Asked AFTER the database, because the database is what decides whether `native` is even on
+  // the list: the bundled Mongo is a Docker service, so a native central would have nothing to
+  // connect to. Asking first would offer a choice and then withdraw it.
+  const facts: CentralRuntimeFacts = {
+    script: Boolean(findCentralScript()),
+    docker: await hasDocker(),
+    envFile: true,
+    mongoUrl: mongoUrl ?? BUNDLED_MONGO_URL,
+  }
+  const runtime = await askRuntime(facts, parseStoredRuntime(existing[RUNTIME_ENV_KEY]) ?? 'docker-image')
+
+  const env = buildCentralEnv({ port, org, bind, mongoUrl, runtime })
   await writeFile(envFile, env, 'utf-8')
   await chmod(envFile, 0o600).catch(() => {})
   process.stdout.write(
     `\nWrote ${envFile} (chmod 600).\n` +
+    `  Runs as: ${centralRuntimeLabel(runtime)}\n` +
+    `  Change it any time with \`agentop central up --image|--build|--native\`, or re-run this wizard.\n` +
     `  No dashboard password is set here — the first thing you do in the browser is create the\n` +
-    `  OWNER account, using the one-time setup token the central prints on its first boot.\n\n`,
+    `  OWNER account, using the one-time setup token the central prints on its first boot.\n` +
+    `  Publishing this on the internet? Set AGENTISTICS_EXPOSURE=public — see docs/exposure.md.\n\n`,
   )
 }
 
@@ -587,22 +861,79 @@ async function runNativeCentral(
 }
 
 /**
- * Standalone central lifecycle. With the bundled Mongo it materializes a compose and drives
- * `docker compose`; with an external DB (Atlas/remote) it runs the binary NATIVELY (no Docker).
- * Mirrors central.sh's commands.
+ * The compose files a published-image central runs with.
+ *
+ * In a CHECKOUT they are the repository's own `docker/central*.yml` — the very files a reader can
+ * review — so `--image` inside a clone is `--build` minus the build, with the same overlays and
+ * the same project name. Outside one they are materialized under ~/.agentistics/central from the
+ * constants above.
+ *
+ * The bundled-Mongo overlay is included on exactly the rule `central.sh` applies: only when
+ * MONGO_URL targets the internal service. An external cluster gets no local Mongo container and
+ * nothing waiting on one.
  */
-async function runCentralStandalone(action: CentralAction, extraArgs: string[] = [], opts: CentralRunOptions = {}): Promise<number> {
-  const envFile = join(STANDALONE_DIR, 'central.env')
-  const composeFile = join(STANDALONE_DIR, 'docker-compose.yml')
+async function imageComposeFiles(
+  script: string | null,
+  facts: { bundled: boolean; selfContrib: boolean },
+): Promise<string[] | null> {
+  if (script) {
+    const dir = join(dirname(script), 'docker')
+    const files = [join(dir, 'central.image.yml')]
+    if (facts.bundled) files.push(join(dir, 'central.localdb.yml'))
+    if (facts.selfContrib) files.push(join(dir, 'central.selfcontrib.yml'))
+    const missing = files.filter(f => !existsSync(f))
+    if (missing.length > 0) {
+      process.stderr.write(
+        `This checkout is missing ${missing.join(', ')}.\n` +
+        'Update it (git pull), or run without --image to build from source.\n',
+      )
+      return null
+    }
+    return files
+  }
+
+  const app = join(STANDALONE_DIR, 'central.image.yml')
+  const files = [app]
+  try {
+    await writeFile(app, STANDALONE_COMPOSE, 'utf-8')
+    if (facts.bundled) {
+      const db = join(STANDALONE_DIR, 'central.localdb.yml')
+      await writeFile(db, STANDALONE_LOCALDB_COMPOSE, 'utf-8')
+      files.push(db)
+    }
+  } catch (err) {
+    process.stderr.write(`Could not write the compose files in ${STANDALONE_DIR}: ${err instanceof Error ? err.message : String(err)}\n`)
+    return null
+  }
+  return files
+}
+
+/**
+ * Central lifecycle for the two runtimes `central.sh` does not own: the published image, and the
+ * native server.
+ *
+ * The runtime is DECIDED by `runCentral` and passed in, rather than re-derived from MONGO_URL
+ * here. It used to be inferred at this point, which is why `--image` and `--native` had nowhere to
+ * enter: the function's only input was what the database happened to be.
+ */
+async function runCentralStandalone(
+  action: CentralAction,
+  extraArgs: string[] = [],
+  opts: CentralRunOptions = {},
+  runtime: 'docker-image' | 'native' = 'docker-image',
+  how?: CentralStartHow,
+): Promise<number> {
+  const script = findCentralScript()
+  const envFile = centralEnvFile(script)
 
   // Streamed means the control center is drawing and Ink owns the keyboard, so there is no terminal
   // to ask a question with — the same thing `[ -t 0 ]` tells central.sh on the repo path.
   const isTTY = process.stdin.isTTY && opts.streamed !== true
 
   try {
-    await mkdir(STANDALONE_DIR, { recursive: true })
+    await mkdir(dirname(envFile), { recursive: true })
   } catch (err) {
-    process.stderr.write(`Could not prepare ${STANDALONE_DIR}: ${err instanceof Error ? err.message : String(err)}\n`)
+    process.stderr.write(`Could not prepare ${dirname(envFile)}: ${err instanceof Error ? err.message : String(err)}\n`)
     return 1
   }
 
@@ -638,24 +969,30 @@ async function runCentralStandalone(action: CentralAction, extraArgs: string[] =
     return 1
   }
 
-  // External DB → run natively (no Docker); bundled → Docker compose.
   const mongoUrl = (await readEnvValue(envFile, 'MONGO_URL')) ?? ''
-  if (!isBundledMongo(mongoUrl)) {
-    return runNativeCentral(envFile, action, extraArgs, opts)
+
+  if (runtime === 'native') {
+    // `--bg` is what makes the already-implemented detached start reachable from the command line.
+    // It existed only as an internal option the control center could set, so the CLI's native
+    // central was foreground-or-nothing and every "run it in the background" answer was a
+    // systemd unit.
+    return runNativeCentral(envFile, action, extraArgs, {
+      ...opts,
+      detached: how === 'bg' ? true : opts.detached,
+    })
   }
 
-  try {
-    await writeFile(composeFile, STANDALONE_COMPOSE, 'utf-8')
-  } catch (err) {
-    process.stderr.write(`Could not write ${composeFile}: ${err instanceof Error ? err.message : String(err)}\n`)
-    return 1
-  }
+  const composeFiles = await imageComposeFiles(script, {
+    bundled: isBundledMongo(mongoUrl) || mongoUrl === '',
+    selfContrib: Boolean((await readEnvValue(envFile, 'AGENTISTICS_CENTRAL_USER')) ?? ''),
+  })
+  if (!composeFiles) return 1
 
   if (action === 'up') {
     process.stdout.write(`\nStarting central from image ${IMAGE} …\n\n`)
-    const code = await runCompose(envFile, composeFile, ['up', '-d', '--pull', 'always', '--force-recreate'], opts)
+    const code = await runCompose(envFile, composeFiles, ['up', '-d', '--pull', 'always', '--force-recreate'], opts)
     if (code === 0) {
-      await runCompose(envFile, composeFile, ['ps'], opts)
+      await runCompose(envFile, composeFiles, ['ps'], opts)
       await printAccessUrl(envFile)
     }
     return code
@@ -663,29 +1000,29 @@ async function runCentralStandalone(action: CentralAction, extraArgs: string[] =
 
   switch (action) {
     case 'restart': {
-      const code = await runCompose(envFile, composeFile, ['restart', 'app'], opts)
+      const code = await runCompose(envFile, composeFiles, ['restart', 'app'], opts)
       if (code === 0) await printAccessUrl(envFile)
       return code
     }
     case 'logs':
-      return runCompose(envFile, composeFile, ['logs', '-f', 'app'], opts)
+      return runCompose(envFile, composeFiles, ['logs', '-f', 'app'], opts)
     case 'status':
-      return runCompose(envFile, composeFile, ['ps'], opts)
+      return runCompose(envFile, composeFiles, ['ps'], opts)
     case 'down':
       // No `-v` — the Mongo data volume is preserved.
-      return runCompose(envFile, composeFile, ['down'], opts)
+      return runCompose(envFile, composeFiles, ['down'], opts)
     case 'setup-token':
       // Inside the container: that is where MONGO_URL resolves.
-      return runCompose(envFile, composeFile, ['exec', '-T', 'app', 'bun', 'run', 'packages/server/bin/cli.ts', 'setup-token'], opts)
+      return runCompose(envFile, composeFiles, ['exec', '-T', 'app', 'bun', 'run', 'packages/server/bin/cli.ts', 'setup-token'], opts)
     case 'reset-password':
       return runCompose(
-        envFile, composeFile,
+        envFile, composeFiles,
         ['exec', '-T', 'app', 'bun', 'run', 'packages/server/bin/cli.ts', 'reset-password', ...extraArgs],
         opts,
       )
     case 'pull': {
-      const code = await runCompose(envFile, composeFile, ['pull'], opts)
-      if (code === 0) return runCompose(envFile, composeFile, ['up', '-d', '--force-recreate'], opts)
+      const code = await runCompose(envFile, composeFiles, ['pull'], opts)
+      if (code === 0) return runCompose(envFile, composeFiles, ['up', '-d', '--force-recreate'], opts)
       return code
     }
   }

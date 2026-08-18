@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { buildCentralEnv, STANDALONE_COMPOSE, isCentralAction, CENTRAL_ACTIONS, isBundledMongo, looksLikeMongoUri, BUNDLED_MONGO_URL, planCentralStart } from './cli-central'
+import { buildCentralEnv, STANDALONE_COMPOSE,
+  STANDALONE_LOCALDB_COMPOSE, isCentralAction, CENTRAL_ACTIONS, isBundledMongo, looksLikeMongoUri, BUNDLED_MONGO_URL, planCentralStart } from './cli-central'
 
 /** Parse the `KEY=value` lines of a central.env blob into a map (ignores comments/blanks). */
 function parseEnv(blob: string): Record<string, string> {
@@ -17,7 +18,11 @@ describe('buildCentralEnv', () => {
   test('applies defaults and auto-generates secrets when omitted', () => {
     const env = parseEnv(buildCentralEnv())
     expect(env.APP_PORT).toBe('48080')
-    expect(env.BIND_IP).toBe('0.0.0.0')
+    // LOOPBACK, not 0.0.0.0. The compose files have defaulted to 127.0.0.1 for exactly the reason
+    // stated there — a fresh install must not land on the network by accident — while this
+    // generator wrote 0.0.0.0 over the top of them, which made the documented default a fiction on
+    // every central the wizard created. Widening it is now an answer the operator gives.
+    expect(env.BIND_IP).toBe('127.0.0.1')
     expect(env.AGENTISTICS_TEAM_ORG).toBe('default')
     expect(env.AGENTISTICS_TEAM_CENTRAL).toBe('1')
     // hex(32) → 64 hex chars.
@@ -73,9 +78,16 @@ describe('STANDALONE_COMPOSE', () => {
     // Central mode + static serving must be forced on regardless of env.
     expect(STANDALONE_COMPOSE).toContain('AGENTISTICS_TEAM_CENTRAL: "1"')
     expect(STANDALONE_COMPOSE).toContain('SERVE_STATIC: "1"')
-    // The internal Mongo container is defined and its data volume declared.
-    expect(STANDALONE_COMPOSE).toContain('mongo:7')
-    expect(STANDALONE_COMPOSE).toContain('mongo_data:')
+  })
+
+  // The bundled database moved to its OWN overlay, merged only when MONGO_URL targets the internal
+  // service — the same rule central.sh applies. It used to be welded into the single generated
+  // file, so a standalone central pointed at Atlas still started a local Mongo container beside it
+  // and waited on its healthcheck.
+  test('the bundled Mongo is an overlay, not part of the app compose', () => {
+    expect(STANDALONE_LOCALDB_COMPOSE).toContain('mongo:7')
+    expect(STANDALONE_LOCALDB_COMPOSE).toContain('mongo_data:')
+    expect(STANDALONE_COMPOSE).not.toContain('mongo:7')
   })
 })
 

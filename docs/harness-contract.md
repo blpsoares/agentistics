@@ -123,9 +123,13 @@ the window. Rules:
 - **A subagent's window is not the session's.** Where a harness folds child agents into one
   session (Kimi), the gauge comes from the main agent only, chosen by timestamp so it does not
   depend on the order the files were read.
-- **A harness that states its own window wins.** Codex writes `model_context_window` per session;
-  store it in `SessionMeta.context_window` and it outranks any table lookup, because it knows the
-  deployment and any per-session cap that a model id cannot express.
+- **A harness that states its own window wins.** Codex writes `model_context_window` per session
+  and Antigravity states it too (protobuf field `1.9.10.4`); store it in
+  `SessionMeta.context_window` and it outranks any table lookup, because it knows the deployment
+  and any per-session cap that a model id cannot express. Measured on one machine, agy ran
+  `gemini-3.6-flash` under a 128.000 window on some conversations and 256.000 on others — one model
+  id, two windows, which no table could have told apart. It is also the escape hatch for a vendor
+  that publishes no citable limit: agy draws a bar with no `CONTEXT_WINDOWS` row at all.
 - **Otherwise the window comes from `resolveContextWindow`** (`packages/core/src/contextWindows.ts`),
   which holds only models with a dated source — the `MODEL_PRICING` provenance rule applied to a
   different number. A model that is not in it draws no bar at all: an absent gauge is visible, a
@@ -181,3 +185,24 @@ Then compare against the harness's own numbers where it publishes any. For activ
 that matters is: *does the reconstruction agree with the harness's own measurement where both
 exist?* If a future harness publishes durations, run that comparison before trusting the
 reconstruction for the turns where it doesn't.
+
+### Reading an undocumented binary format
+
+Antigravity's token counts live in a protobuf blob with no schema published anywhere, and the first
+reader of it got **every counter but output pointing at the wrong field**. It reported 52,6 mi
+tokens where the provider billed ~250 mi, and R$111 against R$703 — 4,8x and 6,3x low. Nothing
+inside the product looked wrong: the numbers were the right order of magnitude, they moved with
+usage, and the per-model split was self-consistent. Two checks would have caught it, and both are
+now required before a decoded field is trusted:
+
+- **Check that the value VARIES the way the thing it claims to count varies.** The field being read
+  as `input_tokens` was the constant 1072 on all 2.966 rows (`min === max`). A per-call counter
+  cannot be constant — that alone disqualified it, with no external source needed.
+- **Reconcile the total against a bill.** Where the vendor exposes a usage console, sum the whole
+  local store and compare — per model and per day, not just the headline. The correct mapping came
+  out within a few percent on input, cache, output *and* the 78,5 % cache share simultaneously;
+  every wrong candidate broke at least one of those. A single aggregate can be matched by luck, a
+  four-way agreement cannot.
+
+Record the reconciliation in the reader's own header, with the figures and the date. The next
+person to touch those field numbers needs to see what pinned them, not just what they are.

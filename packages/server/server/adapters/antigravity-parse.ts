@@ -60,14 +60,23 @@ export interface AntigravityTokenTotals {
   /** Number of `gen_metadata` rows that decoded — used by the reconciliation test. */
   rowCount?: number
   /**
-   * Field `1.4.5` of the LAST decoded row — how full the window was at that generation.
+   * Field `1.9.10.1` of the LAST decoded row — how full the window was at that generation.
    *
    * agy is the one harness that measures this directly rather than leaving it to be reconstructed:
-   * the field is documented as "a gauge, never a sum" precisely because it is a level, not a
-   * quantity. Everything else on this interface is summed across rows; this one is read off the
-   * last.
+   * the field is a gauge, never a sum, precisely because it is a level, not a quantity. Everything
+   * else on this interface is summed across rows; this one is read off the last.
    */
   contextTokens?: number
+  /**
+   * Field `1.9.10.4` of the LAST decoded row — the window agy DECLARES for the call (128.000, and
+   * 256.000 on some rows).
+   *
+   * This is Codex's `model_context_window` rule applied to agy: a harness stating the window for
+   * the session it is running outranks any table, and it is the ONLY way an agy session gets a
+   * context bar — Google publishes no citable input limit, so `CONTEXT_WINDOWS` has no row for
+   * these models and never will until it can be cited.
+   */
+  contextWindow?: number
 }
 
 /** Optional inputs for {@link parseAntigravityTranscript}. */
@@ -579,13 +588,16 @@ export function parseAntigravityTranscriptDetailed(
     git_commits: gitCommits,
     git_pushes: gitPushes,
     input_tokens: tokens?.inputTokens ?? 0,
-    // gen_metadata field 3 is the TOTAL output (thinking + completion) — never add thinking.
+    // gen_metadata field 1.4.3 is the TOTAL output (thinking + completion) — never add thinking.
     output_tokens: tokens?.outputTokens ?? 0,
     cache_read_input_tokens: tokens?.cachedTokens ?? 0,
     // agy does not record cache WRITES separately.
     cache_creation_input_tokens: 0,
-    // The `1.4.5` gauge off the last generation — absent when no row carried one.
+    // The `1.9.10.1` gauge off the last generation — absent when no row carried one.
     ...(tokens?.contextTokens ? { context_tokens: tokens.contextTokens } : {}),
+    // The window agy DECLARES (`1.9.10.4`), which outranks CONTEXT_WINDOWS exactly as Codex's
+    // `model_context_window` does — and is the only reason an agy session can draw a bar.
+    ...(tokens?.contextWindow ? { context_window: tokens.contextWindow } : {}),
     first_prompt: firstPrompt,
     title,
     user_interruptions: 0,

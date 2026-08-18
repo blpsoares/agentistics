@@ -90,6 +90,8 @@ export interface ControlStrings {
   sectionRuntimes: string
   sectionAddresses: string
   sectionMachine: string
+  /** Heads the sentences naming the starts this box cannot perform — see `ControlService.startNotes`. */
+  sectionStartBlocked: string
 
   modeLabel: string
   historyLabel: string
@@ -624,6 +626,7 @@ const EN: ControlStrings = {
   sectionRuntimes: 'RUNTIMES',
   sectionAddresses: 'ADDRESSES',
   sectionMachine: 'MACHINE',
+  sectionStartBlocked: 'NOT AVAILABLE HERE',
 
   // Lowercase, and the same case as the pane titles: these are row labels inside a pane, not
   // section headers over one. SETUP stays uppercase because it still heads a section.
@@ -1090,6 +1093,7 @@ const PT: ControlStrings = {
   sectionRuntimes: 'RUNTIMES',
   sectionAddresses: 'ENDEREÇOS',
   sectionMachine: 'MÁQUINA',
+  sectionStartBlocked: 'INDISPONÍVEL AQUI',
 
   modeLabel: 'modo',
   historyLabel: 'histórico',

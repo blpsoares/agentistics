@@ -92,12 +92,12 @@ const LIVE_UNAVAILABLE_DETAIL: Record<LiveUnavailableReason, { en: string; pt: s
     pt: 'Não foi possível ler /proc, então nenhum assistente em execução pode ser observado.',
   },
   'container-isolated': {
-    en: 'This machine runs in a container with its own process namespace, so assistants running on the host are invisible to it. Add `pid: host` to docker-compose.machine.yml, or run the machine natively.',
-    pt: 'Esta máquina roda em um container com namespace de processos próprio, então assistentes que rodam no host são invisíveis para ela. Adicione `pid: host` ao docker-compose.machine.yml, ou rode a máquina nativamente.',
+    en: 'This machine runs in a container with its own process namespace, so assistants running on the host are invisible to it. Add `pid: host` to docker/machine.yml, or run the machine natively.',
+    pt: 'Esta máquina roda em um container com namespace de processos próprio, então assistentes que rodam no host são invisíveis para ela. Adicione `pid: host` ao docker/machine.yml, ou rode a máquina nativamente.',
   },
   'permission-denied': {
-    en: 'The host processes are visible but their working directories are not: reading them requires the same user id. Run the container as the host user (see the commented `user:` line in docker-compose.machine.yml), or run the machine natively.',
-    pt: 'Os processos do host são visíveis, mas seus diretórios de trabalho não: lê-los exige o mesmo id de usuário. Rode o container como o usuário do host (veja a linha `user:` comentada em docker-compose.machine.yml), ou rode a máquina nativamente.',
+    en: 'The host processes are visible but their working directories are not: reading them requires the same user id. Run the container as the host user (see the commented `user:` line in docker/machine.yml), or run the machine natively.',
+    pt: 'Os processos do host são visíveis, mas seus diretórios de trabalho não: lê-los exige o mesmo id de usuário. Rode o container como o usuário do host (veja a linha `user:` comentada em docker/machine.yml), ou rode a máquina nativamente.',
   },
   'capability-off': {
     en: 'This instance is exposed on a network, so reading the host process list is disabled. A working directory is usually a repository name.',

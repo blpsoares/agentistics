@@ -2,6 +2,12 @@
 
 Local analytics dashboard for AI coding assistants. Visualizes tokens, costs, activity, projects, and agent metrics based on data from `~/.claude/`.
 
+## Process rules live in AGENTS.md, not here
+
+Issue/PR/Project-board/Discussion workflow rules are harness-agnostic and live in `AGENTS.md` at
+the repo root — read it before opening an Issue, starting implementation work, or submitting a PR.
+This file stays Claude-Code-specific implementation memory and does not duplicate those rules.
+
 ## Language convention
 
 **Everything in this project is in English**: code, comments, commit messages, PR titles and descriptions, documentation, and this file.
@@ -28,7 +34,7 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   ├── agentop restart …    → bounce a mode's service (`server`/`watch` → systemd; `central` → central.sh restart; `--all` → cli-start.ts restartAllServices over every running service). `--rebuild` rebuilds before restarting instead of just bouncing (`central` → `up`; machine → `compose build --no-cache` then `compose up -d --force-recreate`; `server`/`watch` → `rebuildNativeBinary()`, i.e. `bun run bin`, which needs the repo checkout — outside one it says so and restarts the existing build). **A rebuild is a FULL rebuild**: the Docker paths pass `--no-cache`, because a cached one could hand back the very image it was asked to replace, and they say so on the way in — that build is several minutes. `--cache` is the escape hatch (reuse Docker's layer cache); `-y`/`-n` answer `central.sh up`'s "re-run interactive setup?" prompt up front, so an unattended rebuild never waits on a keypress. All of it is resolved by the pure `rebuild-flags.ts` (`parseRebuildFlags` / `centralRebuildArgs` / `composeRebuildCommands`) — the shell receives an already-decided answer, `-y` with `-n` (or `--cache` with `--no-cache`) is refused rather than resolved, and the control center's rebuild verb passes `-n` EXPLICITLY instead of relying on its piped child failing `[ -t 0 ]`. A plain `agentop central up` / `central.sh up` is not a rebuild and keeps its cached build
   ├── agentop tui          → an ALIAS for `start`, renamed in cli.ts's one-line dispatch. There is no second Ink app: the metrics ARE the control center's `dashboard` tab, and a branch of its own would be a copy that starts identical and drifts
   ├── agentop watch        → server/otel-watcher.ts (daemon only)
-  ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull; `up` takes -y/-n and --cache/--no-cache, honored on the standalone path too)
+  ├── agentop central …    → server/cli-central.ts (up/init/down/logs/status/restart/pull/setup-token/reset-password). **HOW a central runs is the USER'S choice, not an inference** — the pure `central-runtime.ts` holds the three shapes (`docker-build` = central.sh builds from the checkout, `docker-image` = pull ghcr.io/blpsoares/agentistics, `native` = the binary IS the server) plus which of them work HERE and why not. It used to be pure inference (a checkout meant central.sh, no checkout meant the image), which made two reasonable requests impossible to express: the published image from inside a clone, and a native server anywhere. `up` now takes `--image` / `--build` / `--native` (+ `--bg`, which finally exposes the detached native start that only the control center could reach), the wizard ASKS and records the answer in `AGENTISTICS_CENTRAL_RUNTIME` — read by the CLI only, passed into no container — and every later action resolves the same way the first did. **A requested shape that cannot work is REFUSED in a sentence, never downgraded**: a `--native` that quietly became a Docker start is a central running under a shape its operator did not choose. `defaultCentralRuntime` reproduces the old inference exactly and `central-runtime.test.ts` pins it against `planCentralStart`, so an upgrade changes nothing for an existing central. `up` still takes -y/-n and --cache/--no-cache
   ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
   ├── agentop session …    → server/sessions/cli-session.ts (start/ls/list/attach/kill/rename/note;
   │                          `--bg` detaches via tmux, attach prints the REAL detach key; `list`
@@ -303,6 +309,28 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
+  ├── central-runtime.ts   → **pure**: the three shapes a central can take here, each with `available` + a REASON CODE
+  │                          (`no-docker` / `no-checkout` / `no-env` / `bundled-mongo`) rendered by cli-i18n and the
+  │                          cockpit's own strings — the module is language-free, like `LiveUnavailableReason`. It is the
+  │                          ONE resolution behind BOTH front doors: `agentop central up --image|--build|--native` and the
+  │                          control center's start verbs, which is what stops the CLI and the cockpit offering different
+  │                          deployments. `no-env` and `bundled-mongo` are deliberately different codes — "not configured
+  │                          yet" and "configured for a database Docker alone can reach" send the user to different screens
+  ├── service-manager.ts   → **pure**: which init system can keep a mode running here (systemd user units on Linux, launchd
+  │                          user agents on macOS, pm2 anywhere it is installed) and the exact file/argv each needs. **pm2
+  │                          never wins by default** even when installed — it is a list the user curates, and agentop filing
+  │                          itself into it is their decision. The field the module exists for is `keepsRunning`: `agentop
+  │                          server` holds the foreground (`Type=simple`), while `docker compose up -d` and `central.sh up`
+  │                          RETURN once the container is up — registered as long-running, systemd marks the unit
+  │                          inactive(dead) a second after a perfectly successful start and every `is-active` then lies, so
+  │                          those become `Type=oneshot` + `RemainAfterExit=yes`. Same distinction drives launchd's
+  │                          `KeepAlive` and pm2's `--no-autorestart`. It is a property of the COMMAND, so a NATIVE central
+  │                          gets a different unit type from a Docker one — which is why `serviceCommandFor` takes the
+  │                          central runtime, and why `agentop autostart central` finally works from an installed binary
+  │                          (it writes `agentop central up --image -n` instead of refusing for want of a central.sh).
+  │                          Each manager NAMES the one step it cannot take for the user (`bootCaveat`): linger on systemd,
+  │                          login-not-boot on launchd, `pm2 save` + `pm2 startup` on pm2 — a service that will not survive
+  │                          a reboot while the user believes it will is worse than none
   ├── rebuild-flags.ts     → **pure**: the rebuild's two answers (`-y`/`-n` for central.sh's setup prompt, `--cache`/`--no-cache` for the image build) — parse, conflict-refuse, and the argv each path receives
   ├── cli-i18n.ts          → EN/PT strings the HOST produces (CLI is English by default; language follows --lang / preferences.lang / the in-app toggle). The control center's own chrome strings live in tui/src/control/i18n.ts
   ├── cli-hooks.ts + claude-hooks.ts / claude-skill.ts / session-context.ts → **the Claude Code
@@ -407,6 +435,25 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── team-ingest.ts       → POST /api/team/ingest → upsert + triggerSseNotification (real-time central)
   ├── team-source.ts / team-admin.ts → central-side team read for buildApiResponse + members-panel admin routes
   ├── team-uploader.ts     → member→central push: sent-state, sync-signature auto-reconcile, push-on-change (notifyDataChanged), auto-reset on revoke, /api/team/status pill
+  ├── ingest-batch.ts      → **pure**: how many sessions one ingest carries and how long it gets.
+  │                          **A BATCH IS THE UNIT OF DURABLE PROGRESS** — the sent-state advances
+  │                          only on an ACCEPTED batch, so a batch that cannot complete records
+  │                          NOTHING and the next cycle re-sends the same sessions forever. That
+  │                          happened: `BATCH_SIZE` 200 was chosen in one place and a flat 15s
+  │                          timeout in another, nothing checked that one fit the other, and a real
+  │                          central costs ~195 ms/session — so 200 needed ~39s and every first push
+  │                          aborted. Measured on a live member: 1.260 consecutive failures, a
+  │                          sent-state still `{}`, `lastSuccessAt: null`, against a central
+  │                          answering everything else in under a second. So the TIMEOUT IS DERIVED
+  │                          from the batch (`ingestTimeoutMs`, the only place either number is
+  │                          decided) and still BOUNDED (`MAX_TIMEOUT_MS`), because the timeout's
+  │                          original job is releasing a `MAX_CONCURRENT_PUSHES` slot held by a
+  │                          wedged proxy. And the batch ADAPTS (`nextBatchSize`): a derived timeout
+  │                          still rests on an estimate of someone else's hardware, so a failure
+  │                          HALVES and a success grows back GRADUALLY — jumping straight to the
+  │                          ceiling would fail, floor, and fail again, which is the same
+  │                          non-convergence in a slower loop. The ceiling is far below 200 on
+  │                          purpose: smaller batches cost round trips and buy durable progress
   ├── account-repos.ts     → **pure**: buildAccountRepoList (central grouping) + findStillShared (the MACHINE-side intersection). A machine asks the central what repositories it holds FOR ITS ACCOUNT (`GET /api/team/account-repos`, team-account-repos.ts) — a question naming no repository and carrying no rule — and compares locally, so it learns a sibling still shares a repo it hid without disclosing anything
   ├── team-elsewhere.ts    → member side of that: TTL-throttled fetch + cache → ConnectionStatusEntry.elsewhere (same-origin) → the orange banner on the connection card
   ├── (core) siblingRules.ts → **pure** `@agentistics/core`: the REVERSE warning's arithmetic — `bucketSharedBy` (is this repo/project bucket shared by these announced rules?) + `siblingsRestricting` + `mergeSiblingFacts`. It may **never** be derived from the central: a sibling that hides a repo simply leaves the central without it, and absence is ambiguous between "restricted" and "never cloned", so the ONLY sound source is the sealed envelope inbox. `bucketSharedBy` is a second implementation of a privacy rule, so `share-rules.test.ts` cross-checks it against `sessionShared` over every mode x dimension x bucket combination — `share-rules.ts` stays the single source of the semantics. **Projects correlate across machines by FOLDER NAME** (`projectNameKey`: `\`→`/`, trailing separators stripped, final segment, case folded — case because WSL/Windows machines share these accounts), because the same project sits at a different path on every machine and full-`project_path` comparison correlates almost nothing. **That is the CROSS-MACHINE key only**: `bucketSharedBy` and the stored rules stay EXACT, or a local rule denying `/home/a/x/proj` would silently widen to every project named `proj` — `shareBucketKeys` (exact) and `crossMachineKeys` (correlation) must stay separate, and a test fails if the exact predicate is widened. It is a heuristic (`api`, `web`, `docs` collide), so `siblingsWithholding` reports the sibling's OWN path when the announcement carries one, and the UI says "a project with this name"
@@ -597,9 +644,10 @@ cumulative input 44.3M against a context of 455k, so a gauge built from the tota
 **codex** — `last_token_usage.input_tokens`, which already includes the cached portion, NOT the
 cumulative `total_token_usage`; **kimi** — the input side of one per-turn `usage.record`, from the
 **main** agent only and chosen by timestamp (a subagent runs its own, emptier window, and file read
-order must not decide the answer); **antigravity** — protobuf field `1.4.5`, already documented as
-"a gauge, never a sum", off the last row. **gemini** and **copilot** are `false`: gemini's chat
-files carry no token data at all, and copilot reports tokens only cumulatively at shutdown.
+order must not decide the answer); **antigravity** — protobuf field `1.9.10.1`, off the last row,
+with the window agy declares beside it in `1.9.10.4`. **gemini** and **copilot** are `false`:
+gemini's chat files carry no token data at all, and copilot reports tokens only cumulatively at
+shutdown.
 
 **The window** is `resolveContextWindow` (`packages/core/src/contextWindows.ts`) — the
 `MODEL_PRICING` provenance rule applied to a different number. `ContextWindow` requires
@@ -607,11 +655,16 @@ files carry no token data at all, and copilot reports tokens only cumulatively a
 the table draws no bar**. That is deliberate: an absent gauge is visible, a wrong percentage is not,
 and the same 212.959 tokens is 106% of a 200k window and 21% of a 1M one. Two consequences:
 - **A harness that states its own window outranks the table.** Codex writes `model_context_window`
-  into every `token_count` event → `SessionMeta.context_window`. It knows the deployment and any
-  per-session cap; a model id cannot express either.
+  into every `token_count` event → `SessionMeta.context_window`, and **Antigravity states it too**,
+  in protobuf field `1.9.10.4` beside its gauge. It knows the deployment and any per-session cap; a
+  model id cannot express either — measured on one machine, agy ran `gemini-3.6-flash` under a
+  128.000 window on some conversations and 256.000 on others, which no table keyed by model id
+  could ever have told apart.
 - **OpenAI and Google models are absent** (checked 2026-08-14: neither publishes a citable input
-  token limit). So Antigravity's Gemini conversations and Kimi's routed models measure a context and
-  still draw no bar. Add them the day the figures can be cited, never before.
+  token limit). So Kimi's routed models measure a context and still draw no bar. Add them the day
+  the figures can be cited, never before. Antigravity is the case that shows the table is not the
+  only way out: it draws a bar with no row here at all, because the harness declares the window
+  itself.
 
 **Known limitation, stated rather than papered over:** Claude Code can run `claude-opus-5` under a
 200k session cap (its `opus[1m]` picker) and the transcript records only `claude-opus-5` — no
@@ -647,10 +700,22 @@ a conversation with no genuine user turn is dropped (same principle as the Gemin
 **Tokens / model / cost are REAL for agy.** They come from `conversations/<conversation-id>.db`
 (SQLite), table `gen_metadata`, column `data` — a protobuf blob per LLM call, decoded by the pure,
 dependency-free `adapters/antigravity-protobuf.ts`. Verified wire layout:
-`1.4.1` input, `1.4.2` cache read, `1.4.3` output, `1.4.5` context-size gauge, `1.4.9` thinking,
-`1.4.10` completion, `1.19` technical model id, `1.21` display name. Rules:
+`1.4.1` the CONSTANT system-instruction size, `1.4.2` input, `1.4.3` output, `1.4.5` cache read,
+`1.4.9` thinking, `1.4.10` completion, `1.9.10.1` context-size gauge, `1.9.10.4` the declared
+context window, `1.19` technical model id, `1.21` display name. Rules:
 - **`1.4.3` already includes `1.4.9`** — never add thinking on top of output.
-- **`1.4.5` is a gauge, never a sum** — it is the context size at that call.
+- **`1.9.10.1` is a gauge, never a sum** — it is the context size at that call.
+- **`1.4.1` is a CONSTANT and belongs in no sum.** This mapping was wrong for a release and the
+  bug was invisible from inside: the first reader took `1.4.1` as input, `1.4.2` as cache and
+  `1.4.5` as the gauge, and every number it produced looked plausible. It was off by **4,8x in
+  tokens and 6,3x in cost** (52,6 mi / R$111 against a billed ~250 mi / R$703). What exposed it was
+  a comparison with the provider's own console — and what would have caught it earlier is in the
+  data itself: **`1.4.1` was the same 1072 on all 2.966 rows** (`min === max`), and a per-call
+  counter cannot be constant. When adopting a field from an undocumented binary format, check that
+  the values VARY the way the thing they claim to count varies, and reconcile the total against a
+  bill before trusting it. The mapping above is pinned by tests and by the arithmetic recorded in
+  `antigravity-protobuf.ts`'s header (input/cache/output and the 80,6 % cache share all land within
+  a few percent of the console's figures for the same project; no other assignment is close).
 - agy records **no cache-write** counter, so `cache_creation_input_tokens` stays 0.
 - `model` is the dominant `1.19` across the conversation's rows (e.g. `gemini-3.6-flash`; agy can
   also drive Claude models, e.g. `claude-opus-4-6-thinking`). **Cost is `calcCost()` only** —
@@ -1592,7 +1657,7 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
 - **BRL costs**: conversion via `/api/rates` (fetches live exchange rate); falls back to a fixed rate if the API fails
 - **Session sources**: `_source: 'meta'` sessions are the most complete; `'jsonl'` and `'subdir'` are fallbacks with partial data (no git line counts, no cache tokens)
 - **Binary mode**: `agentop server` sets `SERVE_STATIC=1`; `index.ts` then binds **two ports with one shared request handler** — `PORT` (47291) is the api + mcp endpoint, `WEB_PORT` (47292) serves the web dashboard (the URL you open). Same handler → the SPA on 47292 makes same-origin `/api/*` calls that resolve locally, so 91 stays api+mcp and 92 is the dashboard. The startup log lists `web` (92) above `api` (91)
-- **Machine in Docker**: `docker-compose.machine.yml` (repo root) runs a solo/member machine in a container — reuses the central image (minus Mongo/central mode), mounts the host harness dirs read-only + `~/.agentistics` read-write, host networking. Offered as the `docker` option in the control center's Services tab. Run the machine in Docker **or** natively, never both
+- **Machine in Docker**: `docker/machine.yml` runs a solo/member machine in a container — reuses the central image (minus Mongo/central mode), mounts the host harness dirs read-only + `~/.agentistics` read-write, host networking. Offered as the `docker` option in the control center's Services tab. Run the machine in Docker **or** natively, never both
 - **Live sessions are host-process detection, and every layer must stay honest about it.**
   `live-sessions.ts` reads `/proc` on the machine serving the request; a central never does this
   for members (it has no visibility into them) — members report their own snapshot over the
@@ -1611,9 +1676,9 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
     the same N/A-versus-a-confident-0 rule `HARNESS_CAPABILITIES` applies to metrics.
   - **A container needs `pid: host` AND the host user's uid.** `pid: host` alone yields the process
     list but `/proc/<pid>/cwd` is ptrace-gated, and the image runs as uid 10001 while the
-    assistants run as the host user. `docker-compose.machine.yml` sets `pid: host` and documents
+    assistants run as the host user. `docker/machine.yml` sets `pid: host` and documents
     the `user:` line as a deliberate opt-in that trades the hardening for the feature.
-    `docker-compose.yml` (the central) deliberately has NO `pid: host` — its own processes are not
+    `docker/central.yml` (the central) deliberately has NO `pid: host` — its own processes are not
     what anyone is asking about.
   - **The /proc read is gated by `CAPS.localProcesses` inside the handler** (`readLocalLiveSnapshot`
     in `index.ts`), NOT by registering the path in `capability-guard.ts`: `/api/live-sessions` also

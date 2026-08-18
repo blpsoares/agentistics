@@ -28,22 +28,30 @@ function str(s: string): number[] {
   return [...new TextEncoder().encode(s)]
 }
 
-/** Build a blob shaped exactly like a real gen_metadata.data row. */
+/**
+ * Build a blob shaped exactly like a real gen_metadata.data row.
+ *
+ * The parameter names are the SEMANTICS, not the field numbers, and the mapping below is the one
+ * verified against the provider's billing console: input is `1.4.2`, cache is `1.4.5`, and `1.4.1`
+ * is the constant system-instruction size that belongs in no sum.
+ */
 function buildBlob(o: {
-  input?: number, cached?: number, output?: number, context?: number,
+  input?: number, cached?: number, output?: number,
+  systemInstruction?: number, context?: number, window?: number,
   thinking?: number, completion?: number, modelId?: string, modelDisplay?: string,
 }): Uint8Array {
   const usage = [
-    ...vfield(1, o.input ?? 0),
-    ...vfield(2, o.cached ?? 0),
+    ...vfield(1, o.systemInstruction ?? 0),
+    ...vfield(2, o.input ?? 0),
     ...vfield(3, o.output ?? 0),
-    ...vfield(5, o.context ?? 0),
+    ...vfield(5, o.cached ?? 0),
     ...vfield(6, 24), // unknown constant present in the real data — must be ignored
     ...vfield(9, o.thinking ?? 0),
     ...vfield(10, o.completion ?? 0),
   ]
   const gen = [
     ...lfield(4, usage),
+    ...lfield(9, lfield(10, [...vfield(1, o.context ?? 0), ...vfield(4, o.window ?? 0)])),
     ...lfield(19, str(o.modelId ?? '')),
     ...lfield(21, str(o.modelDisplay ?? '')),
   ]
@@ -52,21 +60,54 @@ function buildBlob(o: {
 
 // ---------------------------------------------------------------------------
 
-test('decodes the verified real row 0 (input 1072 / cached 22504 / output 472)', () => {
+test('decodes a verified real row (input 18804 / cached 17105 / output 472)', () => {
   const blob = buildBlob({
-    input: 1072, cached: 22504, output: 472, thinking: 401, completion: 71,
+    systemInstruction: 1072, input: 18804, cached: 17105, output: 472, thinking: 401, completion: 71,
+    context: 30125, window: 128_000,
     modelId: 'gemini-3.6-flash', modelDisplay: 'Gemini 3.6 Flash (Medium)',
   })
   expect(parseGenMetadataBlob(blob)).toEqual({
-    inputTokens: 1072,
-    cachedTokens: 22504,
+    inputTokens: 18804,
+    cachedTokens: 17105,
     outputTokens: 472,
     thinkingTokens: 401,
     completionTokens: 71,
-    totalContextTokens: 0,
+    systemInstructionTokens: 1072,
+    contextTokens: 30125,
+    contextWindow: 128_000,
     modelId: 'gemini-3.6-flash',
     modelDisplay: 'Gemini 3.6 Flash (Medium)',
   })
+})
+
+test('field 1.4.1 is the constant system-instruction size, NOT the input count', () => {
+  // The regression this whole mapping exists to prevent. On the machine the fields were verified
+  // against, 1.4.1 was 1072 on every one of 2.966 rows while the real input varied per call; the
+  // adapter summed the constant and reported 52,6 mi tokens where the provider billed ~250 mi.
+  // A constant can never be a per-call counter, so it must never reach `inputTokens`.
+  const a = parseGenMetadataBlob(buildBlob({ systemInstruction: 1072, input: 2810 }))!
+  const b = parseGenMetadataBlob(buildBlob({ systemInstruction: 1072, input: 76273 }))!
+  expect(a.systemInstructionTokens).toBe(1072)
+  expect(b.systemInstructionTokens).toBe(1072)
+  expect(a.inputTokens).toBe(2810)
+  expect(b.inputTokens).toBe(76273)
+})
+
+test('the context gauge and the declared window come from 1.9.10, not from the usage message', () => {
+  const m = parseGenMetadataBlob(buildBlob({ input: 8011, cached: 70131, context: 91958, window: 256_000 }))!
+  expect(m.contextTokens).toBe(91958)
+  expect(m.contextWindow).toBe(256_000)
+  // The gauge is a LEVEL and sits apart from the two additive counters beside it.
+  expect(m.inputTokens).toBe(8011)
+  expect(m.cachedTokens).toBe(70131)
+})
+
+test('a row with no 1.9.10 reports no window rather than a guessed one', () => {
+  const gen = [...lfield(4, [...vfield(2, 500), ...vfield(3, 20)]), ...lfield(19, str('gemini-3.6-flash'))]
+  const m = parseGenMetadataBlob(new Uint8Array(lfield(1, gen)))!
+  expect(m.contextTokens).toBe(0)
+  expect(m.contextWindow).toBe(0)
+  expect(m.inputTokens).toBe(500)
 })
 
 test('output already contains thinking — the reader never adds them', () => {
@@ -75,11 +116,14 @@ test('output already contains thinking — the reader never adds them', () => {
   expect(m.thinkingTokens + m.completionTokens).toBe(m.outputTokens)
 })
 
-test('field 5 (context size) is reported separately and never folded into a sum', () => {
-  const m = parseGenMetadataBlob(buildBlob({ input: 10, output: 20, context: 20366 }))!
-  expect(m.totalContextTokens).toBe(20366)
-  expect(m.inputTokens).toBe(10)
-  expect(m.outputTokens).toBe(20)
+test('field 1.4.5 is the cache READ — the biggest counter agy produces', () => {
+  // ~80 % of agy's prompt volume lands here (80,6 % measured over 2.966 rows, against the 78,5 %
+  // the provider's console reports for the same project). Reading it as a context gauge, as the
+  // first version of this module did, dropped four fifths of the billed tokens on the floor.
+  const m = parseGenMetadataBlob(buildBlob({ input: 8011, cached: 70131, output: 183 }))!
+  expect(m.cachedTokens).toBe(70131)
+  expect(m.inputTokens).toBe(8011)
+  expect(m.outputTokens).toBe(183)
 })
 
 test('multi-byte varints above 2^21 decode correctly', () => {
@@ -89,11 +133,11 @@ test('multi-byte varints above 2^21 decode correctly', () => {
 })
 
 test('unknown fields of every wire type are skipped, not fatal', () => {
-  const usage = [...vfield(1, 5), ...vfield(3, 7)]
+  const usage = [...vfield(2, 5), ...vfield(3, 7)]
   const gen = [
     ...varint(7 * 8 + 5), 1, 2, 3, 4,             // fixed32 unknown
     ...varint(8 * 8 + 1), 1, 2, 3, 4, 5, 6, 7, 8, // fixed64 unknown
-    ...vfield(9, 999),                             // varint unknown
+    ...vfield(11, 999),                            // varint unknown
     ...lfield(12, str('ignored')),                 // LEN unknown
     ...lfield(4, usage),
     ...lfield(19, str('gemini-3.6-flash')),
@@ -112,8 +156,8 @@ test('empty / absent input returns null', () => {
 
 test('a truncated blob never throws and yields at most partial data', () => {
   const full = buildBlob({
-    input: 1072, cached: 22504, output: 472, thinking: 401, completion: 71,
-    modelId: 'gemini-3.6-flash',
+    systemInstruction: 1072, input: 1072, cached: 22504, output: 472, thinking: 401, completion: 71,
+    context: 30125, window: 128_000, modelId: 'gemini-3.6-flash',
   })
   for (let cut = 1; cut < full.length; cut++) {
     const m = parseGenMetadataBlob(full.subarray(0, cut))
@@ -139,7 +183,7 @@ test('garbage bytes never throw', () => {
 })
 
 test('an implausibly huge token count is treated as corruption, not data', () => {
-  const usage = [...vfield(1, Number.MAX_SAFE_INTEGER)]
+  const usage = [...vfield(2, Number.MAX_SAFE_INTEGER)]
   const m = parseGenMetadataBlob(new Uint8Array(lfield(1, lfield(4, usage))))!
   expect(m.inputTokens).toBe(0)
 })
