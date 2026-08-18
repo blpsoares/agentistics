@@ -3,7 +3,7 @@ import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { GitCompare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import type { HarnessId, Lang, TokenBreakdown } from '@agentistics/core'
-import { EMPTY_TOKENS, fmt, fmtCost, formatModel, t, tokenSharePct, totalTokens } from '@agentistics/core'
+import { EMPTY_TOKENS, TOKEN_PARTS, fmt, fmtCost, formatModel, t, tokenLabel, tokenSharePct, totalTokens } from '@agentistics/core'
 import { HARNESS_LABELS, HARNESS_COLORS, capable } from '../lib/harness'
 import { computeFilteredHarnessSummaries } from '../hooks/useData'
 import { fmtDateLocalized } from '../lib/dateFormat'
@@ -477,37 +477,35 @@ function CompareByHarness() {
             <MetricRow label={t('compare.sessions', lang)} values={sessionValues} format={fmtCount} colors={colors} lang={lang} />
             <MetricRow label={t('compare.messages', lang)} values={messageValues} format={fmtCount} colors={colors} lang={lang} />
             <MetricRow label={t('compare.totalTokens', lang)} values={tokensValues} format={fmtTokens} colors={colors} lang={lang} />
-            <MetricRow
-              label={t('compare.inputTokens', lang)}
-              values={aggs.map(a => ({
-                harness: a.harness,
-                value: capable(a.harness, 'tokens') ? a.inputTokens : null,
-              }))}
-              format={fmtTokens}
-              colors={colors}
-              lang={lang}
-            />
-            <MetricRow
-              label={t('compare.outputTokens', lang)}
-              values={aggs.map(a => ({
-                harness: a.harness,
-                value: capable(a.harness, 'tokens') ? a.outputTokens : null,
-              }))}
-              format={fmtTokens}
-              colors={colors}
-              lang={lang}
-            />
+            {/* All FOUR counters, one row each. This was input and output alone — the pair that
+                comes to 0,34 % of the volume on a real machine — so the table could show one
+                harness's total dwarfing another's without showing the cache that explains it.
+                Rows cost height, never width, so a comparison of six harnesses is unaffected.
+                Labels come from `tokenLabel`, the same vocabulary every other surface prints. */}
+            {TOKEN_PARTS.map(part => (
+              <MetricRow
+                key={part}
+                label={tokenLabel(part, lang === 'pt' ? 'pt' : 'en')}
+                values={aggs.map(a => ({
+                  harness: a.harness,
+                  value: capable(a.harness, 'tokens') ? a.tokens[part] : null,
+                }))}
+                format={fmtTokens}
+                colors={colors}
+                lang={lang}
+              />
+            ))}
             <MetricRow label={t('compare.cost', lang)} values={costValues} format={fmtCostFn} colors={colors} lang={lang} />
           </tbody>
         </table>
       </div>
 
-      {/* Three token rows sit above each other and only one of them is the total. Without this the
-          obvious reading is that input + output should equal it, and it is off by ~300x. */}
+      {/* The four rows under the total now ARE the total, so the note says how they are priced
+          rather than apologising for the two that were missing. */}
       <MetricNote>
         {lang === 'pt'
-          ? 'A linha de tokens totais soma os quatro contadores cobrados. As linhas de entrada e saída abaixo dela são só dois deles — o resto é leitura e escrita de cache, que costumam ser a maior parte do volume. Por isso entrada + saída NÃO fecha com o total.'
-          : 'The total-tokens row adds all four billed counters. The input and output rows under it are only two of them — the rest is cache read and cache write, usually most of the volume. That is why input + output does NOT add up to the total.'}
+          ? 'A linha de tokens totais soma os quatro contadores abaixo dela. São quatro preços diferentes: leitura de cache custa cerca de um décimo da entrada nova, e a saída é o token mais caro que existe — por isso dois harnesses com o mesmo total podem custar muito diferente.'
+          : 'The total-tokens row adds the four counters under it. They are four different prices: a cache read costs about a tenth of fresh input, and output is the most expensive token there is — which is why two harnesses with the same total can cost very differently.'}
       </MetricNote>
 
       {/* Cost per 1M tokens (blended) — highlights the cheapest harness */}
