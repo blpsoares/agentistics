@@ -24,7 +24,7 @@ const YE = `${ESC}[33m`
 const WH = `${ESC}[97m`
 
 const CENTRAL_PROJECT = 'team-mode'      // central.sh: PROJECT=${PROJECT:-team-mode}
-const MACHINE_IMAGE = 'agentistics-machine' // docker-compose.machine.yml: image
+const MACHINE_IMAGE = 'agentistics-machine' // docker/machine.yml: image
 
 // shell helpers (local copy of cli-start.ts's pattern)
 async function sh(cmd: string[]): Promise<{ code: number; out: string }> {

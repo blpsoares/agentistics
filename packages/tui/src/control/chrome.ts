@@ -1107,6 +1107,19 @@ export function detailContent(
     }
   }
 
+  // What this box CANNOT start, and why. Placed after the runtimes — it is the same subject read
+  // one level down — and only while the service is DOWN: a running central has no start verbs at
+  // all, so listing what it could not have started is a paragraph about a decision nobody is
+  // making. Absent when nothing is withheld, rather than a line saying so.
+  const startNotes = service.state === 'up' ? [] : service.startNotes ?? []
+  if (startNotes.length > 0) {
+    lines.push({ kind: 'blank', label: '', value: '', tone: 'plain' })
+    lines.push({ kind: 'section', label: s.sectionStartBlocked, value: '', tone: 'plain' })
+    for (const note of startNotes) {
+      lines.push({ kind: 'text', label: '', value: note, tone: 'info' })
+    }
+  }
+
   const addresses: DetailLine[] = []
   if (active?.webUrl) {
     addresses.push({ kind: 'row', label: s.webLabel, value: active.webUrl, tone: 'plain' })

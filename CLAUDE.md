@@ -34,7 +34,7 @@ packages/server/bin/cli.ts  (binary entry point — agentop)
   ├── agentop restart …    → bounce a mode's service (`server`/`watch` → systemd; `central` → central.sh restart; `--all` → cli-start.ts restartAllServices over every running service). `--rebuild` rebuilds before restarting instead of just bouncing (`central` → `up`; machine → `compose build --no-cache` then `compose up -d --force-recreate`; `server`/`watch` → `rebuildNativeBinary()`, i.e. `bun run bin`, which needs the repo checkout — outside one it says so and restarts the existing build). **A rebuild is a FULL rebuild**: the Docker paths pass `--no-cache`, because a cached one could hand back the very image it was asked to replace, and they say so on the way in — that build is several minutes. `--cache` is the escape hatch (reuse Docker's layer cache); `-y`/`-n` answer `central.sh up`'s "re-run interactive setup?" prompt up front, so an unattended rebuild never waits on a keypress. All of it is resolved by the pure `rebuild-flags.ts` (`parseRebuildFlags` / `centralRebuildArgs` / `composeRebuildCommands`) — the shell receives an already-decided answer, `-y` with `-n` (or `--cache` with `--no-cache`) is refused rather than resolved, and the control center's rebuild verb passes `-n` EXPLICITLY instead of relying on its piped child failing `[ -t 0 ]`. A plain `agentop central up` / `central.sh up` is not a rebuild and keeps its cached build
   ├── agentop tui          → an ALIAS for `start`, renamed in cli.ts's one-line dispatch. There is no second Ink app: the metrics ARE the control center's `dashboard` tab, and a branch of its own would be a copy that starts identical and drifts
   ├── agentop watch        → server/otel-watcher.ts (daemon only)
-  ├── agentop central …    → server/cli-central.ts (wraps central.sh: up/init/down/logs/status/restart/pull; `up` takes -y/-n and --cache/--no-cache, honored on the standalone path too)
+  ├── agentop central …    → server/cli-central.ts (up/init/down/logs/status/restart/pull/setup-token/reset-password). **HOW a central runs is the USER'S choice, not an inference** — the pure `central-runtime.ts` holds the three shapes (`docker-build` = central.sh builds from the checkout, `docker-image` = pull ghcr.io/blpsoares/agentistics, `native` = the binary IS the server) plus which of them work HERE and why not. It used to be pure inference (a checkout meant central.sh, no checkout meant the image), which made two reasonable requests impossible to express: the published image from inside a clone, and a native server anywhere. `up` now takes `--image` / `--build` / `--native` (+ `--bg`, which finally exposes the detached native start that only the control center could reach), the wizard ASKS and records the answer in `AGENTISTICS_CENTRAL_RUNTIME` — read by the CLI only, passed into no container — and every later action resolves the same way the first did. **A requested shape that cannot work is REFUSED in a sentence, never downgraded**: a `--native` that quietly became a Docker start is a central running under a shape its operator did not choose. `defaultCentralRuntime` reproduces the old inference exactly and `central-runtime.test.ts` pins it against `planCentralStart`, so an upgrade changes nothing for an existing central. `up` still takes -y/-n and --cache/--no-cache
   ├── agentop member …     → server/cli-member.ts (connect/leave/status; whoami-verified, no browser)
   ├── agentop session …    → server/sessions/cli-session.ts (start/ls/list/attach/kill/rename/note;
   │                          `--bg` detaches via tmux, attach prints the REAL detach key; `list`
@@ -309,6 +309,28 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
+  ├── central-runtime.ts   → **pure**: the three shapes a central can take here, each with `available` + a REASON CODE
+  │                          (`no-docker` / `no-checkout` / `no-env` / `bundled-mongo`) rendered by cli-i18n and the
+  │                          cockpit's own strings — the module is language-free, like `LiveUnavailableReason`. It is the
+  │                          ONE resolution behind BOTH front doors: `agentop central up --image|--build|--native` and the
+  │                          control center's start verbs, which is what stops the CLI and the cockpit offering different
+  │                          deployments. `no-env` and `bundled-mongo` are deliberately different codes — "not configured
+  │                          yet" and "configured for a database Docker alone can reach" send the user to different screens
+  ├── service-manager.ts   → **pure**: which init system can keep a mode running here (systemd user units on Linux, launchd
+  │                          user agents on macOS, pm2 anywhere it is installed) and the exact file/argv each needs. **pm2
+  │                          never wins by default** even when installed — it is a list the user curates, and agentop filing
+  │                          itself into it is their decision. The field the module exists for is `keepsRunning`: `agentop
+  │                          server` holds the foreground (`Type=simple`), while `docker compose up -d` and `central.sh up`
+  │                          RETURN once the container is up — registered as long-running, systemd marks the unit
+  │                          inactive(dead) a second after a perfectly successful start and every `is-active` then lies, so
+  │                          those become `Type=oneshot` + `RemainAfterExit=yes`. Same distinction drives launchd's
+  │                          `KeepAlive` and pm2's `--no-autorestart`. It is a property of the COMMAND, so a NATIVE central
+  │                          gets a different unit type from a Docker one — which is why `serviceCommandFor` takes the
+  │                          central runtime, and why `agentop autostart central` finally works from an installed binary
+  │                          (it writes `agentop central up --image -n` instead of refusing for want of a central.sh).
+  │                          Each manager NAMES the one step it cannot take for the user (`bootCaveat`): linger on systemd,
+  │                          login-not-boot on launchd, `pm2 save` + `pm2 startup` on pm2 — a service that will not survive
+  │                          a reboot while the user believes it will is worse than none
   ├── rebuild-flags.ts     → **pure**: the rebuild's two answers (`-y`/`-n` for central.sh's setup prompt, `--cache`/`--no-cache` for the image build) — parse, conflict-refuse, and the argv each path receives
   ├── cli-i18n.ts          → EN/PT strings the HOST produces (CLI is English by default; language follows --lang / preferences.lang / the in-app toggle). The control center's own chrome strings live in tui/src/control/i18n.ts
   ├── cli-hooks.ts + claude-hooks.ts / claude-skill.ts / session-context.ts → **the Claude Code
@@ -1598,7 +1620,7 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
 - **BRL costs**: conversion via `/api/rates` (fetches live exchange rate); falls back to a fixed rate if the API fails
 - **Session sources**: `_source: 'meta'` sessions are the most complete; `'jsonl'` and `'subdir'` are fallbacks with partial data (no git line counts, no cache tokens)
 - **Binary mode**: `agentop server` sets `SERVE_STATIC=1`; `index.ts` then binds **two ports with one shared request handler** — `PORT` (47291) is the api + mcp endpoint, `WEB_PORT` (47292) serves the web dashboard (the URL you open). Same handler → the SPA on 47292 makes same-origin `/api/*` calls that resolve locally, so 91 stays api+mcp and 92 is the dashboard. The startup log lists `web` (92) above `api` (91)
-- **Machine in Docker**: `docker-compose.machine.yml` (repo root) runs a solo/member machine in a container — reuses the central image (minus Mongo/central mode), mounts the host harness dirs read-only + `~/.agentistics` read-write, host networking. Offered as the `docker` option in the control center's Services tab. Run the machine in Docker **or** natively, never both
+- **Machine in Docker**: `docker/machine.yml` runs a solo/member machine in a container — reuses the central image (minus Mongo/central mode), mounts the host harness dirs read-only + `~/.agentistics` read-write, host networking. Offered as the `docker` option in the control center's Services tab. Run the machine in Docker **or** natively, never both
 - **Live sessions are host-process detection, and every layer must stay honest about it.**
   `live-sessions.ts` reads `/proc` on the machine serving the request; a central never does this
   for members (it has no visibility into them) — members report their own snapshot over the
@@ -1617,9 +1639,9 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
     the same N/A-versus-a-confident-0 rule `HARNESS_CAPABILITIES` applies to metrics.
   - **A container needs `pid: host` AND the host user's uid.** `pid: host` alone yields the process
     list but `/proc/<pid>/cwd` is ptrace-gated, and the image runs as uid 10001 while the
-    assistants run as the host user. `docker-compose.machine.yml` sets `pid: host` and documents
+    assistants run as the host user. `docker/machine.yml` sets `pid: host` and documents
     the `user:` line as a deliberate opt-in that trades the hardening for the feature.
-    `docker-compose.yml` (the central) deliberately has NO `pid: host` — its own processes are not
+    `docker/central.yml` (the central) deliberately has NO `pid: host` — its own processes are not
     what anyone is asking about.
   - **The /proc read is gated by `CAPS.localProcesses` inside the handler** (`readLocalLiveSnapshot`
     in `index.ts`), NOT by registering the path in `capability-guard.ts`: `/api/live-sessions` also
