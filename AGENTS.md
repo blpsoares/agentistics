@@ -27,10 +27,11 @@ implementation detail: those live in `docs/` (canonical) and in each harness's o
 
 ## Opening a PR
 
-- **Every PR must reference an Issue** — `Closes #N` / `Fixes #N` / `Resolves #N` in the PR body.
-  `.github/workflows/require-linked-issue.yml` checks this on every PR. A genuinely trivial change
-  (a typo, a single dependency bump) can carry the `no-issue-needed` label instead of an Issue
-  opened just to satisfy the check — that label is the escape hatch, not the default.
+- **Link the Issue it addresses** — `Closes #N` / `Fixes #N` / `Resolves #N` in the PR body, when
+  one exists. This is a convention, not an enforced gate: there is deliberately no CI check and no
+  branch protection requiring it — an Issue must never block someone from shipping a fix. Link it
+  because it keeps the Project board accurate, not because something will reject the PR if you
+  don't.
 - Follow `CONTRIBUTING.md` for setup, running tests, and commit conventions (Conventional Commits,
   English).
 - Fill in the PR template for real — a "Summary" with no "Motivation" or "Test plan" is not a
