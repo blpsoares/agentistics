@@ -182,6 +182,33 @@ A member does **not** name itself — the display name is set by the central whe
 
 The **central owns the cadence** (`server/central-config.ts`, `pushIntervalSec`; normal floor 15s, default 30s, express down to 5s via `EXPRESS_MIN_SEC`). Members fetch it from `GET /api/team/policy` each cycle and can only follow it — there is no member-side override that goes faster. On top of the periodic timer, `server/team-uploader.ts` also does **push-on-change**: the file watcher calls `notifyDataChanged()`, which schedules a debounced push (coalesces bursts, never sooner than the central's interval since the last success). Members push their **supplemented** statsCache (the one the local dashboard shows, gap-filled past the stale `lastComputedDate`), not the raw `~/.claude/stats-cache.json`, so central totals match the member's own dashboard exactly.
 
+### Batch size and its timeout — one decision, not two
+
+A push splits its sessions into batches, and **a batch is the unit of durable progress**: the
+sent-state advances only after the central ACCEPTS one. A batch that can never complete therefore
+records nothing, and the next cycle sends exactly the same sessions again — forever.
+
+That is not hypothetical. A batch size of 200 was chosen in one place and a flat 15s ingest timeout
+in another, with nothing checking that one fit the other. A real remote central costs ~195 ms per
+session (Mongo upserts + stats + SSE fan-out, over the public internet), so 200 sessions need ~39s.
+Measured on a live member: **1.260 consecutive failures, a sent-state still `{}`, and
+`lastSuccessAt: null`** — a machine that had never once pushed while its central answered every
+other request in under a second.
+
+So `server/ingest-batch.ts` (**pure**) owns both numbers:
+
+- **The timeout is DERIVED from the batch** (`ingestTimeoutMs(n)`), never stated beside it, so they
+  cannot drift apart again. It stays bounded (`MAX_TIMEOUT_MS`) because the timeout's original job
+  is to guarantee a `MAX_CONCURRENT_PUSHES` slot is released when a wedged proxy accepts a
+  connection and never answers.
+- **The batch adapts** (`nextBatchSize`): a derived timeout still rests on an estimate of someone
+  else's hardware, so a failed push halves the batch and a successful one grows it back toward the
+  ceiling. A central slower than the estimate converges on a size it can serve instead of retrying
+  an impossible request. Growth is gradual on purpose — jumping straight back to the ceiling would
+  fail, drop to the floor and fail again, which is the same non-convergence in a slower loop.
+- **The ceiling is far below the old 200.** Smaller batches cost round trips and buy durable
+  progress: a member whose network drops mid-push keeps every batch already accepted.
+
 ### Real-time central
 
 A member push lands in `server/team-ingest.ts`, which upserts the sessions/stats and then calls `triggerSseNotification()` — the central's dashboards refresh live over SSE without polling. This is why the "Live" toggle is **hidden on a central**. `server/team-watch.ts` also watches the team collection as a fallback SSE source.

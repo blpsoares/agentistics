@@ -435,6 +435,25 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   ├── team-ingest.ts       → POST /api/team/ingest → upsert + triggerSseNotification (real-time central)
   ├── team-source.ts / team-admin.ts → central-side team read for buildApiResponse + members-panel admin routes
   ├── team-uploader.ts     → member→central push: sent-state, sync-signature auto-reconcile, push-on-change (notifyDataChanged), auto-reset on revoke, /api/team/status pill
+  ├── ingest-batch.ts      → **pure**: how many sessions one ingest carries and how long it gets.
+  │                          **A BATCH IS THE UNIT OF DURABLE PROGRESS** — the sent-state advances
+  │                          only on an ACCEPTED batch, so a batch that cannot complete records
+  │                          NOTHING and the next cycle re-sends the same sessions forever. That
+  │                          happened: `BATCH_SIZE` 200 was chosen in one place and a flat 15s
+  │                          timeout in another, nothing checked that one fit the other, and a real
+  │                          central costs ~195 ms/session — so 200 needed ~39s and every first push
+  │                          aborted. Measured on a live member: 1.260 consecutive failures, a
+  │                          sent-state still `{}`, `lastSuccessAt: null`, against a central
+  │                          answering everything else in under a second. So the TIMEOUT IS DERIVED
+  │                          from the batch (`ingestTimeoutMs`, the only place either number is
+  │                          decided) and still BOUNDED (`MAX_TIMEOUT_MS`), because the timeout's
+  │                          original job is releasing a `MAX_CONCURRENT_PUSHES` slot held by a
+  │                          wedged proxy. And the batch ADAPTS (`nextBatchSize`): a derived timeout
+  │                          still rests on an estimate of someone else's hardware, so a failure
+  │                          HALVES and a success grows back GRADUALLY — jumping straight to the
+  │                          ceiling would fail, floor, and fail again, which is the same
+  │                          non-convergence in a slower loop. The ceiling is far below 200 on
+  │                          purpose: smaller batches cost round trips and buy durable progress
   ├── account-repos.ts     → **pure**: buildAccountRepoList (central grouping) + findStillShared (the MACHINE-side intersection). A machine asks the central what repositories it holds FOR ITS ACCOUNT (`GET /api/team/account-repos`, team-account-repos.ts) — a question naming no repository and carrying no rule — and compares locally, so it learns a sibling still shares a repo it hid without disclosing anything
   ├── team-elsewhere.ts    → member side of that: TTL-throttled fetch + cache → ConnectionStatusEntry.elsewhere (same-origin) → the orange banner on the connection card
   ├── (core) siblingRules.ts → **pure** `@agentistics/core`: the REVERSE warning's arithmetic — `bucketSharedBy` (is this repo/project bucket shared by these announced rules?) + `siblingsRestricting` + `mergeSiblingFacts`. It may **never** be derived from the central: a sibling that hides a repo simply leaves the central without it, and absence is ambiguous between "restricted" and "never cloned", so the ONLY sound source is the sealed envelope inbox. `bucketSharedBy` is a second implementation of a privacy rule, so `share-rules.test.ts` cross-checks it against `sessionShared` over every mode x dimension x bucket combination — `share-rules.ts` stays the single source of the semantics. **Projects correlate across machines by FOLDER NAME** (`projectNameKey`: `\`→`/`, trailing separators stripped, final segment, case folded — case because WSL/Windows machines share these accounts), because the same project sits at a different path on every machine and full-`project_path` comparison correlates almost nothing. **That is the CROSS-MACHINE key only**: `bucketSharedBy` and the stored rules stay EXACT, or a local rule denying `/home/a/x/proj` would silently widen to every project named `proj` — `shareBucketKeys` (exact) and `crossMachineKeys` (correlation) must stay separate, and a test fails if the exact predicate is widened. It is a heuristic (`api`, `web`, `docs` collide), so `siblingsWithholding` reports the sibling's OWN path when the announcement carries one, and the UI says "a project with this name"
