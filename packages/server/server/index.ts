@@ -240,10 +240,22 @@ if (TEAM_CENTRAL) {
         } else {
           // Deliberately NOT reissued here: a boot that minted a second token would silently
           // invalidate one the operator may still be holding. Name the command that does it.
+          // Named by HOW this central was deployed. It used to lead with `./central.sh
+          // setup-token`, which does not exist for the majority of installs — the published-image
+          // path needs no checkout — so the first command the operator was told to run was one
+          // their machine could not run. The compose files set AGENTISTICS_DEPLOY_HINT for exactly
+          // this; absent (a hand-rolled compose), both are named and each is labelled.
+          const hint = process.env.AGENTISTICS_DEPLOY_HINT
+          const reissue = hint === 'central.sh'
+            ? '  logs). Lost it? Reissue with:  ./central.sh setup-token\n'
+            : hint === 'agentop'
+              ? '  logs). Lost it? Reissue with:  agentop central setup-token\n'
+              : '  logs). Lost it? Reissue it from the host that started this central:\n' +
+                '    agentop central setup-token     (deployed with the agentop CLI)\n' +
+                '    ./central.sh setup-token        (deployed from a repo checkout)\n'
           console.log(
             '\n[agentistics] Owner setup pending — a setup token was already issued (see earlier\n' +
-            '  logs). Lost it? Reissue with:  ./central.sh setup-token\n' +
-            '  (standalone: agentop central setup-token)\n',
+            reissue,
           )
         }
       }

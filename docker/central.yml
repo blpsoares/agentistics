@@ -71,6 +71,10 @@ services:
       # Requires docker/central.selfcontrib.yml, which central.sh includes automatically when
       # this is set — a dedicated central mounts nothing from the host at all.
       AGENTISTICS_CENTRAL_USER: ${AGENTISTICS_CENTRAL_USER:-}
+      # Which tool brought this container up, so the in-container "lost your setup token"
+      # banner can name a command that actually EXISTS on this host. It used to lead with
+      # `./central.sh setup-token`, which the published-image path has no checkout for.
+      AGENTISTICS_DEPLOY_HINT: "central.sh"
       PORT: "47291"
       SERVE_STATIC: "1"
     volumes:
