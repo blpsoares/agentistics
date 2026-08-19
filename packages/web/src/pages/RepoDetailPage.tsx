@@ -7,7 +7,8 @@ import {
 } from 'lucide-react'
 import type { AppContext, } from '../lib/app-context'
 import type { SessionMeta, MemberPresence, HarnessId, WorkflowRun, WorkflowAgent } from '@agentistics/core'
-import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionCostUSD, sessionLabel, workflowTokens, NO_REPO_KEY, sessionTokenTotal, totalTokens, TOKEN_PARTS, tokenLabel, tokenHelp, totalTokensExplained } from '@agentistics/core'
+import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionCostUSD, sessionLabel, workflowTokens, NO_REPO_KEY, sessionTokenTotal, totalTokens, totalTokensExplained } from '@agentistics/core'
+import { TokenBreakdownLine } from '../components/TokenBreakdownLine'
 import { capable, HARNESS_LABELS, HARNESS_COLORS, DYNAMIC_WORKFLOWS_DOC } from '../lib/harness'
 import { canonicalRepoKey } from '../lib/shareRepos'
 import { PLURAL_COPY, interpolate, plural } from '../components/team/copy'
@@ -143,30 +144,27 @@ export default function RepoDetailPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10 }}>
         <StatTile label={pt ? 'Sessões' : 'Sessions'} value={String(scoped.totalSessions)} />
         <StatTile label={pt ? 'Custo' : 'Cost'} value={fmtCost(scoped.totalCostUSD, currency, brlRate)} accent />
-        {/* The total, then all four billed counters. It used to be input and output alone, which
-            on a real machine is 0,34 % of the volume — the cache pair was on no tile here at all,
-            so the strip could not explain its own cost. `scoped.tokenTotals` is the same filtered
-            model usage `totalCostUSD` above is priced from, so the tokens and the money describe
-            the same turns under the repo scope. The grid is `auto-fit`, so the extra tiles wrap
-            instead of leaving a gap. */}
+        {/* ONE tokens tile — the total of all four billed counters, where this used to be input
+            and output as two tiles (the pair that comes to 0,34 % of the volume). The four
+            counters themselves are the line UNDER this strip, not tiles in it: the grid is
+            `repeat(auto-fit, minmax(120px, 1fr))`, which fits `floor((W + gap) / 130)` columns —
+            ten at ~1400px — so taking the strip to eleven tiles stranded the last one alone on a
+            second row. `scoped.tokenTotals` is the same filtered model usage `totalCostUSD` above
+            is priced from, so the tokens and the money describe the same turns under the repo
+            scope. */}
         <StatTile
           label="Tokens"
           value={fmt(totalTokens(scoped.tokenTotals))}
           title={totalTokensExplained(scoped.tokenTotals, pt ? 'pt' : 'en')}
         />
-        {TOKEN_PARTS.map(part => (
-          <StatTile
-            key={part}
-            label={tokenLabel(part, pt ? 'pt' : 'en')}
-            value={fmt(scoped.tokenTotals[part])}
-            title={tokenHelp(part, pt ? 'pt' : 'en')}
-          />
-        ))}
         <StatTile label="Commits" value={String(scoped.gitCommits)} />
         <StatTile label={pt ? 'Linhas' : 'Lines'} value={`+${fmt(scoped.linesAdded)} −${fmt(scoped.linesRemoved)}`} />
         {isCentral && <StatTile label={pt ? 'Membros' : 'Members'} value={String(scoped.repoStats[0]?.members.length ?? 0)} />}
         <StatTile label="Agents" value={String(scoped.totalAgentInvocations)} />
       </div>
+      {/* What the Tokens tile above is made of. A wrapping line has no cell count, so unlike four
+          more tiles it cannot strand anything at any width. */}
+      <TokenBreakdownLine tokens={scoped.tokenTotals} lang={pt ? 'pt' : 'en'} />
 
       {/* Tabs */}
       <div className="tabscroll" style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', overflowX: 'auto' }}>

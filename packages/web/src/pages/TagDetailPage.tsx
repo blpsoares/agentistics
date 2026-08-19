@@ -6,9 +6,10 @@ import {
 import { format, parseISO } from 'date-fns'
 import { ArrowLeft, Pencil, Trash2, CalendarRange } from 'lucide-react'
 import {
-  TOKEN_PARTS, fmt, fmtCost, formatModel, formatProjectName, repoShortName,
-  tokenHelp, tokenLabel, totalTokens as totalTokensOf, totalTokensExplained,
+  fmt, fmtCost, formatModel, formatProjectName, repoShortName,
+  totalTokens as totalTokensOf, totalTokensExplained,
 } from '@agentistics/core'
+import { TokenBreakdownLine } from '../components/TokenBreakdownLine'
 import type { AppContext } from '../lib/app-context'
 import type { TokenBreakdown } from '@agentistics/core'
 import { MetricNote } from '../components/MetricNote'
@@ -416,26 +417,23 @@ export default function TagDetailPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
           <StatTile label={pt ? 'Custo' : 'Cost'} value={fmtCost(tag.aggregate.costUSD, currency, brlRate)} accent />
           <StatTile label={pt ? 'Sessões' : 'Sessions'} value={tag.aggregate.sessions.toLocaleString()} />
-          <StatTile label="Tokens" value={fmt(totalTokens)} />
-          {/* All FOUR counters, each named. This used to be the total plus input and output alone,
-              with a note underneath explaining why the two did not add up to the first — an
-              apology for a missing number rather than the number. The cache pair it was
-              apologising for is usually most of the volume, so it is the half that explains both
-              the size of the total and the modesty of the cost beside it. */}
-          {TOKEN_PARTS.map(part => (
-            <StatTile
-              key={part}
-              label={tokenLabel(part, pt ? 'pt' : 'en')}
-              value={fmt(tag.aggregate.tokens[part])}
-              title={tokenHelp(part, pt ? 'pt' : 'en')}
-            />
-          ))}
+          {/* ONE tokens tile, with the four counters on the line below the strip. It was the total
+              plus input and output as three tiles, under a note explaining why two of them did not
+              add up to the first — an apology for the missing pair rather than the pair. Adding
+              them as tiles was the first fix and the wrong one: this grid is `auto-fit` over
+              `minmax(130px, 1fr)`, so past a certain count the last tile is stranded alone on a
+              second row. */}
+          <StatTile
+            label="Tokens"
+            value={fmt(totalTokens)}
+            title={totalTokensExplained(tag.aggregate.tokens, pt ? 'pt' : 'en')}
+          />
           {/* Counts, not names — so they need no redaction and stay honest even when the machine
               buckets below collapse several unseeable ones into a single "other". */}
           <StatTile label={pt ? 'Membros' : 'Members'} value={(detail?.stats.distinctMembers ?? 0).toLocaleString()} />
           <StatTile label={pt ? 'Máquinas' : 'Machines'} value={(detail?.stats.distinctMachines ?? 0).toLocaleString()} />
         </div>
-        <MetricNote>{totalTokensExplained(tag.aggregate.tokens, pt ? 'pt' : 'en')}</MetricNote>
+        <TokenBreakdownLine tokens={tag.aggregate.tokens} lang={pt ? 'pt' : 'en'} />
         {/* A tag whose sources resolve to nothing is a real, common state (a brand-new grouping, or
             one whose machines have not pushed yet) — say so instead of showing five zeros. */}
         {empty && (
