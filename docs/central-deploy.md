@@ -48,13 +48,47 @@ Not sure? **`--image` is the one that works everywhere Docker does**, needs no c
 
 ## 2. Configure it — `central.env`
 
-Every shape reads the same file. Generate it with the wizard, which asks for the port, org, bind
-interface, database and shape, generates the secrets with `openssl`, and writes it `chmod 600`:
+Every shape reads the same file. Generate it with the wizard, which asks for the port, org, **who
+will reach it**, the bind interface, the database and the shape, generates the secrets with
+`openssl`, and writes it `chmod 600`:
 
 ```bash
 agentop central init      # anywhere — the installed binary is enough
 ./central.sh init         # the same wizard, from a checkout
 ```
+
+### "Who will reach this central" — and why it is a question at all
+
+The wizard asks this, and it is the setting with the most consequence:
+
+```
+Who will reach this central
+› Only this machine — nothing else can connect
+  A network I trust — LAN, or a tailnet
+  The internet — published through a tunnel or a reverse proxy
+```
+
+It looks like something that ought to be automatic. An API has no switch for "am I on the
+internet" — it simply is. **The difference is that this is not a question about reach; it is a
+question about capability.**
+
+A central shares its code with a solo machine's dashboard, and that dashboard legitimately runs
+shell on its own host (`/api/exec`), spawns the local assistant CLI (`/api/chat-tty`), reads the
+machine's raw transcripts and rewrites `~/.claude.json`. Correct on your own laptop; catastrophic
+on a box strangers can reach. So the real question is *which of those capabilities should still
+exist, given who can get here* — and answering "the internet" makes them stop existing, with no
+opt-in to bring them back.
+
+**It cannot be inferred.** From inside the container, a central behind a Cloudflare tunnel and a
+central nobody can reach are identical: both see a loopback bind and the same request headers. The
+tunnel is outside the process, often on another host entirely. Only you know the intent.
+
+Answering **the internet** writes `AGENTISTICS_EXPOSURE=public`, `AGENTISTICS_TEAM_TLS=1` and
+`AGENTISTICS_TRUST_PROXY=1`, and keeps `BIND_IP=127.0.0.1` **on purpose** — the entry point in
+front must be the only way in, or everything it enforces can be walked around by addressing this
+host directly. You can still override the bind (a tunnel on another machine is a real deployment);
+the wizard warns rather than refuses. Then run `agentop doctor --exposed` before the first outside
+request — [`docs/exposure.md`](exposure.md) is the full runbook.
 
 Or copy the annotated template and edit it:
 
@@ -223,13 +257,18 @@ rebuilt, so your new code silently does not run.
 
 ### First boot — the owner account
 
-The first boot with no owner prints a one-time setup token to the log. `up` prints it for you;
-otherwise:
+The first boot with no owner prints a one-time setup token to the log, and `up` prints it for you.
+If it scrolled past, **do not go hunting for it in the logs — mint a new one**, which invalidates
+the old:
 
 ```bash
-agentop central logs | grep -A6 "OWNER SETUP"
-docker compose -p team-mode logs app | grep -A6 "OWNER SETUP"
+agentop central setup-token     # deployed with the CLI (any shape)
+./central.sh setup-token        # deployed from a checkout
 ```
+
+Both run the reissue *inside* the container, which is where the database is reachable. Reading it
+back out of the logs is the fragile path: `docker compose logs` needs `-f`/`--env-file` to resolve
+the project from an arbitrary directory, and the banner may have rotated out entirely.
 
 Open the dashboard, create the owner (name, e-mail, password + that token), and enrol a second
 factor. **Every profile requires an owner to hold one** — an owner reaches every team's data and

@@ -51,6 +51,10 @@ services:
 
       # Self-contribution needs host mounts, which this path deliberately does NOT have —
       # see docker/central.selfcontrib.yml, and prefer the build path for that setup.
+      # Which tool brought this container up, so the in-container "lost your setup token"
+      # banner can name a command that actually EXISTS on this host. It used to lead with
+      # `./central.sh setup-token`, which the published-image path has no checkout for.
+      AGENTISTICS_DEPLOY_HINT: "agentop"
       PORT: "47291"
       SERVE_STATIC: "1"
     volumes:
