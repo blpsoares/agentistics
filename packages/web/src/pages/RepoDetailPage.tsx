@@ -7,7 +7,8 @@ import {
 } from 'lucide-react'
 import type { AppContext, } from '../lib/app-context'
 import type { SessionMeta, MemberPresence, HarnessId, WorkflowRun, WorkflowAgent } from '@agentistics/core'
-import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionCostUSD, sessionLabel, workflowTokens, NO_REPO_KEY, sessionTokenTotal, totalTokens } from '@agentistics/core'
+import { repoShortName, fmt, fmtCost, fmtDuration, formatProjectName, formatModel, calcCost, sessionCostUSD, sessionLabel, workflowTokens, NO_REPO_KEY, sessionTokenTotal, totalTokens, totalTokensExplained } from '@agentistics/core'
+import { TokenBreakdownLine } from '../components/TokenBreakdownLine'
 import { capable, HARNESS_LABELS, HARNESS_COLORS, DYNAMIC_WORKFLOWS_DOC } from '../lib/harness'
 import { canonicalRepoKey } from '../lib/shareRepos'
 import { PLURAL_COPY, interpolate, plural } from '../components/team/copy'
@@ -143,13 +144,27 @@ export default function RepoDetailPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10 }}>
         <StatTile label={pt ? 'Sessões' : 'Sessions'} value={String(scoped.totalSessions)} />
         <StatTile label={pt ? 'Custo' : 'Cost'} value={fmtCost(scoped.totalCostUSD, currency, brlRate)} accent />
-        <StatTile label={pt ? 'Tokens in' : 'Tokens in'} value={fmt(scoped.inputTokens)} />
-        <StatTile label={pt ? 'Tokens out' : 'Tokens out'} value={fmt(scoped.outputTokens)} />
+        {/* ONE tokens tile — the total of all four billed counters, where this used to be input
+            and output as two tiles (the pair that comes to 0,34 % of the volume). The four
+            counters themselves are the line UNDER this strip, not tiles in it: the grid is
+            `repeat(auto-fit, minmax(120px, 1fr))`, which fits `floor((W + gap) / 130)` columns —
+            ten at ~1400px — so taking the strip to eleven tiles stranded the last one alone on a
+            second row. `scoped.tokenTotals` is the same filtered model usage `totalCostUSD` above
+            is priced from, so the tokens and the money describe the same turns under the repo
+            scope. */}
+        <StatTile
+          label="Tokens"
+          value={fmt(totalTokens(scoped.tokenTotals))}
+          title={totalTokensExplained(scoped.tokenTotals, pt ? 'pt' : 'en')}
+        />
         <StatTile label="Commits" value={String(scoped.gitCommits)} />
         <StatTile label={pt ? 'Linhas' : 'Lines'} value={`+${fmt(scoped.linesAdded)} −${fmt(scoped.linesRemoved)}`} />
         {isCentral && <StatTile label={pt ? 'Membros' : 'Members'} value={String(scoped.repoStats[0]?.members.length ?? 0)} />}
         <StatTile label="Agents" value={String(scoped.totalAgentInvocations)} />
       </div>
+      {/* What the Tokens tile above is made of. A wrapping line has no cell count, so unlike four
+          more tiles it cannot strand anything at any width. */}
+      <TokenBreakdownLine tokens={scoped.tokenTotals} lang={pt ? 'pt' : 'en'} />
 
       {/* Tabs */}
       <div className="tabscroll" style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', overflowX: 'auto' }}>
@@ -359,9 +374,9 @@ function MemberComparePanel({ sessions, lang, currency, brlRate }: {
   )
 }
 
-function StatTile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function StatTile({ label, value, accent, title }: { label: string; value: string; accent?: boolean; title?: string }) {
   return (
-    <div style={{
+    <div title={title} style={{
       display: 'flex', flexDirection: 'column', gap: 3, padding: '12px 14px',
       background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)',
     }}>

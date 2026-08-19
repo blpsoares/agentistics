@@ -5,7 +5,11 @@ import {
 } from 'recharts'
 import { format, parseISO } from 'date-fns'
 import { ArrowLeft, Pencil, Trash2, CalendarRange } from 'lucide-react'
-import { fmt, fmtCost, formatModel, formatProjectName, repoShortName, totalTokens as totalTokensOf } from '@agentistics/core'
+import {
+  fmt, fmtCost, formatModel, formatProjectName, repoShortName,
+  totalTokens as totalTokensOf, totalTokensExplained,
+} from '@agentistics/core'
+import { TokenBreakdownLine } from '../components/TokenBreakdownLine'
 import type { AppContext } from '../lib/app-context'
 import type { TokenBreakdown } from '@agentistics/core'
 import { MetricNote } from '../components/MetricNote'
@@ -112,9 +116,9 @@ const iconBtn: React.CSSProperties = {
 }
 
 /** The KPI tile used across the app: big number over an uppercase caption. */
-function StatTile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function StatTile({ label, value, accent, title }: { label: string; value: string; accent?: boolean; title?: string }) {
   return (
-    <div style={{
+    <div title={title} style={{
       display: 'flex', flexDirection: 'column', gap: 3, padding: '12px 14px', minWidth: 0,
       background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)',
     }}>
@@ -413,21 +417,23 @@ export default function TagDetailPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
           <StatTile label={pt ? 'Custo' : 'Cost'} value={fmtCost(tag.aggregate.costUSD, currency, brlRate)} accent />
           <StatTile label={pt ? 'Sessões' : 'Sessions'} value={tag.aggregate.sessions.toLocaleString()} />
-          <StatTile label="Tokens" value={fmt(totalTokens)} />
-          <StatTile label={pt ? 'Tokens entrada' : 'Tokens in'} value={fmt(tag.aggregate.inputTokens)} />
-          <StatTile label={pt ? 'Tokens saída' : 'Tokens out'} value={fmt(tag.aggregate.outputTokens)} />
+          {/* ONE tokens tile, with the four counters on the line below the strip. It was the total
+              plus input and output as three tiles, under a note explaining why two of them did not
+              add up to the first — an apology for the missing pair rather than the pair. Adding
+              them as tiles was the first fix and the wrong one: this grid is `auto-fit` over
+              `minmax(130px, 1fr)`, so past a certain count the last tile is stranded alone on a
+              second row. */}
+          <StatTile
+            label="Tokens"
+            value={fmt(totalTokens)}
+            title={totalTokensExplained(tag.aggregate.tokens, pt ? 'pt' : 'en')}
+          />
           {/* Counts, not names — so they need no redaction and stay honest even when the machine
               buckets below collapse several unseeable ones into a single "other". */}
           <StatTile label={pt ? 'Membros' : 'Members'} value={(detail?.stats.distinctMembers ?? 0).toLocaleString()} />
           <StatTile label={pt ? 'Máquinas' : 'Machines'} value={(detail?.stats.distinctMachines ?? 0).toLocaleString()} />
         </div>
-        {/* Three token tiles side by side and only the first is the total — without this the
-            obvious reading is that the other two should add up to it. */}
-        <MetricNote>
-          {pt
-            ? '"Tokens" soma os quatro contadores cobrados. As duas caixas ao lado — entrada e saída — são só dois deles; o resto é leitura e escrita de cache, normalmente a maior parte do volume. Por isso entrada + saída não fecha com o total.'
-            : '"Tokens" adds all four billed counters. The two tiles beside it — in and out — are only two of them; the rest is cache read and cache write, usually most of the volume. That is why in + out does not add up to the total.'}
-        </MetricNote>
+        <TokenBreakdownLine tokens={tag.aggregate.tokens} lang={pt ? 'pt' : 'en'} />
         {/* A tag whose sources resolve to nothing is a real, common state (a brand-new grouping, or
             one whose machines have not pushed yet) — say so instead of showing five zeros. */}
         {empty && (
