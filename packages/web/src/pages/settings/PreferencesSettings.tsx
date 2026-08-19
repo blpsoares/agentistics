@@ -6,13 +6,15 @@ import type { AppContext, PrefsDraft } from '../../lib/app-context'
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL } from '../../lib/chatModels'
 import { CHAT_SOUNDS, DEFAULT_CHAT_SOUND_ID, findChatSound } from '../../lib/chatSounds'
 import { SectionHeader, Divider, TabSelect, PrefRow, Toggle } from './primitives'
+import { DEFAULT_CARD_ORDER, type CardId } from '../../lib/cardOrder'
 
-const CARD_LABELS: Record<string, { en: string; pt: string }> = {
+/** One label per `CardId`. Typed as the Record so the build fails if a card is added and this is
+ *  not — the same reason `HARNESS_CAPABILITIES` is a Record rather than a list. */
+const CARD_LABELS: Record<CardId, { en: string; pt: string }> = {
   messages:         { en: 'Messages',        pt: 'Mensagens' },
   sessions:         { en: 'Sessions',        pt: 'Sessões' },
   'tool-calls':     { en: 'Tool calls',      pt: 'Tool calls' },
-  'input-tokens':   { en: 'Input tokens',    pt: 'Tokens entrada' },
-  'output-tokens':  { en: 'Output tokens',   pt: 'Tokens saída' },
+  tokens:           { en: 'Tokens',          pt: 'Tokens' },
   cost:             { en: 'Est. cost',       pt: 'Custo estimado' },
   streak:           { en: 'Streak',          pt: 'Sequência' },
   'longest-session':{ en: 'Longest session', pt: 'Sessão mais longa' },
@@ -20,12 +22,10 @@ const CARD_LABELS: Record<string, { en: string; pt: string }> = {
   files:            { en: 'Files',           pt: 'Arquivos' },
 }
 
-const DEFAULT_CARD_ORDER = [
-  'messages', 'sessions', 'tool-calls', 'input-tokens', 'output-tokens',
-  'cost', 'streak', 'longest-session', 'commits', 'files',
-]
-
-const METRIC_IDS = ['kpi.messages', 'kpi.sessions', 'kpi.tool-calls', 'kpi.input-tokens', 'kpi.output-tokens']
+// The order lived here as a SECOND copy and had to be edited in lockstep with App.tsx's — the
+// duplication CLAUDE.md forbids for harness lists, for the same reason: an array literal with a
+// member missing still compiles.
+const METRIC_IDS = ['kpi.messages', 'kpi.sessions', 'kpi.tool-calls', 'kpi.tokens']
 
 const BADGE_COLORS: Record<string, string> = {
   Fast:     'var(--accent-green)',
@@ -257,7 +257,7 @@ export default function PreferencesSettings() {
             }}
           >
             <GripVertical size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
-            <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>{CARD_LABELS[id]?.[draft.lang] ?? id}</span>
+            <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>{CARD_LABELS[id as CardId]?.[draft.lang] ?? id}</span>
           </div>
         ))}
       </div>

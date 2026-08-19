@@ -299,6 +299,27 @@ html, body {
 @media (min-width: 1160px) { .ag-grid.cols-5, .ag-grid.cols-6 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 @media (min-width: 1460px) { .ag-grid.cols-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 
+/* --- A cell that carries more than one number -------------------------------------------------
+ *
+ * `.ag-span-2` is for a card holding a whole breakdown rather than a single figure (TokenStatCard:
+ * a total plus its four billed counters). It takes the width of the two cards it replaced, so the
+ * CELL COUNT of the grid — and therefore whether the last row comes out flush — is unchanged by
+ * the swap.
+ *
+ * It stays span-1 on a single-column grid: spanning two of one column overflows the row and is
+ * what makes `document.documentElement.scrollWidth > window.innerWidth` on a phone.
+ *
+ * `.ag-dense` is the other half and is required wherever a span-2 cell sits in a REORDERABLE grid.
+ * Without it, a wide cell that does not fit in the columns left on the current row is pushed to the
+ * next one and leaves the remainder of the row EMPTY — a hole in the middle of the grid, not a
+ * short last row. `dense` backfills that gap with the next card that fits. The cost is that one
+ * card can appear ahead of its configured position; a visible hole is the worse of the two, and it
+ * only ever happens once the user has reordered the row away from the default.
+ */
+.ag-grid > .ag-span-2 { grid-column: span 1; }
+@media (min-width: 421px) { .ag-grid > .ag-span-2 { grid-column: span 2; } }
+.ag-grid.ag-dense { grid-auto-flow: row dense; }
+
 /* --- .ag-hint: an informational icon that discloses its sentence on demand ----------------------
  *
  * Used by the sharing picker's reverse-warning (SiblingWithheldBadge.tsx), which used to be an
