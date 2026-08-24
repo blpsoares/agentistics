@@ -5,8 +5,9 @@ the terminal TUI, the OpenTelemetry daemon, host or join a **Team Mode** central
 and manage autostart + updates.
 
 Get the binary from the [install instructions](../README.md#install) (`install.sh`,
-the Windows installer, or `bun run build:binary` from source). From a checkout you
-can also run it directly with `bun run packages/server/bin/cli.ts <command>`.
+`npm i -g @agentistics/agentop`, the Windows installer, or `bun run build:binary` from
+source). From a checkout you can also run it directly with
+`bun run packages/server/bin/cli.ts <command>`.
 
 ```bash
 agentop --help       # full usage
