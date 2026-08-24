@@ -1,6 +1,6 @@
 {
   "name": "@agentistics/core",
-  "version": "1.22.2",
+  "version": "1.22.3",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
