@@ -546,6 +546,12 @@ export interface DetailLine {
   note?: boolean
   /** A line the assistant itself wrote, rendered in the text colour rather than as a label. */
   say?: boolean
+  /**
+   * Who wrote this line, when it is known EXACTLY — from a chat turn read off the session's own
+   * transcript (`ChatTurn`), never guessed from the screen. Absent for a raw `lastLines` fallback
+   * line, which carries `say` but no verified author.
+   */
+  role?: 'user' | 'assistant'
 }
 
 /**
@@ -613,8 +619,23 @@ export function detailLines(s: ControlSession, labels: {
   const out: DetailLine[] = []
 
   // WHAT IT IS SAYING comes first, because it is the reason someone selected the row. Everything
-  // below is context for it.
-  if (s.lastLines?.length) {
+  // below is context for it. `chatTurns` — role-tagged, read from the session's own transcript —
+  // is preferred whenever it is available; `lastLines` (the raw screen tail) is the fallback for
+  // every harness that has no exact way to read its own transcript live. See `chat-tail.ts`.
+  if (s.chatTurns?.length) {
+    s.chatTurns.forEach((turn, i) => {
+      out.push({
+        key: `chat${i}`,
+        label: i === 0 ? labels.doing : '',
+        // A turn is the transcript's own text, which can span several lines — collapsed to one so
+        // it truncates the same way every other detail line does rather than breaking the pane's
+        // one-fact-per-row shape.
+        value: turn.text.replace(/\s*\n\s*/g, ' '),
+        say: turn.role === 'assistant',
+        role: turn.role,
+      })
+    })
+  } else if (s.lastLines?.length) {
     s.lastLines.forEach((line, i) => {
       out.push({ key: `say${i}`, label: i === 0 ? labels.doing : '', value: line, say: true })
     })

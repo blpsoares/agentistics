@@ -146,6 +146,7 @@ export function toControlSession(
       : {}),
     ...(v.resume ? { resume: v.resume } : {}),
     ...(v.lastLines?.length ? { lastLines: v.lastLines } : {}),
+    ...(v.chatTurns?.length ? { chatTurns: v.chatTurns } : {}),
     ...(v.approvalLines?.length ? { approvalLines: v.approvalLines } : {}),
     ...(v.dialogOptions?.length ? { dialogOptions: v.dialogOptions } : {}),
     // Picking one of them needs a VERIFIED way to select by number on this harness. Only claude has

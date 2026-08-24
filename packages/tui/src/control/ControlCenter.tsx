@@ -100,8 +100,11 @@ export interface TaskView {
 export type RunAction = (fn: () => Promise<ActionResult>, label?: string) => Promise<ActionResult>
 
 /**
- * How often the fleet is re-read. Five seconds — the interval the monitor was specified at, and slow
- * enough that a machine running a dozen sessions is not forking a `capture-pane` per second.
+ * The built-in fallback for how often the fleet is re-read, used only until the host answers
+ * `status.sessionPollMs` (or if it never does). Five seconds — the interval the monitor was
+ * originally specified at. The user-facing default and floor/ceiling live in `preferences.ts`
+ * (`SESSION_POLL_DEFAULT_MS` and friends); this constant is deliberately not imported from there —
+ * the TUI reads no preferences of its own, exactly like the mouse and the language.
  */
 const SESSION_POLL_MS = 5_000
 
@@ -198,6 +201,20 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   )
 
   /**
+   * How often the fleet is re-read — `null`-until-chosen, same shape as `mouseChoice` below: the
+   * default until the host answers is the built-in one, and once the config pane row has been
+   * pressed the local answer wins so a stale `refresh()` cannot flicker it back to what it was.
+   */
+  const [pollChoice, setPollChoice] = useState<number | null>(null)
+  const sessionPollMs = pollChoice ?? status?.sessionPollMs ?? SESSION_POLL_MS
+
+  const setSessionPollMs = useCallback((next: number) => {
+    setPollChoice(next)
+    // The TUI owns no persistence — the host stores it beside every other preference.
+    void host.setSessionPollMs(next)
+  }, [host])
+
+  /**
    * One read of the fleet, callable on demand as well as on the interval.
    *
    * The sessions screen calls it straight after an action, because a kill or a rename the user just
@@ -225,9 +242,11 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
   useEffect(() => {
     if (!host.sessions) return
     void pollFleet()
-    const timer = setInterval(() => { void pollFleet() }, SESSION_POLL_MS)
+    // Re-armed whenever `sessionPollMs` changes, so pressing the config row's action takes effect
+    // on the very next tick rather than waiting out whatever interval was already running.
+    const timer = setInterval(() => { void pollFleet() }, sessionPollMs)
     return () => clearInterval(timer)
-  }, [host, pollFleet])
+  }, [host, pollFleet, sessionPollMs])
 
   /**
    * The task the last action started, or `null` when nothing has been performed yet.
@@ -579,6 +598,8 @@ export function ControlCenter({ host, lang: initialLang, initial, onExit, mouse 
             // `m` key together rather than leaving a control for a device that cannot report.
             mouseOn={mouseOn}
             onMouse={mouse ? toggleMouse : undefined}
+            sessionPollMs={sessionPollMs}
+            onSessionPollMs={setSessionPollMs}
             // A machine that has never been configured opens with the wizard already asking. It is
             // a question of this screen now rather than a tab of its own — see `TAB_ORDER`.
             initialSetup={initial?.setup}

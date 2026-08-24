@@ -63,6 +63,7 @@ function probingHost(known: ControlStatus | null): ControlHost {
     setLang: async () => {},
     setSessionView: async () => {},
     setMouse: async () => {},
+    setSessionPollMs: async () => {},
     onOutput: () => () => {},
     readLog: async () => [],
     sessions: async () => FLEET,

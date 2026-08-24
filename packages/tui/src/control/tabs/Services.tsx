@@ -82,6 +82,7 @@ import { Menu } from '../Menu'
 import { OutputView } from '../Output'
 import { ArchiveChoice } from '../ArchiveChoice'
 import { archiveGateOnOpen } from '../archive-gate'
+import { nextSessionPollMs } from '../session-poll'
 import { ConfirmPrompt, TextPrompt } from '../Prompt'
 import type { ControlStrings } from '../i18n'
 import type { CliLang } from '../lang'
@@ -278,6 +279,10 @@ export interface ServicesProps {
   mouseOn?: boolean
   /** Absent when there is no mouse at all, and then the config pane has no row for one. */
   onMouse?: () => void
+  /** How often the cockpit re-reads the fleet, in milliseconds — the config row states it. */
+  sessionPollMs: number
+  /** Cycles to the next preset in `SESSION_POLL_PRESETS_MS` — see the config row's action. */
+  onSessionPollMs: (ms: number) => void
   /**
    * Open with the wizard already asking — a machine that has never been configured.
    *
@@ -290,7 +295,7 @@ export interface ServicesProps {
 
 export function Services({
   host, status, strings: s, lang, width, height, isActive, run, task, onDismissTask,
-  onChrome, onExit, onLang, mouseOn, onMouse, initialSetup,
+  onChrome, onExit, onLang, mouseOn, onMouse, sessionPollMs, onSessionPollMs, initialSetup,
 }: ServicesProps) {
   const l = launcherStrings(lang)
 
@@ -676,8 +681,15 @@ export function Services({
         action: { label: s.actMouse, run: onMouse },
       })
     }
+    rows.push({
+      key: 'sessionPoll',
+      label: s.sessionPollLabel,
+      value: `${sessionPollMs / 1000}s`,
+      short: `${sessionPollMs / 1000}s`,
+      action: { label: s.actSessionPoll, run: () => onSessionPollMs(nextSessionPollMs(sessionPollMs)) },
+    })
     return rows
-  }, [s, status, connectAction, onLang, lang, mouseOn, onMouse])
+  }, [s, status, connectAction, onLang, lang, mouseOn, onMouse, sessionPollMs, onSessionPollMs])
 
   const configSelection = Math.min(configIndex, Math.max(0, configRows.length - 1))
 

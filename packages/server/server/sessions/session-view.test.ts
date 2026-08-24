@@ -43,6 +43,16 @@ describe('buildSessionViews', () => {
     })
   })
 
+  it('carries chat turns onto the view, keyed by session id — and leaves them off a session with none', () => {
+    const reconciled = [row('a'), row('b')]
+    const chatTails = new Map([
+      ['a', [{ role: 'user' as const, text: 'hi' }, { role: 'assistant' as const, text: 'hello' }]],
+    ])
+    const [a, b] = buildSessionViews({ reconciled, activity: new Map(), processes: [], chatTails })
+    expect(a!.chatTurns).toEqual([{ role: 'user', text: 'hi' }, { role: 'assistant', text: 'hello' }])
+    expect(b!.chatTurns).toBeUndefined()
+  })
+
   it('reports approval detection exactly where rules exist, for every harness', () => {
     // Written as an INVARIANT rather than against one harness that happens to be unprobed today:
     // this test used to name gemini, and it broke the day gemini was probed — asserting a fact
