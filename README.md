@@ -76,6 +76,15 @@ A metric a harness genuinely cannot produce renders as **N/A**, never as a confi
 curl -fsSL https://agentop.openvibes.tech/cli | bash
 ```
 
+Or via npm — same binary, downloaded by `postinstall` from the same GitHub Release:
+
+```bash
+npm i -g @agentistics/agentop
+```
+
+Both install the identical Linux x86_64 binary; use whichever fits your workflow (npm is handy
+when `agentop` is a dependency of another project's scripts).
+
 Then just run it:
 
 ```bash
