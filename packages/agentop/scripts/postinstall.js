@@ -11,13 +11,23 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const { resolveAsset } = require('./platform.js');
+const { resolveAsset, isMonorepoCheckout } = require('./platform.js');
 
 const pkg = require('../package.json');
 
 const BIN_DIR = path.join(__dirname, '..', 'bin');
 const BIN_PATH = path.join(BIN_DIR, 'agentop-bin');
 const MAX_REDIRECTS = 5;
+// packages/agentop/scripts -> packages/agentop -> packages -> repo root
+const MONOREPO_ROOT_PKG = path.join(__dirname, '..', '..', '..', 'package.json');
+
+function readAncestorPkg() {
+  try {
+    return JSON.parse(fs.readFileSync(MONOREPO_ROOT_PKG, 'utf8'));
+  } catch {
+    return null;
+  }
+}
 
 function download(url, destPath, redirectsLeft) {
   return new Promise((resolve, reject) => {
@@ -51,6 +61,13 @@ function download(url, destPath, redirectsLeft) {
 }
 
 async function main() {
+  if (isMonorepoCheckout(readAncestorPkg())) {
+    console.log(
+      'Skipping agentop binary download — running inside the agentistics monorepo itself (build it with `bun run build:binary`).'
+    );
+    return;
+  }
+
   const asset = resolveAsset(process.platform, process.arch, pkg.version);
 
   if (!asset.ok) {
