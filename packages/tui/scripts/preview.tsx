@@ -431,6 +431,7 @@ function fakeHost(opts: Options, apiUrl?: string): ControlHost {
     // The preview has no terminal to report a mouse, so `ControlCenter` is rendered without a
     // channel and never asks for tracking — this only satisfies the contract.
     setMouse: async () => {},
+    setSessionPollMs: async () => {},
     // Present so the preview shows the cockpit's full action row. `openUrl` is optional on the
     // host, and a host without it makes the action, the `o` key and its footer hint all disappear.
     openUrl: done,

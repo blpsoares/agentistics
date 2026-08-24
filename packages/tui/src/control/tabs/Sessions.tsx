@@ -2527,9 +2527,15 @@ function Detail({ lines, width, rows }: {
       {lines.slice(0, Math.max(0, rows)).map(l => (
         <Text key={l.key} wrap="truncate" dimColor={l.note}>
           {l.label ? <Text dimColor>{l.label.padEnd(labelWidth)}  </Text> : <Text>{' '.repeat(labelWidth + 2)}</Text>}
-          {/* What the assistant said is drawn in the text colour: it is the content, and everything
-              else on this pane is a label for it. */}
-          <Text color={l.say ? COLORS.text : undefined}>
+          {/*
+            A chat turn is coloured by who wrote it, read off the transcript's own `role` — never
+            guessed from the screen (see `chat-tail.ts`). The user's own text takes `COLORS.info`,
+            the same token this app already uses elsewhere for "what the user themselves did"; the
+            assistant keeps the plain text colour it always had. A `say` line with no `role` is the
+            raw-screen-tail fallback for a harness with no verified author, and stays in the
+            content colour rather than being coloured as either side.
+          */}
+          <Text color={l.role === 'user' ? COLORS.info : l.say ? COLORS.text : undefined}>
             {truncate(l.value, Math.max(1, width - labelWidth - 2))}
           </Text>
         </Text>

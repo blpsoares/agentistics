@@ -557,6 +557,18 @@ export interface ControlSession {
    */
   lastLines?: string[]
   /**
+   * The last few chat turns of this session, role-tagged, read from its own transcript — Claude
+   * only. When present, the detail pane renders THIS instead of `lastLines`, so the user's and the
+   * assistant's own text can be told apart by role rather than by a guess at the screen's layout.
+   */
+  chatTurns?: {
+    role: 'user' | 'assistant'
+    text: string
+    /** A synthesized "running a tool" note, not something either side actually said — see the
+     *  server's `ChatTurn.pending`. Rendered dim, never in the role colours. */
+    pending?: boolean
+  }[]
+  /**
    * The DIALOG this session is blocked on, verbatim — present only while it is asking.
    *
    * A different reading of the frame from `lastLines`, which cuts the input box and the status strip
@@ -1049,6 +1061,13 @@ export interface ControlStatus {
    * stores it beside the language and the archive mode, and hands the answer over like any other.
    */
   mouse?: boolean
+  /**
+   * How often the cockpit re-reads the fleet, in milliseconds — the same STATUS-not-TUI shape as
+   * `mouse` and the language, for the same reason: the TUI reads no preferences of its own.
+   * Absent means the host has not answered yet; the shell falls back to its own built-in default
+   * exactly as it does for `mouse` and for `lang`.
+   */
+  sessionPollMs?: number
 }
 
 export interface ActionResult {
@@ -1166,6 +1185,14 @@ export interface ControlHost {
    * this session.
    */
   setMouse(on: boolean): Promise<void>
+
+  /**
+   * Persist how often the cockpit re-reads the fleet. Same shape as `setMouse` — best-effort, and
+   * the shell applies the new interval to its own running poll immediately rather than waiting for
+   * a `refresh()` this action does not itself trigger. The host clamps to its own floor/ceiling, so
+   * a value from an older or hand-edited preferences file can never be handed back as-is.
+   */
+  setSessionPollMs(ms: number): Promise<void>
 
   /**
    * Hand a URL to the desktop's browser.

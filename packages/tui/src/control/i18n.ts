@@ -104,6 +104,9 @@ export interface ControlStrings {
   mouseLabel: string
   mouseOn: string
   mouseOff: string
+  /** The config pane's refresh-interval row. */
+  sessionPollLabel: string
+  actSessionPoll: string
 
   /** Detail pane. */
   pidLabel: string
@@ -639,6 +642,8 @@ const EN: ControlStrings = {
   mouseLabel: 'mouse',
   mouseOn: 'on',
   mouseOff: 'off',
+  sessionPollLabel: 'refresh',
+  actSessionPoll: 'Change',
 
   pidLabel: 'pid',
   uptimeLabel: 'up',
@@ -1104,6 +1109,8 @@ const PT: ControlStrings = {
   mouseLabel: 'mouse',
   mouseOn: 'ligado',
   mouseOff: 'desligado',
+  sessionPollLabel: 'atualização',
+  actSessionPoll: 'Trocar',
 
   pidLabel: 'pid',
   uptimeLabel: 'no ar há',
