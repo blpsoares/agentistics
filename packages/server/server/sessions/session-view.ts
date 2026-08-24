@@ -21,6 +21,7 @@ import type { ReconciledSession } from './session-ref'
 import type { Conversation } from './conversations'
 import { conversationForProcess } from './conversations'
 import type { ManagedSession, SessionActivity } from './types'
+import type { ChatTurn } from './chat-tail'
 
 /**
  * The registry's own record of when a session began, as epoch ms — PURE.
@@ -63,6 +64,16 @@ export interface SessionView {
    * decide the state, so it costs nothing extra, and there is no frame to read for anything else.
    */
   lastLines?: string[]
+  /**
+   * The last few CHAT TURNS of this session, role-tagged, read from its own JSONL transcript
+   * rather than the screen — see `chat-tail.ts`.
+   *
+   * Claude only: it is the one harness with an exact live-session -> conversation-id link, which
+   * is what makes trusting the transcript's own `role` field safe rather than a guess. Absent for
+   * every other harness (and for a Claude row whose transcript could not be resolved yet), in
+   * which case the detail pane falls back to `lastLines` exactly as it always has.
+   */
+  chatTurns?: ChatTurn[]
   /**
    * The BOTTOM of the screen verbatim, present only while this session is blocked on a dialog.
    *
@@ -283,6 +294,8 @@ export function buildSessionViews(o: {
   activity: ReadonlyMap<string, SessionActivity>
   /** The tail of each hosted session's screen, keyed by session id. */
   tails?: ReadonlyMap<string, string[]>
+  /** Role-tagged chat turns, keyed by session id — see `SessionView.chatTurns`. */
+  chatTails?: ReadonlyMap<string, ChatTurn[]>
   /** The DIALOG a blocked session is showing, keyed by session id — see `SessionView.approvalLines`. */
   approvals?: ReadonlyMap<string, string[]>
   /** The options that dialog offers, keyed by session id. Absent where they could not be read. */
@@ -407,6 +420,7 @@ export function buildSessionViews(o: {
       status: finished ? ('exited' as const) : r.status,
       ...(activity ? { activity } : {}),
       ...((o.tails?.get(r.id)?.length ?? 0) > 0 ? { lastLines: o.tails!.get(r.id)! } : {}),
+      ...((o.chatTails?.get(r.id)?.length ?? 0) > 0 ? { chatTurns: o.chatTails!.get(r.id)! } : {}),
       // Only while it is genuinely asking. A dialog frame carried on a row that has moved on would
       // be shown under "what you are about to confirm" for a question that is no longer open.
       ...(activity === 'waiting-approval' && (o.approvals?.get(r.id)?.length ?? 0) > 0

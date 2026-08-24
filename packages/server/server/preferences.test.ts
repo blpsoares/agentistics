@@ -671,3 +671,23 @@ test('C1 end to end: the guarded payload written through writePreferencesTo pres
   const wiped = await readPreferencesFrom(primary, legacy)
   expect(wiped.team!.connections).toEqual([])
 })
+
+import {
+  clampSessionPollMs, sessionPollMsOrDefault,
+  SESSION_POLL_DEFAULT_MS, SESSION_POLL_MIN_MS, SESSION_POLL_MAX_MS,
+} from './preferences'
+
+test('sessionPollMsOrDefault falls back to the built-in default when unset', () => {
+  expect(sessionPollMsOrDefault({})).toBe(SESSION_POLL_DEFAULT_MS)
+})
+
+test('sessionPollMsOrDefault clamps a stored value to the floor and ceiling', () => {
+  expect(sessionPollMsOrDefault({ sessionPollMs: 1 })).toBe(SESSION_POLL_MIN_MS)
+  expect(sessionPollMsOrDefault({ sessionPollMs: 1_000_000 })).toBe(SESSION_POLL_MAX_MS)
+  expect(sessionPollMsOrDefault({ sessionPollMs: 2_000 })).toBe(2_000)
+})
+
+test('clampSessionPollMs falls back to the default for a non-finite value', () => {
+  expect(clampSessionPollMs(NaN)).toBe(SESSION_POLL_DEFAULT_MS)
+  expect(clampSessionPollMs(Infinity)).toBe(SESSION_POLL_DEFAULT_MS)
+})

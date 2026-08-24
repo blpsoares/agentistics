@@ -69,7 +69,10 @@ import type {
 } from '@agentistics/tui/control'
 import { DEFAULT_SESSION_VIEW } from '@agentistics/tui/control'
 import { PORT, WEB_PORT } from './config'
-import { readPreferences, writePreferences, resolveArchiveMode, type ArchiveMode } from './preferences'
+import {
+  readPreferences, writePreferences, resolveArchiveMode, type ArchiveMode,
+  clampSessionPollMs, sessionPollMsOrDefault, SESSION_POLL_DEFAULT_MS,
+} from './preferences'
 import { centralRuntimeChoices, centralStartPlan, runCentral, type CentralStartPlan } from './cli-central'
 import { flagFor, type CentralRuntimeId, type CentralRuntimeOption } from './central-runtime'
 import { onOutputLine, publishLines, streamCommand } from './cli-stream'
@@ -193,7 +196,9 @@ type Mode = 'solo' | 'central' | 'member'
  * that question with one endpoint out of three is the same misreport `agentop status` was fixed
  * for.
  */
-async function loadState(): Promise<{ mode: Mode; endpoint?: string; connections: TeamConnection[]; mouse: boolean }> {
+async function loadState(): Promise<{
+  mode: Mode; endpoint?: string; connections: TeamConnection[]; mouse: boolean; sessionPollMs: number
+}> {
   try {
     const prefs = await readPreferences()
     // Mouse ON unless the preference says otherwise — the default the control center assumes, and
@@ -204,9 +209,10 @@ async function loadState(): Promise<{ mode: Mode; endpoint?: string; connections
       endpoint: prefs.team?.endpoint,
       connections: prefs.team?.connections ?? [],
       mouse: prefs.mouse !== false,
+      sessionPollMs: sessionPollMsOrDefault(prefs),
     }
   } catch {
-    return { mode: 'solo', connections: [], mouse: true }
+    return { mode: 'solo', connections: [], mouse: true, sessionPollMs: SESSION_POLL_DEFAULT_MS }
   }
 }
 
@@ -2084,7 +2090,8 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
 
     async refresh(): Promise<ControlStatus> {
       const s = S()
-      const [{ mode, endpoint, connections, mouse }, services] = await Promise.all([loadState(), serviceRows()])
+      const [{ mode, endpoint, connections, mouse, sessionPollMs }, services] =
+        await Promise.all([loadState(), serviceRows()])
       return remember({
         mode,
         modeLabel: modeSentence(s, mode, connections.length),
@@ -2120,6 +2127,7 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
           : {},
         ...(await sessionViewPref()),
         mouse,
+        sessionPollMs,
       })
     },
 
@@ -2453,6 +2461,15 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       // tell the next remount the mouse is still what it was before the key was pressed.
       if (lastStatus) remember({ ...lastStatus, mouse: on })
       try { await writePreferences({ mouse: on }) } catch { /* best-effort */ }
+    },
+
+    async setSessionPollMs(ms: number): Promise<void> {
+      // Same shape as `setMouse`: this changes the running `setInterval` in the shell, which reads
+      // it back straight off the row it just pressed enter on rather than waiting a poll cycle for
+      // a `refresh()` this action does not otherwise trigger.
+      const clamped = clampSessionPollMs(ms)
+      if (lastStatus) remember({ ...lastStatus, sessionPollMs: clamped })
+      try { await writePreferences({ sessionPollMs: clamped }) } catch { /* best-effort */ }
     },
 
     /**

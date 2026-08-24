@@ -15,6 +15,7 @@ import { createLimiter } from '../utils'
 import type { HarnessProcess } from '../live-sessions'
 import { rulesFor } from './attention-rules'
 import { approvalTail, attentionOf, digestFrame, frameTail } from './attention'
+import { readRecentChatTurns, resolveChatTranscriptPath, type ChatTurn } from './chat-tail'
 import { parseDialogOptions, type DialogOption } from './dialog-choice'
 // Taking a running session back when its registry record is gone. See `session-adopt.ts`.
 import { planAdoptions } from './session-adopt'
@@ -45,6 +46,9 @@ const CAPTURE_CONCURRENCY = 4
 /** How much of what a session is saying to carry. Enough that a tall pane has something to fill it
  *  with; the pane cuts from the bottom to whatever it can actually draw. */
 const TAIL_LINES = 8
+
+/** How many role-tagged chat turns to carry for a Claude session — see `chat-tail.ts`. */
+const TAIL_CHAT_TURNS = 6
 
 /**
  * How much of a blocked session's screen to carry as the dialog.
@@ -205,6 +209,7 @@ export function createSessionsPoller(o: {
       const tails = new Map<string, string[]>()
       const approvals = new Map<string, string[]>()
       const dialogOptions = new Map<string, DialogOption[]>()
+      const chatTails = new Map<string, ChatTurn[]>()
 
       await Promise.all(reconciled.map(r => limit(async () => {
         const b = r.backend
@@ -217,6 +222,20 @@ export function createSessionsPoller(o: {
         tails.set(r.id, frameTail(frame, TAIL_LINES))
 
         const harness = harnessOf.get(r.id)
+
+        // Claude only: the one harness with an EXACT live-session -> conversation-id link
+        // (`harness-sessions.ts`), which is what makes reading its own transcript safe rather than
+        // a guess. Every other harness keeps the raw screen tail above as its only detail content.
+        const cwd = r.managed?.cwd
+        const conversationId = harnessSessions.byManagedId.get(r.id)?.sessionId
+        if (harness === 'claude' && cwd && conversationId) {
+          const path = await resolveChatTranscriptPath(cwd, conversationId).catch(() => null)
+          if (path) {
+            const turns = await readRecentChatTurns(path, TAIL_CHAT_TURNS).catch(() => [] as ChatTurn[])
+            if (turns.length > 0) chatTails.set(r.id, turns)
+          }
+        }
+
         const rules = harness ? rulesFor(harness) : undefined
         const before = prevDigest.get(r.id)
         const state = attentionOf({
@@ -301,6 +320,7 @@ export function createSessionsPoller(o: {
         reconciled,
         activity,
         tails,
+        chatTails,
         approvals,
         dialogOptions,
         processes,

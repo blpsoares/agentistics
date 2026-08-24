@@ -61,6 +61,17 @@ export interface Preferences {
    *    - 'off'         = do nothing, use Claude's default folder */
   archiveMode?: 'off' | 'consolidate' | 'full'
   /**
+   * How often the cockpit refreshes the fleet list and the session detail pane, in milliseconds.
+   *
+   * `undefined` reads as the built-in default (`SESSION_POLL_DEFAULT_MS`). Clamped to
+   * `[SESSION_POLL_MIN_MS, SESSION_POLL_MAX_MS]` on write, never on read — a value saved by an
+   * older binary before the floor existed still parses, and `sessionPollMsOrDefault` is where the
+   * clamp actually applies. Below the floor the cost is real: each tick captures a `tmux` pane per
+   * live session, and a poll faster than the terminal can usefully redraw buys no responsiveness,
+   * only load.
+   */
+  sessionPollMs?: number
+  /**
    * How the cockpit's fleet list was last arranged.
    *
    * Stored here rather than held in the TUI because the control center owns no persistence — the
@@ -134,6 +145,25 @@ export function resolveArchiveMode(p: Preferences): ArchiveMode | undefined {
 
 export async function getArchiveMode(): Promise<ArchiveMode | undefined> {
   return resolveArchiveMode(await readPreferences())
+}
+
+/** The cockpit's built-in refresh cadence — unchanged from what the feature shipped with. */
+export const SESSION_POLL_DEFAULT_MS = 5_000
+/** Below this, a tick captures a `tmux` pane per live session more often than a terminal can
+ *  usefully redraw — all cost, no perceptible gain. */
+export const SESSION_POLL_MIN_MS = 1_000
+export const SESSION_POLL_MAX_MS = 30_000
+/** The presets offered in the config pane, fastest first. */
+export const SESSION_POLL_PRESETS_MS = [1_000, 2_000, SESSION_POLL_DEFAULT_MS, 10_000] as const
+
+export function clampSessionPollMs(ms: number): number {
+  if (!Number.isFinite(ms)) return SESSION_POLL_DEFAULT_MS
+  return Math.min(SESSION_POLL_MAX_MS, Math.max(SESSION_POLL_MIN_MS, Math.round(ms)))
+}
+
+/** The effective poll interval — `undefined` reads as the default, exactly like `archiveMode`. */
+export function sessionPollMsOrDefault(p: Preferences): number {
+  return p.sessionPollMs !== undefined ? clampSessionPollMs(p.sessionPollMs) : SESSION_POLL_DEFAULT_MS
 }
 
 /** Read + parse a preferences JSON file.

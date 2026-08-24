@@ -547,6 +547,42 @@ describe('detailLines — the two non-actionable rows say different things', () 
     expect(l[0]).toMatchObject({ label: 'saying', value: '● done', say: true })
   })
 
+  it('prefers role-tagged chat turns over the raw screen tail, and tags them', () => {
+    const l = detailLines(session('m', {
+      lastLines: ['this must not appear'],
+      chatTurns: [
+        { role: 'user', text: 'fix the bug' },
+        { role: 'assistant', text: 'done' },
+      ],
+    }), labels, ago)
+    expect(l[0]).toMatchObject({ label: 'saying', value: 'fix the bug', role: 'user', say: false })
+    expect(l[1]).toMatchObject({ label: '', value: 'done', role: 'assistant', say: true })
+    expect(l.map(x => x.value)).not.toContain('this must not appear')
+  })
+
+  it('draws a pending tool-activity turn dim, in neither role colour', () => {
+    const l = detailLines(session('m', {
+      chatTurns: [
+        { role: 'user', text: 'fix the bug' },
+        { role: 'assistant', text: 'Running Bash', pending: true },
+      ],
+    }), labels, ago)
+    expect(l[1]).toMatchObject({ value: 'Running Bash', note: true, say: false, role: undefined })
+  })
+
+  it('collapses a multi-line chat turn onto one detail line', () => {
+    const l = detailLines(session('m', {
+      chatTurns: [{ role: 'assistant', text: 'line one\n  line two\nline three' }],
+    }), labels, ago)
+    expect(l[0]?.value).toBe('line one line two line three')
+  })
+
+  it('falls back to the raw screen tail when there are no chat turns', () => {
+    const l = detailLines(session('m', { lastLines: ['● done'], chatTurns: [] }), labels, ago)
+    expect(l[0]?.value).toBe('● done')
+    expect(l[0]?.role).toBeUndefined()
+  })
+
   it('shows usage only where the conversation recorded any', () => {
     expect(detailLines(session('m'), labels, ago).map(x => x.key)).not.toContain('metrics')
     const l = detailLines(session('m', { tokens: '41.4K', cost: 'USD 0.26' }), labels, ago)
