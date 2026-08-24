@@ -21,6 +21,7 @@ import type { ReconciledSession } from './session-ref'
 import type { Conversation } from './conversations'
 import { conversationForProcess } from './conversations'
 import type { ManagedSession, SessionActivity } from './types'
+import type { ChatTurn } from './chat-tail'
 
 /**
  * The registry's own record of when a session began, as epoch ms — PURE.
@@ -72,7 +73,7 @@ export interface SessionView {
    * every other harness (and for a Claude row whose transcript could not be resolved yet), in
    * which case the detail pane falls back to `lastLines` exactly as it always has.
    */
-  chatTurns?: { role: 'user' | 'assistant'; text: string }[]
+  chatTurns?: ChatTurn[]
   /**
    * The BOTTOM of the screen verbatim, present only while this session is blocked on a dialog.
    *
@@ -294,7 +295,7 @@ export function buildSessionViews(o: {
   /** The tail of each hosted session's screen, keyed by session id. */
   tails?: ReadonlyMap<string, string[]>
   /** Role-tagged chat turns, keyed by session id — see `SessionView.chatTurns`. */
-  chatTails?: ReadonlyMap<string, { role: 'user' | 'assistant'; text: string }[]>
+  chatTails?: ReadonlyMap<string, ChatTurn[]>
   /** The DIALOG a blocked session is showing, keyed by session id — see `SessionView.approvalLines`. */
   approvals?: ReadonlyMap<string, string[]>
   /** The options that dialog offers, keyed by session id. Absent where they could not be read. */

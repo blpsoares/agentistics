@@ -560,6 +560,16 @@ describe('detailLines — the two non-actionable rows say different things', () 
     expect(l.map(x => x.value)).not.toContain('this must not appear')
   })
 
+  it('draws a pending tool-activity turn dim, in neither role colour', () => {
+    const l = detailLines(session('m', {
+      chatTurns: [
+        { role: 'user', text: 'fix the bug' },
+        { role: 'assistant', text: 'Running Bash', pending: true },
+      ],
+    }), labels, ago)
+    expect(l[1]).toMatchObject({ value: 'Running Bash', note: true, say: false, role: undefined })
+  })
+
   it('collapses a multi-line chat turn onto one detail line', () => {
     const l = detailLines(session('m', {
       chatTurns: [{ role: 'assistant', text: 'line one\n  line two\nline three' }],

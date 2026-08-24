@@ -561,7 +561,13 @@ export interface ControlSession {
    * only. When present, the detail pane renders THIS instead of `lastLines`, so the user's and the
    * assistant's own text can be told apart by role rather than by a guess at the screen's layout.
    */
-  chatTurns?: { role: 'user' | 'assistant'; text: string }[]
+  chatTurns?: {
+    role: 'user' | 'assistant'
+    text: string
+    /** A synthesized "running a tool" note, not something either side actually said — see the
+     *  server's `ChatTurn.pending`. Rendered dim, never in the role colours. */
+    pending?: boolean
+  }[]
   /**
    * The DIALOG this session is blocked on, verbatim — present only while it is asking.
    *

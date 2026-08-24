@@ -631,8 +631,12 @@ export function detailLines(s: ControlSession, labels: {
         // it truncates the same way every other detail line does rather than breaking the pane's
         // one-fact-per-row shape.
         value: turn.text.replace(/\s*\n\s*/g, ' '),
-        say: turn.role === 'assistant',
-        role: turn.role,
+        // A `pending` turn is not something either side SAID — it is "a tool call is running and
+        // nothing has followed it yet", drawn dim like every other status line on this pane rather
+        // than in either role's colour, which would claim an author for a note neither of them wrote.
+        say: turn.role === 'assistant' && !turn.pending,
+        role: turn.pending ? undefined : turn.role,
+        note: turn.pending === true,
       })
     })
   } else if (s.lastLines?.length) {

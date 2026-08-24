@@ -26,6 +26,14 @@ import { isHumanUserEntry } from '../jsonl'
 export interface ChatTurn {
   role: 'user' | 'assistant'
   text: string
+  /**
+   * This is not something the assistant SAID — it is a synthesized note that a tool call has been
+   * written to the transcript and no text has followed it yet, which is exactly the window where a
+   * session is visibly busy and the pane would otherwise show nothing (or a stale turn from before
+   * the tool call). Rendered dim, like every other status line in this pane, never in the role
+   * colours — it is not a message either side wrote.
+   */
+  pending?: boolean
 }
 
 /** Resolved paths and one-time-scan misses, keyed by conversation id. Never re-scanned once known. */
@@ -114,6 +122,21 @@ function extractAssistantText(e: Record<string, unknown>): string | null {
   return text?.trim() || null
 }
 
+/** The tool names an assistant entry is calling, when it carries no text at all — see `ChatTurn.pending`. */
+function extractToolActivity(e: Record<string, unknown>): string[] | null {
+  if (e.type !== 'assistant') return null
+  const msgContent = (e.message as Record<string, unknown> | undefined)?.content
+  if (!Array.isArray(msgContent)) return null
+  const names = (msgContent as Record<string, unknown>[])
+    .filter(p => p.type === 'tool_use' && typeof p.name === 'string')
+    .map(p => p.name as string)
+  return names.length > 0 ? names : null
+}
+
+function toolActivityLabel(tools: string[]): string {
+  return `Running ${tools.join(', ')}`
+}
+
 /**
  * The most recent chat turns in a Claude transcript, oldest first.
  *
@@ -134,16 +157,27 @@ export async function readRecentChatTurns(path: string, max = 6): Promise<ChatTu
 
   const lines = content.split('\n')
   const turns: ChatTurn[] = []
+  // Set once, on the first substantive (non-blank, parseable) line the loop inspects — which is the
+  // NEWEST event in the transcript. Only there does "no text yet" mean "busy right now"; the same
+  // shape earlier in the file is just an ordinary tool call whose result and follow-up text already
+  // exist further down and will be read on a later iteration.
+  let newest = true
   for (let i = lines.length - 1; i >= 0 && turns.length < max; i--) {
     const line = (lines[i] ?? '').trim()
     if (!line) continue
     let e: Record<string, unknown>
     try { e = JSON.parse(line) } catch { continue }
+    const isNewest = newest
+    newest = false
 
     const userText = extractUserText(e)
     if (userText) { turns.push({ role: 'user', text: userText }); continue }
     const assistantText = extractAssistantText(e)
-    if (assistantText) turns.push({ role: 'assistant', text: assistantText })
+    if (assistantText) { turns.push({ role: 'assistant', text: assistantText }); continue }
+    if (isNewest) {
+      const tools = extractToolActivity(e)
+      if (tools) turns.push({ role: 'assistant', text: toolActivityLabel(tools), pending: true })
+    }
   }
   turns.reverse()
 

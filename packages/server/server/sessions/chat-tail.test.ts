@@ -19,6 +19,10 @@ const assistantTurn = (text: string) => line({
 const toolResultTurn = () => line({
   type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] },
 })
+const toolUseTurn = (...names: string[]) => line({
+  type: 'assistant',
+  message: { content: names.map(name => ({ type: 'tool_use', name, input: {} })) },
+})
 
 describe('resolveChatTranscriptPath', () => {
   let root: string
@@ -109,6 +113,40 @@ describe('readRecentChatTurns', () => {
 
     const turns = await readRecentChatTurns(file)
     expect(turns.map(t => t.role)).toEqual(['user', 'assistant', 'assistant'])
+  })
+
+  test('surfaces a pending tool-activity turn when the newest event is a tool call with no text yet', async () => {
+    await writeFile(file, [
+      userTurn('fix the bug'),
+      assistantTurn('looking into it'),
+      toolUseTurn('Bash'),
+    ].join('\n') + '\n')
+
+    const turns = await readRecentChatTurns(file)
+    expect(turns).toEqual([
+      { role: 'user', text: 'fix the bug' },
+      { role: 'assistant', text: 'looking into it' },
+      { role: 'assistant', text: 'Running Bash', pending: true },
+    ])
+  })
+
+  test('names every tool called in the newest entry', async () => {
+    await writeFile(file, [userTurn('go'), toolUseTurn('Read', 'Bash')].join('\n') + '\n')
+    const turns = await readRecentChatTurns(file)
+    expect(turns.at(-1)).toEqual({ role: 'assistant', text: 'Running Read, Bash', pending: true })
+  })
+
+  test('does NOT synthesize a pending turn for an older tool call that already has a result', async () => {
+    // Only the newest event in the file may be read as "busy right now" — an earlier tool_use with
+    // nothing after it in this fixture would otherwise misreport a finished exchange as still running.
+    await writeFile(file, [
+      toolUseTurn('Bash'),
+      toolResultTurn(),
+      assistantTurn('done'),
+    ].join('\n') + '\n')
+
+    const turns = await readRecentChatTurns(file)
+    expect(turns).toEqual([{ role: 'assistant', text: 'done' }])
   })
 
   test('stops parsing once `max` turns are collected, from the end', async () => {
