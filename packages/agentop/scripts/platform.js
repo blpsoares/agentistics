@@ -59,4 +59,24 @@ function resolveAsset(platform, arch, version) {
   };
 }
 
-module.exports = { resolveAsset, REPO, BINARY };
+// True when the ancestor package.json (the root of whatever checkout this
+// package sits in) IS the agentistics monorepo itself, rather than some
+// unrelated project that installed @agentistics/agentop as a dependency.
+// `bun install` at this repo's own root runs every workspace member's
+// postinstall (workspace-local scripts are trusted by default, unlike a
+// dependency's) — so without this check, every contributor's `bun install`,
+// and any CI job that runs it for an unrelated reason (e.g. the Windows
+// desktop build, which has nothing to do with the agentop CLI), downloaded
+// an 87MB binary it never uses, and failed outright on a platform this npm
+// package doesn't support. The repo already builds its own binary via
+// `bun run build:binary` — the npm postinstall exists for EXTERNAL installs.
+/**
+ * @param {{name?: string} | null} ancestorPkg - the parsed package.json 3
+ *   levels up from this file (repo root), or null if none was found/readable
+ * @returns {boolean}
+ */
+function isMonorepoCheckout(ancestorPkg) {
+  return ancestorPkg != null && ancestorPkg.name === 'agentistics';
+}
+
+module.exports = { resolveAsset, isMonorepoCheckout, REPO, BINARY };

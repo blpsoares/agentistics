@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { resolveAsset } from './platform.js';
+import { resolveAsset, isMonorepoCheckout } from './platform.js';
 
 describe('resolveAsset', () => {
   test('linux x64 resolves the version-tagged GitHub release asset URL', () => {
@@ -36,5 +36,19 @@ describe('resolveAsset', () => {
     const result = resolveAsset('freebsd', 'mips', '1.22.1');
     expect(result.ok).toBe(false);
     expect(result.message).toContain('detected: freebsd');
+  });
+});
+
+describe('isMonorepoCheckout', () => {
+  test('true when the ancestor package.json is the agentistics monorepo root', () => {
+    expect(isMonorepoCheckout({ name: 'agentistics' })).toBe(true);
+  });
+
+  test('false for an unrelated consumer project (npm install as a dependency)', () => {
+    expect(isMonorepoCheckout({ name: 'some-other-app' })).toBe(false);
+  });
+
+  test('false when there is no ancestor package.json at all', () => {
+    expect(isMonorepoCheckout(null)).toBe(false);
   });
 });
