@@ -1,0 +1,43 @@
+{
+  "name": "@agentistics/agentop",
+  "version": "1.22.1",
+  "description": "agentop CLI — npm install for the same native binary distributed via install.sh (Linux x86_64 only)",
+  "type": "commonjs",
+  "bin": {
+    "agentop": "bin/agentop.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "!scripts/*.test.js",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js",
+    "prepublishOnly": "bun test scripts/platform.test.js"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "cli",
+    "claude",
+    "claude-code",
+    "analytics",
+    "agentistics",
+    "agentop"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blpsoares/agentistics.git",
+    "directory": "packages/agentop"
+  },
+  "homepage": "https://github.com/blpsoares/agentistics"
+}
