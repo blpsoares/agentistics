@@ -691,3 +691,29 @@ test('clampSessionPollMs falls back to the default for a non-finite value', () =
   expect(clampSessionPollMs(NaN)).toBe(SESSION_POLL_DEFAULT_MS)
   expect(clampSessionPollMs(Infinity)).toBe(SESSION_POLL_DEFAULT_MS)
 })
+
+// THREE — the persisted search-scope preference the cockpit (j-20260826-fi) builds on.
+// The scope SET rides `sessionView` and its whole-object write; this file owns where it lives,
+// its default, and its validation. The renderer is the TUI's.
+import { resolveSessionSearchScopes, DEFAULT_SESSION_SEARCH_SCOPES } from './preferences'
+
+test('search scopes: never chosen reads as the default (all own fields, no transcript)', () => {
+  expect(resolveSessionSearchScopes({})).toEqual([...DEFAULT_SESSION_SEARCH_SCOPES])
+  expect(DEFAULT_SESSION_SEARCH_SCOPES).not.toContain('transcript')
+  expect(DEFAULT_SESSION_SEARCH_SCOPES).toContain('name')
+})
+
+test('search scopes: a stored set is honoured, in canonical order and deduped', () => {
+  const p = { sessionView: { grouping: 'none', showClosed: false, showExited: false, showUnfiled: false, searchScopes: ['prompt', 'name', 'prompt', 'transcript'] } } as never
+  expect(resolveSessionSearchScopes(p)).toEqual(['name', 'prompt', 'transcript'])
+})
+
+test('search scopes: an empty stored array is a real (empty) choice, distinct from never-chosen', () => {
+  const p = { sessionView: { grouping: 'none', showClosed: false, showExited: false, showUnfiled: false, searchScopes: [] } } as never
+  expect(resolveSessionSearchScopes(p)).toEqual([])
+})
+
+test('search scopes: unknown values are dropped rather than crashing', () => {
+  const p = { sessionView: { grouping: 'none', showClosed: false, showExited: false, showUnfiled: false, searchScopes: ['name', 'bogus', 'folder'] } } as never
+  expect(resolveSessionSearchScopes(p)).toEqual(['name', 'folder'])
+})

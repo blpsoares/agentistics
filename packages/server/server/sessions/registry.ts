@@ -53,6 +53,11 @@ export interface SessionPatch {
   task?: string
   endedAt?: string
   conversationId?: string
+  /** The harness's own `/rename` name, persisted so the title survives the process — see
+   *  `ManagedSession.harnessName`. Written by the poller only when it CHANGES, one write per rename. */
+  harnessName?: string
+  /** Written alongside `harnessName`, never on its own — see `ManagedSession.harnessNameSince`. */
+  harnessNameSince?: number
 }
 
 export interface SessionRegistry {

@@ -22,6 +22,7 @@ import { planAdoptions } from './session-adopt'
 import { loadConversations, type Conversation } from './conversations'
 import { HEARTBEAT_MS, planCrashGroup, type CrashGroup } from './crash-group'
 import { emptyHarnessSessionIndex, type HarnessSessionIndex } from './harness-sessions'
+import { chosenName } from './harness-session-file'
 import { reconcileSessions } from './session-ref'
 import {
   attentionCount, bellTransitions, buildSessionViews, type SessionView,
@@ -121,6 +122,17 @@ export function createSessionsPoller(o: {
    * conversation.
    */
   recordConversation?: (id: string, conversationId: string) => Promise<unknown>
+  /**
+   * Persist the name a managed row was given INSIDE the harness (`/rename`), so the title survives
+   * the process.
+   *
+   * Mirror of `recordConversation`, and for the same reason: the harness deletes its own session
+   * file when the process ends, so a name that lived only there is lost the instant the session
+   * finishes — the displayed title then flips to a different source and `CTRL+F` can no longer find
+   * the row by the name it wore a moment ago. Called ONLY when the live, non-derived name disagrees
+   * with what the registry already holds, so it writes once per rename and not once per poll.
+   */
+  recordHarnessName?: (id: string, name: string, since?: number) => Promise<unknown>
   /**
    * Write registry records for sessions the backend is running and the registry has lost.
    *
@@ -277,6 +289,18 @@ export function createSessionsPoller(o: {
           const exact = harnessSessions.byManagedId.get(m.id)?.sessionId
           if (!exact || m.conversationId === exact) continue
           await o.recordConversation(m.id, exact).catch(() => undefined)
+        }
+      }
+
+      // The `/rename` name, captured WHILE there is still a harness file to read it from, so the
+      // title outlives the process. Only a name a PERSON typed (`chosenName` drops the harness's own
+      // invented `agentistics-77`), and only when it CHANGED — one write per rename, never per poll.
+      if (o.recordHarnessName) {
+        for (const m of registry) {
+          const file = harnessSessions.byManagedId.get(m.id)
+          const name = chosenName(file)
+          if (!name || (m.harnessName === name && m.harnessNameSince === file?.nameSince)) continue
+          await o.recordHarnessName(m.id, name, file?.nameSince).catch(() => undefined)
         }
       }
 
