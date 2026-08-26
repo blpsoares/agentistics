@@ -384,6 +384,14 @@ export interface ControlStrings {
   /** Named in words, never rendered as a zero — see `TranscriptSearch.unavailable`. */
   searchNoGrep: string
   searchNoTranscripts: string
+  /** The transcription depth is switched off — a choice, distinct from "none on this machine". */
+  searchTranscriptOff: string
+  /** The search-depth section in the view menu, and its three cumulative toggles + the "all" row. */
+  viewSearchDepth: string
+  searchDepthName: string
+  searchDepthPrompt: string
+  searchDepthTranscript: string
+  searchDepthAll: string
   searchCovered: (harnesses: string) => string
   searchFailed: (harnesses: string) => string
   /** How long ago, from a whole number of SECONDS — the caller does the clock arithmetic so this
@@ -909,6 +917,12 @@ const EN: ControlStrings = {
   searchRunning: 'reading transcripts…',
   searchNoGrep: 'transcripts not searched — grep is not available here',
   searchNoTranscripts: 'transcripts not searched — none on this machine',
+  searchTranscriptOff: 'transcription off',
+  viewSearchDepth: 'Search in',
+  searchDepthName: 'title',
+  searchDepthPrompt: 'first prompt',
+  searchDepthTranscript: 'transcription (full session)',
+  searchDepthAll: 'all',
   searchCovered: h => `transcripts: ${h}`,
   searchFailed: h => `could not read: ${h}`,
   sessionsAgo: (sec: number) => {
@@ -1360,6 +1374,12 @@ const PT: ControlStrings = {
   searchRunning: 'lendo transcripts…',
   searchNoGrep: 'transcripts não buscados — não há grep aqui',
   searchNoTranscripts: 'transcripts não buscados — nenhum nesta máquina',
+  searchTranscriptOff: 'transcrição desligada',
+  viewSearchDepth: 'Buscar em',
+  searchDepthName: 'título',
+  searchDepthPrompt: 'primeiro prompt',
+  searchDepthTranscript: 'transcrição (sessão completa)',
+  searchDepthAll: 'todos',
   searchCovered: h => `transcripts: ${h}`,
   searchFailed: h => `não deu pra ler: ${h}`,
   sessionsAgo: (sec: number) => {

@@ -8,7 +8,7 @@
  */
 
 import type { CliLang } from './lang'
-import type { SearchFields } from './search-scope'
+import type { SearchFields, SearchScopeSelection } from './search-scope'
 // The default ARRANGEMENT is derived from the dimension vocabulary rather than written out beside
 // it. `session-dimensions.ts` imports this file for TYPES only, so this is the one value direction.
 import {
@@ -812,6 +812,15 @@ export interface SessionViewPrefs {
    * useful — you marked the row because you were about to go into it.
    */
   marked?: string[]
+  /**
+   * Which search DEPTHS are active — title, first prompt, transcription — cumulative.
+   *
+   * Persisted like the rest of the arrangement so the depth someone chose survives a restart, and
+   * absent reads as `DEFAULT_SCOPE_SELECTION` (title + first prompt on, transcription off) via
+   * `normalizeSelection` — never a literal here, for the same reason `layout` is not: a hand-written
+   * fallback drifts from the one in `search-scope.ts`. See finding (3) in the journey.
+   */
+  searchScopes?: SearchScopeSelection
 }
 
 /**

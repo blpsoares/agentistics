@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  emptyScopeCounts, matchScopes, scopeCounts, searchDepthText, type SearchFields,
+  activeScopes, allState, DEFAULT_SCOPE_SELECTION, emptyScopeCounts, matchScopes, normalizeSelection,
+  scopeCounts, searchDepthText, toggleAllScopes, toggleScope, transcriptScopeOn,
+  type SearchFields, type SearchScopeSelection,
 } from './search-scope'
 
 const fields = (o: Partial<SearchFields> = {}): SearchFields => ({
@@ -72,6 +74,7 @@ const words = {
   },
   noGrep: 'no grep here',
   noTranscripts: 'none on this machine',
+  transcriptOff: 'transcript off',
 }
 
 describe('searchDepthText', () => {
@@ -89,6 +92,14 @@ describe('searchDepthText', () => {
     expect(searchDepthText(emptyScopeCounts(), words, {})).toBe('transcript 0')
   })
 
+  test('a transcription depth switched OFF says so, distinct from "none on this machine"', () => {
+    const counts = { ...emptyScopeCounts(), name: 2 }
+    expect(searchDepthText(counts, words, { off: true })).toBe('name 2 · transcript off')
+    // …and it outranks a stale running/unavailable flag: nothing ran, so nothing is pending.
+    expect(searchDepthText(counts, words, { off: true, running: true, runningWord: 'reading…' }))
+      .toBe('name 2 · transcript off')
+  })
+
   test('an unsearchable transcript says WHY instead of showing a zero', () => {
     const counts = { ...emptyScopeCounts(), name: 2 }
     expect(searchDepthText(counts, words, { unavailable: 'no-grep' }))
@@ -101,5 +112,104 @@ describe('searchDepthText', () => {
     const counts = { ...emptyScopeCounts(), name: 2 }
     expect(searchDepthText(counts, words, { running: true, runningWord: 'reading…' }))
       .toBe('name 2 · reading…')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Selectable, cumulative search depth + the two-way "all" — finding (3).
+
+const sel = (o: Partial<SearchScopeSelection> = {}): SearchScopeSelection =>
+  ({ ...DEFAULT_SCOPE_SELECTION, ...o })
+
+describe('scope selection defaults', () => {
+  test('title and first prompt on, transcription OFF — the disk read is opt-in', () => {
+    expect(DEFAULT_SCOPE_SELECTION).toEqual({ title: true, prompt: true, transcript: false })
+  })
+
+  test('a stored selection missing a key reads as that key’s default, never as false', () => {
+    expect(normalizeSelection(undefined)).toEqual(DEFAULT_SCOPE_SELECTION)
+    expect(normalizeSelection({ transcript: true })).toEqual({ title: true, prompt: true, transcript: true })
+    expect(normalizeSelection({ title: false })).toEqual({ title: false, prompt: true, transcript: false })
+  })
+})
+
+describe('activeScopes', () => {
+  test('the structured scopes are always searched, whatever the toggles say', () => {
+    const off = activeScopes({ title: false, prompt: false, transcript: false })
+    for (const s of ['folder', 'harness', 'note', 'task'] as const) expect(off.has(s)).toBe(true)
+    // …and the three human depths are all off.
+    expect(off.has('name')).toBe(false)
+    expect(off.has('prompt')).toBe(false)
+    expect(off.has('transcript')).toBe(false)
+  })
+
+  test('each toggle turns on exactly its own scope — cumulative, several at once', () => {
+    expect(activeScopes(sel({ transcript: true })).has('transcript')).toBe(true)
+    const titleOnly = activeScopes({ title: true, prompt: false, transcript: false })
+    expect(titleOnly.has('name')).toBe(true)
+    expect(titleOnly.has('prompt')).toBe(false)
+  })
+
+  test('transcriptScopeOn is the single gate for the expensive disk search', () => {
+    expect(transcriptScopeOn(sel({ transcript: false }))).toBe(false)
+    expect(transcriptScopeOn(sel({ transcript: true }))).toBe(true)
+  })
+})
+
+describe('the "all" control is two-way and never contradicts the individuals', () => {
+  test('all shows ON exactly when every individual is checked', () => {
+    expect(allState({ title: true, prompt: true, transcript: true })).toBe('on')
+  })
+  test('all shows OFF when none is, and MIXED when some are', () => {
+    expect(allState({ title: false, prompt: false, transcript: false })).toBe('off')
+    expect(allState({ title: true, prompt: false, transcript: false })).toBe('mixed')
+    expect(allState(DEFAULT_SCOPE_SELECTION)).toBe('mixed')
+  })
+  test('checking all from mixed turns every individual on; from all-on it clears them', () => {
+    expect(toggleAllScopes({ title: true, prompt: false, transcript: false }))
+      .toEqual({ title: true, prompt: true, transcript: true })
+    expect(toggleAllScopes({ title: true, prompt: true, transcript: true }))
+      .toEqual({ title: false, prompt: false, transcript: false })
+    expect(toggleAllScopes({ title: false, prompt: false, transcript: false }))
+      .toEqual({ title: true, prompt: true, transcript: true })
+  })
+  test('turning the last individual on makes all read ON — the reverse direction, by derivation', () => {
+    const oneOff = { title: true, prompt: true, transcript: false }
+    expect(allState(oneOff)).toBe('mixed')
+    expect(allState(toggleScope(oneOff, 'transcript'))).toBe('on')
+  })
+})
+
+describe('matchScopes honours the active selection', () => {
+  const active = (s: SearchScopeSelection) => activeScopes(s)
+
+  test('a title-only match is invisible while the title toggle is off', () => {
+    const row = fields({ name: 'docker' })
+    expect(matchScopes(row, 'docker', {}, active(sel({ title: true })))).toEqual(['name'])
+    expect(matchScopes(row, 'docker', {}, active(sel({ title: false })))).toEqual([])
+  })
+
+  test('a transcript hit is dropped unless the transcription toggle is on — the perf guard', () => {
+    const row = fields()
+    expect(matchScopes(row, 'docker', { transcript: true }, active(sel({ transcript: false })))).toEqual([])
+    expect(matchScopes(row, 'docker', { transcript: true }, active(sel({ transcript: true })))).toEqual(['transcript'])
+  })
+
+  test('the always-on structured scopes still match with every toggle off', () => {
+    const row = fields({ note: 'docker note', task: 'docker task' })
+    const allOff = active({ title: false, prompt: false, transcript: false })
+    expect(matchScopes(row, 'docker', {}, allOff)).toEqual(['note', 'task'])
+  })
+
+  test('with no active set given, behaviour is unchanged — every scope is searched', () => {
+    const row = fields({ name: 'docker', prompt: 'docker build' })
+    expect(matchScopes(row, 'docker')).toEqual(['name', 'prompt'])
+  })
+
+  test('scopeCounts respects the active set too, so the depth line cannot exceed what was searched', () => {
+    const rows = [{ fields: fields({ name: 'docker' }), transcript: true }]
+    const counts = scopeCounts(rows, 'docker', activeScopes(sel({ title: false, transcript: false })))
+    expect(counts.name).toBe(0)
+    expect(counts.transcript).toBe(0)
   })
 })

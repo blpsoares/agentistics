@@ -21,7 +21,11 @@ import type {
   TranscriptSearch,
 } from '../types'
 import type { ControlStrings } from '../i18n'
-import { searchDepthText } from '../search-scope'
+import {
+  activeScopes, allState, normalizeSelection, toggleAllScopes, toggleScope, transcriptScopeOn,
+  SEARCH_TOGGLES, searchDepthText,
+  type SearchScopeSelection, type SearchToggle,
+} from '../search-scope'
 import { searchDepth } from '../sessions'
 import { sessionWordBook } from '../i18n'
 import type { TabChrome } from '../ControlCenter'
@@ -250,6 +254,15 @@ export function Sessions({
    */
   const [transcript, setTranscript] = useState<TranscriptSearch | null>(null)
   const [searchingText, setSearchingText] = useState(false)
+  /**
+   * Which search DEPTHS are active — title, first prompt, transcription — cumulative and persisted.
+   *
+   * Restored from `view.searchScopes` below (absent reads as the default: title + first prompt on,
+   * transcription off). The active SCOPE set derived from it gates both what the rows filter on and
+   * whether the expensive disk read runs at all.
+   */
+  const [scopes, setScopes] = useState<SearchScopeSelection>(() => normalizeSelection(view?.searchScopes))
+  const active = useMemo(() => activeScopes(scopes), [scopes])
 
   /**
    * Ask the disk, once the typing settles.
@@ -262,20 +275,27 @@ export function Sessions({
    */
   useEffect(() => {
     const q = query.trim()
-    if (q === '' || !host.searchTranscripts) { setTranscript(null); setSearchingText(false); return }
+    // The disk read is GATED on the transcription toggle — this is the performance answer. Reading
+    // hundreds of megabytes of transcripts on every query is what would hang the TUI, so it runs
+    // only when the user has switched that depth on; with it off, the in-memory scopes alone answer
+    // instantly and `transcript` stays null (the depth line then omits the transcript count rather
+    // than reporting a stale one).
+    if (q === '' || !host.searchTranscripts || !transcriptScopeOn(scopes)) {
+      setTranscript(null); setSearchingText(false); return
+    }
 
     let cancelled = false
     setSearchingText(true)
     const timer = setTimeout(() => {
       host.searchTranscripts!(q)
         .then(r => { if (!cancelled) { setTranscript(r); setSearchingText(false) } })
-        // A failed deep search must not take the list with it: the six in-memory scopes are still
+        // A failed deep search must not take the list with it: the in-memory scopes are still
         // a perfectly good search, so the row count stays right and only the transcript half is lost.
         .catch(() => { if (!cancelled) { setTranscript(null); setSearchingText(false) } })
     }, TRANSCRIPT_DEBOUNCE_MS)
 
     return () => { cancelled = true; clearTimeout(timer); }
-  }, [query, host])
+  }, [query, host, scopes])
   const [showDone, setShowDone] = useState(view?.showDone ?? DEFAULT_SESSION_VIEW.showDone ?? false)
   /**
    * What the list is narrowed to, per dimension — the ONE source, and the whole answer.
@@ -399,6 +419,7 @@ export function Sessions({
         && (showDone || taskFilter !== null || !(v.task && done.has(v.task)))),
       query,
       transcript?.ids,
+      active,
     ),
     grouping,
     words,
@@ -413,7 +434,7 @@ export function Sessions({
      // Absent when nothing is marked, so the band is not merely empty — it does not exist.
      marked.size > 0 ? { ids: marked, label: s.sessionsMarkedBand } : undefined), [
     fleet?.sessions, fleet?.finishedTasks, fleet?.fell, done, grouping, cascade, query, transcript, filters,
-    showNamed, showDone, taskFilter, dimensionCtx, order, words, marked,
+    showNamed, showDone, taskFilter, dimensionCtx, order, words, marked, active,
   ])
 
   /**
@@ -422,16 +443,26 @@ export function Sessions({
    */
   const depth = useMemo(() => {
     if (query.trim() === '') return ''
+    const transcriptOn = transcriptScopeOn(scopes)
     return searchDepthText(
-      searchDepth(fleet?.sessions ?? [], query, transcript?.ids),
-      { scope: s.searchScope, noGrep: s.searchNoGrep, noTranscripts: s.searchNoTranscripts },
+      searchDepth(fleet?.sessions ?? [], query, transcript?.ids, active),
       {
-        running: searchingText,
-        runningWord: s.searchRunning,
-        ...(transcript?.unavailable ? { unavailable: transcript.unavailable } : {}),
+        scope: s.searchScope, noGrep: s.searchNoGrep,
+        noTranscripts: s.searchNoTranscripts, transcriptOff: s.searchTranscriptOff,
+      },
+      {
+        // With transcription switched off the disk read never ran; the line says so rather than
+        // claiming a count of zero or a search still in flight.
+        ...(transcriptOn
+          ? {
+              running: searchingText,
+              runningWord: s.searchRunning,
+              ...(transcript?.unavailable ? { unavailable: transcript.unavailable } : {}),
+            }
+          : { off: true }),
       },
     )
-  }, [fleet?.sessions, query, transcript, searchingText, s])
+  }, [fleet?.sessions, query, transcript, searchingText, s, active, scopes])
 
   const selectable = useMemo(() => selectableIndexes(rows), [rows])
 
@@ -1181,6 +1212,7 @@ export function Sessions({
     // empty set — see `SessionFilterState.marked`.
     setMarked(new Set(restoredFilters.marked))
     setOrder((view.sort as SessionOrder | undefined) ?? DEFAULT_ORDER)
+    setScopes(normalizeSelection(view.searchScopes))
     setHideDetail(view.hideDetail ?? false)
     // The DEFAULT, never a literal — same rule, same reason as `onlyActive` above.
     setLayout(view.layout ?? DEFAULT_SESSION_VIEW.layout ?? 'list')
@@ -1226,9 +1258,10 @@ export function Sessions({
       cascade,
       ...(cardAnchor ? { cardAnchor } : {}),
       sort: order,
+      searchScopes: scopes,
     } as SessionViewPrefs)
   }, [grouping, cascade, filters, showNamed, showDone, hideDetail,
-      layout, cardAnchor, order, marked, onView, view])
+      layout, cardAnchor, order, marked, scopes, onView, view])
 
   useEffect(() => {
     if (!isActive) return
@@ -1545,12 +1578,15 @@ export function Sessions({
           grouping={grouping}
           showHistory={showHistory}
           showNamed={showNamed}
+          scopes={scopes}
           width={width}
           height={height}
           isActive={isActive}
           onGrouping={g => { setGrouping(g); setCursor(0) }}
           onShowClosed={() => pressShortcut('history')}
           onShowNamed={() => { setShowNamed(v => !v); setCursor(0) }}
+          onToggleScope={t => setScopes(sc => toggleScope(sc, t))}
+          onToggleAllScopes={() => setScopes(toggleAllScopes)}
           onClose={() => setAsk(null)}
         />
       </Box>
@@ -2989,19 +3025,22 @@ function Question({
  * squeezing it under the list is what made it unreadable the first time.
  */
 function ViewOptions({
-  strings: s, grouping, showHistory, showNamed, width, height, isActive,
-  onGrouping, onShowClosed, onShowNamed, onClose,
+  strings: s, grouping, showHistory, showNamed, scopes, width, height, isActive,
+  onGrouping, onShowClosed, onShowNamed, onToggleScope, onToggleAllScopes, onClose,
 }: {
   strings: ControlStrings
   grouping: SessionGrouping
   showHistory: boolean
   showNamed: boolean
+  scopes: SearchScopeSelection
   width: number
   height: number
   isActive: boolean
   onGrouping: (g: SessionGrouping) => void
   onShowClosed: () => void
   onShowNamed: () => void
+  onToggleScope: (t: SearchToggle) => void
+  onToggleAllScopes: () => void
   onClose: () => void
 }) {
   // One flat list of rows so the cursor moves over exactly what is drawn — the same reason the
@@ -3011,7 +3050,13 @@ function ViewOptions({
     | { kind: 'group'; value: SessionGrouping }
     | { kind: 'closed' }
     | { kind: 'named' }
+    // The cumulative search depths, plus the two-way "all" — see `search-scope.ts`.
+    | { kind: 'scope'; toggle: SearchToggle }
+    | { kind: 'scopeAll' }
 
+  const scopeLabel: Record<SearchToggle, string> = {
+    title: s.searchDepthName, prompt: s.searchDepthPrompt, transcript: s.searchDepthTranscript,
+  }
   const rows: Row[] = [
     { kind: 'heading', label: s.viewGroupBy },
     ...GROUPINGS.map(g => ({ kind: 'group' as const, value: g })),
@@ -3020,6 +3065,9 @@ function ViewOptions({
     // Was the unfiled switch, which only meant anything while grouping by task. That bucket is now
     // a row in the task section, on every grouping; this is the widening that had no control at all.
     { kind: 'named' },
+    { kind: 'heading', label: s.viewSearchDepth },
+    ...SEARCH_TOGGLES.map(t => ({ kind: 'scope' as const, toggle: t })),
+    { kind: 'scopeAll' },
   ]
   const selectable = rows.map((r, i) => (r.kind === 'heading' ? -1 : i)).filter(i => i >= 0)
 
@@ -3037,9 +3085,16 @@ function ViewOptions({
     if (row.kind === 'group') return onGrouping(row.value)
     if (row.kind === 'closed') return onShowClosed()
     if (row.kind === 'named') return onShowNamed()
+    if (row.kind === 'scope') return onToggleScope(row.toggle)
+    if (row.kind === 'scopeAll') return onToggleAllScopes()
   }, { isActive })
 
   const body = Math.max(1, height - 2)
+  // The "all" glyph is TRI-STATE: a half-dot when only some depths are on, so it can never claim to
+  // be on while a depth is off. `allState` is derived from the very toggles above, so the two read
+  // as one — the PE's two-way requirement, met by there being only one source.
+  const all = allState(scopes)
+  const allGlyph = all === 'on' ? '● ' : all === 'off' ? '○ ' : '◐ '
 
   return (
     <Box flexDirection="column" width={width} flexShrink={0}>
@@ -3055,16 +3110,23 @@ function ViewOptions({
         // The dot means ON, always — for every row on this panel.
         const on = row.kind === 'group'
           ? row.value === grouping
-          : row.kind === 'closed' ? showHistory : showNamed
+          : row.kind === 'closed' ? showHistory
+          : row.kind === 'named' ? showNamed
+          : row.kind === 'scope' ? scopes[row.toggle]
+          : all === 'on'
         const label = row.kind === 'group'
           ? s.sessionsGroupings[row.value]
           : row.kind === 'closed' ? s.viewClosedOn
-          : s.toggleNamed
+          : row.kind === 'named' ? s.toggleNamed
+          : row.kind === 'scope' ? scopeLabel[row.toggle]
+          : s.searchDepthAll
+        // The "all" row wears the tri-state glyph; every other row is a plain on/off dot.
+        const glyph = row.kind === 'scopeAll' ? allGlyph : on ? '● ' : '○ '
         return (
           <Text key={`r${i}`} wrap="truncate">
             <Text color={active ? COLORS.accent : undefined}>{active ? '  ❯ ' : '    '}</Text>
             {/* Glyph plus word: which options are on must survive a terminal that drops colour. */}
-            <Text color={on ? COLORS.success : COLORS.muted}>{on ? '● ' : '○ '}</Text>
+            <Text color={on ? COLORS.success : COLORS.muted}>{glyph}</Text>
             <Text color={active ? COLORS.accent : undefined} bold={active}>
               {truncate(label, Math.max(1, width - 8))}
             </Text>
