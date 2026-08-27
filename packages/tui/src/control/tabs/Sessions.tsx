@@ -22,8 +22,8 @@ import type {
 } from '../types'
 import type { ControlStrings } from '../i18n'
 import {
-  activeScopes, allState, normalizeSelection, toggleAllScopes, toggleScope, transcriptScopeOn,
-  SEARCH_TOGGLES, searchDepthText,
+  activeScopes, allState, selectionFromScopes, selectionToScopes, toggleAllScopes, toggleScope,
+  transcriptScopeOn, SEARCH_TOGGLES, searchDepthText,
   type SearchScopeSelection, type SearchToggle,
 } from '../search-scope'
 import { searchDepth } from '../sessions'
@@ -261,7 +261,7 @@ export function Sessions({
    * transcription off). The active SCOPE set derived from it gates both what the rows filter on and
    * whether the expensive disk read runs at all.
    */
-  const [scopes, setScopes] = useState<SearchScopeSelection>(() => normalizeSelection(view?.searchScopes))
+  const [scopes, setScopes] = useState<SearchScopeSelection>(() => selectionFromScopes(view?.searchScopes))
   const active = useMemo(() => activeScopes(scopes), [scopes])
 
   /**
@@ -1212,7 +1212,7 @@ export function Sessions({
     // empty set — see `SessionFilterState.marked`.
     setMarked(new Set(restoredFilters.marked))
     setOrder((view.sort as SessionOrder | undefined) ?? DEFAULT_ORDER)
-    setScopes(normalizeSelection(view.searchScopes))
+    setScopes(selectionFromScopes(view.searchScopes))
     setHideDetail(view.hideDetail ?? false)
     // The DEFAULT, never a literal — same rule, same reason as `onlyActive` above.
     setLayout(view.layout ?? DEFAULT_SESSION_VIEW.layout ?? 'list')
@@ -1258,7 +1258,9 @@ export function Sessions({
       cascade,
       ...(cardAnchor ? { cardAnchor } : {}),
       sort: order,
-      searchScopes: scopes,
+      // The persisted shape is the canonical scope ARRAY (server contract, #240), derived from this
+      // screen's toggles at the edge so the object never crosses the boundary.
+      searchScopes: selectionToScopes(scopes),
     } as SessionViewPrefs)
   }, [grouping, cascade, filters, showNamed, showDone, hideDetail,
       layout, cardAnchor, order, marked, scopes, onView, view])

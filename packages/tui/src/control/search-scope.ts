@@ -94,6 +94,39 @@ export function activeScopes(sel: SearchScopeSelection): Set<SearchScope> {
   return out
 }
 
+/**
+ * The CANONICAL persisted shape — the cumulative scope ARRAY, in `SEARCH_SCOPES` order.
+ *
+ * `Preferences.sessionView.searchScopes` (server, `preferences.ts`) and
+ * `SessionViewPrefs.searchScopes` (this package) are BOTH `SearchScope[]`: the server owns the
+ * stored format and the tui produces and consumes it, so the two never disagree on the wire. The
+ * `SearchScopeSelection` object is only this screen's own on/off convenience — it is converted to
+ * the array on the way out (`selectionToScopes`) and back on the way in (`selectionFromScopes`), so
+ * nothing downstream ever sees the object. The array is exactly what `activeScopes` searches, which
+ * is what keeps the persisted set and the actual search in step.
+ */
+export function selectionToScopes(sel: SearchScopeSelection): SearchScope[] {
+  const set = activeScopes(sel)
+  return SEARCH_SCOPES.filter(s => set.has(s))
+}
+
+/**
+ * Recover the depth toggles from a persisted scope array — the inverse of `selectionToScopes` over
+ * the three USER-controlled depths (title→`name`, prompt, transcript).
+ *
+ * The always-searched structured scopes (folder/harness/note/task) carry no toggle, so they are
+ * ignored here exactly as they are in the UI — which is why the toggles round-trip through
+ * `selectionToScopes` even though the array also names them. Anything that is NOT an array — absent,
+ * or a value written by the pre-array build — reads as the default (title + first prompt on,
+ * transcription off), the same robustness the server's `resolveSessionSearchScopes` applies to a
+ * hand-edited or newer-binary file.
+ */
+export function selectionFromScopes(scopes: readonly SearchScope[] | undefined): SearchScopeSelection {
+  if (!Array.isArray(scopes)) return { ...DEFAULT_SCOPE_SELECTION }
+  const set = new Set<SearchScope>(scopes)
+  return { title: set.has('name'), prompt: set.has('prompt'), transcript: set.has('transcript') }
+}
+
 /** Whether the deep transcript search should run at all — the one scope worth not paying for. */
 export function transcriptScopeOn(sel: SearchScopeSelection): boolean {
   return sel.transcript

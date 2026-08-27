@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
   activeScopes, allState, DEFAULT_SCOPE_SELECTION, emptyScopeCounts, matchScopes, normalizeSelection,
-  scopeCounts, searchDepthText, toggleAllScopes, toggleScope, transcriptScopeOn,
-  type SearchFields, type SearchScopeSelection,
+  scopeCounts, searchDepthText, selectionFromScopes, selectionToScopes, toggleAllScopes, toggleScope,
+  transcriptScopeOn, SEARCH_SCOPES, SEARCH_TOGGLES,
+  type SearchFields, type SearchScope, type SearchScopeSelection,
 } from './search-scope'
 
 const fields = (o: Partial<SearchFields> = {}): SearchFields => ({
@@ -211,5 +212,66 @@ describe('matchScopes honours the active selection', () => {
     const counts = scopeCounts(rows, 'docker', activeScopes(sel({ title: false, transcript: false })))
     expect(counts.name).toBe(0)
     expect(counts.transcript).toBe(0)
+  })
+})
+
+// The CANONICAL persisted shape is the scope ARRAY (server contract, #240). The tui keeps its
+// on/off object internally and converts at the edge, so these pin that the two never disagree —
+// what makes SessionViewPrefs.searchScopes: SearchScope[] and the merge with dev typecheck.
+describe('selection <-> canonical scope array (the #240 array contract)', () => {
+  test('the default selection is exactly the default persisted set — all own fields, no transcript', () => {
+    // Same value the server derives (preferences.ts DEFAULT_SESSION_SEARCH_SCOPES = all but transcript).
+    expect(selectionToScopes(DEFAULT_SCOPE_SELECTION)).toEqual(
+      SEARCH_SCOPES.filter(s => s !== 'transcript') as SearchScope[],
+    )
+  })
+
+  test('the array is in canonical SEARCH_SCOPES order, whatever order the toggles imply', () => {
+    const scopes = selectionToScopes(sel({ title: true, prompt: true, transcript: true }))
+    expect(scopes).toEqual([...SEARCH_SCOPES])
+    // strictly increasing indices — never a shuffled set
+    const idx = scopes.map(s => SEARCH_SCOPES.indexOf(s))
+    expect(idx).toEqual([...idx].sort((a, b) => a - b))
+  })
+
+  test('every one of the 8 toggle combinations round-trips through the array unchanged', () => {
+    for (const title of [false, true]) {
+      for (const prompt of [false, true]) {
+        for (const transcript of [false, true]) {
+          const s = { title, prompt, transcript }
+          expect(selectionFromScopes(selectionToScopes(s))).toEqual(s)
+        }
+      }
+    }
+  })
+
+  test('the toggleable depths map to their own scopes; the always-on ones ride along', () => {
+    expect(selectionToScopes(sel({ title: true, prompt: false, transcript: false })))
+      .toEqual(['name', 'folder', 'harness', 'note', 'task'])
+    expect(selectionToScopes(sel({ title: false, prompt: false, transcript: false })))
+      .toEqual(['folder', 'harness', 'note', 'task'])
+    // reading back ignores the always-on scopes, so the toggles are recovered exactly
+    expect(selectionFromScopes(['folder', 'harness', 'note', 'task']))
+      .toEqual({ title: false, prompt: false, transcript: false })
+  })
+
+  test('absent, empty, or a pre-array (object) value all degrade to the default selection', () => {
+    expect(selectionFromScopes(undefined)).toEqual(DEFAULT_SCOPE_SELECTION)
+    // a value written by the pre-array build was an object, not an array — must not throw
+    expect(selectionFromScopes({ title: true, prompt: true, transcript: false } as never))
+      .toEqual(DEFAULT_SCOPE_SELECTION)
+  })
+
+  test('a returned default is a fresh object, never the shared constant', () => {
+    const got = selectionFromScopes(undefined)
+    got.title = false
+    expect(DEFAULT_SCOPE_SELECTION.title).toBe(true)
+  })
+
+  test('the array a selection persists is exactly what activeScopes searches', () => {
+    for (const t of [...SEARCH_TOGGLES]) {
+      const s = sel({ [t]: true })
+      expect(new Set(selectionToScopes(s))).toEqual(activeScopes(s))
+    }
   })
 })

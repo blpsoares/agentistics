@@ -8,7 +8,7 @@
  */
 
 import type { CliLang } from './lang'
-import type { SearchFields, SearchScopeSelection } from './search-scope'
+import type { SearchFields, SearchScope } from './search-scope'
 // The default ARRANGEMENT is derived from the dimension vocabulary rather than written out beside
 // it. `session-dimensions.ts` imports this file for TYPES only, so this is the one value direction.
 import {
@@ -813,14 +813,18 @@ export interface SessionViewPrefs {
    */
   marked?: string[]
   /**
-   * Which search DEPTHS are active — title, first prompt, transcription — cumulative.
+   * WHICH scopes the session search looks in — the cumulative set (name, folder, harness, note,
+   * task, prompt, transcript), persisted like the rest of the arrangement so the depth someone chose
+   * survives a restart.
    *
-   * Persisted like the rest of the arrangement so the depth someone chose survives a restart, and
-   * absent reads as `DEFAULT_SCOPE_SELECTION` (title + first prompt on, transcription off) via
-   * `normalizeSelection` — never a literal here, for the same reason `layout` is not: a hand-written
-   * fallback drifts from the one in `search-scope.ts`. See finding (3) in the journey.
+   * A `SearchScope[]`, not this package's `SearchScopeSelection` object: the STORED format is the
+   * server's (`Preferences.sessionView.searchScopes` in `preferences.ts`, shipped in #240), and this
+   * type is the same contract read back through `cli-start.ts`. The tui converts to and from its own
+   * on/off toggles at the edge (`selectionToScopes` / `selectionFromScopes`), so the object never
+   * crosses this boundary. Absent reads as the default (title + first prompt on, transcription off)
+   * — never a literal here, for the same reason `layout` is not. See finding (3) in the journey.
    */
-  searchScopes?: SearchScopeSelection
+  searchScopes?: SearchScope[]
 }
 
 /**
