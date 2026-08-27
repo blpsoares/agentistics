@@ -3014,6 +3014,25 @@ function Question({
 }
 
 /**
+ * The scroll window for the view menu — PURE, so the "does it actually scroll" guarantee is
+ * testable without a tty (an input-driven render test flakes under concurrent load; this does not).
+ *
+ * The menu draws a title and a hint above its rows, so the rows get `height - 2`. Over that budget
+ * it uses the SAME following window (`windowOffset`) every other list in this package uses, centred
+ * on the cursor — which is what keeps the row the cursor lands on drawn. Slicing from zero
+ * (`rows.slice(0, height - 2)`) left the Search-in depths below the fold and unreachable on a short
+ * terminal — the `Math.max(1, height - chrome)` trap CLAUDE.md names.
+ */
+export function viewMenuWindow(
+  rowCount: number,
+  cursorRow: number,
+  height: number,
+): { offset: number; body: number } {
+  const body = Math.max(1, height - 2)
+  return { offset: windowOffset(cursorRow, rowCount, body), body }
+}
+
+/**
  * Everything about WHAT the list shows, as ONE vertical panel.
  *
  * It replaced a cramped horizontal strip that cycled the grouping on a hidden key and had nowhere
@@ -3089,7 +3108,10 @@ function ViewOptions({
     if (row.kind === 'scopeAll') return onToggleAllScopes()
   }, { isActive })
 
-  const body = Math.max(1, height - 2)
+  // The list — every grouping, the two Show switches, and the Search-in depths — outgrows a short
+  // terminal, so it SCROLLS: `viewMenuWindow` is the same following window every other list here
+  // uses, and it keeps the cursor's row drawn. Slicing from zero left the depth rows below the fold.
+  const { offset, body } = viewMenuWindow(rows.length, cursorRow, height)
   // The "all" glyph is TRI-STATE: a half-dot when only some depths are on, so it can never claim to
   // be on while a depth is off. `allState` is derived from the very toggles above, so the two read
   // as one — the PE's two-way requirement, met by there being only one source.
@@ -3100,7 +3122,10 @@ function ViewOptions({
     <Box flexDirection="column" width={width} flexShrink={0}>
       <Text bold>{truncate(s.viewTitle, width)}</Text>
       <Text dimColor>{truncate(s.viewHint, width)}</Text>
-      {rows.slice(0, body).map((row, i) => {
+      {rows.slice(offset, offset + body).map((row, localIndex) => {
+        // `i` is the row's index in the WHOLE list, not the visible slice, so the cursor comparison
+        // and the React keys stay correct once the window has scrolled off zero.
+        const i = offset + localIndex
         if (row.kind === 'heading') {
           return <Text key={`h${i}`} dimColor bold>{truncate(row.label, width)}</Text>
         }
