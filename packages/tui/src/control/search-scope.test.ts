@@ -275,3 +275,29 @@ describe('selection <-> canonical scope array (the #240 array contract)', () => 
     }
   })
 })
+
+// F2 — the transcript disk read (Sessions.tsx) keys on transcriptScopeOn(scopes), NOT the whole
+// object, so a title/first-prompt toggle never re-fires the ~255 ms grep. These pin the semantic
+// that fix rests on: the cheap depths leave the gate untouched; only transcription flips it.
+describe('F2: the disk-read gate moves only with the transcription depth', () => {
+  test('toggling title or first prompt leaves transcriptScopeOn unchanged', () => {
+    for (const on of [true, false]) {
+      const base = { title: true, prompt: false, transcript: on }
+      expect(transcriptScopeOn(toggleScope(base, 'title'))).toBe(on)
+      expect(transcriptScopeOn(toggleScope(base, 'prompt'))).toBe(on)
+    }
+  })
+
+  test('toggling transcription — and only that — flips the gate, so the read re-runs', () => {
+    expect(transcriptScopeOn(toggleScope({ title: true, prompt: true, transcript: false }, 'transcript')))
+      .toBe(true)
+    expect(transcriptScopeOn(toggleScope({ title: true, prompt: true, transcript: true }, 'transcript')))
+      .toBe(false)
+  })
+
+  test('the two-way "all" flips the gate too, since it carries transcription', () => {
+    // all-off -> all-on turns transcription on; all-on -> off turns it off.
+    expect(transcriptScopeOn(toggleAllScopes({ title: false, prompt: false, transcript: false }))).toBe(true)
+    expect(transcriptScopeOn(toggleAllScopes({ title: true, prompt: true, transcript: true }))).toBe(false)
+  })
+})

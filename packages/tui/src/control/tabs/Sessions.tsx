@@ -263,6 +263,12 @@ export function Sessions({
    */
   const [scopes, setScopes] = useState<SearchScopeSelection>(() => selectionFromScopes(view?.searchScopes))
   const active = useMemo(() => activeScopes(scopes), [scopes])
+  // The disk read below keys on THIS boolean, not the whole `scopes` object. Toggling title or
+  // first prompt makes a new `scopes` (they are in-memory scopes, searched instantly), and depending
+  // on the object re-fired the ~255 ms transcript grep on those cheap toggles for no new result. The
+  // deep read only has to re-run when the transcription depth itself flips — which is exactly what
+  // this value tracks.
+  const transcriptSearchOn = transcriptScopeOn(scopes)
 
   /**
    * Ask the disk, once the typing settles.
@@ -280,7 +286,7 @@ export function Sessions({
     // only when the user has switched that depth on; with it off, the in-memory scopes alone answer
     // instantly and `transcript` stays null (the depth line then omits the transcript count rather
     // than reporting a stale one).
-    if (q === '' || !host.searchTranscripts || !transcriptScopeOn(scopes)) {
+    if (q === '' || !host.searchTranscripts || !transcriptSearchOn) {
       setTranscript(null); setSearchingText(false); return
     }
 
@@ -295,7 +301,9 @@ export function Sessions({
     }, TRANSCRIPT_DEBOUNCE_MS)
 
     return () => { cancelled = true; clearTimeout(timer); }
-  }, [query, host, scopes])
+    // Keyed on `transcriptSearchOn`, NOT `scopes`: a title/first-prompt toggle must not re-run the
+    // disk read, only a change to the transcription depth (or the query/host) may. See F2.
+  }, [query, host, transcriptSearchOn])
   const [showDone, setShowDone] = useState(view?.showDone ?? DEFAULT_SESSION_VIEW.showDone ?? false)
   /**
    * What the list is narrowed to, per dimension — the ONE source, and the whole answer.
