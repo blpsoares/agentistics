@@ -5,7 +5,8 @@ import type { HarnessProcess } from '../live-sessions'
 import type { ManagedSession, SessionActivity } from './types'
 import type { ReconciledSession } from './session-ref'
 import {
-  attentionCount, bellTransitions, buildSessionViews, needsAttention,
+  attentionCount, bellTransitions, buildSessionViews, collapseSupersededSessions,
+  needsAttention, type SessionView,
 } from './session-view'
 
 const managed = (id: string, over: Partial<ManagedSession> = {}): ManagedSession => ({
@@ -493,5 +494,138 @@ describe('a session that CHANGED DIRECTORY is still the row hosting it', () => {
       harnessSessions: index({ byPid: { 777: { pid: 777, tmux: 'agentop-gonefromregistry:@0.%0' } } }),
     })
     expect(views.filter(v => v.status === 'external')).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ONE — duplicate rows. A conversation reopened N times left N `exited` rows
+// beside its one live continuation, because the row key is the per-spawn
+// managedId, not the conversation. `collapseSupersededSessions` drops a
+// predecessor ONLY when it is provably dead (endedMs) AND superseded.
+// ---------------------------------------------------------------------------
+describe('collapseSupersededSessions', () => {
+  const sv = (id: string, o: Partial<SessionView> = {}): SessionView => ({
+    id, cwd: '/repo/a', status: 'exited', attached: false, approvalDetection: true,
+    searchFields: { name: '', folder: '', harness: '', note: '', task: '', prompt: '' },
+    ...o,
+  })
+
+  it('drops a retired predecessor when a LIVE row drives the same conversation', () => {
+    const rows = [
+      sv('live', { status: 'running', conversationId: 'c1', createdMs: 2000 }),
+      sv('dead', { status: 'exited', conversationId: 'c1', createdMs: 1000, endedMs: 1500 }),
+    ]
+    const out = collapseSupersededSessions(rows)
+    expect(out.map(v => v.id)).toEqual(['live'])
+  })
+
+  it('keeps the NEWEST ended row when nothing is live, and drops the older ended ones', () => {
+    const rows = [
+      sv('old1', { conversationId: 'c1', createdMs: 1000, endedMs: 1100 }),
+      sv('old2', { conversationId: 'c1', createdMs: 2000, endedMs: 2100 }),
+      sv('newest', { conversationId: 'c1', createdMs: 3000, endedMs: 3100 }),
+    ]
+    const out = collapseSupersededSessions(rows)
+    // The newest ended row survives — it is the reopenable representative of the conversation.
+    expect(out.map(v => v.id)).toEqual(['newest'])
+  })
+
+  // NEGATIVE — the guarantee the coordinator reads this list for.
+  it('NEVER drops a live row, even when it shares a conversation with another live row', () => {
+    const rows = [
+      sv('liveA', { status: 'running', conversationId: 'c1', createdMs: 1000 }),
+      sv('liveB', { status: 'running', conversationId: 'c1', createdMs: 2000 }),
+    ]
+    const out = collapseSupersededSessions(rows)
+    expect(out.map(v => v.id).sort()).toEqual(['liveA', 'liveB'])
+  })
+
+  it('NEVER drops a row it cannot prove is dead — a lost row with no end time is kept', () => {
+    const rows = [
+      sv('live', { status: 'running', conversationId: 'c1', createdMs: 2000 }),
+      // `lost` with no endedMs: the backend cannot see it, which is not proof the process is gone.
+      sv('unproven', { status: 'lost', conversationId: 'c1', createdMs: 1000 }),
+    ]
+    const out = collapseSupersededSessions(rows)
+    expect(out.map(v => v.id).sort()).toEqual(['live', 'unproven'])
+  })
+
+  it('never collapses genuinely distinct sessions — different conversations both stay', () => {
+    const rows = [
+      sv('a', { status: 'exited', conversationId: 'c1', createdMs: 1000, endedMs: 1100 }),
+      sv('b', { status: 'exited', conversationId: 'c2', createdMs: 1000, endedMs: 1100 }),
+    ]
+    const out = collapseSupersededSessions(rows)
+    expect(out.map(v => v.id).sort()).toEqual(['a', 'b'])
+  })
+
+  it('never groups rows with NO conversationId — a shared directory is not an identity', () => {
+    const rows = [
+      sv('a', { status: 'exited', createdMs: 1000, endedMs: 1100 }),
+      sv('b', { status: 'exited', createdMs: 2000, endedMs: 2100 }),
+    ]
+    const out = collapseSupersededSessions(rows)
+    expect(out.map(v => v.id).sort()).toEqual(['a', 'b'])
+  })
+
+  it('the whole pipeline: a reopen chain collapses to one row through buildSessionViews', () => {
+    const m = (id: string, o: Partial<ManagedSession> = {}): ManagedSession => ({
+      id, harness: 'claude', cwd: '/repo/a', createdAt: '2026-08-14T10:00:00.000Z',
+      conversationId: 'conv', ...o,
+    })
+    const reconciled: ReconciledSession[] = [
+      { id: 'r1', managed: m('r1', { createdAt: '2026-08-14T10:00:00.000Z', endedAt: '2026-08-14T11:00:00.000Z' }), status: 'lost' },
+      { id: 'r2', managed: m('r2', { createdAt: '2026-08-14T12:00:00.000Z', endedAt: '2026-08-14T13:00:00.000Z' }), status: 'lost' },
+      {
+        id: 'r3', managed: m('r3', { createdAt: '2026-08-14T14:00:00.000Z' }),
+        backend: { id: 'r3', createdMs: 5000, attached: false, alive: true, lastActivityMs: 5000 },
+        status: 'running',
+      },
+    ]
+    const views = buildSessionViews({ reconciled, activity: new Map([['r3', 'working']]), processes: [] })
+    const forConv = views.filter(v => v.conversationId === 'conv')
+    expect(forConv.map(v => v.id)).toEqual(['r3'])
+    expect(forConv[0]!.status).toBe('running')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// TWO — a title is an identity. The `/rename` name lived only in the harness's
+// own file, which it deletes on exit; the title then flipped and CTRL+F broke.
+// The poller persists the name into the registry, so buildSessionViews reads it
+// even when the live file is gone.
+// ---------------------------------------------------------------------------
+describe('title survives the process (persisted harness name)', () => {
+  const m = (id: string, o: Partial<ManagedSession> = {}): ManagedSession => ({
+    id, harness: 'claude', cwd: '/repo/a', createdAt: '2026-08-14T10:00:00.000Z', ...o,
+  })
+
+  it('a finished row (no live file) still carries its persisted /rename name', () => {
+    const [v] = buildSessionViews({
+      reconciled: [{
+        id: 'm1',
+        managed: m('m1', { label: 'Integrar CLI', harnessName: 'AIPE + agentop CLI', harnessNameSince: 42, endedAt: '2026-08-14T11:00:00.000Z' }),
+        status: 'lost',
+      }],
+      activity: new Map(),
+      processes: [],
+      // No harnessSessions entry — the process is gone, the file deleted.
+    })
+    expect(v!.harnessName).toBe('AIPE + agentop CLI')
+    expect(v!.harnessNameSince).toBe(42)
+  })
+
+  it('the LIVE file still wins while the session runs — persistence is only a fallback', () => {
+    const [v] = buildSessionViews({
+      reconciled: [{ id: 'm1', managed: m('m1', { harnessName: 'stale name', harnessNameSince: 1 }), status: 'lost' }],
+      activity: new Map(),
+      processes: [],
+      harnessSessions: {
+        byManagedId: new Map([['m1', { name: 'fresh name', nameSince: 99 }]]),
+        byPid: new Map(), byConversation: new Map(),
+      } as never,
+    })
+    expect(v!.harnessName).toBe('fresh name')
+    expect(v!.harnessNameSince).toBe(99)
   })
 })

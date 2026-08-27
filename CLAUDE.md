@@ -177,7 +177,14 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          harness — `nameSince` exists only from claude 2.1.232, and the
   │                          complaint this answers is a rename made inside the session that agentop
   │                          went on ignoring. NEITHER name is discarded when they differ: the row
-  │                          says which place the one it is showing came from. `session-view.ts` merges the managed fleet
+  │                          says which place the one it is showing came from. **A `/rename` name
+  │                          OUTLIVES the process**: the harness deletes its `<pid>.json` on exit, so a
+  │                          finished session lost that name and its title FLIPPED to another source,
+  │                          breaking search — the poller now PERSISTS the live non-derived name into
+  │                          `ManagedSession.harnessName`/`harnessNameSince` (mirror of
+  │                          `recordConversation`, one write per rename, `chosenName` only), and
+  │                          `buildSessionViews` reads it as the fallback when the live file is gone, so
+  │                          `pickTitle` returns the same title alive or finished. `session-view.ts` merges the managed fleet
   │                          with the EXTERNAL assistants `/proc` reports (listed, marked, and
   │                          carrying no activity — nothing about them is capturable), and
   │                          `sessions-host.ts` is the 5s poller, whose failed poll keeps the
@@ -187,8 +194,20 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          **A reboot takes tmux and leaves the registry**, so every managed
   │                          session reconciles to `lost` while keeping its name, note and task —
   │                          `session-view.ts` therefore offers REOPEN for any managed row that is
-  │                          not running, not only for one the user finished, and the pure
-  │                          `task-reopen.ts` holds what "open the whole task" means (a running row
+  │                          not running, not only for one the user finished. **But a RETIRED
+  │                          predecessor is not a second session**: every attach/reopen/restart mints a
+  │                          new managedId for the SAME conversation and retires the old record without
+  │                          removing it, so a conversation reopened N times drew N `exited` rows beside
+  │                          its live continuation — the row key was the per-spawn id, not the identity.
+  │                          The pure `collapseSupersededSessions` (session-view.ts, applied at the
+  │                          return) drops a predecessor ONLY when it is provably dead (`endedMs` set)
+  │                          AND superseded by a same-`conversationId` sibling (a live row, or a newer
+  │                          ended one). It NEVER hides a live row, a `lost` row with no recorded end,
+  │                          or the newest ended row (the reopenable one); rows with NO conversationId
+  │                          are never grouped, because a shared directory or label is not an identity —
+  │                          the coordinator reads this list to decide whether to re-dispatch over work
+  │                          in flight, so a row it cannot prove dead is never removed. The
+  │                          pure `task-reopen.ts` holds what "open the whole task" means (a running row
   │                          is left alone and reported as `already`, never as a skip; a FINISHED
   │                          row is not resurrected; an unresolvable one is skipped AND counted;
   │                          everything reopened RETIRES the row it replaced, or a laptop closed

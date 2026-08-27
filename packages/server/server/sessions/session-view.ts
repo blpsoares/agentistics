@@ -213,6 +213,77 @@ function rankOf(v: SessionView): number {
 }
 
 /**
+ * Collapse a session's RETIRED predecessors against its own continuation — PURE, and keyed on the
+ * one thing that is an identity rather than a guess: the harness's `conversationId`.
+ *
+ * ## Why this exists
+ *
+ * A session's durable identity is its CONVERSATION, but the registry keys a record by the per-spawn
+ * `managedId`. Every attach / reopen / restart mints a NEW managedId for the SAME conversation and
+ * retires the old record (`endedAt`) without removing it — so `reconcileSessions` returns one record
+ * per spawn and `buildSessionViews` draws one row per record. A conversation reopened five times
+ * therefore stood on screen as five `exited` rows beside its one live continuation, all wearing the
+ * same name. Measured here: 18 conversations held more than one record, 36 rows of pure history that
+ * a person reads as "this session is open many times over".
+ *
+ * ## What it may and may NOT drop — the guarantee
+ *
+ * The coordinator reads this list to decide whether to re-dispatch over work in flight, so a row it
+ * cannot prove is dead is NEVER hidden. A row is dropped only when BOTH hold:
+ *
+ *  1. it is PROVABLY dead — `endedMs` is set, which means the system retired or the user finished it;
+ *     a `lost` row with no end time (a reboot, say) is never touched, because "the backend cannot see
+ *     it right now" is not proof the process is gone; and
+ *  2. it is SUPERSEDED — the same conversation has either a LIVE row (running / unregistered) or a
+ *     strictly newer ended row. That sibling IS this session, continued, so the predecessor is its
+ *     own history, not a second session.
+ *
+ * Consequences, each deliberate:
+ *  - a LIVE row is never dropped (it has no `endedMs`);
+ *  - the newest ended row of a conversation with nothing live is KEPT — it is the reopenable
+ *    representative, and a finished session the user wants back must still be there;
+ *  - rows with NO `conversationId` are never grouped and never collapsed: two sessions that merely
+ *    share a directory or a label are genuinely distinct, and the list telling the truth about them
+ *    is the whole point — the fix is identity, never appearance.
+ *
+ * Two rows with the SAME `conversationId` cannot be distinct sessions: it is the harness's own id for
+ * one conversation. So this never merges two real sessions — only a session with its own past lives.
+ */
+export function collapseSupersededSessions(managed: readonly SessionView[]): SessionView[] {
+  const groups = new Map<string, SessionView[]>()
+  for (const v of managed) {
+    if (!v.conversationId) continue
+    const arr = groups.get(v.conversationId) ?? []
+    arr.push(v)
+    groups.set(v.conversationId, arr)
+  }
+
+  const drop = new Set<string>()
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    const hasLive = group.some(v => v.status === 'running' || v.status === 'unregistered')
+    // The reopenable representative when nothing is live: the newest by start time, id as a
+    // deterministic tiebreak so the same fleet always keeps the same row.
+    const newest = group.reduce((a, b) => {
+      const am = a.createdMs ?? -Infinity
+      const bm = b.createdMs ?? -Infinity
+      if (bm !== am) return bm > am ? b : a
+      return b.id > a.id ? b : a
+    })
+    for (const v of group) {
+      // Rule 1: only a row proven ended may go. A live row (no `endedMs`) and a `lost` row with no
+      // recorded end are both kept, whatever else the group holds.
+      if (v.endedMs === undefined) continue
+      // Rule 2: dropped only when a continuation supersedes it — anything live retires every dead
+      // predecessor; otherwise all but the newest ended row.
+      if (hasLive || v !== newest) drop.add(v.id)
+    }
+  }
+
+  return managed.filter(v => !drop.has(v.id))
+}
+
+/**
  * An id for an external process that is STABLE across polls and unique per process.
  *
  * The start time is what does both jobs: it distinguishes two assistants of the same harness open
@@ -403,7 +474,16 @@ export function buildSessionViews(o: {
     // What the harness says about ITSELF, matched by the tmux session it recorded — the one exact
     // link between its record and this row.
     const own: HarnessSessionFile | undefined = o.harnessSessions?.byManagedId.get(r.id)
-    const ownName = chosenName(own)
+    // The live harness file when there is one, ELSE the name the poller persisted while there was.
+    // Claude deletes `~/.claude/sessions/<pid>.json` the instant the process ends, so a finished
+    // session's `/rename` name lives only in the registry copy — without this fallback the title
+    // flipped to a different source on finish and `CTRL+F` stopped finding the row by the name it
+    // wore a second earlier. A title is an identity; it must not change because the process died.
+    const ownName = chosenName(own) ?? r.managed?.harnessName
+    // The recency stamp travels with whichever name won: the live file's `nameSince` while alive,
+    // the persisted mirror once it is gone. `pickTitle` then settles the label-vs-harness contest
+    // identically in both states.
+    const ownNameSince = own?.nameSince ?? r.managed?.harnessNameSince
     // A session the user FINISHED reports `exited` whatever the backend still holds: the row exists
     // to be reopened, and calling it `running` because a dead tmux pane lingers would put it back
     // among the things you can talk to.
@@ -433,7 +513,7 @@ export function buildSessionViews(o: {
       ...(r.managed?.label ? { label: r.managed.label } : {}),
       ...(r.managed?.labelSince !== undefined ? { labelSince: r.managed.labelSince } : {}),
       ...(ownName ? { harnessName: ownName } : {}),
-      ...(ownName && own?.nameSince !== undefined ? { harnessNameSince: own.nameSince } : {}),
+      ...(ownName && ownNameSince !== undefined ? { harnessNameSince: ownNameSince } : {}),
       ...(r.managed?.note ? { note: r.managed.note } : {}),
       ...(r.managed?.model ? { model: r.managed.model } : {}),
       ...(r.managed?.effort ? { effort: r.managed.effort } : {}),
@@ -699,7 +779,10 @@ export function buildSessionViews(o: {
       }
     })
 
-  return [...managed, ...external, ...closed].sort((a, b) => {
+  // Retired predecessors are dropped LAST, so everything above — the external-twin dedup and the
+  // closed-history cover set — still reasons over the full managed list. Only the final rows the
+  // reader sees lose the superseded duplicates; the registry itself is untouched.
+  return [...collapseSupersededSessions(managed), ...external, ...closed].sort((a, b) => {
     const byRank = rankOf(a) - rankOf(b)
     if (byRank !== 0) return byRank
     return (b.createdMs ?? 0) - (a.createdMs ?? 0)

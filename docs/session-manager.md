@@ -233,6 +233,28 @@ you are in. A row that does know its conversation never falls back to that guess
 before the transcript exists: "not written yet" and "some other conversation in this directory" are
 different answers.
 
+### One row per session, and a name that outlives the process
+
+A session's durable identity is its **conversation**, but the registry keys a record by the
+per-spawn managed id — a new one every time a session is attached, reopened or restarted. Each of
+those retires the record it replaced (`endedAt`) without removing it, so a conversation reopened five
+times used to stand on screen as five `exited` rows beside its one live continuation, all wearing the
+same name. The list collapses those: a retired predecessor is hidden **only** when it is provably
+dead (`endedAt` is set) **and** superseded by a row of the same conversation — a live one, or a newer
+ended one, which *is* that session continued. A live row is never hidden, a `lost` row with no
+recorded end (a reboot) is never hidden, and the newest ended row of a conversation with nothing live
+is kept, because it is the one you reopen. Two rows that merely share a directory or a label are left
+alone: only a shared **conversation id** proves two rows are one session, so the list never merges
+sessions that are genuinely distinct.
+
+A **title is an identity**: whatever a session is called while it runs, it stays called after it
+ends. The name you give a session from *inside* Claude Code (`/rename`) lives only in the harness's
+own record, which Claude deletes when the process exits — so a finished session used to lose that
+name, its displayed title fell back to a different source, and `CTRL+F` could no longer find the row
+by the name it wore a second earlier. agentop now captures that name into the registry while the
+session is alive, so the title is the same before and after it finishes. Only a name a person typed
+is kept; a name the harness invented for itself never displaces your own label.
+
 ### Tasks
 
 A task is whatever you say it is: a free string, chosen while starting a session or added later, and
@@ -341,8 +363,14 @@ None of this touches your own tmux: different socket, different server, differen
 tasks, and an `endedAt` on the ones that are over. tmux is authoritative about what is RUNNING; this
 file is authoritative about what it MEANS, which is why a reboot takes the first and leaves the
 second. A session is marked finished rather than deleted: it is still a thing that happened, and
-reopening it is the ordinary next thing to want.
+reopening it is the ordinary next thing to want. It also holds `harnessName` — the `/rename` name
+captured from the harness while the session was alive, so the title survives after the harness
+deletes its own record.
 
-`~/.agentistics/preferences.json` — `sessionView` (how the list is arranged) and `finishedTasks`
-(the tasks you marked done). Both are properties of this machine rather than of any session, which
-is why they do not live in the registry.
+`~/.agentistics/preferences.json` — `sessionView` (how the list is arranged, including
+`searchScopes`: which fields the search looks in) and `finishedTasks` (the tasks you marked done).
+Both are properties of this machine rather than of any session, which is why they do not live in the
+registry. `searchScopes` is a set — name, folder, harness, note, task, prompt, transcript — so the
+"all" control is simply every scope present; when it has never been chosen the search covers every
+field a row carries on its own, and `transcript` (a text scan of the conversation on disk) is an
+explicit opt-in rather than a cost paid on every keystroke.

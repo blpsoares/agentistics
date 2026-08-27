@@ -6,6 +6,10 @@ import { migrateTeamConfig } from '@agentistics/core'
 // TYPE-only, and the allowed direction: `server -> tui`. The arrangements are declared once, in
 // `session-dimensions.ts`, and this file stores whichever one was chosen.
 import type { SessionGroupingId } from '@agentistics/tui/control'
+// The searchable dimensions, declared once in the TUI's `search-scope.ts` and stored here — the
+// same `server -> tui` direction, and the same single-source rule as `SessionGroupingId`: a scope
+// added there fails this build until it is handled, rather than being silently un-persistable.
+import { SEARCH_SCOPES, type SearchScope } from '@agentistics/tui/control/search-scope'
 
 // Preferences live in the writable ~/.agentistics dir. The legacy location under CLAUDE_DIR
 // is read-only in Docker (host ~/.claude mounted :ro), which silently broke persistence and
@@ -113,6 +117,21 @@ export interface Preferences {
     /** The session at the top of the open card page: a page number would name other sessions by
      *  the next poll, so the page is remembered by identity. */
     cardAnchor?: string
+    /**
+     * WHICH scopes the session search looks in — the cumulative set the user has enabled (name,
+     * folder, harness, note, task, prompt, transcript). It is a SET, so the "all" control is simply
+     * every scope present, and an empty array is a real choice (search nothing but what is typed
+     * against no field — the caller decides what an empty set means for its filter).
+     *
+     * Stored inside `sessionView` because it is part of "how the fleet list was last arranged", and
+     * so it rides the SAME whole-object `setSessionView` / PUT `/api/preferences` write every other
+     * field here does — no new route, no new setter. Absent = never chosen; read it through
+     * `resolveSessionSearchScopes`, which supplies the default and drops any value this build does
+     * not know, so an older or hand-edited config degrades to a sane search rather than a crash.
+     *
+     * The renderer/UI is the TUI's (`j-20260826-fi`); this is only where the choice persists.
+     */
+    searchScopes?: SearchScope[]
   }
   /**
    * The session TASKS the user has marked finished.
@@ -164,6 +183,35 @@ export function clampSessionPollMs(ms: number): number {
 /** The effective poll interval — `undefined` reads as the default, exactly like `archiveMode`. */
 export function sessionPollMsOrDefault(p: Preferences): number {
   return p.sessionPollMs !== undefined ? clampSessionPollMs(p.sessionPollMs) : SESSION_POLL_DEFAULT_MS
+}
+
+/**
+ * The scopes the session search looks in when the user has NEVER chosen — every scope a row carries
+ * ON ITS OWN.
+ *
+ * `transcript` is deliberately OUT of the default: it is the only scope that is not a property of a
+ * row but a question asked of the disk (a text scan of every conversation), so making it always-on
+ * would put a file walk behind every keystroke. It stays an explicit opt-in the user enables — which
+ * is exactly the cumulative control the cockpit is adding. This default reproduces the search's
+ * existing reach (all own fields), so nothing narrows on upgrade.
+ */
+export const DEFAULT_SESSION_SEARCH_SCOPES: SearchScope[] =
+  SEARCH_SCOPES.filter((s): s is SearchScope => s !== 'transcript')
+
+/**
+ * The effective session-search scopes — `undefined` reads as the default, exactly like every other
+ * `sessionView` field.
+ *
+ * Validated on read: only scopes THIS build knows survive, returned in canonical `SEARCH_SCOPES`
+ * order and deduped, so a config hand-edited or written by a newer binary degrades to a sane search
+ * rather than a crash. A stored EMPTY array is honoured as a real (empty) choice — distinct from
+ * "never chosen", which is the `undefined` branch above.
+ */
+export function resolveSessionSearchScopes(p: Preferences): SearchScope[] {
+  const stored = p.sessionView?.searchScopes
+  if (!Array.isArray(stored)) return [...DEFAULT_SESSION_SEARCH_SCOPES]
+  const set = new Set(stored)
+  return SEARCH_SCOPES.filter(s => set.has(s))
 }
 
 /** Read + parse a preferences JSON file.
