@@ -1425,6 +1425,10 @@ async function ensureSessionsPoller(): Promise<SessionsPoller> {
     // Written once per session, not once per poll — the poller only calls this when the harness's
     // own record disagrees with the registry.
     recordConversation: (id, conversationId) => patchSession(id, { conversationId }),
+    // The `/rename` name, persisted so the title survives the process — same once-per-change
+    // discipline. See `ManagedSession.harnessName` and `pickTitle`.
+    recordHarnessName: (id, name, since) =>
+      patchSession(id, { harnessName: name, ...(since !== undefined ? { harnessNameSince: since } : {}) }),
     // Take back a running session whose registry record was lost. Called only with a non-empty
     // list, so a healthy fleet never writes. See `session-adopt.ts` for what may be adopted.
     adoptSessions: async records => { for (const r of records) await addSession(r) },

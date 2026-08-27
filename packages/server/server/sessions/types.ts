@@ -214,6 +214,29 @@ export interface ManagedSession {
    * never as "no repository", so an older row simply behaves as it always did.
    */
   repo?: RepoFacts
+  /**
+   * The name the user gave this session FROM INSIDE the harness (Claude Code's `/rename`), captured
+   * while the session was alive so it OUTLIVES the process.
+   *
+   * A title is an identity: whatever a session is called while it runs, it stays called after it
+   * ends. But that name lives only in the harness's own `~/.claude/sessions/<pid>.json`, which Claude
+   * DELETES when the process exits — so a session that showed a `/rename` name while running lost it
+   * the instant it finished, the displayed title fell back to a different source, and `CTRL+F` could
+   * no longer find the row by the name it had a second earlier. The poller persists the LIVE,
+   * non-derived name here (via `chosenName`) the moment it sees it, so the title is stable across the
+   * running -> finished transition. Only a name a PERSON typed is stored: a harness-invented
+   * `agentistics-77` never reaches this field, so it can never displace an agentop label. See
+   * `pickTitle` and `harness-session-file.ts`.
+   *
+   * Absent for a session that was never `/rename`d, and on a row written by a build predating this —
+   * both read exactly as they did before (the live file, when present, still wins).
+   */
+  harnessName?: string
+  /** When `harnessName` was set inside the harness, epoch ms — the recency side of the title
+   *  contest, mirrored from the harness's own `nameSince` so `pickTitle` settles it the same way
+   *  whether the session is alive (live file) or finished (this persisted copy). Absent on a claude
+   *  older than 2.1.232, which writes the name with no timestamp. */
+  harnessNameSince?: number
 }
 
 /**

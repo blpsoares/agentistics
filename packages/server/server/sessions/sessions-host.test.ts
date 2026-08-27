@@ -294,3 +294,51 @@ describe('the dialog a blocked session is showing', () => {
     expect((await p.poll()).sessions[0]!.approvalLines).toBeUndefined()
   })
 })
+
+describe('persisting the harness /rename name', () => {
+  const index = (byManagedId: Record<string, Record<string, unknown>>) => async () => ({
+    byManagedId: new Map(Object.entries(byManagedId)),
+    byPid: new Map(), byConversation: new Map(),
+  } as never)
+
+  it('persists a name a person typed, exactly once, and only when it CHANGES', async () => {
+    const calls: { id: string; name: string; since?: number }[] = []
+    const p = createSessionsPoller({
+      backend: fakeBackend({ sessions: [backendSession('m1')], frames: { m1: ['x'] } }),
+      readRegistry: async () => [managed('m1')],
+      scanProcesses: async () => ({ procs: [] }),
+      now: () => NOW,
+      loadHarnessSessions: index({ m1: { name: 'MAIN', nameSince: 7, tmux: 'agentop-m1:@0.%0' } }),
+      recordHarnessName: async (id, name, since) => { calls.push({ id, name, ...(since !== undefined ? { since } : {}) }) },
+    })
+    await p.poll()
+    expect(calls).toEqual([{ id: 'm1', name: 'MAIN', since: 7 }])
+
+    // Registry now already holds the name — the next poll must not write again.
+    calls.length = 0
+    const p2 = createSessionsPoller({
+      backend: fakeBackend({ sessions: [backendSession('m1')], frames: { m1: ['x'] } }),
+      readRegistry: async () => [managed('m1', { harnessName: 'MAIN', harnessNameSince: 7 })],
+      scanProcesses: async () => ({ procs: [] }),
+      now: () => NOW,
+      loadHarnessSessions: index({ m1: { name: 'MAIN', nameSince: 7, tmux: 'agentop-m1:@0.%0' } }),
+      recordHarnessName: async (id, name, since) => { calls.push({ id, name, ...(since !== undefined ? { since } : {}) }) },
+    })
+    await p2.poll()
+    expect(calls).toEqual([])
+  })
+
+  it('never persists a name the harness invented for itself', async () => {
+    const calls: unknown[] = []
+    const p = createSessionsPoller({
+      backend: fakeBackend({ sessions: [backendSession('m1')], frames: { m1: ['x'] } }),
+      readRegistry: async () => [managed('m1')],
+      scanProcesses: async () => ({ procs: [] }),
+      now: () => NOW,
+      loadHarnessSessions: index({ m1: { name: 'agentistics-77', nameSource: 'derived', tmux: 'agentop-m1:@0.%0' } }),
+      recordHarnessName: async (...a) => { calls.push(a) },
+    })
+    await p.poll()
+    expect(calls).toEqual([])
+  })
+})
