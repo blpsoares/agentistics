@@ -11,6 +11,7 @@
   "dependencies": {
     "@agentistics/core": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
+    "@xterm/xterm": "^5.5.0",
     "date-fns": "^4.1.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
