@@ -1,11 +1,16 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react'
+import React, { useState, useMemo, useEffect, useRef, lazy, Suspense, useSyncExternalStore } from 'react'
 import type { SessionMeta } from '@agentistics/core'
 import { sessionTime } from '../lib/sessionTime'
 import { formatProjectName, repoShortName, sessionLabel, sessionTokenTotal } from '@agentistics/core'
 import type { SessionActivity } from '../lib/sessionNotifications'
-import type { FleetActionId, FleetRow } from '../lib/fleet'
+import type { FleetActionId, FleetRow, FleetVerb } from '../lib/fleet'
+import { primaryAction, isWatchable, type PrimaryAction } from '../lib/sessionActions'
+import { SessionActionsMenu, SessionActionsPanel, useSessionActionsController } from './SessionActions'
+import { useTerminalStream } from '../hooks/useTerminalStream'
+import { terminalStatus, type TerminalTone } from '../lib/terminalStream'
+import { getTerminalZoom, setTerminalZoom, subscribeTerminalZoom, ZOOM_STEP, ZOOM_MIN, ZOOM_MAX } from '../lib/terminalZoom'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { encodeProjectDir, transcriptSource, transcriptUnavailableNote, type TranscriptMessage } from '../lib/sessionTranscript'
-import { SessionActionBar } from './SessionActionBar'
 import { resumeCommand } from '../lib/resumeCommand'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { format, parseISO } from 'date-fns'
@@ -22,7 +27,6 @@ import {
   Wrench,
   FileCode,
   GitCommit,
-  ExternalLink,
   LayoutGrid,
   List,
   Layers,
@@ -36,8 +40,18 @@ import {
   ArrowUpDown,
   Filter,
   Maximize2,
+  Eye,
+  Send,
+  RotateCcw,
+  Hand,
+  ZoomIn,
+  ZoomOut,
   X,
 } from 'lucide-react'
+
+/** The lazy terminal chunk: xterm's weight lands here, downloaded only when a card is expanded to
+ *  watch a live session — never on the initial dashboard load. */
+const SessionTerminal = lazy(() => import('./SessionTerminal'))
 
 // Types
 
@@ -64,6 +78,14 @@ interface Props {
   fleet?: Map<string, FleetRow>
   onFleetAction?: (req: { id: string; action: FleetActionId; text?: string; choice?: number })
     => Promise<{ ok: boolean; message: string }>
+  /** Dashboard theme — the live terminal's palette follows it. Only the Sessions page needs it. */
+  theme?: 'dark' | 'light'
+  /** Initial grouping. Defaults to 'project' for the history surfaces; the Sessions page opens on
+   *  'repo'. */
+  defaultGrouping?: SessionGrouping
+  /** Initial status shortcut. Defaults to 'all'; the Sessions page opens on 'active' so a machine's
+   *  live work is what you see first, without a click. */
+  defaultStatus?: StatusShortcut
   title?: React.ReactNode
   subtitle?: React.ReactNode
   topActions?: React.ReactNode
@@ -427,14 +449,14 @@ function getSessionBucketKey(
 
 const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
 
-export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities, viewMode: externalViewMode, onViewModeChange, fleet, onFleetAction, title, subtitle, topActions }: Props) {
+export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities, viewMode: externalViewMode, onViewModeChange, fleet, onFleetAction, theme, defaultGrouping, defaultStatus, title, subtitle, topActions }: Props) {
   const t = T[lang]
 
-  // Grouping state (default 'project' to match agentop session ls)
-  const [groupBy, setGroupBy] = useState<SessionGrouping>('project')
+  // Grouping state — 'project' on the history surfaces; the Sessions page opens on 'repo'.
+  const [groupBy, setGroupBy] = useState<SessionGrouping>(defaultGrouping ?? 'project')
 
-  // Status shortcut filter
-  const [statusShortcut, setStatusShortcut] = useState<StatusShortcut>('all')
+  // Status shortcut filter — 'all' by default; the Sessions page opens on 'active'.
+  const [statusShortcut, setStatusShortcut] = useState<StatusShortcut>(defaultStatus ?? 'all')
 
   // Sort state
   const [sortKey, setSortKey] = useState<SortKey>('date')
@@ -862,6 +884,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
                           fleetRow={fleet?.get(s.session_id)}
                           onFleetAction={onFleetAction}
                           viewMode={viewMode}
+                          theme={theme}
                         />
                       ))}
                     </div>
@@ -947,6 +970,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
               fleetRow={fleet?.get(s.session_id)}
               onFleetAction={onFleetAction}
               viewMode={viewMode}
+              theme={theme}
             />
           ))}
         </div>
@@ -1221,563 +1245,528 @@ function ResumeCommandModal({
   )
 }
 
-function SessionCard({
-  s,
-  lang,
-  onSelect,
-  isPinned,
-  state,
-  fleetRow,
-  onFleetAction,
-  viewMode = 'list',
-}: {
+// ================================================================================================
+// SessionCard — one session row, built to ANSWER AT A GLANCE: who is it, what is it doing, what
+// state is it in, and does it need you. The row leads with that; everything a glance does not need
+// (the metrics, the transcript, the seven other verbs, and the live terminal itself) moves into the
+// expanded accordion, reached by clicking the row.
+//
+// A LIVE row (agentop hosts it, `fleetRow` present) additionally carries the state's ONE lead action
+// and a kebab of the rest, and expands to the live terminal + the action panel. A HISTORY row (any
+// other page) is the same shell without the live half. The two are split into separate components so
+// neither runs the other's hooks (the terminal stream, the actions controller) conditionally.
+// ================================================================================================
+
+interface SessionCardProps {
   s: SessionMeta
   lang: 'pt' | 'en'
   onSelect?: (s: SessionMeta) => void
   isPinned?: boolean
   /** What this session is doing right now; absent when it is not live. */
   state?: SessionActivity
-  /** The live fleet row driving this conversation, when one is. Absent = no action bar. */
+  /** The live fleet row driving this conversation, when one is. Absent = a history row. */
   fleetRow?: FleetRow
   onFleetAction?: (req: { id: string; action: FleetActionId; text?: string; choice?: number })
     => Promise<{ ok: boolean; message: string }>
   viewMode?: 'list' | 'grid'
-}) {
-  const t = T[lang]
+  theme?: 'dark' | 'light'
+}
+
+function SessionCard(props: SessionCardProps) {
+  if (props.fleetRow && props.onFleetAction) {
+    return <LiveSessionCard {...props} fleetRow={props.fleetRow} onFleetAction={props.onFleetAction} />
+  }
+  return <HistorySessionCard {...props} />
+}
+
+// ---- shared pieces -------------------------------------------------------------------------------
+
+function titleOf(s: SessionMeta): string {
+  return s.title || (s.project_path ? formatProjectName(s.project_path) : '') || s.session_id.slice(0, 8)
+}
+
+/** The colour for a FLEET state — the same palette `getStatusInfo` uses for the live-poll activity,
+ *  so a live row lit from the fleet reads identically to a history row lit from the activity. */
+function fleetStateColor(state: FleetRow['state']): string {
+  if (state === 'waiting-approval') return '#ef4444'
+  if (state === 'waiting') return '#f59e0b'
+  if (state === 'working') return '#22c55e'
+  if (state === 'exited' || state === 'lost' || state === 'closed') return 'rgba(156, 163, 175, 0.5)'
+  return 'var(--text-tertiary)'
+}
+
+/** The state badge — the loudest thing on the row, because "does it need you" is the question that
+ *  brings someone to this page. Its `color`/`label` come from ONE source per card: the fleet row on
+ *  a live card (the same source the primary action reads), the live-poll activity on a history one —
+ *  never a mix, so the pill and the action can never contradict each other. */
+function StatusPill({ color, label }: { color: string; label: string }) {
+  return (
+    <span
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 999,
+        fontSize: 11, fontWeight: 600, color, background: `${color}14`,
+        border: `1px solid ${color}33`, flexShrink: 0, whiteSpace: 'nowrap',
+      }}
+    >
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: color }} />
+      {label}
+    </span>
+  )
+}
+
+/** The recessed second line — WHERE the session lives and WHAT it is on, when the fleet knows: the
+ *  project/repo, the model, and (live) the task and note. This is the "who/what" context, kept quiet
+ *  under the title so the state and the title stay the loud things. */
+function CardMeta({ s, fleetRow, lang }: { s: SessionMeta; fleetRow?: FleetRow; lang: 'pt' | 'en' }) {
+  const bits: React.ReactNode[] = []
+  const repo = s.git_remote ? repoShortName(s.git_remote) : ''
+  const project = fleetRow?.project || (s.project_path ? formatProjectName(s.project_path) : '')
+  if (project) bits.push(<span key="p" style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><Folder size={11} style={{ opacity: 0.7 }} />{project}</span>)
+  if (repo) bits.push(<span key="r" style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><GitCommit size={11} style={{ opacity: 0.7 }} />{repo}</span>)
+  const model = fleetRow?.model || s.model
+  if (model) bits.push(<span key="m" style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><Tag size={11} style={{ opacity: 0.7 }} />{model}</span>)
+  if (fleetRow?.task) bits.push(<span key="t" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--anthropic-orange)' }}><Bookmark size={11} />{fleetRow.task}</span>)
+  if (fleetRow?.note) bits.push(<span key="n" style={{ fontStyle: 'italic', opacity: 0.85 }} title={fleetRow.note}>“{truncate(fleetRow.note, 60)}”</span>)
+  if (bits.length === 0) return null
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-tertiary)', minWidth: 0 }}>
+      {bits.map((b, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <span style={{ opacity: 0.4 }}>·</span>}
+          {b}
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
+/** The metric chips — the deep-dive numbers. They do not help answer who/what/state/needs-you, so
+ *  they live in the expanded body, not on the collapsed row. */
+function CardChips({ s, lang }: { s: SessionMeta; lang: 'pt' | 'en' }) {
   const tokens = totalTokens(s)
   const tools = totalTools(s)
   const msgs = totalMessages(s)
-  const clickable = Boolean(onSelect)
-  const status = getStatusInfo(state, isPinned)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <Chip icon={<Clock size={11} />} label={sessionTime(s, lang).combined} title={sessionTime(s, lang).tooltip} />
+      <Chip icon={null} label={`${msgs} msgs`} color="var(--accent-blue, #3b82f6)" />
+      {tokens > 0 && <Chip icon={null} label={`${fmt(tokens)} tkn`} color="var(--anthropic-orange, #e8690b)" />}
+      {tools > 0 && <Chip icon={<Wrench size={11} />} label={`${tools} tools`} color="var(--accent-green, #22c55e)" />}
+      {s.git_commits > 0 && <Chip icon={<GitCommit size={11} />} label={`${s.git_commits} commits`} color="var(--accent-purple, #a855f7)" />}
+      {s.files_modified > 0 && <Chip icon={<FileCode size={11} />} label={`${s.files_modified} files`} />}
+    </div>
+  )
+}
 
-  const cmd = resumeCommand(s)
-  const [showResumeModal, setShowResumeModal] = useState(false)
-  const [showDetails, setShowDetails] = useState(false)
-  const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string; timestamp?: number | string; tools?: string[] }[] | null>(null)
-  const [loadingMsgs, setLoadingMsgs] = useState(false)
-  const detailsContainerRef = useRef<HTMLDivElement>(null)
-
-  // Click outside listener for Detalhes popover
-  useEffect(() => {
-    if (!showDetails) return
-    function handleClickOutside(e: MouseEvent) {
-      if (detailsContainerRef.current && !detailsContainerRef.current.contains(e.target as Node)) {
-        setShowDetails(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showDetails])
-
-  // Body scroll lock when Detalhes popover is open
-  useEffect(() => {
-    if (!showDetails) return
-    const originalOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = originalOverflow
-    }
-  }, [showDetails])
-
-  const isLiveSession = Boolean(isPinned || cmd)
-  const titleName = s.title || (s.project_path ? formatProjectName(s.project_path) : '') || s.session_id.slice(0, 8)
-  // Where this harness's messages are read from, or the sentence saying they are never captured.
+/** The transcript, read from the harness's own reader (`lib/sessionTranscript.ts`). Moved out of a
+ *  floating popover and into the expanded body, where there is room to read it. */
+function useSessionMessages(s: SessionMeta, open: boolean, isLive: boolean, lang: 'pt' | 'en') {
+  const [messages, setMessages] = useState<TranscriptMessage[] | null>(null)
+  const [loading, setLoading] = useState(false)
   const source = useMemo(
     () => transcriptSource({ session_id: s.session_id, project_path: s.project_path, harness: s.harness }),
     [s.session_id, s.project_path, s.harness],
   )
-  const transcriptUnavailable = source.kind === 'unavailable'
-    ? transcriptUnavailableNote(source.harness, lang)
-    : null
+  const unavailable = source.kind === 'unavailable' ? transcriptUnavailableNote(source.harness, lang) : null
 
   useEffect(() => {
-    if (!showDetails) return
-
-    // The reader is the HARNESS's own (`lib/sessionTranscript.ts`). This used to POST at
-    // `/api/sessions/<id>/messages`, a route that has never existed here: it 404s, the
-    // `r.ok ? r.json() : []` turns that into an empty array, and the panel reported "no recent
-    // messages" on a live session with sixty-five of them. A confident emptiness produced by a
-    // request nobody answered is the same defect as a confident zero for a metric nobody can
-    // produce, so a harness with NO reader now says so instead (`transcriptUnavailable`).
-    if (source.kind === 'unavailable') { setMessages([]); setLoadingMsgs(false); return }
-
+    if (!open) return
+    // A harness with NO reader says so, rather than reporting a confident emptiness produced by a
+    // request nobody answered.
+    if (source.kind === 'unavailable') { setMessages([]); setLoading(false); return }
     let interval: ReturnType<typeof setInterval> | null = null
     const fetchMsgs = () => {
       fetch(source.url)
-        .then(r => r.ok ? r.json() : null)
+        .then(r => (r.ok ? r.json() : null))
         .then((msgs: unknown) => {
-          // `null` = the request was refused or failed. Keeping the LAST known list beats replacing
-          // it with an emptiness the server never asserted.
           if (Array.isArray(msgs)) setMessages(msgs as TranscriptMessage[])
           else setMessages(prev => prev ?? [])
         })
         .catch(() => setMessages(prev => prev ?? []))
-        .finally(() => setLoadingMsgs(false))
+        .finally(() => setLoading(false))
     }
-
-    if (messages === null && !loadingMsgs) {
-      setLoadingMsgs(true)
-    }
+    if (messages === null) setLoading(true)
     fetchMsgs()
-
     const es = new EventSource('/api/events')
     es.addEventListener('change', fetchMsgs)
-    if (isLiveSession) {
-      interval = setInterval(fetchMsgs, 2000)
-    }
+    if (isLive) interval = setInterval(fetchMsgs, 2000)
+    return () => { es.close(); if (interval) clearInterval(interval) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, s.session_id, s.harness, s.project_path, isLive, source])
 
-    return () => {
-      es.close()
-      if (interval) clearInterval(interval)
-    }
-  }, [showDetails, s.session_id, s.harness, s.project_path, isLiveSession, source])
-  const isList = viewMode === 'list'
+  return { messages, loading, unavailable }
+}
+
+function DetailsBlock({ s, open, isLive, lang }: { s: SessionMeta; open: boolean; isLive: boolean; lang: 'pt' | 'en' }) {
+  const { messages, loading, unavailable } = useSessionMessages(s, open, isLive, lang)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {s.first_prompt && (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: 4 }}>
+            {lang === 'pt' ? 'Prompt Inicial' : 'First Prompt'}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto' }}>
+            "{s.first_prompt}"
+          </div>
+        </div>
+      )}
+      <div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: 4 }}>
+          {lang === 'pt' ? 'Últimas mensagens' : 'Latest messages'}
+        </div>
+        {loading ? (
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{lang === 'pt' ? 'Carregando...' : 'Loading...'}</div>
+        ) : !messages || messages.length === 0 ? (
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', lineHeight: 1.5 }}>
+            {unavailable ?? (lang === 'pt' ? 'Nenhuma mensagem recente' : 'No recent messages')}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 200, overflowY: 'auto' }}>
+            {messages.slice(-4).map((m, mi) => (
+              <div key={mi} style={{ fontSize: 11, padding: '6px 8px', borderRadius: 6, background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontWeight: 700, color: m.role === 'user' ? 'var(--accent-blue)' : 'var(--anthropic-orange)' }}>
+                    {m.role === 'user' ? 'User: ' : 'Assistant: '}
+                  </span>
+                  {m.timestamp && (
+                    <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+                      {format(parseISO(typeof m.timestamp === 'string' ? m.timestamp : new Date(m.timestamp).toISOString()), 'HH:mm:ss')}
+                    </span>
+                  )}
+                </div>
+                <span style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content.slice(0, 220)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** The small buttons that open the metrics modal / the resume-command modal. Grouped so both card
+ *  variants render them the same way. */
+function CardFooterButtons({ s, lang, onSelect, onResume }: {
+  s: SessionMeta; lang: 'pt' | 'en'; onSelect?: (s: SessionMeta) => void; onResume: () => void
+}) {
+  const btn: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 6,
+    border: '1px solid var(--border-subtle)', background: 'var(--bg-surface)', color: 'var(--text-primary)',
+    fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <button onClick={(e) => { e.stopPropagation(); onResume() }} title={lang === 'pt' ? 'Retomar sessão (Agentop / Nativo)' : 'Resume session (Agentop / Native)'} style={{ ...btn, color: 'var(--anthropic-orange)' }}>
+        <Terminal size={12} /><span>{lang === 'pt' ? 'Retomar' : 'Resume'}</span>
+      </button>
+      {onSelect && (
+        <button onClick={(e) => { e.stopPropagation(); onSelect(s) }} style={btn}>
+          <Maximize2 size={11} /><span>{lang === 'pt' ? 'Métricas da sessão' : 'Session metrics'}</span>
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** The outer card shell + clickable header shared by both variants. `accent` is the state colour
+ *  drawn as a left rule so a row that needs you is spotted without reading it. */
+function CardShell({
+  accent, expanded, onToggle, statusPill, harness, title, right, meta, children,
+}: {
+  accent: string
+  expanded: boolean
+  onToggle: () => void
+  statusPill: React.ReactNode
+  harness?: string
+  title: string
+  right: React.ReactNode
+  meta: React.ReactNode
+  children?: React.ReactNode
+}) {
+  return (
+    <div
+      style={{
+        position: 'relative', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+        borderLeft: `3px solid ${accent}`, borderRadius: 10, boxSizing: 'border-box', minWidth: 0, width: '100%',
+        display: 'flex', flexDirection: 'column', transition: 'all 0.15s ease',
+      }}
+    >
+      <div
+        onClick={onToggle}
+        style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 16px', cursor: 'pointer', userSelect: 'none', minWidth: 0 }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
+            {statusPill}
+            <HarnessBadge harness={harness} />
+            <span
+              style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
+              title={title}
+            >
+              {title}
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {right}
+            <span style={{ color: 'var(--text-tertiary)', display: 'inline-flex' }}>
+              {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            </span>
+          </div>
+        </div>
+        {meta}
+      </div>
+      {expanded && (
+        <div onClick={e => e.stopPropagation()} style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '0 16px 14px', minWidth: 0 }}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---- the live terminal region --------------------------------------------------------------------
+
+const TERM_TONE_COLOR: Record<TerminalTone, string> = {
+  idle: 'var(--text-tertiary)',
+  connecting: 'var(--text-tertiary)',
+  live: '#22c55e',
+  finished: 'var(--anthropic-orange, #e8690b)',
+  ended: 'var(--accent-red, #e0342a)',
+}
+
+/** The live screen of THIS session, inside its own accordion. Mounted only while the card is
+ *  expanded and the row is watchable, so the stream opens on demand and closes on collapse. The
+ *  emulator is keyed by id, so switching to another session can never show one screen under
+ *  another's name. The activity state shown is the fleet row's own (two-sample-verified) state,
+ *  never recomputed from the frames; what the SCREEN is (live / finished / gone) comes from the
+ *  channel's own fields. */
+/** The page-wide, persisted terminal zoom, shared live across every open terminal. */
+function useTerminalZoom(): number {
+  return useSyncExternalStore(subscribeTerminalZoom, getTerminalZoom, () => 1)
+}
+
+/** The A− / % / A+ control. It scales the PIXELS only (the emulator stays at the pane's real column
+ *  count), so a bigger font can never reflow the capture; the choice persists across reloads. */
+function TerminalZoomControls({ lang }: { lang: 'pt' | 'en' }) {
+  const zoom = useTerminalZoom()
+  const isMobile = useIsMobile()
+  // 44px touch targets on mobile (the repo rule); the compact desktop size otherwise.
+  const btn: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: isMobile ? 40 : 24, height: isMobile ? 40 : 22,
+    borderRadius: 4, border: 'none', background: 'transparent', color: 'var(--text-secondary)',
+    cursor: 'pointer', padding: 0,
+  }
+  return (
+    <div
+      onClick={e => e.stopPropagation()}
+      title={lang === 'pt' ? 'Tamanho da fonte do terminal' : 'Terminal font size'}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 2, marginLeft: 'auto',
+        border: '1px solid var(--border-subtle)', borderRadius: 6, padding: 2, background: 'var(--bg-elevated)',
+      }}
+    >
+      <button
+        onClick={() => setTerminalZoom(zoom - ZOOM_STEP)}
+        disabled={zoom <= ZOOM_MIN}
+        aria-label={lang === 'pt' ? 'Diminuir fonte' : 'Smaller font'}
+        style={{ ...btn, opacity: zoom <= ZOOM_MIN ? 0.4 : 1, cursor: zoom <= ZOOM_MIN ? 'default' : 'pointer' }}
+      >
+        <ZoomOut size={13} />
+      </button>
+      <button
+        onClick={() => setTerminalZoom(1)}
+        title={lang === 'pt' ? 'Tamanho padrão' : 'Reset size'}
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)', fontSize: isMobile ? 12 : 10, fontWeight: 600, fontVariantNumeric: 'tabular-nums', minWidth: 32, minHeight: isMobile ? 40 : undefined, padding: 0 }}
+      >
+        {Math.round(zoom * 100)}%
+      </button>
+      <button
+        onClick={() => setTerminalZoom(zoom + ZOOM_STEP)}
+        disabled={zoom >= ZOOM_MAX}
+        aria-label={lang === 'pt' ? 'Aumentar fonte' : 'Larger font'}
+        style={{ ...btn, opacity: zoom >= ZOOM_MAX ? 0.4 : 1, cursor: zoom >= ZOOM_MAX ? 'default' : 'pointer' }}
+      >
+        <ZoomIn size={13} />
+      </button>
+    </div>
+  )
+}
+
+function TerminalRegion({ id, theme, lang }: { id: string; theme: 'dark' | 'light'; lang: 'pt' | 'en' }) {
+  const isMobile = useIsMobile()
+  const state = useTerminalStream(id)
+  const status = terminalStatus(state, lang === 'pt' ? 'pt' : 'en')
+  const zoom = useTerminalZoom()
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex' }}><Terminal size={14} /></span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{lang === 'pt' ? 'Terminal ao vivo' : 'Live terminal'}</span>
+        <span
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600,
+            color: TERM_TONE_COLOR[status.tone], border: `1px solid ${TERM_TONE_COLOR[status.tone]}`,
+            borderRadius: 999, padding: '2px 8px',
+          }}
+        >
+          <span
+            style={{
+              width: 7, height: 7, borderRadius: '50%', background: TERM_TONE_COLOR[status.tone],
+              // Pulse only while genuinely live; a still dot on a finished/gone screen would imply life.
+              animation: status.tone === 'live' ? 'ag-term-pulse 1.6s ease-in-out infinite' : undefined,
+            }}
+          />
+          {status.label}
+        </span>
+        <TerminalZoomControls lang={lang} />
+      </div>
+      <div
+        style={{
+          height: isMobile ? 240 : 320, borderRadius: 8, overflow: 'hidden',
+          border: '1px solid var(--border-subtle)', background: theme === 'light' ? '#ffffff' : '#0e1116',
+        }}
+      >
+        <Suspense fallback={<div style={{ padding: 16, fontSize: 12, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>{lang === 'pt' ? 'Carregando o emulador…' : 'Loading the emulator…'}</div>}>
+          {/* key={id}: a new session gets a brand-new emulator, so no content leaks across. */}
+          <SessionTerminal key={id} frame={state.frame} theme={theme} showCursor={status.showCursor} zoom={zoom} />
+        </Suspense>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{status.detail}</div>
+      <style>{`@keyframes ag-term-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }`}</style>
+    </div>
+  )
+}
+
+// ---- the primary lead action ---------------------------------------------------------------------
+
+/** The one action the row leads with. 'watch' just opens the terminal; the verbs run through the
+ *  shared controller. `Answer its question` is rendered as a HUMAN action — a person answers it, so
+ *  it carries a hand glyph and a plain-language note, and (like every verb) it is never automated. */
+function PrimaryButton({ primary, lang, onExpand, onPick }: {
+  primary: PrimaryAction; lang: 'pt' | 'en'; onExpand: () => void; onPick: (v: FleetVerb) => void
+}) {
+  const isMobile = useIsMobile()
+  let label: string
+  let icon: React.ReactNode
+  let title: string | undefined
+  const human = primary.human
+  switch (primary.kind) {
+    case 'watch':
+      label = lang === 'pt' ? 'Ver ao vivo' : 'Watch'
+      icon = <Eye size={13} />
+      break
+    case 'approve':
+      label = primary.verb?.label ?? (lang === 'pt' ? 'Responder' : 'Answer its question')
+      icon = <Hand size={13} />
+      title = lang === 'pt' ? 'Uma pessoa responde — nada aqui responde por ela.' : 'A person answers this — nothing here answers for you.'
+      break
+    case 'prompt':
+      label = primary.verb?.label ?? (lang === 'pt' ? 'Enviar prompt' : 'Send a prompt')
+      icon = <Send size={13} />
+      break
+    case 'resume':
+      label = primary.verb?.label ?? (lang === 'pt' ? 'Reabrir' : 'Reopen')
+      icon = <RotateCcw size={13} />
+      break
+  }
+  const filled = primary.kind === 'approve' || primary.kind === 'prompt'
+  const disabled = primary.verb ? !primary.verb.enabled : false
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation()
+        onExpand()
+        if (primary.verb) onPick(primary.verb)
+      }}
+      title={title ?? label}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
+        minHeight: isMobile ? 40 : 30, padding: isMobile ? '0 14px' : '5px 12px', borderRadius: 8,
+        fontSize: isMobile ? 13 : 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+        border: filled ? '1px solid var(--anthropic-orange)' : '1px solid var(--border-subtle)',
+        background: filled ? 'var(--anthropic-orange)' : 'var(--bg-surface)',
+        color: filled ? '#fff' : 'var(--anthropic-orange)',
+        opacity: disabled ? 0.55 : 1,
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+      {human && <span aria-hidden style={{ fontSize: 10, opacity: 0.85, fontWeight: 500 }}>· {lang === 'pt' ? 'você' : 'you'}</span>}
+    </button>
+  )
+}
+
+// ---- the two card variants -----------------------------------------------------------------------
+
+function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleetAction, theme }: SessionCardProps & {
+  fleetRow: FleetRow
+  onFleetAction: NonNullable<SessionCardProps['onFleetAction']>
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [showResumeModal, setShowResumeModal] = useState(false)
+  const ctrl = useSessionActionsController(fleetRow, lang, onFleetAction)
+  // The state indicator reads the FLEET — the same source the primary action reads — so the pill,
+  // the accent and the lead action can never contradict each other. The `/api/live-sessions`
+  // activity poll drives the history rows; a live row is lit by the row that is actually driving it.
+  const accent = fleetStateColor(fleetRow.state)
+  const primary = primaryAction(fleetRow)
+  const watchable = isWatchable(fleetRow.state)
+  const isLive = Boolean(isPinned || resumeCommand(s))
 
   return (
     <>
-      {showResumeModal && (
-        <ResumeCommandModal s={s} lang={lang} onClose={() => setShowResumeModal(false)} />
-      )}
-
-      <div
-        style={{
-          position: 'relative',
-          background: 'var(--bg-elevated)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 10,
-          padding: isList ? '14px 18px' : '16px 18px',
-          boxSizing: 'border-box',
-          minWidth: 0,
-          width: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-          transition: 'all 0.15s ease',
-        }}
-      >
-        {/* List Mode Layout */}
-        {isList ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
-            {/* Single Header Row: Badges, Title, Date/Time & Action Buttons ALL in one row */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-              {/* Left Group: Badges & Title */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 200 }}>
-                {/* Status Badge */}
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    padding: '3px 8px',
-                    borderRadius: 999,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: status.color,
-                    background: `${status.color}14`,
-                    border: `1px solid ${status.color}33`,
-                    flexShrink: 0,
-                  }}
-                >
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: status.color }} />
-                  {lang === 'pt' ? status.labelPt : status.labelEn}
-                </span>
-
-                <HarnessBadge harness={s.harness} />
-
-                {/* Project Title */}
-                <span
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 600,
-                    color: 'var(--text-primary)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                  title={titleName}
-                >
-                  {titleName}
-                </span>
-              </div>
-
-              {/* Right Group: Date/Time + Action Buttons */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', marginRight: 4 }}>
-                  {s.start_time ? format(parseISO(s.start_time), 'MMM d, HH:mm') : ''}
-                </span>
-
-                {/* Retomar Sessão Button */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setShowResumeModal(true)
-                  }}
-                  title={lang === 'pt' ? 'Retomar sessão (Agentop / Nativo)' : 'Resume session (Agentop / Native)'}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    padding: '5px 10px',
-                    borderRadius: 6,
-                    border: '1px solid var(--border-subtle)',
-                    background: 'var(--bg-surface)',
-                    color: 'var(--anthropic-orange)',
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    transition: 'all 0.15s',
-                    fontFamily: 'inherit',
-                  }}
-                >
-                  <Terminal size={12} />
-                  <span>{lang === 'pt' ? 'Retomar Sessão' : 'Resume'}</span>
-                </button>
-
-                {/* Detalhes Trigger & Popover Wrapper */}
-                <div ref={detailsContainerRef} style={{ position: 'relative' }}>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setShowDetails(v => !v)
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      padding: '5px 10px',
-                      borderRadius: 6,
-                      border: showDetails ? '1px solid var(--anthropic-orange)' : '1px solid var(--border-subtle)',
-                      background: showDetails ? 'rgba(232, 105, 11, 0.1)' : 'var(--bg-surface)',
-                      color: showDetails ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                      fontFamily: 'inherit',
-                    }}
-                  >
-                    <span>{lang === 'pt' ? 'Detalhes' : 'Details'}</span>
-                    {showDetails ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                  </button>
-
-                  {/* Floating Detalhes Popover */}
-                  {showDetails && (
-                    <div
-                      onClick={(e) => e.stopPropagation()}
-                      style={{
-                        position: 'absolute',
-                        top: 'calc(100% + 6px)',
-                        right: 0,
-                        width: 380,
-                        maxWidth: '90vw',
-                        zIndex: 100,
-                        background: 'var(--bg-surface)',
-                        border: '1px solid var(--anthropic-orange)',
-                        borderRadius: 10,
-                        padding: '14px 16px',
-                        boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 12,
-                      }}
-                    >
-                      {s.first_prompt && (
-                        <div>
-                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: 4 }}>
-                            {lang === 'pt' ? 'Prompt Inicial' : 'First Prompt'}
-                          </div>
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto' }}>
-                            "{s.first_prompt}"
-                          </div>
-                        </div>
-                      )}
-
-                      <div>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: 4 }}>
-                          {lang === 'pt' ? 'Últimas mensagens' : 'Latest messages'}
-                        </div>
-                        {loadingMsgs ? (
-                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{lang === 'pt' ? 'Carregando...' : 'Loading...'}</div>
-                        ) : !messages || messages.length === 0 ? (
-                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', lineHeight: 1.5 }}>
-                            {transcriptUnavailable ?? (lang === 'pt' ? 'Nenhuma mensagem recente' : 'No recent messages')}
-                          </div>
-                        ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
-                            {messages.slice(-3).map((m, mi) => (
-                              <div key={mi} style={{ fontSize: 11, padding: '6px 8px', borderRadius: 6, background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                  <span style={{ fontWeight: 700, color: m.role === 'user' ? 'var(--accent-blue)' : 'var(--anthropic-orange)' }}>
-                                    {m.role === 'user' ? 'User: ' : 'Assistant: '}
-                                  </span>
-                                  {m.timestamp && (
-                                    <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
-                                      {format(parseISO(typeof m.timestamp === 'string' ? m.timestamp : new Date(m.timestamp).toISOString()), 'HH:mm:ss')}
-                                    </span>
-                                  )}
-                                </div>
-                                <span style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content.slice(0, 200)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Métricas Modal Button */}
-                {clickable && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onSelect!(s)
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 5,
-                      padding: '5px 10px',
-                      borderRadius: 6,
-                      border: '1px solid var(--border-subtle)',
-                      background: 'var(--bg-surface)',
-                      color: 'var(--text-primary)',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                      fontFamily: 'inherit',
-                    }}
-                  >
-                    <Maximize2 size={11} />
-                    <span>{lang === 'pt' ? 'Métricas da sessão' : 'Session metrics'}</span>
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Bottom Row: Stats Chips */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <Chip icon={<Clock size={11} />} label={sessionTime(s, lang).combined} title={sessionTime(s, lang).tooltip} />
-              <Chip icon={null} label={`${msgs} msgs`} color="var(--accent-blue, #3b82f6)" />
-              {tokens > 0 && <Chip icon={null} label={`${fmt(tokens)} tkn`} color="var(--anthropic-orange, #e8690b)" />}
-              {tools > 0 && <Chip icon={<Wrench size={11} />} label={`${tools} tools`} color="var(--accent-green, #22c55e)" />}
-              {s.git_commits > 0 && <Chip icon={<GitCommit size={11} />} label={`${s.git_commits} commits`} color="var(--accent-purple, #a855f7)" />}
-              {s.files_modified > 0 && <Chip icon={<FileCode size={11} />} label={`${s.files_modified} files`} />}
-            </div>
-          </div>
-        ) : (
-          /* Grid Mode Layout */
+      {showResumeModal && <ResumeCommandModal s={s} lang={lang} onClose={() => setShowResumeModal(false)} />}
+      <CardShell
+        accent={accent}
+        expanded={expanded}
+        onToggle={() => setExpanded(v => !v)}
+        statusPill={<StatusPill color={accent} label={fleetRow.stateLabel} />}
+        harness={s.harness}
+        title={titleOf(s)}
+        right={
           <>
-            {/* Header Row: Badges & Time */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    padding: '3px 8px',
-                    borderRadius: 999,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: status.color,
-                    background: `${status.color}14`,
-                    border: `1px solid ${status.color}33`,
-                  }}
-                >
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: status.color }} />
-                  {lang === 'pt' ? status.labelPt : status.labelEn}
-                </span>
-                <HarnessBadge harness={s.harness} />
-              </div>
-
-              <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
-                {s.start_time ? format(parseISO(s.start_time), 'MMM d, HH:mm') : ''}
-              </span>
-            </div>
-
-            {/* Title */}
-            <div
-              style={{
-                fontSize: 15,
-                fontWeight: 600,
-                color: 'var(--text-primary)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-              title={titleName}
-            >
-              {titleName}
-            </div>
-
-            {/* Minimal Essential Chips */}
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-              <Chip icon={<Clock size={11} />} label={sessionTime(s, lang).combined} title={sessionTime(s, lang).tooltip} />
-              <Chip icon={null} label={`${msgs} msgs`} color="var(--accent-blue, #3b82f6)" />
-              {tokens > 0 && <Chip icon={null} label={`${fmt(tokens)} tkn`} color="var(--anthropic-orange, #e8690b)" />}
-            </div>
-
-            {/* Actions Row */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingTop: 4, flexWrap: 'wrap' }}>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setShowResumeModal(true)
-                }}
-                title={lang === 'pt' ? 'Retomar sessão' : 'Resume session'}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  padding: '4px 8px',
-                  borderRadius: 6,
-                  border: '1px solid var(--border-subtle)',
-                  background: 'var(--bg-surface)',
-                  color: 'var(--anthropic-orange)',
-                  fontSize: 11,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                }}
-              >
-                <Terminal size={11} />
-                <span>{lang === 'pt' ? 'Retomar Sessão' : 'Resume'}</span>
-              </button>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div ref={detailsContainerRef} style={{ position: 'relative' }}>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setShowDetails(v => !v)
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 3,
-                      padding: '4px 8px',
-                      borderRadius: 6,
-                      border: showDetails ? '1px solid var(--anthropic-orange)' : '1px solid var(--border-subtle)',
-                      background: showDetails ? 'rgba(232, 105, 11, 0.1)' : 'var(--bg-surface)',
-                      color: showDetails ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                      fontSize: 11,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      fontFamily: 'inherit',
-                    }}
-                  >
-                    <span>{lang === 'pt' ? 'Detalhes' : 'Details'}</span>
-                    {showDetails ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                  </button>
-
-                  {/* Floating Detalhes Popover Grid Mode */}
-                  {showDetails && (
-                    <div
-                      onClick={(e) => e.stopPropagation()}
-                      style={{
-                        position: 'absolute',
-                        top: 'calc(100% + 6px)',
-                        right: 0,
-                        width: 300,
-                        maxWidth: '85vw',
-                        zIndex: 100,
-                        background: 'var(--bg-surface)',
-                        border: '1px solid var(--anthropic-orange)',
-                        borderRadius: 10,
-                        padding: '12px 14px',
-                        boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 10,
-                      }}
-                    >
-                      {s.first_prompt && (
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: 4 }}>
-                            {lang === 'pt' ? 'Prompt Inicial' : 'First Prompt'}
-                          </div>
-                          <div style={{ fontSize: 11, color: 'var(--text-secondary)', fontStyle: 'italic', lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 100, overflowY: 'auto' }}>
-                            "{s.first_prompt}"
-                          </div>
-                        </div>
-                      )}
-
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: 4 }}>
-                          {lang === 'pt' ? 'Últimas mensagens' : 'Latest messages'}
-                        </div>
-                        {loadingMsgs ? (
-                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{lang === 'pt' ? 'Carregando...' : 'Loading...'}</div>
-                        ) : !messages || messages.length === 0 ? (
-                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', lineHeight: 1.5 }}>
-                            {transcriptUnavailable ?? (lang === 'pt' ? 'Nenhuma mensagem recente' : 'No recent messages')}
-                          </div>
-                        ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 160, overflowY: 'auto' }}>
-                            {messages.slice(-3).map((m, mi) => (
-                              <div key={mi} style={{ fontSize: 11, padding: '5px 7px', borderRadius: 6, background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                  <span style={{ fontWeight: 700, color: m.role === 'user' ? 'var(--accent-blue)' : 'var(--anthropic-orange)' }}>
-                                    {m.role === 'user' ? 'User: ' : 'Assistant: '}
-                                  </span>
-                                  {m.timestamp && (
-                                    <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
-                                      {format(parseISO(typeof m.timestamp === 'string' ? m.timestamp : new Date(m.timestamp).toISOString()), 'HH:mm:ss')}
-                                    </span>
-                                  )}
-                                </div>
-                                <span style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content.slice(0, 180)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {clickable && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onSelect!(s)
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 3,
-                      padding: '4px 8px',
-                      borderRadius: 6,
-                      border: '1px solid var(--border-subtle)',
-                      background: 'var(--bg-surface)',
-                      color: 'var(--text-primary)',
-                      fontSize: 11,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      fontFamily: 'inherit',
-                    }}
-                  >
-                    <Maximize2 size={10} />
-                    <span>{lang === 'pt' ? 'Métricas' : 'Metrics'}</span>
-                  </button>
-                )}
-              </div>
-            </div>
+            {primary && <PrimaryButton primary={primary} lang={lang} onExpand={() => setExpanded(true)} onPick={ctrl.pick} />}
+            <SessionActionsMenu ctrl={ctrl} onActivate={() => setExpanded(true)} />
           </>
-        )}
+        }
+        meta={<CardMeta s={s} fleetRow={fleetRow} lang={lang} />}
+      >
+        {watchable && <TerminalRegion id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} />}
+        <SessionActionsPanel ctrl={ctrl} />
+        <DetailsBlock s={s} open={expanded} isLive={isLive} lang={lang} />
+        <CardChips s={s} lang={lang} />
+        <CardFooterButtons s={s} lang={lang} onSelect={onSelect} onResume={() => setShowResumeModal(true)} />
+      </CardShell>
+    </>
+  )
+}
 
-        {/* What can actually be done with this session, from `/api/fleet`.
-            It replaced a checkbox and a prompt box that posted to routes which did not exist —
-            every press was silently inert, which is indistinguishable from a broken control. */}
-        {fleetRow && onFleetAction && (
-          <div onClick={e => e.stopPropagation()}>
-            <SessionActionBar row={fleetRow} lang={lang} act={onFleetAction} />
-          </div>
-        )}
+function HistorySessionCard({ s, lang, onSelect, isPinned, state }: SessionCardProps) {
+  const [expanded, setExpanded] = useState(false)
+  const [showResumeModal, setShowResumeModal] = useState(false)
+  const status = getStatusInfo(state, isPinned)
+  const isLive = Boolean(isPinned || resumeCommand(s))
+  const time = s.start_time ? format(parseISO(s.start_time), 'MMM d, HH:mm') : ''
 
-      </div>
+  return (
+    <>
+      {showResumeModal && <ResumeCommandModal s={s} lang={lang} onClose={() => setShowResumeModal(false)} />}
+      <CardShell
+        accent={status.color}
+        expanded={expanded}
+        onToggle={() => setExpanded(v => !v)}
+        statusPill={<StatusPill color={status.color} label={lang === 'pt' ? status.labelPt : status.labelEn} />}
+        harness={s.harness}
+        title={titleOf(s)}
+        right={<span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>{time}</span>}
+        meta={<CardMeta s={s} lang={lang} />}
+      >
+        <CardChips s={s} lang={lang} />
+        <DetailsBlock s={s} open={expanded} isLive={isLive} lang={lang} />
+        <CardFooterButtons s={s} lang={lang} onSelect={onSelect} onResume={() => setShowResumeModal(true)} />
+      </CardShell>
     </>
   )
 }
