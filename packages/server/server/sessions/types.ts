@@ -152,6 +152,33 @@ export interface BackendInitialPrompt extends InitialPrompt {
   rules?: AttentionRules
 }
 
+/**
+ * The pane's live geometry and cursor, read alongside a capture.
+ *
+ * `capture-pane` renders the grid but says nothing about where the cursor is or whether the hosted
+ * command has exited, and both are things the terminal channel must tell the browser honestly: a
+ * frozen last frame that still shows a blinking cursor is exactly the `waiting` lie this house has
+ * a rule against. So the backend reads it in the same breath as the content (one `display-message`).
+ */
+export interface PaneInfo {
+  cols: number
+  rows: number
+  cursorX: number
+  cursorY: number
+  /** False once the hosted command has exited — the pane is dead but still capturable (remain-on-exit). */
+  alive: boolean
+  /** How many lines of scrollback tmux is holding above the visible screen, right now. */
+  historySize: number
+}
+
+/** One ANSI-preserving read of a pane: its rendered lines plus the geometry beside them. */
+export interface TerminalCapture {
+  /** Newest-last lines of the rendered frame, WITH the SGR escape sequences (`capture-pane -e`).
+   *  NOT trailing-trimmed: a full-screen TUI uses the whole grid and its blank rows are layout. */
+  lines: string[]
+  info: PaneInfo
+}
+
 /** One session as the BACKEND sees it — existence and liveness, no product metadata. */
 export interface BackendSession {
   id: string
@@ -309,6 +336,20 @@ export interface SessionBackend {
   list(): Promise<BackendSession[]>
   /** Newest-last lines of the last rendered frame, trailing blanks removed. */
   capture(id: string, lines: number): Promise<string[]>
+  /**
+   * An ANSI-PRESERVING read of the pane — its rendered lines with colour/attribute escapes intact,
+   * plus the geometry and cursor beside them — for the browser terminal channel.
+   *
+   * Distinct from `capture` on purpose: `capture` strips escapes because its callers pattern-match
+   * the text (readiness, approval detection), and a frame full of SGR codes would break those
+   * regexes. This one KEEPS them, because a terminal that loses its colours is a worse copy of the
+   * one a person would have got from `tmux attach`.
+   *
+   * `null` — never a throw — when the session is GONE (tmux no longer has it): the caller ends the
+   * stream cleanly rather than crashing. A pane that has merely EXITED still returns a capture with
+   * `info.alive === false`, so the last frame stays readable and is honestly marked dead.
+   */
+  captureTerminal(id: string, lines: number): Promise<TerminalCapture | null>
   /**
    * Type `text` into the session and submit it — what a person does at the keyboard.
    *

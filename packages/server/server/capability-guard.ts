@@ -39,6 +39,10 @@ const EXACT: ReadonlyMap<string, keyof Capabilities> = new Map<string, keyof Cap
   // that should expose someone's keyboard to the internet and a shell is the honest name for it.
   ['/api/fleet', 'localShell'],
   ['/api/fleet/act', 'localShell'],
+  // The live terminal channel — an SSE stream of a session's SCREEN, colours and all. It is a read,
+  // but it is a read of a coding assistant's terminal, so it rides the same `localShell` as
+  // `/api/fleet`: there is no deployment that should stream someone's terminal to the internet.
+  ['/api/fleet/stream', 'localShell'],
 ])
 
 /** Prefix (no trailing slash) → capability. Matches `<prefix>` and `<prefix>/…` only. */
