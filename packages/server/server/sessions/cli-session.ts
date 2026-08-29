@@ -24,6 +24,7 @@ import { toControlSession } from './control-session'
 import { recordedRepo, repoFacts } from './repo-facts'
 import { emptyReason, renderSessionTable, resolveWidth } from './session-table'
 import { SPAWN_SPECS, planSpawn } from './spawn-spec'
+import { rulesFor } from './attention-rules'
 // The harness half of a rename. Shared with the cockpit's Rename verb — see `rename.ts`.
 import { renameInHarness, renameMessage } from './rename'
 import { reconcileSessions, resolveSessionRef, type ReconciledSession, type RefCandidate } from './session-ref'
@@ -39,7 +40,19 @@ import { liveConversationHolders } from './live-claims'
 import { POLL_MS, SETTLE_MS, spawnOutcome } from './spawn-outcome'
 import { parseHarnessAgents } from './harness-agents'
 import { planTakeover, type TakeoverRefusal } from './takeover'
-import type { ManagedSession, SessionBackend, SpawnPlanError } from './types'
+import type { BackendInitialPrompt, ManagedSession, SessionBackend, SpawnPlan, SpawnPlanError } from './types'
+
+/**
+ * The initial-prompt argument for `backend.spawn`, with the harness's screen RULES attached so the
+ * backend can gate delivery on readiness without importing the harness table. Absent when the plan
+ * carries no prompt to deliver. One helper for both spawn sites — the rules must never be forgotten
+ * on one of them.
+ */
+function spawnPromptArg(plan: SpawnPlan, harness: HarnessId): { initialPrompt?: BackendInitialPrompt } {
+  if (!plan.initialPrompt) return {}
+  const rules = rulesFor(harness)
+  return { initialPrompt: { ...plan.initialPrompt, ...(rules ? { rules } : {}) } }
+}
 
 /** Derived from the specs, never a second hand-written list — the two could not then disagree. */
 const STARTABLE: HarnessId[] = HARNESS_ORDER.filter(h => SPAWN_SPECS[h] !== null)
@@ -192,7 +205,7 @@ async function start(
 
   const id = newSessionId()
   try {
-    await backend.spawn({ id, cwd, argv: planned.plan.argv, ...(planned.plan.sendKeys ? { sendKeys: planned.plan.sendKeys } : {}) })
+    await backend.spawn({ id, cwd, argv: planned.plan.argv, ...spawnPromptArg(planned.plan, cmd.harness) })
   } catch (e) {
     console.error(`Could not start the session: ${e instanceof Error ? e.message : String(e)}`)
     return 1
@@ -300,7 +313,7 @@ async function batch(
     try {
       await backend.spawn({
         id, cwd, argv: planned.plan.argv,
-        ...(planned.plan.sendKeys ? { sendKeys: planned.plan.sendKeys } : {}),
+        ...spawnPromptArg(planned.plan, spec.harness),
       })
     } catch (e) {
       failed.push({ harness: spec.harness, reason: e instanceof Error ? e.message : String(e) })
@@ -492,10 +505,26 @@ function fleetJson(snap: SessionSnapshot): unknown {
  * able from a fleet that was alive — and `crash-group.ts` would be reading a write nobody made a
  * claim with.
  */
+/**
+ * How long between the two confirming polls a one-shot command makes. Long enough for a working
+ * session's screen to have moved (or a quiet one to have stayed still) — tmux's activity clock has
+ * one-second resolution — short enough not to be felt on the command line.
+ */
+const CONFIRM_POLL_GAP_MS = 700
+
 async function pollFleet(backend: SessionBackend): Promise<SessionSnapshot> {
   const poller = createSessionsPoller({
     backend, readRegistry, scanProcesses, loadConversations, loadHarnessSessions,
   })
+  // Poll TWICE, and return the second. The cockpit debounces the noisy per-frame reading by
+  // confirming a `waiting` state across two polls (`attention-confirm.ts`), but a one-shot command
+  // has no memory of a previous poll — so a single reading cannot be confirmed and a lone quiet
+  // frame (a finished sub-turn, a repaint) would be reported as "waiting on you" for a session that
+  // is still working. The first poll seeds the poller's confirmation memory; the second returns the
+  // confirmed reading, so `session ls`/`list` agrees with the cockpit and the event channel instead
+  // of reviving the exact false positive on the command line.
+  await poller.poll()
+  await new Promise(r => setTimeout(r, CONFIRM_POLL_GAP_MS))
   return await poller.poll()
 }
 

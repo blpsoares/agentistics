@@ -30,19 +30,27 @@ describe('SPAWN_SPECS', () => {
 })
 
 describe('planSpawn', () => {
-  it('puts a claude prompt in the positional slot, after the flags', () => {
+  it('puts a claude prompt in the positional slot, after the flags, and marks it for submit', () => {
+    // Positional, so the text is in argv — but the backend must still SUBMIT it (an Enter) on a
+    // version that pre-fills without auto-submitting, without double-submitting one that does.
     const r = planSpawn({ harness: 'claude', cwd: '/tmp', prompt: 'fix the tests', model: 'opus', effort: 'high' })
-    expect(r).toEqual({ ok: true, plan: { argv: ['claude', '--model', 'opus', '--effort', 'high', 'fix the tests'] } })
+    expect(r).toEqual({
+      ok: true,
+      plan: { argv: ['claude', '--model', 'opus', '--effort', 'high', 'fix the tests'], initialPrompt: { mode: 'submit' } },
+    })
   })
 
-  it('puts a codex prompt in the positional slot', () => {
+  it('puts a codex prompt in the positional slot and marks it for submit', () => {
     const r = planSpawn({ harness: 'codex', cwd: '/tmp', prompt: 'implement X', model: 'o3' })
-    expect(r).toEqual({ ok: true, plan: { argv: ['codex', '--model', 'o3', 'implement X'] } })
+    expect(r).toEqual({
+      ok: true,
+      plan: { argv: ['codex', '--model', 'o3', 'implement X'], initialPrompt: { mode: 'submit' } },
+    })
   })
 
   it('types a kimi prompt in, because kimi has no interactive prompt flag', () => {
     const r = planSpawn({ harness: 'kimi', cwd: '/tmp', prompt: 'implement X' })
-    expect(r).toEqual({ ok: true, plan: { argv: ['kimi'], sendKeys: 'implement X' } })
+    expect(r).toEqual({ ok: true, plan: { argv: ['kimi'], initialPrompt: { mode: 'type', text: 'implement X' } } })
   })
 
   it('omits the prompt entirely when there is none', () => {
@@ -72,7 +80,7 @@ describe('planSpawn', () => {
 
   it('types a copilot prompt in, because its -p exits after answering', () => {
     const r = planSpawn({ harness: 'copilot', cwd: '/tmp', prompt: 'review this' })
-    expect(r).toEqual({ ok: true, plan: { argv: ['copilot'], sendKeys: 'review this' } })
+    expect(r).toEqual({ ok: true, plan: { argv: ['copilot'], initialPrompt: { mode: 'type', text: 'review this' } } })
   })
 
   it('accepts agy effort, which its own --help prints as a closed set', () => {

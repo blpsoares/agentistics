@@ -1509,7 +1509,11 @@ async function spawnManaged(req: {
       id,
       cwd: req.cwd,
       argv: planned.plan.argv,
-      ...(planned.plan.sendKeys ? { sendKeys: planned.plan.sendKeys } : {}),
+      // Deliver the initial prompt once the harness is ready (see `initial-prompt.ts`). The harness's
+      // screen rules ride along so the backend can tell an idle prompt from a startup dialog.
+      ...(planned.plan.initialPrompt
+        ? { initialPrompt: { ...planned.plan.initialPrompt, ...(rulesFor(req.harness) ? { rules: rulesFor(req.harness)! } : {}) } }
+        : {}),
     })
   } catch (e) {
     return { ok: false, message: s.sessSpawnFailed(e instanceof Error ? e.message : String(e)) }

@@ -312,10 +312,20 @@ CLI, so it exists only for the harnesses that were probed (claude, codex, kimi).
 harness a blocking question shows as `waiting` — still counted, still surfaced, but the reason
 cannot be named. `ls` and `list` both say so rather than leaving you to assume otherwise.
 
-The states are also honest about their own timing. When a turn ends, the poll that *observes* it
-ending sees a frame that changed since the last one, which is movement — so the session reads
-`working` for that one interval before settling on `waiting`. The signal is therefore at most one
-interval late and never early, which is the right way round for something a person acts on.
+The states are also honest about their own timing, and deliberately biased. A single frame is a
+noisy sample: a session that has just finished a turn, or one whose pane a plugin repainted for a
+moment, reads `working` on one poll and `waiting` on the next with nothing about it having changed.
+Believing that lone `waiting` is how the counter came to say "waiting on you" about a session that
+had already gone back to work — a false summons that wastes the most expensive resource here and,
+once it has cried wolf, stops being read. So the two directions are confirmed differently
+(`attention-confirm.ts`): **`waiting` and `NEEDS APPROVAL` are believed only once the same reading
+has held for two consecutive polls**, while a return to `working` (a screen that moved — unambiguous
+proof) and `exited` are believed at once. The counter therefore never spikes on a single quiet
+frame, and it DROPS on the very next poll after work resumes. The cost is that a genuine wait takes
+one extra interval to appear — the cheap direction, since a slightly late "needs you" only delays a
+person while a false one wastes them. The event channel (`agentop events`) confirms every transition
+the same way for the same reason, so the two surfaces agree on when a session starts waiting; the
+fleet display just clears it a poll sooner.
 
 ## Harness support
 
@@ -330,6 +340,20 @@ interval late and never early, which is the right way round for something a pers
 
 `kimi` and `copilot` have no flag for an initial prompt in an interactive session — their `-p` runs
 one prompt non-interactively and exits — so agentop types the prompt in once the session is up.
+
+**Delivering the initial prompt is READINESS-GATED** (`initial-prompt.ts`), not a fixed sleep. A
+detached session created with a prompt has to receive it with no human in the loop, and two things
+used to break that silently: a slow-starting harness lost a prompt typed after a fixed 1200 ms into
+a pane that had not drawn yet, and a positional prompt was left entirely to the CLI to auto-submit —
+which some versions do not do (the prompt "stays in the field" and the agent sits waiting for
+something that already arrived). So agentop now polls the pane and delivers only once the harness is
+genuinely ready — its input surface drawn, and NOT sitting on a startup/approval dialog — and then
+once: a typed harness has its text typed and submitted; a positional harness whose "working" marker
+lets us tell an auto-submitted turn from an idle prompt (claude) gets a single Enter to submit the
+pre-filled text, but only after it has sat idle for a few polls without ever running, so a CLI that
+DOES auto-submit is never double-submitted. It is never delivered into a dialog — launched in a
+folder it does not yet trust, claude opens with a trust prompt whose default is "No, exit", and a
+blind early Enter would select it and kill the session.
 
 Codex's reasoning effort is a `-c key=value` configuration override rather than a flag; it is not
 wired up because the key could not be verified from the CLI itself, and agentop does not guess flags.
