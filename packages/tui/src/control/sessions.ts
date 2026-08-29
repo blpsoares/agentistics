@@ -479,6 +479,71 @@ export function selectableIndexes(rows: readonly SessionRow[]): number[] {
   return out
 }
 
+/**
+ * The session id at a selectable POSITION, or undefined when the position names no row.
+ *
+ * `at` indexes `selectable` (the session rows), not `rows` (which also holds headings and spacers);
+ * this is the one place that resolves the two so no call site has to do the double indirection by
+ * hand and get it subtly wrong.
+ */
+export function idAtRow(
+  rows: readonly SessionRow[],
+  selectable: readonly number[],
+  at: number,
+): string | undefined {
+  const row = rows[selectable[at] ?? -1]
+  return row?.kind === 'session' ? row.session.id : undefined
+}
+
+/**
+ * WHICH row the selection is on — resolved by IDENTITY, not by a raw position.
+ *
+ * The list re-sorts under the cursor constantly: the fleet polls every five seconds, and marking a
+ * row lifts it to the top band. A selection kept as a bare index therefore names a DIFFERENT session
+ * one frame later — and a destructive verb (`x` kills, and the loss is silent) fired in that frame
+ * hits the wrong one. That is exactly why the MARK set is kept by id; the cursor must be too.
+ *
+ * Given the id the cursor is glued to, this returns that session's CURRENT index, wherever the sort
+ * left it. Only when the glued id is no longer in the list — the session ended, a filter dropped it —
+ * does it fall back to the last numeric position, clamped into range, which is what keeps the cursor
+ * sensible on the row that slid into its place. `-1` on an empty list, as before.
+ */
+export function selectedRow(
+  rows: readonly SessionRow[],
+  selectable: readonly number[],
+  glueId: string | undefined,
+  cursor: number,
+): number {
+  if (selectable.length === 0) return -1
+  if (glueId !== undefined) {
+    const found = selectable.findIndex(r => {
+      const row = rows[r]
+      return row?.kind === 'session' && row.session.id === glueId
+    })
+    if (found >= 0) return found
+  }
+  return Math.min(Math.max(0, cursor), selectable.length - 1)
+}
+
+/**
+ * The arrangement to DRAW while a search is active — one flat list, newest first.
+ *
+ * Grouping a search spreads its hits across bands and cascades and makes you sweep the whole screen
+ * for them; the answer to "where did that session go" is a single flat list ordered by last
+ * activity. This applies ONLY while a query is present: with none, it returns the user's own
+ * grouping, cascade and order untouched — which is what makes leaving the search restore the
+ * arrangement with nothing to undo, because the stored state was never changed to begin with.
+ */
+export function searchArrangement(
+  querying: boolean,
+  grouping: SessionGrouping,
+  cascade: boolean,
+  order: SessionOrder,
+): { grouping: SessionGrouping; cascade: boolean; order: SessionOrder } {
+  if (!querying) return { grouping, cascade, order }
+  return { grouping: 'none', cascade: false, order: { by: 'recent', dir: 'desc' } }
+}
+
 // ---------------------------------------------------------------------------
 // the row
 // ---------------------------------------------------------------------------
