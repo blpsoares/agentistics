@@ -13,7 +13,7 @@
  * Every field and flag below was probed against tmux 3.2a on 2026-08-12.
  */
 
-import type { BackendSession } from './types'
+import type { BackendSession, PaneInfo } from './types'
 
 export const TMUX_SOCKET = 'agentop'
 export const SESSION_PREFIX = 'agentop-'
@@ -43,6 +43,57 @@ export function killSessionArgs(id: string): string[] {
 
 export function capturePaneArgs(id: string, lines: number): string[] {
   return sock(['capture-pane', '-p', '-t', tmuxName(id), '-S', `-${lines}`])
+}
+
+/**
+ * The same read as `capturePaneArgs`, but `-e` keeps the SGR escape sequences in the output —
+ * colours, bold, reverse — so the browser terminal renders what a person would have seen on attach.
+ *
+ * A SEPARATE builder rather than a flag on the one above, and deliberately so: the plain capture
+ * feeds the readiness and approval REGEXES (`backend-tmux.ts`, `attention.ts`), and a frame carrying
+ * `\x1b[38;5;39m` in front of every word would break every one of those patterns silently. The two
+ * reads have opposite requirements, so they are two functions — the same reasoning that keeps
+ * `sendKeysLiteralArgs` and `sendKeysNamedArgs` apart.
+ */
+export function capturePaneAnsiArgs(id: string, lines: number): string[] {
+  return sock(['capture-pane', '-p', '-e', '-t', tmuxName(id), '-S', `-${lines}`])
+}
+
+/**
+ * One `display-message` read of the pane's geometry, cursor and liveness — the facts `capture-pane`
+ * cannot report. Tab-separated so `parsePaneInfo` can split it without guessing at spaces (a cwd or
+ * a title would carry them; these six numeric fields never do, but tab is free insurance).
+ *
+ * Must stay in lockstep with `parsePaneInfo` — the test asserts the exact format string for that
+ * reason, the same contract `LIST_FORMAT` keeps with `parseTmuxList`.
+ */
+export const PANE_INFO_FORMAT =
+  '#{cursor_x}\t#{cursor_y}\t#{pane_width}\t#{pane_height}\t#{pane_dead}\t#{history_size}'
+
+export function paneInfoArgs(id: string): string[] {
+  return sock(['display-message', '-p', '-t', tmuxName(id), '-F', PANE_INFO_FORMAT])
+}
+
+/**
+ * Parse the `PANE_INFO_FORMAT` line. `null` on anything that does not read as the six numbers it
+ * must be — a partial `PaneInfo` is worse than none, because the terminal channel would ship a
+ * confident wrong cursor or a wrong "alive". `pane_dead` is `1` once the hosted command has exited.
+ */
+export function parsePaneInfo(stdout: string): PaneInfo | null {
+  const line = stdout.split('\n')[0]?.trim() ?? ''
+  if (!line) return null
+  const parts = line.split('\t')
+  if (parts.length < 6) return null
+  const [cx, cy, w, h, dead, hist] = parts.map(Number)
+  if (![cx, cy, w, h, dead, hist].every(Number.isFinite)) return null
+  return {
+    cols: w!,
+    rows: h!,
+    cursorX: cx!,
+    cursorY: cy!,
+    alive: dead !== 1,
+    historySize: hist!,
+  }
 }
 
 /** `-l` sends the text literally, so a prompt containing `;` or `C-c` is typed, not interpreted. */

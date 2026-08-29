@@ -31,6 +31,10 @@ function fakeBackend(o: {
     async spawn() {},
     async list() { return o.sessions },
     async capture(id) { o.onCapture?.(id); return o.frames?.[id] ?? [] },
+    async captureTerminal(id) {
+      const lines = o.frames?.[id] ?? []
+      return { lines, info: { cols: 80, rows: lines.length, cursorX: 0, cursorY: 0, alive: true, historySize: 0 } }
+    },
     async kill() { return true },
     attachCommand(id) { return ['tmux', 'attach', id] },
     async detachHint() { return 'Ctrl-b then d' },

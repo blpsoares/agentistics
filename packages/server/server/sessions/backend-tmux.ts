@@ -4,12 +4,15 @@
  */
 
 import {
-  attachArgs, capturePaneArgs, idFromTmuxName, isSessionGoneError, killSessionArgs, listSessionsArgs,
-  newSessionArgs, parsePrefix, parseTmuxList, serverOptionsArgs, sendKeysNamedArgs,
-  sendKeysLiteralArgs, showPrefixArgs, trimCapture,
+  attachArgs, capturePaneArgs, capturePaneAnsiArgs, idFromTmuxName, isSessionGoneError,
+  killSessionArgs, listSessionsArgs, newSessionArgs, paneInfoArgs, parsePaneInfo, parsePrefix,
+  parseTmuxList, serverOptionsArgs, sendKeysNamedArgs, sendKeysLiteralArgs, showPrefixArgs,
+  trimCapture,
 } from './tmux-cli'
 import { planPromptDelivery } from './initial-prompt'
-import type { BackendInitialPrompt, BackendSession, BackendSpawn, SessionBackend } from './types'
+import type {
+  BackendInitialPrompt, BackendSession, BackendSpawn, SessionBackend, TerminalCapture,
+} from './types'
 
 /** How often to re-read the pane while waiting for the harness to be ready to receive the prompt. */
 const DELIVER_POLL_MS = 400
@@ -136,6 +139,28 @@ export const tmuxBackend: SessionBackend = {
     const { code, out } = await tmux(capturePaneArgs(id, lines))
     if (code !== 0) return []
     return trimCapture(out.split('\n'))
+  },
+
+  async captureTerminal(id: string, lines: number): Promise<TerminalCapture | null> {
+    // Content FIRST: a non-zero capture is how we learn the session is gone, and there is no point
+    // asking for its geometry once it is. `-e` keeps the colours; the frame is NOT trailing-trimmed
+    // because a full-screen TUI's blank rows are part of its layout, not padding to discard.
+    const cap = await tmux(capturePaneAnsiArgs(id, lines))
+    if (cap.code !== 0) return null // tmux no longer has this session — the caller ends the stream
+    // A trailing '' from the final newline is not a real row; drop only that one.
+    const raw = cap.out.split('\n')
+    if (raw.length && raw[raw.length - 1] === '') raw.pop()
+
+    const meta = await tmux(paneInfoArgs(id))
+    const info = meta.code === 0 ? parsePaneInfo(meta.out) : null
+    if (!info) {
+      // The pane exists (capture succeeded) but display-message could not be read or parsed. Rather
+      // than ship a confident-wrong cursor, fall back to a minimal honest geometry: the browser
+      // emulator sizes itself, so `cols: 0` is a "don't know" the client can ignore, and `alive` is
+      // true because the capture just worked. Never a throw.
+      return { lines: raw, info: { cols: 0, rows: raw.length, cursorX: 0, cursorY: 0, alive: true, historySize: 0 } }
+    }
+    return { lines: raw, info }
   },
 
   async kill(id: string) {
