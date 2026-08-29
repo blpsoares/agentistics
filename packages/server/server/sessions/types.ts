@@ -86,10 +86,27 @@ export interface SpawnRequest {
   task?: string
 }
 
+/**
+ * How the initial prompt reaches the harness once it is READY to receive it — see `initial-prompt.ts`.
+ *
+ * `type`   — a `send-keys` harness (its only prompt flag exits): the text is typed in and submitted.
+ * `submit` — a `positional` harness: the text is already in argv; it may only need an Enter to submit
+ *            it, on a harness/version that pre-fills without auto-submitting. Verified by a working
+ *            marker so a CLI that DID auto-submit is never double-submitted.
+ *
+ * A `flag` harness (`--prompt-interactive`) runs the prompt by design and carries no delivery.
+ */
+export interface InitialPrompt {
+  mode: 'type' | 'submit'
+  /** The text to type. Present only for mode `type`. */
+  text?: string
+}
+
 export interface SpawnPlan {
   argv: string[]
-  /** Typed into the session once it is up, for a `send-keys` harness. */
-  sendKeys?: string
+  /** How to deliver the initial prompt once the harness is up — absent when there is no prompt, or a
+   *  `flag` harness that runs it itself. */
+  initialPrompt?: InitialPrompt
   /**
    * The conversation this spawn is KNOWN to drive — the id reopened, or the id assigned.
    *
@@ -119,7 +136,20 @@ export interface BackendSpawn {
   id: string
   cwd: string
   argv: string[]
-  sendKeys?: string
+  /**
+   * How to deliver the initial prompt once the harness is ready to receive it.
+   *
+   * The harness's screen RULES ride along so the backend can tell a live turn and a startup dialog
+   * from an idle prompt WITHOUT importing the harness table — it stays harness-agnostic, the caller
+   * resolves the rules. Absent when there is nothing to deliver.
+   */
+  initialPrompt?: BackendInitialPrompt
+}
+
+export interface BackendInitialPrompt extends InitialPrompt {
+  /** The harness's probed markers, for readiness / already-submitted detection. Absent = only the
+   *  input-surface heuristic gates readiness, and a `submit` is never forced (cannot verify safely). */
+  rules?: AttentionRules
 }
 
 /** One session as the BACKEND sees it — existence and liveness, no product metadata. */

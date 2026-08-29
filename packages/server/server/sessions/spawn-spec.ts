@@ -18,7 +18,7 @@
 
 import type { HarnessId } from '@agentistics/core'
 import { HARNESS_SESSION_SOURCES } from './harness-session-file'
-import type { SpawnRequest, SpawnPlanResult, SpawnSpec } from './types'
+import type { InitialPrompt, SpawnRequest, SpawnPlanResult, SpawnSpec } from './types'
 
 export const SPAWN_SPECS: Record<HarnessId, SpawnSpec | null> = {
   // `Usage: claude [options] [command] [prompt]` / `Arguments: prompt  Your prompt`
@@ -173,11 +173,19 @@ export function planSpawn(req: SpawnRequest): SpawnPlanResult {
   if (req.model && spec.modelFlag) argv.push(spec.modelFlag, req.model)
   if (req.effort && spec.effortFlag) argv.push(spec.effortFlag, req.effort)
 
-  let sendKeys: string | undefined
+  // How the initial prompt will be DELIVERED once the session is up — see `initial-prompt.ts`. A
+  // `positional` prompt is in argv but may not have been auto-submitted (`submit`); a `send-keys`
+  // harness needs it typed (`type`); a `flag` harness runs it itself and needs no delivery.
+  let initialPrompt: InitialPrompt | undefined
   if (req.prompt) {
-    if (spec.prompt.kind === 'positional') argv.push(req.prompt)
-    else if (spec.prompt.kind === 'flag') argv.push(spec.prompt.flag, req.prompt)
-    else sendKeys = req.prompt
+    if (spec.prompt.kind === 'positional') {
+      argv.push(req.prompt)
+      initialPrompt = { mode: 'submit' }
+    } else if (spec.prompt.kind === 'flag') {
+      argv.push(spec.prompt.flag, req.prompt)
+    } else {
+      initialPrompt = { mode: 'type', text: req.prompt }
+    }
   }
 
   // The conversation this spawn is KNOWN to drive: the one we asked to reopen, or the one we just
@@ -189,7 +197,7 @@ export function planSpawn(req: SpawnRequest): SpawnPlanResult {
     ok: true,
     plan: {
       argv,
-      ...(sendKeys === undefined ? {} : { sendKeys }),
+      ...(initialPrompt ? { initialPrompt } : {}),
       ...(conversationId ? { conversationId } : {}),
     },
   }

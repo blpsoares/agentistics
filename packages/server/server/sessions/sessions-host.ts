@@ -15,6 +15,7 @@ import { createLimiter } from '../utils'
 import type { HarnessProcess } from '../live-sessions'
 import { rulesFor } from './attention-rules'
 import { approvalTail, attentionOf, digestFrame, frameTail } from './attention'
+import { EMPTY_CONFIRM_MEMORY, confirmActivities, type ConfirmMemory } from './attention-confirm'
 import { readRecentChatTurns, resolveChatTranscriptPath, type ChatTurn } from './chat-tail'
 import { parseDialogOptions, type DialogOption } from './dialog-choice'
 // Taking a running session back when its registry record is gone. See `session-adopt.ts`.
@@ -155,6 +156,11 @@ export function createSessionsPoller(o: {
   // first is how movement is detected; the second is what makes the bell a transition.
   let prevDigest = new Map<string, string>()
   let prevActivity = new Map<string, SessionActivity>()
+  // The raw per-poll reading is noisy: a session that just finished, or a pane a plugin repainted,
+  // reads `working` then `waiting` across two polls with nothing changed. `confirmActivities` turns
+  // that into a CONFIRMED reading — a needs-you state must be seen twice before the counter believes
+  // it, while a return to work is believed at once — so the "waiting on you" count stops lying.
+  let confirmMemory: ConfirmMemory = EMPTY_CONFIRM_MEMORY
   const prevProcStats = new Map<number, ProcStatSample>()
   let last: SessionSnapshot | null = null
   /**
@@ -340,9 +346,19 @@ export function createSessionsPoller(o: {
         }
       }
 
+      // Confirm the raw readings before anything downstream sees them: the count, the sort, the bell
+      // and the TUI all read `activity`, so confirming here is the one place that makes every surface
+      // honest at once. A needs-you state must hold for two polls to be believed; a return to work is
+      // believed immediately (see `attention-confirm.ts`). The dialog/approval frames captured above
+      // are keyed to the RAW `waiting-approval` reading and only reach a row once its CONFIRMED state
+      // is `waiting-approval` too — `buildSessionViews` gates them on `activity`.
+      const confirm = confirmActivities(confirmMemory, activity)
+      confirmMemory = confirm.memory
+      const confirmedActivity = confirm.activities
+
       const sessions = buildSessionViews({
         reconciled,
-        activity,
+        activity: confirmedActivity,
         tails,
         chatTails,
         approvals,
