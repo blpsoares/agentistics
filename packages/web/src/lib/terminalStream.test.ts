@@ -140,6 +140,14 @@ describe('terminalStatus — the honesty line', () => {
     const st = terminalStatus(state, 'en')
     expect(st.tone).toBe('ended')
     expect(st.showCursor).toBe(false)
+    expect(st.detail.toLowerCase()).toContain('last thing it drew') // there IS a last frame to show
+  })
+
+  test('a session gone BEFORE any frame does not promise a screen it never has', () => {
+    const state = terminalReducer({ ...INITIAL_TERMINAL_STATE, phase: 'connecting' }, { type: 'end', reason: 'gone' })
+    const st = terminalStatus(state, 'en')
+    expect(st.tone).toBe('ended')
+    expect(st.detail.toLowerCase()).toContain('no screen to show')
   })
 
   test('pt and en differ', () => {
@@ -164,11 +172,13 @@ describe('watchableFleetRows', () => {
     expect(watchableFleetRows(rows).map(r => r.id)).toEqual(['a', 'b', 'c'])
   })
 
-  test('drops rows that have no tmux pane to read', () => {
+  test('drops rows that have no live pane worth offering — incl. exited/closed/lost', () => {
     const rows = [
       row({ id: 'a', state: 'working' }),
+      row({ id: 'exited', state: 'exited' }),
       row({ id: 'closed', state: 'closed' }),
       row({ id: 'lost', state: 'lost' }),
+      row({ id: 'unknown', state: 'unknown' }),
     ]
     expect(watchableFleetRows(rows).map(r => r.id)).toEqual(['a'])
   })

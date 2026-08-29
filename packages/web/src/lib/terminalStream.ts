@@ -237,6 +237,15 @@ export function terminalStatus(state: TerminalState, lang: 'pt' | 'en'): Termina
 
   // ended
   const reason = state.endReason
+  // "the screen below is the last thing it drew" is only true when there IS a last frame; a session
+  // that was already gone when we opened the stream left nothing to show, so say that instead.
+  const goneDetail = state.frame
+    ? (pt
+        ? 'A sessão saiu do tmux; a tela abaixo é a última coisa que ela desenhou.'
+        : 'The session left tmux; the screen below is the last thing it drew.')
+    : (pt
+        ? 'A sessão já não estava mais no tmux; não há tela para mostrar.'
+        : 'The session was already gone from tmux; there is no screen to show.')
   const detail =
     reason === 'not-found'
       ? (pt
@@ -244,9 +253,7 @@ export function terminalStatus(state: TerminalState, lang: 'pt' | 'en'): Termina
           : 'This session is no longer managed by this machine.')
       : reason === 'error'
         ? (pt ? 'O canal do terminal não pôde ser lido.' : 'The terminal channel could not be read.')
-        : (pt
-            ? 'A sessão saiu do tmux; a tela abaixo é a última coisa que ela desenhou.'
-            : 'The session left tmux; the screen below is the last thing it drew.')
+        : goneDetail
   return {
     tone: 'ended',
     label: pt ? 'Sessão encerrada' : 'Session gone',
@@ -259,16 +266,18 @@ export function terminalStatus(state: TerminalState, lang: 'pt' | 'en'): Termina
 // ---- which rows can be watched -------------------------------------------------------------------
 
 /**
- * The fleet states that actually have a live tmux pane to read. `closed` (read from the store, never
- * had a pane), `lost` (its tmux went away) and `unknown` have nothing to stream — offering them
- * would only draw an immediate `end: gone`. `exited` keeps its pane while tmux holds the session, so
- * it stays watchable: the finished screen is worth seeing.
+ * The fleet states that unambiguously have a LIVE tmux pane to read: an assistant that is running
+ * or waiting on a person. Everything else has nothing worth offering to watch — `closed` (read from
+ * the store, never had a pane) and `lost` (its tmux went away) would draw an immediate `end: gone`,
+ * and `exited` is a finished conversation whose pane is, on a real machine, almost always already
+ * gone from tmux; including it buried the live sessions under dozens of dead history rows. A session
+ * that exits WHILE being watched still reports its finished screen honestly through the open stream
+ * — this filter only governs what the selector OFFERS, not what a live stream may show.
  */
 const WATCHABLE_STATES: ReadonlySet<FleetRow['state']> = new Set<FleetRow['state']>([
   'working',
   'waiting',
   'waiting-approval',
-  'exited',
 ])
 
 export function watchableFleetRows(rows: readonly FleetRow[]): FleetRow[] {
