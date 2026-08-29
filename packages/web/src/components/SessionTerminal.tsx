@@ -231,7 +231,14 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1 }: 
         cursorBlink: false,
         cursorStyle: 'block',
         scrollback: 5000,
-        convertEol: false,
+        // The frame separates its already-hard-wrapped lines with a bare LF and carries NO carriage
+        // return (tmux `capture-pane -p` emits `\n`, never `\r\n`). With `convertEol: false` xterm
+        // treats each LF as a line-feed ONLY — the cursor drops a row but keeps its COLUMN — so every
+        // line is drawn starting at the previous line's end column, the columns accumulate, and a
+        // wide pane scatters across the grid (the exact "fragments at arbitrary positions" bug). EOL
+        // conversion makes each LF a CR+LF, returning to column 0, so the layout is byte-for-byte
+        // what `capture-pane` drew. This is what the transform-scale fidelity actually depends on.
+        convertEol: true,
         theme: xtermTheme(theme),
       })
       termRef.current = term
