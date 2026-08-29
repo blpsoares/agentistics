@@ -16,6 +16,7 @@ import { Bell, BellOff, Clock, Settings, Sparkles } from 'lucide-react'
 import type { SessionMeta } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { RecentSessions } from '../components/RecentSessions'
+import { SessionTerminalPanel } from '../components/SessionTerminalPanel'
 import { useFleet, useFleetIndex } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
 import {
@@ -33,7 +34,7 @@ const LIVE_POLL_MS = 4000
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
-  const { data, derived, lang, setSelectedSession, isCentral } = ctx
+  const { data, derived, lang, theme, setSelectedSession, isCentral } = ctx
   const pt = lang === 'pt'
   const navigate = useNavigate()
   const isMobile = useIsMobile()
@@ -232,6 +233,13 @@ export default function SessionsPage() {
                 : 'Session control is not available on this install, so the sessions below are listed as history only.')
             : fleet.unavailable}
         </div>
+      )}
+
+      {/* The live terminal of a selected session — a panel WITHIN the tab, machine mode only. Gated
+          on the same fleet availability the list uses, which is exactly what the stream channel
+          gates on too (a central 404s, an exposed profile 403s). The list below stays visible. */}
+      {!isCentral && !fleetUnsupported && !fleet.unavailable && (
+        <SessionTerminalPanel rows={fleet.sessions} lang={lang} theme={theme} />
       )}
 
       <RecentSessions
