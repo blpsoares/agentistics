@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   attentionOf, detailLines, groupSessions, rowWidth, treeGuides, selectableIndexes, sessionActions, sessionCells,
+  selectedRow, idAtRow, searchArrangement,
   sessionRows, sortSessions, summaryCells, actionLabels, enabledActionIndexes,
   sessionColumns, sessionsCockpit, asideRows, asideSelectable, projectCounts, projectColumns,
   projectPickRows, groupProjects, asideSections, asideFold, scrollBar, THUMB, TRACK, sessionNamed,
@@ -82,6 +83,92 @@ describe('sortSessions', () => {
   it('breaks a tie on the newest', () => {
     const list = [session('old', { startedAt: 1 }), session('new', { startedAt: 2 })]
     expect(sortSessions(list).map(s => s.id)).toEqual(['new', 'old'])
+  })
+})
+
+describe('selectedRow — the cursor follows the session by IDENTITY', () => {
+  // The rows a `groupSessions('none', …)` would draw for these sessions, flattened. No headings, so
+  // every row is selectable — a spacer/heading in the middle is exercised separately below.
+  const rowsOf = (...ids: string[]): SessionRow[] =>
+    ids.map(id => ({ kind: 'session', session: session(id) }))
+
+  it('returns the index of the glued id even after the list reorders under the cursor', () => {
+    // The user selected 'b' (at position 1). A poll reorders the fleet so 'b' is now last.
+    const before = rowsOf('a', 'b', 'c')
+    const after = rowsOf('c', 'a', 'b')
+    const sel = selectableIndexes(after)
+    // Glued to 'b', the resolved row is wherever 'b' now IS — position 2 — not the old position 1.
+    expect(selectedRow(after, sel, 'b', 1)).toBe(2)
+    // And the session at that row is provably 'b', not whoever slid into position 1.
+    expect(idAtRow(after, sel, selectedRow(after, sel, 'b', 1))).toBe('b')
+    // Sanity: the OLD, position-based reading would have selected 'a' — the wrong session.
+    expect(idAtRow(after, sel, 1)).toBe('a')
+    void before
+  })
+
+  it('falls back to the clamped numeric position only when the glued id is gone', () => {
+    const rows = rowsOf('a', 'b', 'c')
+    const sel = selectableIndexes(rows)
+    // 'z' ended and is no longer in the list — the cursor holds its last position, clamped.
+    expect(selectedRow(rows, sel, 'z', 1)).toBe(1)
+    // A position past the end clamps rather than pointing at nothing.
+    expect(selectedRow(rows, sel, 'z', 9)).toBe(2)
+  })
+
+  it('with no glue id, behaves as the plain clamped cursor', () => {
+    const rows = rowsOf('a', 'b', 'c')
+    const sel = selectableIndexes(rows)
+    expect(selectedRow(rows, sel, undefined, 0)).toBe(0)
+    expect(selectedRow(rows, sel, undefined, 5)).toBe(2)
+  })
+
+  it('returns -1 on an empty list', () => {
+    expect(selectedRow([], [], 'a', 0)).toBe(-1)
+    expect(selectedRow([], [], undefined, 3)).toBe(-1)
+  })
+
+  it('resolves the id through headings and spacers, not raw row indices', () => {
+    // A grouped list: heading, sessions, spacer, heading, session. `selectable` skips the chrome.
+    const rows: SessionRow[] = [
+      { kind: 'heading', label: 'live', count: 2 },
+      { kind: 'session', session: session('a') },
+      { kind: 'session', session: session('b') },
+      { kind: 'spacer' },
+      { kind: 'heading', label: 'closed', count: 1 },
+      { kind: 'session', session: session('c') },
+    ]
+    const sel = selectableIndexes(rows)
+    // 'c' is the third selectable row (index 2 into `selectable`), at raw row 5.
+    expect(selectedRow(rows, sel, 'c', 0)).toBe(2)
+    expect(idAtRow(rows, sel, 2)).toBe('c')
+  })
+
+  it('a mark that moves a row to the top carries the selection with it', () => {
+    // Simulates bug (4): the fleet is [a,b,c]; the user marks 'c', which the marked band lifts to
+    // the top → [c,a,b]. Glued to 'c', the resolved index follows it to row 0 — the cursor tracks
+    // the row, never the position it used to hold.
+    const after = rowsOf('c', 'a', 'b') // the marked band lifted 'c' from position 2
+    const sel = selectableIndexes(after)
+    expect(selectedRow(after, sel, 'c', 2)).toBe(0)
+    expect(idAtRow(after, sel, selectedRow(after, sel, 'c', 2))).toBe('c')
+  })
+})
+
+describe('searchArrangement — search is flat and newest-first, and only while searching', () => {
+  const userOrder = { by: 'name', dir: 'asc' } as const
+
+  it('forces a flat, recent-desc list while a query is active', () => {
+    const eff = searchArrangement(true, 'task', true, userOrder)
+    expect(eff.grouping).toBe('none')
+    expect(eff.cascade).toBe(false)
+    expect(eff.order).toEqual({ by: 'recent', dir: 'desc' })
+  })
+
+  it("returns the user's own arrangement untouched when there is no query — so exiting restores it", () => {
+    const eff = searchArrangement(false, 'task', true, userOrder)
+    expect(eff.grouping).toBe('task')
+    expect(eff.cascade).toBe(true)
+    expect(eff.order).toBe(userOrder)
   })
 })
 
