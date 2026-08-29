@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  LIST_FORMAT, attachArgs, capturePaneArgs, idFromTmuxName, isSessionGoneError, killSessionArgs,
-  newSessionArgs, parsePrefix, parseTmuxList, sendKeysEnterArgs, sendKeysLiteralArgs,
+  LIST_FORMAT, PANE_INFO_FORMAT, attachArgs, capturePaneArgs, capturePaneAnsiArgs, idFromTmuxName,
+  isSessionGoneError, killSessionArgs, newSessionArgs, paneInfoArgs, parsePaneInfo, parsePrefix,
+  parseTmuxList, sendKeysEnterArgs, sendKeysLiteralArgs,
   sendKeysNamedArgs, trimCapture,
   tmuxName,
   serverOptionsArgs, HISTORY_LIMIT,
@@ -32,6 +33,10 @@ describe('the other argv builders', () => {
   it('builds them all against our socket and our session name', () => {
     expect(killSessionArgs('a1')).toEqual(['-L', 'agentop', 'kill-session', '-t', 'agentop-a1'])
     expect(capturePaneArgs('a1', 40)).toEqual(['-L', 'agentop', 'capture-pane', '-p', '-t', 'agentop-a1', '-S', '-40'])
+    // The ANSI variant is the plain one with `-e` added — colours survive to the browser. Getting
+    // this wrong is silent: without `-e` the terminal renders monochrome and looks fine.
+    expect(capturePaneAnsiArgs('a1', 40)).toEqual(['-L', 'agentop', 'capture-pane', '-p', '-e', '-t', 'agentop-a1', '-S', '-40'])
+    expect(paneInfoArgs('a1')).toEqual(['-L', 'agentop', 'display-message', '-p', '-t', 'agentop-a1', '-F', PANE_INFO_FORMAT])
     expect(sendKeysLiteralArgs('a1', 'hello there')).toEqual(['-L', 'agentop', 'send-keys', '-t', 'agentop-a1', '-l', 'hello there'])
     expect(sendKeysEnterArgs('a1')).toEqual(['-L', 'agentop', 'send-keys', '-t', 'agentop-a1', 'Enter'])
     expect(attachArgs('a1')).toEqual(['tmux', '-L', 'agentop', 'attach-session', '-t', 'agentop-a1'])
@@ -95,6 +100,30 @@ describe('trimCapture', () => {
 
   it('survives an all-blank frame', () => {
     expect(trimCapture(['', '', ''])).toEqual([])
+  })
+})
+
+describe('parsePaneInfo', () => {
+  it('reads the six numbers our PANE_INFO_FORMAT asks for', () => {
+    expect(parsePaneInfo('12\t3\t80\t40\t0\t500')).toEqual({
+      cols: 80, rows: 40, cursorX: 12, cursorY: 3, alive: true, historySize: 500,
+    })
+  })
+
+  it('reads pane_dead=1 as not alive', () => {
+    expect(parsePaneInfo('0\t0\t80\t40\t1\t0')!.alive).toBe(false)
+  })
+
+  it('returns null on a short or non-numeric line rather than a half-built PaneInfo', () => {
+    // A confident-wrong cursor or "alive" is worse than none: the channel refuses the frame's
+    // metadata instead of shipping a guess.
+    expect(parsePaneInfo('12\t3\t80')).toBeNull()
+    expect(parsePaneInfo('a\tb\tc\td\te\tf')).toBeNull()
+    expect(parsePaneInfo('')).toBeNull()
+  })
+
+  it('asks for exactly the fields it parses', () => {
+    expect(PANE_INFO_FORMAT).toBe('#{cursor_x}\t#{cursor_y}\t#{pane_width}\t#{pane_height}\t#{pane_dead}\t#{history_size}')
   })
 })
 

@@ -59,11 +59,13 @@ export function filterSessions(
   list: readonly ControlSession[],
   query: string,
   transcriptHits?: ReadonlySet<string>,
+  /** The scopes the search is looking in — see `search-scope.ts`. Absent means every scope. */
+  active?: ReadonlySet<SearchScope>,
 ): ControlSession[] {
   if (query.trim() === '') return [...list]
   return list.filter(v => matchesQuery(v.searchFields, query, {
     transcript: transcriptOf(v, transcriptHits),
-  }))
+  }, active))
 }
 
 /**
@@ -82,8 +84,9 @@ export function rowScopes(
   v: ControlSession,
   query: string,
   transcriptHits?: ReadonlySet<string>,
+  active?: ReadonlySet<SearchScope>,
 ): SearchScope[] {
-  return matchScopes(v.searchFields, query, { transcript: transcriptOf(v, transcriptHits) })
+  return matchScopes(v.searchFields, query, { transcript: transcriptOf(v, transcriptHits) }, active)
 }
 
 /** How deep the search went: how many rows carry the query in each scope. */
@@ -91,10 +94,12 @@ export function searchDepth(
   list: readonly ControlSession[],
   query: string,
   transcriptHits?: ReadonlySet<string>,
+  active?: ReadonlySet<SearchScope>,
 ): ScopeCounts {
   return scopeCounts(
     list.map(v => ({ fields: v.searchFields, transcript: transcriptOf(v, transcriptHits) })),
     query,
+    active,
   )
 }
 

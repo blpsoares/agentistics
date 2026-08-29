@@ -4,14 +4,30 @@
  */
 
 import {
-  attachArgs, capturePaneArgs, idFromTmuxName, isSessionGoneError, killSessionArgs, listSessionsArgs,
-  newSessionArgs, parsePrefix, parseTmuxList, serverOptionsArgs, sendKeysNamedArgs,
-  sendKeysLiteralArgs, showPrefixArgs, trimCapture,
+  attachArgs, capturePaneArgs, capturePaneAnsiArgs, idFromTmuxName, isSessionGoneError,
+  killSessionArgs, listSessionsArgs, newSessionArgs, paneInfoArgs, parsePaneInfo, parsePrefix,
+  parseTmuxList, serverOptionsArgs, sendKeysNamedArgs, sendKeysLiteralArgs, showPrefixArgs,
+  trimCapture,
 } from './tmux-cli'
-import type { BackendSession, BackendSpawn, SessionBackend } from './types'
+import { planPromptDelivery } from './initial-prompt'
+import type {
+  BackendInitialPrompt, BackendSession, BackendSpawn, SessionBackend, TerminalCapture,
+} from './types'
 
-/** How long to wait for a harness to draw its prompt before typing into it. */
-const SEND_KEYS_DELAY_MS = 1200
+/** How often to re-read the pane while waiting for the harness to be ready to receive the prompt. */
+const DELIVER_POLL_MS = 400
+/**
+ * How long to keep trying to deliver the initial prompt before giving up.
+ *
+ * Robust to a SLOW start (a big CLAUDE.md, MCP servers loading) — the old fixed 1200ms lost the
+ * keys to a pane that had not drawn its prompt yet. Bounded so a session stuck on an unrecognised
+ * dialog cannot block a batch forever. Overridable for tests.
+ */
+const DELIVER_DEADLINE_MS = Number(process.env.AGENTISTICS_DELIVER_DEADLINE_MS) > 0
+  ? Number(process.env.AGENTISTICS_DELIVER_DEADLINE_MS)
+  : 15_000
+/** How much of the pane to read to judge readiness — enough for the input box and its footer. */
+const DELIVER_CAPTURE_LINES = 40
 
 async function tmux(args: string[]): Promise<{ code: number; out: string; err: string }> {
   try {
@@ -47,6 +63,38 @@ async function sendTextTo(id: string, text: string): Promise<boolean> {
   return (await tmux(sendKeysNamedArgs(id, 'Enter'))).code === 0
 }
 
+async function captureFrame(id: string): Promise<string[]> {
+  const { code, out } = await tmux(capturePaneArgs(id, DELIVER_CAPTURE_LINES))
+  if (code !== 0) return []
+  return trimCapture(out.split('\n'))
+}
+
+/**
+ * Deliver the initial prompt once the harness is genuinely ready to receive it — see
+ * `initial-prompt.ts` for the WHY. This is the impure half: it polls the pane, hands each frame to
+ * the pure `planPromptDelivery`, and does exactly what it says. It NEVER submits into a startup or
+ * approval dialog (the pure planner never returns an action for one), so the "press Enter too early
+ * and select No, exit" accident cannot happen.
+ */
+async function deliverInitialPrompt(id: string, d: BackendInitialPrompt): Promise<void> {
+  const deadline = Date.now() + DELIVER_DEADLINE_MS
+  let readyStreak = 0
+  while (Date.now() < deadline) {
+    const frame = await captureFrame(id)
+    const step = planPromptDelivery({ frame, mode: d.mode, readyStreak, ...(d.rules ? { rules: d.rules } : {}) })
+    readyStreak = step.readyStreak
+    if (step.action === 'done') return // a positional prompt that already auto-submitted
+    if (step.action === 'type') { await sendTextTo(id, d.text ?? ''); return }
+    if (step.action === 'submit') { await tmux(sendKeysNamedArgs(id, 'Enter')); return }
+    await sleep(DELIVER_POLL_MS)
+  }
+  // Timed out. For a `type` harness, fall back to the old best-effort so a slow-but-eventually-up
+  // harness still gets its prompt (never worse than before). For `submit`, do nothing: the text is
+  // in the field, the CLI may still auto-submit, and a blind Enter now could land on a dialog we
+  // never confirmed had cleared.
+  if (d.mode === 'type') await sendTextTo(id, d.text ?? '')
+}
+
 let tmuxPresent: boolean | null = null
 
 export const tmuxBackend: SessionBackend = {
@@ -67,12 +115,10 @@ export const tmuxBackend: SessionBackend = {
     for (const args of serverOptionsArgs()) await tmux(args)
     const { code, out } = await tmux(newSessionArgs({ id: req.id, cwd: req.cwd, argv: req.argv }))
     if (code !== 0) throw new Error(out.trim() || `tmux new-session failed (code ${code})`)
-    if (req.sendKeys) {
-      // The harness has to have drawn its prompt before anything typed into it lands anywhere. Only
-      // the OPENING line needs this wait; `sendText` below is called on a session that is already up
-      // and must not pay for it.
-      await sleep(SEND_KEYS_DELAY_MS)
-      await sendTextTo(req.id, req.sendKeys)
+    if (req.initialPrompt) {
+      // Deliver the prompt only once the harness is READY — polled, not a fixed sleep — so a slow
+      // start does not lose it and a startup dialog is never submitted into. See `deliverInitialPrompt`.
+      await deliverInitialPrompt(req.id, req.initialPrompt)
     }
   },
 
@@ -93,6 +139,28 @@ export const tmuxBackend: SessionBackend = {
     const { code, out } = await tmux(capturePaneArgs(id, lines))
     if (code !== 0) return []
     return trimCapture(out.split('\n'))
+  },
+
+  async captureTerminal(id: string, lines: number): Promise<TerminalCapture | null> {
+    // Content FIRST: a non-zero capture is how we learn the session is gone, and there is no point
+    // asking for its geometry once it is. `-e` keeps the colours; the frame is NOT trailing-trimmed
+    // because a full-screen TUI's blank rows are part of its layout, not padding to discard.
+    const cap = await tmux(capturePaneAnsiArgs(id, lines))
+    if (cap.code !== 0) return null // tmux no longer has this session — the caller ends the stream
+    // A trailing '' from the final newline is not a real row; drop only that one.
+    const raw = cap.out.split('\n')
+    if (raw.length && raw[raw.length - 1] === '') raw.pop()
+
+    const meta = await tmux(paneInfoArgs(id))
+    const info = meta.code === 0 ? parsePaneInfo(meta.out) : null
+    if (!info) {
+      // The pane exists (capture succeeded) but display-message could not be read or parsed. Rather
+      // than ship a confident-wrong cursor, fall back to a minimal honest geometry: the browser
+      // emulator sizes itself, so `cols: 0` is a "don't know" the client can ignore, and `alive` is
+      // true because the capture just worked. Never a throw.
+      return { lines: raw, info: { cols: 0, rows: raw.length, cursorX: 0, cursorY: 0, alive: true, historySize: 0 } }
+    }
+    return { lines: raw, info }
   },
 
   async kill(id: string) {

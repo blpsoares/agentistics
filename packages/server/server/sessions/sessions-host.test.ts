@@ -31,6 +31,10 @@ function fakeBackend(o: {
     async spawn() {},
     async list() { return o.sessions },
     async capture(id) { o.onCapture?.(id); return o.frames?.[id] ?? [] },
+    async captureTerminal(id) {
+      const lines = o.frames?.[id] ?? []
+      return { lines, info: { cols: 80, rows: lines.length, cursorX: 0, cursorY: 0, alive: true, historySize: 0 } }
+    },
     async kill() { return true },
     attachCommand(id) { return ['tmux', 'attach', id] },
     async detachHint() { return 'Ctrl-b then d' },
@@ -66,6 +70,42 @@ describe('createSessionsPoller', () => {
     expect(snap.attention).toBe(1)
   })
 
+  it('does NOT count a working session that goes quiet for a single poll — the reported false positive', async () => {
+    // The field report: the fleet said "waiting on you" about a session that had already gone back to
+    // work. It reproduces at the poller: a session working (its probed footer moving), then ONE poll
+    // where the frame is momentarily quiet — a repaint settling, a sub-turn finishing — reads `waiting`
+    // raw. Before this fix the counter jumped to 1 on that single frame and a person was summoned.
+    const frames: Record<string, string[]> = { a: ['working hard · esc to interrupt'] }
+    const p = poller({
+      backend: fakeBackend({ sessions: [backendSession('a')], frames }),
+      registry: [managed('a')],
+    })
+    // Establish the confirmed working state.
+    expect((await p.poll()).attention).toBe(0)
+    // The marker goes away and the frame stops moving for exactly one poll.
+    frames.a = ['❯ ']
+    const blip = await p.poll()
+    expect(blip.sessions[0]!.activity).toBe('working') // held — not summoned on one frame
+    expect(blip.attention).toBe(0)
+    expect(blip.rang).toEqual([])
+  })
+
+  it('the waiting count DROPS on the sample after work resumes', async () => {
+    // The transition the acceptance names: waiting -> back to working -> the count falls on the next
+    // sample. Clearing attention is the cheap direction, so it is believed at once.
+    const frames: Record<string, string[]> = { a: ['❯ '] }
+    const p = poller({
+      backend: fakeBackend({ sessions: [backendSession('a')], frames }),
+      registry: [managed('a')],
+    })
+    // Two quiet polls confirm waiting.
+    await p.poll()
+    expect((await p.poll()).attention).toBe(1)
+    // The session resumes — a moving footer.
+    frames.a = ['back at it · esc to interrupt']
+    expect((await p.poll()).attention).toBe(0) // fell on the very next sample
+  })
+
   it('reports a session working from its probed footer', async () => {
     const p = poller({
       backend: fakeBackend({
@@ -78,7 +118,7 @@ describe('createSessionsPoller', () => {
     expect((await p.poll()).attention).toBe(0)
   })
 
-  it('sees a frame that changed between two polls as working', async () => {
+  it('sees a frame that changed between two polls as working, and confirms waiting before it flips', async () => {
     const frames: Record<string, string[]> = { a: ['one'] }
     const p = poller({
       backend: fakeBackend({ sessions: [backendSession('a')], frames }),
@@ -86,8 +126,14 @@ describe('createSessionsPoller', () => {
     })
     expect((await p.poll()).sessions[0]!.activity).toBe('waiting')
     frames.a = ['two']
+    // A changed frame is movement, and movement is believed at once.
     expect((await p.poll()).sessions[0]!.activity).toBe('working')
-    // Third poll: unchanged again, so it settles back to waiting with no extra interval of lag.
+    // Now the frame goes quiet. The RAW reading is `waiting`, but a single quiet poll after work is
+    // not yet a fact — the fleet holds `working` rather than assert a person is needed on one frame.
+    // This one-interval confirmation is the whole point: it is what stopped the counter reporting a
+    // session that had just gone quiet (a repaint, a finished sub-turn) as "waiting on you".
+    expect((await p.poll()).sessions[0]!.activity).toBe('working')
+    // Seen quiet on two consecutive polls now — confirmed waiting.
     expect((await p.poll()).sessions[0]!.activity).toBe('waiting')
   })
 
@@ -120,7 +166,15 @@ describe('createSessionsPoller', () => {
     frames.a = ['done']
     expect((await p.poll()).sessions[0]!.activity).toBe('working')
 
-    // Next poll: the frame is unchanged and the session has settled.
+    // Next poll: the frame is unchanged, so the RAW reading is `waiting` — but it has been seen only
+    // once, so the fleet still shows `working` and the bell does NOT ring. The bell fires on the
+    // CONFIRMED transition, never on a single frame: that is what stops a one-frame quiet ringing a
+    // person for a session that is still working.
+    const held = await p.poll()
+    expect(held.sessions[0]!.activity).toBe('working')
+    expect(held.rang).toEqual([])
+
+    // The poll after that confirms the quiet — waiting is now believed, and the bell rings once.
     const settled = await p.poll()
     expect(settled.sessions[0]!.activity).toBe('waiting')
     expect(settled.rang).toEqual(['a'])
@@ -292,5 +346,53 @@ describe('the dialog a blocked session is showing', () => {
       registry: [managed('a')],
     })
     expect((await p.poll()).sessions[0]!.approvalLines).toBeUndefined()
+  })
+})
+
+describe('persisting the harness /rename name', () => {
+  const index = (byManagedId: Record<string, Record<string, unknown>>) => async () => ({
+    byManagedId: new Map(Object.entries(byManagedId)),
+    byPid: new Map(), byConversation: new Map(),
+  } as never)
+
+  it('persists a name a person typed, exactly once, and only when it CHANGES', async () => {
+    const calls: { id: string; name: string; since?: number }[] = []
+    const p = createSessionsPoller({
+      backend: fakeBackend({ sessions: [backendSession('m1')], frames: { m1: ['x'] } }),
+      readRegistry: async () => [managed('m1')],
+      scanProcesses: async () => ({ procs: [] }),
+      now: () => NOW,
+      loadHarnessSessions: index({ m1: { name: 'MAIN', nameSince: 7, tmux: 'agentop-m1:@0.%0' } }),
+      recordHarnessName: async (id, name, since) => { calls.push({ id, name, ...(since !== undefined ? { since } : {}) }) },
+    })
+    await p.poll()
+    expect(calls).toEqual([{ id: 'm1', name: 'MAIN', since: 7 }])
+
+    // Registry now already holds the name — the next poll must not write again.
+    calls.length = 0
+    const p2 = createSessionsPoller({
+      backend: fakeBackend({ sessions: [backendSession('m1')], frames: { m1: ['x'] } }),
+      readRegistry: async () => [managed('m1', { harnessName: 'MAIN', harnessNameSince: 7 })],
+      scanProcesses: async () => ({ procs: [] }),
+      now: () => NOW,
+      loadHarnessSessions: index({ m1: { name: 'MAIN', nameSince: 7, tmux: 'agentop-m1:@0.%0' } }),
+      recordHarnessName: async (id, name, since) => { calls.push({ id, name, ...(since !== undefined ? { since } : {}) }) },
+    })
+    await p2.poll()
+    expect(calls).toEqual([])
+  })
+
+  it('never persists a name the harness invented for itself', async () => {
+    const calls: unknown[] = []
+    const p = createSessionsPoller({
+      backend: fakeBackend({ sessions: [backendSession('m1')], frames: { m1: ['x'] } }),
+      readRegistry: async () => [managed('m1')],
+      scanProcesses: async () => ({ procs: [] }),
+      now: () => NOW,
+      loadHarnessSessions: index({ m1: { name: 'agentistics-77', nameSource: 'derived', tmux: 'agentop-m1:@0.%0' } }),
+      recordHarnessName: async (...a) => { calls.push(a) },
+    })
+    await p.poll()
+    expect(calls).toEqual([])
   })
 })

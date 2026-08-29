@@ -233,6 +233,28 @@ you are in. A row that does know its conversation never falls back to that guess
 before the transcript exists: "not written yet" and "some other conversation in this directory" are
 different answers.
 
+### One row per session, and a name that outlives the process
+
+A session's durable identity is its **conversation**, but the registry keys a record by the
+per-spawn managed id — a new one every time a session is attached, reopened or restarted. Each of
+those retires the record it replaced (`endedAt`) without removing it, so a conversation reopened five
+times used to stand on screen as five `exited` rows beside its one live continuation, all wearing the
+same name. The list collapses those: a retired predecessor is hidden **only** when it is provably
+dead (`endedAt` is set) **and** superseded by a row of the same conversation — a live one, or a newer
+ended one, which *is* that session continued. A live row is never hidden, a `lost` row with no
+recorded end (a reboot) is never hidden, and the newest ended row of a conversation with nothing live
+is kept, because it is the one you reopen. Two rows that merely share a directory or a label are left
+alone: only a shared **conversation id** proves two rows are one session, so the list never merges
+sessions that are genuinely distinct.
+
+A **title is an identity**: whatever a session is called while it runs, it stays called after it
+ends. The name you give a session from *inside* Claude Code (`/rename`) lives only in the harness's
+own record, which Claude deletes when the process exits — so a finished session used to lose that
+name, its displayed title fell back to a different source, and `CTRL+F` could no longer find the row
+by the name it wore a second earlier. agentop now captures that name into the registry while the
+session is alive, so the title is the same before and after it finishes. Only a name a person typed
+is kept; a name the harness invented for itself never displaces your own label.
+
 ### Tasks
 
 A task is whatever you say it is: a free string, chosen while starting a session or added later, and
@@ -290,10 +312,20 @@ CLI, so it exists only for the harnesses that were probed (claude, codex, kimi).
 harness a blocking question shows as `waiting` — still counted, still surfaced, but the reason
 cannot be named. `ls` and `list` both say so rather than leaving you to assume otherwise.
 
-The states are also honest about their own timing. When a turn ends, the poll that *observes* it
-ending sees a frame that changed since the last one, which is movement — so the session reads
-`working` for that one interval before settling on `waiting`. The signal is therefore at most one
-interval late and never early, which is the right way round for something a person acts on.
+The states are also honest about their own timing, and deliberately biased. A single frame is a
+noisy sample: a session that has just finished a turn, or one whose pane a plugin repainted for a
+moment, reads `working` on one poll and `waiting` on the next with nothing about it having changed.
+Believing that lone `waiting` is how the counter came to say "waiting on you" about a session that
+had already gone back to work — a false summons that wastes the most expensive resource here and,
+once it has cried wolf, stops being read. So the two directions are confirmed differently
+(`attention-confirm.ts`): **`waiting` and `NEEDS APPROVAL` are believed only once the same reading
+has held for two consecutive polls**, while a return to `working` (a screen that moved — unambiguous
+proof) and `exited` are believed at once. The counter therefore never spikes on a single quiet
+frame, and it DROPS on the very next poll after work resumes. The cost is that a genuine wait takes
+one extra interval to appear — the cheap direction, since a slightly late "needs you" only delays a
+person while a false one wastes them. The event channel (`agentop events`) confirms every transition
+the same way for the same reason, so the two surfaces agree on when a session starts waiting; the
+fleet display just clears it a poll sooner.
 
 ## Harness support
 
@@ -308,6 +340,20 @@ interval late and never early, which is the right way round for something a pers
 
 `kimi` and `copilot` have no flag for an initial prompt in an interactive session — their `-p` runs
 one prompt non-interactively and exits — so agentop types the prompt in once the session is up.
+
+**Delivering the initial prompt is READINESS-GATED** (`initial-prompt.ts`), not a fixed sleep. A
+detached session created with a prompt has to receive it with no human in the loop, and two things
+used to break that silently: a slow-starting harness lost a prompt typed after a fixed 1200 ms into
+a pane that had not drawn yet, and a positional prompt was left entirely to the CLI to auto-submit —
+which some versions do not do (the prompt "stays in the field" and the agent sits waiting for
+something that already arrived). So agentop now polls the pane and delivers only once the harness is
+genuinely ready — its input surface drawn, and NOT sitting on a startup/approval dialog — and then
+once: a typed harness has its text typed and submitted; a positional harness whose "working" marker
+lets us tell an auto-submitted turn from an idle prompt (claude) gets a single Enter to submit the
+pre-filled text, but only after it has sat idle for a few polls without ever running, so a CLI that
+DOES auto-submit is never double-submitted. It is never delivered into a dialog — launched in a
+folder it does not yet trust, claude opens with a trust prompt whose default is "No, exit", and a
+blind early Enter would select it and kill the session.
 
 Codex's reasoning effort is a `-c key=value` configuration override rather than a flag; it is not
 wired up because the key could not be verified from the CLI itself, and agentop does not guess flags.
@@ -341,8 +387,14 @@ None of this touches your own tmux: different socket, different server, differen
 tasks, and an `endedAt` on the ones that are over. tmux is authoritative about what is RUNNING; this
 file is authoritative about what it MEANS, which is why a reboot takes the first and leaves the
 second. A session is marked finished rather than deleted: it is still a thing that happened, and
-reopening it is the ordinary next thing to want.
+reopening it is the ordinary next thing to want. It also holds `harnessName` — the `/rename` name
+captured from the harness while the session was alive, so the title survives after the harness
+deletes its own record.
 
-`~/.agentistics/preferences.json` — `sessionView` (how the list is arranged) and `finishedTasks`
-(the tasks you marked done). Both are properties of this machine rather than of any session, which
-is why they do not live in the registry.
+`~/.agentistics/preferences.json` — `sessionView` (how the list is arranged, including
+`searchScopes`: which fields the search looks in) and `finishedTasks` (the tasks you marked done).
+Both are properties of this machine rather than of any session, which is why they do not live in the
+registry. `searchScopes` is a set — name, folder, harness, note, task, prompt, transcript — so the
+"all" control is simply every scope present; when it has never been chosen the search covers every
+field a row carries on its own, and `transcript` (a text scan of the conversation on disk) is an
+explicit opt-in rather than a cost paid on every keystroke.

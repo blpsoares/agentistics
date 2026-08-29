@@ -15,6 +15,7 @@ import { createLimiter } from '../utils'
 import type { HarnessProcess } from '../live-sessions'
 import { rulesFor } from './attention-rules'
 import { approvalTail, attentionOf, digestFrame, frameTail } from './attention'
+import { EMPTY_CONFIRM_MEMORY, confirmActivities, type ConfirmMemory } from './attention-confirm'
 import { readRecentChatTurns, resolveChatTranscriptPath, type ChatTurn } from './chat-tail'
 import { parseDialogOptions, type DialogOption } from './dialog-choice'
 // Taking a running session back when its registry record is gone. See `session-adopt.ts`.
@@ -22,6 +23,7 @@ import { planAdoptions } from './session-adopt'
 import { loadConversations, type Conversation } from './conversations'
 import { HEARTBEAT_MS, planCrashGroup, type CrashGroup } from './crash-group'
 import { emptyHarnessSessionIndex, type HarnessSessionIndex } from './harness-sessions'
+import { chosenName } from './harness-session-file'
 import { reconcileSessions } from './session-ref'
 import {
   attentionCount, bellTransitions, buildSessionViews, type SessionView,
@@ -122,6 +124,17 @@ export function createSessionsPoller(o: {
    */
   recordConversation?: (id: string, conversationId: string) => Promise<unknown>
   /**
+   * Persist the name a managed row was given INSIDE the harness (`/rename`), so the title survives
+   * the process.
+   *
+   * Mirror of `recordConversation`, and for the same reason: the harness deletes its own session
+   * file when the process ends, so a name that lived only there is lost the instant the session
+   * finishes — the displayed title then flips to a different source and `CTRL+F` can no longer find
+   * the row by the name it wore a moment ago. Called ONLY when the live, non-derived name disagrees
+   * with what the registry already holds, so it writes once per rename and not once per poll.
+   */
+  recordHarnessName?: (id: string, name: string, since?: number) => Promise<unknown>
+  /**
    * Write registry records for sessions the backend is running and the registry has lost.
    *
    * Injected and optional for the same reason the two above are: it writes to disk. Called only with
@@ -143,6 +156,11 @@ export function createSessionsPoller(o: {
   // first is how movement is detected; the second is what makes the bell a transition.
   let prevDigest = new Map<string, string>()
   let prevActivity = new Map<string, SessionActivity>()
+  // The raw per-poll reading is noisy: a session that just finished, or a pane a plugin repainted,
+  // reads `working` then `waiting` across two polls with nothing changed. `confirmActivities` turns
+  // that into a CONFIRMED reading — a needs-you state must be seen twice before the counter believes
+  // it, while a return to work is believed at once — so the "waiting on you" count stops lying.
+  let confirmMemory: ConfirmMemory = EMPTY_CONFIRM_MEMORY
   const prevProcStats = new Map<number, ProcStatSample>()
   let last: SessionSnapshot | null = null
   /**
@@ -280,6 +298,18 @@ export function createSessionsPoller(o: {
         }
       }
 
+      // The `/rename` name, captured WHILE there is still a harness file to read it from, so the
+      // title outlives the process. Only a name a PERSON typed (`chosenName` drops the harness's own
+      // invented `agentistics-77`), and only when it CHANGED — one write per rename, never per poll.
+      if (o.recordHarnessName) {
+        for (const m of registry) {
+          const file = harnessSessions.byManagedId.get(m.id)
+          const name = chosenName(file)
+          if (!name || (m.harnessName === name && m.harnessNameSince === file?.nameSince)) continue
+          await o.recordHarnessName(m.id, name, file?.nameSince).catch(() => undefined)
+        }
+      }
+
       // Decided against the BACKEND's own list rather than the reconciled statuses, because that is
       // the question: a row the backend has never heard of is one the machine took.
       const backendIds = new Set(backendSessions.map(b => b.id))
@@ -316,9 +346,19 @@ export function createSessionsPoller(o: {
         }
       }
 
+      // Confirm the raw readings before anything downstream sees them: the count, the sort, the bell
+      // and the TUI all read `activity`, so confirming here is the one place that makes every surface
+      // honest at once. A needs-you state must hold for two polls to be believed; a return to work is
+      // believed immediately (see `attention-confirm.ts`). The dialog/approval frames captured above
+      // are keyed to the RAW `waiting-approval` reading and only reach a row once its CONFIRMED state
+      // is `waiting-approval` too — `buildSessionViews` gates them on `activity`.
+      const confirm = confirmActivities(confirmMemory, activity)
+      confirmMemory = confirm.memory
+      const confirmedActivity = confirm.activities
+
       const sessions = buildSessionViews({
         reconciled,
-        activity,
+        activity: confirmedActivity,
         tails,
         chatTails,
         approvals,

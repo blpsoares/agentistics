@@ -86,10 +86,27 @@ export interface SpawnRequest {
   task?: string
 }
 
+/**
+ * How the initial prompt reaches the harness once it is READY to receive it — see `initial-prompt.ts`.
+ *
+ * `type`   — a `send-keys` harness (its only prompt flag exits): the text is typed in and submitted.
+ * `submit` — a `positional` harness: the text is already in argv; it may only need an Enter to submit
+ *            it, on a harness/version that pre-fills without auto-submitting. Verified by a working
+ *            marker so a CLI that DID auto-submit is never double-submitted.
+ *
+ * A `flag` harness (`--prompt-interactive`) runs the prompt by design and carries no delivery.
+ */
+export interface InitialPrompt {
+  mode: 'type' | 'submit'
+  /** The text to type. Present only for mode `type`. */
+  text?: string
+}
+
 export interface SpawnPlan {
   argv: string[]
-  /** Typed into the session once it is up, for a `send-keys` harness. */
-  sendKeys?: string
+  /** How to deliver the initial prompt once the harness is up — absent when there is no prompt, or a
+   *  `flag` harness that runs it itself. */
+  initialPrompt?: InitialPrompt
   /**
    * The conversation this spawn is KNOWN to drive — the id reopened, or the id assigned.
    *
@@ -119,7 +136,47 @@ export interface BackendSpawn {
   id: string
   cwd: string
   argv: string[]
-  sendKeys?: string
+  /**
+   * How to deliver the initial prompt once the harness is ready to receive it.
+   *
+   * The harness's screen RULES ride along so the backend can tell a live turn and a startup dialog
+   * from an idle prompt WITHOUT importing the harness table — it stays harness-agnostic, the caller
+   * resolves the rules. Absent when there is nothing to deliver.
+   */
+  initialPrompt?: BackendInitialPrompt
+}
+
+export interface BackendInitialPrompt extends InitialPrompt {
+  /** The harness's probed markers, for readiness / already-submitted detection. Absent = only the
+   *  input-surface heuristic gates readiness, and a `submit` is never forced (cannot verify safely). */
+  rules?: AttentionRules
+}
+
+/**
+ * The pane's live geometry and cursor, read alongside a capture.
+ *
+ * `capture-pane` renders the grid but says nothing about where the cursor is or whether the hosted
+ * command has exited, and both are things the terminal channel must tell the browser honestly: a
+ * frozen last frame that still shows a blinking cursor is exactly the `waiting` lie this house has
+ * a rule against. So the backend reads it in the same breath as the content (one `display-message`).
+ */
+export interface PaneInfo {
+  cols: number
+  rows: number
+  cursorX: number
+  cursorY: number
+  /** False once the hosted command has exited — the pane is dead but still capturable (remain-on-exit). */
+  alive: boolean
+  /** How many lines of scrollback tmux is holding above the visible screen, right now. */
+  historySize: number
+}
+
+/** One ANSI-preserving read of a pane: its rendered lines plus the geometry beside them. */
+export interface TerminalCapture {
+  /** Newest-last lines of the rendered frame, WITH the SGR escape sequences (`capture-pane -e`).
+   *  NOT trailing-trimmed: a full-screen TUI uses the whole grid and its blank rows are layout. */
+  lines: string[]
+  info: PaneInfo
 }
 
 /** One session as the BACKEND sees it — existence and liveness, no product metadata. */
@@ -214,6 +271,29 @@ export interface ManagedSession {
    * never as "no repository", so an older row simply behaves as it always did.
    */
   repo?: RepoFacts
+  /**
+   * The name the user gave this session FROM INSIDE the harness (Claude Code's `/rename`), captured
+   * while the session was alive so it OUTLIVES the process.
+   *
+   * A title is an identity: whatever a session is called while it runs, it stays called after it
+   * ends. But that name lives only in the harness's own `~/.claude/sessions/<pid>.json`, which Claude
+   * DELETES when the process exits — so a session that showed a `/rename` name while running lost it
+   * the instant it finished, the displayed title fell back to a different source, and `CTRL+F` could
+   * no longer find the row by the name it had a second earlier. The poller persists the LIVE,
+   * non-derived name here (via `chosenName`) the moment it sees it, so the title is stable across the
+   * running -> finished transition. Only a name a PERSON typed is stored: a harness-invented
+   * `agentistics-77` never reaches this field, so it can never displace an agentop label. See
+   * `pickTitle` and `harness-session-file.ts`.
+   *
+   * Absent for a session that was never `/rename`d, and on a row written by a build predating this —
+   * both read exactly as they did before (the live file, when present, still wins).
+   */
+  harnessName?: string
+  /** When `harnessName` was set inside the harness, epoch ms — the recency side of the title
+   *  contest, mirrored from the harness's own `nameSince` so `pickTitle` settles it the same way
+   *  whether the session is alive (live file) or finished (this persisted copy). Absent on a claude
+   *  older than 2.1.232, which writes the name with no timestamp. */
+  harnessNameSince?: number
 }
 
 /**
@@ -256,6 +336,20 @@ export interface SessionBackend {
   list(): Promise<BackendSession[]>
   /** Newest-last lines of the last rendered frame, trailing blanks removed. */
   capture(id: string, lines: number): Promise<string[]>
+  /**
+   * An ANSI-PRESERVING read of the pane — its rendered lines with colour/attribute escapes intact,
+   * plus the geometry and cursor beside them — for the browser terminal channel.
+   *
+   * Distinct from `capture` on purpose: `capture` strips escapes because its callers pattern-match
+   * the text (readiness, approval detection), and a frame full of SGR codes would break those
+   * regexes. This one KEEPS them, because a terminal that loses its colours is a worse copy of the
+   * one a person would have got from `tmux attach`.
+   *
+   * `null` — never a throw — when the session is GONE (tmux no longer has it): the caller ends the
+   * stream cleanly rather than crashing. A pane that has merely EXITED still returns a capture with
+   * `info.alive === false`, so the last frame stays readable and is honestly marked dead.
+   */
+  captureTerminal(id: string, lines: number): Promise<TerminalCapture | null>
   /**
    * Type `text` into the session and submit it — what a person does at the keyboard.
    *

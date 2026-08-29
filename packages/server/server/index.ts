@@ -1014,7 +1014,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // take. A central never answers it: it aggregates many machines and hosts none of their
     // sessions, so a fleet read there would be this box's own processes under someone else's page.
     // `capability-guard.ts` has already refused both paths on an exposed profile.
-    if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act') {
+    if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act' || url.pathname === '/api/fleet/stream') {
       if (TEAM_CENTRAL) {
         return new Response(JSON.stringify({ error: 'fleet_central' }), {
           status: 404,
@@ -1051,6 +1051,43 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
+    }
+
+    // The live terminal channel: an SSE stream of one session's screen. Read-only (Phase 1). Already
+    // gated by `localShell` (capability-guard) and 404'd on a central above, so this handler only has
+    // to enforce SCOPE — the session must be one this machine manages — and the stream ceiling.
+    if (url.pathname === '/api/fleet/stream' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { terminalSessionExists, terminalAtCapacity, openTerminalStream } = await import('./sessions/terminal-web')
+      if (!(await terminalSessionExists(id))) {
+        return new Response(JSON.stringify({ error: 'not_found' }), {
+          status: 404,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (await terminalAtCapacity()) {
+        return new Response(JSON.stringify({ error: 'too_many_streams' }), {
+          status: 503,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const stream = await openTerminalStream(id, req.signal)
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          ...CORS_HEADERS,
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        },
+      })
     }
 
     // Chat is opt-in. `capability-guard.ts` has already refused these paths where the exposure
