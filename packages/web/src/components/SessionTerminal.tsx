@@ -44,9 +44,6 @@ interface Props {
 }
 
 const FONT_SIZE = 13
-/** The smallest cell the fit will shrink a wide pane to before it lets the box scroll instead — a
- *  readability floor, so a 200-column pane in a narrow card is small but never a 3px smear. */
-const MIN_FIT_SCALE = 9 / FONT_SIZE
 const FONT_FAMILY =
   "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace"
 
@@ -116,10 +113,13 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1 }: 
    * Fit the natural cols×rows grid into the box by scaling the PIXELS — never by resizing the
    * buffer, so the column count (and therefore the line breaks) never change.
    *
-   * The base is fit-to-WIDTH, so every column is shown; it is never enlarged past 1:1, and never
-   * shrunk below a readability floor (a very wide pane then scrolls horizontally instead of becoming
-   * an unreadable smear). The user's zoom multiplies that base — above what the box holds, the box
-   * simply scrolls. At every scale the bytes on screen are exactly what `capture-pane` drew.
+   * The base is fit-to-WIDTH: at zoom 1 every column is shown and nothing scrolls, however wide the
+   * pane — a 252-column pane is simply drawn smaller so it fits. There is deliberately NO lower
+   * bound: a floor would leave a very wide pane overflowing a narrow box (exactly the "cut on both
+   * ends" the accordion showed), and the zoom control is the user's way to enlarge instead — the
+   * readable path for a wide pane is the maximize MODAL, where the box is wide enough to hold it. It
+   * is never enlarged past 1:1. The user's zoom multiplies the base; above what the box holds, the
+   * box scrolls. At every scale the bytes on screen are exactly what `capture-pane` drew.
    */
   function fit() {
     const box = boxRef.current
@@ -136,8 +136,7 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1 }: 
     host.style.height = `${natH}px`
     const availW = box.clientWidth
     if (!availW) return
-    const fitWidth = availW / natW
-    const base = Math.min(1, Math.max(MIN_FIT_SCALE, fitWidth))
+    const base = Math.min(1, availW / natW)
     const s = base * zoomRef.current
     host.style.transform = `scale(${s})`
     host.style.transformOrigin = 'top left'

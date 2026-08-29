@@ -9,6 +9,8 @@ import { SessionActionsMenu, SessionActionsPanel, useSessionActionsController } 
 import { useTerminalStream } from '../hooks/useTerminalStream'
 import { terminalStatus, type TerminalTone } from '../lib/terminalStream'
 import { getTerminalZoom, setTerminalZoom, subscribeTerminalZoom, ZOOM_STEP, ZOOM_MIN, ZOOM_MAX } from '../lib/terminalZoom'
+import { getPinnedIds, isSessionPinned, togglePinnedSession, subscribePinnedSessions, pinnedServerSnapshot, MAX_PINNED } from '../lib/pinnedSessions'
+import { getOpenModalSession, setOpenModalSession, subscribeOpenModalSession } from '../lib/openModalSession'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { encodeProjectDir, transcriptSource, transcriptUnavailableNote, type TranscriptMessage } from '../lib/sessionTranscript'
 import { resumeCommand } from '../lib/resumeCommand'
@@ -46,6 +48,8 @@ import {
   Hand,
   ZoomIn,
   ZoomOut,
+  Pin,
+  PinOff,
   X,
 } from 'lucide-react'
 
@@ -474,6 +478,34 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
     setInternalViewMode(mode)
   }
 
+  // Pinned-to-top: up to three sessions the user always wants in sight. They live in their own block
+  // above the list, OUTSIDE the grouping and the status filter, and are excluded from the list below
+  // so they never appear twice. A SEARCH wins over pinning (its own flat/recent rule), so the block
+  // steps aside while a search is active.
+  const pinnedTopIds = usePinnedIds()
+  const searching = search.trim().length > 0
+
+  // Does a session pass the current status shortcut? Used to MARK a pinned card that the active
+  // filter would otherwise hide — pinning beats the filter, but the list must not lie about it.
+  const matchesStatusShortcut = (s: SessionMeta): boolean => {
+    if (statusShortcut === 'all') return true
+    const isLive = pinnedIds?.has(s.session_id)
+    if (statusShortcut === 'active') return Boolean(isLive)
+    if (statusShortcut === 'waiting') {
+      const st = activities?.[s.session_id]
+      return Boolean(isLive) && (st === 'waiting' || st === 'waiting-approval')
+    }
+    if (statusShortcut === 'closed') return !isLive
+    return true
+  }
+
+  const pinnedSessions = useMemo(() => {
+    if (searching || pinnedTopIds.length === 0) return []
+    const bySessionId = new Map(sessions.map(s => [s.session_id, s]))
+    return pinnedTopIds.map(id => bySessionId.get(id)).filter((s): s is SessionMeta => Boolean(s))
+  }, [pinnedTopIds, sessions, searching])
+  const pinnedTopSet = useMemo(() => new Set(searching ? [] : pinnedTopIds), [pinnedTopIds, searching])
+
   // Pagination state (default 5 per page)
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(5)
@@ -486,7 +518,9 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
 
   // Filter & Sort list
   const filteredAndSorted = useMemo(() => {
-    let list = [...sessions]
+    // Pinned-to-top sessions render in their own block above; drop them here so they never appear
+    // twice. A search suspends pinning, so they flow back into the list.
+    let list = pinnedTopSet.size > 0 ? sessions.filter(s => !pinnedTopSet.has(s.session_id)) : [...sessions]
 
     // Text search filter
     if (search.trim()) {
@@ -556,7 +590,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
     })
 
     return list
-  }, [sessions, search, statusShortcut, sortKey, sortDir, pinnedIds])
+  }, [sessions, search, statusShortcut, sortKey, sortDir, pinnedIds, pinnedTopSet])
 
   // Grouped list
   const groups = useMemo(() => {
@@ -782,8 +816,63 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
         </div>
       </div>
 
+      {/* Pinned-to-top block — always here, above the grouping, unmoved by it. Excluded from the
+          list below so nothing shows twice; hidden while a search is active (search wins). */}
+      {pinnedSessions.length > 0 && (
+        <div
+          style={{
+            background: 'var(--bg-surface)', border: '1px solid var(--anthropic-orange-dim, rgba(232,105,11,0.35))',
+            borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 10,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+            <Pin size={14} fill="currentColor" style={{ color: 'var(--anthropic-orange)' }} />
+            <span>{lang === 'pt' ? 'Fixadas' : 'Pinned'}</span>
+            <span
+              style={{
+                fontSize: 11, padding: '1px 8px', borderRadius: 999,
+                background: 'rgba(232,105,11,0.12)', color: 'var(--anthropic-orange)', fontWeight: 600,
+              }}
+            >
+              {pinnedSessions.length} / {MAX_PINNED}
+            </span>
+            <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)' }}>
+              {lang === 'pt' ? '— sempre à mão, fora do agrupamento' : '— always in sight, outside the grouping'}
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, minWidth: 0 }}>
+            {pinnedSessions.map(s => {
+              const outside = !matchesStatusShortcut(s)
+              return (
+                <div key={s.session_id} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                  {outside && (
+                    <div style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 4, paddingLeft: 4 }}>
+                      <Filter size={10} />
+                      {lang === 'pt'
+                        ? 'Fixada — fora do filtro atual da lista'
+                        : 'Pinned — outside the list’s current filter'}
+                    </div>
+                  )}
+                  <SessionCard
+                    s={s}
+                    lang={lang}
+                    onSelect={onSelect}
+                    isPinned={pinnedIds?.has(s.session_id)}
+                    state={activities?.[s.session_id]}
+                    fleetRow={fleet?.get(s.session_id)}
+                    onFleetAction={onFleetAction}
+                    viewMode="list"
+                    theme={theme}
+                  />
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Main Content Area: Grouped or Ungrouped */}
-      {filteredAndSorted.length === 0 ? (
+      {filteredAndSorted.length === 0 && pinnedSessions.length === 0 ? (
         <div
           style={{
             display: 'flex',
@@ -1470,9 +1559,11 @@ function CardFooterButtons({ s, lang, onSelect, onResume }: {
 }
 
 /** The outer card shell + clickable header shared by both variants. `accent` is the state colour
- *  drawn as a left rule so a row that needs you is spotted without reading it. */
+ *  drawn as a left rule so a row that needs you is spotted without reading it. `affordance` is the
+ *  trailing icon that says what a click does — a chevron in the list (expands inline) or a maximize
+ *  glyph in the grid (opens the modal, so the grid layout never stretches). */
 function CardShell({
-  accent, expanded, onToggle, statusPill, harness, title, right, meta, children,
+  accent, expanded, onToggle, statusPill, harness, title, right, meta, affordance, children,
 }: {
   accent: string
   expanded: boolean
@@ -1482,6 +1573,7 @@ function CardShell({
   title: string
   right: React.ReactNode
   meta: React.ReactNode
+  affordance: React.ReactNode
   children?: React.ReactNode
 }) {
   return (
@@ -1510,7 +1602,7 @@ function CardShell({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             {right}
             <span style={{ color: 'var(--text-tertiary)', display: 'inline-flex' }}>
-              {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              {affordance}
             </span>
           </div>
         </div>
@@ -1594,13 +1686,21 @@ function TerminalZoomControls({ lang }: { lang: 'pt' | 'en' }) {
   )
 }
 
-function TerminalRegion({ id, theme, lang }: { id: string; theme: 'dark' | 'light'; lang: 'pt' | 'en' }) {
+function TerminalRegion({ id, theme, lang, fill, onMaximize }: {
+  id: string; theme: 'dark' | 'light'; lang: 'pt' | 'en'
+  /** Fill the available height (in the modal) instead of a fixed card-sized box. */
+  fill?: boolean
+  /** When set, a maximize button opens the modal — where the box is wide enough to read a wide pane
+   *  at a larger scale. Absent inside the modal itself (already maximized). */
+  onMaximize?: () => void
+}) {
   const isMobile = useIsMobile()
   const state = useTerminalStream(id)
   const status = terminalStatus(state, lang === 'pt' ? 'pt' : 'en')
   const zoom = useTerminalZoom()
+  const fixedHeight = isMobile ? 240 : 320
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, height: fill ? '100%' : undefined, flex: fill ? 1 : undefined }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex' }}><Terminal size={14} /></span>
         <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{lang === 'pt' ? 'Terminal ao vivo' : 'Live terminal'}</span>
@@ -1621,10 +1721,26 @@ function TerminalRegion({ id, theme, lang }: { id: string; theme: 'dark' | 'ligh
           {status.label}
         </span>
         <TerminalZoomControls lang={lang} />
+        {onMaximize && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onMaximize() }}
+            title={lang === 'pt' ? 'Ampliar o terminal' : 'Enlarge the terminal'}
+            aria-label={lang === 'pt' ? 'Ampliar o terminal' : 'Enlarge the terminal'}
+            style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: isMobile ? 40 : 26, height: isMobile ? 40 : 22, borderRadius: 6,
+              border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+              color: 'var(--text-secondary)', cursor: 'pointer', padding: 0,
+            }}
+          >
+            <Maximize2 size={13} />
+          </button>
+        )}
       </div>
       <div
         style={{
-          height: isMobile ? 240 : 320, borderRadius: 8, overflow: 'hidden',
+          height: fill ? undefined : fixedHeight, flex: fill ? 1 : undefined, minHeight: fill ? 0 : undefined,
+          borderRadius: 8, overflow: 'hidden',
           border: '1px solid var(--border-subtle)', background: theme === 'light' ? '#ffffff' : '#0e1116',
         }}
       >
@@ -1698,74 +1814,252 @@ function PrimaryButton({ primary, lang, onExpand, onPick }: {
   )
 }
 
+// ---- pin to top -----------------------------------------------------------------------------------
+
+/** The page-wide, persisted set of pinned session ids, shared live across the list. */
+function usePinnedIds(): string[] {
+  return useSyncExternalStore(subscribePinnedSessions, getPinnedIds, pinnedServerSnapshot)
+}
+
+/** Which session's card modal is open — held outside the card so a live re-render (which remounts a
+ *  card) cannot close a maximized terminal under the user. */
+function useOpenModalSession(): string | null {
+  return useSyncExternalStore(subscribeOpenModalSession, getOpenModalSession, () => null)
+}
+
+/** The pin toggle on a card. Solid = pinned (click to unpin); outline = pin it. The fourth pin is
+ *  REFUSED (never a silent swap), and the refusal is said in a brief tooltip. */
+function PinButton({ sessionId, lang }: { sessionId: string; lang: 'pt' | 'en' }) {
+  const pinnedIds = usePinnedIds()
+  const pinned = pinnedIds.includes(sessionId)
+  const isMobile = useIsMobile()
+  const [refused, setRefused] = useState(false)
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex' }} onClick={e => e.stopPropagation()}>
+      <button
+        onClick={() => {
+          const r = togglePinnedSession(sessionId)
+          if (!r.ok) { setRefused(true); setTimeout(() => setRefused(false), 2600) }
+        }}
+        title={pinned
+          ? (lang === 'pt' ? 'Desafixar do topo' : 'Unpin from top')
+          : (lang === 'pt' ? `Fixar no topo (até ${MAX_PINNED})` : `Pin to top (up to ${MAX_PINNED})`)}
+        aria-label={pinned ? (lang === 'pt' ? 'Desafixar' : 'Unpin') : (lang === 'pt' ? 'Fixar' : 'Pin')}
+        aria-pressed={pinned}
+        style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: isMobile ? 40 : 30, height: isMobile ? 40 : 30, borderRadius: 8,
+          border: pinned ? '1px solid var(--anthropic-orange)' : '1px solid var(--border-subtle)',
+          background: pinned ? 'rgba(232,105,11,0.1)' : 'transparent',
+          color: pinned ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+          cursor: 'pointer', padding: 0, flexShrink: 0,
+        }}
+      >
+        {pinned ? <Pin size={15} fill="currentColor" /> : <Pin size={15} />}
+      </button>
+      {refused && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 300, width: 200,
+            fontSize: 11, lineHeight: 1.4, color: 'var(--text-primary)', background: 'var(--bg-surface)',
+            border: '1px solid var(--anthropic-orange)', borderRadius: 8, padding: '8px 10px',
+            boxShadow: '0 8px 20px -6px rgba(0,0,0,0.5)',
+          }}
+        >
+          {lang === 'pt'
+            ? `Máximo de ${MAX_PINNED} sessões fixadas. Desafixe uma para fixar outra.`
+            : `At most ${MAX_PINNED} pinned sessions. Unpin one to pin another.`}
+        </div>
+      )}
+    </span>
+  )
+}
+
+// ---- the modal (grid card-open + terminal maximize) ----------------------------------------------
+
+/** One overlay, used for two things the coordinator kept as one: opening a card in the GRID (so the
+ *  grid never stretches when a card expands) and MAXIMIZING the terminal (where the box is wide
+ *  enough to read a 200+ column pane at a larger scale). `esc` or a click outside closes it. */
+function CardModal({ statusPill, harness, title, meta, lang, onClose, children }: {
+  statusPill: React.ReactNode
+  harness?: string
+  title: string
+  meta: React.ReactNode
+  lang: 'pt' | 'en'
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  const isMobile = useIsMobile()
+  useEffect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => { document.body.style.overflow = prev; document.removeEventListener('keydown', onKey) }
+  }, [onClose])
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9998, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'center', padding: isMobile ? 0 : 24,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: isMobile ? '100%' : 'min(1400px, 95vw)', height: isMobile ? '100%' : '92vh',
+          background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+          borderRadius: isMobile ? 0 : 12, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0,
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            {statusPill}
+            <HarnessBadge harness={harness} />
+            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }} title={title}>
+              {title}
+            </span>
+            <button
+              onClick={onClose}
+              title={lang === 'pt' ? 'Fechar' : 'Close'}
+              aria-label={lang === 'pt' ? 'Fechar' : 'Close'}
+              style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                width: isMobile ? 40 : 30, height: isMobile ? 40 : 30, borderRadius: 8,
+                border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0,
+              }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+          {meta}
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ---- the two card variants -----------------------------------------------------------------------
 
-function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleetAction, theme }: SessionCardProps & {
+function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleetAction, theme, viewMode }: SessionCardProps & {
   fleetRow: FleetRow
   onFleetAction: NonNullable<SessionCardProps['onFleetAction']>
 }) {
+  const isGrid = viewMode === 'grid'
   const [expanded, setExpanded] = useState(false)
+  const modalOpen = useOpenModalSession() === s.session_id
+  const setModalOpen = (open: boolean) => setOpenModalSession(open ? s.session_id : null)
   const [showResumeModal, setShowResumeModal] = useState(false)
   const ctrl = useSessionActionsController(fleetRow, lang, onFleetAction)
   // The state indicator reads the FLEET — the same source the primary action reads — so the pill,
-  // the accent and the lead action can never contradict each other. The `/api/live-sessions`
-  // activity poll drives the history rows; a live row is lit by the row that is actually driving it.
+  // the accent and the lead action can never contradict each other.
   const accent = fleetStateColor(fleetRow.state)
   const primary = primaryAction(fleetRow)
   const watchable = isWatchable(fleetRow.state)
   const isLive = Boolean(isPinned || resumeCommand(s))
 
+  // In the GRID, opening never expands inline (that would stretch the whole row to the tallest card)
+  // — it opens the modal, so the layout never moves. In the LIST there is no grid to break, so it
+  // expands inline. The primary action and the menu route through the same door.
+  const openCard = () => { if (isGrid) setModalOpen(true); else setExpanded(v => !v) }
+
+  const statusPill = <StatusPill color={accent} label={fleetRow.stateLabel} />
+  const meta = <CardMeta s={s} fleetRow={fleetRow} lang={lang} />
+
+  // `large` = inside the modal (fill the height, no maximize button); `open` gates the transcript fetch.
+  const body = (large: boolean, open: boolean) => (
+    <>
+      {watchable && <TerminalRegion id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} fill={large} onMaximize={large ? undefined : () => setModalOpen(true)} />}
+      <SessionActionsPanel ctrl={ctrl} />
+      <DetailsBlock s={s} open={open} isLive={isLive} lang={lang} />
+      <CardChips s={s} lang={lang} />
+      <CardFooterButtons s={s} lang={lang} onSelect={onSelect} onResume={() => setShowResumeModal(true)} />
+    </>
+  )
+
   return (
     <>
       {showResumeModal && <ResumeCommandModal s={s} lang={lang} onClose={() => setShowResumeModal(false)} />}
+      {modalOpen && (
+        <CardModal statusPill={statusPill} harness={s.harness} title={titleOf(s)} meta={meta} lang={lang} onClose={() => setModalOpen(false)}>
+          {body(true, true)}
+        </CardModal>
+      )}
       <CardShell
         accent={accent}
-        expanded={expanded}
-        onToggle={() => setExpanded(v => !v)}
-        statusPill={<StatusPill color={accent} label={fleetRow.stateLabel} />}
+        expanded={isGrid ? false : expanded}
+        onToggle={openCard}
+        statusPill={statusPill}
         harness={s.harness}
         title={titleOf(s)}
         right={
           <>
-            {primary && <PrimaryButton primary={primary} lang={lang} onExpand={() => setExpanded(true)} onPick={ctrl.pick} />}
-            <SessionActionsMenu ctrl={ctrl} onActivate={() => setExpanded(true)} />
+            <PinButton sessionId={s.session_id} lang={lang} />
+            {primary && <PrimaryButton primary={primary} lang={lang} onExpand={openCard} onPick={ctrl.pick} />}
+            <SessionActionsMenu ctrl={ctrl} onActivate={openCard} />
           </>
         }
-        meta={<CardMeta s={s} fleetRow={fleetRow} lang={lang} />}
+        meta={meta}
+        affordance={isGrid ? <Maximize2 size={15} /> : (expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />)}
       >
-        {watchable && <TerminalRegion id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} />}
-        <SessionActionsPanel ctrl={ctrl} />
-        <DetailsBlock s={s} open={expanded} isLive={isLive} lang={lang} />
-        <CardChips s={s} lang={lang} />
-        <CardFooterButtons s={s} lang={lang} onSelect={onSelect} onResume={() => setShowResumeModal(true)} />
+        {body(false, expanded)}
       </CardShell>
     </>
   )
 }
 
-function HistorySessionCard({ s, lang, onSelect, isPinned, state }: SessionCardProps) {
+function HistorySessionCard({ s, lang, onSelect, isPinned, state, viewMode }: SessionCardProps) {
+  const isGrid = viewMode === 'grid'
   const [expanded, setExpanded] = useState(false)
+  const modalOpen = useOpenModalSession() === s.session_id
+  const setModalOpen = (open: boolean) => setOpenModalSession(open ? s.session_id : null)
   const [showResumeModal, setShowResumeModal] = useState(false)
   const status = getStatusInfo(state, isPinned)
   const isLive = Boolean(isPinned || resumeCommand(s))
   const time = s.start_time ? format(parseISO(s.start_time), 'MMM d, HH:mm') : ''
+  const openCard = () => { if (isGrid) setModalOpen(true); else setExpanded(v => !v) }
+
+  const statusPill = <StatusPill color={status.color} label={lang === 'pt' ? status.labelPt : status.labelEn} />
+  const meta = <CardMeta s={s} lang={lang} />
+  const body = (open: boolean) => (
+    <>
+      <CardChips s={s} lang={lang} />
+      <DetailsBlock s={s} open={open} isLive={isLive} lang={lang} />
+      <CardFooterButtons s={s} lang={lang} onSelect={onSelect} onResume={() => setShowResumeModal(true)} />
+    </>
+  )
 
   return (
     <>
       {showResumeModal && <ResumeCommandModal s={s} lang={lang} onClose={() => setShowResumeModal(false)} />}
+      {modalOpen && (
+        <CardModal statusPill={statusPill} harness={s.harness} title={titleOf(s)} meta={meta} lang={lang} onClose={() => setModalOpen(false)}>
+          {body(true)}
+        </CardModal>
+      )}
       <CardShell
         accent={status.color}
-        expanded={expanded}
-        onToggle={() => setExpanded(v => !v)}
-        statusPill={<StatusPill color={status.color} label={lang === 'pt' ? status.labelPt : status.labelEn} />}
+        expanded={isGrid ? false : expanded}
+        onToggle={openCard}
+        statusPill={statusPill}
         harness={s.harness}
         title={titleOf(s)}
-        right={<span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>{time}</span>}
-        meta={<CardMeta s={s} lang={lang} />}
+        right={
+          <>
+            <PinButton sessionId={s.session_id} lang={lang} />
+            <span style={{ fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>{time}</span>
+          </>
+        }
+        meta={meta}
+        affordance={isGrid ? <Maximize2 size={15} /> : (expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />)}
       >
-        <CardChips s={s} lang={lang} />
-        <DetailsBlock s={s} open={expanded} isLive={isLive} lang={lang} />
-        <CardFooterButtons s={s} lang={lang} onSelect={onSelect} onResume={() => setShowResumeModal(true)} />
+        {body(expanded)}
       </CardShell>
     </>
   )
