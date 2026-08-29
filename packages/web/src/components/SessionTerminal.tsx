@@ -230,7 +230,12 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1 }: 
         cursorBlink: false,
         cursorStyle: 'block',
         scrollback: 5000,
-        convertEol: false,
+        // The channel joins the pane's rows with a BARE LF (`lines.join('\n')`, no CR). Without EOL
+        // conversion xterm reads `\n` as line-feed only — down a row, SAME column — so every row
+        // after a short one starts where the previous row's text ended, splitting words across
+        // arbitrary columns (a token comes out `GI…THUB_TOKEN`). `convertEol` maps `\n` to CRLF so
+        // each row starts at column 0, which is what makes the render byte-faithful to the frame.
+        convertEol: true,
         theme: xtermTheme(theme),
       })
       termRef.current = term
