@@ -133,34 +133,37 @@ jobs:
             exit 0
           fi
 
-          # Parse semver
-          MAJOR=$(echo $CURRENT | cut -d. -f1)
-          MINOR=$(echo $CURRENT | cut -d. -f2)
-          PATCH=$(echo $CURRENT | cut -d. -f3)
-
-          # Determine bump type from conventional commits
-          BUMP="patch"
-          while IFS= read -r subject; do
-            # SCOPES count. `feat:*` does not match `feat(sessions):`, so every scoped feature in
-            # this repository has been shipping as a patch — a whole cockpit went out as 1.8.2.
-            # The bang can sit on either side of the scope (`feat!:` and `feat(x)!:` are both
-            # conventional), so each is matched with and without one.
-            case "$subject" in
-              feat\!:*|fix\!:*|refactor\!:*|chore\!:*) BUMP="major"; break ;;
-              feat\(*\)\!:*|fix\(*\)\!:*|refactor\(*\)\!:*|chore\(*\)\!:*) BUMP="major"; break ;;
-              feat:*|feat\(*\):*) [ "$BUMP" != "major" ] && BUMP="minor" ;;
-            esac
-            if echo "$subject" | grep -qi "BREAKING CHANGE"; then
-              BUMP="major"; break
-            fi
-          done < <(git log "$RANGE" --pretty=format:"%s")
-
-          # Calculate next version
-          case "$BUMP" in
-            major) NEXT="$((MAJOR+1)).0.0" ;;
-            minor) NEXT="${MAJOR}.$((MINOR+1)).0" ;;
-            patch) NEXT="${MAJOR}.${MINOR}.$((PATCH+1))" ;;
-          esac
+          # Determine the bump and the next version from the range's conventional commits.
+          #
+          # The classification is NOT inlined here any more — it lives in @agentistics/core
+          # (`bumpFromCommits` / `nextVersion`), the ONE tested implementation, and this step reads
+          # the commits and delegates. Two things this step gets right that the old inline loop did
+          # not:
+          #   - `--pretty=tformat:` (NOT `format:`). `format:` omits the terminal newline on the
+          #     LAST record, and `while read` silently drops a final line without one — so the
+          #     OLDEST commit in the range was never classified. When that was the only `feat`,
+          #     the bump fell to the silent `patch` default and a feature shipped as v1.23.1.
+          #   - a NOISY failure. `bumpFromCommits` throws when it is handed nothing to classify, so
+          #     a range with commits but zero readable subjects aborts the release loudly instead
+          #     of quietly emitting a patch. The `if !` below turns that throw into a failed job.
+          #
+          # Records are `%s <US> %b <RS>` so a multi-line body survives; core scans the body for a
+          # `BREAKING CHANGE` footer, which the old subject-only read could not see.
+          if ! RESULT=$(git log "$RANGE" --pretty=tformat:'%s%x1f%b%x1e' | CURRENT="$CURRENT" bun -e '
+            import { bumpFromCommits, nextVersion } from "@agentistics/core"
+            const raw = await Bun.stdin.text()
+            const commits = raw.split("\x1e").map((r) => r.trim()).filter(Boolean).map((r) => {
+              const [subject = "", ...body] = r.split("\x1f")
+              return { subject: subject.trim(), body: body.join("\x1f").trim() }
+            })
+            const bump = bumpFromCommits(commits)
+            process.stdout.write(nextVersion(process.env.CURRENT, bump) + " " + bump)
+          '); then
+            echo "::error::version bump calculation failed for range ${RANGE} — the range has commits but none could be classified (reading defect). Refusing to guess a version."
+            exit 1
+          fi
+          NEXT="${RESULT%% *}"
+          BUMP="${RESULT##* }"
 
           echo "current=$CURRENT"    >> $GITHUB_OUTPUT
           echo "next=$NEXT"          >> $GITHUB_OUTPUT
@@ -226,7 +229,9 @@ jobs:
             echo "## What's changed in v${VERSION}"
             echo ""
 
-            git log "$RANGE" --pretty=format:"%s|%H" | while IFS='|' read -r subject sha; do
+            # `tformat:` (not `format:`) so the last record carries a terminal newline — otherwise
+            # `while read` drops the oldest commit in the range and it vanishes from the changelog.
+            git log "$RANGE" --pretty=tformat:"%s|%H" | while IFS='|' read -r subject sha; do
               short="${sha:0:7}"
               url="https://github.com/${{ github.repository }}/commit/${sha}"
               case "$subject" in

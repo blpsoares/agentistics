@@ -84,7 +84,7 @@ import { Question as WrappedText } from '../Surface'
 import { SessionWizard } from './SessionWizard'
 import { TaskChoice } from '../TaskChoice'
 import {
-  GROUPINGS, breadcrumb, detailLines, groupSessions, selectableIndexes, sessionCells, sessionRows,
+  GROUPINGS, breadcrumb, detailLines, groupSessions, selectableIndexes, selectedRow, idAtRow, searchArrangement, sessionCells, sessionRows,
   QUESTION_ROWS, askRows, fitApprovalPreview, actionLabels, asideRows, asideSelectable,
   asideRowKey, resolveAsideCursor,
   enabledActionIndexes, filterSessions,
@@ -242,6 +242,29 @@ export function Sessions({
    */
   const [cardAnchor, setCardAnchor] = useState<string | undefined>(view?.cardAnchor)
   const [cursor, setCursor] = useState(0)
+  /**
+   * The session id the cursor is GLUED to — the selection's identity, not its position.
+   *
+   * The list re-sorts under the cursor every five seconds (a poll) and the instant a row is marked
+   * (the marked band lifts it to the top). A cursor kept only as a number therefore names a
+   * DIFFERENT session one frame later, and `x` — which kills, silently — fired in that frame hit the
+   * wrong one. `marked` is kept by id for exactly this reason; the cursor now is too. Held in a ref,
+   * not state: it must be readable at the moment of the keypress and updating it must never itself
+   * force a render.
+   */
+  const glueRef = useRef<string | undefined>(undefined)
+  /**
+   * Send the cursor to the TOP and drop the glue, so the top row is selected by position again.
+   *
+   * The gesture behind every filter/grouping/search change: those reset to the top, and keeping the
+   * old glue would hold the selection on the previous session wherever it now sits instead. The
+   * reconcile effect re-adopts the top session's id immediately after, so the cursor still follows
+   * THAT row through the next reorder.
+   */
+  const toTop = useCallback(() => {
+    setCursor(0)
+    glueRef.current = undefined
+  }, [])
   const [ask, setAsk] = useState<Ask | null>(null)
   const [query, setQuery] = useState('')
   /**
@@ -334,8 +357,8 @@ export function Sessions({
   const projectFilter = filters.project?.[0] ?? null
   const pressShortcut = useCallback((k: StatusShortcut) => {
     setFilters(f => ({ ...f, status: applyShortcut(f.status ?? ACTIVE_STATES, k) }))
-    setCursor(0)
-  }, [])
+    toTop()
+  }, [toTop])
   /** Pick ONE value on a dimension, or clear it — the task and project sections' gesture. */
   const scopeTo = useCallback((id: SessionDimensionId, value: string | null) => {
     setFilters(f => {
@@ -344,8 +367,8 @@ export function Sessions({
       else next[id] = [value]
       return next
     })
-    setCursor(0)
-  }, [])
+    toTop()
+  }, [toTop])
   const [hideDetail, setHideDetail] = useState(view?.hideDetail ?? false)
   /**
    * The rows the user MARKED — a highlighter, not a selection.
@@ -412,6 +435,11 @@ export function Sessions({
   const words = useMemo(() => sessionWordBook(s), [s])
   // The only fact a `keyOf` needs that is not on the session itself.
   const dimensionCtx = useMemo(() => ({ marked }), [marked])
+  // While a search is active the list is drawn FLAT and newest-first, whatever the user's grouping
+  // is — a grouped search scatters its hits across bands and makes you hunt the screen for them.
+  // It is an override on the DRAWING only: the stored grouping/cascade/order are untouched, so
+  // clearing the query restores the arrangement with nothing to put back. See `searchArrangement`.
+  const searchView = searchArrangement(query.trim() !== '', grouping, cascade, order)
   const rows = useMemo(() => sessionRows(groupSessions(
     filterSessions(
       (fleet?.sessions ?? []).filter(v =>
@@ -429,12 +457,12 @@ export function Sessions({
       transcript?.ids,
       active,
     ),
-    grouping,
+    searchView.grouping,
     words,
     fleet?.finishedTasks ?? [],
-    order,
+    searchView.order,
     dimensionCtx,
-    cascade,
+    searchView.cascade,
     // The heading is passed only when something ACTUALLY fell. `sessionRows` treats an absent word
     // as "there is no such section", so on an ordinary machine the reading order is unchanged
     // rather than carrying an empty block that exists to say nothing.
@@ -482,13 +510,50 @@ export function Sessions({
   )
   const badges = useMemo(() => cardBadges(rows), [rows])
 
-  // Clamped on every render rather than corrected in an effect: a session that ends between two
-  // polls shortens the list under the cursor, and a stored index would point past the end for one
-  // frame — which is the frame the user presses enter on.
-  const at = selectable.length === 0 ? -1 : Math.min(cursor, selectable.length - 1)
+  // Resolved by IDENTITY every render: the row the glued session is on NOW, wherever the sort left
+  // it. `cursor` survives only as the fallback for when that session is gone — a session that ends
+  // between two polls shortens the list, and the clamp then lands the cursor on the row that took
+  // its place rather than past the end. See `selectedRow`.
+  const at = selectedRow(rows, selectable, glueRef.current, cursor)
   const selected: ControlSession | undefined = at < 0
     ? undefined
     : (rows[selectable[at]!] as Extract<SessionRow, { kind: 'session' }>).session
+
+  /**
+   * Move the cursor to a selectable position AND glue it to whatever session is there.
+   *
+   * Every navigation goes through here rather than a bare `setCursor`, so the identity and the
+   * number are set together and can never disagree — the moment they do is the moment `x` kills the
+   * wrong session.
+   */
+  const moveTo = useCallback((index: number) => {
+    const max = selectable.length - 1
+    if (max < 0) return
+    const clamped = Math.max(0, Math.min(index, max))
+    setCursor(clamped)
+    glueRef.current = idAtRow(rows, selectable, clamped)
+  }, [rows, selectable])
+
+  /**
+   * Keep the glue honest across every reorder the user did not cause.
+   *
+   * Runs after each render. When the glued session is still on screen it is a no-op; when it is
+   * absent (first render, or after `toTop` dropped it, or the session ended) it ADOPTS the currently
+   * resolved row, so the cursor follows a concrete session by identity from then on. It also syncs
+   * the numeric `cursor` to the resolved index so navigation deltas and the persisted page start
+   * from the right row. Setting a ref never re-renders; the one `setCursor` is guarded and converges.
+   */
+  useEffect(() => {
+    if (at < 0) { glueRef.current = undefined; return }
+    const here = idAtRow(rows, selectable, at)
+    const present = glueRef.current !== undefined
+      && selectable.some(r => {
+        const row = rows[r]
+        return row?.kind === 'session' && row.session.id === glueRef.current
+      })
+    if (!present) glueRef.current = here
+    if (at !== cursor) setCursor(at)
+  }, [rows, selectable, at, cursor])
 
   // The detail pane asks for exactly what it has to say, and the list absorbs the difference. A
   // pane sized to a constant leaves dead rows under it — air under a pane is a fault, and a list
@@ -916,8 +981,8 @@ export function Sessions({
     setShowDone(true)
     setOrder({ by: 'recent', dir: 'desc' })
     setQuery('')
-    setCursor(0)
-  }, [])
+    toTop()
+  }, [toTop])
 
   const resetView = useCallback(() => {
     setGrouping(groupingOf(DEFAULT_SESSION_VIEW.grouping))
@@ -932,15 +997,15 @@ export function Sessions({
     setLayout(DEFAULT_SESSION_VIEW.layout ?? 'list')
     setMarked(new Set(DEFAULT_MARKED))
     setQuery('')
-    setCursor(0)
-  }, [])
+    toTop()
+  }, [toTop])
 
   /** Run whatever an aside row means — the same path a key and a click both take. */
   const runAside = useCallback((index: number) => {
     const row = asideList[index]
     if (!row) return
     if (row.kind === 'action') { if (row.enabled) runAction(row.action); return }
-    if (row.kind === 'group') { setGrouping(row.value); setCursor(0); return }
+    if (row.kind === 'group') { setGrouping(row.value); toTop(); return }
     if (row.kind === 'layout') { setLayout(row.value); return }
     if (row.kind === 'task') { scopeTo('task', row.all ? null : row.name); return }
     if (row.kind === 'project') { scopeTo('project', row.name || null); return }
@@ -950,24 +1015,24 @@ export function Sessions({
       setOrder(o => (o.by === row.value
         ? { by: o.by, dir: o.dir === 'desc' ? 'asc' : 'desc' }
         : { by: row.value, dir: DEFAULT_ORDER.dir }))
-      setCursor(0)
+      toTop()
       return
     }
     if (row.kind === 'state') {
       // The never-empty rule lives in `toggleValue` now, where the keyboard reaches it too.
       setFilters(f => ({ ...f, status: toggleValue(f.status ?? ACTIVE_STATES, row.value) }))
-      setCursor(0)
+      toTop()
       return
     }
     if (row.kind !== 'toggle') return
     if (row.toggle === 'history') return pressShortcut('history')
     if (row.toggle === 'active') return pressShortcut('active')
-    setCursor(0)
+    toTop()
     if (row.toggle === 'cascade') return setCascade(v => !v)
     if (row.toggle === 'done') return setShowDone(v => !v)
     if (row.toggle === 'named') return setShowNamed(v => !v)
     return setHideDetail(v => !v)
-  }, [asideList, runAction, resetView, pressShortcut, scopeTo])
+  }, [asideList, runAction, resetView, pressShortcut, scopeTo, toTop])
 
   useInput((input, key) => {
     const nav: NavKey = {
@@ -1059,7 +1124,7 @@ export function Sessions({
     // could only be undone by opening the field and clearing it, and the field re-submitted the old
     // query on an empty enter — so a typo in the search box was a list that could not be got back.
     if (key.escape) {
-      if (query) { setQuery(''); setCursor(0); return }
+      if (query) { setQuery(''); toTop(); return }
       if (projectFilter !== null) { scopeTo('project', null); return }
       if (taskFilter !== null) { scopeTo('task', null); return }
       return
@@ -1171,7 +1236,7 @@ export function Sessions({
     // grid would send the cursor from the top-left card to the bottom-RIGHT one.
     if (grid && selectable.length > 0) {
       const here = Math.max(0, at)
-      const to = (n: number) => setCursor(Math.max(0, Math.min(n, selectable.length - 1)))
+      const to = (n: number) => moveTo(n)
       // Band to band rather than by `cols`: with grouping on, a band holding a one-card group is
       // shorter than the grid is wide, and stepping by `cols` jumped clean over the band below it.
       const step = (dy: number) => to(cardStep(pages, here, dy))
@@ -1191,7 +1256,7 @@ export function Sessions({
 
     if (selectable.length > 0) {
       const next = resolveListKey(nav, Math.max(0, at), selectable.length)
-      if (next !== at) setCursor(next)
+      if (next !== at) moveTo(next)
     }
   }, { isActive: isActive && ask === null })
 
@@ -1240,8 +1305,8 @@ export function Sessions({
     if (anchored.current || cards.length === 0 || !view?.cardAnchor) return
     anchored.current = true
     const index = cards.findIndex(v => v.id === view.cardAnchor)
-    if (index >= 0) setCursor(index)
-  }, [cards, view?.cardAnchor])
+    if (index >= 0) moveTo(index)
+  }, [cards, view?.cardAnchor, moveTo])
 
   // Written whenever any part of the arrangement moves, rather than at each call site: four setters
   // that each had to remember to persist is four places for one to be forgotten. It waits for the
@@ -1337,7 +1402,7 @@ export function Sessions({
     if (wheel !== 0) {
       if (selectable.length === 0) return
       const next = Math.min(Math.max(0, Math.max(0, at) + wheel), selectable.length - 1)
-      return setCursor(next)
+      return moveTo(next)
     }
     if (!isActivation(p)) return
 
@@ -1419,7 +1484,7 @@ export function Sessions({
           // else to set and nothing that can fall out of step.
           if (hit) {
             const next = pages[hit === 'next' ? pageAt + 1 : pageAt - 1]
-            if (next) setCursor(Math.min(next.items[0] ?? 0, selectable.length - 1))
+            if (next) moveTo(next.items[0] ?? 0)
           }
           return
         }
@@ -1430,7 +1495,7 @@ export function Sessions({
           x: gx,
           y: gy,
         })
-        if (index !== null && index < selectable.length) setCursor(index)
+        if (index !== null && index < selectable.length) moveTo(index)
         return
       }
       // The column HEADER is paid for as well as the summary row. Without it every click in the
@@ -1440,7 +1505,7 @@ export function Sessions({
       if (row < 0 || row >= rows.length) return
       const found = selectable.indexOf(row)
       if (found < 0) return
-      setCursor(found)
+      moveTo(found)
       // The X at the right edge. It SELECTS the row first and then asks — so the confirmation names
       // the session under the pointer, never the one that happened to be selected before.
       const entry = rows[row]
@@ -1592,9 +1657,9 @@ export function Sessions({
           width={width}
           height={height}
           isActive={isActive}
-          onGrouping={g => { setGrouping(g); setCursor(0) }}
+          onGrouping={g => { setGrouping(g); toTop() }}
           onShowClosed={() => pressShortcut('history')}
-          onShowNamed={() => { setShowNamed(v => !v); setCursor(0) }}
+          onShowNamed={() => { setShowNamed(v => !v); toTop() }}
           onToggleScope={t => setScopes(sc => toggleScope(sc, t))}
           onToggleAllScopes={() => setScopes(toggleAllScopes)}
           onClose={() => setAsk(null)}
@@ -1978,7 +2043,7 @@ export function Sessions({
               // that stopped this being live: a narrowing list moves rows out from under the
               // selection, so keeping the old index points at whatever slid into that slot. Row 0
               // is the best match to look at anyway.
-              onQuery={q => { setQuery(q); setCursor(0) }}
+              onQuery={q => { setQuery(q); toTop() }}
               fleet={fleet}
             />
           ) : (

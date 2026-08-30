@@ -626,6 +626,33 @@ const FAKE_FLEET: ControlSessions = {
       state: 'unknown', stateLabel: 'external', actionable: false,
       startedAt: Date.now() - 40 * 60_000, attached: false,
     },
+    // Several conversations under ONE name, all off — the DUPLICATE-NAME case (a coordinator
+    // reopened again and again). They share a title and a project, and are told apart ONLY by the
+    // never-dropped `id` column and the per-row "ended" time. This is the awkward case behind the
+    // "why do I see the same session five times" report: rendered here, the rows are distinct
+    // (distinct ids co1/co2/co3), which is the proof that identical-LOOKING rows can only come from
+    // records that share an id — a de-dup question upstream, not a drawing one here.
+    {
+      id: 'closed:co1', title: 'COORDENADOR AIPE-ELETROMIDIA', harness: 'claude',
+      cwd: '/home/dev/aipe-eletromidia', project: 'aipe-eletromidia',
+      state: 'closed', stateLabel: 'closed', actionable: false,
+      resume: { sessionId: 'co1', title: 'COORDENADOR AIPE-ELETROMIDIA' },
+      startedAt: Date.now() - 9 * 60 * 60_000, endedAt: Date.now() - 8 * 60 * 60_000, attached: false,
+    },
+    {
+      id: 'closed:co2', title: 'COORDENADOR AIPE-ELETROMIDIA', harness: 'claude',
+      cwd: '/home/dev/aipe-eletromidia', project: 'aipe-eletromidia',
+      state: 'closed', stateLabel: 'closed', actionable: false,
+      resume: { sessionId: 'co2', title: 'COORDENADOR AIPE-ELETROMIDIA' },
+      startedAt: Date.now() - 5 * 60 * 60_000, endedAt: Date.now() - 4 * 60 * 60_000, attached: false,
+    },
+    {
+      id: 'closed:co3', title: 'COORDENADOR AIPE-ELETROMIDIA', harness: 'claude',
+      cwd: '/home/dev/aipe-eletromidia', project: 'aipe-eletromidia',
+      state: 'closed', stateLabel: 'closed', actionable: false,
+      resume: { sessionId: 'co3', title: 'COORDENADOR AIPE-ELETROMIDIA' },
+      startedAt: Date.now() - 1 * 60 * 60_000, endedAt: Date.now() - 30 * 60_000, attached: false,
+    },
     {
       id: 'closed:1', title: 'wire up the billing basis', harness: 'claude',
       cwd: '/home/dev/agentistics', project: 'agentistics', task: 'billing',
