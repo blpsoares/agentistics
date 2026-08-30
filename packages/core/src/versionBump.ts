@@ -32,8 +32,17 @@ export interface Commit {
   body?: string
 }
 
-/** A `BREAKING CHANGE` / `BREAKING-CHANGE` marker, per the Conventional Commits spec. */
-const BREAKING = /BREAKING[ -]CHANGE/i
+/**
+ * A breaking-change FOOTER, per the Conventional Commits spec: `BREAKING CHANGE:` (or the synonym
+ * `BREAKING-CHANGE:`) on a LINE OF ITS OWN, with the mandatory `:` separator. Anchored to the start
+ * of a line (`m` flag) so a mention in prose, mid-paragraph, or wrapped in backticks — which carries
+ * no line-leading token — is NOT a declaration. That distinction is the whole point: a substring
+ * scan read a52ba8b's own body (which describes the footer mechanism in backticked prose) as a
+ * break and rolled a false major. The colon after the token is what separates a footer from prose,
+ * so it is required. `[ \t]*` tolerates leading indentation without letting a token float into the
+ * middle of a line.
+ */
+const BREAKING_FOOTER = /^[ \t]*BREAKING[ -]CHANGE:/im
 /**
  * `type` or `type(scope)`, an optional `!`, then the mandatory `:` — matches `feat:`, `feat(web):`,
  * `feat!:`, `feat(web)!:`. Group 1 is the type; group 2 is the bang (present only when breaking).
@@ -51,8 +60,11 @@ export function classifyCommit(commit: Commit): SemverBump | null {
   const m = CONVENTIONAL.exec(subject)
   // A `!` before the colon marks a breaking change regardless of type (`feat!:`, `chore(x)!:`).
   if (m && m[2] === '!') return 'major'
-  // A `BREAKING CHANGE` marker in the subject or body is breaking too (the spec's footer form).
-  if (BREAKING.test(subject) || BREAKING.test(body)) return 'major'
+  // The spec's other breaking form is a FOOTER in the body — a line of its own, `BREAKING CHANGE:`
+  // (or `BREAKING-CHANGE:`). Only the footer counts: a mention in prose or inside backticks is a
+  // description, not a declaration. The subject carries no footer — its breaking form is the `!`
+  // above — so only the body is scanned.
+  if (BREAKING_FOOTER.test(body)) return 'major'
   if (m && m[1]!.toLowerCase() === 'feat') return 'minor'
   // A recognised conventional commit that is not a feature (fix, chore, docs, …) is a patch.
   if (m) return 'patch'
