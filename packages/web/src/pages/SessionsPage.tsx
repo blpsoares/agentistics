@@ -16,7 +16,6 @@ import { Bell, BellOff, Clock, Settings, Sparkles } from 'lucide-react'
 import type { SessionMeta } from '@agentistics/core'
 import type { AppContext } from '../lib/app-context'
 import { RecentSessions } from '../components/RecentSessions'
-import { SessionTerminalPanel } from '../components/SessionTerminalPanel'
 import { useFleet, useFleetIndex } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
 import {
@@ -235,21 +234,19 @@ export default function SessionsPage() {
         </div>
       )}
 
-      {/* The live terminal of a selected session — a panel WITHIN the tab, machine mode only. Gated
-          on the same fleet availability the list uses, which is exactly what the stream channel
-          gates on too (a central 404s, an exposed profile 403s). The list below stays visible. */}
-      {!isCentral && !fleetUnsupported && !fleet.unavailable && (
-        <SessionTerminalPanel rows={fleet.sessions} lang={lang} theme={theme} />
-      )}
-
       <RecentSessions
         sessions={derived.filteredSessions}
         lang={lang}
+        theme={theme}
         onSelect={setSelectedSession}
         pinnedIds={liveIds}
         activities={liveActivities}
         fleet={fleetIdx}
         onFleetAction={act}
+        // The live terminal now lives INSIDE each session's card (expand a row to watch it), so the
+        // machine's live work is what you see first: grouped by repo, only the active sessions.
+        defaultGrouping="repo"
+        defaultStatus="active"
         title={<>
           <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex' }}><Clock size={18} /></span>
           {pt ? 'Sessões' : 'Sessions'}
