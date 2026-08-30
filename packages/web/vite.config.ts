@@ -23,8 +23,15 @@ export default defineConfig({
         background_color: '#0f0f12',
         theme_color: '#D97706',
         icons: [
-          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+          // Transparent mark, no backdrop — what desktop taskbars/docks draw verbatim.
+          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          // Opaque plate, glyph confined to the safe-zone circle — for OSes (Android/ChromeOS)
+          // that crop icons to their own adaptive shape. A maskable icon must stay opaque
+          // edge-to-edge, or the crop reveals holes; it must never double as the 'any' icon,
+          // or the same edge-to-edge plate is what painted the black square being fixed here.
+          { src: '/icons/icon-192-maskable.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: '/icons/icon-512-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       workbox: {
