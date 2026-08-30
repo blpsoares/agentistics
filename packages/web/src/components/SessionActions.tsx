@@ -1,12 +1,16 @@
 /**
  * SessionActions — what you can do with ONE session, split into a MENU and a PANEL.
  *
- * It replaced a flat bar of eight buttons drawn under every card. A row is not a toolbar: the eight
- * verbs (`Answer its question`, `Send a prompt`, `Rename`, `Note`, `Task`, `Open whole task`,
- * `Finish task`, `Stop session`) now live behind a kebab MENU, and only the state's ONE lead action
- * stays on the row (decided by the pure `primaryAction`). The forms, the confirm, the dialog to
- * answer, the attach command and the result all render in the PANEL, inside the session's expanded
- * accordion.
+ * It replaced a flat bar of eight buttons drawn under every card. A row is not a toolbar: the fleet
+ * verbs (`Answer its question`, `Send a prompt`, `Rename`, `Note`, `Task`, `Stop session`) live
+ * behind a kebab MENU, and only the state's ONE lead action stays on the row (decided by the pure
+ * `primaryAction`). `Open whole task` / `Finish task` are DROPPED from the menu entirely (`HIDDEN_VERBS`
+ * below) — never rendered, never pickable — because the card is session control, not task
+ * bookkeeping; those two belong to the fleet cockpit. The menu also carries non-fleet items the CARD
+ * itself decides on (`extraItems`, e.g. "Session metrics") — listed above the fleet verbs, since a
+ * menu already opened to act on a session is also where you look to inspect it. The forms, the
+ * confirm, the dialog to answer, the attach command and the result all render in the PANEL, inside
+ * the session's expanded accordion.
  *
  * The rules the bar carried are kept, because they are what make this honest:
  *  - **A verb this row cannot take is DISABLED and refuses in a SENTENCE**, never silently inert —
@@ -109,6 +113,18 @@ function usePromptAuditForSession(sessionId: string): PromptAuditEntry[] {
 
 /** Verbs that end work and are asked about before they run. */
 const CONFIRM_VERBS: ReadonlySet<FleetActionId> = new Set<FleetActionId>(['kill'])
+
+/** Task bookkeeping verbs — deliberately never rendered in the menu. The card is session control,
+ *  not task management; these two belong to the fleet cockpit, not the dashboard. */
+const HIDDEN_VERBS: ReadonlySet<FleetActionId> = new Set<FleetActionId>(['openTask', 'finishTask'])
+
+/** A non-fleet item the card mixes into the menu (e.g. "Session metrics") — the menu is where you
+ *  act on a session, and also where you go to inspect it. */
+export interface SessionMenuExtraItem {
+  key: string
+  label: string
+  onClick: () => void
+}
 
 type ActFn = (req: { id: string; action: FleetActionId; text?: string; choice?: number })
   => Promise<{ ok: boolean; message: string }>
@@ -234,7 +250,11 @@ function btnStyle(kind: 'plain' | 'danger' | 'primary', touch: number, isMobile:
  * Picking one runs it or opens its form in the panel (via the shared controller) — and calls
  * `onActivate`, which the card uses to open the accordion so whatever the pick produced is visible.
  */
-export function SessionActionsMenu({ ctrl, onActivate }: { ctrl: SessionActionsController; onActivate: () => void }) {
+export function SessionActionsMenu({ ctrl, onActivate, extraItems }: {
+  ctrl: SessionActionsController
+  onActivate: () => void
+  extraItems?: SessionMenuExtraItem[]
+}) {
   const t = T[ctrl.lang]
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
@@ -279,7 +299,28 @@ export function SessionActionsMenu({ ctrl, onActivate }: { ctrl: SessionActionsC
             display: 'flex', flexDirection: 'column', gap: 2,
           }}
         >
-          {ctrl.row.verbs.map(v => {
+          {extraItems && extraItems.length > 0 && (
+            <>
+              {extraItems.map(item => (
+                <button
+                  key={item.key}
+                  role="menuitem"
+                  onClick={() => { item.onClick(); setOpen(false) }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                    padding: isMobile ? '11px 10px' : '7px 10px', borderRadius: 6, border: 'none',
+                    background: 'transparent', cursor: 'pointer', textAlign: 'left',
+                    fontFamily: 'inherit', fontSize: isMobile ? 14 : 12, fontWeight: 500,
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  <span>{item.label}</span>
+                </button>
+              ))}
+              <div style={{ height: 1, background: 'var(--border-subtle)', margin: '4px 2px' }} />
+            </>
+          )}
+          {ctrl.row.verbs.filter(v => !HIDDEN_VERBS.has(v.action)).map(v => {
             const live = v.enabled && PERFORMABLE.has(v.action)
             return (
               <button

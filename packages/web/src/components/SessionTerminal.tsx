@@ -54,6 +54,12 @@ const FONT_SIZE = 13
 const FONT_FAMILY =
   "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace"
 
+/** The floor the fit-to-width auto-shrink may not cross. `11px` is not a made-up number — it is the
+ *  smallest body text already used throughout this dashboard (the metric chips, the card meta row).
+ *  Below it, letters stop being legible characters and become texture; the box scrolls sideways
+ *  instead (see `fit`'s doc comment). */
+const MIN_SCALE = 11 / FONT_SIZE
+
 /**
  * Has the renderer measured its cell dimensions yet? `resize()` schedules a viewport sync that reads
  * `renderService.dimensions`, and doing that before the first measured render (or after dispose)
@@ -120,13 +126,18 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1 }: 
    * Fit the natural cols×rows grid into the box by scaling the PIXELS — never by resizing the
    * buffer, so the column count (and therefore the line breaks) never change.
    *
-   * The base is fit-to-WIDTH: at zoom 1 every column is shown and nothing scrolls, however wide the
-   * pane — a 252-column pane is simply drawn smaller so it fits. There is deliberately NO lower
-   * bound: a floor would leave a very wide pane overflowing a narrow box (exactly the "cut on both
-   * ends" the accordion showed), and the zoom control is the user's way to enlarge instead — the
-   * readable path for a wide pane is the maximize MODAL, where the box is wide enough to hold it. It
-   * is never enlarged past 1:1. The user's zoom multiplies the base; above what the box holds, the
-   * box scrolls. At every scale the bytes on screen are exactly what `capture-pane` drew.
+   * The base is fit-to-WIDTH: at zoom 1 every column is shown — a 252-column pane is drawn smaller
+   * so it fits — but ONLY DOWN TO `MIN_SCALE`. Below that the card was shrinking a pane's own
+   * captured width into illegibility by DEFAULT, with nothing to blame it on: a 157-column capture
+   * (an ordinary width — this is not a wide-pane edge case) in a ~900px card measured a real 11px
+   * row height at "100%", and the same capture in a narrower card falls well under that. The zoom
+   * control could not fix it either, because "100%" there means "no extra zoom on top of the
+   * auto-shrink" — it reads the multiplier, not the rendered size, so the control looked fine while
+   * the text was not. Past `MIN_SCALE` the box SCROLLS horizontally instead of continuing to shrink
+   * (it already supports that — `overflow: auto` on both axes below) — the same trade this module
+   * already makes vertically for a tall capture (see `paint`'s `bufRows`). It is never enlarged past
+   * 1:1. The user's zoom still multiplies the base; above what the box holds, the box scrolls. At
+   * every scale the bytes on screen are exactly what `capture-pane` drew.
    */
   function fit() {
     const box = boxRef.current
@@ -143,7 +154,7 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1 }: 
     host.style.height = `${natH}px`
     const availW = box.clientWidth
     if (!availW) return
-    const base = Math.min(1, availW / natW)
+    const base = Math.max(MIN_SCALE, Math.min(1, availW / natW))
     const s = base * zoomRef.current
     host.style.transform = `scale(${s})`
     host.style.transformOrigin = 'top left'

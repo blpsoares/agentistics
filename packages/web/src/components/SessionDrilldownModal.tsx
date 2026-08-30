@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import {
   X, Clock, FileCode, GitCommit, Wrench, MessageSquare, Bot, Zap, AlertTriangle,
-  CheckCircle, XCircle, Globe, Server, ExternalLink, Workflow as WorkflowIcon,
+  CheckCircle, XCircle, Globe, Workflow as WorkflowIcon,
 } from 'lucide-react'
 import type { SessionMeta, Lang, WorkflowRun } from '@agentistics/core'
 import { sessionTime } from '../lib/sessionTime'
@@ -14,7 +14,6 @@ import {
 import { blendedCostPerToken, blendedSessionCost } from '../hooks/useData'
 import { buildWorkflowSteps } from '../lib/workflowSteps'
 import { fmt as fmtShort, fmtFull, workflowTokens } from '@agentistics/core'
-import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { splitInlinedHistory } from '../lib/transcriptSplit'
@@ -25,8 +24,6 @@ interface Props {
   currency: 'USD' | 'BRL'
   brlRate: number
   lang: Lang
-  /** true when this agentistics instance is running in central (hub) mode */
-  central?: boolean
   /** All dynamic-workflow runs (from /api/data); this modal shows the ones for THIS session. */
   workflows?: WorkflowRun[]
   onClose: () => void
@@ -84,7 +81,7 @@ function sessionCost(session: SessionMeta, globalModelUsage: Props['globalModelU
   return blendedSessionCost(session, blendedCostPerToken(globalModelUsage))
 }
 
-export function SessionDrilldownModal({ session, globalModelUsage, currency, brlRate, lang, central, workflows, onClose }: Props) {
+export function SessionDrilldownModal({ session, globalModelUsage, currency, brlRate, lang, workflows, onClose }: Props) {
   const pt = lang === 'pt'
   /** `Lang` narrowed for the token vocabulary — `lang` is widened elsewhere in this component. */
   const tokLang: Lang = pt ? 'pt' : 'en'
@@ -224,37 +221,6 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            {!central && (
-              <button
-                onClick={() => {
-                  const isNay = session.project_path.includes('.agentistics/nay-chat')
-                  if (isNay) {
-                    window.dispatchEvent(new CustomEvent('agentistics:open-nay-chat', {
-                      detail: { sessionId: session.session_id },
-                    }))
-                  } else {
-                    const harness = session.harness ?? 'claude'
-                    // Match Claude's folder encoding: every non-alphanumeric char → '-'
-                    const encodedDir = session.project_path.replace(/[^a-zA-Z0-9-]/g, '-')
-                    window.dispatchEvent(new CustomEvent('agentistics:open-transcript', {
-                      detail: { harness, sessionId: session.session_id, project: { path: session.project_path, name: session.project_path.split('/').pop() ?? session.project_path, encodedDir } },
-                    }))
-                  }
-                }}
-                title={session.project_path.includes('.agentistics/nay-chat') ? 'Open in Nay Chat' : 'View transcript'}
-                style={{
-                  height: 30, padding: '0 10px',
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  border: '1px solid var(--border)', borderRadius: 8,
-                  background: 'transparent',
-                  color: session.project_path.includes('.agentistics/nay-chat') ? 'var(--anthropic-orange)' : HARNESS_COLORS[session.harness ?? 'claude'],
-                  cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 500,
-                }}
-              >
-                <ExternalLink size={12} />
-                {session.project_path.includes('.agentistics/nay-chat') ? 'Nay' : HARNESS_LABELS[session.harness ?? 'claude']}
-              </button>
-            )}
             <button
               onClick={onClose}
               style={{
@@ -271,23 +237,6 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
         </div>
 
         <div style={{ padding: isMobile ? '14px 16px' : '18px 22px', display: 'flex', flexDirection: 'column', gap: 18 }}>
-
-          {/* First prompt */}
-          {session.first_prompt && (
-            <div style={{
-              background: 'var(--bg-elevated)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 10,
-              padding: '11px 14px',
-            }}>
-              <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 5 }}>
-                {pt ? 'Prompt inicial' : 'First prompt'}
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, fontStyle: 'italic', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                "{session.first_prompt}"
-              </div>
-            </div>
-          )}
 
           {/* KPIs */}
           <div>
@@ -400,11 +349,11 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
             </div>
           )}
 
-          {/* Capabilities chips */}
-          {(session.uses_mcp || session.uses_web_search || session.uses_web_fetch || session.uses_task_agent) && (
+          {/* Capabilities chips — no hardware/server icon here: MCP is a wiring detail, not a
+              session metric, and it read as a stray "hardware" glyph beside the real numbers. */}
+          {(session.uses_web_search || session.uses_web_fetch || session.uses_task_agent) && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {session.uses_task_agent && <Capability icon={<Bot size={10} />} label={pt ? 'Subagents' : 'Subagents'} color="var(--accent-purple, #a855f7)" />}
-              {session.uses_mcp && <Capability icon={<Server size={10} />} label="MCP" color="var(--accent-cyan, #06b6d4)" />}
               {session.uses_web_search && <Capability icon={<Globe size={10} />} label="Web search" color="var(--accent-blue, #3b82f6)" />}
               {session.uses_web_fetch && <Capability icon={<Globe size={10} />} label="Web fetch" color="var(--accent-blue, #3b82f6)" />}
             </div>
