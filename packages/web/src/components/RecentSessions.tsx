@@ -93,6 +93,9 @@ interface Props {
   title?: React.ReactNode
   subtitle?: React.ReactNode
   topActions?: React.ReactNode
+  /** Who a write-channel send is attributed to in the audit — the IAM display name where the
+   *  dashboard has a login, else the browser's own operator id (resolved in `promptAudit`). */
+  authorName?: string
 }
 
 /** `task` is deliberately absent: a task is a fact of the agentop session registry, not of a
@@ -453,7 +456,7 @@ function getSessionBucketKey(
 
 const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
 
-export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities, viewMode: externalViewMode, onViewModeChange, fleet, onFleetAction, theme, defaultGrouping, defaultStatus, title, subtitle, topActions }: Props) {
+export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities, viewMode: externalViewMode, onViewModeChange, fleet, onFleetAction, theme, defaultGrouping, defaultStatus, title, subtitle, topActions, authorName }: Props) {
   const t = T[lang]
 
   // Grouping state — 'project' on the history surfaces; the Sessions page opens on 'repo'.
@@ -861,6 +864,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
                     state={activities?.[s.session_id]}
                     fleetRow={fleet?.get(s.session_id)}
                     onFleetAction={onFleetAction}
+                    authorName={authorName}
                     viewMode="list"
                     theme={theme}
                   />
@@ -972,6 +976,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
                           state={activities?.[s.session_id]}
                           fleetRow={fleet?.get(s.session_id)}
                           onFleetAction={onFleetAction}
+                          authorName={authorName}
                           viewMode={viewMode}
                           theme={theme}
                         />
@@ -1058,6 +1063,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
               state={activities?.[s.session_id]}
               fleetRow={fleet?.get(s.session_id)}
               onFleetAction={onFleetAction}
+              authorName={authorName}
               viewMode={viewMode}
               theme={theme}
             />
@@ -1359,6 +1365,8 @@ interface SessionCardProps {
     => Promise<{ ok: boolean; message: string }>
   viewMode?: 'list' | 'grid'
   theme?: 'dark' | 'light'
+  /** Who a write-channel send is attributed to (threaded to the actions controller for the audit). */
+  authorName?: string
 }
 
 function SessionCard(props: SessionCardProps) {
@@ -1588,8 +1596,15 @@ function CardShell({
         onClick={onToggle}
         style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 16px', cursor: 'pointer', userSelect: 'none', minWidth: 0 }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
+        {/* The header WRAPS. In a grid column (~360px) the action cluster is `flexShrink:0` and wide
+            (a "Send a prompt" button + pin + kebab + maximize), so on one non-wrapping row it crushed
+            the title to nothing and clipped the harness badge — the fields did not fit the column.
+            With `flexWrap`, when the actions cannot sit beside the identity they drop to their own
+            row and the pill + badge + title keep a full-width line where the title is readable; on a
+            wide card everything stays on one row exactly as before. `marginLeft:auto` right-aligns
+            the actions on the shared row (replacing space-between, which mis-spaces a wrapped line). */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, rowGap: 8, minWidth: 0, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 170px', minWidth: 0 }}>
             {statusPill}
             <HarnessBadge harness={harness} />
             <span
@@ -1599,7 +1614,7 @@ function CardShell({
               {title}
             </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, marginLeft: 'auto' }}>
             {right}
             <span style={{ color: 'var(--text-tertiary)', display: 'inline-flex' }}>
               {affordance}
@@ -1947,7 +1962,7 @@ function CardModal({ statusPill, harness, title, meta, lang, onClose, children }
 
 // ---- the two card variants -----------------------------------------------------------------------
 
-function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleetAction, theme, viewMode }: SessionCardProps & {
+function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleetAction, theme, viewMode, authorName }: SessionCardProps & {
   fleetRow: FleetRow
   onFleetAction: NonNullable<SessionCardProps['onFleetAction']>
 }) {
@@ -1956,7 +1971,7 @@ function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleet
   const modalOpen = useOpenModalSession() === s.session_id
   const setModalOpen = (open: boolean) => setOpenModalSession(open ? s.session_id : null)
   const [showResumeModal, setShowResumeModal] = useState(false)
-  const ctrl = useSessionActionsController(fleetRow, lang, onFleetAction)
+  const ctrl = useSessionActionsController(fleetRow, lang, onFleetAction, authorName)
   // The state indicator reads the FLEET — the same source the primary action reads — so the pill,
   // the accent and the lead action can never contradict each other.
   const accent = fleetStateColor(fleetRow.state)

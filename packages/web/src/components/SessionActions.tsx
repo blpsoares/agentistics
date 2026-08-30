@@ -25,10 +25,20 @@
  * against — a second rule set here would be the bug `task-reopen.ts` exists to have fixed once.
  */
 
-import React, { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Check, Copy, MoreVertical, Terminal, X } from 'lucide-react'
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { AlertTriangle, Check, Copy, History, MoreVertical, Send, Terminal, X } from 'lucide-react'
+import { format, parseISO } from 'date-fns'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { PERFORMABLE, TEXT_VERBS, type FleetActionId, type FleetRow, type FleetVerb } from '../lib/fleet'
+import {
+  auditForSession,
+  getPromptAudit,
+  operatorId,
+  recordPromptSend,
+  resolveAuthor,
+  subscribePromptAudit,
+  type PromptAuditEntry,
+} from '../lib/promptAudit'
 
 const T = {
   pt: {
@@ -47,6 +57,12 @@ const T = {
     external: 'Esta sessão não foi iniciada pelo agentop — nada aqui pode agir sobre ela.',
     noTask: 'Esta sessão não está em nenhuma tarefa.',
     working: 'Executando…',
+    sendingTo: 'Escrevendo em',
+    auditTitle: 'Enviados a esta sessão',
+    auditEmpty: 'Nada foi enviado a esta sessão por este navegador ainda.',
+    auditOk: 'entregue',
+    auditFail: 'falhou',
+    by: 'por',
     placeholder: {
       prompt: 'Uma linha para digitar nesta sessão…',
       rename: 'Novo nome para esta sessão…',
@@ -70,6 +86,12 @@ const T = {
     external: 'This session was not started by agentop — nothing here can act on it.',
     noTask: 'This session is not filed under any task.',
     working: 'Running…',
+    sendingTo: 'Writing to',
+    auditTitle: 'Sent to this session',
+    auditEmpty: 'Nothing has been sent to this session from this browser yet.',
+    auditOk: 'delivered',
+    auditFail: 'failed',
+    by: 'by',
     placeholder: {
       prompt: 'One line to type into this session…',
       rename: 'A new name for this session…',
@@ -77,6 +99,12 @@ const T = {
       task: 'Which task this session belongs to…',
     } as Record<string, string>,
   },
+}
+
+/** Subscribe to the write-channel audit log, scoped to one session (newest first). */
+function usePromptAuditForSession(sessionId: string): PromptAuditEntry[] {
+  const all = useSyncExternalStore(subscribePromptAudit, getPromptAudit, getPromptAudit)
+  return auditForSession(all, sessionId)
 }
 
 /** Verbs that end work and are asked about before they run. */
@@ -105,7 +133,14 @@ export interface SessionActionsController {
   refuse: (action: FleetActionId, reason?: string) => void
 }
 
-export function useSessionActionsController(row: FleetRow, lang: 'pt' | 'en', act: ActFn): SessionActionsController {
+export function useSessionActionsController(
+  row: FleetRow,
+  lang: 'pt' | 'en',
+  act: ActFn,
+  /** The IAM display name where the dashboard has a login; else the send is attributed to this
+   *  browser's stable operator id. Threaded from the page so the audit records a real actor. */
+  authorName?: string,
+): SessionActionsController {
   const t = T[lang]
   const [active, setActive] = useState<FleetActionId | null>(null)
   const [text, setText] = useState('')
@@ -116,6 +151,21 @@ export function useSessionActionsController(row: FleetRow, lang: 'pt' | 'en', ac
     setBusy(true)
     setMsg(null)
     const out = await act({ id: row.id, action, ...extra })
+    // AUDIT the write channel. `prompt` is the one verb that types free text INTO the session, so
+    // every one — accepted or refused — leaves a record of who/which session/what/when + the
+    // outcome. Recorded AFTER the server answers, so `ok`/`message` are the truth, and only when
+    // there was actually text (an empty submit never reaches here). See `lib/promptAudit.ts`.
+    if (action === 'prompt' && extra?.text && extra.text.trim()) {
+      recordPromptSend({
+        author: resolveAuthor({ accountName: authorName, operatorId: operatorId() }),
+        sessionId: row.id,
+        sessionTitle: row.title,
+        harness: row.harness,
+        text: extra.text,
+        ok: out.ok,
+        message: out.message,
+      })
+    }
     setBusy(false)
     setActive(null)
     setText('')
@@ -270,6 +320,7 @@ export function SessionActionsPanel({ ctrl }: { ctrl: SessionActionsController }
   const btn = (kind: 'plain' | 'danger' | 'primary') => btnStyle(kind, touch, isMobile)
 
   const killVerb = row.verbs.find(v => v.action === 'kill')
+  const audit = usePromptAuditForSession(row.id)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
@@ -324,6 +375,25 @@ export function SessionActionsPanel({ ctrl }: { ctrl: SessionActionsController }
 
       {/* The inline form for whichever text verb is active. */}
       {active && TEXT_VERBS.has(active) && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+        {/* WHICH session this writes to, named at the moment of typing. Several terminals share one
+            page, and a prompt sent to the wrong one is the accident this line exists to prevent. */}
+        {active === 'prompt' && (
+          <div
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, fontSize: 11, fontWeight: 600,
+              color: 'var(--anthropic-orange)', border: '1px solid rgba(232,105,11,0.35)',
+              background: 'rgba(232,105,11,0.08)', borderRadius: 8, padding: '5px 9px',
+            }}
+          >
+            <Send size={12} style={{ flexShrink: 0 }} />
+            <span style={{ color: 'var(--text-tertiary)', fontWeight: 500, flexShrink: 0 }}>{t.sendingTo}</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${row.title} · ${row.id}`}>
+              {row.title}
+            </span>
+            <code style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 10, opacity: 0.75, flexShrink: 0 }}>{row.id}</code>
+          </div>
+        )}
         <form
           onSubmit={e => { e.preventDefault(); if (text.trim()) void ctrl.run(active, { text }) }}
           style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', minWidth: 0 }}
@@ -348,6 +418,7 @@ export function SessionActionsPanel({ ctrl }: { ctrl: SessionActionsController }
             <X size={13} /> {t.cancel}
           </button>
         </form>
+        </div>
       )}
 
       {/* The confirm for a destructive verb (Stop session). */}
@@ -404,6 +475,64 @@ export function SessionActionsPanel({ ctrl }: { ctrl: SessionActionsController }
           {msg.text}
         </div>
       )}
+
+      {/* The write-channel AUDIT for this session: every prompt this browser sent here, with the
+          author, the exact text, the time, and whether it landed. A send can never disappear in
+          silence — the record outlives the transient result line above. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: 0.2 }}>
+          <History size={12} /> {t.auditTitle}{audit.length > 0 ? ` · ${audit.length}` : ''}
+        </div>
+        {audit.length === 0 ? (
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>{t.auditEmpty}</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
+            {audit.map(e => (
+              <div
+                key={e.id}
+                style={{
+                  fontSize: 11, padding: '6px 8px', borderRadius: 6, background: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <span
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 700, fontSize: 10,
+                      padding: '1px 6px', borderRadius: 999,
+                      color: e.ok ? '#22c55e' : '#ef4444',
+                      background: e.ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
+                      border: `1px solid ${e.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
+                    }}
+                  >
+                    {e.ok ? <Check size={10} /> : <X size={10} />} {e.ok ? t.auditOk : t.auditFail}
+                  </span>
+                  <span style={{ color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }} title={e.at}>
+                    {auditTime(e.at)}
+                  </span>
+                  <span style={{ color: 'var(--text-tertiary)' }}>{t.by}</span>
+                  <span style={{ color: 'var(--text-secondary)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }} title={e.author}>
+                    {e.author}
+                  </span>
+                </div>
+                <span style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{e.text}</span>
+                {!e.ok && e.message && (
+                  <span style={{ color: '#ef4444', fontSize: 10 }}>{e.message}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
+}
+
+/** A recorded send's time, shown compactly; the full ISO stays in the row's `title`. */
+function auditTime(iso: string): string {
+  try {
+    return format(parseISO(iso), 'HH:mm:ss')
+  } catch {
+    return iso
+  }
 }
