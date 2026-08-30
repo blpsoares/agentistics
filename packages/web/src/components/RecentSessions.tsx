@@ -12,7 +12,7 @@ import { getTerminalZoom, setTerminalZoom, subscribeTerminalZoom, ZOOM_STEP, ZOO
 import { getPinnedIds, isSessionPinned, togglePinnedSession, subscribePinnedSessions, pinnedServerSnapshot, MAX_PINNED } from '../lib/pinnedSessions'
 import { getOpenModalSession, setOpenModalSession, subscribeOpenModalSession } from '../lib/openModalSession'
 import { useIsMobile } from '../hooks/useIsMobile'
-import { encodeProjectDir, transcriptSource, transcriptUnavailableNote, type TranscriptMessage } from '../lib/sessionTranscript'
+import { encodeProjectDir } from '../lib/sessionTranscript'
 import { resumeCommand } from '../lib/resumeCommand'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { format, parseISO } from 'date-fns'
@@ -93,6 +93,9 @@ interface Props {
   title?: React.ReactNode
   subtitle?: React.ReactNode
   topActions?: React.ReactNode
+  /** Who a write-channel send is attributed to in the audit — the IAM display name where the
+   *  dashboard has a login, else the browser's own operator id (resolved in `promptAudit`). */
+  authorName?: string
 }
 
 /** `task` is deliberately absent: a task is a fact of the agentop session registry, not of a
@@ -453,7 +456,7 @@ function getSessionBucketKey(
 
 const PAGE_SIZE_OPTIONS = [5, 10, 20, 50]
 
-export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities, viewMode: externalViewMode, onViewModeChange, fleet, onFleetAction, theme, defaultGrouping, defaultStatus, title, subtitle, topActions }: Props) {
+export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities, viewMode: externalViewMode, onViewModeChange, fleet, onFleetAction, theme, defaultGrouping, defaultStatus, title, subtitle, topActions, authorName }: Props) {
   const t = T[lang]
 
   // Grouping state — 'project' on the history surfaces; the Sessions page opens on 'repo'.
@@ -861,6 +864,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
                     state={activities?.[s.session_id]}
                     fleetRow={fleet?.get(s.session_id)}
                     onFleetAction={onFleetAction}
+                    authorName={authorName}
                     viewMode="list"
                     theme={theme}
                   />
@@ -972,6 +976,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
                           state={activities?.[s.session_id]}
                           fleetRow={fleet?.get(s.session_id)}
                           onFleetAction={onFleetAction}
+                          authorName={authorName}
                           viewMode={viewMode}
                           theme={theme}
                         />
@@ -1058,6 +1063,7 @@ export function RecentSessions({ sessions, lang, onSelect, pinnedIds, activities
               state={activities?.[s.session_id]}
               fleetRow={fleet?.get(s.session_id)}
               onFleetAction={onFleetAction}
+              authorName={authorName}
               viewMode={viewMode}
               theme={theme}
             />
@@ -1359,6 +1365,8 @@ interface SessionCardProps {
     => Promise<{ ok: boolean; message: string }>
   viewMode?: 'list' | 'grid'
   theme?: 'dark' | 'light'
+  /** Who a write-channel send is attributed to (threaded to the actions controller for the audit). */
+  authorName?: string
 }
 
 function SessionCard(props: SessionCardProps) {
@@ -1447,93 +1455,6 @@ function CardChips({ s, lang }: { s: SessionMeta; lang: 'pt' | 'en' }) {
   )
 }
 
-/** The transcript, read from the harness's own reader (`lib/sessionTranscript.ts`). Moved out of a
- *  floating popover and into the expanded body, where there is room to read it. */
-function useSessionMessages(s: SessionMeta, open: boolean, isLive: boolean, lang: 'pt' | 'en') {
-  const [messages, setMessages] = useState<TranscriptMessage[] | null>(null)
-  const [loading, setLoading] = useState(false)
-  const source = useMemo(
-    () => transcriptSource({ session_id: s.session_id, project_path: s.project_path, harness: s.harness }),
-    [s.session_id, s.project_path, s.harness],
-  )
-  const unavailable = source.kind === 'unavailable' ? transcriptUnavailableNote(source.harness, lang) : null
-
-  useEffect(() => {
-    if (!open) return
-    // A harness with NO reader says so, rather than reporting a confident emptiness produced by a
-    // request nobody answered.
-    if (source.kind === 'unavailable') { setMessages([]); setLoading(false); return }
-    let interval: ReturnType<typeof setInterval> | null = null
-    const fetchMsgs = () => {
-      fetch(source.url)
-        .then(r => (r.ok ? r.json() : null))
-        .then((msgs: unknown) => {
-          if (Array.isArray(msgs)) setMessages(msgs as TranscriptMessage[])
-          else setMessages(prev => prev ?? [])
-        })
-        .catch(() => setMessages(prev => prev ?? []))
-        .finally(() => setLoading(false))
-    }
-    if (messages === null) setLoading(true)
-    fetchMsgs()
-    const es = new EventSource('/api/events')
-    es.addEventListener('change', fetchMsgs)
-    if (isLive) interval = setInterval(fetchMsgs, 2000)
-    return () => { es.close(); if (interval) clearInterval(interval) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, s.session_id, s.harness, s.project_path, isLive, source])
-
-  return { messages, loading, unavailable }
-}
-
-function DetailsBlock({ s, open, isLive, lang }: { s: SessionMeta; open: boolean; isLive: boolean; lang: 'pt' | 'en' }) {
-  const { messages, loading, unavailable } = useSessionMessages(s, open, isLive, lang)
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {s.first_prompt && (
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: 4 }}>
-            {lang === 'pt' ? 'Prompt Inicial' : 'First Prompt'}
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto' }}>
-            "{s.first_prompt}"
-          </div>
-        </div>
-      )}
-      <div>
-        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', marginBottom: 4 }}>
-          {lang === 'pt' ? 'Últimas mensagens' : 'Latest messages'}
-        </div>
-        {loading ? (
-          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{lang === 'pt' ? 'Carregando...' : 'Loading...'}</div>
-        ) : !messages || messages.length === 0 ? (
-          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic', lineHeight: 1.5 }}>
-            {unavailable ?? (lang === 'pt' ? 'Nenhuma mensagem recente' : 'No recent messages')}
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 200, overflowY: 'auto' }}>
-            {messages.slice(-4).map((m, mi) => (
-              <div key={mi} style={{ fontSize: 11, padding: '6px 8px', borderRadius: 6, background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontWeight: 700, color: m.role === 'user' ? 'var(--accent-blue)' : 'var(--anthropic-orange)' }}>
-                    {m.role === 'user' ? 'User: ' : 'Assistant: '}
-                  </span>
-                  {m.timestamp && (
-                    <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
-                      {format(parseISO(typeof m.timestamp === 'string' ? m.timestamp : new Date(m.timestamp).toISOString()), 'HH:mm:ss')}
-                    </span>
-                  )}
-                </div>
-                <span style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content.slice(0, 220)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 /** The small buttons that open the metrics modal / the resume-command modal. Grouped so both card
  *  variants render them the same way. */
 function CardFooterButtons({ s, lang, onSelect, onResume }: {
@@ -1588,8 +1509,15 @@ function CardShell({
         onClick={onToggle}
         style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 16px', cursor: 'pointer', userSelect: 'none', minWidth: 0 }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
+        {/* The header WRAPS. In a grid column (~360px) the action cluster is `flexShrink:0` and wide
+            (a "Send a prompt" button + pin + kebab + maximize), so on one non-wrapping row it crushed
+            the title to nothing and clipped the harness badge — the fields did not fit the column.
+            With `flexWrap`, when the actions cannot sit beside the identity they drop to their own
+            row and the pill + badge + title keep a full-width line where the title is readable; on a
+            wide card everything stays on one row exactly as before. `marginLeft:auto` right-aligns
+            the actions on the shared row (replacing space-between, which mis-spaces a wrapped line). */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, rowGap: 8, minWidth: 0, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 170px', minWidth: 0 }}>
             {statusPill}
             <HarnessBadge harness={harness} />
             <span
@@ -1599,7 +1527,7 @@ function CardShell({
               {title}
             </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, marginLeft: 'auto' }}>
             {right}
             <span style={{ color: 'var(--text-tertiary)', display: 'inline-flex' }}>
               {affordance}
@@ -1947,7 +1875,7 @@ function CardModal({ statusPill, harness, title, meta, lang, onClose, children }
 
 // ---- the two card variants -----------------------------------------------------------------------
 
-function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleetAction, theme, viewMode }: SessionCardProps & {
+function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleetAction, theme, viewMode, authorName }: SessionCardProps & {
   fleetRow: FleetRow
   onFleetAction: NonNullable<SessionCardProps['onFleetAction']>
 }) {
@@ -1956,13 +1884,12 @@ function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleet
   const modalOpen = useOpenModalSession() === s.session_id
   const setModalOpen = (open: boolean) => setOpenModalSession(open ? s.session_id : null)
   const [showResumeModal, setShowResumeModal] = useState(false)
-  const ctrl = useSessionActionsController(fleetRow, lang, onFleetAction)
+  const ctrl = useSessionActionsController(fleetRow, lang, onFleetAction, authorName)
   // The state indicator reads the FLEET — the same source the primary action reads — so the pill,
   // the accent and the lead action can never contradict each other.
   const accent = fleetStateColor(fleetRow.state)
   const primary = primaryAction(fleetRow)
   const watchable = isWatchable(fleetRow.state)
-  const isLive = Boolean(isPinned || resumeCommand(s))
 
   // In the GRID, opening never expands inline (that would stretch the whole row to the tallest card)
   // — it opens the modal, so the layout never moves. In the LIST there is no grid to break, so it
@@ -1972,14 +1899,15 @@ function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleet
   const statusPill = <StatusPill color={accent} label={fleetRow.stateLabel} />
   const meta = <CardMeta s={s} fleetRow={fleetRow} lang={lang} />
 
-  // `large` = inside the modal (fill the height, no maximize button); `open` gates the transcript fetch.
-  const body = (large: boolean, open: boolean) => (
+  // The card is session CONTROL, not a session dossier: only the metric chips stay on it. The first
+  // prompt / latest-messages block and the "Session metrics" button moved off — the deep-dive lives
+  // one click away, in the drilldown reached from the kebab.
+  const body = (large: boolean) => (
     <>
       {watchable && <TerminalRegion id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} fill={large} onMaximize={large ? undefined : () => setModalOpen(true)} />}
       <SessionActionsPanel ctrl={ctrl} />
-      <DetailsBlock s={s} open={open} isLive={isLive} lang={lang} />
       <CardChips s={s} lang={lang} />
-      <CardFooterButtons s={s} lang={lang} onSelect={onSelect} onResume={() => setShowResumeModal(true)} />
+      <CardFooterButtons s={s} lang={lang} onResume={() => setShowResumeModal(true)} />
     </>
   )
 
@@ -1988,7 +1916,7 @@ function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleet
       {showResumeModal && <ResumeCommandModal s={s} lang={lang} onClose={() => setShowResumeModal(false)} />}
       {modalOpen && (
         <CardModal statusPill={statusPill} harness={s.harness} title={titleOf(s)} meta={meta} lang={lang} onClose={() => setModalOpen(false)}>
-          {body(true, true)}
+          {body(true)}
         </CardModal>
       )}
       <CardShell
@@ -2002,13 +1930,21 @@ function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleet
           <>
             <PinButton sessionId={s.session_id} lang={lang} />
             {primary && <PrimaryButton primary={primary} lang={lang} onExpand={openCard} onPick={ctrl.pick} />}
-            <SessionActionsMenu ctrl={ctrl} onActivate={openCard} />
+            <SessionActionsMenu
+              ctrl={ctrl}
+              onActivate={openCard}
+              extraItems={onSelect ? [{
+                key: 'metrics',
+                label: lang === 'pt' ? 'Métricas da sessão' : 'Session metrics',
+                onClick: () => onSelect(s),
+              }] : undefined}
+            />
           </>
         }
         meta={meta}
         affordance={isGrid ? <Maximize2 size={15} /> : (expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />)}
       >
-        {body(false, expanded)}
+        {body(false)}
       </CardShell>
     </>
   )
@@ -2021,16 +1957,16 @@ function HistorySessionCard({ s, lang, onSelect, isPinned, state, viewMode }: Se
   const setModalOpen = (open: boolean) => setOpenModalSession(open ? s.session_id : null)
   const [showResumeModal, setShowResumeModal] = useState(false)
   const status = getStatusInfo(state, isPinned)
-  const isLive = Boolean(isPinned || resumeCommand(s))
   const time = s.start_time ? format(parseISO(s.start_time), 'MMM d, HH:mm') : ''
   const openCard = () => { if (isGrid) setModalOpen(true); else setExpanded(v => !v) }
 
   const statusPill = <StatusPill color={status.color} label={lang === 'pt' ? status.labelPt : status.labelEn} />
   const meta = <CardMeta s={s} lang={lang} />
-  const body = (open: boolean) => (
+  // History rows have no fleet controller, so no kebab to move "Session metrics" into — it stays a
+  // footer button here (unlike the live card, which routes it through SessionActionsMenu).
+  const body = () => (
     <>
       <CardChips s={s} lang={lang} />
-      <DetailsBlock s={s} open={open} isLive={isLive} lang={lang} />
       <CardFooterButtons s={s} lang={lang} onSelect={onSelect} onResume={() => setShowResumeModal(true)} />
     </>
   )
@@ -2040,7 +1976,7 @@ function HistorySessionCard({ s, lang, onSelect, isPinned, state, viewMode }: Se
       {showResumeModal && <ResumeCommandModal s={s} lang={lang} onClose={() => setShowResumeModal(false)} />}
       {modalOpen && (
         <CardModal statusPill={statusPill} harness={s.harness} title={titleOf(s)} meta={meta} lang={lang} onClose={() => setModalOpen(false)}>
-          {body(true)}
+          {body()}
         </CardModal>
       )}
       <CardShell
@@ -2059,7 +1995,7 @@ function HistorySessionCard({ s, lang, onSelect, isPinned, state, viewMode }: Se
         meta={meta}
         affordance={isGrid ? <Maximize2 size={15} /> : (expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />)}
       >
-        {body(expanded)}
+        {body()}
       </CardShell>
     </>
   )

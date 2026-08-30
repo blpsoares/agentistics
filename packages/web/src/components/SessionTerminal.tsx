@@ -14,11 +14,18 @@
  * FIDELITY vs the box — the fix for the "scattered words" bug. The frame was captured at the pane's
  * OWN width (`f.cols`, routinely 157/200+) and every line is already hard-broken at that width by
  * tmux. Rendering it into an emulator of ANY other column count reflows those lines and scatters the
- * text — so the emulator is always resized to EXACTLY `f.cols × f.rows` and never fitted to the box.
- * A 157-column grid does not fit a card, so instead of reflowing (wrong) or clipping to a scroll
+ * text — so the emulator's COLUMN count is always EXACTLY `f.cols` and never fitted to the box. A
+ * 157-column grid does not fit a card, so instead of reflowing (wrong) or clipping to a scroll
  * window (what read as broken), the whole grid is SCALED to the box with a CSS transform: the layout
  * stays byte-for-byte what `capture-pane` drew, only smaller. `transform` is visual only — it never
- * changes the buffer's column count — so nothing wraps.
+ * changes the buffer's column count — so nothing wraps. The discriminant between a faithful and a
+ * broken terminal is therefore the pane's COLUMN count against the box, and the scale is what
+ * answers it; a session broke precisely when its columns overflowed a box the fit did not shrink.
+ *
+ * SCROLL — the emulator's ROW count is the whole capture (`max(f.rows, f.lines)`), not one screen,
+ * so every shipped line lives on the grid and the fixed-height box scrolls through all of it (see
+ * `paint`). Sizing it to the visible screen alone left the earlier lines in xterm's own scrollback,
+ * which a per-frame `reset()` wiped — so scrolling up never reached the start of the conversation.
  *
  * Timing: `resize()` throws asynchronously inside xterm if it runs before the renderer has measured
  * its cell dimensions (an unmeasured `Viewport.syncScrollArea` reads `dimensions` off `undefined`),
@@ -46,6 +53,12 @@ interface Props {
 const FONT_SIZE = 13
 const FONT_FAMILY =
   "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace"
+
+/** The floor the fit-to-width auto-shrink may not cross. `11px` is not a made-up number — it is the
+ *  smallest body text already used throughout this dashboard (the metric chips, the card meta row).
+ *  Below it, letters stop being legible characters and become texture; the box scrolls sideways
+ *  instead (see `fit`'s doc comment). */
+const MIN_SCALE = 11 / FONT_SIZE
 
 /**
  * Has the renderer measured its cell dimensions yet? `resize()` schedules a viewport sync that reads
@@ -113,13 +126,18 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1 }: 
    * Fit the natural cols×rows grid into the box by scaling the PIXELS — never by resizing the
    * buffer, so the column count (and therefore the line breaks) never change.
    *
-   * The base is fit-to-WIDTH: at zoom 1 every column is shown and nothing scrolls, however wide the
-   * pane — a 252-column pane is simply drawn smaller so it fits. There is deliberately NO lower
-   * bound: a floor would leave a very wide pane overflowing a narrow box (exactly the "cut on both
-   * ends" the accordion showed), and the zoom control is the user's way to enlarge instead — the
-   * readable path for a wide pane is the maximize MODAL, where the box is wide enough to hold it. It
-   * is never enlarged past 1:1. The user's zoom multiplies the base; above what the box holds, the
-   * box scrolls. At every scale the bytes on screen are exactly what `capture-pane` drew.
+   * The base is fit-to-WIDTH: at zoom 1 every column is shown — a 252-column pane is drawn smaller
+   * so it fits — but ONLY DOWN TO `MIN_SCALE`. Below that the card was shrinking a pane's own
+   * captured width into illegibility by DEFAULT, with nothing to blame it on: a 157-column capture
+   * (an ordinary width — this is not a wide-pane edge case) in a ~900px card measured a real 11px
+   * row height at "100%", and the same capture in a narrower card falls well under that. The zoom
+   * control could not fix it either, because "100%" there means "no extra zoom on top of the
+   * auto-shrink" — it reads the multiplier, not the rendered size, so the control looked fine while
+   * the text was not. Past `MIN_SCALE` the box SCROLLS horizontally instead of continuing to shrink
+   * (it already supports that — `overflow: auto` on both axes below) — the same trade this module
+   * already makes vertically for a tall capture (see `paint`'s `bufRows`). It is never enlarged past
+   * 1:1. The user's zoom still multiplies the base; above what the box holds, the box scrolls. At
+   * every scale the bytes on screen are exactly what `capture-pane` drew.
    */
   function fit() {
     const box = boxRef.current
@@ -136,7 +154,7 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1 }: 
     host.style.height = `${natH}px`
     const availW = box.clientWidth
     if (!availW) return
-    const base = Math.min(1, availW / natW)
+    const base = Math.max(MIN_SCALE, Math.min(1, availW / natW))
     const s = base * zoomRef.current
     host.style.transform = `scale(${s})`
     host.style.transformOrigin = 'top left'
@@ -146,17 +164,34 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1 }: 
 
   function paint() {
     const term = termRef.current
+    const box = boxRef.current
     const { frame: f, showCursor: cur } = pendingRef.current
     if (!term || disposedRef.current || !readyRef.current || !f) return
 
-    // EXACTLY the pane's geometry — the one column count at which its lines do not reflow — but only
-    // when it CHANGED and the renderer has measured, so a resize never schedules a viewport sync it
-    // is not ready for (the async `dimensions` throw). If it is not ready this frame, skip the
-    // resize and paint at the current size; the next frame, or the ready-gate, catches up.
-    if (f.cols > 0 && f.rows > 0 && (f.cols !== geomRef.current.cols || f.rows !== geomRef.current.rows) && dimensionsReady(term)) {
+    // SCROLL model. A capture carries up to `TERMINAL_VIEW_LINES` (200) lines of scrollback+screen,
+    // routinely MORE than one pane-height. The emulator is therefore sized to hold EVERY shipped
+    // line at once (`bufRows`), never just the visible screen: the extra lines used to fall into
+    // xterm's own scrollback, which — with a full snapshot `reset()`+`write()` every frame — was
+    // wiped and snapped back to the bottom twice a second, so scrolling up never reached the
+    // conversation. With the whole capture on one grid, the fixed-height BOX (`overflow:auto`)
+    // scrolls through all of it and its scroll position survives every repaint. Columns are still
+    // EXACTLY `f.cols`, so nothing reflows — the fidelity fix is untouched. What is NOT in this 200
+    // is disclosed by the status line's `truncated`; that ceiling is the server's, stated, not hidden.
+    const bufRows = Math.max(f.rows, f.lines)
+
+    // Stick-to-bottom: remember whether the reader was already at the live edge BEFORE the repaint,
+    // so a new frame follows the tail for someone watching live, but never yanks a reader who has
+    // scrolled up to read history. A small threshold absorbs sub-pixel rounding from the scale.
+    const wasAtBottom = !box || (box.scrollTop + box.clientHeight >= box.scrollHeight - 4)
+
+    // EXACTLY the pane's column count — the one width at which its lines do not reflow — with the row
+    // count grown to the whole capture. Only when it CHANGED and the renderer has measured, so a
+    // resize never schedules a viewport sync it is not ready for (the async `dimensions` throw). If
+    // it is not ready this frame, paint at the current size; the next frame, or the ready-gate, catches up.
+    if (f.cols > 0 && bufRows > 0 && (f.cols !== geomRef.current.cols || bufRows !== geomRef.current.rows) && dimensionsReady(term)) {
       try {
-        term.resize(f.cols, f.rows)
-        geomRef.current = { cols: f.cols, rows: f.rows }
+        term.resize(f.cols, bufRows)
+        geomRef.current = { cols: f.cols, rows: bufRows }
       } catch {
         /* geometry can momentarily disagree with the DOM; the next frame corrects it */
       }
@@ -167,16 +202,19 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1 }: 
       // The write callback fires asynchronously; the terminal may have been disposed since (the
       // accordion collapsed, the id changed). Writing to a disposed terminal throws, so bail.
       if (disposedRef.current || termRef.current !== term) return
-      // After the content is laid out, place (or hide) the block cursor. Done in the write callback
-      // so it lands after xterm has parsed the snapshot, not racing it.
+      // After the content is laid out, place (or hide) the block cursor. The frame's cursor is
+      // relative to the VISIBLE screen (the last `f.rows`), so on a taller buffer it is offset down
+      // by the scrollback that precedes the live screen — otherwise the cursor lands in the history.
       if (cur && f.cursor) {
-        term.write(`\x1b[?25h\x1b[${f.cursor.y + 1};${f.cursor.x + 1}H`)
+        const cursorRow = f.cursor.y + Math.max(0, f.lines - f.rows)
+        term.write(`\x1b[?25h\x1b[${cursorRow + 1};${f.cursor.x + 1}H`)
       } else {
         term.write('\x1b[?25l')
       }
-      // Re-fit AFTER the write settles — the grid's natural size is only final once the new
-      // geometry has rendered.
+      // Re-fit AFTER the write settles — the grid's natural size is only final once the new geometry
+      // has rendered — then re-pin to the live edge if that is where the reader was.
       fit()
+      if (wasAtBottom && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight
     })
   }
 
