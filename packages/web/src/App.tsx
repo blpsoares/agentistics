@@ -16,6 +16,7 @@ import {
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import { usePlanBasis } from './hooks/usePlanBasis'
 import { planScopeHarnesses, planScopeNote } from './lib/costBasis'
+import { bootLoading } from './lib/bootPhase'
 import { DEFAULT_CARD_ORDER, migrateCardOrder, type CardId } from './lib/cardOrder'
 import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
@@ -2195,11 +2196,14 @@ export default function AppLayout() {
   // must resolve the session and show the login screen FIRST — otherwise the
   // expected 401 surfaces as a "failed to load" error and the login never shows.
   if (teamSession === undefined) {
-    return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
+    // Still resolving the session — show the honest boot loader, not a silent blank. We also can't
+    // yet tell a 403 auth-hold from a real error (that needs `teamSession.central`), so holding the
+    // loader here is correct as well as honest.
+    return <LoadingScreen lang={lang} loadProgress={loadProgress} />
   }
   // Central: account-based IAM gate (bootstrap → login → app).
   if (teamSession.central) {
-    if (iam === undefined) return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
+    if (iam === undefined) return <LoadingScreen lang={lang} loadProgress={loadProgress} />
     if (iam.needsBootstrap) return <OwnerSetup lang={lang} onDone={() => { reloadIam(); refetch() }} />
     if (!iam.authed) return <Login onAuthed={() => { reloadIam(); refetch() }} />
     // Changing a password is step-up-protected (`server/stepup.ts`), and this screen is returned
@@ -2226,9 +2230,8 @@ export default function AppLayout() {
     return <TeamLogin onAuthed={() => { setTeamSession(s => ({ ...(s ?? { required: true }), required: true, authed: true })); refetch() }} />
   }
 
-  if (loading) {
-    return <LoadingScreen lang={lang} loadProgress={loadProgress} />
-  }
+  // Errors are checked BEFORE the boot loader below: an error means the load settled (`complete()`
+  // cleared `loading`), and it must win — otherwise a failed load would spin the loader forever.
 
   // A 403 on a central is an AUTH state, not a broken server: the gate refuses data until the
   // enrolment (or the sign-in) it is waiting for happens, and the effect above is already
@@ -2278,7 +2281,16 @@ export default function AppLayout() {
     )
   }
 
-  if (!data || !derived) return null
+  // The boot loader stays until the app can actually paint: data fetched, derived stats computed,
+  // AND the first-run prefs (archive choice) resolved. `loading` alone flipped false the instant
+  // /api/data resolved, and the gaps here used to return a SILENT BLANK — the loader vanishing
+  // before the data was ready. `bootLoading` is the single predicate deciding this.
+  if (bootLoading({ loading, hasData: !!data, hasDerived: !!derived, prefsLoaded: archiveChoice !== undefined })) {
+    return <LoadingScreen lang={lang} loadProgress={loadProgress} />
+  }
+  // `bootLoading` already guaranteed both are present; this explicit guard is what narrows them for
+  // TypeScript below. It is not reachable as a blank — it returns the loader too, never `null`.
+  if (!data || !derived) return <LoadingScreen lang={lang} loadProgress={loadProgress} />
 
   // Capture non-null derived for use in nested functions (TypeScript can't narrow closures)
   const d = derived
@@ -2310,11 +2322,10 @@ export default function AppLayout() {
     (filters.models.length > 0 ? 1 : 0) +
     (harnessFilterActive ? 1 : 0)
 
-  // Block the app until the user makes the first-run archive choice. While prefs OR the
-  // team-session flag are still loading render a neutral background to avoid a flash.
-  if (archiveChoice === undefined || teamSession === undefined) {
-    return <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }} />
-  }
+  // Block the app until the user makes the first-run archive choice. `archiveChoice` is guaranteed
+  // resolved here (undefined would have kept `bootLoading` on the loader above) and `teamSession` is
+  // non-undefined since the auth gate at the top — so `null` is the one remaining case: "loaded, not
+  // yet chosen", which is the consent prompt, never a silent blank.
   // A central never shows the archive consent gate: it aggregates members' computed metrics
   // (stored in Mongo) and any self-contributed host data defaults server-side — there's nothing
   // for the operator to consent to here, so the blocking prompt would only annoy.
