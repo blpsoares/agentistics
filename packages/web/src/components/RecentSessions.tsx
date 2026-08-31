@@ -1553,6 +1553,9 @@ const TERM_TONE_COLOR: Record<TerminalTone, string> = {
   live: '#22c55e',
   finished: 'var(--anthropic-orange, #e8690b)',
   ended: 'var(--accent-red, #e0342a)',
+  // A stall is recoverable (there is a reconnect verb), so it is amber — a warning, not the red
+  // fault colour a gone session wears.
+  stalled: 'var(--accent-amber, #f59e0b)',
 }
 
 /** The live screen of THIS session, inside its own accordion. Mounted only while the card is
@@ -1623,10 +1626,11 @@ function TerminalRegion({ id, theme, lang, fill, onMaximize }: {
   onMaximize?: () => void
 }) {
   const isMobile = useIsMobile()
-  const state = useTerminalStream(id)
+  const { state, reconnect } = useTerminalStream(id)
   const status = terminalStatus(state, lang === 'pt' ? 'pt' : 'en')
   const zoom = useTerminalZoom()
   const fixedHeight = isMobile ? 240 : 320
+  const stalled = status.tone === 'stalled'
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, height: fill ? '100%' : undefined, flex: fill ? 1 : undefined }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -1677,7 +1681,24 @@ function TerminalRegion({ id, theme, lang, fill, onMaximize }: {
           <SessionTerminal key={id} frame={state.frame} theme={theme} showCursor={status.showCursor} zoom={zoom} />
         </Suspense>
       </div>
-      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{status.detail}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5, flex: 1, minWidth: 0 }}>{status.detail}</div>
+        {stalled && (
+          <button
+            onClick={(e) => { e.stopPropagation(); reconnect() }}
+            title={lang === 'pt' ? 'Reconectar' : 'Reconnect'}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0,
+              minHeight: isMobile ? 40 : 28, padding: isMobile ? '0 14px' : '4px 12px', borderRadius: 8,
+              fontSize: isMobile ? 13 : 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+              border: `1px solid ${TERM_TONE_COLOR.stalled}`, background: 'transparent', color: TERM_TONE_COLOR.stalled,
+            }}
+          >
+            <RotateCcw size={13} />
+            <span>{lang === 'pt' ? 'Reconectar' : 'Reconnect'}</span>
+          </button>
+        )}
+      </div>
       <style>{`@keyframes ag-term-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }`}</style>
     </div>
   )
@@ -1902,9 +1923,15 @@ function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleet
   // The card is session CONTROL, not a session dossier: only the metric chips stay on it. The first
   // prompt / latest-messages block and the "Session metrics" button moved off — the deep-dive lives
   // one click away, in the drilldown reached from the kebab.
+  // The terminal opens a persistent SSE per mount, and the browser caps how many a single origin may
+  // hold at once (~6 over HTTP/1.1, several already spent on the dashboard's own live channels). So
+  // the INLINE terminal is not mounted while the MODAL is open for this session: rendering both would
+  // hold TWO streams for one id, and the extra one — queued behind the limit — is exactly what leaves
+  // a maximised terminal stuck "connecting". The modal's copy is the one in view; the inline one comes
+  // back when the modal closes.
   const body = (large: boolean) => (
     <>
-      {watchable && <TerminalRegion id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} fill={large} onMaximize={large ? undefined : () => setModalOpen(true)} />}
+      {watchable && (large || !modalOpen) && <TerminalRegion id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} fill={large} onMaximize={large ? undefined : () => setModalOpen(true)} />}
       <SessionActionsPanel ctrl={ctrl} />
       <CardChips s={s} lang={lang} />
       <CardFooterButtons s={s} lang={lang} onResume={() => setShowResumeModal(true)} />
