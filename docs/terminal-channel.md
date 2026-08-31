@@ -110,6 +110,20 @@ The stream emits named SSE events. `: keepalive` comment lines arrive ~every 15s
 A session that merely **exits** does **not** end the stream — it keeps arriving as `frame`s with
 `alive:false`, so the finished screen stays readable. `end` is only for a session that is gone.
 
+### A connection that never delivers must say so — not spin forever
+
+The client opens the stream in a `connecting` state and leaves it only on a `frame` (→ live/finished)
+or an `end`. If **neither** arrives — the stream opened but produced no frame, or the `EventSource`
+is queued behind the browser's per-origin connection limit (~6 over HTTP/1.1, several already spent
+on the dashboard's own live channels) and never actually connects — a "Connecting…" that never
+resolves is indistinguishable from death. So the client (`useTerminalStream`) raises a `stall` after
+`STALL_MS` (10s) without a first frame, and also on an `EventSource` error while still frame-less; the
+status line then reads an honest **"No response"** with a **reconnect** verb, instead of spinning
+forever. A stall **never** blanks a screen that already has a frame: there the last frame stays and
+`EventSource`'s own reconnect handles the blip. Because every watched terminal holds a persistent SSE
+against that same connection budget, the UI must not open more streams than it shows — in particular
+it does not keep the inline terminal mounted while the maximised modal is open for the same session.
+
 ## Security
 
 The read channel inherits the fleet's existing model exactly — it invents no new auth:
