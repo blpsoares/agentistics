@@ -243,6 +243,9 @@ export default function SessionsPage() {
         activities={liveActivities}
         fleet={fleetIdx}
         onFleetAction={act}
+        // Who a prompt is attributed to in the write-channel audit: the IAM display name where the
+        // dashboard has a login, else the browser's own operator id (resolved in promptAudit).
+        authorName={ctx.me?.name}
         // The live terminal now lives INSIDE each session's card (expand a row to watch it), so the
         // machine's live work is what you see first: grouped by repo, only the active sessions.
         defaultGrouping="repo"

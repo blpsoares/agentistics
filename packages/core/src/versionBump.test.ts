@@ -25,6 +25,39 @@ describe('classifyCommit — a single commit', () => {
     expect(classifyCommit({ subject: 'fix: x', body: 'BREAKING-CHANGE: incompatible' })).toBe('major'))
 })
 
+describe('the marker is a FOOTER, not prose — the defect that shipped a false major', () => {
+  // The real body of a52ba8b ("fix(release): read every commit for the version bump and make it
+  // testable (#249)"). Its body describes the footer mechanism in PROSE, wrapping the token in
+  // backticks — a description of the mechanism, not a declaration of a break. A substring scan
+  // read it as breaking and rolled a whole major. This fixture is the exact offending sentence.
+  const a52ba8bBody = [
+    'The release workflow computed the semver bump from `git log --pretty=format:"%s"`',
+    'fed into a `while IFS= read -r` loop.',
+    '',
+    '- Extract the calculation to `@agentistics/core` (`versionBump.ts`).',
+    '  It also scans the commit BODY for a `BREAKING CHANGE` footer, which the old',
+    '  subject-only read could not see.',
+  ].join('\n')
+
+  test('a fix: whose body MENTIONS the footer token in prose (backticks) → patch, not major', () =>
+    expect(classifyCommit({ subject: 'fix(release): read every commit for the version bump and make it testable (#249)', body: a52ba8bBody })).toBe('patch'))
+
+  test('the honest pair: a real footer on its own line at the end → major', () =>
+    expect(classifyCommit({ subject: 'fix(release): rework the reader', body: 'why we did it\n\nBREAKING CHANGE: the reader signature changed' })).toBe('major'))
+
+  test('the token mid-paragraph (no line-leading colon token) → not breaking', () =>
+    expect(classifyCommit({ subject: 'fix: x', body: 'this introduces a BREAKING CHANGE for old clients somewhere' })).toBe('patch'))
+
+  test('the token inside backticks in prose → not breaking', () =>
+    expect(classifyCommit({ subject: 'feat: x', body: 'we now honour the `BREAKING CHANGE:` footer form' })).toBe('minor'))
+
+  test('the token in the SUBJECT but not as a footer → decided by the subject alone (no ! → not major)', () =>
+    expect(classifyCommit({ subject: 'fix: describe the BREAKING CHANGE handling' })).toBe('patch'))
+
+  test('a hyphen footer on its own line at the end → major', () =>
+    expect(classifyCommit({ subject: 'fix: x', body: 'context\n\nBREAKING-CHANGE: incompatible wire format' })).toBe('major'))
+})
+
 describe('bumpFromCommits — the defect that shipped v1.23.1', () => {
   test('a range whose ONLY commit is a feat → minor (the exact failing scenario)', () => {
     expect(bumpFromCommits([s('feat(web): live terminal panel (#246)')])).toBe('minor')

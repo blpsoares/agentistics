@@ -2859,7 +2859,6 @@ export default function AppLayout() {
           currency={currency}
           brlRate={brlRate}
           lang={lang}
-          central={teamSession?.central === true}
           workflows={data.workflows}
           onClose={() => setSelectedSession(null)}
         />
