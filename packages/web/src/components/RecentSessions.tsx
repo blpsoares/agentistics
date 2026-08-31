@@ -1923,15 +1923,15 @@ function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleet
   // The card is session CONTROL, not a session dossier: only the metric chips stay on it. The first
   // prompt / latest-messages block and the "Session metrics" button moved off — the deep-dive lives
   // one click away, in the drilldown reached from the kebab.
-  // The terminal opens a persistent SSE per mount, and the browser caps how many a single origin may
-  // hold at once (~6 over HTTP/1.1, several already spent on the dashboard's own live channels). So
-  // the INLINE terminal is not mounted while the MODAL is open for this session: rendering both would
-  // hold TWO streams for one id, and the extra one — queued behind the limit — is exactly what leaves
-  // a maximised terminal stuck "connecting". The modal's copy is the one in view; the inline one comes
-  // back when the modal closes.
+  // The inline terminal is mounted whenever the row is watchable — do NOT gate it on `!modalOpen`.
+  // Unmounting the inline `TerminalRegion` each time the modal opens/closes DISPOSES its xterm on
+  // every fullscreen toggle, and an xterm dispose schedules a viewport sync that reads `dimensions`
+  // off a torn-down render service — an async, uncatchable throw once per toggle (invisible in dev
+  // under StrictMode, real in the production build). The duplicate SSE the modal briefly holds is the
+  // lesser cost, and it is bounded by the connecting stall/reconnect above.
   const body = (large: boolean) => (
     <>
-      {watchable && (large || !modalOpen) && <TerminalRegion id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} fill={large} onMaximize={large ? undefined : () => setModalOpen(true)} />}
+      {watchable && <TerminalRegion id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} fill={large} onMaximize={large ? undefined : () => setModalOpen(true)} />}
       <SessionActionsPanel ctrl={ctrl} />
       <CardChips s={s} lang={lang} />
       <CardFooterButtons s={s} lang={lang} onResume={() => setShowResumeModal(true)} />
