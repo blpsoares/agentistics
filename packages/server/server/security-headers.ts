@@ -63,7 +63,18 @@ export function securityHeaders(opts: {
     ...(opts.embed ? {} : { 'X-Frame-Options': 'DENY' }),
     'Referrer-Policy': 'same-origin',
     'Cross-Origin-Opener-Policy': 'same-origin',
-    'Cross-Origin-Resource-Policy': 'same-origin',
+    // CORP is the SECOND thing that has to give for an editor to frame this, and missing it is why
+    // relaxing `frame-ancestors` alone still produced a blank tab. A VS Code webview is served with
+    // `Cross-Origin-Embedder-Policy: require-corp`, and under COEP every cross-origin subresource
+    // AND nested document the embedder loads must answer `Cross-Origin-Resource-Policy:
+    // cross-origin`. `same-origin` makes the browser drop the frame silently — no error the page
+    // can see, nothing in the network panel of the outer document, just an empty rectangle.
+    //
+    // `cross-origin` here is narrower than it sounds: CORP governs who may EMBED the bytes, not who
+    // may READ them. Reading is still same-origin by the browser's own rules and, on the profile
+    // where this applies, the server is bound to 127.0.0.1 anyway. Every other profile keeps
+    // `same-origin`.
+    'Cross-Origin-Resource-Policy': opts.embed ? 'cross-origin' : 'same-origin',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
   }
   if (opts.tls) h['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'

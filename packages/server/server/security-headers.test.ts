@@ -83,6 +83,13 @@ describe('securityHeaders', () => {
     expect(embedded['Content-Security-Policy']).toContain('frame-ancestors vscode-webview:')
     expect(embedded['X-Content-Type-Options']).toBe('nosniff')
     expect(embedded['Referrer-Policy']).toBe('same-origin')
+    // The SECOND header that has to give. A VS Code webview is served with COEP `require-corp`, and
+    // under COEP a nested document answering `same-origin` is dropped silently — an empty rectangle
+    // with no error the page can see, which is exactly how it presented after `frame-ancestors`
+    // alone was relaxed.
+    expect(embedded['Cross-Origin-Resource-Policy']).toBe('cross-origin')
+    expect(securityHeaders({ tls: false, dev: false, isApi: false })['Cross-Origin-Resource-Policy'])
+      .toBe('same-origin')
     // …and the default is unchanged: no `embed`, no framing.
     expect(securityHeaders({ tls: false, dev: false, isApi: false })['X-Frame-Options']).toBe('DENY')
   })

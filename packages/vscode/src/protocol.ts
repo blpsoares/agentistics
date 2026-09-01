@@ -188,6 +188,15 @@ export type ViewMessage =
   /** Open this session as its own editor tab — several may be open at once. */
   | { type: 'openTab'; id: string }
   /**
+   * Stop a session, ASKING FIRST.
+   *
+   * Its own message rather than `act` with `kill`, because the confirmation is the point: this is
+   * the one control on the screen that ends work in progress and cannot be undone. The question is
+   * asked by the host with VS Code's own modal — unmissable, keyboard-accessible, and impossible to
+   * dismiss by clicking past it, which a box drawn inside the panel would not be.
+   */
+  | { type: 'kill'; id: string; title: string }
+  /**
    * A keystroke, or literal characters, straight into the live session.
    *
    * The browser's own key vocabulary travels; the mapping to tmux's happens on the server, which

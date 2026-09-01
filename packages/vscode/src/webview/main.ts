@@ -47,14 +47,23 @@ interface Persisted {
   onlyActive: boolean
 }
 
-const restored = (vscode.getState() as Persisted | undefined) ?? { query: '', onlyActive: false }
+/**
+ * How the panel opens on a surface that has never chosen.
+ *
+ * ONLY ACTIVE, which is `DEFAULT_SESSION_VIEW` in the control center — stated there once so every
+ * surface opens the same way. It is strict on purpose: a machine with months of named work shows
+ * all of it otherwise, and the empty state says which switch is hiding the rest.
+ */
+const DEFAULT_VIEW: Persisted = { query: '', onlyActive: true }
+
+const restored = (vscode.getState() as Persisted | undefined) ?? DEFAULT_VIEW
 
 const state = {
   route: { view: 'list' } as Route,
   pinned: false,
   theme: 'dark' as 'dark' | 'light',
   query: restored.query ?? '',
-  onlyActive: restored.onlyActive ?? false,
+  onlyActive: restored.onlyActive ?? DEFAULT_VIEW.onlyActive,
   expanded: null as string | null,
   wizard: false,
   busy: new Set<string>(),
@@ -179,7 +188,9 @@ function renderHeader(): void {
   // including the editor this panel lives in. On the right it sits among the actions, reading as
   // one more of them rather than as the way out.
   if (state.route.view === 'session' && !state.pinned) {
-    const back = button('←', 'btn ghost back', () => go({ view: 'list' }))
+    // Orange, not a ghost. It is the only way out of this view and it was a grey arrow among grey
+    // chrome — the one control that must be findable without looking for it.
+    const back = button('←', 'btn primary back', () => go({ view: 'list' }))
     back.title = s('backToList')
     back.setAttribute('aria-label', s('backToList'))
     top.append(back)
@@ -425,35 +436,103 @@ function patchSession(id: string): void {
   const row = rowOf(id)
   if (!dom || !row) return
 
+  // The TITLE is the heading of the screen below it, with the pencil that renames it right there.
+  // It was a line of text among four other lines and a row of wide buttons — in a 320px sidebar
+  // that is a wall, and the one thing a person needs to read (which session is this?) had no more
+  // weight than the path under it.
   dom.head.replaceChildren()
   const title = el('div', 'session-title')
-  title.append(stateDot(row), el('span', 'session-name', row.title), statePill(row))
+  title.append(stateDot(row))
+  title.append(el('h2', 'session-name', row.title))
+  title.append(iconButton('✎', s('rename'), 'icon-btn', () => {
+    openTextVerb(dom.head, row, 'rename', s('rename'), row.title)
+  }))
+  title.append(statePill(row))
   dom.head.append(title)
 
+  // One line of facts, not four. The harness, the model and the folder are context; the folder is
+  // the long one, so it goes last and is allowed to wrap.
   const meta = el('div', 'session-meta')
   meta.append(harnessChip(row.harness))
   if (row.model) meta.append(el('span', 'chip', row.model))
-  if (row.task) meta.append(el('span', 'chip task', row.task))
+  meta.append(el('span', 'session-cwd', row.cwd))
   dom.head.append(meta)
-  dom.head.append(el('div', 'session-cwd', row.cwd))
-  if (row.note) dom.head.append(el('div', 'session-note', row.note))
 
-  dom.tools.replaceChildren()
-  if (!state.pinned) {
-    dom.tools.append(button(s('openTab'), 'btn small ghost', () => post({ type: 'openTab', id })))
-  }
-  if (row.actionable) {
-    dom.tools.append(button(s('attach'), 'btn small', () => post({ type: 'attach', id })))
-  }
-  dom.tools.append(button(s('copyCommand'), 'btn small ghost', () => post({ type: 'copy', text: row.attachCommand })))
-  dom.tools.append(button(s('openFolder'), 'btn small ghost', () => post({ type: 'openFolder', path: row.cwd })))
+  // NOTE and TASK are shown as what they are — a value, or an invitation to add one. The `＋`
+  // is the whole affordance: an icon on its own says "there is a note here" and says nothing about
+  // being able to write one.
+  const marks = el('div', 'session-marks')
+  marks.append(markButton('✎', 'note', row.note, s('note'), () => {
+    openTextVerb(dom.head, row, 'note', s('note'), row.note ?? '')
+  }))
+  marks.append(markButton('⚑', 'task', row.task, s('task'), () => {
+    openTextVerb(dom.head, row, 'task', s('task'), row.task ?? '')
+  }))
+  dom.head.append(marks)
 
   dom.approval.replaceChildren()
   if (row.approvalLines?.length || row.dialogOptions?.length) dom.approval.append(renderApproval(row))
 
   paintScreen(row)
+
+  // The action row lives UNDER the screen, as icons: in a sidebar four wide buttons wrapped into
+  // three rows and pushed the terminal off the bottom. Every one carries a tooltip and an
+  // aria-label, because an icon alone is a control you have to learn by clicking.
+  dom.tools.replaceChildren()
+  if (!state.pinned) {
+    dom.tools.append(iconButton('⧉', s('openTab'), 'icon-btn', () => post({ type: 'openTab', id })))
+  }
+  if (row.actionable) {
+    dom.tools.append(iconButton('⌨', s('attach'), 'icon-btn', () => post({ type: 'attach', id })))
+  }
+  dom.tools.append(iconButton('⧉̸', s('copyCommand'), 'icon-btn', () => post({ type: 'copy', text: row.attachCommand })))
+  dom.tools.append(iconButton('🗀', s('openFolder'), 'icon-btn', () => post({ type: 'openFolder', path: row.cwd })))
+  const kill = row.verbs.find(v => v.action === 'kill')
+  if (kill) {
+    // Red, and it ASKS. Stopping a session ends work in progress, and the one control on this
+    // screen that cannot be undone should not sit among the others looking like them.
+    const stop = iconButton('⏹', kill.label, 'icon-btn danger', () => {
+      post({ type: 'kill', id, title: row.title })
+    })
+    stop.disabled = !kill.enabled
+    if (kill.reason) stop.title = kill.reason
+    dom.tools.append(stop)
+  }
+
   dom.verbs.replaceChildren()
   dom.verbs.append(...renderVerbs(row))
+}
+
+/** An icon control. The label is never only in the glyph: it is the tooltip and the accessible name. */
+function iconButton(glyph: string, label: string, className: string, onClick: () => void): HTMLButtonElement {
+  const b = el('button', className, glyph)
+  b.title = label
+  b.setAttribute('aria-label', label)
+  b.addEventListener('click', onClick)
+  return b
+}
+
+/**
+ * A note or a task: the value when there is one, and `＋ <what>` when there is not.
+ *
+ * The empty state is the important one. An icon by itself announces that something exists; it does
+ * not tell anybody they can create one, which is what "bota um + pra tentar intuir que isso cria
+ * uma nota" is asking for.
+ */
+function markButton(
+  glyph: string,
+  kind: 'note' | 'task',
+  value: string | undefined,
+  label: string,
+  onClick: () => void,
+): HTMLButtonElement {
+  const b = el('button', value ? `mark ${kind} set` : `mark ${kind}`)
+  b.append(el('span', 'mark-glyph', value ? glyph : `${glyph}＋`))
+  b.append(el('span', 'mark-text', value ?? label))
+  b.title = value ? `${label}: ${value}` : label
+  b.setAttribute('aria-label', b.title)
+  b.addEventListener('click', onClick)
+  return b
 }
 
 /**
@@ -706,16 +785,22 @@ function renderVerbs(row: FleetRow): HTMLElement[] {
 }
 
 /** The four verbs that need a line of text. Inline, because a modal over a 300px panel is a wall. */
-function openTextVerb(host: HTMLElement, row: FleetRow, action: FleetActionId, label: string): void {
+function openTextVerb(
+  host: HTMLElement,
+  row: FleetRow,
+  action: FleetActionId,
+  label: string,
+  initial?: string,
+): void {
   host.querySelector('.text-verb')?.remove()
   const box = el('div', 'text-verb')
   const input = el('input')
   input.type = 'text'
   input.placeholder = label
-  input.value = action === 'rename' ? row.title
+  input.value = initial ?? (action === 'rename' ? row.title
     : action === 'note' ? row.note ?? ''
     : action === 'task' ? row.task ?? ''
-    : ''
+    : '')
   const submit = () => {
     act(row.id, action, input.value)
     box.remove()

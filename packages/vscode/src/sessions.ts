@@ -230,7 +230,34 @@ export class SessionsHub implements vscode.Disposable {
         return
       case 'openTab':
         this.deps.openTab(msg.id)
+        // The sidebar goes BACK to the list. Otherwise the same session is open twice, in two
+        // panels, side by side — and the one in the sidebar is the smaller copy of the one the
+        // user just asked to see bigger.
+        if (!surface.pinned) {
+          surface.route = { view: 'list' }
+          void webview.postMessage({
+            type: 'mount',
+            route: { view: 'list' },
+            pinned: false,
+            theme: themeKind(),
+          } satisfies HostMessage)
+        }
         return
+      case 'kill': {
+        // Asked with VS Code's own modal: unmissable, keyboard-accessible, and impossible to
+        // dismiss by clicking past it. Stopping a session ends work in progress.
+        const strings = this.deps.strings()
+        const answer = await vscode.window.showWarningMessage(
+          fill(strings.killConfirm ?? 'Stop {0}?', msg.title),
+          { modal: true, detail: strings.killDetail ?? '' },
+          strings.killAction ?? 'Stop',
+        )
+        if (!answer) return
+        const out = await this.deps.client().act({ id: msg.id, action: 'kill' })
+        this.broadcast({ type: 'result', ok: out.ok, message: out.message })
+        await this.poll()
+        return
+      }
       case 'attach': {
         const ticket = await this.deps.client().attach(msg.id)
         const strings = this.deps.strings()

@@ -317,19 +317,81 @@ button.chip { cursor: pointer; }
 
 /* ---------------------------------------------------------------- one session */
 
-.session { padding-top: var(--gap); }
-.session-head {
-  padding: 10px 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-card);
+/*
+ * One session, COMPACT.
+ *
+ * The sidebar is 300–360px and the terminal is the reason anybody opened this. Every row above the
+ * screen is a row the screen does not get, so the head is three lines — title, facts, marks — and
+ * the actions are icons under the screen rather than four wide buttons that wrapped into three
+ * rows and pushed the terminal off the bottom.
+ */
+.session { padding-top: 6px; }
+.session-head { padding: 0 2px 8px; }
+
+.session-title { display: flex; align-items: center; gap: 6px; }
+.session-name {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
-.session-title { display: flex; align-items: center; gap: 7px; }
-.session-name { flex: 1; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
-.session-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
-.session-cwd { margin-top: 6px; font-size: 11.5px; color: var(--text-tertiary); overflow-wrap: anywhere; }
-.session-note { margin-top: 5px; font-size: 12px; color: var(--text-secondary); font-style: italic; }
-.session-tools { display: flex; gap: 5px; flex-wrap: wrap; margin-top: var(--gap); }
+.session-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 5px;
+}
+.session-cwd { font-size: 11px; color: var(--text-tertiary); overflow-wrap: anywhere; }
+.session-marks { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+
+.icon-btn {
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.icon-btn:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--text-primary); }
+.icon-btn:disabled { opacity: .4; cursor: default; }
+/* The one control that cannot be undone does not look like the others. */
+.icon-btn.danger { color: var(--red); border-color: rgba(239, 68, 68, .4); }
+.icon-btn.danger:hover:not(:disabled) { background: var(--red); color: #fff; border-color: var(--red); }
+
+/* A note or a task: the value when there is one, `＋` when there is not. */
+.mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  font: inherit;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.mark:hover { color: var(--text-primary); border-color: var(--accent); }
+.mark.set { border-style: solid; }
+.mark.note.set { border-color: var(--border-strong); color: var(--text-secondary); }
+.mark.task.set { border-color: var(--purple); color: var(--purple); }
+.mark-glyph { flex: none; }
+.mark-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.session-tools {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
 
 .approval {
   margin-top: var(--gap);
@@ -377,10 +439,13 @@ button.chip { cursor: pointer; }
   overflow: hidden;
 }
 .screen {
-  padding: 10px;
-  /* Tall enough to be a terminal, short enough to leave the composer and the verbs on screen in a
-     sidebar. It grows with the panel rather than being pinned to a line count. */
-  height: clamp(180px, 46vh, 620px);
+  padding: 8px;
+  /*
+   * Tall enough to be a terminal, and it takes what the panel has left rather than a fixed slice.
+   * `vh` alone gave the same height in a 360px sidebar and a 1400px editor tab — too short in one
+   * and a stripe in the other.
+   */
+  height: clamp(160px, 52vh, 900px);
 }
 .screen-status {
   display: flex;
