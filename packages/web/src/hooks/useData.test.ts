@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { calcStreak, calcLongestStreak, getDateRangeFilter, filterByHarness, computeHarnessSummaries, computeFilteredHarnessSummaries, sortRepos, pickLongestSession, repositoryGitTotals, apportionModelUsage, summarizeApiCostByDay, computeDerivedStats, resolvePresenceScope } from './useData'
-import { EMPTY_TOKENS, mergeStatsCaches, totalTokens } from '@agentistics/core'
+import { EMPTY_TOKENS, mergeStatsCaches, totalTokens, calcCost } from '@agentistics/core'
 import type { RepoSortKey, RepoStat } from './useData'
 import type { SessionMeta } from '@agentistics/core'
 import { format, subDays } from 'date-fns'
@@ -1144,6 +1144,126 @@ describe('machine filter reads the same deep history as the member filter', () =
     const out = computeFilteredHarnessSummaries(pruned, filters({ users: ['Bryan Soares'] }))
     expect(out.summaries.claude!.sessions).toBe(1)
     expect(out.summaries.claude!.inputTokens).toBe(10)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Machine-scoped COST reads the deep cache — the same path (resolveMachineCacheScope)
+// the tokens already travel, per model, over all four billed counters.
+//
+// The block above pins a machine selection's SESSIONS and INPUT TOKENS to the deep statsCache.
+// COST — the dashboard's headline number, and the one the reader budgets against — was never
+// asserted for a machine scope. That omission is exactly where this repo's costing has regressed
+// before:
+//   - summing the session documents instead of the deep cache (this task): the central showed
+//     R$319,40 for two machines apart but R$705,45 together, on the same tokens (a ~2,2x gap);
+//   - pricing a whole session by its dominant model (server PR #267, ~2,2x);
+//   - counting only 2 of the 4 billed counters (#225, ~300x low), or pricing cache as fresh
+//     input (#225, ~10x high).
+// Each of those makes the machine's cost DIVERGE from the deep-cache figure below, so pinning the
+// machine cost to `calcCost` over the cache's own per-model usage catches all of them at once.
+//
+// The A-numbers are the acceptance items of this task's spec.
+describe('machine-scoped cost is derived from the deep cache, not summed from sessions', () => {
+  // A real, priced model (MODEL_PRICING: 5 / 25 / 0.50 / 6.25 per 1M) so `calcCost` is exercised
+  // over every counter — input, output, cache-read and cache-write — rather than a fallback blend.
+  const MODEL = 'claude-opus-4-6'
+  const four = (i: number, o: number, cr: number, cw: number) => ({
+    [MODEL]: {
+      inputTokens: i, outputTokens: o,
+      cacheReadInputTokens: cr, cacheCreationInputTokens: cw,
+      webSearchRequests: 0, costUSD: 0,
+    },
+  })
+  const cacheFor = (i: number, o: number, cr: number, cw: number, dates: string[]): import('@agentistics/core').StatsCache => ({
+    version: 1,
+    lastComputedDate: dates[dates.length - 1]!,
+    dailyActivity: dates.map(d => ({ date: d, sessionCount: 100, messageCount: 300, toolCallCount: 0 })),
+    dailyModelTokens: [],
+    modelUsage: four(i, o, cr, cw),
+    totalSessions: dates.length * 100,
+    totalMessages: dates.length * 300,
+    longestSession: { sessionId: 'x', duration: 1, messageCount: 1, timestamp: '2026-06-01T00:00:00Z' },
+    firstSessionDate: dates[0]!,
+    hourCounts: {},
+    totalSpeculationTimeSavedMs: 0,
+  })
+
+  // Two machines with genuinely different deep histories, dominated by cache-read (≈80% of the
+  // volume, as real Claude usage is) so a "2 of 4 counters" or "cache as fresh input" mistake moves
+  // the number far.
+  const alienware = cacheFor(1_000_000, 500_000, 8_000_000, 200_000, ['2026-06-01', '2026-06-02'])
+  const dell = cacheFor(9_000_000, 4_500_000, 72_000_000, 1_800_000, ['2026-06-01', '2026-06-03'])
+  const costA = calcCost(alienware.modelUsage[MODEL]!, MODEL)
+  const costB = calcCost(dell.modelUsage[MODEL]!, MODEL)
+  const tokensA = 1_000_000 + 500_000 + 8_000_000 + 200_000
+
+  // The surviving session documents are a TINY, recent subset of that history — this is precisely
+  // what "summing session documents" would report. They are dated AFTER the cache window so they
+  // are pure gap sessions (their count supplements the cache; their cost does not — it is already
+  // inside `modelUsage`).
+  const recent = (memberId: string): SessionMeta => ({
+    session_id: `${memberId}-recent`, harness: 'claude', user: 'Bryan Soares', memberId,
+    project_path: '/p', model: MODEL, start_time: '2026-08-29T10:00:00.000Z', end_time: '2026-08-29T11:00:00.000Z',
+    input_tokens: 1_000, output_tokens: 500, cache_read_input_tokens: 2_000, cache_creation_input_tokens: 100,
+  } as unknown as SessionMeta)
+  const sessionSumCost = calcCost(
+    { inputTokens: 1_000, outputTokens: 500, cacheReadInputTokens: 2_000, cacheCreationInputTokens: 100, webSearchRequests: 0, costUSD: 0 },
+    MODEL,
+  )
+
+  const data = {
+    statsCache: cacheFor(0, 0, 0, 0, ['2026-06-01']),
+    sessions: [recent('alienware'), recent('dell')],
+    projects: [],
+    allSessions: [],
+    harnesses: ['claude'],
+    userStatsCaches: { 'Bryan Soares': mergeStatsCaches([alienware, dell]) },
+    machineStatsCaches: { alienware, dell },
+    machineOwners: {
+      alienware: { user: 'Bryan Soares', teamIds: ['dev'] },
+      dell: { user: 'Bryan Soares', teamIds: ['dev'] },
+    },
+  } as unknown as import('@agentistics/core').AppData
+
+  const filters = (over: Partial<import('@agentistics/core').Filters>): import('@agentistics/core').Filters =>
+    ({ dateRange: 'all', customStart: '', customEnd: '', projects: [], models: [], ...over })
+
+  // The dashboard headline (`computeDerivedStats.totalCostUSD`) — what A1 measures.
+  const dA = computeDerivedStats(data, filters({ machines: ['alienware'] }))!
+  const dB = computeDerivedStats(data, filters({ machines: ['dell'] }))!
+  const dAB = computeDerivedStats(data, filters({ machines: ['alienware', 'dell'] }))!
+
+  // A1 — the accounts close. Two machines apart sum to the two together, on the same tokens.
+  // Tolerance is 1e-6 USD (sub-micro-dollar): the merge is additive and `calcCost` is linear, so
+  // the only slack is IEEE-754 rounding, not a modelling choice.
+  test('A1: filtering the two machines together equals the sum of each alone', () => {
+    expect(dAB.totalCostUSD).toBeCloseTo(dA.totalCostUSD + dB.totalCostUSD, 6)
+  })
+
+  // A3 — a single machine reflects its WHOLE deep history, not the fraction still stored as
+  // session documents. If cost were summed from sessions, `dA.totalCostUSD` would collapse to
+  // `sessionSumCost` (orders of magnitude smaller); reading the deep cache, it is `costA`.
+  test('A3: a single machine cost is the deep-cache figure, dwarfing the surviving sessions', () => {
+    expect(dA.totalCostUSD).toBeCloseTo(costA, 6)
+    expect(dA.totalCostUSD).toBeGreaterThan(sessionSumCost * 100)
+  })
+
+  // A2 — cost and tokens are read from the SAME deep-cache usage record. The tokens are exactly the
+  // four counters of the cache (the recent session's tokens do not leak in), and the cost is
+  // `calcCost` of that very record — so they cannot come from different sources.
+  test('A2: cost and tokens share the deep-cache source, over all four counters', () => {
+    expect(totalTokens(dA.tokenTotals)).toBe(tokensA)
+    expect(dA.totalCostUSD).toBeCloseTo(calcCost(alienware.modelUsage[MODEL]!, MODEL), 6)
+  })
+
+  // The Compare page must agree with the dashboard for the identical selection, or the two screens
+  // contradict each other. Same property, through `computeFilteredHarnessSummaries.costUSD`.
+  test('the Compare page prices a machine from the cache and closes under the merge', () => {
+    const one = computeFilteredHarnessSummaries(data, filters({ machines: ['alienware'] }))
+    const both = computeFilteredHarnessSummaries(data, filters({ machines: ['alienware', 'dell'] }))
+    expect(one.summaries.claude!.costUSD).toBeCloseTo(costA, 6)
+    expect(both.summaries.claude!.costUSD).toBeCloseTo(costA + costB, 6)
   })
 })
 
