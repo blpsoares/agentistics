@@ -39,6 +39,7 @@ jobs:
         packages/mcp/package.json
         packages/tui/package.json
         packages/agentop/package.json
+        packages/vscode/package.json
     outputs:
       skip: ${{ steps.skip_check.outputs.skip }}
       version_skip: ${{ steps.version.outputs.skip }}

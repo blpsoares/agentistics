@@ -1,0 +1,8 @@
+# What does NOT go into the .vsix. The bundles in `dist/` are the extension; the TypeScript that
+# produced them is not, and shipping `src/` would ship the workspace's own package graph with it.
+src/**
+tsconfig.json
+node_modules/**
+**/*.test.ts
+**/*.map
+.vscode/**

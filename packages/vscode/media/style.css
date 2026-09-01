@@ -1,0 +1,259 @@
+/*
+ * style.css — the Sessions panel.
+ *
+ * Every colour is a VS Code theme variable and never a literal: this panel sits inside somebody
+ * else's theme, light or dark or high-contrast, and a hardcoded grey that reads as "subtle" on the
+ * default dark theme is invisible on one and glaring on another.
+ *
+ * The layout is single-column and stays single-column. The sidebar is routinely 280–320px wide and
+ * the editor tab is 1400px; a grid that reflowed between them would be two layouts to keep working,
+ * for a list whose rows are the same rows either way. What width buys is the space each row has to
+ * spend, not a different arrangement — the same principle the control center's `width`-aware
+ * screens follow.
+ */
+
+:root {
+  --gap: 8px;
+  --radius: 4px;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background: var(--vscode-sideBar-background);
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  cursor: pointer;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+}
+
+button:hover:not(:disabled) { background: var(--vscode-button-secondaryHoverBackground); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+button.primary:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
+button.ghost { background: transparent; border-color: var(--vscode-contrastBorder, transparent); }
+button.link {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  color: var(--vscode-textLink-foreground);
+  text-decoration: underline;
+}
+
+input {
+  font-family: inherit;
+  /* 13px minimum: anything smaller is unreadable on a high-DPI panel at this width. */
+  font-size: max(13px, var(--vscode-font-size));
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+}
+
+input:focus { outline: 1px solid var(--vscode-focusBorder); }
+
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: var(--gap);
+  background: var(--vscode-sideBar-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.bar { display: flex; gap: 4px; flex-wrap: wrap; }
+.filters { display: flex; gap: 4px; margin-top: var(--gap); align-items: center; }
+.filters .search { flex: 1; }
+
+.toggle.on {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+/* The waiting count: readable without reading, and never the only thing that says it. */
+.attention { display: none; }
+.attention.visible {
+  display: block;
+  margin-top: var(--gap);
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  color: var(--vscode-inputValidation-warningForeground, var(--vscode-foreground));
+  background: var(--vscode-inputValidation-warningBackground);
+  border: 1px solid var(--vscode-inputValidation-warningBorder, transparent);
+}
+
+.banner { display: none; }
+.banner.visible {
+  display: block;
+  margin: var(--gap);
+  padding: 8px;
+  border-radius: var(--radius);
+  background: var(--vscode-inputValidation-errorBackground);
+  border: 1px solid var(--vscode-inputValidation-errorBorder, transparent);
+  color: var(--vscode-inputValidation-errorForeground, var(--vscode-foreground));
+}
+
+.result { display: none; }
+.result.visible {
+  display: block;
+  margin: 0 var(--gap) var(--gap);
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: var(--vscode-editorWidget-background);
+  border-left: 2px solid var(--vscode-charts-green, var(--vscode-focusBorder));
+}
+.result.bad { border-left-color: var(--vscode-errorForeground); }
+
+.notice {
+  margin: var(--gap);
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: var(--vscode-editorWidget-background);
+  color: var(--vscode-descriptionForeground);
+}
+
+.list { padding: 0 var(--gap) 24px; }
+
+.group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 4px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+  text-transform: none;
+}
+.group .count {
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+.row {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  background: var(--vscode-editor-background);
+}
+.row.busy { opacity: 0.6; }
+
+.row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+}
+
+.row-head .title { flex: 1; font-weight: 600; overflow-wrap: anywhere; }
+.row-head .state { color: var(--vscode-descriptionForeground); font-size: 0.9em; white-space: nowrap; }
+.row-head .dot { color: var(--vscode-descriptionForeground); }
+
+/* Waiting on a person: the one state the eye should find without reading the list. */
+.row.state-waiting .dot,
+.row.state-waiting-approval .dot { color: var(--vscode-charts-orange, var(--vscode-editorWarning-foreground)); }
+.row.state-waiting-approval { border-color: var(--vscode-inputValidation-warningBorder, var(--vscode-panel-border)); }
+.row.state-working .dot { color: var(--vscode-charts-green, var(--vscode-testing-iconPassed)); }
+.row.state-lost, .row.state-exited, .row.state-closed { opacity: 0.75; }
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 4px;
+  font-size: 0.9em;
+  color: var(--vscode-descriptionForeground);
+}
+.meta .cwd { overflow-wrap: anywhere; opacity: 0.8; }
+.meta .harness { text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.85em; }
+
+.chip {
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  border: none;
+  font-size: 0.9em;
+}
+.chip.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+
+.note { margin-top: 4px; font-style: italic; color: var(--vscode-descriptionForeground); }
+.dim { color: var(--vscode-descriptionForeground); }
+
+.detail { margin-top: 8px; border-top: 1px solid var(--vscode-panel-border); padding-top: 8px; }
+.detail .label {
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 4px;
+}
+
+/* The dialog, verbatim. It scrolls inside its own box — never the panel. */
+.dialog {
+  margin: 0 0 8px;
+  padding: 6px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.9em;
+  background: var(--vscode-textCodeBlock-background);
+  border-radius: var(--radius);
+}
+
+.options { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.option { text-align: left; }
+.option.selected { border-color: var(--vscode-focusBorder); }
+
+.verbs { display: flex; flex-wrap: wrap; gap: 4px; }
+.text-verb { display: flex; gap: 4px; margin-top: 8px; align-items: center; }
+.text-verb input { flex: 1; }
+
+.empty { padding: 24px var(--gap); text-align: center; color: var(--vscode-descriptionForeground); }
+.empty p { margin: 4px 0; }
+
+.wizard {
+  margin: var(--gap);
+  padding: var(--gap);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius);
+  background: var(--vscode-editorWidget-background);
+}
+.wizard-title { font-weight: 600; margin-bottom: var(--gap); }
+.field { margin-bottom: var(--gap); }
+.field label { display: block; font-size: 0.9em; color: var(--vscode-descriptionForeground); margin-bottom: 2px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.places { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.place {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 3px 4px;
+  border-radius: var(--radius);
+}
+.place:hover { background: var(--vscode-list-hoverBackground); }
+.place-name { font-weight: 600; }
+.place-repo { font-size: 0.85em; color: var(--vscode-descriptionForeground); }
+.place-detail { font-size: 0.85em; opacity: 0.7; overflow-wrap: anywhere; }
+.wizard-buttons { display: flex; gap: 4px; flex-wrap: wrap; }
