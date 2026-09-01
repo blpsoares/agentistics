@@ -363,6 +363,16 @@ export interface SessionBackend {
    */
   sendText(id: string, text: string): Promise<boolean>
   /**
+   * Type characters and press NOTHING — the same literal send as `sendText` without the submit.
+   *
+   * Its own method rather than a flag on `sendText`, because the two answer different questions and
+   * a flag would let a caller ask the wrong one by omission. `sendText` delivers a MESSAGE (and a
+   * message that is never submitted was never sent); this delivers KEYSTROKES, where an implicit
+   * Enter would submit somebody's half-typed line for them. The raw input channel is the caller
+   * that needs it: a person typing into a live screen presses Enter themselves, when they mean it.
+   */
+  sendLiteral(id: string, text: string): Promise<boolean>
+  /**
    * Press ONE named key — the backend's own vocabulary (`Enter`, `Escape`).
    *
    * Separate from `sendText` because the two are opposites and confusing them fails silently: sent

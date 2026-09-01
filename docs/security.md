@@ -397,6 +397,7 @@ published envelope key — and the enumeration of what is keyed by a machine id 
 each live session's screen — a coding assistant's terminal, transcript and all. `/api/fleet/act`
 types into it, answers a permission prompt for it, or kills it. `/api/fleet/stream` streams that
 screen continuously. `/api/fleet/attach` hands out the command that ENTERS it. And
+`/api/fleet/input` sends RAW KEYSTROKES into a live one, and
 `/api/fleet/new` **starts a fresh coding assistant, with a prompt, in a directory the request
 names** — billable, on this machine, with whatever access the assistant itself has.
 
@@ -429,6 +430,14 @@ to read it from; that is why the bound above is exposure rather than argument.
 server has no tty. It checks SCOPE first — the row must be one this machine manages and must be
 running — because `attachSession` composes the command from whatever id it is given without asking
 whether that session exists.
+
+**Raw keystrokes.** `POST /api/fleet/input` types characters with no submit, or presses one named
+key, in a session this machine manages. It is the same power a terminal has once attached, reached
+through the same `localShell` gate and the same scope check, and its one rule is in the pure
+`fleet-input.ts`: a key name outside tmux's own vocabulary is REFUSED, never forwarded, because
+`send-keys` does not fail cleanly on an unknown name — it sends the string, so a bogus key becomes
+typed text in somebody's live session. Unlike `prompt` it does not refuse an open dialog: a KEY is
+what answers a dialog, and the caller is looking at the frame while they press it.
 
 **Framing.** On a `local` profile the dashboard now allows exactly one frame-ancestor,
 `vscode-webview:`, so the VS Code extension can show it in an editor tab; `X-Frame-Options` is

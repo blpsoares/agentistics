@@ -211,6 +211,17 @@ export class SessionsHub implements vscode.Disposable {
         await this.poll()
         return
       }
+      case 'input': {
+        // No result on success: a toast per keystroke is not feedback, the screen is. A REFUSAL is
+        // reported, because a key that silently did nothing is indistinguishable from a session
+        // that is ignoring you.
+        const out = await this.deps.client().input(msg.id, {
+          ...(msg.text !== undefined ? { text: msg.text } : {}),
+          ...(msg.key ? { key: msg.key } : {}),
+        })
+        if (!out.ok) this.broadcast({ type: 'result', ok: false, message: out.message })
+        return
+      }
       case 'watch':
         this.streams.watch(msg.id, surface.onTerminal)
         return

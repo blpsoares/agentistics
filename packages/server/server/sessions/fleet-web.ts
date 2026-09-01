@@ -22,11 +22,13 @@ import { controlStrings } from '@agentistics/tui/control/i18n'
 import { sessionRunning } from '@agentistics/tui/control/session-dimensions'
 import { fleetRow, type FleetActionRequest, type FleetRow } from './fleet-row'
 import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
+import { planFleetInput, type FleetInputBody } from './fleet-input'
 
 // The REQUEST shape lives in the leaf `fleet-row.ts` so `index.ts` can name it without naming
 // this module — see the note there.
 export type { FleetRow, FleetVerb, FleetActionId, FleetActionRequest } from './fleet-row'
 export type { FleetSpawnBody } from './fleet-spawn'
+export type { FleetInputBody } from './fleet-input'
 
 export interface FleetPayload {
   sessions: FleetRow[]
@@ -301,6 +303,41 @@ export async function readNewOptions(lang: CliLang, query: string): Promise<Flee
       unavailable: e instanceof Error ? e.message : String(e),
     }
   }
+}
+
+/**
+ * Raw input into a live session — the char-mode half of `runFleetAction`'s `prompt`.
+ *
+ * The request is read by the pure `planFleetInput`, which is where the whole rule lives: a key name
+ * outside tmux's own vocabulary is REFUSED rather than passed through, because `send-keys` does not
+ * fail cleanly on one — it falls back to sending the string, so a bogus key becomes typed text in
+ * somebody's live session.
+ *
+ * Bounded by exposure like the rest of the fleet (`localShell`, so unreachable on `lan`/`public`)
+ * and by scope in the host (the session must be one this machine manages, and running).
+ */
+export async function runFleetInput(
+  lang: CliLang,
+  body: FleetInputBody,
+): Promise<FleetActionResponse> {
+  const s = controlStrings(lang)
+  const host = await hostFor(lang)
+  if (!host.inputSession) return { ok: false, message: s.sessionsNoHost }
+
+  const decision = planFleetInput(body)
+  if (!decision.ok) {
+    const message =
+      decision.reason === 'unknown_key' ? s.inputUnknownKey(decision.detail ?? '')
+      : decision.reason === 'control_in_text' ? s.inputControlChars
+      : decision.reason === 'too_long' ? s.inputTooLong
+      : s.sessionsNoHost
+    return { ok: false, message }
+  }
+
+  return await host.inputSession(
+    decision.plan.id,
+    decision.plan.kind === 'key' ? { key: decision.plan.key } : { text: decision.plan.text },
+  )
 }
 
 export interface FleetSpawnResponse {

@@ -102,12 +102,39 @@ A session that goes un-typable *while armed* (killed, or falls onto a dialog) is
 automatically and shows the block sentence, so an armed composer can never sit over a session where
 every send would fail.
 
-## Escalation — Phase 2b (raw keystroke channel), `packages/server`
+## Phase 2b — the raw keystroke channel, `POST /api/fleet/input`
 
-Full char-mode interactivity (Ctrl-C, arrows, Esc, Tab, no-submit typing, answering raw dialogs by
-keypress) requires a server write endpoint that forwards individual keys to the backend's existing
-`sendKey` / `sendText` primitives **without** the implicit Enter — e.g. `POST /api/fleet/input
-{ id, key | text, submit? }`, gated by the same `localShell` capability and scope as the read stream,
-with its own audit decision. That is a `packages/server` change and was **not** made here; the web
-half above is complete and honest on its own for line-oriented interaction (sending a message or an
-answer to the agent), which is the dominant case.
+Full char-mode interactivity (Ctrl-C, the arrows that move a highlighted option, Esc, Tab
+completion inside the tool, typing that does not submit, answering a raw dialog by keypress) needs
+individual keys, and the line composer above cannot express one. That endpoint now exists, built
+for the VS Code extension's live screen — see [`docs/vscode-extension.md`](vscode-extension.md).
+
+```
+POST /api/fleet/input        { id, text }  |  { id, key: { key, ctrl?, alt?, shift? } }
+→ { ok, message }            message always present, already localized
+```
+
+- **`text` is typed literally and submits NOTHING** (`sendLiteral`, `send-keys -l`), which is the
+  whole difference from `prompt`: a person typing presses Enter when they mean it. `sendLiteral` is
+  its own backend method rather than a flag on `sendText`, because the two answer different
+  questions and a flag lets a caller ask the wrong one by omission — `sendText` delivers a MESSAGE,
+  and a message that is never submitted was never sent.
+- **`key` is one key, in the BROWSER's vocabulary**, mapped to tmux's by the pure `fleet-input.ts`.
+  One mapping, on the side that has to validate it anyway. **Nothing outside the table is sent**:
+  `send-keys` given an unrecognised name does not fail cleanly — it falls back to sending the
+  string — so a bogus key would become typed text in somebody's live session. An unmapped key is
+  refused in a sentence naming the combination.
+- **It does NOT refuse an open dialog**, and that is the difference from `prompt` rather than an
+  omission. A LINE typed past a question goes into the dialog's own filter and its submit takes
+  whichever option is highlighted; a KEY press is what answers that dialog, and the caller is
+  looking at the frame. Scope and life are still checked: the session must be one this machine
+  manages, and running.
+- **Same gate as the read channel** — `localShell` (403 on any exposed profile) via the
+  `/api/fleet` prefix in `capability-guard.ts`, and 404 on a central.
+- **Ordering is the client's job and is done by construction.** HTTP requests can complete out of
+  order, so the extension serialises sends per session (`api.ts`): each waits for the previous one
+  to the same session, and printable characters are batched for 25ms into one `text`, so `abc` then
+  Enter can never arrive as Enter then `abc`.
+
+The line composer above is unchanged and remains the right shape for the dashboard, where there is
+no focusable screen to type into.

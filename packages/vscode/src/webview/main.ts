@@ -32,10 +32,7 @@ import {
   INITIAL_TERMINAL_STATE, parseEnd, parseFrame, parseOpen, terminalReducer, terminalStatus,
   type TerminalState,
 } from '../../../web/src/lib/terminalStream'
-import {
-  INITIAL_COMPOSER, canEdit, canSubmit, composerReducer, interactionBlock,
-  type ComposerState,
-} from '../../../web/src/lib/terminalInput'
+import { interactionBlock } from '../../../web/src/lib/terminalInput'
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: ViewMessage): void
@@ -70,9 +67,10 @@ const state = {
   tasks: [] as string[],
   options: null as NewOptions | null,
   result: undefined as { ok: boolean; message: string } | undefined,
-  /** Per session, so walking away and back does not lose a screen or a half-typed line. */
+  /** Per session, so walking away and back does not lose a screen. */
   terminals: new Map<string, TerminalState>(),
-  composers: new Map<string, ComposerState>(),
+  /** True once the screen has the keyboard — see `renderScreen`. */
+  typing: false,
   /** The session whose stream this surface has asked for. */
   watching: null as string | null,
 }
@@ -108,9 +106,6 @@ function terminalOf(id: string): TerminalState {
   return state.terminals.get(id) ?? INITIAL_TERMINAL_STATE
 }
 
-function composerOf(id: string): ComposerState {
-  return state.composers.get(id) ?? INITIAL_COMPOSER
-}
 
 // ---------------------------------------------------------------------------
 // routing
@@ -396,7 +391,6 @@ function renderSession(id: string): HTMLElement {
 
   if (row.approvalLines?.length || row.dialogOptions?.length) box.append(renderApproval(row))
   box.append(renderScreen(row))
-  box.append(renderComposer(row))
   box.append(renderVerbs(row))
   return box
 }
@@ -436,16 +430,42 @@ const TAIL_SLACK = 40
 let screenEl: HTMLPreElement | null = null
 let screenWasAtBottom = true
 
+/**
+ * The screen, and — when it has the keyboard — the thing you type into.
+ *
+ * **Focus is the gate.** Every terminal emulator ever written works this way: click it and you are
+ * typing into it, click away and you are not. It is the same explicit, per-session, revocable
+ * decision the dashboard's composer asks for with a button, expressed the way a terminal expresses
+ * it, and the strip under the screen SAYS which of the two states you are in — a screen that
+ * silently swallows keys, or silently ignores them, is the failure either design has to avoid.
+ *
+ * It is an INTENT gate and nothing more. The real authority is the server: `localShell` on any
+ * exposed profile, scope (only sessions this machine manages), and a session that is actually
+ * running.
+ */
 function renderScreen(row: FleetRow): HTMLElement {
   const box = el('div', 'screen-box')
   const terminal = terminalOf(row.id)
   const status = terminalStatus(terminal, state.lang)
+  // The line composer refuses a session on a dialog, because a LINE typed past a question goes into
+  // the dialog's own filter. Raw keys are the opposite case: answering that dialog by keypress is
+  // one of the reasons this exists, and the person can see it on the screen in front of them.
+  const block = interactionBlock(row.state)
+  const typable = block !== 'external' && block !== 'not-running'
 
   const pre = el('pre', 'screen')
   // THE ONE PLACE THIS FILE ASSIGNS HTML. `ansiToHtml` escapes the frame before it colours it, and
   // returns spans and text nodes only — see its header. Nothing else here goes near innerHTML.
   pre.innerHTML = terminal.frame ? ansiToHtml(terminal.frame.content, state.theme) : ''
   screenEl = pre
+
+  if (typable) {
+    pre.tabIndex = 0
+    pre.addEventListener('keydown', e => onScreenKey(row.id, e))
+    pre.addEventListener('paste', e => onScreenPaste(row.id, e))
+    pre.addEventListener('focus', () => { state.typing = true; renderTypingStrip(row, box, true) })
+    pre.addEventListener('blur', () => { state.typing = false; renderTypingStrip(row, box, false) })
+  }
   box.append(pre)
 
   const line = el('div', 'screen-status')
@@ -453,84 +473,110 @@ function renderScreen(row: FleetRow): HTMLElement {
   line.append(el('span', 'dim', status.detail))
   if (status.truncated) line.append(el('span', 'dim', s('screenTruncated')))
   box.append(line)
+
+  const strip = el('div', 'typing-strip')
+  box.append(strip)
+  renderTypingStrip(row, box, state.typing && typable, typable, block)
   return box
 }
 
 /**
- * The line composer — consent-gated, exactly as the dashboard's is.
+ * The one line under the screen that says whether your keys are going anywhere.
  *
- * Typing into a live session changes another running process mid-work, so it is a deliberate
- * opt-in rather than something that happens because a terminal is on screen. The gate is an INTENT
- * gate and says so: the real authority is the server, which refuses a prompt into an open dialog,
- * into a session that is not running, and on any exposed profile.
+ * Re-rendered on focus and blur ALONE — not through the whole view — because a full re-render on
+ * focus would replace the very element that just took it, and the keyboard would land back on the
+ * document a frame later.
  */
-function renderComposer(row: FleetRow): HTMLElement {
-  const box = el('div', 'composer')
-  const block = interactionBlock(row.state)
-  if (block) {
-    box.append(el('div', 'dim', s(
-      block === 'external' ? 'typeBlockedExternal'
-      : block === 'not-running' ? 'typeBlockedNotRunning'
-      : 'typeBlockedApproval',
+function renderTypingStrip(
+  row: FleetRow,
+  box: HTMLElement,
+  focused: boolean,
+  typable = true,
+  block = interactionBlock(row.state),
+): void {
+  const strip = box.querySelector('.typing-strip')
+  if (!strip) return
+  strip.replaceChildren()
+  strip.className = `typing-strip${focused ? ' live' : ''}`
+
+  if (!typable) {
+    strip.append(el('span', 'dim', s(
+      block === 'external' ? 'typeBlockedExternal' : 'typeBlockedNotRunning',
     )))
-    return box
+    return
   }
-
-  const composer = composerOf(row.id)
-  if (!composer.armed) {
-    box.append(button(s('typeArm'), 'btn', () => {
-      state.composers.set(row.id, composerReducer(composer, { type: 'arm' }))
-      renderBody()
-      focusComposer()
-    }))
-    box.append(el('div', 'dim', s('typeArmHint')))
-    return box
+  if (focused) {
+    strip.append(el('span', 'typing-dot', '●'))
+    strip.append(el('span', undefined, s('typingLive')))
+    strip.append(el('span', 'dim', s('typingLiveHint')))
+    return
   }
+  const focus = button(s('typingStart'), 'btn tiny primary', () => screenEl?.focus())
+  strip.append(focus, el('span', 'dim', s('typingIdle')))
+}
 
-  const rowBox = el('div', 'composer-row')
-  const input = el('input', 'composer-input')
-  input.type = 'text'
-  input.placeholder = s('promptPlaceholder')
-  input.value = composer.draft
-  input.disabled = !canEdit(composer)
-  input.addEventListener('input', () => {
-    state.composers.set(row.id, composerReducer(composerOf(row.id), { type: 'edit', draft: input.value }))
+// ---------------------------------------------------------------------------
+// typing
+//
+// Printable characters are BUFFERED for a few milliseconds and sent as one `text`, because one HTTP
+// round trip per keystroke is ~5 requests a second per typist, each spawning a `tmux send-keys` on
+// the host. A non-printable key FLUSHES the buffer first and then goes on its own, so `abc<Enter>`
+// can never arrive as `<Enter>abc`. Ordering across calls is the client's serialised queue
+// (`api.ts`), so nothing here has to think about it beyond flushing in order.
+
+const TYPE_FLUSH_MS = 25
+let typeBuffer = ''
+let typeTimer: ReturnType<typeof setTimeout> | undefined
+
+function flushTyping(id: string): void {
+  clearTimeout(typeTimer)
+  typeTimer = undefined
+  if (!typeBuffer) return
+  const text = typeBuffer
+  typeBuffer = ''
+  post({ type: 'input', id, text })
+}
+
+function onScreenKey(id: string, e: KeyboardEvent): void {
+  // The editor's own chords are left alone: `ctrl+shift+*` and anything with Cmd/Win is a VS Code
+  // command, and swallowing those would make the panel a place where the editor stops working.
+  if (e.metaKey || (e.ctrlKey && e.shiftKey)) return
+
+  const printable = e.key.length === 1 && !e.ctrlKey && !e.altKey
+  e.preventDefault()
+  e.stopPropagation()
+
+  if (printable) {
+    typeBuffer += e.key
+    if (!typeTimer) typeTimer = setTimeout(() => flushTyping(id), TYPE_FLUSH_MS)
+    return
+  }
+  flushTyping(id)
+  post({
+    type: 'input',
+    id,
+    key: {
+      key: e.key,
+      ...(e.ctrlKey ? { ctrl: true } : {}),
+      ...(e.altKey ? { alt: true } : {}),
+      ...(e.shiftKey ? { shift: true } : {}),
+    },
   })
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter') submitLine(row.id)
-    if (e.key === 'Escape') disarm(row.id)
+}
+
+/** A paste is one `text` — the whole reason the channel takes text and not only keys. */
+function onScreenPaste(id: string, e: ClipboardEvent): void {
+  const text = e.clipboardData?.getData('text')
+  if (!text) return
+  e.preventDefault()
+  flushTyping(id)
+  // Newlines inside a paste are Enter presses, and Enter is a KEY. Splitting here keeps a pasted
+  // block from being refused whole for carrying control characters.
+  const lines = text.split(/\r\n|\r|\n/)
+  lines.forEach((line, index) => {
+    if (line) post({ type: 'input', id, text: line })
+    if (index < lines.length - 1) post({ type: 'input', id, key: { key: 'Enter' } })
   })
-  const send = button(s('send'), 'btn primary', () => submitLine(row.id))
-  send.disabled = !canSubmit(composer)
-  rowBox.append(input, send, button(s('typeStop'), 'btn ghost', () => disarm(row.id)))
-  box.append(rowBox)
-
-  if (composer.status === 'sending') box.append(el('div', 'dim', s('typeSending')))
-  if (composer.status === 'failed' && composer.error) {
-    // The exact line is kept and the server's own reason is on screen: a terminal must never accept
-    // a line visually and fail to deliver it in silence.
-    box.append(el('div', 'composer-failed', composer.error))
-  }
-  return box
-}
-
-function focusComposer(): void {
-  const input = document.querySelector<HTMLInputElement>('.composer-input')
-  input?.focus()
-}
-
-function disarm(id: string): void {
-  state.composers.set(id, composerReducer(composerOf(id), { type: 'disarm' }))
-  renderBody()
-}
-
-function submitLine(id: string): void {
-  const composer = composerOf(id)
-  if (!canSubmit(composer)) return
-  const text = composer.draft
-  state.composers.set(id, composerReducer(composer, { type: 'submit' }))
-  renderBody()
-  post({ type: 'act', id, action: 'prompt', text })
 }
 
 function renderVerbs(row: FleetRow): HTMLElement {
@@ -792,10 +838,6 @@ window.addEventListener('message', event => {
     // A result only means something to a composer that is mid-send; the reducer enforces that, so
     // handing every result to the open session's composer is safe and is what keeps a failed line
     // on screen with the server's own reason.
-    if (state.route.view === 'session') {
-      const id = state.route.id
-      state.composers.set(id, composerReducer(composerOf(id), { type: 'sent', ok: msg.ok, message: msg.message }))
-    }
     render()
     return
   }

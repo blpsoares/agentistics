@@ -74,6 +74,7 @@ import { LIMITS, readJsonLimited } from './limits'
 // dynamic import. Naming `fleet-web` here even in a type position measurably pulled that graph in.
 import type { FleetActionRequest } from './sessions/fleet-row'
 import type { FleetSpawnBody } from './sessions/fleet-spawn'
+import type { FleetInputBody } from './sessions/fleet-input'
 // Type only: the module itself reaches `cli-start` → `@agentistics/tui/control` → Ink, and is
 // loaded by dynamic import inside the two /api/fleet handlers.
 import { canSeeMemberNames } from './iam-view'
@@ -1120,6 +1121,34 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           })
         }
         const out = await runFleetSpawn(fleetLang(url.searchParams.get('lang')), body.value)
+        return new Response(JSON.stringify(out), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // RAW INPUT into a live session — the write half of the terminal channel, and the escalation
+    // `docs/terminal-interactive.md` named: `prompt` types a whole line and presses Enter, which
+    // cannot express Ctrl-C, an arrow key moving a highlighted option, Esc, Tab completion inside
+    // the tool, or typing that does not submit. `fleet-input.ts` decides what may be sent and as
+    // what; an unknown key name is REFUSED, because `send-keys` falls back to sending the string
+    // and a bogus key becomes typed text in somebody's live session.
+    if (url.pathname === '/api/fleet/input' && req.method === 'POST') {
+      try {
+        const { runFleetInput, fleetLang } = await import('./sessions/fleet-web')
+        const body = await readJsonLimited<FleetInputBody>(req, LIMITS.bodyBytes)
+        if (!body.ok) {
+          return new Response(JSON.stringify({ ok: false, message: 'bad_request' }), {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const out = await runFleetInput(fleetLang(url.searchParams.get('lang')), body.value)
         return new Response(JSON.stringify(out), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })

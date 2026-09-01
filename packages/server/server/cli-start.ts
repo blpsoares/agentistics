@@ -2940,6 +2940,40 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
     },
 
     /**
+     * One raw keystroke, or literal characters with no submit — the char-mode half of `promptSession`.
+     *
+     * **It deliberately does NOT refuse an open dialog**, and that is the difference between the two
+     * verbs rather than an omission. `promptSession` delivers a LINE into a prompt, so a dialog is a
+     * trap: the text goes into the dialog's own filter and the submit takes whichever option is
+     * highlighted, answering a question nobody read. Here the caller is a person watching the live
+     * screen and pressing a key — answering a dialog by keypress is one of the reasons this exists,
+     * and it is exactly what attaching would let them do.
+     *
+     * What it still checks is SCOPE and LIFE: the session must be one this machine manages and must
+     * be running. Keystrokes to a dead pane are silently discarded by tmux, which is the one outcome
+     * a person typing cannot tell apart from a session that is ignoring them.
+     */
+    async inputSession(id: string, input: { text?: string; key?: string }): Promise<ActionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+
+      const managed = (await readRegistry()).find(m => m.id === id)
+      if (!managed) return { ok: false, message: s.sessNoRegistryEntry }
+
+      const live = (await backend.list().catch(() => [])).find(b => b.id === id)
+      if (!live?.alive) return { ok: false, message: s.sessNotRunning }
+
+      const sent = input.key !== undefined
+        ? await backend.sendKey(id, input.key)
+        : await backend.sendLiteral(id, input.text ?? '')
+      return sent
+        ? { ok: true, message: s.sessPrompted(id) }
+        : { ok: false, message: s.sessSendFailed(id) }
+    },
+
+    /**
      * Answer the dialog this session is blocked on.
      *
      * Everything is checked at THIS instant rather than assumed from a snapshot: the session is

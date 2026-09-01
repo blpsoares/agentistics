@@ -1292,6 +1292,20 @@ export interface ControlHost {
   promptSession?(id: string, text: string): Promise<ActionResult>
 
   /**
+   * One raw keystroke, or literal characters with NO submit.
+   *
+   * The char-mode counterpart to `promptSession`, for a surface that draws the session's live
+   * screen and lets a person type into it: Ctrl-C, the arrows that move a highlighted option, Esc,
+   * Tab completion inside the tool, and typing that does not end in Enter until the person presses
+   * it. The cockpit does not use it — it hands over the real terminal instead — but the VS Code
+   * extension has a screen and no tty, so this is what makes that screen typable.
+   *
+   * Unlike `promptSession` it does NOT refuse an open dialog: the caller is watching the frame and
+   * pressing a key, and answering a dialog by keypress is one of the reasons it exists.
+   */
+  inputSession?(id: string, input: { text?: string; key?: string }): Promise<ActionResult>
+
+  /**
    * Answer the dialog this session is blocked on.
    *
    * `choice` is the option NUMBER to pick, and it is the whole point of this signature: a dialog

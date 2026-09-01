@@ -162,6 +162,11 @@ export const tmuxBackend: SessionBackend = {
 
   sendText: sendTextTo,
 
+  async sendLiteral(id: string, text: string) {
+    // `-l` and nothing else: no Enter, no interpretation. See the interface note.
+    return (await tmux(sendKeysLiteralArgs(id, text))).code === 0
+  },
+
   async sendKey(id: string, key: string) {
     return (await tmux(sendKeysNamedArgs(id, key))).code === 0
   },

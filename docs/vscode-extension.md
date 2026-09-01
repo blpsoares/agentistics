@@ -85,21 +85,38 @@ many readers, each `frame` a complete picture with its SGR sequences intact.
 
 ## Typing into a session
 
-The composer is the write half, and it is the dashboard's, unchanged
-([`docs/terminal-interactive.md`](terminal-interactive.md)): there is exactly one web-reachable way
-to write into a managed session — `POST /api/fleet/act { action: 'prompt' }` — which types a whole
-line and submits it, and answers honestly whether it landed.
+**You type into the screen itself.** Click it and the keys go to the session — every key, including
+Enter, Esc, Tab, the arrows and Ctrl-C. There is no text field to compose a line in: that is the
+dashboard's shape, where there is no focusable screen to type into, and it cannot express any of the
+keys above.
 
-- **Consent, per session, in memory.** The region is read-only until "Type into this session" is
-  pressed; "Stop" revokes it and drops the pending line. Typing into a live session changes another
-  running process mid-work, so it is a decision, not a side effect of the terminal being on screen.
-  It is an INTENT gate and says so — the real authority is the server, which refuses a prompt into
-  an open dialog, into a session that is not running, and on any exposed profile.
-- **The line is local until submit**, so nothing per-key can be lost, and a line that fails is KEPT
-  on screen with the server's own reason. `composerReducer` and `interactionBlock` are imported from
-  the dashboard for the same reason the phase machine is.
-- **A session on a dialog is not typable**, and the panel says which of the three reasons applies
-  rather than disabling a box with no explanation.
+That needed a server endpoint, which is now `POST /api/fleet/input` — the escalation
+[`docs/terminal-interactive.md`](terminal-interactive.md) named and did not build. `text` is typed
+literally with **no submit**; `key` is one key press in the browser's vocabulary, mapped to tmux's
+by the pure `fleet-input.ts`, which refuses anything outside its table rather than passing it
+through (`send-keys` falls back to sending an unknown name as a string, so a bogus key becomes
+typed text in a live session).
+
+- **Focus is the gate.** Every terminal emulator works this way: click it and you are typing into
+  it, click away and you are not. It is the same explicit, per-session, revocable decision the
+  dashboard's composer asks for with a button, expressed the way a terminal expresses it — and the
+  strip under the screen says which of the two states you are in, because a screen that silently
+  swallows keys and one that silently ignores them look identical. It is an INTENT gate; the real
+  authority is the server (`localShell`, scope, and a session that is running).
+- **The editor keeps working.** `ctrl+shift+*` and anything with Cmd/Win is a VS Code command and
+  is never swallowed.
+- **Order is guaranteed by construction.** Printable characters are batched for 25ms into one
+  `text` — one HTTP round trip per keystroke is ~5 requests a second per typist, each spawning a
+  `tmux send-keys` — and every send waits for the previous one to the SAME session, so `abc` then
+  Enter cannot arrive as Enter then `abc`. A non-printable key flushes the buffer before it goes.
+- **A paste is one `text` per line, with Enter between them** — the newlines in a paste are Enter
+  presses, and Enter is a key.
+- **A dialog does not block typing here**, unlike the dashboard's line composer: answering a dialog
+  by keypress is one of the reasons this exists, and you are looking at the dialog while you do it.
+  `interactionBlock` still hides the keyboard for an external row (agentop did not start it, so
+  nothing can write to it) and for one that is not running.
+- **No toast per keystroke.** The screen is the feedback. Only a REFUSAL is reported, because a key
+  that silently did nothing is indistinguishable from a session ignoring you.
 
 ## The rules it holds — none
 

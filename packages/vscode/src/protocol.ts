@@ -110,6 +110,14 @@ export interface SpawnRequest {
   label?: string
 }
 
+/** One key press, in the browser's vocabulary — `KeyboardEvent.key` plus its modifiers. */
+export interface KeyPress {
+  key: string
+  ctrl?: boolean
+  alt?: boolean
+  shift?: boolean
+}
+
 /** How this window is doing at reaching the machine's server. */
 export type LinkState =
   /** Answering. */
@@ -179,3 +187,11 @@ export type ViewMessage =
   | { type: 'unwatch'; id: string }
   /** Open this session as its own editor tab — several may be open at once. */
   | { type: 'openTab'; id: string }
+  /**
+   * A keystroke, or literal characters, straight into the live session.
+   *
+   * The browser's own key vocabulary travels; the mapping to tmux's happens on the server, which
+   * has to validate it anyway (`fleet-input.ts`). No result comes back for a successful key — a
+   * toast per keystroke is not feedback, the screen is; only a REFUSAL is reported.
+   */
+  | { type: 'input'; id: string; text?: string; key?: KeyPress }

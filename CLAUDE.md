@@ -1676,6 +1676,18 @@ packages/vscode/src/
 - **The panel wears the DASHBOARD's palette**, not VS Code chrome, and follows
   `activeColorTheme` for dark/light (the ANSI palette with it). A panel that looks like a different
   product from the dashboard beside it is a different product as far as the eye is concerned.
+- **You type into the SCREEN, not into a text field.** `POST /api/fleet/input` (Phase 2b, the
+  escalation `docs/terminal-interactive.md` named) carries `text` typed literally with NO submit, or
+  ONE key in the browser's vocabulary mapped to tmux's by the pure `fleet-input.ts` — which REFUSES
+  anything outside its table, because `send-keys` does not fail cleanly on an unknown name, it sends
+  the string, and a bogus key becomes typed text in a live session. `sendLiteral` is its own backend
+  method rather than a flag on `sendText`: the latter delivers a MESSAGE and a message that is never
+  submitted was never sent. Unlike `prompt` it does NOT refuse an open dialog — a key is what
+  answers a dialog, and the caller is watching the frame. FOCUS is the consent gate (every terminal
+  works that way) and the strip under the screen says which state you are in; `ctrl+shift+*` and
+  Cmd/Win are never swallowed, or the editor stops working inside the panel. Ordering is by
+  construction: printable characters batched 25ms into one `text`, every send awaiting the previous
+  one to the SAME session, so `abc`+Enter cannot land as Enter+`abc`.
 - **The dashboard is FRAMED, and that took a server change.** Every response carried
   `frame-ancestors 'none'` + `X-Frame-Options: DENY`, so the tab was a blank rectangle. On a `local`
   profile only, the policy is now `frame-ancestors vscode-webview:` and the legacy header is

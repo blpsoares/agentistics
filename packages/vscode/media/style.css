@@ -398,19 +398,33 @@ button.chip { cursor: pointer; }
 .pill.finished { color: var(--blue); }
 .pill.ended, .pill.stalled { color: var(--red); }
 
-/* ---------------------------------------------------------------- composer */
+/* ------------------------------------------------------------- typing strip
+ *
+ * The one line that says whether your keys are going anywhere. It changes colour when the screen
+ * has the keyboard, because a terminal that silently swallows keys and one that silently ignores
+ * them look identical.
+ */
 
-.composer { margin-top: var(--gap); }
-.composer-row { display: flex; gap: 5px; align-items: center; }
-.composer-input { flex: 1; }
-.composer-failed {
-  margin-top: 6px;
-  padding: 6px 9px;
-  border-radius: var(--radius-sm);
-  border-left: 2px solid var(--red);
-  background: var(--bg-card);
+.typing-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  font-size: 11.5px;
+}
+.typing-strip.live {
+  background: var(--accent-dim);
+  border-top-color: var(--accent);
   color: var(--text-primary);
 }
+.typing-dot { color: var(--accent-light); font-size: 9px; }
+
+/* The screen is a real focus target once it can be typed into. */
+.screen:focus { outline: none; }
+.screen-box:has(.screen:focus) { border-color: var(--accent); }
 
 .verbs-box { margin-top: var(--gap); }
 .verbs { display: flex; flex-wrap: wrap; gap: 5px; }
