@@ -24,3 +24,18 @@ Full documentation: [`docs/vscode-extension.md`](../../docs/vscode-extension.md)
 bun run build:vscode     # from the repo root
 bun run package:vscode   # a .vsix
 ```
+
+## The two icons, and why they are different files
+
+- **`media/icon.png`** is the gallery image — the one on the extension's page. It is the full
+  colour agentistics mark, square, so the marketplace card does not letterbox it. Regenerate it
+  from the vector source with:
+
+  ```bash
+  convert media/logo.svg -background none -gravity center -extent 441x441 -resize 256x256 media/icon.png
+  ```
+
+- **`media/icon.svg`** is the activity-bar icon and is deliberately MONOCHROME (`currentColor`).
+  VS Code tints that one itself — dim when the view is inactive, the theme's foreground when it is
+  — so the coloured mark would sit at one shade while every neighbour responds, which reads as a
+  broken icon rather than a branded one.
