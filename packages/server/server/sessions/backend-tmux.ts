@@ -5,9 +5,10 @@
 
 import {
   attachArgs, capturePaneArgs, capturePaneAnsiArgs, idFromTmuxName, isSessionGoneError,
-  killSessionArgs, listSessionsArgs, newSessionArgs, paneInfoArgs, parsePaneInfo, parsePrefix,
-  parseTmuxList, serverOptionsArgs, sendKeysNamedArgs, sendKeysLiteralArgs, showPrefixArgs,
-  trimCapture,
+  killSessionArgs, listSessionsArgs, paneInfoArgs, parsePaneInfo, parsePrefix, parseTmuxList,
+  resolveDefaultTerminal, resolveTruecolorTerm, spawnArgs, sendKeysNamedArgs, sendKeysLiteralArgs,
+  showPrefixArgs, trimCapture,
+  type TerminalProfile,
 } from './tmux-cli'
 import { planPromptDelivery } from './initial-prompt'
 import type {
@@ -28,6 +29,38 @@ const DELIVER_DEADLINE_MS = Number(process.env.AGENTISTICS_DELIVER_DEADLINE_MS) 
   : 15_000
 /** How much of the pane to read to judge readiness — enough for the input box and its footer. */
 const DELIVER_CAPTURE_LINES = 40
+
+/** True when this host has the named terminfo entry (`infocmp` exits 0). Never throws. */
+async function terminfoHas(name: string): Promise<boolean> {
+  try {
+    const p = Bun.spawn(['infocmp', name], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' })
+    return (await p.exited) === 0
+  } catch {
+    // No infocmp on PATH — treat every entry as absent, so agentop leaves tmux's own default rather
+    // than naming a terminfo entry it could not confirm exists.
+    return false
+  }
+}
+
+let profileCache: TerminalProfile | null = null
+
+/**
+ * Resolve the colour profile once per process: the terminfo entries do not change under us, and the
+ * invoking terminal's env (`TERM` / `COLORTERM`) is fixed for this run. The pure resolvers in
+ * `tmux-cli.ts` decide; this only does the IO they cannot.
+ */
+async function terminalProfile(): Promise<TerminalProfile> {
+  if (profileCache) return profileCache
+  const [tmux256color, screen256color] = await Promise.all([
+    terminfoHas('tmux-256color'),
+    terminfoHas('screen-256color'),
+  ])
+  profileCache = {
+    defaultTerminal: resolveDefaultTerminal({ tmux256color, screen256color }),
+    truecolorTerm: resolveTruecolorTerm({ TERM: process.env.TERM, COLORTERM: process.env.COLORTERM }),
+  }
+  return profileCache
+}
 
 async function tmux(args: string[]): Promise<{ code: number; out: string; err: string }> {
   try {
@@ -109,11 +142,16 @@ export const tmuxBackend: SessionBackend = {
   },
 
   async spawn(req: BackendSpawn) {
-    // Set BEFORE the session exists. `remain-on-exit` afterwards is a race the fast-failing case
-    // always wins, and `history-limit` afterwards does not apply to this pane at all — see
-    // `serverOptionsArgs`.
-    for (const args of serverOptionsArgs()) await tmux(args)
-    const { code, out } = await tmux(newSessionArgs({ id: req.id, cwd: req.cwd, argv: req.argv }))
+    // Options and `new-session` go in ONE chained invocation. They must be set BEFORE the session
+    // exists — `remain-on-exit` afterwards is a race the fast-failing case always wins,
+    // `history-limit` afterwards does not apply to this pane at all, and `default-terminal` (the
+    // colour fix) keeps tmux's 8-colour `screen` default for the life of a pane created before it.
+    // Applied as SEPARATE pre-flight calls they were lost on a cold socket, because `set-option`
+    // does not start a server — see `spawnArgs`.
+    const profile = await terminalProfile()
+    const { code, out } = await tmux(
+      spawnArgs(profile, { id: req.id, cwd: req.cwd, argv: req.argv }),
+    )
     if (code !== 0) throw new Error(out.trim() || `tmux new-session failed (code ${code})`)
     if (req.initialPrompt) {
       // Deliver the prompt only once the harness is READY — polled, not a fixed sleep — so a slow
