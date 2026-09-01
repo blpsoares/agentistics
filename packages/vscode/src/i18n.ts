@@ -58,6 +58,20 @@ const EN: Record<string, string> = {
 
   // The row.
   externalNote: 'Started outside agentop.',
+  backToList: 'All sessions',
+  openTab: 'Open as a tab',
+  sessionGone: 'This session is no longer in the fleet.',
+  screenTruncated: 'There is more scrollback above than this screen carries.',
+
+  // The composer. Typing into a live session changes another running process mid-work, so the
+  // region is read-only until somebody says otherwise.
+  typeArm: 'Type into this session',
+  typeArmHint: 'The line is edited here and sent whole, with Enter. The session receives it and submits it.',
+  typeStop: 'Stop',
+  typeSending: 'Sending…',
+  typeBlockedExternal: 'This session was started outside agentop — nothing here can write to it.',
+  typeBlockedNotRunning: 'This session is not running, so there is nothing to receive a line.',
+  typeBlockedApproval: 'It is waiting on a question. Answer that above — a line typed past it goes into the dialog\u2019s own filter.',
   approvalTitle: 'It is asking:',
   chooseOption: 'Pick an answer',
   promptPlaceholder: 'Type a line and send it to this session…',
@@ -127,6 +141,18 @@ const PT: Record<string, string> = {
   onlyActive: 'Só ativas',
 
   externalNote: 'Iniciada fora do agentop.',
+  backToList: 'Todas as sessões',
+  openTab: 'Abrir em uma aba',
+  sessionGone: 'Esta sessão não está mais na frota.',
+  screenTruncated: 'Há mais histórico acima do que esta tela carrega.',
+
+  typeArm: 'Escrever nesta sessão',
+  typeArmHint: 'A linha é editada aqui e enviada inteira, com Enter. A sessão recebe e submete.',
+  typeStop: 'Parar',
+  typeSending: 'Enviando…',
+  typeBlockedExternal: 'Esta sessão foi iniciada fora do agentop — nada aqui consegue escrever nela.',
+  typeBlockedNotRunning: 'Esta sessão não está rodando, então não há nada para receber uma linha.',
+  typeBlockedApproval: 'Ela está esperando uma resposta. Responda acima — uma linha digitada por cima vai para o filtro do próprio diálogo.',
   approvalTitle: 'Ela está perguntando:',
   chooseOption: 'Escolha uma resposta',
   promptPlaceholder: 'Escreva uma linha e envie para esta sessão…',

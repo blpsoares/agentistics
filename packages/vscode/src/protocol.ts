@@ -131,9 +131,26 @@ export interface LinkStatus {
   detail?: string
 }
 
+/**
+ * What a surface is showing.
+ *
+ * The sidebar starts on `list` and walks into a session and back. An editor TAB is created pinned
+ * to one session and has no list to return to — which is what lets several be open at once, one per
+ * session, each keeping its own scroll and its own composer.
+ */
+export type Route =
+  | { view: 'list' }
+  | { view: 'session'; id: string }
+
 /** Extension host → webview. */
 export type HostMessage =
   | { type: 'state'; link: LinkStatus; fleet: FleetPayload; strings: Record<string, string>; lang: 'en' | 'pt' }
+  /** How this surface opens, and whether it may navigate. Sent once, before anything else. */
+  | { type: 'mount'; route: Route; pinned: boolean; theme: 'dark' | 'light' }
+  /** The editor's theme changed under a surface that is already open. */
+  | { type: 'theme'; theme: 'dark' | 'light' }
+  /** One event off `/api/fleet/stream`, forwarded verbatim so the existing parsers read it. */
+  | { type: 'terminal'; id: string; event: 'open' | 'frame' | 'end' | 'stall' | 'error'; data: string }
   | { type: 'newOptions'; options: NewOptions }
   | { type: 'result'; ok: boolean; message: string }
   | { type: 'busy'; id: string; busy: boolean }
@@ -157,3 +174,8 @@ export type ViewMessage =
   | { type: 'spawn'; request: SpawnRequest; attach: boolean }
   | { type: 'openDashboard' }
   | { type: 'startServer' }
+  /** Start / stop receiving this session's screen. The host shares one stream per session. */
+  | { type: 'watch'; id: string }
+  | { type: 'unwatch'; id: string }
+  /** Open this session as its own editor tab — several may be open at once. */
+  | { type: 'openTab'; id: string }

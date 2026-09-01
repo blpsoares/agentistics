@@ -430,6 +430,13 @@ server has no tty. It checks SCOPE first — the row must be one this machine ma
 running — because `attachSession` composes the command from whatever id it is given without asking
 whether that session exists.
 
+**Framing.** On a `local` profile the dashboard now allows exactly one frame-ancestor,
+`vscode-webview:`, so the VS Code extension can show it in an editor tab; `X-Frame-Options` is
+omitted on that profile because `DENY` cannot express "one scheme" and would simply win. A web
+page's origin is `http:` or `https:` and cannot be forged into another scheme, so no page gains the
+ability to frame anything, and `lan` / `public` are untouched — they keep `frame-ancestors 'none'`
+and the legacy header. `security-headers.test.ts` pins both directions.
+
 ## 9. Verifying it yourself
 
 Each control has tests next to it; these are the ones worth reading first:

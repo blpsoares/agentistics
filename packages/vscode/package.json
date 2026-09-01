@@ -7,6 +7,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -54,7 +55,7 @@
     "commands": [
       {
         "command": "agentistics.openSessions",
-        "title": "Agentistics: Open Sessions in an editor tab",
+        "title": "Agentistics: Open the whole fleet in an editor tab",
         "icon": "$(window)"
       },
       {
@@ -67,8 +68,12 @@
         "title": "Agentistics: Start a session here"
       },
       {
+        "command": "agentistics.openSession",
+        "title": "Agentistics: Open a session in a tab"
+      },
+      {
         "command": "agentistics.attachSession",
-        "title": "Agentistics: Attach to a session"
+        "title": "Agentistics: Attach to a session in a terminal"
       },
       {
         "command": "agentistics.refresh",

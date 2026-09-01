@@ -28,12 +28,78 @@ VS Code window                          the machine
 
 | Surface | What it shows | Where it comes from |
 |---|---|---|
-| **Sessions** (sidebar, and the same document in an editor tab) | the whole fleet, grouped by project, most urgent first; the dialog a blocked session is showing, verbatim, with its options; every verb the cockpit offers | `GET /api/fleet` every 5s |
+| **The fleet** (sidebar, or an editor tab) | every session, grouped by project, most urgent first | `GET /api/fleet` every 5s |
+| **One session** — the sidebar walks into it, or it opens as its **own tab** | its LIVE SCREEN, the dialog it is blocked on with the options to answer, a composer to type into it, and every verb | `GET /api/fleet/stream` + `POST /api/fleet/act` |
 | **Verbs** | approve · prompt · rename · note · task · open the whole task · finish the task · kill · reopen | `POST /api/fleet/act` |
 | **Attach** | a real integrated terminal running the very `tmux` command the cockpit runs | `GET /api/fleet/attach` |
 | **New session** | the wizard: which assistants this machine can start, where, the task, the first message, model and effort | `GET`/`POST /api/fleet/new` |
 | **Dashboard** | the existing web dashboard, in a frame | `agentistics.dashboardUrl` (`:47292`) |
 | **Status bar** | today's cost, tokens and session count, plus how many sessions are waiting on you | `GET /api/data`, slowly |
+
+## Two views, and why a session gets its own tab
+
+The panel has exactly two views. `list` is the fleet — cards, grouped by project, most urgent
+first. Clicking one opens `session`: that session's live screen, its composer, its verbs, and a way
+back. In the **sidebar** the two swap places, which is what makes a 300px column usable at all; the
+list is a way IN, not a control panel with everything on it at once.
+
+A session can also be opened as **its own editor tab**, and several can be open at once — one per
+session, each keeping its own scroll position and its own half-typed line. A tab is created pinned
+to one session and never shows the list, which is what makes "several at once" mean anything: the
+sidebar can only ever be looking at one. Tabs are keyed by session id, so asking twice REVEALS the
+one that exists rather than opening a second panel onto the same screen, and each is titled with
+what the session is CALLED — a tab strip full of `3f5f21a8b0c1` is a tab strip nobody can use.
+
+Both are the same document, driven by the same 5s poll and the same shared streams. An action taken
+in the sidebar reports its result in the tab too.
+
+## The live screen
+
+`GET /api/fleet/stream` is the read channel documented in
+[`docs/terminal-channel.md`](terminal-channel.md): SSE, one `capture-pane` loop per session however
+many readers, each `frame` a complete picture with its SGR sequences intact.
+
+- **The HOST opens the stream, not the webview.** A webview's `localhost` is the editor client's,
+  which in a Remote-SSH or WSL window is not the machine the sessions are on. The extension host
+  sits beside the fleet, so it is what asks, and it forwards each event over `postMessage`.
+- **One connection per session, shared by every surface watching it** (`streams.ts`), mirroring the
+  server's own model. Watching is tied to the route: entering a session asks for its stream, leaving
+  gives it back. Capture is viewer-gated on the server, so a surface that forgot to unwatch would
+  keep a loop running on the host for a screen nobody can see.
+- **A stream that never delivers says so.** 10s without a first frame is reported as a stall, not
+  as patience — a "Connecting…" that never resolves is indistinguishable from a dead session. A
+  stall never blanks a screen that already has a frame.
+- **The phase machine and the honesty line are imported, not restated**
+  (`packages/web/src/lib/terminalStream.ts`). Whether you are looking at a live screen, a finished
+  session or one that is gone is the same decision, in the same words, as on the dashboard. A second
+  copy in an editor client would be a second set of honesty rules, and a frozen screen that looks
+  alive is the one thing this feature may never be wrong about.
+- **Rendering is `ansi.ts`, pure and tested — not xterm.js.** `capture-pane` has already resolved
+  the spinners, the redraws and the cursor into final glyphs, so what is left is colour. xterm is
+  300 KB that wants a fixed character grid and a fit addon, in a panel that is routinely 300px wide
+  and resized by dragging; what it would buy is either already resolved or is the integrated
+  terminal's job, one click away on every row. What it must not cost is colour fidelity, so the
+  palette is the dashboard's own `xtermTheme` — the same session reads the same in both places.
+  Verified against a real Claude Code frame: 19 coloured spans, no escape bytes and no unescaped
+  `<` surviving into the HTML.
+
+## Typing into a session
+
+The composer is the write half, and it is the dashboard's, unchanged
+([`docs/terminal-interactive.md`](terminal-interactive.md)): there is exactly one web-reachable way
+to write into a managed session — `POST /api/fleet/act { action: 'prompt' }` — which types a whole
+line and submits it, and answers honestly whether it landed.
+
+- **Consent, per session, in memory.** The region is read-only until "Type into this session" is
+  pressed; "Stop" revokes it and drops the pending line. Typing into a live session changes another
+  running process mid-work, so it is a decision, not a side effect of the terminal being on screen.
+  It is an INTENT gate and says so — the real authority is the server, which refuses a prompt into
+  an open dialog, into a session that is not running, and on any exposed profile.
+- **The line is local until submit**, so nothing per-key can be lost, and a line that fails is KEPT
+  on screen with the server's own reason. `composerReducer` and `interactionBlock` are imported from
+  the dashboard for the same reason the phase machine is.
+- **A session on a dialog is not typable**, and the panel says which of the three reasons applies
+  rather than disabling a box with no explanation.
 
 ## The rules it holds — none
 
@@ -149,6 +215,40 @@ cross-harness. Tokens means all four counters (`sessionTokenTotal`).
 An unreachable server prints a sentence, never a zero — `R$ 0,00` from a machine whose server is
 not running is a confident, wrong answer to the one question the item exists to answer.
 
+## The Dashboard tab, and the header that used to make it blank
+
+The dashboard is FRAMED — the existing React application, not a second implementation of its
+charts, filters, PDF export and settings. Framing is full parity, permanently, for free.
+
+It did not work at first, and the reason was on the server: every response carried
+`frame-ancestors 'none'` and `X-Frame-Options: DENY`, so the tab rendered an empty rectangle with
+nothing on screen saying why. The fix is deliberately narrow (`security-headers.ts`):
+
+- On a **`local` profile only** — the machine's own dashboard, on 127.0.0.1 — the policy becomes
+  `frame-ancestors vscode-webview:`. A VS Code webview document lives at `vscode-webview://<uuid>`;
+  a web page's origin is `http:` or `https:` and cannot be forged into another scheme, so this
+  admits the editor and nothing a page can ever present. It is deliberately **not**
+  `frame-ancestors 'self'`, which would let any same-origin page frame the dashboard, and not a
+  wildcard.
+- `X-Frame-Options` disappears on that profile, and that is the point rather than an oversight: the
+  header has two values, `DENY` and `SAMEORIGIN`, and neither can express "one scheme". Left at
+  `DENY` beside a permissive `frame-ancestors` it simply wins wherever it is honoured — which is
+  exactly how the blank tab happened. `frame-ancestors` is the modern and more expressive control.
+- Every other profile is untouched: `lan` and `public` keep `'none'` and keep the legacy header.
+  `security-headers.test.ts` pins both directions.
+
+## The design system
+
+The panel wears the **dashboard's** palette, not raw VS Code chrome: the same near-black surfaces,
+the same Anthropic orange, the same green/amber/red accents, the same radii, and the same
+per-harness colours. A panel that looks like a different product from the dashboard it sits beside
+is a different product as far as the eye is concerned, and the two are one.
+
+It is not theme-agnostic by accident. The host reads `vscode.window.activeColorTheme` and sets
+`data-theme`, so a light editor gets the dashboard's LIGHT palette rather than a dark panel bolted
+into a bright window — and the terminal's ANSI palette follows the same switch. Only the focus ring
+and the scrollbar are borrowed from VS Code; those belong to the editor's input conventions.
+
 ## Remote windows
 
 The dashboard URL goes through `vscode.env.asExternalUri`. In a Remote-SSH or Codespaces window
@@ -181,6 +281,9 @@ here.
 | `src/extension.ts` | activation and wiring; nothing else |
 | `src/api.ts` | the only process that talks HTTP; every method total, no method inventing a value |
 | `src/sessions.ts` | one poll, any number of surfaces; performs every action |
+| `src/streams.ts` | one live screen per session, shared by every surface watching it |
+| `src/panels.ts` | the editor tabs — one per session, keyed so asking twice reveals rather than duplicates |
+| `src/ansi.ts` | **pure** — one terminal frame, rendered as HTML, in the dashboard's palette |
 | `src/protocol.ts` | the wire shapes, and the note about why no rule lives on this side |
 | `src/view-model.ts` | **pure** — grouping, ordering, the search, the three empty states |
 | `src/attention.ts` | **pure** — which sessions have just started needing a person |
@@ -195,7 +298,9 @@ here.
 
 Every string on the panel is somebody's session title, note, project path or a line captured off a
 terminal, so the webview is built with DOM calls and never with `innerHTML`: a template literal is
-one unescaped `<` away from executing it.
+one unescaped `<` away from executing it. There is exactly **one** exception, marked at the
+assignment — the terminal screen, whose HTML `ansi.ts` builds, having escaped the frame before it
+coloured it.
 
 ## See also
 

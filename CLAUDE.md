@@ -1593,6 +1593,9 @@ packages/vscode/src/
   extension.ts   activation + wiring, nothing else
   api.ts         the ONE process that talks HTTP; every method total
   sessions.ts    SessionsHub: one poll, any number of surfaces, performs every action
+  streams.ts     one live screen per session (SSE), shared by every surface watching it
+  panels.ts      the editor tabs — one per session, keyed so asking twice REVEALS
+  ansi.ts        PURE: one terminal frame → HTML, in the dashboard's own palette
   protocol.ts    the wire shapes (host <-> webview, and the server's answers)
   view-model.ts  PURE: grouping, ordering, search, the three empty states
   attention.ts   PURE: which sessions have just started needing a person
@@ -1654,6 +1657,30 @@ packages/vscode/src/
   is not on the wire; a tree derived client-side by matching the project NAME against each `cwd`
   goes wrong wherever a path segment repeats. A band per project plus the shortened directory is the
   honest subset.
+- **TWO views, one document.** `list` is the fleet; `session` is one session's live screen, composer
+  and verbs. The sidebar walks between them (a 300px column cannot hold both); an editor TAB is
+  created PINNED to one session and never shows the list, which is what makes "several at once"
+  mean anything. Tabs are keyed by session id — asking twice REVEALS the one that exists — and are
+  titled with what the session is CALLED, because a tab strip of `3f5f21a8b0c1` is unusable.
+- **The HOST opens the terminal stream, never the webview** — a webview's `localhost` is the editor
+  client's, which under Remote-SSH/WSL is not the machine the sessions run on. One connection per
+  session shared by every watching surface (the server's own model), and **watching is tied to the
+  route**: capture is viewer-gated, so a surface that forgets to unwatch leaves a `capture-pane`
+  loop running for a screen nobody can see.
+- **The terminal's phase machine, its honesty line and the composer are IMPORTED from the dashboard**
+  (`packages/web/src/lib/terminalStream.ts` / `terminalInput.ts`, both dependency-free). A second
+  copy would be a second set of honesty rules, and "this screen is live" is the one thing this
+  feature may never be wrong about. Rendering is the pure `ansi.ts`, not xterm — `capture-pane` has
+  already resolved the redraws, so what is left is colour — but the PALETTE is the dashboard's own
+  `xtermTheme`, so one session reads the same in both places.
+- **The panel wears the DASHBOARD's palette**, not VS Code chrome, and follows
+  `activeColorTheme` for dark/light (the ANSI palette with it). A panel that looks like a different
+  product from the dashboard beside it is a different product as far as the eye is concerned.
+- **The dashboard is FRAMED, and that took a server change.** Every response carried
+  `frame-ancestors 'none'` + `X-Frame-Options: DENY`, so the tab was a blank rectangle. On a `local`
+  profile only, the policy is now `frame-ancestors vscode-webview:` and the legacy header is
+  OMITTED — it has two values and neither says "one scheme", so left at `DENY` it just wins. No page
+  gains anything: a page's origin cannot be another scheme.
 
 ## Important rules
 

@@ -315,7 +315,13 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
   const res = await handleRequestInner(req, server)
   if (!res) return res // WebSocket upgrade handed off
   const isApi = new URL(req.url).pathname.startsWith('/api/')
-  for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi }))) {
+  // `embed` — may an editor frame this dashboard? Only on a `local` profile: the machine's own
+  // dashboard, bound to 127.0.0.1, which is the only deployment where the thing doing the framing
+  // is the user's own VS Code window rather than someone else's page. The allowance itself is a
+  // single scheme no web page can present (`security-headers.ts`), and everything the fleet routes
+  // can do stays behind `localShell` regardless.
+  const embed = PROFILE === 'local'
+  for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi, embed }))) {
     res.headers.set(k, v)
   }
   // A sliding-session refresh recorded by the auth gate. Appended (not set) so a route that

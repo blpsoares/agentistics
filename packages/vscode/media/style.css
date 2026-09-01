@@ -1,259 +1,466 @@
 /*
- * style.css — the Sessions panel.
+ * style.css — the panel, in the agentistics design system.
  *
- * Every colour is a VS Code theme variable and never a literal: this panel sits inside somebody
- * else's theme, light or dark or high-contrast, and a hardcoded grey that reads as "subtle" on the
- * default dark theme is invisible on one and glaring on another.
+ * The palette is the dashboard's own (`packages/web/src/index.css`): the same near-black surfaces,
+ * the same Anthropic orange, the same green/amber/red accents, the same radii. That is the point of
+ * this file — a panel wearing raw VS Code chrome reads as a different product from the dashboard it
+ * sits beside, and the two are one product.
  *
- * The layout is single-column and stays single-column. The sidebar is routinely 280–320px wide and
- * the editor tab is 1400px; a grid that reflowed between them would be two layouts to keep working,
- * for a list whose rows are the same rows either way. What width buys is the space each row has to
- * spend, not a different arrangement — the same principle the control center's `width`-aware
- * screens follow.
+ * It is NOT theme-agnostic by accident: `[data-theme]` is set by the host from
+ * `vscode.window.activeColorTheme`, so a light editor gets the dashboard's light palette rather
+ * than the dark one bolted into a bright window. Only the FOCUS ring and the scrollbar are borrowed
+ * from VS Code — those belong to the editor's input conventions, not to ours.
+ *
+ * The layout is single-column and stays single-column. The sidebar is routinely 280–320px and an
+ * editor tab is 1400px; what width buys is the room each row has to spend, not a different
+ * arrangement — the same principle the control center's width-aware screens follow.
  */
 
-:root {
-  --gap: 8px;
-  --radius: 4px;
+:root,
+body[data-theme='dark'] {
+  --bg-base: #0a0a0f;
+  --bg-surface: #111118;
+  --bg-card: #16161f;
+  --bg-card-hover: #1c1c28;
+  --bg-elevated: #1e1e2e;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
+
+  --accent: #d97706;
+  --accent-light: #f59e0b;
+  --accent-dim: rgba(217, 119, 6, 0.15);
+
+  --green: #10b981;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --blue: #6366f1;
+  --cyan: #06b6d4;
+  --purple: #8b5cf6;
+
+  --text-primary: rgba(255, 255, 255, 0.92);
+  --text-secondary: rgba(255, 255, 255, 0.55);
+  --text-tertiary: rgba(255, 255, 255, 0.3);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --gap: 10px;
 }
+
+body[data-theme='light'] {
+  --bg-base: #f4f4f7;
+  --bg-surface: #fafafc;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f0f1f5;
+  --bg-elevated: #f0f1f5;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.16);
+
+  --accent: #f97316;
+  --accent-light: #fb923c;
+  --accent-dim: rgba(249, 115, 22, 0.12);
+
+  --green: #047857;
+  --amber: #b45309;
+  --red: #b91c1c;
+  --blue: #4338ca;
+  --cyan: #0e7490;
+  --purple: #7c3aed;
+
+  --text-primary: #18181b;
+  --text-secondary: rgba(24, 24, 27, 0.55);
+  --text-tertiary: rgba(24, 24, 27, 0.35);
+}
+
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
   padding: 0;
   font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
-  color: var(--vscode-foreground);
-  background: var(--vscode-sideBar-background);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  background: var(--bg-base);
 }
 
-button {
-  font-family: inherit;
-  font-size: inherit;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  padding: 4px 8px;
+/* ---------------------------------------------------------------- buttons */
+
+.btn {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-primary);
   cursor: pointer;
-  background: var(--vscode-button-secondaryBackground);
-  color: var(--vscode-button-secondaryForeground);
+  transition: background .12s ease, border-color .12s ease;
 }
+.btn:hover:not(:disabled) { background: var(--bg-card-hover); border-color: var(--border-strong); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.btn.primary:hover:not(:disabled) { background: var(--accent-light); border-color: var(--accent-light); }
+.btn.ghost { background: transparent; }
+.btn.small { padding: 3px 8px; font-size: 12px; }
+.btn.tiny { padding: 2px 7px; font-size: 11.5px; border-radius: 6px; }
 
-button:hover:not(:disabled) { background: var(--vscode-button-secondaryHoverBackground); }
-button:disabled { opacity: 0.5; cursor: default; }
-button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-button.primary:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
-button.ghost { background: transparent; border-color: var(--vscode-contrastBorder, transparent); }
-button.link {
-  background: none;
-  border: none;
-  padding: 0 4px;
-  color: var(--vscode-textLink-foreground);
-  text-decoration: underline;
-}
+:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 
 input {
-  font-family: inherit;
-  /* 13px minimum: anything smaller is unreadable on a high-DPI panel at this width. */
-  font-size: max(13px, var(--vscode-font-size));
+  font: inherit;
+  /* 13px floor: anything smaller is unreadable in a 300px panel on a high-DPI screen. */
+  font-size: max(13px, 13px);
   width: 100%;
-  box-sizing: border-box;
-  padding: 4px 6px;
-  border-radius: var(--radius);
-  color: var(--vscode-input-foreground);
-  background: var(--vscode-input-background);
-  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 5px 8px;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
+input::placeholder { color: var(--text-tertiary); }
+input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 
-input:focus { outline: 1px solid var(--vscode-focusBorder); }
+/* ---------------------------------------------------------------- header */
 
-.header {
+.ag-header {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 3;
   padding: var(--gap);
-  background: var(--vscode-sideBar-background);
-  border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+.header-top { display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap; }
+.header-actions { display: flex; gap: 5px; margin-left: auto; flex-wrap: wrap; }
+
+.brand { display: flex; align-items: center; gap: 6px; }
+.brand-mark { color: var(--accent); font-size: 15px; }
+.brand-word {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
 }
 
-.bar { display: flex; gap: 4px; flex-wrap: wrap; }
-.filters { display: flex; gap: 4px; margin-top: var(--gap); align-items: center; }
+/* Waiting on a person: the one thing on this screen that must be readable without reading. */
+.attention {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--gap);
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.attention-dot { color: var(--accent-light); }
+
+.filters { display: flex; gap: 6px; margin-top: var(--gap); align-items: center; }
 .filters .search { flex: 1; }
 
-.toggle.on {
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
+.chip {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: default;
+  white-space: nowrap;
 }
+button.chip { cursor: pointer; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip.task { border-color: var(--purple); color: var(--purple); }
 
-/* The waiting count: readable without reading, and never the only thing that says it. */
-.attention { display: none; }
-.attention.visible {
-  display: block;
-  margin-top: var(--gap);
-  padding: 4px 8px;
-  border-radius: var(--radius);
-  color: var(--vscode-inputValidation-warningForeground, var(--vscode-foreground));
-  background: var(--vscode-inputValidation-warningBackground);
-  border: 1px solid var(--vscode-inputValidation-warningBorder, transparent);
-}
+/* The harness keeps its own colour, the same one the dashboard and the cockpit give it. */
+.chip.harness { text-transform: lowercase; letter-spacing: .02em; }
+.chip.h-claude { color: #d97706; border-color: rgba(217, 119, 6, .45); }
+.chip.h-codex { color: #10b981; border-color: rgba(16, 185, 129, .45); }
+.chip.h-gemini { color: #6366f1; border-color: rgba(99, 102, 241, .45); }
+.chip.h-copilot { color: #06b6d4; border-color: rgba(6, 182, 212, .45); }
+.chip.h-antigravity { color: #8b5cf6; border-color: rgba(139, 92, 246, .45); }
+.chip.h-kimi { color: #ec4899; border-color: rgba(236, 72, 153, .45); }
+.chip.harness.on { color: #fff; }
 
-.banner { display: none; }
-.banner.visible {
-  display: block;
-  margin: var(--gap);
-  padding: 8px;
-  border-radius: var(--radius);
-  background: var(--vscode-inputValidation-errorBackground);
-  border: 1px solid var(--vscode-inputValidation-errorBorder, transparent);
-  color: var(--vscode-inputValidation-errorForeground, var(--vscode-foreground));
-}
+/* ---------------------------------------------------------------- banners */
 
-.result { display: none; }
-.result.visible {
-  display: block;
-  margin: 0 var(--gap) var(--gap);
-  padding: 6px 8px;
-  border-radius: var(--radius);
-  background: var(--vscode-editorWidget-background);
-  border-left: 2px solid var(--vscode-charts-green, var(--vscode-focusBorder));
+.banner, .result { display: none; }
+.banner.visible, .result.visible {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  flex-wrap: wrap;
+  margin: var(--gap) var(--gap) 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  border-left: 2px solid var(--border-strong);
 }
-.result.bad { border-left-color: var(--vscode-errorForeground); }
+.banner.bad { border-left-color: var(--red); }
+.result.ok { border-left-color: var(--green); }
+.result.bad { border-left-color: var(--red); }
 
 .notice {
   margin: var(--gap);
-  padding: 6px 8px;
-  border-radius: var(--radius);
-  background: var(--vscode-editorWidget-background);
-  color: var(--vscode-descriptionForeground);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-secondary);
 }
 
-.list { padding: 0 var(--gap) 24px; }
+.body { padding: 0 var(--gap) 24px; }
+.dim { color: var(--text-secondary); }
+.section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-tertiary);
+  margin: var(--gap) 0 4px;
+}
+
+/* ---------------------------------------------------------------- the list */
 
 .group {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 12px 0 4px;
+  margin: 16px 0 6px;
+}
+.group-name {
   font-weight: 600;
-  color: var(--vscode-descriptionForeground);
-  text-transform: none;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-tertiary);
 }
-.group .count {
-  font-weight: 400;
-  opacity: 0.7;
+.group-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-card);
+  border-radius: 999px;
+  padding: 0 6px;
 }
 
-.row {
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: var(--radius);
-  padding: 6px 8px;
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
   margin-bottom: 6px;
-  background: var(--vscode-editor-background);
+  overflow: hidden;
+  transition: border-color .12s ease, background .12s ease;
 }
-.row.busy { opacity: 0.6; }
+.card:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
+.card.busy { opacity: .55; }
 
-.row-head {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
+.card-open {
+  display: block;
   width: 100%;
+  text-align: left;
   background: none;
   border: none;
-  padding: 0;
-  text-align: left;
   color: inherit;
+  font: inherit;
+  padding: 9px 11px 7px;
+  cursor: pointer;
 }
-
-.row-head .title { flex: 1; font-weight: 600; overflow-wrap: anywhere; }
-.row-head .state { color: var(--vscode-descriptionForeground); font-size: 0.9em; white-space: nowrap; }
-.row-head .dot { color: var(--vscode-descriptionForeground); }
-
-/* Waiting on a person: the one state the eye should find without reading the list. */
-.row.state-waiting .dot,
-.row.state-waiting-approval .dot { color: var(--vscode-charts-orange, var(--vscode-editorWarning-foreground)); }
-.row.state-waiting-approval { border-color: var(--vscode-inputValidation-warningBorder, var(--vscode-panel-border)); }
-.row.state-working .dot { color: var(--vscode-charts-green, var(--vscode-testing-iconPassed)); }
-.row.state-lost, .row.state-exited, .row.state-closed { opacity: 0.75; }
-
-.meta {
+.card-head { display: flex; align-items: center; gap: 7px; }
+.card-title { flex: 1; font-weight: 600; overflow-wrap: anywhere; }
+.card-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.card-cwd {
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+.card-note { margin-top: 4px; font-size: 12px; color: var(--text-secondary); font-style: italic; }
+.card-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 6px;
-  margin-top: 4px;
-  font-size: 0.9em;
-  color: var(--vscode-descriptionForeground);
-}
-.meta .cwd { overflow-wrap: anywhere; opacity: 0.8; }
-.meta .harness { text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.85em; }
-
-.chip {
-  padding: 1px 6px;
-  border-radius: 10px;
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
-  border: none;
-  font-size: 0.9em;
-}
-.chip.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-
-.note { margin-top: 4px; font-style: italic; color: var(--vscode-descriptionForeground); }
-.dim { color: var(--vscode-descriptionForeground); }
-
-.detail { margin-top: 8px; border-top: 1px solid var(--vscode-panel-border); padding-top: 8px; }
-.detail .label {
-  font-size: 0.85em;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--vscode-descriptionForeground);
-  margin-bottom: 4px;
+  gap: 5px;
+  padding: 0 11px 9px;
 }
 
-/* The dialog, verbatim. It scrolls inside its own box — never the panel. */
-.dialog {
-  margin: 0 0 8px;
-  padding: 6px;
-  max-height: 220px;
-  overflow: auto;
-  white-space: pre;
-  font-family: var(--vscode-editor-font-family);
-  font-size: 0.9em;
-  background: var(--vscode-textCodeBlock-background);
-  border-radius: var(--radius);
+.dot { font-size: 9px; line-height: 1; color: var(--text-tertiary); }
+.state-waiting .dot, .state-waiting-approval .dot { color: var(--amber); }
+.state-working .dot { color: var(--green); }
+.state-waiting-approval { border-color: rgba(245, 158, 11, .45); }
+.state-lost, .state-exited, .state-closed, .state-unknown { opacity: .8; }
+
+.state-pill {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
 }
+.state-pill.working { color: var(--green); }
+.state-pill.waiting, .state-pill.waiting-approval { color: var(--amber); }
 
-.options { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-.option { text-align: left; }
-.option.selected { border-color: var(--vscode-focusBorder); }
-
-.verbs { display: flex; flex-wrap: wrap; gap: 4px; }
-.text-verb { display: flex; gap: 4px; margin-top: 8px; align-items: center; }
-.text-verb input { flex: 1; }
-
-.empty { padding: 24px var(--gap); text-align: center; color: var(--vscode-descriptionForeground); }
+.empty { padding: 32px var(--gap); text-align: center; color: var(--text-secondary); }
 .empty p { margin: 4px 0; }
 
+/* ---------------------------------------------------------------- one session */
+
+.session { padding-top: var(--gap); }
+.session-head {
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+.session-title { display: flex; align-items: center; gap: 7px; }
+.session-name { flex: 1; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.session-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.session-cwd { margin-top: 6px; font-size: 11.5px; color: var(--text-tertiary); overflow-wrap: anywhere; }
+.session-note { margin-top: 5px; font-size: 12px; color: var(--text-secondary); font-style: italic; }
+.session-tools { display: flex; gap: 5px; flex-wrap: wrap; margin-top: var(--gap); }
+
+.approval {
+  margin-top: var(--gap);
+  padding: 10px 11px;
+  border: 1px solid var(--amber);
+  border-radius: var(--radius-md);
+  background: var(--accent-dim);
+}
+.approval-title { font-weight: 600; margin-bottom: 6px; }
+.options { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.option {
+  font: inherit;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.option:hover { background: var(--bg-card-hover); border-color: var(--accent); }
+.option.selected { border-color: var(--accent); }
+
+.dialog, .screen {
+  margin: 0;
+  font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre;
+  overflow: auto;
+}
+.dialog {
+  padding: 8px;
+  max-height: 220px;
+  background: var(--bg-base);
+  border-radius: var(--radius-sm);
+}
+
+/* The live screen. It scrolls INSIDE its own box — the page never scrolls sideways. */
+.screen-box {
+  margin-top: var(--gap);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-base);
+  overflow: hidden;
+}
+.screen {
+  padding: 10px;
+  /* Tall enough to be a terminal, short enough to leave the composer and the verbs on screen in a
+     sidebar. It grows with the panel rather than being pinned to a line count. */
+  height: clamp(180px, 46vh, 620px);
+}
+.screen-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  font-size: 11.5px;
+}
+.pill {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+.pill.live { color: var(--green); }
+.pill.connecting { color: var(--text-secondary); }
+.pill.finished { color: var(--blue); }
+.pill.ended, .pill.stalled { color: var(--red); }
+
+/* ---------------------------------------------------------------- composer */
+
+.composer { margin-top: var(--gap); }
+.composer-row { display: flex; gap: 5px; align-items: center; }
+.composer-input { flex: 1; }
+.composer-failed {
+  margin-top: 6px;
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--red);
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+.verbs-box { margin-top: var(--gap); }
+.verbs { display: flex; flex-wrap: wrap; gap: 5px; }
+.text-verb { display: flex; gap: 5px; margin-top: 8px; align-items: center; }
+.text-verb input { flex: 1; }
+
+/* ---------------------------------------------------------------- wizard */
+
 .wizard {
-  margin: var(--gap);
-  padding: var(--gap);
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: var(--radius);
-  background: var(--vscode-editorWidget-background);
+  margin-top: var(--gap);
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
 }
 .wizard-title { font-weight: 600; margin-bottom: var(--gap); }
 .field { margin-bottom: var(--gap); }
-.field label { display: block; font-size: 0.9em; color: var(--vscode-descriptionForeground); margin-bottom: 2px; }
-.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-.places { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.field label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.places { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 .place {
   display: flex;
-  gap: 6px;
+  gap: 7px;
   align-items: baseline;
   text-align: left;
+  font: inherit;
+  color: inherit;
   background: none;
   border: none;
-  padding: 3px 4px;
-  border-radius: var(--radius);
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
 }
-.place:hover { background: var(--vscode-list-hoverBackground); }
+.place:hover { background: var(--bg-card-hover); }
 .place-name { font-weight: 600; }
-.place-repo { font-size: 0.85em; color: var(--vscode-descriptionForeground); }
-.place-detail { font-size: 0.85em; opacity: 0.7; overflow-wrap: anywhere; }
-.wizard-buttons { display: flex; gap: 4px; flex-wrap: wrap; }
+.place-repo { font-size: 11px; color: var(--text-secondary); }
+.place-detail { font-size: 11px; color: var(--text-tertiary); overflow-wrap: anywhere; }
+.wizard-buttons { display: flex; gap: 5px; flex-wrap: wrap; }
+
+/* The editor's own scrollbar conventions — this is the one place borrowing beats matching. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground); }

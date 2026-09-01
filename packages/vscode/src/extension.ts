@@ -13,9 +13,10 @@ import { AgentopClient } from './api'
 import { resolveEndpoints, type Endpoints } from './config'
 import { openDashboard } from './dashboard'
 import { resolveLang, strings, type Lang } from './i18n'
-import { SessionsHub, SessionsViewProvider, openSessionsPanel } from './sessions'
+import { disposePanels, openFleetPanel, openSessionPanel, retitleSessionPanel } from './panels'
+import { SessionsHub, SessionsViewProvider, themeKind } from './sessions'
 import { StatusBar } from './status-bar'
-import { forgetClosedTerminal, startServerInTerminal } from './terminal'
+import { attachInTerminal, forgetClosedTerminal, startServerInTerminal } from './terminal'
 
 export function activate(context: vscode.ExtensionContext): void {
   let endpoints: Endpoints = read().endpoints
@@ -38,19 +39,37 @@ export function activate(context: vscode.ExtensionContext): void {
     return vscode.workspace.getConfiguration('agentistics').get<T>(key) ?? fallback
   }
 
+  function dashboardNotice(): string {
+    return lang === 'pt'
+      ? `Não dá para carregar ${endpoints.dashboard} — verifique agentistics.dashboardUrl.`
+      : `${endpoints.dashboard} cannot be loaded — check agentistics.dashboardUrl.`
+  }
+
   const hub = new SessionsHub(context, {
     client: () => new AgentopClient(endpoints.api, lang),
+    api: () => endpoints.api,
     strings: () => words,
     lang: () => lang,
     notifyOnAttention: () => setting('notifyOnAttention', true),
     onAttention: count => statusBar.setAttention(count),
     openDashboard: () => void openDashboard(endpoints.dashboard, 'Agentistics', dashboardNotice()),
+    openTab: id => void openSessionTab(id),
   })
 
-  function dashboardNotice(): string {
-    return lang === 'pt'
-      ? `Não dá para carregar ${endpoints.dashboard} — verifique agentistics.dashboardUrl.`
-      : `${endpoints.dashboard} cannot be loaded — check agentistics.dashboardUrl.`
+  /**
+   * Open one session as its own tab, titled with what the session is CALLED.
+   *
+   * The title is read from the fleet rather than from the id: a tab strip full of `3f5f21a8b0c1`
+   * is a tab strip nobody can use, which is the whole reason several of these can be open at once.
+   * An id that is not in the fleet still opens — the panel itself says the session is gone, which
+   * is a better answer than a command that appears to do nothing.
+   */
+  async function openSessionTab(id: string): Promise<void> {
+    const { payload } = await new AgentopClient(endpoints.api, lang).fleet()
+    const row = payload?.sessions.find(r => r.id === id)
+    const title = row ? `${row.title} · agentop` : `agentop · ${id.slice(0, 8)}`
+    openSessionPanel(hub, id, title)
+    if (row) retitleSessionPanel(id, title)
   }
 
   // A setting that could not be read is REPORTED, not silently replaced: a panel quietly reading a
@@ -60,16 +79,20 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     hub,
     statusBar,
+    { dispose: disposePanels },
     vscode.window.registerWebviewViewProvider(
       SessionsViewProvider.viewType,
       new SessionsViewProvider(hub),
-      // The panel keeps its search text and whichever row was open while it is hidden behind
-      // another view — losing both on every tab switch is what makes a sidebar unusable.
+      // The panel keeps its search text, its open session and its half-typed line while it is
+      // hidden behind another view — losing those on every switch is what makes a sidebar unusable.
       { webviewOptions: { retainContextWhenHidden: true } },
     ),
     vscode.window.onDidCloseTerminal(forgetClosedTerminal),
+    // The terminal's palette follows the editor's theme, so a light window does not get a black
+    // screen with the dashboard's dark ANSI colours on it.
+    vscode.window.onDidChangeActiveColorTheme(() => hub.setTheme(themeKind())),
     vscode.commands.registerCommand('agentistics.openSessions', () => {
-      openSessionsPanel(hub, `Agentistics — ${words.title}`)
+      openFleetPanel(hub, `Agentistics — ${words.title}`)
     }),
     vscode.commands.registerCommand('agentistics.openDashboard', () =>
       openDashboard(endpoints.dashboard, 'Agentistics', dashboardNotice())),
@@ -85,7 +108,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const folders = vscode.workspace.workspaceFolders ?? []
       hub.openWizard(folders.length === 1 ? folders[0]!.uri.fsPath : undefined)
     }),
-    vscode.commands.registerCommand('agentistics.attachSession', () => attachViaPicker()),
+    vscode.commands.registerCommand('agentistics.openSession', () => pickSession('open')),
+    vscode.commands.registerCommand('agentistics.attachSession', () => pickSession('attach')),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (!event.affectsConfiguration('agentistics')) return
       const next = read()
@@ -100,40 +124,43 @@ export function activate(context: vscode.ExtensionContext): void {
   )
 
   /**
-   * The palette route to attaching, for the keyboard-first user who never opens the panel.
+   * The palette route in, for the keyboard-first user who never opens the sidebar.
    *
    * It asks the SERVER which rows exist and what each one is called rather than composing a list
    * here: the labels, the state words and which rows can be attached to at all are decisions that
    * were already made, in the cockpit's own wording.
    */
-  async function attachViaPicker(): Promise<void> {
+  async function pickSession(then: 'open' | 'attach'): Promise<void> {
     const client = new AgentopClient(endpoints.api, lang)
     const { link, payload } = await client.fleet()
     if (link.state !== 'ok' || !payload) {
       void vscode.window.showWarningMessage(words.networkError ?? 'No answer.')
       return
     }
-    const attachable = payload.sessions.filter(row => row.actionable)
-    if (attachable.length === 0) {
-      void vscode.window.showInformationMessage(words.emptyNone ?? 'Nothing to attach to.')
+    const rows = then === 'attach' ? payload.sessions.filter(r => r.actionable) : payload.sessions
+    if (rows.length === 0) {
+      void vscode.window.showInformationMessage(words.emptyNone ?? 'Nothing to open.')
       return
     }
     const picked = await vscode.window.showQuickPick(
-      attachable.map(row => ({
+      rows.map(row => ({
         label: row.title,
         description: row.stateLabel,
         detail: `${row.harness} · ${row.cwd}`,
         id: row.id,
       })),
-      { placeHolder: words.attach },
+      { placeHolder: then === 'attach' ? words.attach : words.openTab },
     )
     if (!picked) return
+    if (then === 'open') {
+      await openSessionTab(picked.id)
+      return
+    }
     const ticket = await client.attach(picked.id)
     if (!ticket) {
       void vscode.window.showWarningMessage(words.attachUnavailable ?? 'Cannot attach.')
       return
     }
-    const { attachInTerminal } = await import('./terminal')
     attachInTerminal(picked.id, ticket, words)
   }
 
