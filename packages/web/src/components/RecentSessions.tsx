@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, lazy, Suspense, useSyncExternalStore } from 'react'
+import React, { useState, useMemo, useEffect, useRef, useReducer, lazy, Suspense, useSyncExternalStore } from 'react'
 import type { SessionMeta } from '@agentistics/core'
 import { sessionTime } from '../lib/sessionTime'
 import { formatProjectName, repoShortName, sessionLabel, sessionTokenTotal } from '@agentistics/core'
@@ -8,6 +8,13 @@ import { primaryAction, isWatchable, type PrimaryAction } from '../lib/sessionAc
 import { SessionActionsMenu, SessionActionsPanel, useSessionActionsController } from './SessionActions'
 import { useTerminalStream } from '../hooks/useTerminalStream'
 import { terminalStatus, type TerminalTone } from '../lib/terminalStream'
+import {
+  INITIAL_COMPOSER,
+  canSubmit,
+  composerReducer,
+  interactionBlock,
+} from '../lib/terminalInput'
+import { operatorId, recordPromptSend, resolveAuthor } from '../lib/promptAudit'
 import { getTerminalZoom, setTerminalZoom, subscribeTerminalZoom, ZOOM_STEP, ZOOM_MIN, ZOOM_MAX } from '../lib/terminalZoom'
 import { getPinnedIds, isSessionPinned, togglePinnedSession, subscribePinnedSessions, pinnedServerSnapshot, MAX_PINNED } from '../lib/pinnedSessions'
 import { getOpenModalSession, setOpenModalSession, subscribeOpenModalSession } from '../lib/openModalSession'
@@ -46,6 +53,7 @@ import {
   Send,
   RotateCcw,
   Hand,
+  Keyboard,
   ZoomIn,
   ZoomOut,
   Pin,
@@ -1617,13 +1625,19 @@ function TerminalZoomControls({ lang }: { lang: 'pt' | 'en' }) {
   )
 }
 
-function TerminalRegion({ id, theme, lang, fill, onMaximize }: {
+function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, authorName }: {
   id: string; theme: 'dark' | 'light'; lang: 'pt' | 'en'
   /** Fill the available height (in the modal) instead of a fixed card-sized box. */
   fill?: boolean
   /** When set, a maximize button opens the modal — where the box is wide enough to read a wide pane
    *  at a larger scale. Absent inside the modal itself (already maximized). */
   onMaximize?: () => void
+  /** The live fleet row this terminal is showing. When present with `act`, the region becomes
+   *  INTERACTIVE — a consent-gated line composer under the screen (see `TerminalComposer`). */
+  row?: FleetRow
+  act?: (req: { id: string; action: FleetActionId; text?: string; choice?: number })
+    => Promise<{ ok: boolean; message: string }>
+  authorName?: string
 }) {
   const isMobile = useIsMobile()
   const { state, reconnect } = useTerminalStream(id)
@@ -1699,9 +1713,220 @@ function TerminalRegion({ id, theme, lang, fill, onMaximize }: {
           </button>
         )}
       </div>
+      {/* Phase 2 — the WRITE half: a consent-gated line composer, present only when this region is
+          driving a live fleet row the page can act on. Read-only terminals (history rows, or a page
+          with no `act`) render no composer, so a field that does nothing is never shown. */}
+      {row && act && (
+        <TerminalComposer row={row} act={act} authorName={authorName} lang={lang} isMobile={isMobile} />
+      )}
       <style>{`@keyframes ag-term-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }`}</style>
     </div>
   )
+}
+
+/**
+ * TerminalComposer — the interactive write channel under the live terminal.
+ *
+ * It renders the four decisions of `lib/terminalInput.ts` (all localized here, the logic pure there):
+ *  - CONSENT: read-only until you press "Type into this session"; a "Stop typing" revokes it.
+ *  - BATCHED: a native input is the local line editor; ONE `prompt` request carries the finished line.
+ *  - HONEST DELIVERY: the draft is a visibly-distinct LOCAL line; on submit it goes sending →
+ *    delivered (cleared) | failed (kept verbatim, with the server's reason). A key is never accepted
+ *    then lost — nothing is delivered per key, and the one line's outcome is always on screen.
+ *  - AUDIT: the delivered-or-failed line is recorded through `recordPromptSend`; keystrokes are not.
+ */
+function TerminalComposer({ row, act, authorName, lang, isMobile }: {
+  row: FleetRow
+  act: (req: { id: string; action: FleetActionId; text?: string; choice?: number })
+    => Promise<{ ok: boolean; message: string }>
+  authorName?: string
+  lang: 'pt' | 'en'
+  isMobile: boolean
+}) {
+  const [composer, dispatch] = useReducer(composerReducer, INITIAL_COMPOSER)
+  // A brief "delivered" confirmation; the durable record lives in the audit panel below the card.
+  const [flash, setFlash] = useState(false)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const t = COMPOSER_T[lang]
+
+  // A session that has just gone un-typable (killed, or fell onto a dialog) must not keep an armed
+  // composer that can only fail — disarm it and say why in the block notice below.
+  const block = interactionBlock(row.state)
+  useEffect(() => {
+    if (block && composer.armed) dispatch({ type: 'disarm' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [block])
+
+  async function send() {
+    if (!canSubmit(composer)) return
+    const text = composer.draft
+    dispatch({ type: 'submit' })
+    setFlash(false)
+    const out = await act({ id: row.id, action: 'prompt', text })
+    // AUDIT the atomic line — accepted or refused — through the one write-channel record. Local edits
+    // reached here as nothing; only this send is a record (decision 4).
+    recordPromptSend({
+      author: resolveAuthor({ accountName: authorName, operatorId: operatorId() }),
+      sessionId: row.id,
+      sessionTitle: row.title,
+      harness: row.harness,
+      text,
+      ok: out.ok,
+      message: out.message,
+    })
+    dispatch({ type: 'sent', ok: out.ok, message: out.message })
+    if (out.ok) {
+      setFlash(true)
+      inputRef.current?.focus()
+    }
+  }
+
+  // A row that cannot be typed into says why, in one sentence, and offers no arming button — the same
+  // rule the session menu applies: a control that does nothing is worse than an honest refusal.
+  if (block) {
+    return (
+      <div style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <Keyboard size={12} style={{ opacity: 0.6 }} />
+        <span>{t.block[block]}</span>
+      </div>
+    )
+  }
+
+  if (!composer.armed) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <button
+          onClick={(e) => { e.stopPropagation(); dispatch({ type: 'arm' }); setFlash(false); setTimeout(() => inputRef.current?.focus(), 0) }}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0,
+            minHeight: isMobile ? 44 : 28, padding: isMobile ? '0 16px' : '4px 12px', borderRadius: 8,
+            fontSize: isMobile ? 13 : 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+            border: '1px solid var(--anthropic-orange)', background: 'transparent', color: 'var(--anthropic-orange)',
+          }}
+        >
+          <Keyboard size={13} /> <span>{t.arm}</span>
+        </button>
+        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{t.readonly}</span>
+      </div>
+    )
+  }
+
+  const sending = composer.status === 'sending'
+  const failed = composer.status === 'failed'
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,
+        // A LOCAL DRAFT, drawn distinctly from the session's own output so local echo is never
+        // mistaken for the session having received it.
+        borderLeft: '2px solid var(--anthropic-orange)', paddingLeft: 10,
+      }}
+    >
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, fontSize: 11, fontWeight: 600, color: 'var(--anthropic-orange)' }}>
+        <Send size={11} style={{ flexShrink: 0 }} />
+        <span style={{ color: 'var(--text-tertiary)', fontWeight: 500, flexShrink: 0 }}>{t.writingTo}</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${row.title} · ${row.id}`}>{row.title}</span>
+        <code style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 10, opacity: 0.75, flexShrink: 0 }}>{row.id}</code>
+      </div>
+      <form
+        onSubmit={(e) => { e.preventDefault(); void send() }}
+        style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', minWidth: 0 }}
+      >
+        <span style={{ color: 'var(--anthropic-orange)', fontFamily: 'var(--font-mono, monospace)', fontWeight: 700, flexShrink: 0 }}>›</span>
+        <input
+          ref={inputRef}
+          value={composer.draft}
+          disabled={sending}
+          onChange={(e) => dispatch({ type: 'edit', draft: e.target.value })}
+          placeholder={t.placeholder}
+          aria-label={t.arm}
+          // No inline font-size: index.css guarantees >= 16px on mobile; overriding it zooms iOS.
+          style={{
+            flex: '1 1 220px', minWidth: 0, minHeight: isMobile ? 44 : 28, padding: '0 10px', borderRadius: 8,
+            border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)',
+            fontFamily: 'var(--font-mono, monospace)', outline: 'none', opacity: sending ? 0.6 : 1,
+          }}
+        />
+        <button
+          type="submit"
+          disabled={!canSubmit(composer)}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0,
+            minHeight: isMobile ? 44 : 28, padding: isMobile ? '0 16px' : '4px 12px', borderRadius: 8,
+            fontSize: isMobile ? 13 : 12, fontWeight: 600, fontFamily: 'inherit',
+            cursor: canSubmit(composer) ? 'pointer' : 'default', opacity: canSubmit(composer) ? 1 : 0.5,
+            border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange)', color: '#fff',
+          }}
+        >
+          <Send size={13} /> <span>{sending ? t.sending : t.send}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => dispatch({ type: 'disarm' })}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0,
+            minHeight: isMobile ? 44 : 28, padding: isMobile ? '0 14px' : '4px 10px', borderRadius: 8,
+            fontSize: isMobile ? 13 : 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+            border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-secondary)',
+          }}
+        >
+          <Hand size={13} /> <span>{t.stop}</span>
+        </button>
+      </form>
+      {/* HONEST DELIVERY — the one place the line's fate is reported. */}
+      {sending && <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{t.delivering}</div>}
+      {failed && (
+        <div role="status" style={{ fontSize: 11, color: '#ef4444', lineHeight: 1.5 }}>
+          <strong>{t.notDelivered}</strong> {composer.error} <span style={{ color: 'var(--text-tertiary)' }}>· {t.retryHint}</span>
+        </div>
+      )}
+      {flash && !sending && !failed && (
+        <div role="status" style={{ fontSize: 11, color: '#22c55e', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <Check size={12} /> {t.delivered}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const COMPOSER_T = {
+  pt: {
+    arm: 'Digitar nesta sessão',
+    readonly: 'Somente leitura até você começar a digitar.',
+    stop: 'Parar',
+    writingTo: 'Escrevendo em',
+    placeholder: 'Uma linha para enviar a esta sessão…',
+    send: 'Enviar',
+    sending: 'Enviando…',
+    delivering: 'Entregando a linha…',
+    delivered: 'Entregue à sessão.',
+    notDelivered: 'Não entregue:',
+    retryHint: 'a linha foi mantida; revise e reenvie.',
+    block: {
+      external: 'Esta sessão não foi iniciada pelo agentop — nada aqui pode escrever nela.',
+      'not-running': 'Esta sessão não está rodando — não há processo para receber o que você digitar.',
+      'awaiting-approval': 'Esta sessão está esperando uma resposta numa caixa de diálogo. Responda o diálogo — não dá para digitar por cima dele.',
+    } as Record<string, string>,
+  },
+  en: {
+    arm: 'Type into this session',
+    readonly: 'Read-only until you start typing.',
+    stop: 'Stop',
+    writingTo: 'Writing to',
+    placeholder: 'One line to send to this session…',
+    send: 'Send',
+    sending: 'Sending…',
+    delivering: 'Delivering the line…',
+    delivered: 'Delivered to the session.',
+    notDelivered: 'Not delivered:',
+    retryHint: 'the line was kept; edit and resend.',
+    block: {
+      external: 'This session was not started by agentop — nothing here can write to it.',
+      'not-running': 'This session is not running — there is no process to receive what you type.',
+      'awaiting-approval': 'This session is waiting on a dialog answer. Answer the dialog — you cannot type past it.',
+    } as Record<string, string>,
+  },
 }
 
 // ---- the primary lead action ---------------------------------------------------------------------
@@ -1931,7 +2156,7 @@ function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleet
   // lesser cost, and it is bounded by the connecting stall/reconnect above.
   const body = (large: boolean) => (
     <>
-      {watchable && <TerminalRegion id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} fill={large} onMaximize={large ? undefined : () => setModalOpen(true)} />}
+      {watchable && <TerminalRegion id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} fill={large} onMaximize={large ? undefined : () => setModalOpen(true)} row={fleetRow} act={onFleetAction} authorName={authorName} />}
       <SessionActionsPanel ctrl={ctrl} />
       <CardChips s={s} lang={lang} />
       <CardFooterButtons s={s} lang={lang} onResume={() => setShowResumeModal(true)} />

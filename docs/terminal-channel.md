@@ -7,10 +7,14 @@ doing without anyone opening a terminal and running `tmux attach`.
 This is the **server contract** the web dashboard consumes. The web side (the terminal panel and its
 emulator) must build on exactly this — it does not invent its own endpoint.
 
-**Phase 1 is read-only.** There is no write path yet: no keystrokes reach the session through this
-channel. A write channel (`Phase 2`) is a separate, later delivery with its own security contract;
-until it exists the web must show **no input box**, because a text field that does nothing is the
-same kind of lie as a frozen terminal that looks live.
+**This channel (Phase 1) is read-only.** No keystrokes reach the session through the *stream* — a
+`frame` only ever flows server → browser. The **write** half is a separate concern with its own
+contract: the line-oriented interactive composer built on `POST /api/fleet/act { action:'prompt' }`
+(**Phase 2**, web-only, no new endpoint) is documented in
+[`docs/terminal-interactive.md`](terminal-interactive.md); a raw keystroke channel (**Phase 2b**) is
+the escalation noted there. The rule the read channel set still holds: the web shows **no input box
+that does nothing** — the composer is offered only where a live, managed, typable row backs it, and it
+reports every line's delivery honestly.
 
 ## Transport, and why
 
