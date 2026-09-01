@@ -360,9 +360,35 @@ wired up because the key could not be verified from the CLI itself, and agentop 
 
 ## Scrolling an attached session
 
-Sessions are hosted on agentop's own tmux socket (`-L agentop`), and agentop sets four options on
-it before the first one exists: `remain-on-exit` (a finished session stays listable with its last
-frame readable), `mouse on`, a `history-limit` of 50000 lines, and `status off`.
+Sessions are hosted on agentop's own tmux socket (`-L agentop`), and agentop sets its options on it
+as part of creating the first session: the colour profile (below), `remain-on-exit` (a finished
+session stays listable with its last frame readable), `mouse on`, a `history-limit` of 50000 lines,
+and `status off`.
+
+All of it goes in **one chained tmux invocation** with the `new-session` it precedes, and that is
+not a style choice. `set-option` does not start a tmux server — on a cold socket it fails outright —
+so applied as separate pre-flight calls the options were simply lost, and the very first session
+kept tmux's defaults (8 colours, no mouse, a 2000-line buffer) until a second session happened to
+warm the server. Chaining runs every command against the single server tmux starts for the batch,
+in order, so an option that must precede its pane actually does.
+
+**Colour — a pane inside tmux should render like the CLI does outside it.** tmux's own
+`default-terminal` is `screen`, which advertises 8 colours, so a CLI in the pane self-downgrades
+even when the terminal you attach from does 256 or truecolor (measured on tmux 3.2a: `tput colors`
+is 8 inside such a pane against 256 outside). agentop sets `default-terminal` to the richest
+256-colour terminfo entry that provably exists on the host — `tmux-256color`, else `screen-256color`
+— which takes the pane to 256; a host with neither keeps tmux's default rather than naming an entry
+that is not installed. This is safe for every client because tmux downsamples per attach.
+
+Truecolor is added only when the terminal that *invoked* the session declared it (`COLORTERM` =
+`truecolor`/`24bit`), and it is keyed to that terminal's own `$TERM`: a `terminal-features
+,<TERM>:RGB` capability (appended, so tmux's built-in features survive) plus `COLORTERM=truecolor`
+carried into the pane so the CLI actually emits 24-bit. Keying to the invoker's `$TERM` is the
+compatibility guarantee — a different, less capable client attaching later never matches it and is
+rendered at 256 rather than fed RGB it cannot show. `-2` (force-256 on attach) was evaluated and
+left out: its effect on the attaching client could not be measured on 3.2a, and agentop does not
+ship a flag it could not verify — the attaching client's depth follows its own `$TERM` terminfo,
+which is exactly the terminfo the CLI would use outside tmux.
 
 The status bar is off because every fact it carries is wrong here: it lists windows and an agentop
 session is one window with one pane, it shows the session name and that name is `agentop-<id>`
@@ -374,10 +400,10 @@ nothing else, so attaching to a session to read what it did was attaching to a s
 read. The trade is that dragging to select now goes to tmux rather than to your terminal: **hold
 shift** to select and copy the terminal's own way.
 
-The scrollback is set up front because it does not apply retroactively — a pane created before it
-keeps tmux's default 2000 for as long as it lives. Sessions started by an older agentop therefore
-keep the small buffer until they are reopened; the mouse, being a server option, applies to them
-immediately.
+The scrollback and `default-terminal` are set up front because neither applies retroactively — a
+pane created before them keeps tmux's default 2000-line buffer and 8-colour `screen` for as long as
+it lives. Sessions started by an older agentop therefore keep the small buffer and the flat colours
+until they are reopened; the mouse, being a live server option, applies to them immediately.
 
 None of this touches your own tmux: different socket, different server, different config.
 
