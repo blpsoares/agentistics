@@ -34,6 +34,19 @@ describe('routeCapability', () => {
     // The live terminal channel streams a session's SCREEN. It is a read, but a read of a coding
     // assistant's terminal, so it must be as unreachable on an exposed profile as the fleet itself.
     expect(routeCapability('/api/fleet/stream')).toBe('localShell')
+    // The attach ticket hands out the command that ENTERS a session, and `new` starts a fresh
+    // assistant in a directory the caller names — the most powerful call on the whole route table.
+    expect(routeCapability('/api/fleet/attach')).toBe('localShell')
+    expect(routeCapability('/api/fleet/new')).toBe('localShell')
+  })
+
+  it('guards a fleet route nobody has written yet', () => {
+    // The registration is a PREFIX on purpose: an unregistered route is assumed harmless, so the
+    // next fleet route must be guarded by having been added at all, never by someone having
+    // remembered a second table. This assertion is what keeps that true.
+    expect(routeCapability('/api/fleet/anything-added-later')).toBe('localShell')
+    // …without swallowing a neighbour that merely starts with the same letters.
+    expect(routeCapability('/api/fleetwide')).toBeNull()
   })
 
   it('maps the local chat routes', () => {
