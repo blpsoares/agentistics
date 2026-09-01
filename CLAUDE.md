@@ -21,6 +21,7 @@ packages/
   web/      (@agentistics/web)    — React + Vite frontend
   mcp/      (@agentistics/mcp)    — MCP server, publishable to npm standalone
   tui/      (@agentistics/tui)    — Ink (React) terminal dashboard + the `agentop` control center
+  vscode/   (agentistics-vscode)  — the VS Code extension: a CLIENT of the local server, no more
   desktop/                        — Tauri v2 Windows installer (spawns agentop as sidecar)
 ```
 
@@ -1581,6 +1582,78 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   `host.lang`, never the value it resolved at boot** — the language is a closure variable the in-app
   toggle reassigns, so attaching to a session and detaching remounted the whole cockpit in the
   previous language, with nothing on screen to explain it and nothing to do but restart.
+
+## VS Code extension (`packages/vscode`)
+
+The fourth front door onto the fleet, after the CLI, the cockpit and the web dashboard. See
+`docs/vscode-extension.md`.
+
+```
+packages/vscode/src/
+  extension.ts   activation + wiring, nothing else
+  api.ts         the ONE process that talks HTTP; every method total
+  sessions.ts    SessionsHub: one poll, any number of surfaces, performs every action
+  protocol.ts    the wire shapes (host <-> webview, and the server's answers)
+  view-model.ts  PURE: grouping, ordering, search, the three empty states
+  attention.ts   PURE: which sessions have just started needing a person
+  today.ts       PURE: today's totals + the day rule they use
+  config.ts      PURE: the two endpoints, the second derived from the first
+  i18n.ts        the extension's OWN chrome words, EN/PT — nothing about a session
+  terminal.ts    attach (a real integrated terminal) + starting the server
+  status-bar.ts  today, and the waiting count
+  webview/html.ts  PURE: the CSP'd documents and the escaping
+  webview/main.ts  the panel — DOM calls only
+```
+
+### Rules
+
+- **It is a CLIENT of `agentop server` and never anything more.** It must not read
+  `~/.agentistics`, talk to tmux, or import `server/sessions/*`. A second process
+  read-modify-writing `managed-sessions.json` beside the running server is the registry race
+  `registry.ts` documents — a record written by a short-lived process observed ERASED by a
+  longer-lived one, leaving a user in a session no verb could name.
+- **It holds no rule about what a session may take.** Every `enabled` flag, verb label and refusal
+  sentence arrives already decided from `/api/fleet`, which resolves them through the same
+  `sessionActions` the cockpit resolves every keypress against. The two exceptions are IMPORTED,
+  not restated: `sessionRank` (`@agentistics/tui/control/session-order`) and `sessionRunning`
+  (`.../session-dimensions`), both widened to `Pick<ControlSession, 'state'>` precisely so a client
+  holding the reduced `FleetRow` can call them.
+- **`approve` is an OPTION LIST, never a button.** The server reads the options off the live frame;
+  the panel lists them and sends the picked NUMBER. A single "approve" takes whichever row is
+  highlighted, which on "only my fix / promote everything / stop here" is choosing for someone.
+- **The webview never fetches, and never uses `innerHTML`.** Its `localhost` is the BROWSER's — in a
+  Remote-SSH window that is not the machine the sessions are on — so the extension host asks. And
+  every string on the panel is a session title, a note, a path or a line captured off a terminal: a
+  template literal is one unescaped `<` away from executing it. DOM calls only.
+- **The bell rings on the TRANSITION, never on the level**, and the FIRST poll announces nothing —
+  a machine with nine blocked sessions would greet the user with nine toasts. Only
+  `waiting-approval` raises a toast; plain `waiting` is where every turn ends, so a toast on it is a
+  toast per turn. It still counts toward the badge.
+- **An unreachable server prints a sentence, never a zero.** `down` (nothing answered), `refused`
+  (a central, or a profile with no host power) and a real empty fleet are three different facts and
+  keep three different sentences — the same N/A-versus-a-confident-0 rule the dashboard applies to
+  harness capabilities.
+- **The status bar's day is the UTC one** (`start_time.slice(0,10)`), matching the dashboard's own
+  date presets, and is summed PER SESSION — `stats-cache.json` is Claude-only and today's sessions
+  are all still on disk for every harness. Tokens is all four counters.
+- **`/api/data` gets its own slow timer** (default 300s). It is megabytes; the fleet poll is 5s and
+  a few kilobytes. Polling the large one at the small one's rate spends a megabyte a minute to move
+  a figure that changes once a turn.
+- **New server routes ride the `/api/fleet` PREFIX in `capability-guard.ts`.** It is a prefix and
+  not a list of names so the next fleet route is guarded by having been ADDED, never by having
+  remembered a second table; `capability-guard.test.ts` asserts a not-yet-written path resolves to
+  `localShell`. `POST /api/fleet/new` is the one fleet call that takes a DIRECTORY from the body
+  (`resume` refuses to, and says why) — `fleet-spawn.ts` is the pure reader, and it REFUSES rather
+  than repairs: a relative path resolves against the server's own cwd, an effort outside the CLI's
+  closed enum is a usage error nobody sees, and a model asked for on a harness with no model flag
+  would start a session that is not the one requested.
+- **`GET /api/fleet/attach` checks SCOPE before answering.** `attachSession` composes the command
+  from whatever id it is given, so an unknown id came back as a well-formed ticket for nothing and
+  the client opened a terminal that printed `no such session` and sat there.
+- **The cascade is deliberately absent.** It is measured against `ControlSession.projectRoot`, which
+  is not on the wire; a tree derived client-side by matching the project NAME against each `cwd`
+  goes wrong wherever a path segment repeats. A band per project plus the shortened directory is the
+  honest subset.
 
 ## Important rules
 
