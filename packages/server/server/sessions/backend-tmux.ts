@@ -162,6 +162,12 @@ export const tmuxBackend: SessionBackend = {
 
   sendText: sendTextTo,
 
+  async sendTextRaw(id: string, text: string) {
+    // Literal only, NO Enter — the first half of `sendTextTo`. This is what the browser's key-by-key
+    // channel needs: a character appears without submitting a turn.
+    return (await tmux(sendKeysLiteralArgs(id, text))).code === 0
+  },
+
   async sendKey(id: string, key: string) {
     return (await tmux(sendKeysNamedArgs(id, key))).code === 0
   },

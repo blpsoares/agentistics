@@ -11,8 +11,10 @@ emulator) must build on exactly this — it does not invent its own endpoint.
 `frame` only ever flows server → browser. The **write** half is a separate concern with its own
 contract: the line-oriented interactive composer built on `POST /api/fleet/act { action:'prompt' }`
 (**Phase 2**, web-only, no new endpoint) is documented in
-[`docs/terminal-interactive.md`](terminal-interactive.md); a raw keystroke channel (**Phase 2b**) is
-the escalation noted there. The rule the read channel set still holds: the web shows **no input box
+[`docs/terminal-interactive.md`](terminal-interactive.md); the raw key-by-key channel
+(**Phase 2b**, `WS /api/fleet/input`) is documented in
+[`docs/terminal-write-channel.md`](terminal-write-channel.md). The rule the read channel set still
+holds: the web shows **no input box
 that does nothing** — the composer is offered only where a live, managed, typable row backs it, and it
 reports every line's delivery honestly.
 

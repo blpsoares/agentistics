@@ -73,6 +73,15 @@ import { LIMITS, readJsonLimited } from './limits'
 // and React, so this server names only `fleet-row.ts` — the two handlers load the implementation by
 // dynamic import. Naming `fleet-web` here even in a type position measurably pulled that graph in.
 import type { FleetActionRequest } from './sessions/fleet-row'
+// The live-terminal WRITE channel (Phase 2b). Statically importable — unlike `fleet-web`, this
+// module's own graph is light (registry + the two pure input modules) and resolves the heavy backend
+// LAZILY, so naming its WS handlers here does not pull the Ink/session-view graph into a server that
+// never opens this page. The handlers must be reachable synchronously from the shared `_wsHandlers`.
+import {
+  openInputSocket, onInputMessage, closeInputSocket,
+  createInputState, inputSessionExists, inputAtCapacity, type FleetInputState,
+} from './sessions/input-web'
+import { wsInputOriginOk } from './sessions/input-protocol'
 // Type only: the module itself reaches `cli-start` → `@agentistics/tui/control` → Ink, and is
 // loaded by dynamic import inside the two /api/fleet handlers.
 import { canSeeMemberNames } from './iam-view'
@@ -293,15 +302,27 @@ ensureClaudeChat().catch(err => console.warn('[claude-chat] failed to initialize
 // Bun HTTP server
 // ---------------------------------------------------------------------------
 
-type WSData = { user: string; memberId: string; isAgent?: boolean }
+// Two kinds of socket ride these handlers: the member↔central reverse channel (`isAgent`) and the
+// browser's live-terminal WRITE channel (`fleetInput`). They are disjoint — an agent socket never
+// carries `fleetInput` and vice versa — so each handler dispatches on which field is present.
+type WSData = { user: string; memberId: string; isAgent?: boolean; fleetInput?: FleetInputState }
 
 // Shared WS + request handlers, so the binary can bind the SAME logic to two ports below:
 // PORT (47291 = api + mcp) and WEB_PORT (47292 = the web dashboard you open).
 const _wsHandlers = {
-  open(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; registerAgent(ws) },
-  message(ws: ServerWebSocket<WSData>, msg: string | Buffer) { if (!ws.data.isAgent) return; onAgentMessage(ws, msg) },
+  open(ws: ServerWebSocket<WSData>) {
+    if (ws.data.fleetInput) { openInputSocket(ws); return }
+    if (!ws.data.isAgent) return; registerAgent(ws)
+  },
+  message(ws: ServerWebSocket<WSData>, msg: string | Buffer) {
+    if (ws.data.fleetInput) { onInputMessage(ws, msg); return }
+    if (!ws.data.isAgent) return; onAgentMessage(ws, msg)
+  },
   pong(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; onAgentPong(ws) },
-  close(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; unregisterAgent(ws) },
+  close(ws: ServerWebSocket<WSData>) {
+    if (ws.data.fleetInput) { closeInputSocket(ws); return }
+    if (!ws.data.isAgent) return; unregisterAgent(ws)
+  },
 }
 
 /**
@@ -1014,7 +1035,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // take. A central never answers it: it aggregates many machines and hosts none of their
     // sessions, so a fleet read there would be this box's own processes under someone else's page.
     // `capability-guard.ts` has already refused both paths on an exposed profile.
-    if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act' || url.pathname === '/api/fleet/stream') {
+    if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act' || url.pathname === '/api/fleet/stream' || url.pathname === '/api/fleet/input') {
       if (TEAM_CENTRAL) {
         return new Response(JSON.stringify({ error: 'fleet_central' }), {
           status: 404,
@@ -1087,6 +1108,60 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           'Connection': 'keep-alive',
           'X-Accel-Buffering': 'no',
         },
+      })
+    }
+
+    // The live terminal WRITE channel (Phase 2b): a WebSocket that types key-by-key into one session
+    // — literal characters with NO implicit Enter, and named control keys (`C-c`). Ordering is
+    // guaranteed by ONE connection per session (TCP order) plus a per-connection serial queue on the
+    // server (sessions/input-channel.ts), and every message is confirmed by an ack. It already rides
+    // the SAME gates as `/api/fleet/act`: `localShell` (capability-guard, refused before this block)
+    // and the central-404 above — typing into a session is more power than its line prompt, not less.
+    // This handler adds the two checks a WS UPGRADE needs on top of those: SAME-ORIGIN (CSWSH —
+    // `localShell` being on does not stop a malicious page in the user's own browser from opening a
+    // socket to localhost) and SCOPE (the session must be one this machine manages), plus the ceiling.
+    if (url.pathname === '/api/fleet/input') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (!wsInputOriginOk({ origin: req.headers.get('origin'), host: url.host, allowlist: ALLOWED_ORIGINS, dev: !SERVE_STATIC })) {
+        void writeAudit({ action: 'fleet.input.denied', ip: clientIp, meta: { id, reason: 'origin' } })
+        return new Response(JSON.stringify({ error: 'forbidden_origin' }), {
+          status: 403,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (!(await inputSessionExists(id))) {
+        return new Response(JSON.stringify({ error: 'not_found' }), {
+          status: 404,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (inputAtCapacity()) {
+        return new Response(JSON.stringify({ error: 'too_many_streams' }), {
+          status: 503,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const upgraded = server.upgrade(req, {
+        // user/memberId are the agent-socket fields; a write socket carries none, and `fleetInput`
+        // is what the shared WS handlers dispatch on. The session id is fixed HERE — a message can
+        // never redirect a keystroke to another session.
+        data: { user: '', memberId: '', fleetInput: createInputState(id) },
+      })
+      if (upgraded) {
+        // ONE audit entry per channel opened — a keyboard was attached to a session — never one per
+        // keystroke, which would drown the log (the coalesced per-keystroke record is the web unit's).
+        void writeAudit({ action: 'fleet.input.open', ip: clientIp, meta: { id } })
+        return // handshake handed off to the shared websocket handlers
+      }
+      return new Response(JSON.stringify({ error: 'upgrade_failed' }), {
+        status: 500,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
     }
 

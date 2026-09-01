@@ -39,6 +39,7 @@ function fakeBackend(o: {
     attachCommand(id) { return ['tmux', 'attach', id] },
     async detachHint() { return 'Ctrl-b then d' },
     async sendText() { return true },
+    async sendTextRaw() { return true },
     async sendKey() { return true },
   }
 }
