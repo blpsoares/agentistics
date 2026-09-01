@@ -87,17 +87,40 @@ export function sessionsHtml(shell: Shell): string {
  * and then kept in step. What this document adds is the frame, the CSP that admits exactly one
  * origin, and — when that origin cannot be worked out — a sentence instead of a blank rectangle.
  */
-export function dashboardHtml(url: string, shell: Pick<Shell, 'cspSource' | 'nonce'>, notice: string): string {
+export interface DashboardStrings {
+  /** Shown instead of the frame when the address cannot be parsed at all. */
+  notice: string
+  /** The line above the frame: what is being shown, and where to go if it is blank. */
+  bar: string
+  openExternal: string
+}
+
+export function dashboardHtml(
+  url: string,
+  shell: Pick<Shell, 'cspSource' | 'nonce'>,
+  strings: DashboardStrings,
+): string {
   const origin = frameOrigin(url)
+  const nonce = shell.nonce || 'dashboard'
   const csp = [
     "default-src 'none'",
     `style-src ${shell.cspSource} 'unsafe-inline'`,
+    `script-src 'nonce-${nonce}'`,
     origin ? `frame-src ${origin}` : "frame-src 'none'",
   ].join('; ')
 
+  // The bar is ALWAYS drawn, not only on failure. A frame that a policy refuses does not report
+  // itself to the page — there is no event for "the browser declined to load this" — so a tab that
+  // only showed a fallback after detecting one would show nothing, forever, in exactly the case
+  // that needs explaining. One line saying what is being framed and offering the browser costs a
+  // row and removes the mystery.
   const body = origin
-    ? `<iframe src="${escapeAttr(url)}" title="Agentistics"></iframe>`
-    : `<p class="notice">${escapeText(notice)}</p>`
+    ? `<div class="bar">
+  <span class="addr">${escapeText(strings.bar)} <code>${escapeText(url)}</code></span>
+  <button id="external" type="button">${escapeText(strings.openExternal)}</button>
+</div>
+<iframe src="${escapeAttr(url)}" title="Agentistics"></iframe>`
+    : `<p class="notice">${escapeText(strings.notice)}</p>`
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -106,12 +129,33 @@ export function dashboardHtml(url: string, shell: Pick<Shell, 'cspSource' | 'non
 <meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  html, body { height: 100%; margin: 0; padding: 0; }
-  iframe { border: 0; width: 100%; height: 100%; display: block; }
+  html, body { height: 100%; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .bar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 4px 8px; font-family: var(--vscode-font-family); font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    background: var(--vscode-editorWidget-background);
+    border-bottom: 1px solid var(--vscode-panel-border);
+  }
+  .bar .addr { flex: 1; overflow-wrap: anywhere; }
+  .bar button {
+    font: inherit; cursor: pointer; padding: 2px 8px; border-radius: 4px;
+    border: 1px solid var(--vscode-contrastBorder, transparent);
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+  }
+  iframe { border: 0; width: 100%; flex: 1; display: block; }
   .notice { padding: 16px; font-family: var(--vscode-font-family); color: var(--vscode-foreground); }
 </style>
 <title>Agentistics</title>
 </head>
-<body>${body}</body>
+<body>${body}
+<script nonce="${escapeAttr(nonce)}">
+  const vscode = acquireVsCodeApi();
+  document.getElementById('external')?.addEventListener('click', () => {
+    vscode.postMessage({ type: 'openExternal' });
+  });
+</script>
+</body>
 </html>`
 }

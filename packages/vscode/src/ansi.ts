@@ -1,17 +1,22 @@
 /**
- * ansi.ts — PURE. One terminal frame, rendered as HTML.
+ * ansi.ts — PURE. One terminal frame, rendered as HTML, with the cursor where the pane says it is.
  *
  * `GET /api/fleet/stream` sends the pane as `tmux capture-pane -e` produced it: a RENDERED grid
  * with SGR escape sequences intact. tmux has already resolved the spinners, the redraws and the
- * cursor moves into final glyphs, so what is left to do is colour — no cursor arithmetic, no
- * scrollback model, no alternate buffer. That is why this is 200 lines and not a terminal emulator.
+ * cursor moves into final glyphs, so what is left to do is colour and one cell — no cursor
+ * arithmetic, no scrollback model, no alternate buffer. That is why this is 250 lines and not a
+ * terminal emulator.
  *
  * The dashboard feeds the same frames to xterm.js. This does not, and the reason is the surface:
  * xterm is a 300 KB dependency that wants a fixed character grid and a fit addon, in a panel that
- * is routinely 300px wide and resized by dragging. What it would buy — a real cursor, an alternate
- * screen, selection — is either already resolved by `capture-pane` or is the integrated terminal's
- * job, one click away on every row. What it must NOT cost is colour fidelity, so the palette is
- * imported from the dashboard's own `xtermTheme`: the same session reads the same in both places.
+ * is routinely 300px wide and resized by dragging. What it must NOT cost is colour fidelity, so the
+ * palette is imported from the dashboard's own `xtermTheme`: the same session reads the same in
+ * both places.
+ *
+ * **The CURSOR is drawn here and not with CSS**, because it is a cell of the grid — the character
+ * the pane's own `cursor` field points at — and CSS has no way to find that character. Without it a
+ * person typing sees text appear with nothing marking where the next one goes, which is the whole
+ * of "não aparece o _ que fica na frente do último caractere".
  *
  * **Everything is escaped.** The content is a coding assistant's terminal output — file contents,
  * diffs, error messages, whatever it was asked to print — so it is the least trustworthy string in
@@ -19,6 +24,12 @@
  */
 
 import { xtermTheme, type XtermTheme } from '../../web/src/lib/terminalStream'
+
+/** Where the pane says the block cursor is. Columns and rows are 0-based, as the channel sends them. */
+export interface CursorPos {
+  x: number
+  y: number
+}
 
 /** The eight ANSI colours, in code order (30-37 / 40-47), then their bright twins (90-97 / 100-107). */
 const BASE: (keyof XtermTheme)[] = [
@@ -61,10 +72,7 @@ function xterm256(index: number, theme: XtermTheme): string | null {
   if (index < 232) {
     const n = index - 16
     const steps = [0, 95, 135, 175, 215, 255]
-    const r = steps[Math.floor(n / 36) % 6]!
-    const g = steps[Math.floor(n / 6) % 6]!
-    const b = steps[n % 6]!
-    return rgb(r, g, b)
+    return rgb(steps[Math.floor(n / 36) % 6]!, steps[Math.floor(n / 6) % 6]!, steps[n % 6]!)
   }
   const level = 8 + (index - 232) * 10
   return rgb(level, level, level)
@@ -138,51 +146,122 @@ function penStyle(pen: Pen, theme: XtermTheme): string {
   return parts.join(';')
 }
 
-const SGR = /\x1b\[([0-9;]*)m/
-/** Every other CSI/OSC sequence, removed. `capture-pane` should emit none; belt and braces. */
-const OTHER_ESCAPES = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]|\x1b\[[0-9;?]*[ -/]*[@-~]/g
-/**
- * A sequence the text ENDS in the middle of.
- *
- * Each frame is a whole pane, but a pane is a slice and tmux will cut one at a byte boundary inside
- * an escape. Printing the leftover `ESC[38;5` as text puts machine noise on the screen at the exact
- * moment somebody is trying to read what their session is doing.
- */
-const DANGLING_ESCAPE = /\x1b\[?[0-9;?]*$/
+/** Sticky, so each is tried AT the current index rather than searched for ahead of it. */
+const SGR_AT = /\x1b\[([0-9;]*)m/y
+const ESCAPE_AT = /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_]|\[[0-9;?]*[ -/]*[@-~])/y
+/** A sequence the frame ENDS in the middle of — tmux cuts a pane at a byte boundary. */
+const DANGLING_AT = /\x1b\[?[0-9;?]*$/y
 
 /**
  * One frame's `content` → HTML.
  *
  * Total: any string in, HTML out, no throw. An empty frame yields an empty string rather than a
  * stray element, so "no output yet" and "one blank line" stay distinguishable.
+ *
+ * `cursor` is drawn only when the caller passes one, and the caller passes one only for a LIVE
+ * frame — the channel sends `cursor: null` on a dead pane, and a cursor blinking on a session that
+ * exited is a screen claiming to be alive.
  */
-export function ansiToHtml(content: string, theme: 'dark' | 'light'): string {
+export function ansiToHtml(
+  content: string,
+  theme: 'dark' | 'light',
+  cursor?: CursorPos | null,
+): string {
   const palette = xtermTheme(theme)
   let pen: Pen = { ...BLANK }
+  let runPen: Pen = pen
+  let run = ''
   let out = ''
-  let rest = content
+  let line = 0
+  let col = 0
+  let cursorDrawn = false
 
-  for (;;) {
-    const match = SGR.exec(rest)
-    if (!match) break
-    const before = rest.slice(0, match.index)
-    if (before) out += paint(before, pen, palette)
-    const params = (match[1] ?? '')
-      .split(';')
-      .map(p => (p === '' ? 0 : Number(p)))
-      .filter(n => Number.isFinite(n))
-    pen = applySgr(pen, params.length > 0 ? params : [0], palette)
-    rest = rest.slice(match.index + match[0].length)
+  const flush = () => {
+    if (!run) return
+    const style = penStyle(runPen, palette)
+    const text = escapeHtml(run)
+    out += style ? `<span style="${style}">${text}</span>` : text
+    run = ''
   }
-  // The tail is the only place a cut sequence can be, so it is the only place that pays for the
-  // check — running it on every segment would strip a legitimate `[1;` typed into a file.
-  if (rest) out += paint(rest.replace(DANGLING_ESCAPE, ''), pen, palette)
+
+  /**
+   * The cursor sitting PAST the last character of its line — which is where it is whenever somebody
+   * is typing at the end of a line, i.e. almost always. There is no cell to wrap, so one is drawn.
+   */
+  const cursorAtLineEnd = () => {
+    if (!cursor || cursorDrawn || line !== cursor.y || col > cursor.x) return
+    flush()
+    out += cursorCell(' ', pen, palette)
+    cursorDrawn = true
+  }
+
+  let i = 0
+  while (i < content.length) {
+    if (content[i] === '\x1b') {
+      SGR_AT.lastIndex = i
+      const sgr = SGR_AT.exec(content)
+      if (sgr) {
+        flush()
+        const params = (sgr[1] ?? '')
+          .split(';')
+          .map(p => (p === '' ? 0 : Number(p)))
+          .filter(n => Number.isFinite(n))
+        pen = applySgr(pen, params.length > 0 ? params : [0], palette)
+        runPen = pen
+        i = SGR_AT.lastIndex
+        continue
+      }
+      ESCAPE_AT.lastIndex = i
+      const other = ESCAPE_AT.exec(content)
+      if (other) { i = ESCAPE_AT.lastIndex; continue }
+      DANGLING_AT.lastIndex = i
+      if (DANGLING_AT.exec(content)) break
+      i += 1
+      continue
+    }
+
+    const ch = content[i]!
+    if (ch === '\n') {
+      cursorAtLineEnd()
+      flush()
+      out += '\n'
+      line += 1
+      col = 0
+      i += 1
+      continue
+    }
+
+    if (cursor && !cursorDrawn && line === cursor.y && col === cursor.x) {
+      flush()
+      out += cursorCell(ch, pen, palette)
+      cursorDrawn = true
+    } else {
+      // A pen change starts a new run; otherwise the character joins the one being built.
+      if (run && !samePen(pen, runPen)) flush()
+      runPen = pen
+      run += ch
+    }
+    col += 1
+    i += 1
+  }
+
+  cursorAtLineEnd()
+  flush()
   return out
 }
 
-function paint(text: string, pen: Pen, theme: XtermTheme): string {
-  const clean = escapeHtml(text.replace(OTHER_ESCAPES, ''))
-  if (!clean) return ''
-  const style = penStyle(pen, theme)
-  return style ? `<span style="${style}">${clean}</span>` : clean
+/**
+ * The cursor cell: the pane's colours, swapped.
+ *
+ * Inverting the pen rather than painting a fixed colour keeps it legible on any background the
+ * assistant happens to be drawing — a hardcoded white block vanishes on a white selection bar.
+ */
+function cursorCell(ch: string, pen: Pen, theme: XtermTheme): string {
+  const style = penStyle({ ...pen, inverse: !pen.inverse }, theme)
+  return `<span class="cursor"${style ? ` style="${style}"` : ''}>${escapeHtml(ch)}</span>`
+}
+
+function samePen(a: Pen, b: Pen): boolean {
+  return a.fg === b.fg && a.bg === b.bg && a.bold === b.bold && a.dim === b.dim
+    && a.italic === b.italic && a.underline === b.underline && a.inverse === b.inverse
 }

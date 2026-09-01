@@ -39,10 +39,15 @@ export function activate(context: vscode.ExtensionContext): void {
     return vscode.workspace.getConfiguration('agentistics').get<T>(key) ?? fallback
   }
 
-  function dashboardNotice(): string {
-    return lang === 'pt'
-      ? `Não dá para carregar ${endpoints.dashboard} — verifique agentistics.dashboardUrl.`
-      : `${endpoints.dashboard} cannot be loaded — check agentistics.dashboardUrl.`
+  function dashboardText() {
+    return {
+      title: 'Agentistics',
+      notice: lang === 'pt'
+        ? `Não dá para carregar ${endpoints.dashboard} — verifique agentistics.dashboardUrl.`
+        : `${endpoints.dashboard} cannot be loaded — check agentistics.dashboardUrl.`,
+      bar: words.dashboardBar ?? 'Showing',
+      openExternal: words.dashboardExternal ?? 'Open in a browser',
+    }
   }
 
   const hub = new SessionsHub(context, {
@@ -52,7 +57,7 @@ export function activate(context: vscode.ExtensionContext): void {
     lang: () => lang,
     notifyOnAttention: () => setting('notifyOnAttention', true),
     onAttention: count => statusBar.setAttention(count),
-    openDashboard: () => void openDashboard(endpoints.dashboard, 'Agentistics', dashboardNotice()),
+    openDashboard: () => void openDashboard(endpoints.dashboard, dashboardText()),
     openTab: id => void openSessionTab(id),
   })
 
@@ -95,7 +100,7 @@ export function activate(context: vscode.ExtensionContext): void {
       openFleetPanel(hub, `Agentistics — ${words.title}`)
     }),
     vscode.commands.registerCommand('agentistics.openDashboard', () =>
-      openDashboard(endpoints.dashboard, 'Agentistics', dashboardNotice())),
+      openDashboard(endpoints.dashboard, dashboardText())),
     vscode.commands.registerCommand('agentistics.refresh', () => hub.refresh()),
     vscode.commands.registerCommand('agentistics.startServer', () => startServerInTerminal(words)),
     vscode.commands.registerCommand('agentistics.focusSessions', () =>

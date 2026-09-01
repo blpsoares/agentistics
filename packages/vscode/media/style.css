@@ -140,6 +140,13 @@ input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 .header-top { display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap; }
 .header-actions { display: flex; gap: 5px; margin-left: auto; flex-wrap: wrap; }
 
+/* Back is the first thing in the row, where every application puts it — including the editor. */
+.btn.back {
+  padding: 2px 8px;
+  font-size: 15px;
+  line-height: 1;
+}
+
 .brand { display: flex; align-items: center; gap: 6px; }
 .brand-mark { color: var(--accent); font-size: 15px; }
 .brand-word {
@@ -425,6 +432,15 @@ button.chip { cursor: pointer; }
 /* The screen is a real focus target once it can be typed into. */
 .screen:focus { outline: none; }
 .screen-box:has(.screen:focus) { border-color: var(--accent); }
+
+/*
+ * The cursor cell. `ansi.ts` already inverted the pen under it, so the only thing left here is the
+ * blink — and it stops on hover, because a blinking block under the pointer while you are trying to
+ * select text is noise.
+ */
+.cursor { animation: cursor-blink 1.1s step-end infinite; }
+.screen:hover .cursor, .screen:not(:focus) .cursor { animation: none; }
+@keyframes cursor-blink { 50% { opacity: .35; } }
 
 .verbs-box { margin-top: var(--gap); }
 .verbs { display: flex; flex-wrap: wrap; gap: 5px; }

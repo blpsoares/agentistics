@@ -20,22 +20,24 @@ describe('sessionsHtml', () => {
   })
 })
 
+const TEXT = { notice: 'unreadable', bar: 'Showing', openExternal: 'Open in a browser' }
+
 describe('dashboardHtml', () => {
   it('admits exactly one frame origin — the one it is showing', () => {
-    const html = dashboardHtml('http://127.0.0.1:47292/', SHELL, 'nope')
+    const html = dashboardHtml('http://127.0.0.1:47292/', SHELL, TEXT)
     expect(html).toContain('frame-src http://127.0.0.1:47292')
     expect(html).toContain('<iframe src="http://127.0.0.1:47292/"')
   })
 
   it('narrows a URL with a path down to its origin for the policy', () => {
     // A CSP source carrying a path is not the narrowing it appears to be.
-    const html = dashboardHtml('http://127.0.0.1:47292/repositories', SHELL, 'nope')
+    const html = dashboardHtml('http://127.0.0.1:47292/repositories', SHELL, TEXT)
     expect(html).toContain('frame-src http://127.0.0.1:47292"')
     expect(html).not.toContain('frame-src http://127.0.0.1:47292/repositories')
   })
 
   it('says so rather than framing nothing when the address is unusable', () => {
-    const html = dashboardHtml('not a url', SHELL, 'The dashboard address cannot be read.')
+    const html = dashboardHtml('not a url', SHELL, { ...TEXT, notice: 'The dashboard address cannot be read.' })
     expect(html).toContain("frame-src &#39;none&#39;")
     expect(html).toContain('The dashboard address cannot be read.')
     expect(html).not.toContain('<iframe')
@@ -50,7 +52,7 @@ describe('dashboardHtml', () => {
     // `agentistics.dashboardUrl` is settable by a workspace, and a workspace is not necessarily
     // the user's own.
     const hostile = 'http://127.0.0.1:47292/"><script>fetch("//evil")</script>'
-    const html = dashboardHtml(hostile, SHELL, 'nope')
+    const html = dashboardHtml(hostile, SHELL, TEXT)
     expect(html).not.toContain('<script>fetch')
     expect(html).toContain('&quot;&gt;&lt;script&gt;')
   })

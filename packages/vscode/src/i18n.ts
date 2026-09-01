@@ -59,6 +59,8 @@ const EN: Record<string, string> = {
   // The row.
   externalNote: 'Started outside agentop.',
   backToList: 'All sessions',
+  dashboardBar: 'Showing',
+  dashboardExternal: 'Open in a browser',
   openTab: 'Open as a tab',
   sessionGone: 'This session is no longer in the fleet.',
   screenTruncated: 'There is more scrollback above than this screen carries.',
@@ -141,6 +143,8 @@ const PT: Record<string, string> = {
 
   externalNote: 'Iniciada fora do agentop.',
   backToList: 'Todas as sessões',
+  dashboardBar: 'Mostrando',
+  dashboardExternal: 'Abrir no navegador',
   openTab: 'Abrir em uma aba',
   sessionGone: 'Esta sessão não está mais na frota.',
   screenTruncated: 'Há mais histórico acima do que esta tela carrega.',

@@ -93,6 +93,55 @@ describe('ansiToHtml', () => {
   })
 })
 
+describe('the cursor', () => {
+  it('wraps the cell the pane points at, and only that one', () => {
+    // Without it a person typing sees text appear with nothing marking where the next character
+    // goes — the whole of "não aparece o _ que fica na frente do último caractere".
+    const out = ansiToHtml('abc', 'dark', { x: 1, y: 0 })
+    expect(out).toContain('<span class="cursor"')
+    expect(out.match(/class="cursor"/g)).toHaveLength(1)
+    // …and the character under it survives.
+    expect(out).toContain('>b<')
+  })
+
+  it('finds the right LINE, counting from the frame\'s own rows', () => {
+    const out = ansiToHtml('one\ntwo\nthree', 'dark', { x: 0, y: 2 })
+    expect(out).toContain('<span class="cursor"')
+    expect(out).toMatch(/cursor"[^>]*>t</)
+    // The lines above are untouched text.
+    expect(out.startsWith('one\ntwo\n')).toBe(true)
+  })
+
+  it('draws a block PAST the end of a line — where typing actually happens', () => {
+    // The cursor sits after the last character almost always; with no cell to wrap, one is drawn.
+    const out = ansiToHtml('hi', 'dark', { x: 2, y: 0 })
+    expect(out).toContain('<span class="cursor"')
+    expect(out).toContain('hi')
+  })
+
+  it('inverts the pen under it rather than painting a fixed colour', () => {
+    // A hardcoded white block vanishes on a white selection bar.
+    const out = ansiToHtml(`${ESC}[31mred`, 'dark', { x: 0, y: 0 })
+    expect(out).toMatch(/class="cursor" style="[^"]*background:/)
+  })
+
+  it('draws nothing when the caller passes none — a dead pane has no cursor', () => {
+    expect(ansiToHtml('abc', 'dark', null)).not.toContain('cursor')
+    expect(ansiToHtml('abc', 'dark')).not.toContain('cursor')
+  })
+
+  it('is not confused by escape sequences before it — they occupy no column', () => {
+    const plain = ansiToHtml('abc', 'dark', { x: 2, y: 0 })
+    const coloured = ansiToHtml(`${ESC}[32mabc`, 'dark', { x: 2, y: 0 })
+    expect(plain).toMatch(/cursor"[^>]*>c</)
+    expect(coloured).toMatch(/cursor"[^>]*>c</)
+  })
+
+  it('ignores a cursor pointing outside the frame', () => {
+    expect(ansiToHtml('abc', 'dark', { x: 0, y: 9 })).not.toContain('cursor')
+  })
+})
+
 describe('escapeHtml', () => {
   it('closes every way into a tag', () => {
     expect(escapeHtml('<b>&</b>')).toBe('&lt;b&gt;&amp;&lt;/b&gt;')

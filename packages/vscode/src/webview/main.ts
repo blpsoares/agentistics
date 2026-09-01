@@ -174,6 +174,16 @@ function button(label: string, className: string, onClick: () => void): HTMLButt
 function renderHeader(): void {
   header.replaceChildren()
   const top = el('div', 'header-top')
+
+  // Back goes on the LEFT, before everything, where every application in the world puts it —
+  // including the editor this panel lives in. On the right it sits among the actions, reading as
+  // one more of them rather than as the way out.
+  if (state.route.view === 'session' && !state.pinned) {
+    const back = button('←', 'btn ghost back', () => go({ view: 'list' }))
+    back.title = s('backToList')
+    back.setAttribute('aria-label', s('backToList'))
+    top.append(back)
+  }
   top.append(brand())
 
   const actions = el('div', 'header-actions')
@@ -187,8 +197,6 @@ function renderHeader(): void {
       button(s('dashboard'), 'btn ghost', () => post({ type: 'openDashboard' })),
       button(s('refresh'), 'btn ghost icon', () => post({ type: 'refresh' })),
     )
-  } else if (!state.pinned) {
-    actions.append(button(`← ${s('backToList')}`, 'btn ghost', () => go({ view: 'list' })))
   }
   top.append(actions)
   header.append(top)
@@ -244,12 +252,46 @@ function render(): void {
   renderBody()
 }
 
+/**
+ * The session DOM, kept ALIVE between renders.
+ *
+ * This is not an optimisation. The fleet polls every 5s and a frame arrives up to twice a second,
+ * and each render used to rebuild the whole body — which REPLACES the screen element. Replacing a
+ * focused element takes the keyboard with it, so typing died half a second after it started and the
+ * panel felt broken rather than slow. The screen is therefore built once per session and only its
+ * contents are patched; everything around it is re-rendered into boxes that are never the focus.
+ */
+interface SessionDom {
+  id: string
+  root: HTMLElement
+  head: HTMLElement
+  tools: HTMLElement
+  approval: HTMLElement
+  screenBox: HTMLElement
+  pre: HTMLPreElement
+  status: HTMLElement
+  strip: HTMLElement
+  verbs: HTMLElement
+}
+
+let sessionDom: SessionDom | null = null
+
 function renderBody(): void {
-  body.replaceChildren()
   if (state.route.view === 'session') {
-    body.append(renderSession(state.route.id))
+    const id = state.route.id
+    // Only rebuild when the session CHANGED or the body is showing something else. Otherwise patch,
+    // and never touch the element that holds the keyboard.
+    if (!sessionDom || sessionDom.id !== id || sessionDom.root.parentElement !== body) {
+      sessionDom = null
+      body.replaceChildren()
+      body.append(buildSession(id))
+    } else {
+      patchSession(id)
+    }
     return
   }
+  sessionDom = null
+  body.replaceChildren()
   if (state.wizard) body.append(renderWizard())
   body.append(renderList())
 }
@@ -353,46 +395,65 @@ function harnessChip(harness: string): HTMLElement {
 // ---------------------------------------------------------------------------
 // one session
 
-function renderSession(id: string): HTMLElement {
-  const box = el('div', 'session')
+/** Build the session view once. Everything that changes later is patched in place. */
+function buildSession(id: string): HTMLElement {
+  const root = el('div', 'session')
   const row = rowOf(id)
   if (!row) {
     // The fleet no longer carries this id. Said in words, with the way back — a blank pane would
     // read as a broken panel rather than as a session that ended.
-    box.append(el('div', 'notice', s('sessionGone')))
-    if (!state.pinned) box.append(button(s('backToList'), 'btn', () => go({ view: 'list' })))
-    return box
+    root.append(el('div', 'notice', s('sessionGone')))
+    if (!state.pinned) root.append(button(s('backToList'), 'btn', () => go({ view: 'list' })))
+    return root
   }
 
   const head = el('div', 'session-head')
+  const tools = el('div', 'session-tools')
+  const approval = el('div', 'approval-slot')
+  const { screenBox, pre, status, strip } = buildScreen(row)
+  const verbs = el('div', 'verbs-box')
+  root.append(head, tools, approval, screenBox, verbs)
+
+  sessionDom = { id, root, head, tools, approval, screenBox, pre, status, strip, verbs }
+  patchSession(id)
+  return root
+}
+
+/** Everything that can change while the screen keeps the keyboard. */
+function patchSession(id: string): void {
+  const dom = sessionDom
+  const row = rowOf(id)
+  if (!dom || !row) return
+
+  dom.head.replaceChildren()
   const title = el('div', 'session-title')
   title.append(stateDot(row), el('span', 'session-name', row.title), statePill(row))
-  head.append(title)
+  dom.head.append(title)
 
   const meta = el('div', 'session-meta')
   meta.append(harnessChip(row.harness))
   if (row.model) meta.append(el('span', 'chip', row.model))
   if (row.task) meta.append(el('span', 'chip task', row.task))
-  head.append(meta)
-  head.append(el('div', 'session-cwd', row.cwd))
-  if (row.note) head.append(el('div', 'session-note', row.note))
-  box.append(head)
+  dom.head.append(meta)
+  dom.head.append(el('div', 'session-cwd', row.cwd))
+  if (row.note) dom.head.append(el('div', 'session-note', row.note))
 
-  const tools = el('div', 'session-tools')
+  dom.tools.replaceChildren()
   if (!state.pinned) {
-    tools.append(button(s('openTab'), 'btn small ghost', () => post({ type: 'openTab', id })))
+    dom.tools.append(button(s('openTab'), 'btn small ghost', () => post({ type: 'openTab', id })))
   }
   if (row.actionable) {
-    tools.append(button(s('attach'), 'btn small', () => post({ type: 'attach', id })))
+    dom.tools.append(button(s('attach'), 'btn small', () => post({ type: 'attach', id })))
   }
-  tools.append(button(s('copyCommand'), 'btn small ghost', () => post({ type: 'copy', text: row.attachCommand })))
-  tools.append(button(s('openFolder'), 'btn small ghost', () => post({ type: 'openFolder', path: row.cwd })))
-  box.append(tools)
+  dom.tools.append(button(s('copyCommand'), 'btn small ghost', () => post({ type: 'copy', text: row.attachCommand })))
+  dom.tools.append(button(s('openFolder'), 'btn small ghost', () => post({ type: 'openFolder', path: row.cwd })))
 
-  if (row.approvalLines?.length || row.dialogOptions?.length) box.append(renderApproval(row))
-  box.append(renderScreen(row))
-  box.append(renderVerbs(row))
-  return box
+  dom.approval.replaceChildren()
+  if (row.approvalLines?.length || row.dialogOptions?.length) dom.approval.append(renderApproval(row))
+
+  paintScreen(row)
+  dom.verbs.replaceChildren()
+  dom.verbs.append(...renderVerbs(row))
 }
 
 /**
@@ -443,41 +504,58 @@ let screenWasAtBottom = true
  * exposed profile, scope (only sessions this machine manages), and a session that is actually
  * running.
  */
-function renderScreen(row: FleetRow): HTMLElement {
-  const box = el('div', 'screen-box')
+function buildScreen(row: FleetRow): {
+  screenBox: HTMLElement
+  pre: HTMLPreElement
+  status: HTMLElement
+  strip: HTMLElement
+} {
+  const screenBox = el('div', 'screen-box')
+  const pre = el('pre', 'screen')
+  const status = el('div', 'screen-status')
+  const strip = el('div', 'typing-strip')
+
+  // Bound ONCE, to the element that lives for as long as this session is open. Re-binding on every
+  // frame would mean re-creating this node, and re-creating a focused node takes the keyboard.
+  pre.tabIndex = 0
+  pre.addEventListener('keydown', e => onScreenKey(row.id, e))
+  pre.addEventListener('paste', e => onScreenPaste(row.id, e))
+  pre.addEventListener('focus', () => { state.typing = true; paintTypingStrip(row.id) })
+  pre.addEventListener('blur', () => { state.typing = false; paintTypingStrip(row.id) })
+
+  screenBox.append(pre, status, strip)
+  screenEl = pre
+  return { screenBox, pre, status, strip }
+}
+
+/**
+ * Repaint the screen's CONTENTS — never its elements.
+ *
+ * The cursor is drawn only while the channel says there is one (`showCursor` is false on a dead or
+ * gone pane), so a finished session never blinks as though somebody could still type into it.
+ */
+function paintScreen(row: FleetRow): void {
+  const dom = sessionDom
+  if (!dom) return
   const terminal = terminalOf(row.id)
   const status = terminalStatus(terminal, state.lang)
-  // The line composer refuses a session on a dialog, because a LINE typed past a question goes into
-  // the dialog's own filter. Raw keys are the opposite case: answering that dialog by keypress is
-  // one of the reasons this exists, and the person can see it on the screen in front of them.
-  const block = interactionBlock(row.state)
-  const typable = block !== 'external' && block !== 'not-running'
 
-  const pre = el('pre', 'screen')
   // THE ONE PLACE THIS FILE ASSIGNS HTML. `ansiToHtml` escapes the frame before it colours it, and
   // returns spans and text nodes only — see its header. Nothing else here goes near innerHTML.
-  pre.innerHTML = terminal.frame ? ansiToHtml(terminal.frame.content, state.theme) : ''
-  screenEl = pre
+  dom.pre.innerHTML = terminal.frame
+    ? ansiToHtml(
+        terminal.frame.content,
+        state.theme,
+        status.showCursor ? terminal.frame.cursor : null,
+      )
+    : ''
 
-  if (typable) {
-    pre.tabIndex = 0
-    pre.addEventListener('keydown', e => onScreenKey(row.id, e))
-    pre.addEventListener('paste', e => onScreenPaste(row.id, e))
-    pre.addEventListener('focus', () => { state.typing = true; renderTypingStrip(row, box, true) })
-    pre.addEventListener('blur', () => { state.typing = false; renderTypingStrip(row, box, false) })
-  }
-  box.append(pre)
+  dom.status.replaceChildren()
+  dom.status.append(el('span', `pill ${status.tone}`, status.label))
+  dom.status.append(el('span', 'dim', status.detail))
+  if (status.truncated) dom.status.append(el('span', 'dim', s('screenTruncated')))
 
-  const line = el('div', 'screen-status')
-  line.append(el('span', `pill ${status.tone}`, status.label))
-  line.append(el('span', 'dim', status.detail))
-  if (status.truncated) line.append(el('span', 'dim', s('screenTruncated')))
-  box.append(line)
-
-  const strip = el('div', 'typing-strip')
-  box.append(strip)
-  renderTypingStrip(row, box, state.typing && typable, typable, block)
-  return box
+  paintTypingStrip(row.id)
 }
 
 /**
@@ -487,15 +565,17 @@ function renderScreen(row: FleetRow): HTMLElement {
  * focus would replace the very element that just took it, and the keyboard would land back on the
  * document a frame later.
  */
-function renderTypingStrip(
-  row: FleetRow,
-  box: HTMLElement,
-  focused: boolean,
-  typable = true,
-  block = interactionBlock(row.state),
-): void {
-  const strip = box.querySelector('.typing-strip')
-  if (!strip) return
+function paintTypingStrip(id: string): void {
+  const dom = sessionDom
+  const row = rowOf(id)
+  if (!dom || !row) return
+  // The line composer refuses a session on a dialog, because a LINE typed past a question lands in
+  // the dialog's own filter. Raw keys are the opposite case: answering that dialog by keypress is
+  // one of the reasons this exists, and the person can see it on the screen in front of them.
+  const block = interactionBlock(row.state)
+  const typable = block !== 'external' && block !== 'not-running'
+  const focused = state.typing && typable && document.activeElement === dom.pre
+  const strip = dom.strip
   strip.replaceChildren()
   strip.className = `typing-strip${focused ? ' live' : ''}`
 
@@ -579,8 +659,8 @@ function onScreenPaste(id: string, e: ClipboardEvent): void {
   })
 }
 
-function renderVerbs(row: FleetRow): HTMLElement {
-  const box = el('div', 'verbs-box')
+function renderVerbs(row: FleetRow): HTMLElement[] {
+  const box = el('div', 'verbs-inner')
   box.append(el('div', 'section-label', s('verbsFor')))
   const verbs = el('div', 'verbs')
   for (const verb of row.verbs) {
@@ -599,7 +679,7 @@ function renderVerbs(row: FleetRow): HTMLElement {
     verbs.append(b)
   }
   box.append(verbs)
-  return box
+  return [box]
 }
 
 /** The four verbs that need a line of text. Inline, because a modal over a 300px panel is a wall. */
@@ -877,14 +957,20 @@ function applyTerminal(id: string, event: string, data: string): void {
     next = terminalReducer(before, { type: 'stall' })
   }
   state.terminals.set(id, next)
-  if (state.route.view === 'session' && state.route.id === id) {
-    // Follow the tail only if the reader was already at it — yanking someone back to the bottom
-    // while they are reading further up is the single most annoying thing a live log can do.
-    screenWasAtBottom = !screenEl
-      || screenEl.scrollTop + screenEl.clientHeight >= screenEl.scrollHeight - TAIL_SLACK
-    renderBody()
-    if (screenWasAtBottom && screenEl) screenEl.scrollTop = screenEl.scrollHeight
-  }
+  if (state.route.view !== 'session' || state.route.id !== id) return
+  const row = rowOf(id)
+  if (!row || !sessionDom || sessionDom.id !== id) return
+
+  // Only the screen's CONTENTS are repainted — never the element. A frame arrives up to twice a
+  // second, and replacing a focused node takes the keyboard with it, which is what made typing die
+  // half a second after it started.
+  //
+  // Follow the tail only if the reader was already at it: yanking someone back to the bottom while
+  // they are reading further up is the single most annoying thing a live log can do.
+  screenWasAtBottom = !screenEl
+    || screenEl.scrollTop + screenEl.clientHeight >= screenEl.scrollHeight - TAIL_SLACK
+  paintScreen(row)
+  if (screenWasAtBottom && screenEl) screenEl.scrollTop = screenEl.scrollHeight
 }
 
 mount()

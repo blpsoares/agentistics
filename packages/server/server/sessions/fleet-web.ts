@@ -334,10 +334,19 @@ export async function runFleetInput(
     return { ok: false, message }
   }
 
-  return await host.inputSession(
+  const out = await host.inputSession(
     decision.plan.id,
     decision.plan.kind === 'key' ? { key: decision.plan.key } : { text: decision.plan.text },
   )
+  // Ask the terminal channel to capture NOW. Without it every character waits up to a poll interval
+  // to appear, which reads as a broken keyboard rather than a slow one — and the poll cadence is
+  // right for WATCHING a session, which is what it was tuned for. Dynamic, like the two handlers
+  // in `index.ts`: a machine that never opens a terminal must not carry that module.
+  if (out.ok) {
+    const { nudgeTerminal } = await import('./terminal-web')
+    nudgeTerminal(decision.plan.id)
+  }
+  return out
 }
 
 export interface FleetSpawnResponse {
