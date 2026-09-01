@@ -43,6 +43,18 @@ interface Stream {
   retryTimer?: ReturnType<typeof setTimeout>
   sawFrame: boolean
   closed: boolean
+  /**
+   * The last `open` and `frame` this stream delivered, kept for whoever joins next.
+   *
+   * Not a cache — the whole feature depends on it. A session that is WAITING ON A PERSON draws
+   * nothing: its screen is a permission prompt and does not change, sometimes for hours. A surface
+   * that joined an already-open stream and waited for the next frame therefore waited forever, on
+   * exactly the sessions somebody opens a terminal to look at. The server's own hub replays for the
+   * same reason ("a newcomer to a running loop gets the current screen now, not at the next
+   * change"); this is that rule on the client side of one HTTP subscription.
+   */
+  lastOpen?: string
+  lastFrame?: string
 }
 
 export class TerminalStreams {
@@ -55,6 +67,11 @@ export class TerminalStreams {
     const existing = this.streams.get(id)
     if (existing) {
       existing.listeners.add(listener)
+      // Hand the newcomer what the stream has already delivered. Without this it sees the screen
+      // only when it next CHANGES, which on a session waiting for a person is never — see the note
+      // on `lastFrame`.
+      if (existing.lastOpen !== undefined) listener({ id, event: 'open', data: existing.lastOpen })
+      if (existing.lastFrame !== undefined) listener({ id, event: 'frame', data: existing.lastFrame })
       return
     }
     const stream: Stream = {
@@ -172,6 +189,8 @@ export class TerminalStreams {
       stream.closed = true
       return
     }
+    if (name === 'open') stream.lastOpen = data
+    if (name === 'frame') stream.lastFrame = data
     if (name === 'open' || name === 'frame') this.emit(id, name, data)
   }
 }

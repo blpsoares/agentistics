@@ -617,10 +617,33 @@ function flushTyping(id: string): void {
   post({ type: 'input', id, text })
 }
 
+/**
+ * Keys that are not input, whatever a keyboard reports.
+ *
+ * A modifier press fires its own `keydown` — holding Shift to type a capital sends `Shift` first —
+ * and a laptop's media row sends things like `MediaTrackNext`. Sent to the server those are refused
+ * by name, correctly, and the user gets a red banner for a key they never meant to press. The
+ * server's table stays the authority on what CAN be sent; this is the client not asking about keys
+ * that are not keystrokes at all.
+ */
+const NOT_INPUT: ReadonlySet<string> = new Set([
+  'Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'CapsLock', 'NumLock', 'ScrollLock',
+  'ContextMenu', 'Dead', 'Unidentified', 'Process', 'Compose', 'Fn', 'FnLock', 'Hyper', 'Super',
+  'Insert',
+])
+/** The media / launcher / browser rows, which report a whole family of names. */
+const NOT_INPUT_PREFIX = ['Media', 'Launch', 'Browser', 'Audio', 'Video', 'Zoom', 'Power', 'Print']
+
+function isInputKey(key: string): boolean {
+  if (NOT_INPUT.has(key)) return false
+  return !NOT_INPUT_PREFIX.some(prefix => key.startsWith(prefix))
+}
+
 function onScreenKey(id: string, e: KeyboardEvent): void {
   // The editor's own chords are left alone: `ctrl+shift+*` and anything with Cmd/Win is a VS Code
   // command, and swallowing those would make the panel a place where the editor stops working.
   if (e.metaKey || (e.ctrlKey && e.shiftKey)) return
+  if (!isInputKey(e.key)) return
 
   const printable = e.key.length === 1 && !e.ctrlKey && !e.altKey
   e.preventDefault()

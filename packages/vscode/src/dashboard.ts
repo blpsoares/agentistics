@@ -21,6 +21,7 @@
  */
 
 import * as vscode from 'vscode'
+import { loopbackAsLocalhost } from './config'
 import { dashboardHtml } from './webview/html'
 
 let panel: vscode.WebviewPanel | undefined
@@ -57,15 +58,24 @@ export async function openDashboard(url: string, text: DashboardText): Promise<v
     },
   )
 
-  const external = await resolveExternal(url)
+  // The FRAME gets the port-mapped address, not `asExternalUri`'s. VS Code rewrites
+  // `http://localhost:<webviewPort>` inside a webview through the mapping above; an address
+  // `asExternalUri` produced is a different host and port and the mapping does not apply to it, so
+  // the frame would reach for something that is not there and render nothing. `asExternalUri` is
+  // the right answer for the BROWSER button below, where the address has to work outside the
+  // editor, and it is used there.
+  const framed = loopbackAsLocalhost(url)
   panel.webview.html = dashboardHtml(
-    external,
+    framed,
     { cspSource: panel.webview.cspSource, nonce: '' },
     { notice: text.notice, bar: text.bar, openExternal: text.openExternal },
   )
-  panel.webview.onDidReceiveMessage((msg: { type?: string }) => {
+  panel.webview.onDidReceiveMessage(async (msg: { type?: string }) => {
     // The one message this document sends: "the frame is not showing me anything, take me there".
-    if (msg?.type === 'openExternal') void vscode.env.openExternal(vscode.Uri.parse(url))
+    // THIS is where `asExternalUri` belongs — the address has to work in a browser on whichever
+    // machine the person is sitting at, which in a remote window is not the one running the server.
+    if (msg?.type !== 'openExternal') return
+    await vscode.env.openExternal(vscode.Uri.parse(await resolveExternal(url)))
   })
   panel.onDidDispose(() => { panel = undefined })
 }

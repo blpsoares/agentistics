@@ -70,3 +70,26 @@ export function resolveEndpoints(settings: {
     ...(invalidApi ?? invalidDash ? { invalid: invalidApi ?? invalidDash } : {}),
   }
 }
+
+/**
+ * `127.0.0.1` → `localhost`, and nothing else touched.
+ *
+ * VS Code's webview port mapping is documented and implemented for `localhost`; the numeric
+ * loopback is not reliably rewritten, so a frame pointed at `127.0.0.1` inside a webview reaches
+ * the CLIENT machine's own loopback — which in a WSL or Remote-SSH window is a different computer
+ * from the one running the server, and usually has nothing listening at all. That is a blank frame
+ * with no error anywhere, which is exactly how it presented.
+ *
+ * Any other host is left alone: someone who pointed this at a real machine meant that machine.
+ */
+export function loopbackAsLocalhost(raw: string): string {
+  try {
+    const url = new URL(raw)
+    if (url.hostname === '127.0.0.1' || url.hostname === '::1' || url.hostname === '[::1]') {
+      url.hostname = 'localhost'
+    }
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return raw
+  }
+}
