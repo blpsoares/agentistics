@@ -39,7 +39,7 @@ import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
 
 // Shared imports from the main codebase
 
-import { calcCost } from '@agentistics/core'
+import { calcCost, sessionCostUSD } from '@agentistics/core'
 import type { ModelUsage, HarnessId, SessionMeta } from '@agentistics/core'
 import type { OtelSnapshot } from '@agentistics/core'
 import { HOME_DIR, CLAUDE_DIR, PROJECTS_DIR, SESSION_META_DIR, STATS_CACHE_FILE, CONSOLIDATED_DIR } from './config'
@@ -122,16 +122,17 @@ async function buildHarnessSnapshots(): Promise<HarnessSnapshot[]> {
           const cacheWrite = s.cache_creation_input_tokens ?? 0
           totalInputTokens += inp + cacheRead + cacheWrite
           totalOutputTokens += out
-          // Build a ModelUsage-compatible shape for calcCost
-          const usage: ModelUsage = {
+          // Per-model breakdown (multi-model sessions, e.g. Antigravity, price correctly)
+          // instead of one dominant model's rate applied to the session's whole usage.
+          // No model at all → calcCost falls back to the default price, same as everywhere else.
+          totalCostUsd += sessionCostUSD(s) ?? calcCost({
             inputTokens: inp,
             outputTokens: out,
             cacheReadInputTokens: cacheRead,
             cacheCreationInputTokens: cacheWrite,
             webSearchRequests: 0,
             costUSD: 0,
-          }
-          totalCostUsd += calcCost(usage, s.model ?? '')
+          }, '')
         })
       )
     )
