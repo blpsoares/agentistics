@@ -14,10 +14,13 @@
  * it tracks keys that were SENT but not yet CONFIRMED, so a dropped channel (or a failed ack) is
  * surfaced as an explicit "not delivered", never left as silence or a spinner.
  *
- * Acks are matched FIFO (an ack pops the oldest in-flight key). That is correct whether the server's
- * ack carries an id or not: the channel is ordered and the server processes sequentially, so the
- * first ack answers the first key. The obligation the coordinator fixed — every send is confirmed
- * delivered-or-failed, with a reason — is all this needs; the concrete wire shape is Victor's.
+ * Each keystroke carries a client-assigned monotonic id, echoed back on its ack. Pairing is then
+ * VERIFIED, not inferred: an ack must reference the id of the key we expect next; a mismatch (which
+ * an ordered channel + sequential server should make impossible) is DETECTED and surfaced rather
+ * than silently accepted. That is the whole value of an id over bare FIFO — it shows up exactly in
+ * the bad case (a reconnect, a lost message). The obligation the coordinator fixed — every send is
+ * confirmed delivered-or-failed, with a reason — plus that id is all this needs; the wire shape is
+ * Victor's server dispatch.
  *
  * Pure and reducer-shaped so the honesty rules are pinned by `terminalChannel.test.ts`.
  */
@@ -55,7 +58,7 @@ export type ChannelAction =
   | { type: 'open' }
   | { type: 'closed'; reason?: string }
   | { type: 'send' }
-  | { type: 'ack'; ok: boolean; reason?: string }
+  | { type: 'ack'; id: number; ok: boolean; reason?: string }
 
 /** A key may be transmitted only while consent stands and the channel is open. */
 export function canSend(state: ChannelState): boolean {
@@ -105,8 +108,15 @@ export function channelReducer(state: ChannelState, action: ChannelAction): Chan
       return { ...state, pending: [...state.pending, state.nextId], nextId: state.nextId + 1 }
 
     case 'ack': {
-      // Only meaningful while a key is actually in flight — a late ack after a close resurrects nothing.
+      // Only meaningful while a key is actually in flight — a late/duplicate ack (pending drained by
+      // an OK, a close, or a disarm) resurrects nothing.
       if (state.pending.length === 0) return state
+      // Verify, don't infer: the ack must answer the key we expect next. A mismatch is a detectable
+      // fault (reconnect, lost message) — surfaced, and the accounting left intact rather than
+      // popping the wrong key.
+      if (state.pending[0] !== action.id) {
+        return { ...state, undelivered: true, error: action.reason ?? 'delivery confirmation out of order' }
+      }
       const [, ...rest] = state.pending
       if (action.ok) return { ...state, pending: rest }
       return {

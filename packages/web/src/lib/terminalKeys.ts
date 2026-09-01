@@ -19,17 +19,22 @@
  *      transport-shape-independent: whatever wire format the WS settles on, the client asks this
  *      module "text or named key?" first.
  *
- * The allowlist is deliberately CONSERVATIVE: printable text, Enter, BSpace, Tab, the four arrows,
- * and the two control keys the assignment mandates (Ctrl+C for A7's interrupt, Ctrl+D for EOF).
- * Other C0 controls (Ctrl+Z suspend, Ctrl+U/A/E line-editing) and every unmapped escape sequence
- * (function keys, mouse, bracketed-paste) are refused. This can be widened later — but each
- * addition is a deliberate security choice with a reason, which is exactly why the default is "no".
+ * The allowlist's dividing line: "edits the line" passes; "controls the process" is refused unless
+ * explicitly requested. So it admits printable text, Enter, BSpace, Tab, the four arrows, the
+ * line-editing controls (Ctrl+A/E cursor, Ctrl+U/W/K kill line/word/to-end — none touch the
+ * process), and the two process-control keys the assignment does request (Ctrl+C for A7's interrupt,
+ * Ctrl+D for EOF). Everything else is refused: other process-control C0 keys (Ctrl+Z suspend, Ctrl+\
+ * SIGQUIT) and every unmapped escape sequence (function keys, mouse, bracketed-paste). Widening it
+ * again is a deliberate security choice with a reason, which is exactly why the default is "no".
  *
  * Everything here is pure so the allowlist is pinned by `terminalKeys.test.ts`, not by the JSX.
  */
 
 /** The named keys the server keystroke channel accepts (tmux `send-keys` key names). */
-export type NamedKey = 'Enter' | 'BSpace' | 'Tab' | 'Up' | 'Down' | 'Left' | 'Right' | 'C-c' | 'C-d'
+export type NamedKey =
+  | 'Enter' | 'BSpace' | 'Tab' | 'Up' | 'Down' | 'Left' | 'Right'
+  | 'C-c' | 'C-d' // process control — explicitly requested (A7 / EOF)
+  | 'C-a' | 'C-e' | 'C-u' | 'C-w' | 'C-k' // line editing — "edits the line" passes
 
 /** Why an input chunk was refused. `empty` is a no-op; `unsupported-sequence` is "not in the allowlist". */
 export type BlockReason = 'empty' | 'unsupported-sequence'
@@ -52,8 +57,14 @@ const NAMED: Readonly<Record<string, NamedKey>> = {
   '\x7f': 'BSpace', // DEL — what most terminals send for Backspace
   '\x08': 'BSpace', // BS
   '\t': 'Tab',
-  '\x03': 'C-c',
-  '\x04': 'C-d',
+  '\x03': 'C-c', // interrupt (A7)
+  '\x04': 'C-d', // EOF
+  // Line editing — none of these touch the process; they are what "typing in a terminal" means.
+  '\x01': 'C-a', // cursor to line start
+  '\x05': 'C-e', // cursor to line end
+  '\x15': 'C-u', // kill whole line
+  '\x17': 'C-w', // kill previous word
+  '\x0b': 'C-k', // kill to end of line
   // CSI cursor keys (normal mode)
   '\x1b[A': 'Up',
   '\x1b[B': 'Down',

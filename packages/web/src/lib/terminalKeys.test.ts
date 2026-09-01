@@ -63,16 +63,27 @@ describe('the two mandated control keys → named keys (A7)', () => {
   })
 })
 
+describe('line-editing control keys → named keys (criterion: "edits the line" passes)', () => {
+  it('Ctrl+A / Ctrl+E move the cursor to line start/end', () => {
+    expect(intent('\x01')).toEqual({ kind: 'key', key: 'C-a' })
+    expect(intent('\x05')).toEqual({ kind: 'key', key: 'C-e' })
+  })
+  it('Ctrl+U / Ctrl+W / Ctrl+K edit the line (kill line / word / to-end)', () => {
+    expect(intent('\x15')).toEqual({ kind: 'key', key: 'C-u' })
+    expect(intent('\x17')).toEqual({ kind: 'key', key: 'C-w' })
+    expect(intent('\x0b')).toEqual({ kind: 'key', key: 'C-k' })
+  })
+})
+
 describe('allowlist — nothing else reaches the process', () => {
   it('empty input is blocked as empty', () => {
     expect(intent('')).toEqual({ kind: 'blocked', reason: 'empty' })
   })
-  it('other C0 control keys are refused by default (security-first allowlist)', () => {
-    // Ctrl+Z (suspend) would leave a coding agent looking hung; not in the allowlist.
-    expect(intent('\x1a')).toEqual({ kind: 'blocked', reason: 'unsupported-sequence' })
-    // Ctrl+U / Ctrl+A etc. — deliberate omission, expandable with justification.
-    expect(intent('\x15')).toEqual({ kind: 'blocked', reason: 'unsupported-sequence' })
-    expect(intent('\x01')).toEqual({ kind: 'blocked', reason: 'unsupported-sequence' })
+  it('control keys that touch the PROCESS (not the line) are refused', () => {
+    // The line separating the allowed group from this one: editing the line passes; controlling the
+    // process is refused unless explicitly requested (only C-c / C-d are).
+    expect(intent('\x1a')).toEqual({ kind: 'blocked', reason: 'unsupported-sequence' }) // Ctrl+Z suspend
+    expect(intent('\x1c')).toEqual({ kind: 'blocked', reason: 'unsupported-sequence' }) // Ctrl+\ SIGQUIT
   })
   it('unmapped escape sequences (function keys, mouse, bracketed paste) are refused, never forwarded blindly', () => {
     expect(intent('\x1b[15~')).toEqual({ kind: 'blocked', reason: 'unsupported-sequence' }) // F5
