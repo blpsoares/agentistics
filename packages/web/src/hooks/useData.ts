@@ -3,6 +3,7 @@ import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMe
 import { calcStreak, calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, resolveMachineCacheScope, distinctHarnesses, mergeStatsCaches, repoShortName, HARNESS_ORDER, EMPTY_TOKENS, addTokens, sessionTokens, sessionTokenTotal, sumTokens, totalTokens, usageTokenTotal, usageTokens } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 import { makeTagFilter, type TagDef } from '../lib/tagMatch'
+import { isUsableDataCache } from '../lib/dataCache'
 
 /**
  * True only for a non-empty string. `start_time`/`end_time`/`date` fields are typed as `string`
@@ -175,12 +176,36 @@ const DATA_CACHE_KEY = 'agentistics-data-cache-v1'
 function readDataCache(): AppData | null {
   try {
     const raw = localStorage.getItem(DATA_CACHE_KEY)
-    return raw ? (JSON.parse(raw) as AppData) : null
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    // VALIDATED, not cast. Seeding from this snapshot also sets `loading: false`, so whatever comes
+    // out of here renders immediately with no loader and no server round-trip in between — a
+    // payload that merely PARSES used to reach `computeDerivedStats` and throw there, and the error
+    // boundary's Reload re-read the same bytes. That is an app bricked for its origin until someone
+    // clears site data by hand. See `isUsableDataCache` for how a bad snapshot gets written.
+    if (!isUsableDataCache(parsed)) {
+      // DROPPED, not repaired: the missing half cannot be invented, and a fabricated `statsCache`
+      // is a confident zero on every KPI. Removing it is what makes the next reload recover on its
+      // own instead of hitting the same wall.
+      clearDataCache()
+      return null
+    }
+    return parsed as AppData
   } catch { return null }
 }
 
 function writeDataCache(data: AppData): void {
+  // Guarded on the way IN as well as out. A 200 that is not an `AppData` (a proxy page, a captive
+  // portal, an ingest-only central) was cached by the same blind cast that read it back, so the
+  // next reopen started from a snapshot no server would ever produce again.
+  if (!isUsableDataCache(data)) return
   try { localStorage.setItem(DATA_CACHE_KEY, JSON.stringify(data)) } catch { /* quota/disabled — skip */ }
+}
+
+/** Forget the persisted snapshot. Exported for the root error boundary: a render crash caused by
+ *  the cache cannot be cleared by reloading, because reloading reads the cache. */
+export function clearDataCache(): void {
+  try { localStorage.removeItem(DATA_CACHE_KEY) } catch { /* disabled — nothing to clear */ }
 }
 
 export const LIVE_INTERVAL_OPTIONS = [
