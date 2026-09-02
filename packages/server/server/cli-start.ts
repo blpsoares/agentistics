@@ -34,7 +34,7 @@ import { writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
 import {
-  DEFAULT_TEAM, HARNESS_ORDER, repoShortName,
+  DEFAULT_TEAM, repoShortName,
   type HarnessId, type TeamConnection,
 } from '@agentistics/core'
 import type {
@@ -101,6 +101,7 @@ import { resolveLang } from './cli-lang'
 import { scanProcesses } from './live-sessions'
 import { resolveBackend } from './sessions'
 import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
+import { availableHarnesses } from './sessions/harness-available'
 import { planTakeover } from './sessions/takeover'
 import { findProjects } from './sessions/project-source'
 import { candidatePath } from './sessions/project-search'
@@ -3004,7 +3005,13 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
      * rule `agentop session`'s `STARTABLE` already follows, and the reason the two can never drift.
      */
     async startableHarnesses(): Promise<SessionHarnessOption[]> {
-      return HARNESS_ORDER.flatMap(id => {
+      // Narrowed to the CLIs actually ON THIS MACHINE, through the one helper `cli-hooks.ts` also
+      // asks — a spec says how to run `codex`, not that codex exists here, and offering the other
+      // five started a tmux session that died on `command not found` behind a screen nobody was
+      // watching. `availableHarnesses` answers with ALL of them when it cannot tell, because an
+      // empty wizard is indistinguishable from a broken one.
+      const { ids } = availableHarnesses()
+      return ids.flatMap(id => {
         const spec = SPAWN_SPECS[id]
         if (!spec) return []
         return [{
