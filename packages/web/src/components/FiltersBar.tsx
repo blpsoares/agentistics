@@ -371,6 +371,30 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
         </>
         )}
 
+        {/* Active sessions only — the fleet's own dimension, not part of `Filters`: it is a
+            statement about what a session is DOING right now, which no stored metric has (see
+            `fleetFilter.ts`'s header). Lives here, beside the date range, rather than behind
+            "+ Filter": it is on by default in the Sessions workspace and off everywhere else, so
+            burying it one click deeper would be the "hidden behind a click" complaint all over
+            again for the one control this bar exists to expose. Absent entirely when the caller has
+            nothing to run it against. */}
+        {onActiveOnlyChange && (
+          <button
+            onClick={() => onActiveOnlyChange(!activeOnly)}
+            style={{
+              ...CTL,
+              gap: 6,
+              border: activeOnly ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
+              background: activeOnly ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+              color: activeOnly ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+              fontWeight: activeOnly ? 600 : 400,
+            }}
+          >
+            <Radio size={12} />
+            {lang === 'pt' ? 'Só ativas' : 'Active only'}
+          </button>
+        )}
+
         {/* "Create tag with these filters" — only rendered when the caller has already decided the
             current filters map to a usable tag draft (see canCreateTagFromFilters). FiltersBar
             itself never computes that; it just shows the button and fires the callback. */}

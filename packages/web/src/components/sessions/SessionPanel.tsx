@@ -10,6 +10,15 @@
  * it cannot. Where it cannot, the Chat segment is ABSENT rather than disabled — a control that is
  * present and refuses teaches nothing, while its absence plus the sentence in the panel says which
  * harnesses can do this and why yours cannot.
+ *
+ * ON DESKTOP this panel draws NO header of its own any more — the title, the Chat/Terminal tabs and
+ * the "···" actions moved UP into the shared sticky header in `App.tsx`, right below the fleet's
+ * filter bar. Two bordered strips stacked on top of each other said the same thing twice; one strip
+ * is the whole point of sharing a header with the filters at all. `view`/`onViewChange` being
+ * PROVIDED is the signal that the caller is showing that shared header (desktop): this component
+ * then reads the view instead of owning it and renders no header. On MOBILE, where the shared header
+ * is hidden for lack of room, this panel is still fully self-contained — `SessionsPage`'s mobile
+ * branch passes neither prop, and the header below returns.
  */
 
 import { useState } from 'react'
@@ -33,9 +42,13 @@ export interface SessionPanelProps {
   authorName?: string
   /** Called after a verb that removes the row — the panel has nothing left to show. */
   onGone?: () => void
+  /** Provided together — see the module header. Their presence means "a shared header up in
+   *  App.tsx already shows the title/tabs/actions for this session; draw none of your own." */
+  view?: SessionView
+  onViewChange?: (v: SessionView) => void
 }
 
-export function SessionPanel({ session, row, lang, theme, act, authorName, onGone }: SessionPanelProps) {
+export function SessionPanel({ session, row, lang, theme, act, authorName, onGone, view: viewProp, onViewChange }: SessionPanelProps) {
   const pt = lang === 'pt'
 
   /**
@@ -47,7 +60,13 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
    */
   const chattable = session.conversationBlind === undefined
 
-  const [view, setView] = useState<SessionView>(chattable ? 'chat' : 'terminal')
+  // Uncontrolled (mobile, self-contained) unless the caller hands in `onViewChange` — see the
+  // module header. The local state is still declared unconditionally (hooks can't be), it is just
+  // never read when a controlled view is in play.
+  const [localView, setLocalView] = useState<SessionView>(chattable ? 'chat' : 'terminal')
+  const controlled = onViewChange !== undefined
+  const view = controlled ? (viewProp ?? 'chat') : localView
+  const setView = controlled ? onViewChange! : setLocalView
   const active: SessionView = chattable ? view : 'terminal'
 
   return (
@@ -58,13 +77,9 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
     // element does nothing) and the jump-to-latest arrow never appearing (`scrollHeight` equals
     // `clientHeight`, so the reader always measures as "at the tail").
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-      {/* PINNED. `flexShrink: 0` keeps it out of the flex squeeze so the pane below owns the
-          scrolling, and `position: sticky` is the second, independent guarantee of the same thing:
-          if ANY ancestor between here and the viewport ever ends up the one that scrolls (a
-          mis-measured `<main>` height, a future layout change), a flex-only header rides away with
-          it while a sticky one stays glued to the top of whichever box actually scrolls. Belt and
-          suspenders — `flexShrink:0` alone was reported to still let this header scroll out of
-          view in practice. */}
+      {/* MOBILE ONLY now — see the module header. PINNED exactly as before: `flexShrink: 0` plus
+          `position: sticky` as the second, independent guarantee. */}
+      {!controlled && (
       <header style={{
         display: 'flex', alignItems: 'center', gap: 12,
         padding: '12px 20px', borderBottom: '1px solid var(--border)',
@@ -117,6 +132,7 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           />
         )}
       </header>
+      )}
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {active === 'chat' ? (
@@ -142,7 +158,10 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
   )
 }
 
-function Segment({ on, onClick, icon, label }: {
+/** Exported: the shared App.tsx header draws the SAME segmented control for the lifted-up
+ *  Chat/Terminal toggle, and a second hand-rolled copy of it is exactly the drift this whole
+ *  lift-up was meant to remove. */
+export function Segment({ on, onClick, icon, label }: {
   on: boolean; onClick: () => void; icon: React.ReactNode; label: string
 }) {
   return (

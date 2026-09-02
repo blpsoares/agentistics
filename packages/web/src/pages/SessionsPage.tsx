@@ -17,18 +17,18 @@
  * a session's state by one poll interval — which is a bug people report as flicker.
  */
 
-import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
+import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import { ChevronLeft } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { FleetOverview } from '../components/sessions/FleetOverview'
-import { SessionPanel } from '../components/sessions/SessionPanel'
+import { SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
 import { SessionsAside } from '../components/nav/SessionsAside'
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
-  const { lang, isCentral, theme } = ctx
+  const { lang, isCentral, theme, filters } = ctx
   const pt = lang === 'pt'
   const { sessionId } = useParams()
   const navigate = useNavigate()
@@ -46,6 +46,19 @@ export default function SessionsPage() {
     ? undefined
     : fleet.rows.find(r => r.id === sessionId || r.conversationId === sessionId)
 
+  // The Chat/Terminal choice, in the URL — the SAME `?view=` the shared header in `App.tsx` reads
+  // and writes on desktop. Independent `useSearchParams()` calls on the one search string, not a
+  // prop threaded down from there: the header and this page can never disagree about which view is
+  // showing without a context wire built just to carry two strings.
+  const [viewParams, setViewParams] = useSearchParams()
+  const sessionView: SessionView = viewParams.get('view') === 'terminal' ? 'terminal' : 'chat'
+  const setSessionView = (v: SessionView) => setViewParams(prev => {
+    const next = new URLSearchParams(prev)
+    if (v === 'chat') next.delete('view')
+    else next.set('view', v)
+    return next
+  }, { replace: true })
+
   const panel = selected === undefined ? null : (
     <SessionPanel
       session={selected}
@@ -54,6 +67,9 @@ export default function SessionsPage() {
       theme={theme === 'light' ? 'light' : 'dark'}
       act={act}
       onGone={() => navigate('/sessions')}
+      // Only on desktop: mobile keeps its own self-contained header (see SessionPanel's module
+      // doc) since the shared one is hidden there for lack of room.
+      {...(isMobile ? {} : { view: sessionView, onViewChange: setSessionView })}
     />
   )
 
@@ -90,6 +106,10 @@ export default function SessionsPage() {
           finishedTasks={fleet.finishedTasks}
           loading={loading}
           unsupported={unsupported}
+          filters={filters}
+          // Fixed true: mobile has no FiltersBar to turn it off with yet (the shared header is
+          // desktop-only for now — see App.tsx). Still the right DEFAULT for this workspace.
+          activeOnly
           {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
         />
       </div>

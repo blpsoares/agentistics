@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { Outlet, NavLink, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { version } from '../../../package.json'
 import {
@@ -11,7 +11,7 @@ import {
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowLeft, ArrowRight, PanelLeft,
   GitBranch, Users, LogOut, Server, KeyRound, Tag as TagIcon,
-  ShieldCheck, Cpu,
+  ShieldCheck, Cpu, MessagesSquare, TerminalSquare, Square,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import { usePlanBasis } from './hooks/usePlanBasis'
@@ -65,7 +65,9 @@ import { SessionsAside } from './components/nav/SessionsAside'
 import { AsideResizer } from './components/nav/AsideResizer'
 import { modeOfPath } from './lib/workspaceMode'
 import { ASIDE_DEFAULT } from './lib/asideWidth'
-import { useFleet } from './lib/fleet'
+import { useFleet, useFleetIndex } from './lib/fleet'
+import { Segment } from './components/sessions/SessionPanel'
+import { SessionActions } from './components/sessions/SessionActions'
 import { MemberConnectionStatus } from './components/MemberConnectionStatus'
 import { OwnerSetup } from './components/OwnerSetup'
 import { ChangePassword } from './components/ChangePassword'
@@ -983,7 +985,7 @@ function CollapsedTip({ label, show, children }: { label: string; show: boolean;
   )
 }
 
-function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, onResize, onCommitWidth, onToggle, theme, onToggleTheme, onToggleLang, onExport, principal }: {
+function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, onResize, onCommitWidth, onToggle, theme, onToggleTheme, onToggleLang, onExport, principal, sessionsFilters, sessionsActiveOnly }: {
   lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean
   collapsed: boolean; onToggle: () => void
   /** The width in force. Fixed in the dashboard workspace, user-set in the sessions one. */
@@ -992,6 +994,10 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
   onCommitWidth: (w: number) => void
   theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onExport: () => void
   principal?: IamAccount
+  /** The SAME filters/switch the shared header's `FiltersBar` edits — see `App.tsx`'s own state.
+   *  `SideNav` only reads them, to hand to `SessionsAside`; it owns neither. */
+  sessionsFilters: Filters
+  sessionsActiveOnly: boolean
 }) {
   const location = useLocation()
   const pt = lang === 'pt'
@@ -1092,6 +1098,8 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
           finishedTasks={fleet.finishedTasks}
           loading={fleetLoading}
           unsupported={fleetUnsupported}
+          filters={sessionsFilters}
+          activeOnly={sessionsActiveOnly}
           {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
         />
       ) : (
@@ -1471,6 +1479,45 @@ export default function AppLayout() {
   // Only the sessions workspace offers the handle, but whatever it is dragged to applies to both.
   const liveAsideWidth = asideWidth
   const inSessionsWorkspace = modeOfPath(location.pathname) === 'sessions'
+  /**
+   * Active sessions only — the fleet's own dimension (see `FiltersBar`'s doc comment on
+   * `onActiveOnlyChange`), not part of `Filters`. Defaults to ON the moment you land in the
+   * Sessions workspace and OFF the moment you leave it, on EVERY visit — not a preference
+   * remembered across navigation, because "what is running right now" and "everything on record"
+   * are the natural defaults for those two places respectively, and a stale opposite default from
+   * a previous visit would read as broken filtering rather than as a choice.
+   */
+  const [activeOnly, setActiveOnly] = useState(inSessionsWorkspace)
+  useEffect(() => { setActiveOnly(inSessionsWorkspace) }, [inSessionsWorkspace])
+
+  /**
+   * The selected session's title/tabs/actions row, lifted UP into this shared header from
+   * `SessionPanel` — which used to draw its own second bordered strip directly under this one, the
+   * same information said twice in two different boxes. `useFleet` is a SHARED poll (see
+   * `lib/fleet.ts`'s own header): calling it again here costs no extra request, it is the same
+   * subscription `SideNav` already holds.
+   */
+  const { sessionId: selectedSessionId } = useParams()
+  const { fleet: headerFleet, act: headerFleetAct } = useFleet(lang === 'pt' ? 'pt' : 'en', !isCentral)
+  const headerFleetIndex = useFleetIndex(headerFleet.sessions)
+  const selectedFleetSession = inSessionsWorkspace && selectedSessionId !== undefined
+    ? headerFleet.rows.find(r => r.id === selectedSessionId || r.conversationId === selectedSessionId)
+    : undefined
+  const selectedSessionRow = selectedFleetSession ? headerFleetIndex.get(selectedFleetSession.id) : undefined
+  // The Chat/Terminal choice lives in the URL (`?view=`) rather than in state here or in
+  // `SessionPanel`, so the ONE control (now in this shared header) and the ONE reader (the panel,
+  // still deciding which component to mount) can never disagree about which view is showing without
+  // threading a prop through `SessionsPage` for it.
+  const [sessionViewParams, setSessionViewParams] = useSearchParams()
+  const sessionView: 'chat' | 'terminal' = sessionViewParams.get('view') === 'terminal' ? 'terminal' : 'chat'
+  const setSessionView = useCallback((v: 'chat' | 'terminal') => {
+    setSessionViewParams(prev => {
+      const next = new URLSearchParams(prev)
+      if (v === 'chat') next.delete('view')
+      else next.set('view', v)
+      return next
+    }, { replace: true })
+  }, [setSessionViewParams])
   const toggleSidebar = useCallback(() => setSidebarCollapsed(v => {
     const next = !v
     try { localStorage.setItem('agentistics-sidebar-collapsed', next ? '1' : '0') } catch { /* ignore */ }
@@ -2465,6 +2512,16 @@ export default function AppLayout() {
   return (
     <div style={{
       minHeight: '100vh',
+      // The REAL cause of the session pane's header/composer "scrolling away" and landing at the
+      // wrong spot: `<main>` below sets an explicit `height` for the sessions workspace, but a flex
+      // item with `flex: 1 1 0%` computes its used size from the flex algorithm, not from its own
+      // `height` — and that algorithm needs the CONTAINER (this div) to have a DEFINITE height to
+      // distribute. `minHeight` alone leaves it auto/content-sized, so `<main>` silently grew to fit
+      // an 11.000px-tall conversation instead of clipping at the viewport, and every "scroll to the
+      // bottom" call landed on an inner div that never actually had room to scroll. `position:
+      // sticky` on the header/composer masked the visual symptom (they still track the PAGE's own
+      // scroll) without fixing the underlying non-clipping — this fixes it at the source instead.
+      height: inSessionsWorkspace ? '100vh' : undefined,
       background: 'var(--bg-base)', display: 'flex', flexDirection: 'column',
       paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth),
       paddingTop: isMobile ? 0 : TOPBAR_H,
@@ -2515,14 +2572,18 @@ export default function AppLayout() {
         onToggleLang={() => { const next = lang === 'pt' ? 'en' : 'pt'; setLang(next); if (next === 'pt') setCurrency('BRL'); else if (currency === 'BRL') setCurrency('USD') }}
         onExport={() => navigate('/export')}
         principal={iam?.account}
+        sessionsFilters={filters}
+        sessionsActiveOnly={activeOnly}
       />}
       {/* Header */}
-      {/* Page chrome, and only where a page wants it. The sessions workspace is an application
-          pane whose own header is pinned inside it; a second strip above it both duplicated the
-          role and, being a sibling of a `100vh - topbar` pane, pushed the document into scrolling —
-          which is what made that inner header scroll away. The filters it holds scope stored
-          METRICS, which is not what a live fleet is. */}
-      {!inSessionsWorkspace && (
+      {/* Page chrome. The sessions workspace now shares this SAME header on desktop — it wants the
+          fleet's own harness/project/repo/model filter, and reusing the one control that already
+          does "pick a value to narrow by" beats a second implementation of it (see `FiltersBar`'s
+          `hideDateRange`/`onActiveOnlyChange`, added for exactly this). It stays hidden on MOBILE
+          sessions, whose own full-screen list/panel layout has no room for it yet. The root cause
+          of "the pane's own header scrolled away" was never this strip's presence — it was `<main>`
+          lacking a DEFINITE height to clip to, fixed at the wrapper `<div>` above. */}
+      {(!inSessionsWorkspace || !isMobile) && (
       <header style={{
         background: 'var(--bg-surface)',
         position: 'sticky',
@@ -2700,7 +2761,7 @@ export default function AppLayout() {
             </div>
           </div>
         )}
-        {data && !isCustomPage && !inSessionsWorkspace && !isMobile && (
+        {data && !isCustomPage && !isMobile && (
           <div style={{
             maxWidth: 1400, margin: '0 auto', padding: '5px 32px', width: '100%', boxSizing: 'border-box',
             display: 'flex', alignItems: 'flex-start', gap: 14,
@@ -2708,10 +2769,14 @@ export default function AppLayout() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <FiltersBar
                 only={filterDimsForRoute}
-                costBasis={costBasis}
-                onCostBasisChange={isCentral ? undefined : setCostBasis}
-                costBasisReady={billingReady.ready && planBasis.basis !== null}
-                onCostBasisSetup={openBillingSetup}
+                {...(inSessionsWorkspace ? {} : {
+                  costBasis,
+                  onCostBasisChange: isCentral ? undefined : setCostBasis,
+                  costBasisReady: billingReady.ready && planBasis.basis !== null,
+                  onCostBasisSetup: openBillingSetup,
+                })}
+                activeOnly={inSessionsWorkspace ? activeOnly : undefined}
+                onActiveOnlyChange={inSessionsWorkspace ? setActiveOnly : undefined}
                 filters={filters}
                 onChange={setFilters}
                 projects={availableProjects}
@@ -2733,7 +2798,11 @@ export default function AppLayout() {
 
             {/* Right column: the action cluster (alerts/live/refresh) on top, and the fleet
                 stats strip right-aligned directly beneath it — so "Updated · members · machines ·
-                projects · repos" lines up under the refresh button instead of stretching the bar. */}
+                projects · repos" lines up under the refresh button instead of stretching the bar.
+                Absent for Sessions: those are stored-metrics totals and a page-data "Live" refresh
+                toggle, neither of which describes a fleet that already polls and shows its own
+                "Connected · last sync" in the aside. */}
+            {!inSessionsWorkspace && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, paddingTop: 3 }}>
               {/* Filtered totals, immediately left of the action icons */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
@@ -2796,15 +2865,99 @@ export default function AppLayout() {
                 <RefreshCw size={14} />
               </button>
             </div>
+            )}
           </div>
         )}
+
+        {/* The selected session's title/tabs/actions — lifted up from `SessionPanel`, which used
+            to draw a SECOND bordered strip directly under this one for exactly this. One shared
+            header, not two stacked ones saying overlapping things. Desktop only: on mobile the
+            whole shared header is hidden (see this header's own top-level condition) and
+            `SessionPanel` goes back to drawing its own, self-contained. */}
+        {inSessionsWorkspace && !isMobile && selectedFleetSession && (() => {
+          const chattable = selectedFleetSession.conversationBlind === undefined
+          const stopVerb = selectedSessionRow?.verbs.find(v => v.action === 'interrupt')
+          return (
+            <div style={{
+              borderTop: '1px solid var(--border)',
+              maxWidth: 1400, margin: '0 auto', padding: '10px 32px',
+              width: '100%', boxSizing: 'border-box',
+              display: 'flex', alignItems: 'center', gap: 12,
+            }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <h1 style={{
+                  margin: 0, fontSize: 15, fontWeight: 650, color: 'var(--text-primary)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {selectedFleetSession.title}
+                </h1>
+                <p style={{
+                  margin: '2px 0 0', fontSize: 11.5, color: 'var(--text-tertiary)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {selectedFleetSession.stateLabel}
+                  {selectedFleetSession.task ? ` · ${selectedFleetSession.task}` : ''}
+                  {selectedFleetSession.project ? ` · ${selectedFleetSession.project}` : ''}
+                </p>
+              </div>
+
+              {chattable && (
+                <div role="tablist" style={{
+                  display: 'flex', gap: 3, padding: 3, borderRadius: 10, flexShrink: 0,
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                }}>
+                  <Segment
+                    on={sessionView === 'chat'} onClick={() => setSessionView('chat')}
+                    icon={<MessagesSquare size={14} />} label={lang === 'pt' ? 'Conversa' : 'Chat'}
+                  />
+                  <Segment
+                    on={sessionView === 'terminal'} onClick={() => setSessionView('terminal')}
+                    icon={<TerminalSquare size={14} />} label="Terminal"
+                  />
+                </div>
+              )}
+
+              {/* Working's own stop — mirrors the composer's, for the moment the reader is looking
+                  at the terminal view instead and still wants to interrupt without hunting for the
+                  field. Absent the instant the turn ends, same gate as everywhere else it appears. */}
+              {selectedFleetSession.state === 'working' && stopVerb?.enabled && (
+                <button
+                  onClick={() => void headerFleetAct({ id: selectedFleetSession.id, action: 'interrupt' })}
+                  title={stopVerb.label}
+                  aria-label={stopVerb.label}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+                    minHeight: 32, padding: '0 11px', borderRadius: 9, cursor: 'pointer',
+                    border: '1px solid color-mix(in srgb, var(--accent-red) 45%, transparent)',
+                    background: 'color-mix(in srgb, var(--accent-red) 12%, transparent)',
+                    color: 'var(--accent-red)', fontFamily: 'inherit', fontSize: 12, fontWeight: 650,
+                  }}
+                >
+                  <Square size={11} fill="currentColor" />
+                  {lang === 'pt' ? 'Parar' : 'Stop'}
+                </button>
+              )}
+
+              {selectedSessionRow && (
+                <SessionActions
+                  row={selectedSessionRow}
+                  lang={lang === 'pt' ? 'pt' : 'en'}
+                  act={headerFleetAct}
+                  onGone={() => navigate('/sessions')}
+                />
+              )}
+            </div>
+          )
+        })()}
 
         {/* Nav moved to the left sidebar (SideNav) on desktop; mobile uses the bottom nav. */}
 
       {/* Collapsible "fleet stats" tab — hangs BELOW the header (position:absolute top:100%). It
           lives inside the sticky header so it stays pinned and scrolls down with it; high z-index
-          overlays the page. Expands to show updated/since + members/machines/teams/projects/repos. */}
-      {data && !isCustomPage && !isMobile && (() => {
+          overlays the page. Expands to show updated/since + members/machines/teams/projects/repos.
+          Dashboard only — these are STORED metrics, and a live fleet already states its own
+          "Connected · last sync" in the aside. */}
+      {data && !isCustomPage && !isMobile && !inSessionsWorkspace && (() => {
         const sep = <span style={{ color: 'var(--border)' }}>·</span>
         const iconSt: React.CSSProperties = { color: 'var(--text-tertiary)', flexShrink: 0 }
         return (

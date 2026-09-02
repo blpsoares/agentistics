@@ -15,43 +15,18 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Eye, EyeOff, Pin, PinOff, Plus, Search, X } from 'lucide-react'
-import type { Filters, HarnessId, Project } from '@agentistics/core'
+import { Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import type { Filters } from '@agentistics/core'
 import {
-  ACTIVE_STATES, DEFAULT_ORDER, GROUPINGS,
-  filterSessions, groupSessions, sessionNotify,
-  type ControlSession, type SessionGroupingId,
+  ACTIVE_STATES, DEFAULT_ORDER, filterSessions, sessionNotify, sortSessions,
+  type ControlSession,
 } from '@agentistics/tui/control/session-fleet'
-import { controlStrings, sessionWordBook } from '@agentistics/tui/control/i18n'
 import { filterFleet } from '../../lib/fleetFilter'
-import { FiltersBar } from '../FiltersBar'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
-import { dayLabels, daysAgo } from '../../lib/sessionDays'
 import { NewSessionModal } from '../sessions/NewSessionModal'
 import {
   MAX_PINNED, getPinnedIds, pinnedServerSnapshot, subscribePinnedSessions, togglePinnedSession,
 } from '../../lib/pinnedSessions'
-
-/**
- * The fleet's OWN filter dimensions — harness, project, repo, model — each a fact a row carries
- * itself. Deliberately not the dashboard's `Filters` state: that one scopes stored METRICS (a date
- * range, a set of models over history) and was removed from this workspace on purpose (see
- * `fleetFilter.ts`'s header) — a fleet is what is running now, not a historical window. This block
- * builds the narrower `Filters` shape `filterFleet` actually reads and owns no rule of its own.
- *
- * Rendered through the SAME `FiltersBar` the dashboard uses (`only` restricted to the four
- * dimensions above, `hideDateRange` dropping the one control that means nothing for a live fleet)
- * rather than a second, bespoke filter widget — a fleet's harness/project/repo/model chips are the
- * same KIND of control the dashboard already has, and inventing a second implementation of "pick a
- * value to narrow by" is exactly the defect this whole branch exists to remove.
- */
-interface FleetFilterState {
-  harnesses: HarnessId[]
-  projects: string[]
-  repos: string[]
-  models: string[]
-}
-const EMPTY_FLEET_FILTER: FleetFilterState = { harnesses: [], projects: [], repos: [], models: [] }
 
 export interface SessionsAsideProps {
   lang: 'pt' | 'en'
@@ -63,6 +38,20 @@ export interface SessionsAsideProps {
   unsupported: boolean
   /** Already-localized reason the list may not be the whole truth. */
   unavailable?: string
+  /**
+   * The SAME filters the dashboard's header uses — harness/project/repo/model narrow the fleet
+   * too now (see `filterFleet.ts`); every other dimension there (date range, tags, members…) is
+   * read only where a live row can actually answer it, which today is none of them. Owned by
+   * `App.tsx`, not here: the control that edits it (`FiltersBar`, in the shared sticky header) is
+   * a sibling of this aside, not a child of it.
+   */
+  filters: Filters
+  /**
+   * The fleet's OWN "only what is running" switch — not part of `Filters` (see `fleetFilter.ts`'s
+   * header), and also owned by `App.tsx` now so the SAME control in the header can default it ON
+   * for this workspace and OFF for the dashboard. This aside only reads it.
+   */
+  activeOnly: boolean
 }
 
 /** The colour a state is said in. `running` is its own token, not `success`, which reads teal. */
@@ -116,7 +105,7 @@ function pinKeyOf(row: ControlSession): string {
 }
 
 export function SessionsAside({
-  lang, rows, finishedTasks, loading, unsupported, unavailable,
+  lang, rows, loading, unsupported, unavailable, filters, activeOnly,
 }: SessionsAsideProps) {
   const pt = lang === 'pt'
   const navigate = useNavigate()
@@ -126,23 +115,6 @@ export function SessionsAside({
   const { sessionId } = useParams()
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
-  /**
-   * What the bands stand for. `day` by default; every dimension the terminal cockpit offers is
-   * offered here, from the same `GROUPINGS` table, so the two can never disagree about what a
-   * grouping means or what a band is called.
-   */
-  const [grouping, setGrouping] = useState<SessionGroupingId>('day')
-  /**
-   * Only the conversations that are RUNNING. On by default, matching `DEFAULT_SESSION_VIEW` in the
-   * terminal cockpit — a machine with months of named work otherwise opens on all of it, and the
-   * handful doing something right now is what the workspace is for.
-   *
-   * It is strict, so when nothing is running the list is empty — which is why `EmptyReason` has to
-   * name THIS switch rather than blaming the search: the rows behind it are still there.
-   */
-  const [onlyActive, setOnlyActive] = useState(true)
-  /** The fleet's own filter block — harness/project/repo/model. See `FleetFilterState` above. */
-  const [fleetFilter, setFleetFilter] = useState<FleetFilterState>(EMPTY_FLEET_FILTER)
   /**
    * The pinned set, from the module that already owns it.
    *
@@ -175,71 +147,25 @@ export function SessionsAside({
     return () => window.removeEventListener('agentistics:focus-session-search', focus)
   }, [])
 
-  const strings = useMemo(() => controlStrings(lang), [lang])
-  /** The grouping names, from the control center's own table — never a second set of words. */
-  const groupWords = strings.sessionsGroupings as Record<string, string>
-
-  // The values the filter block can offer, read off the WHOLE fleet rather than the filtered result —
-  // narrowing to "codex" must not make every other harness's chip disappear, or there would be no way
-  // back to it without clearing the block first.
-  const harnessOptions = useMemo(
-    () => Array.from(new Set(rows.map(r => r.harness).filter(h => h !== ''))).sort() as HarnessId[],
-    [rows],
-  )
-  const modelOptions = useMemo(
-    () => Array.from(new Set(rows.map(r => r.model).filter((m): m is string => m !== undefined))).sort(),
-    [rows],
-  )
-  // `FiltersBar`'s project picker and its repo dimension (derived from `Project.gitRemote`) both
-  // read a `Project[]`, which is the dashboard's shape — a fleet row is not one, so this is the
-  // adapter, built ONCE from the live rows rather than from stored data this workspace has none of.
-  // Keyed by `cwd`, which is also what `filterFleet`'s project match falls back to for an exact path.
-  const fleetProjects: Project[] = useMemo(() => {
-    const byPath = new Map<string, Project>()
-    for (const r of rows) {
-      if (r.cwd === '' || byPath.has(r.cwd)) continue
-      byPath.set(r.cwd, {
-        path: r.cwd, name: r.project || r.cwd, sessions: [],
-        ...(r.repo ? { gitRemote: r.repo } : {}),
-      })
-    }
-    return Array.from(byPath.values())
-  }, [rows])
-  const fleetSessionCountByProject = useMemo(() => {
-    const counts: Record<string, number> = {}
-    for (const r of rows) { if (r.cwd !== '') counts[r.cwd] = (counts[r.cwd] ?? 0) + 1 }
-    return counts
-  }, [rows])
-  const fleetFiltersAsFilters: Filters = useMemo(() => ({
-    dateRange: 'all', customStart: '', customEnd: '',
-    projects: fleetFilter.projects, repos: fleetFilter.repos, models: fleetFilter.models,
-    harnesses: fleetFilter.harnesses,
-  }), [fleetFilter])
-  const onFleetFiltersChange = (f: Filters) => {
-    setFleetFilter({
-      harnesses: f.harnesses ?? [], projects: f.projects, repos: f.repos ?? [], models: f.models,
-    })
-  }
-
   // `now` is read once per arrangement rather than per row: two rows landing either side of midnight
   // during one render would be banded against two different "today"s.
   const active = useMemo(() => new Set<string>(ACTIVE_STATES), [])
-  // `filterFleet` owns harness/project/repo/model AND `activeOnly`, but the onlyActive switch needs
-  // its OWN withheld count (see `hidden` below) independent of the value filters, so it is applied
-  // here as an ordinary array filter rather than through `activeOnly: true`.
+  // `filterFleet` owns harness/project/repo/model AND `activeOnly`, but the switch needs its OWN
+  // withheld count (see `hidden` below) independent of the value filters, so it is applied here as
+  // an ordinary array filter rather than through `activeOnly: true`.
   const valueFiltered = useMemo(
-    () => filterFleet({ rows, filters: fleetFiltersAsFilters, activeOnly: false }).rows,
-    [rows, fleetFiltersAsFilters],
+    () => filterFleet({ rows, filters, activeOnly: false }).rows,
+    [rows, filters],
   )
   const searched = useMemo(() => filterSessions(valueFiltered, query), [valueFiltered, query])
   const matched = useMemo(
-    () => (onlyActive ? searched.filter(r => active.has(r.state)) : searched),
-    [searched, onlyActive, active],
+    () => (activeOnly ? searched.filter(r => active.has(r.state)) : searched),
+    [searched, activeOnly, active],
   )
   /** How many rows the switch is withholding, so the row can say what turning it off would show. */
   const hidden = useMemo(
-    () => (onlyActive ? searched.filter(r => !active.has(r.state)).length : 0),
-    [searched, onlyActive, active],
+    () => (activeOnly ? searched.filter(r => !active.has(r.state)).length : 0),
+    [searched, activeOnly, active],
   )
 
   /** The pinned rows, in the order they were pinned. Their own band, above everything. */
@@ -248,27 +174,26 @@ export function SessionsAside({
     [pins, matched],
   )
 
-  const groups = useMemo(() => {
-    const now = Date.now()
-    const words = sessionWordBook(strings, dayLabels(lang, now))
-    // A pinned row is shown ONCE, in its own band. Leaving it in its ordinary band too would make
-    // the list longer than the fleet and the count beside each heading wrong.
+  /**
+   * TWO bands only, for now — Active and Inactive — dropping the cockpit's full grouping picker
+   * (day/repo/project/task/harness/model/marked). That picker is real work for a later, more
+   * stable pass; today's ask is simpler: what is running, ranked by what needs you most, and
+   * everything else beneath it. `DEFAULT_ORDER` (`state`, via `sessionRank`) is the SAME ranking
+   * the terminal cockpit breaks ties on, so "sorted by status" means one thing everywhere.
+   */
+  const { activeRows, inactiveRows } = useMemo(() => {
     const rest = matched.filter(r => !pinned.has(pinKeyOf(r)))
-    const banded = groupSessions(rest, grouping, words, finishedTasks, DEFAULT_ORDER)
-    // Only the DAY grouping has a natural order — newest first, with the band that is not a day at
-    // all (rows with no timestamp) last, because an absence has no place among the dates. Every
-    // other dimension keeps the order `groupSessions` produced; re-sorting it here would be a
-    // second opinion about an arrangement that module already decided.
-    if (grouping !== 'day') return banded
-    return [...banded].sort((a, b) => {
-      const da = daysAgo(a.key, now), db = daysAgo(b.key, now)
-      if (da === undefined) return 1
-      if (db === undefined) return -1
-      return da - db
-    })
-  }, [matched, pinned, grouping, finishedTasks, strings, lang])
+    return {
+      activeRows: sortSessions(rest.filter(r => active.has(r.state)), DEFAULT_ORDER),
+      // Never computed while activeOnly is on — those rows are the ones the switch is withholding,
+      // not a second list to render beside it.
+      inactiveRows: activeOnly ? [] : sortSessions(rest.filter(r => !active.has(r.state)), DEFAULT_ORDER),
+    }
+  }, [matched, pinned, active, activeOnly])
 
-  const total = groups.reduce((n, g) => n + g.sessions.length, 0) + pinnedRows.length
+  const total = activeRows.length + inactiveRows.length + pinnedRows.length
+  const filterCount = (filters.harnesses?.length ?? 0) + filters.projects.length
+    + (filters.repos?.length ?? 0) + filters.models.length
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 10, paddingTop: 4 }}>
@@ -341,70 +266,6 @@ export function SessionsAside({
         )}
       </div>
 
-      {/* ALWAYS VISIBLE — never behind a second click. A native `<select>` rather than the earlier
-          popover: every dimension the terminal cockpit offers, from the same `GROUPINGS` table, so
-          the two can never disagree about what a grouping means or what a band is called. */}
-      <div style={{ padding: '0 2px' }}>
-        <select
-          value={grouping}
-          onChange={e => setGrouping(e.target.value as SessionGroupingId)}
-          style={{
-            width: '100%', minHeight: tap,
-            padding: '6px 9px', borderRadius: 8, cursor: 'pointer',
-            border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
-            color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
-          }}
-        >
-          {GROUPINGS.map(g => (
-            <option key={g} value={g}>{pt ? 'Agrupar: ' : 'Group by: '}{groupWords[g] ?? g}</option>
-          ))}
-        </select>
-      </div>
-
-      {/* The fleet's OWN filter block — harness/project/repo/model, each a fact a row carries
-          itself — through the SAME `FiltersBar` the dashboard uses. A section with only one option
-          offers nothing to narrow, which is what `only` restricted to a dimension with >1 value
-          already achieves inside FiltersBar's own "+ Filter" menu; `hideDateRange` drops the one
-          control that means nothing for a live fleet (see `fleetFilter.ts`'s header). */}
-      {(harnessOptions.length > 1 || fleetProjects.some(p => p.gitRemote) || fleetProjects.length > 1
-        || modelOptions.length > 1) && (
-        <FiltersBar
-          only={['harnesses', 'repos', 'projects', 'models']}
-          hideDateRange
-          compact
-          filters={fleetFiltersAsFilters}
-          onChange={onFleetFiltersChange}
-          projects={fleetProjects}
-          sessionCountByProject={fleetSessionCountByProject}
-          models={modelOptions}
-          harnesses={harnessOptions}
-          users={[]}
-          lang={lang}
-        />
-      )}
-
-      <button
-        onClick={() => setOnlyActive(v => !v)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 7, width: 'calc(100% - 4px)',
-          margin: '0 2px', padding: '6px 9px', borderRadius: 8, cursor: 'pointer', minHeight: tap,
-          border: '1px solid var(--border-subtle)',
-          background: onlyActive ? 'var(--anthropic-orange-dim)' : 'transparent',
-          color: onlyActive ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-          fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
-        }}
-      >
-        {onlyActive ? <Eye size={12} style={{ flexShrink: 0 }} /> : <EyeOff size={12} style={{ flexShrink: 0 }} />}
-        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {pt ? 'Só as que estão rodando' : 'Only what is running'}
-        </span>
-        {/* The count of what is being withheld. A switch that narrows silently is one people
-            conclude is broken when the list looks short. */}
-        {onlyActive && hidden > 0 && (
-          <span style={{ marginLeft: 'auto', fontWeight: 700, opacity: 0.8, flexShrink: 0 }}>+{hidden}</span>
-        )}
-      </button>
-
       {pinNotice && (
         <p role="status" style={{
           margin: '0 4px', fontSize: 11, lineHeight: 1.45, color: 'var(--anthropic-orange)',
@@ -414,8 +275,8 @@ export function SessionsAside({
       )}
 
       <div className="ag-noscroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
-        {/* The pinned band, above everything and OUTSIDE the grouping — that is what pinning is
-            for: the two or three sessions that must not move when the arrangement changes. */}
+        {/* The pinned band, above everything — that is what pinning is for: the two or three
+            sessions that must not move when the arrangement changes. */}
         {pinnedRows.length > 0 && (
           <div style={{ marginBottom: 16 }}>
             <div style={{
@@ -446,39 +307,62 @@ export function SessionsAside({
           <EmptyReason
             pt={pt} loading={loading} unsupported={unsupported}
             unavailable={unavailable} searching={query !== ''}
-            withheld={onlyActive ? hidden : 0}
-            onShowAll={() => setOnlyActive(false)}
-            filterNarrowed={
-              (fleetFilter.harnesses.length + fleetFilter.projects.length
-                + fleetFilter.repos.length + fleetFilter.models.length) > 0
-              && valueFiltered.length < rows.length
-            }
-            onClearFilters={() => setFleetFilter(EMPTY_FLEET_FILTER)}
+            withheld={activeOnly ? hidden : 0}
+            filterNarrowed={filterCount > 0 && valueFiltered.length < rows.length}
           />
-        ) : groups.map(group => (
-          <div key={group.key} style={{ marginBottom: 16 }}>
-            <div style={{
-              display: 'flex', alignItems: 'baseline', gap: 6,
-              padding: '6px 9px 7px', fontSize: 10.5, fontWeight: 700,
-              textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)',
-            }}>
-              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.label}</span>
-              <span style={{ marginLeft: 'auto', fontWeight: 600, opacity: 0.75 }}>{group.sessions.length}</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {group.sessions.map(s => (
-              <SessionRow
-                key={s.id}
-                session={s}
-                selected={s.id === sessionId || s.conversationId === sessionId}
-                pinned={pinned.has(pinKeyOf(s))}
-                {...(tap ? { tap } : {})}
-                onPin={() => flip(s)}
-                onOpen={() => navigate(`/sessions/${s.id}`)}
-              />
-            ))}
-            </div>
-          </div>
+        ) : (
+          <>
+            {/* Only TWO bands for now — see the `activeRows`/`inactiveRows` doc comment above. */}
+            <SessionBand
+              label={pt ? 'Ativas' : 'Active'} rows={activeRows} pinned={pinned}
+              sessionId={sessionId} tap={tap} onPin={flip}
+              onOpen={s => navigate(`/sessions/${s.id}`)}
+            />
+            <SessionBand
+              label={pt ? 'Inativas' : 'Inactive'} rows={inactiveRows} pinned={pinned}
+              sessionId={sessionId} tap={tap} onPin={flip}
+              onOpen={s => navigate(`/sessions/${s.id}`)}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** One band of the two-way (active/inactive) split. Absent when it would be empty — an empty
+ *  band with a heading and no rows under it is a label pretending to be information. */
+function SessionBand({ label, rows, pinned, sessionId, tap, onPin, onOpen }: {
+  label: string
+  rows: readonly ControlSession[]
+  pinned: ReadonlySet<string>
+  sessionId?: string
+  tap?: number
+  onPin: (row: ControlSession) => void
+  onOpen: (row: ControlSession) => void
+}) {
+  if (rows.length === 0) return null
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{
+        display: 'flex', alignItems: 'baseline', gap: 6,
+        padding: '6px 9px 7px', fontSize: 10.5, fontWeight: 700,
+        textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)',
+      }}>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+        <span style={{ marginLeft: 'auto', fontWeight: 600, opacity: 0.75 }}>{rows.length}</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {rows.map(s => (
+          <SessionRow
+            key={s.id}
+            session={s}
+            selected={s.id === sessionId || s.conversationId === sessionId}
+            pinned={pinned.has(pinKeyOf(s))}
+            {...(tap ? { tap } : {})}
+            onPin={() => onPin(s)}
+            onOpen={() => onOpen(s)}
+          />
         ))}
       </div>
     </div>
@@ -488,32 +372,24 @@ export function SessionsAside({
 /**
  * Why the list is empty, in words.
  *
- * Four different facts, and rendering any of them as the others is the confident-zero defect: "not
- * asked yet", "this machine may not be asked", "the poll failed", "your search matched nothing" and
- * "there are genuinely no sessions" send a reader to five different places.
- */
-/**
- * Why the list is empty, in words, plus the way out when there is one.
- *
- * Six different facts, and rendering any of them as the others is the confident-zero defect: not
+ * Five different facts, and rendering any of them as the others is the confident-zero defect: not
  * asked yet, this machine may not be asked, the poll failed, your search matched nothing, the
- * only-running switch is withholding rows, and there are genuinely none. Each sends a reader
- * somewhere different — and the fifth is the one that must name the switch, because the rows are
- * still there and blaming the search would send somebody to clear a field that is already empty.
+ * fleet's own filters (harness/project/repo/model or "active only", now both in the shared header
+ * above) are withholding rows, and there are genuinely none. Each sends a reader somewhere
+ * different — the switch that would fix it is named rather than repeated as a second control here,
+ * since the real one already sits in the header this list scrolls under.
  */
 function EmptyReason({
-  pt, loading, unsupported, unavailable, searching, withheld, onShowAll, filterNarrowed, onClearFilters,
+  pt, loading, unsupported, unavailable, searching, withheld, filterNarrowed,
 }: {
   pt: boolean; loading: boolean; unsupported: boolean; unavailable?: string; searching: boolean
-  /** How many rows the only-running switch is holding back. */
+  /** How many rows the "active only" switch (now in the shared header) is holding back. */
   withheld: number
-  onShowAll: () => void
-  /** The fleet's own filter block (harness/project/repo/model) hid every row — a SEPARATE fact
-      from the only-running switch, and checked first: with the block narrowing to nothing, the
-      switch and the search both read as empty too, and blaming either would send someone to clear
-      a control that was never the cause. */
+  /** The shared header's harness/project/repo/model filter hid every row — a SEPARATE fact from
+      the "active only" switch, and checked first: with the filter narrowing to nothing, the switch
+      and the search both read as empty too, and blaming either would point at a control that was
+      never the cause. */
   filterNarrowed: boolean
-  onClearFilters: () => void
 }) {
   const text = loading
     ? (pt ? 'Lendo as sessões desta máquina…' : 'Reading this machine’s sessions…')
@@ -524,11 +400,11 @@ function EmptyReason({
       : unavailable
         ? unavailable
         : filterNarrowed
-          ? (pt ? 'Nenhuma sessão corresponde aos filtros.' : 'No session matches the filters.')
+          ? (pt ? 'Nenhuma sessão corresponde aos filtros no topo.' : 'No session matches the filters above.')
           : withheld > 0
             ? (pt
-                ? `Nada rodando agora. ${withheld} ${withheld === 1 ? 'conversa está' : 'conversas estão'} escondida${withheld === 1 ? '' : 's'} pelo filtro.`
-                : `Nothing is running right now. ${withheld} ${withheld === 1 ? 'conversation is' : 'conversations are'} hidden by the filter.`)
+                ? `Nada rodando agora. ${withheld} ${withheld === 1 ? 'conversa está' : 'conversas estão'} escondida${withheld === 1 ? '' : 's'} por "Só ativas".`
+                : `Nothing is running right now. ${withheld} ${withheld === 1 ? 'conversation is' : 'conversations are'} hidden by "Active only".`)
             : searching
               ? (pt ? 'Nenhuma sessão corresponde à busca.' : 'No session matches that search.')
               : (pt ? 'Nenhuma sessão nesta máquina ainda.' : 'No sessions on this machine yet.')
@@ -536,37 +412,13 @@ function EmptyReason({
   return (
     <div style={{
       padding: '14px 10px', fontSize: 11.5, lineHeight: 1.55,
-      color: 'var(--text-tertiary)', display: 'flex', flexDirection: 'column', gap: 8,
+      color: 'var(--text-tertiary)',
     }}>
-      <span>{text}</span>
-      {/* The way out, named rather than left for the reader to find. */}
-      {!loading && !unsupported && !unavailable && filterNarrowed && (
-        <button
-          onClick={onClearFilters}
-          style={{
-            alignSelf: 'flex-start', padding: '5px 10px', borderRadius: 7, cursor: 'pointer',
-            border: '1px solid var(--border-subtle)', background: 'transparent',
-            color: 'var(--anthropic-orange)', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
-          }}
-        >
-          {pt ? 'Limpar filtros' : 'Clear filters'}
-        </button>
-      )}
-      {!loading && !unsupported && !unavailable && !filterNarrowed && withheld > 0 && (
-        <button
-          onClick={onShowAll}
-          style={{
-            alignSelf: 'flex-start', padding: '5px 10px', borderRadius: 7, cursor: 'pointer',
-            border: '1px solid var(--border-subtle)', background: 'transparent',
-            color: 'var(--anthropic-orange)', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
-          }}
-        >
-          {pt ? 'Mostrar todas' : 'Show all'}
-        </button>
-      )}
+      {text}
     </div>
   )
 }
+
 
 function SessionRow({ session, selected, pinned, tap, onPin, onOpen }: {
   session: ControlSession; selected: boolean
