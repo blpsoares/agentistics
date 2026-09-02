@@ -40,6 +40,34 @@ Tuning constants live in `packages/server/server/sessions/terminal-stream.ts`
 (`TERMINAL_VIEW_LINES`, `TERMINAL_POLL_MS`) and `terminal-web.ts` (`MAX_TERMINAL_STREAMS`,
 `KEEPALIVE_MS`). The poll cadence is overridable with `AGENTISTICS_TERMINAL_POLL_MS`.
 
+### Tuning: two different "echo" cases, and why `TERMINAL_POLL_MS` is not lowered
+
+**Keystroke echo is already comfortable and does not need this constant touched.** A delivered
+keystroke on the write channel ([docs/terminal-write-channel.md](terminal-write-channel.md)) calls
+`hub.nudge(id)` (`terminal-hub.ts`), which captures the pane immediately instead of waiting for the
+next tick — three cheap reads over ~200ms rather than one on the clock. Measured against a real,
+disposable tmux session: median ~7.7 ms, worst ~31 ms (n=15) from the WS send to the character
+appearing in an SSE `frame`. That is already an order of magnitude inside anything a person can
+perceive as "instant"; chasing it lower buys nothing.
+
+**Continuous output with no keystroke is a separate case the nudge cannot reach**, because nothing
+calls `nudge` when a process prints on its own (an agent streaming its reply, a long build). That
+case stays bound by the plain tick: measured median ~275 ms, worst ~500 ms at the default 500 ms
+cadence (same method — a loop printing a timestamped line every 300ms inside the pane, no WS input
+involved).
+
+Lowering the base `TERMINAL_POLL_MS` would shrink that second number, but unlike `nudge` it is not a
+burst — it is a **per watched session, all the time** cost that every open terminal panel pays for as
+long as it stays open, active or not. Measured (isolated tmux socket, 9 concurrently watched idle
+panes — this machine's real fleet size the day this was measured): ~11% of one core at the current
+500 ms; ~41% at 150 ms; ~47% at 100 ms. A drop large enough to meaningfully shrink the
+continuous-output number costs a real, standing fraction of a core for as long as a few panels stay
+open — for a case that is not the one people report as uncomfortable (nobody is waiting on a
+round-trip; they are watching text scroll in). So the constant stays at 500 ms. If continuous-output
+lag becomes a stated priority, the cheaper lever is the same shape as `nudge` — a short burst
+triggered by the pane actually changing, not a lower floor every watched session pays regardless of
+activity — not implemented here because it is not what this measurement was asked to fix.
+
 ## Request
 
 ```
