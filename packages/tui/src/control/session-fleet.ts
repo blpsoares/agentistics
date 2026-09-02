@@ -45,7 +45,7 @@ export {
   ACTIVE_STATES, OFF_STATE, SESSION_STATES, SESSION_DIMENSIONS, DIMENSION_ORDER, GROUPINGS, UNFILED,
   GONE_PROJECT_KEY, FILTERS_VERSION, DEFAULT_FILTERS, DEFAULT_MARKED, DEFAULT_SHOW_NAMED,
   SHORTCUT_STATES,
-  applyShortcut, bucketKey, dimensionValueLabel, dimensionWordBook, migrateSessionFilters,
+  applyShortcut, bucketKey, dayKey, dimensionValueLabel, dimensionWordBook, migrateSessionFilters,
   sessionKept, sessionNamed,
   sessionRunning, shortcutOn, storedFilters, toggleValue,
   type DimensionContext, type DimensionWordBook, type DimensionWords, type SessionDimensionId,

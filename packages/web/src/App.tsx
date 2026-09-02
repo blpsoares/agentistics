@@ -60,6 +60,8 @@ import { resolveArchiveChoice } from './lib/archive'
 import { TeamLogin } from './components/TeamLogin'
 import { Login } from './components/Login'
 import { ModeSwitch } from './components/nav/ModeSwitch'
+import { TopBar } from './components/nav/TopBar'
+import { SessionsAside } from './components/nav/SessionsAside'
 import { modeOfPath } from './lib/workspaceMode'
 import { useFleet } from './lib/fleet'
 import { MemberConnectionStatus } from './components/MemberConnectionStatus'
@@ -942,6 +944,11 @@ function MobileBottomNav({
   )
 }
 
+/**
+ * The fixed strip holding the mark, search and the sidebar toggle. The aside starts beneath it, so
+ * those three controls never move when the sidebar changes width, changes body, or is collapsed.
+ */
+const TOPBAR_H = 44
 const SIDEBAR_W = 248
 const SIDEBAR_W_COLLAPSED = 64
 
@@ -1022,8 +1029,9 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
   // for the moment you are looking at the dashboard and a session starts needing you. `useFleet`
   // shares one poll across every consumer, so this costs no extra request. Never on a central: it
   // aggregates many machines and hosts none of their sessions.
-  const { fleet } = useFleet(pt ? 'pt' : 'en', !isCentral)
+  const { fleet, loading: fleetLoading, unsupported: fleetUnsupported } = useFleet(pt ? 'pt' : 'en', !isCentral)
   const attention = fleet.attention
+  const mode = modeOfPath(location.pathname)
 
   const items: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
     { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={17} /> },
@@ -1046,43 +1054,12 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
   }
   return (
     <aside style={{
-      position: 'fixed', top: 0, left: 0, bottom: 0,
+      position: 'fixed', top: TOPBAR_H, left: 0, bottom: 0,
       width: collapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, zIndex: 200,
       background: 'var(--bg-surface)', borderRight: '1px solid var(--border)',
       display: 'flex', flexDirection: 'column', padding: '14px 12px', boxSizing: 'border-box',
       transition: 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1)', overflow: 'hidden',
     }}>
-      {/* The mark and the toggle. EXPANDED they share one row, the toggle at its end; COLLAPSED the
-          toggle drops beneath the mark, because 64px of rail cannot hold both side by side. Both
-          stay visible in both states: a collapsed sidebar is still the product's left edge, and the
-          control that reopens it has to live where it can be found. No hover behaviour — it opens
-          on a CLICK; a sidebar that springs open when the pointer merely passes over it is a
-          sidebar that opens when you were reaching for something else. */}
-      <div style={{
-        display: 'flex',
-        flexDirection: collapsed ? 'column' : 'row',
-        alignItems: 'center',
-        gap: collapsed ? 6 : 8,
-        padding: collapsed ? '0 0 10px' : '0 4px 10px',
-      }}>
-        <img
-          src='/minimalistLogo.png'
-          alt="agentistics"
-          style={{ height: collapsed ? 26 : 32, width: 'auto', flexShrink: 0 }}
-        />
-        <button
-          onClick={onToggle}
-          aria-label={collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}
-          title={collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}
-          style={{
-            ...footBtn, width: 30, height: 30, border: 'none',
-            marginLeft: collapsed ? 0 : 'auto', flexShrink: 0,
-          }}
-        >
-          <PanelLeft size={16} />
-        </button>
-      </div>
-
       {/* The workspace switch, PINNED above the scrolling body. */}
       <div style={{ padding: '0 2px 10px' }}>
         <ModeSwitch lang={lang} collapsed={collapsed} attention={attention} />
@@ -1090,6 +1067,20 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
         {!collapsed && !isCentral && <div style={{ marginTop: 8 }}><MemberConnectionStatus lang={lang} compact /></div>}
       </div>
 
+      {/* ONE aside, two bodies — never two asides. The shell above and the footer below are the
+          same in both workspaces; only what sits between them changes. Collapsed, the sessions body
+          is withheld: a 64px rail cannot show a session's title, and a list of unlabelled dots is a
+          list nobody can read. The rail keeps the switch, which is how you get back. */}
+      {mode === 'sessions' && !collapsed ? (
+        <SessionsAside
+          lang={pt ? 'pt' : 'en'}
+          rows={fleet.rows}
+          finishedTasks={fleet.finishedTasks}
+          loading={fleetLoading}
+          unsupported={fleetUnsupported}
+          {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
+        />
+      ) : (
       <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
         {items.map(item => {
           const active = item.to === '/'
@@ -1123,6 +1114,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
           )
         })}
       </nav>
+      )}
 
       {/* Footer — Row A account · thin divider · Row B config actions */}
       <div style={{ paddingTop: 10, marginTop: 6, borderTop: '1px solid var(--border)' }}>
@@ -2396,7 +2388,7 @@ export default function AppLayout() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W), transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W), paddingTop: isMobile ? 0 : TOPBAR_H, transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
       {/* The billing prompt. Mounted HERE, after the archive consent gate's early return above, so
           the two can never stack on a first launch — one blocking modal behind one dismissible one
           is a pile nobody reads. It is the same component for the first-run invite and for the
@@ -2412,6 +2404,19 @@ export default function AppLayout() {
           void saveBilling({ ...billing, introDismissed: true })
         }}
       />
+      {/* The fixed strip above the aside — desktop only. */}
+      {!isMobile && (
+        <TopBar
+          lang={lang === 'pt' ? 'pt' : 'en'}
+          height={TOPBAR_H}
+          asideWidth={sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W}
+          collapsed={sidebarCollapsed}
+          onToggleSidebar={toggleSidebar}
+          {...(modeOfPath(location.pathname) === 'sessions'
+            ? { onSearch: () => window.dispatchEvent(new CustomEvent('agentistics:focus-session-search')) }
+            : {})}
+        />
+      )}
       {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
       {!isMobile && <SideNav
         lang={lang}
@@ -2430,7 +2435,9 @@ export default function AppLayout() {
       <header style={{
         background: 'var(--bg-surface)',
         position: 'sticky',
-        top: 0,
+        // Beneath the fixed strip, never at the viewport top: one is window chrome and the other is
+        // page chrome, and neither may slide under the other.
+        top: isMobile ? 0 : TOPBAR_H,
         zIndex: 100,
         backdropFilter: 'blur(12px)',
         WebkitBackdropFilter: 'blur(12px)',

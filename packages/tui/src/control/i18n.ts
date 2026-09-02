@@ -1530,8 +1530,20 @@ export function controlStrings(lang: CliLang): ControlStrings {
  * assembling its own: two assemblies is two chances for a band and the chip that selects it to be
  * called different things, which is the whole defect the dimension table exists to remove.
  */
-export function sessionWordBook(c: ControlStrings): DimensionWordBook {
+export function sessionWordBook(
+  c: ControlStrings,
+  /**
+   * What to call particular DAYS, keyed `YYYY-MM-DD`.
+   *
+   * Supplied by the caller rather than resolved here, because "today" and "yesterday" are relative
+   * to a clock this module does not read — and a string table that reads a clock is a string table
+   * whose answers go stale at midnight. A day nobody names falls back to its own key, which is
+   * already a readable date.
+   */
+  days?: Readonly<Record<string, string>>,
+): DimensionWordBook {
   return dimensionWordBook({
+    ...(days ? { days } : {}),
     labels: {
       day: c.sessionsGroupings.day,
       status: c.sessionsGroupings.status,
