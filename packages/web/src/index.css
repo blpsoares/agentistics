@@ -481,10 +481,13 @@ html, body {
    it marks the moment of the choice — the slowest and most expensive setting — and then stops. */
 @keyframes ag-effort-peak {
   0%   { transform: scale(1);    box-shadow: 0 0 0 0 currentColor; }
-  45%  { transform: scale(1.05); box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 22%, transparent); }
+  50%  { transform: scale(1.05); box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 22%, transparent); }
   100% { transform: scale(1);    box-shadow: 0 0 0 0 transparent; }
 }
-.ag-effort-peak { animation: ag-effort-peak 520ms ease-out 1; }
+/* LOOPS for as long as the peak step stays selected — the point is "this is the maximum, and it is
+   doing more work for it", which a single pulse at the moment of selection does not keep saying.
+   Slower and eased both ways so a continuous loop reads as a heartbeat, not a jitter. */
+.ag-effort-peak { animation: ag-effort-peak 1400ms ease-in-out infinite; }
 
 /* Motion is decoration here; the colour and the label carry the meaning on their own. */
 @media (prefers-reduced-motion: reduce) {

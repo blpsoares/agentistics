@@ -17,9 +17,10 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { Bot, FolderGit2, Folder, Loader, Search, X } from 'lucide-react'
+import { ChevronDown, FolderGit2, Folder, Loader, Search, X } from 'lucide-react'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { effortColor, effortSteps } from '../../lib/effortScale'
+import { HarnessMark } from './HarnessMark'
 
 interface HarnessOption {
   id: string
@@ -191,7 +192,7 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
                         fontFamily: 'inherit', fontSize: 13, fontWeight: on ? 650 : 500,
                       }}
                     >
-                      <Bot size={15} style={{ color }} />
+                      <HarnessMark harness={h.id} size={18} />
                       {name}
                     </button>
                   )
@@ -269,23 +270,30 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
           {/* SKIPPED, not disabled, when the CLI has no such flag — see the header. */}
           {harness?.supportsModel && (
             <Field label={pt ? 'Modelo (opcional)' : 'Model (optional)'}>
-              <input
-                value={model}
-                onChange={e => setModel(e.target.value)}
-                list="agentistics-models"
-                placeholder={pt ? 'Padrão do assistente' : "The assistant's default"}
-                style={{ ...inputStyle, paddingLeft: 12 }}
-              />
-              <datalist id="agentistics-models">
-                {harness.modelSuggestions.map(m => <option key={m} value={m} />)}
-              </datalist>
+              {/* A CLOSED dropdown, never free text: `modelSuggestions` is the actual set this
+                  harness offers, and a typed id it does not recognise fails at spawn with no
+                  explanation on screen. The wizard's job is to offer only what will work. */}
+              <div style={{ position: 'relative' }}>
+                <select
+                  value={model}
+                  onChange={e => setModel(e.target.value)}
+                  style={{ ...inputStyle, paddingLeft: 12, paddingRight: 30, appearance: 'none', cursor: 'pointer' }}
+                >
+                  <option value="">{pt ? 'Padrão do assistente' : "The assistant's default"}</option>
+                  {harness.modelSuggestions.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <ChevronDown size={14} style={{
+                  position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+                  color: 'var(--text-tertiary)', pointerEvents: 'none',
+                }} />
+              </div>
             </Field>
           )}
 
           {efforts.length > 0 && (
-            <Field label={pt ? 'Esforço' : 'Effort'} hint={pt
-              ? 'Mais esforço pensa por mais tempo e custa mais.'
-              : 'More effort thinks for longer and costs more.'}>
+            <Field label={pt ? 'Esforço (opcional)' : 'Effort (optional)'} hint={pt
+              ? 'Mais esforço pensa por mais tempo e custa mais. Sem escolha, usa o padrão do assistente.'
+              : 'More effort thinks for longer and costs more. Left unset, the assistant’s default applies.'}>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {efforts.map(step => {
                   const on = effort === step.value
