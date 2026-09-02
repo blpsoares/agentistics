@@ -9,7 +9,7 @@ import {
   Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
   Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
-  ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
+  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowLeft, ArrowRight, PanelLeft,
   GitBranch, Users, LogOut, Server, KeyRound, Tag as TagIcon,
   ShieldCheck, Cpu,
 } from 'lucide-react'
@@ -59,6 +59,9 @@ import { ArchiveConsentModal, type ArchiveMode } from './components/ArchiveConse
 import { resolveArchiveChoice } from './lib/archive'
 import { TeamLogin } from './components/TeamLogin'
 import { Login } from './components/Login'
+import { ModeSwitch } from './components/nav/ModeSwitch'
+import { modeOfPath } from './lib/workspaceMode'
+import { useFleet } from './lib/fleet'
 import { MemberConnectionStatus } from './components/MemberConnectionStatus'
 import { OwnerSetup } from './components/OwnerSetup'
 import { ChangePassword } from './components/ChangePassword'
@@ -692,8 +695,11 @@ function MobileBottomNav({
     accent?: boolean
     badge?: string
   }
+  // The switch's badge, from the SHARED fleet poll (see lib/fleet.ts) — no extra request.
+  const { fleet: mobileFleet } = useFleet(lang === 'pt' ? 'pt' : 'en', !isCentral)
+  const attention = mobileFleet.attention
+
   const navTiles: Tile[] = [
-    { key: 'sessions', label: pt ? 'Sessões' : 'Sessions', icon: Clock, onClick: () => { closeSheet(); navigate('/sessions') }, active: location.pathname.startsWith('/sessions') },
     { key: 'repositories', label: pt ? 'Repositórios' : 'Repositories', icon: GitBranch, onClick: () => { closeSheet(); navigate('/repositories') }, active: location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo') },
     // Members/machines only exist on a central — a solo machine has exactly one of each.
     ...(isCentral
@@ -834,6 +840,12 @@ function MobileBottomNav({
             </button>
           </div>
         ) : (
+        <>
+        {/* The workspace switch. The aside that hosts it on desktop is not rendered on mobile, and
+            a mode a phone cannot reach is a mode a phone cannot leave. */}
+        <div style={{ marginBottom: 12 }}>
+          <ModeSwitch lang={lang === 'pt' ? 'pt' : 'en'} attention={attention} />
+        </div>
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(3, 1fr)',
@@ -875,6 +887,7 @@ function MobileBottomNav({
             )
           })}
         </div>
+        </>
         )}
       </div>
 
@@ -969,6 +982,10 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
 }) {
   const location = useLocation()
   const pt = lang === 'pt'
+  // History, for the icon row. This ships as an installed PWA, where there is no browser chrome to
+  // fall back on — in a plain tab they duplicate the browser's own, which is a cost worth paying
+  // for the standalone case.
+  const navigate = useNavigate()
   // Profile menu (popover anchored to the avatar) + self-service change-password modal.
   const [menuOpen, setMenuOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
@@ -1000,9 +1017,16 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
   // Repositories highlights across the whole section (list, detail, actions) — Actions lives as a
   // tab inside each repo, so there's no sidebar submenu.
   const inReposSection = location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo')
+  // How many sessions are waiting on a person, for the switch's badge. Read HERE rather than
+  // passed down, because the aside must carry it in BOTH workspaces — the badge exists precisely
+  // for the moment you are looking at the dashboard and a session starts needing you. `useFleet`
+  // shares one poll across every consumer, so this costs no extra request. Never on a central: it
+  // aggregates many machines and hosts none of their sessions.
+  const { fleet } = useFleet(pt ? 'pt' : 'en', !isCentral)
+  const attention = fleet.attention
+
   const items: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
     { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={17} /> },
-    { to: '/sessions', labelPt: 'Sessões', labelEn: 'Sessions', icon: <Clock size={17} /> },
     { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={17} /> },
     { to: '/top',       labelPt: 'Top de uso',   labelEn: 'Top usage',    icon: <Trophy size={17} /> },
     { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={17} /> },
@@ -1027,18 +1051,43 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
       display: 'flex', flexDirection: 'column', padding: '14px 12px', boxSizing: 'border-box',
       transition: 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1)', overflow: 'hidden',
     }}>
-      {/* Logo + collapse toggle */}
-      <div style={{ padding: '0 4px 12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44 }}>
-          {!collapsed && <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 40, width: 'auto', flexShrink: 0 }} />}
-          <button onClick={onToggle} title={collapsed ? (pt ? 'Expandir' : 'Expand') : (pt ? 'Recolher' : 'Collapse')}
-            style={{ ...footBtn, marginLeft: 'auto', width: 30, height: 30 }}>
-            {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+      {/* The aside's own chrome: an icon row, then the pinned workspace switch below it.
+          Deliberately NOT a copy of the reference's five icons — back and forward earn their place
+          because this ships as an installed PWA with no browser chrome, but a search button would
+          have nothing to open in the dashboard workspace, and a control that does nothing is
+          indistinguishable from one that is broken. It arrives with the sessions list, which is
+          the thing there is to search. */}
+      <div style={{ padding: '0 2px 10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, minHeight: 34 }}>
+          {!collapsed && <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 26, width: 'auto', flexShrink: 0, marginRight: 'auto' }} />}
+          {!collapsed && (
+            <>
+              <button onClick={() => navigate(-1)} aria-label={pt ? 'Voltar' : 'Back'} title={pt ? 'Voltar' : 'Back'}
+                style={{ ...footBtn, width: 28, height: 28, border: 'none' }}>
+                <ArrowLeft size={15} />
+              </button>
+              <button onClick={() => navigate(1)} aria-label={pt ? 'Avançar' : 'Forward'} title={pt ? 'Avançar' : 'Forward'}
+                style={{ ...footBtn, width: 28, height: 28, border: 'none' }}>
+                <ArrowRight size={15} />
+              </button>
+            </>
+          )}
+          <button onClick={onToggle} aria-label={collapsed ? (pt ? 'Expandir' : 'Expand') : (pt ? 'Recolher' : 'Collapse')}
+            title={collapsed ? (pt ? 'Expandir' : 'Expand') : (pt ? 'Recolher' : 'Collapse')}
+            style={{ ...footBtn, width: 28, height: 28, border: 'none', marginLeft: collapsed ? 'auto' : 0, marginRight: collapsed ? 'auto' : 0 }}>
+            <PanelLeft size={15} />
           </button>
         </div>
         {/* Member machine: live connection status + latency to the central (mirrors the
             central's presence line). Renders null unless this instance is a connected member. */}
         {!collapsed && !isCentral && <div style={{ marginTop: 6 }}><MemberConnectionStatus lang={lang} compact /></div>}
+      </div>
+
+      {/* The workspace switch — PINNED. It sits above the scrolling body and never moves with it:
+          the sessions list can run to hundreds of rows, and a switch that scrolls away strands
+          somebody in a workspace with no visible way back. */}
+      <div style={{ padding: '0 2px 10px' }}>
+        <ModeSwitch lang={lang} collapsed={collapsed} attention={attention} />
       </div>
 
       <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>

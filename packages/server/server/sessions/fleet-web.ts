@@ -19,6 +19,7 @@
 import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import { controlStrings } from '@agentistics/tui/control/i18n'
+import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import { fleetRow, type FleetActionRequest, type FleetRow } from './fleet-row'
 
 // The REQUEST shape lives in the leaf `fleet-row.ts` so `index.ts` can name it without naming
@@ -27,6 +28,22 @@ export type { FleetRow, FleetVerb, FleetActionId, FleetActionRequest } from './f
 
 export interface FleetPayload {
   sessions: FleetRow[]
+  /**
+   * The SAME rows, unshaped — what the cockpit itself arranges.
+   *
+   * `FleetRow` is the presentation half: a state already turned into a word, the verbs already
+   * decided. The browser needs the other half too, because grouping, ordering, the cascade and the
+   * filters are `session-fleet.ts`'s job and it operates on `ControlSession`. Sending only
+   * `FleetRow` would have forced the browser to re-derive them, which is the one thing this whole
+   * bridge exists to prevent — the same argument `fleet-row.ts` makes about the verbs.
+   *
+   * It carries nothing `FleetRow` did not already carry, including the approval screen: this route
+   * is `localShell` in `capability-guard.ts`, refused on a central and on every exposed profile, so
+   * it is not a new class of exposure. It is the same machine reading its own terminals.
+   */
+  rows: ControlSession[]
+  /** Tasks the user marked finished — a statement about the WORK, not about any session's state. */
+  finishedTasks: string[]
   /** How many are waiting on a person — the same count the cockpit's header carries. */
   attention: number
   /** Already-localized reason this list may not be the whole truth. Never an empty list alone. */
@@ -83,21 +100,25 @@ export async function readFleet(lang: CliLang): Promise<FleetPayload> {
   const s = controlStrings(lang)
   try {
     const host = await hostFor(lang)
-    if (!host.sessions) return { sessions: [], attention: 0, tasks: [] }
+    if (!host.sessions) return { sessions: [], rows: [], attention: 0, tasks: [], finishedTasks: [] }
     const fleet = await host.sessions()
     const tasks = host.sessionTasks ? await host.sessionTasks().catch(() => []) : []
     return {
       sessions: fleet.sessions.map(row => fleetRow(row, s)),
+      rows: fleet.sessions,
       attention: fleet.attention,
       ...(fleet.unavailable ? { unavailable: fleet.unavailable } : {}),
       tasks,
+      finishedTasks: fleet.finishedTasks ?? [],
     }
   } catch (e) {
     return {
       sessions: [],
+      rows: [],
       attention: 0,
       unavailable: e instanceof Error ? e.message : String(e),
       tasks: [],
+      finishedTasks: [],
     }
   }
 }

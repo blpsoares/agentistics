@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 
 /** Mirrors `SessionAction` in `@agentistics/tui/control/sessions`, minus the verbs a page cannot do. */
 export type FleetActionId =
@@ -64,12 +65,22 @@ export interface FleetRow {
 
 export interface FleetPayload {
   sessions: FleetRow[]
+  /**
+   * The same rows unshaped, for `session-fleet.ts` to arrange.
+   *
+   * Grouping, ordering, the cascade and the filters are decided by the very module the terminal
+   * cockpit decides them with, and that module operates on `ControlSession`. Arranging `FleetRow`
+   * here instead would be a second set of rules — the defect this bridge exists to prevent.
+   */
+  rows: ControlSession[]
   attention: number
   unavailable?: string
   tasks: string[]
+  /** Tasks the user marked finished. A statement about the work, not about any session's state. */
+  finishedTasks: string[]
 }
 
-const EMPTY: FleetPayload = { sessions: [], attention: 0, tasks: [] }
+const EMPTY: FleetPayload = { sessions: [], rows: [], attention: 0, tasks: [], finishedTasks: [] }
 
 /** How often the page re-reads the fleet. The cockpit polls at 5s; matching it keeps the two in step. */
 const FLEET_POLL_MS = 5000
@@ -95,39 +106,82 @@ export interface FleetState {
   }) => Promise<{ ok: boolean; message: string }>
 }
 
-export function useFleet(lang: 'pt' | 'en', enabled = true): FleetState {
-  const [fleet, setFleet] = useState<FleetPayload>(EMPTY)
-  const [loading, setLoading] = useState(enabled)
-  const [unsupported, setUnsupported] = useState(false)
-  const [tick, setTick] = useState(0)
+/**
+ * The poll, SHARED.
+ *
+ * Two surfaces read the fleet now — the aside's session list and the panel showing one session —
+ * and a hook that owned its own interval would poll the machine once per mounted consumer, each
+ * landing at a different moment. So the interval and the last answer live at module scope, and the
+ * hook is a subscription: N consumers, one request every `FLEET_POLL_MS`, and every one of them
+ * looking at the same snapshot. A list and a detail pane disagreeing about a session's state by one
+ * poll interval is a bug people report as flicker.
+ *
+ * Refcounted: the timer starts with the first subscriber and stops with the last, so a machine with
+ * the dashboard open and nothing watching sessions makes no fleet requests at all.
+ */
+const listeners = new Set<() => void>()
+let snapshot: FleetPayload = EMPTY
+let snapLoading = true
+let snapUnsupported = false
+let timer: ReturnType<typeof setInterval> | null = null
+let pollLang: 'pt' | 'en' = 'en'
 
-  const refresh = useCallback(() => setTick(n => n + 1), [])
+function emit(): void {
+  for (const l of listeners) l()
+}
+
+async function pollOnce(): Promise<void> {
+  try {
+    const res = await fetch(`/api/fleet?lang=${pollLang}`)
+    if (res.status === 403 || res.status === 404) {
+      // Not an empty fleet: this machine may not be asked. The two must stay distinguishable.
+      snapUnsupported = true; snapLoading = false; emit(); return
+    }
+    if (!res.ok) return
+    const json = await res.json() as FleetPayload
+    snapUnsupported = false
+    snapshot = json
+  } catch {
+    // Transient — keep the last known answer rather than reporting an empty fleet.
+  } finally {
+    snapLoading = false
+    emit()
+  }
+}
+
+function ensurePolling(lang: 'pt' | 'en'): void {
+  if (lang !== pollLang) {
+    // The payload is localized by the server, so a language change invalidates the snapshot's
+    // words but not its facts. Re-request rather than translate here.
+    pollLang = lang
+    void pollOnce()
+  }
+  if (timer !== null) return
+  void pollOnce()
+  timer = setInterval(() => { void pollOnce() }, FLEET_POLL_MS)
+}
+
+function stopPolling(): void {
+  if (timer === null) return
+  clearInterval(timer)
+  timer = null
+}
+
+export function useFleet(lang: 'pt' | 'en', enabled = true): FleetState {
+  const [, force] = useState(0)
 
   useEffect(() => {
-    if (!enabled) { setLoading(false); return }
-    let alive = true
-    const poll = async () => {
-      try {
-        const res = await fetch(`/api/fleet?lang=${lang}`)
-        if (!alive) return
-        // 403 (capability off) / 404 (a central) are ANSWERS, not failures — the page says so
-        // rather than showing an empty fleet it never got to read.
-        if (res.status === 403 || res.status === 404) { setUnsupported(true); setLoading(false); return }
-        if (!res.ok) return
-        const json = await res.json() as FleetPayload
-        if (!alive) return
-        setUnsupported(false)
-        setFleet(json)
-      } catch {
-        /* transient — keep the last known fleet, exactly as the cockpit's poller does */
-      } finally {
-        if (alive) setLoading(false)
-      }
+    if (!enabled) return
+    const listener = () => force(n => n + 1)
+    listeners.add(listener)
+    ensurePolling(lang)
+    return () => {
+      listeners.delete(listener)
+      if (listeners.size === 0) stopPolling()
     }
-    void poll()
-    const id = setInterval(poll, FLEET_POLL_MS)
-    return () => { alive = false; clearInterval(id) }
-  }, [lang, enabled, tick])
+  }, [lang, enabled])
+
+  const refresh = useCallback(() => { void pollOnce() }, [])
 
   const act = useCallback<FleetState['act']>(async req => {
     try {
@@ -142,7 +196,9 @@ export function useFleet(lang: 'pt' | 'en', enabled = true): FleetState {
         message: json?.message
           ?? (lang === 'pt' ? 'A ação não pôde ser executada.' : 'The action could not be run.'),
       }
-      refresh()
+      // Re-read immediately: the verb changed the machine, and waiting up to five seconds to show
+      // it is how a control that worked looks like one that did nothing.
+      await pollOnce()
       return out
     } catch {
       return {
@@ -150,9 +206,15 @@ export function useFleet(lang: 'pt' | 'en', enabled = true): FleetState {
         message: lang === 'pt' ? 'Erro de rede ao falar com esta máquina.' : 'Network error talking to this machine.',
       }
     }
-  }, [lang, refresh])
+  }, [lang])
 
-  return { fleet, loading, unsupported, refresh, act }
+  return {
+    fleet: enabled ? snapshot : EMPTY,
+    loading: enabled ? snapLoading : false,
+    unsupported: enabled ? snapUnsupported : false,
+    refresh,
+    act,
+  }
 }
 
 /**
