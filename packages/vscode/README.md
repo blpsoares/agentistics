@@ -17,6 +17,18 @@ nothing is answering.
 
 Full documentation: [`docs/vscode-extension.md`](../../docs/vscode-extension.md).
 
+## Installing
+
+The `.vsix` is attached to every [GitHub release](https://github.com/blpsoares/agentistics/releases):
+
+```bash
+code --install-extension agentistics-vscode-<version>.vsix
+```
+
+Marketplace and Open VSX publishing are documented in
+[`docs/vscode-extension.md`](../../docs/vscode-extension.md#installing-it-and-distributing-it) —
+both need credentials a maintainer creates once.
+
 ## Versioning
 
 The extension is versioned on **its own line**, not the product's. It ships to a marketplace on its
