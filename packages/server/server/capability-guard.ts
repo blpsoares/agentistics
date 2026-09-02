@@ -43,6 +43,11 @@ const EXACT: ReadonlyMap<string, keyof Capabilities> = new Map<string, keyof Cap
   // but it is a read of a coding assistant's terminal, so it rides the same `localShell` as
   // `/api/fleet`: there is no deployment that should stream someone's terminal to the internet.
   ['/api/fleet/stream', 'localShell'],
+  // The live terminal WRITE channel — a WebSocket that types key-by-key into a session, control keys
+  // (`C-c`, `C-d`) included. That is more power than `/api/fleet/act`'s line prompt and unambiguously
+  // shell access, so it rides the same `localShell` and is refused (403) before the upgrade on any
+  // exposed profile.
+  ['/api/fleet/input', 'localShell'],
 ])
 
 /** Prefix (no trailing slash) → capability. Matches `<prefix>` and `<prefix>/…` only. */

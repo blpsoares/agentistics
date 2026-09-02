@@ -102,12 +102,16 @@ A session that goes un-typable *while armed* (killed, or falls onto a dialog) is
 automatically and shows the block sentence, so an armed composer can never sit over a session where
 every send would fail.
 
-## Escalation — Phase 2b (raw keystroke channel), `packages/server`
+## Escalation — Phase 2b (raw keystroke channel), `packages/server` — DELIVERED
 
 Full char-mode interactivity (Ctrl-C, arrows, Esc, Tab, no-submit typing, answering raw dialogs by
 keypress) requires a server write endpoint that forwards individual keys to the backend's existing
-`sendKey` / `sendText` primitives **without** the implicit Enter — e.g. `POST /api/fleet/input
-{ id, key | text, submit? }`, gated by the same `localShell` capability and scope as the read stream,
-with its own audit decision. That is a `packages/server` change and was **not** made here; the web
-half above is complete and honest on its own for line-oriented interaction (sending a message or an
-answer to the agent), which is the dominant case.
+`sendKey` / `sendText` primitives **without** the implicit Enter. That server channel now exists as
+**`WS /api/fleet/input`** — a WebSocket rather than a POST, because per-keystroke HTTP arrives out of
+order; ordering is guaranteed by one connection per session plus a per-connection serial send queue,
+and every message is confirmed with an ack. It is gated by the same `localShell` capability and scope
+as the read stream, plus a same-origin (CSWSH) check, and audits one entry per channel opened rather
+than per keystroke. The full server contract — message shape, the closed key allowlist, why there is
+no local echo — is [`docs/terminal-write-channel.md`](terminal-write-channel.md). The line composer
+above **stays** and is unchanged: it remains the right tool for pasting a block and for when the
+socket drops.
