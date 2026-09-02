@@ -1014,7 +1014,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // take. A central never answers it: it aggregates many machines and hosts none of their
     // sessions, so a fleet read there would be this box's own processes under someone else's page.
     // `capability-guard.ts` has already refused both paths on an exposed profile.
-    if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act' || url.pathname === '/api/fleet/stream') {
+    if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act' || url.pathname === '/api/fleet/stream' || url.pathname === '/api/fleet/chat') {
       if (TEAM_CENTRAL) {
         return new Response(JSON.stringify({ error: 'fleet_central' }), {
           status: 404,
@@ -1056,6 +1056,35 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // The live terminal channel: an SSE stream of one session's screen. Read-only (Phase 1). Already
     // gated by `localShell` (capability-guard) and 404'd on a central above, so this handler only has
     // to enforce SCOPE — the session must be one this machine manages — and the stream ceiling.
+    // One hosted session's conversation, for the workspace's chat view. Claude only in practice —
+    // the module refuses in words wherever the live-session -> conversation link is not exact.
+    if (url.pathname === '/api/fleet/chat' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      try {
+        const { readSessionChat } = await import('./sessions/chat-web')
+        const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
+        const payload = await readSessionChat(
+          await hostForFleet(fleetLang(url.searchParams.get('lang'))),
+          fleetLang(url.searchParams.get('lang')),
+          id,
+        )
+        return new Response(JSON.stringify(payload), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify(safeError(err, { verbose: PROFILE === 'local' }).body), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     if (url.pathname === '/api/fleet/stream' && req.method === 'GET') {
       const id = url.searchParams.get('id')
       if (!id) {

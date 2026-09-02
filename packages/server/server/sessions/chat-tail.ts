@@ -184,3 +184,44 @@ export async function readRecentChatTurns(path: string, max = 6): Promise<ChatTu
   contentCache.set(path, { mtimeMs, turns })
   return turns
 }
+
+/**
+ * The conversation, oldest first, capped at `max` turns from the END.
+ *
+ * `readRecentChatTurns` above is the six-row detail pane's reader and stops at its own small
+ * budget; a chat view wants the conversation. The difference is only the budget and the
+ * `pending` rule — which still applies to the NEWEST event only, because "no text has followed
+ * this tool call yet" is a statement about right now, and the same shape earlier in the file is an
+ * ordinary tool call whose follow-up already exists further down.
+ *
+ * No content cache here: a chat view re-reads a file that is being appended to, and a cache keyed
+ * on mtime would be a cache that misses every time by construction while holding whole transcripts
+ * in memory.
+ */
+export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]> {
+  let content: string
+  try { content = await readFile(path, 'utf-8') } catch { return [] }
+
+  const lines = content.split('\n')
+  const turns: ChatTurn[] = []
+  let newest = true
+  for (let i = lines.length - 1; i >= 0 && turns.length < max; i--) {
+    const line = (lines[i] ?? '').trim()
+    if (!line) continue
+    let e: Record<string, unknown>
+    try { e = JSON.parse(line) } catch { continue }
+    const isNewest = newest
+    newest = false
+
+    const userText = extractUserText(e)
+    if (userText) { turns.push({ role: 'user', text: userText }); continue }
+    const assistantText = extractAssistantText(e)
+    if (assistantText) { turns.push({ role: 'assistant', text: assistantText }); continue }
+    if (isNewest) {
+      const tools = extractToolActivity(e)
+      if (tools) turns.push({ role: 'assistant', text: toolActivityLabel(tools), pending: true })
+    }
+  }
+  turns.reverse()
+  return turns
+}

@@ -72,6 +72,11 @@ const NO_TERMINAL = {
 
 const HOSTS = new Map<CliLang, StartHost>()
 
+/** Exported so sibling routes share the ONE host — building a second fires a second version check. */
+export async function hostForFleet(lang: CliLang): Promise<StartHost> {
+  return hostFor(lang)
+}
+
 async function hostFor(lang: CliLang): Promise<StartHost> {
   const cached = HOSTS.get(lang)
   if (cached) return cached

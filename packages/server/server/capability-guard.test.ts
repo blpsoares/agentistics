@@ -34,6 +34,9 @@ describe('routeCapability', () => {
     // The live terminal channel streams a session's SCREEN. It is a read, but a read of a coding
     // assistant's terminal, so it must be as unreachable on an exposed profile as the fleet itself.
     expect(routeCapability('/api/fleet/stream')).toBe('localShell')
+    // The chat view reads the assistant's and the user's actual WORDS out of a transcript on this
+    // machine. If anything on this list must be unreachable from outside, it is this one.
+    expect(routeCapability('/api/fleet/chat')).toBe('localShell')
   })
 
   it('maps the local chat routes', () => {

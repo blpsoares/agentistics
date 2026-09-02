@@ -1625,7 +1625,13 @@ function TerminalZoomControls({ lang }: { lang: 'pt' | 'en' }) {
   )
 }
 
-function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, authorName }: {
+/**
+ * EXPORTED so the sessions workspace's centre pane uses this very component rather than assembling
+ * a second one from `useTerminalStream` + `SessionTerminal` + a composer. Those three have to agree
+ * about reconnects, stall reporting, zoom and the consent gate on typing into a live session, and
+ * two assemblies is two chances for them not to.
+ */
+export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, authorName }: {
   id: string; theme: 'dark' | 'light'; lang: 'pt' | 'en'
   /** Fill the available height (in the modal) instead of a fixed card-sized box. */
   fill?: boolean

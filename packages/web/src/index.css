@@ -406,3 +406,11 @@ html, body {
     max-width: calc(100vw - 48px);
   }
 }
+
+/* The sidebar's resize grip. Dim until the handle around it is pointed at or focused — an edge
+   that is always lit competes with the content beside it, and one that is never lit is an
+   affordance nobody finds. */
+[role="separator"]:hover .ag-aside-grip,
+[role="separator"]:focus-visible .ag-aside-grip {
+  background: var(--anthropic-orange);
+}

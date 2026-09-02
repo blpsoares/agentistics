@@ -38,6 +38,10 @@ const EXACT: ReadonlyMap<string, keyof Capabilities> = new Map<string, keyof Cap
   // steps, so it rides `localShell` rather than the softer `localChat`: there is no deployment
   // that should expose someone's keyboard to the internet and a shell is the honest name for it.
   ['/api/fleet', 'localShell'],
+  // The CONVERSATION of one hosted session, read from its own transcript. Same capability as the
+  // fleet it belongs to and for a stronger reason: this is the assistant's and the user's actual
+  // words, not a list of rows.
+  ['/api/fleet/chat', 'localShell'],
   ['/api/fleet/act', 'localShell'],
   // The live terminal channel — an SSE stream of a session's SCREEN, colours and all. It is a read,
   // but it is a read of a coding assistant's terminal, so it rides the same `localShell` as

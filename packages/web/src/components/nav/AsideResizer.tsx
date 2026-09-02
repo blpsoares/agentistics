@@ -91,6 +91,21 @@ export function AsideResizer({ width, onResize, onCommit, lang }: AsideResizerPr
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
       onFocus={e => { e.currentTarget.style.background = 'var(--anthropic-orange-dim)' }}
       onBlur={e => { e.currentTarget.style.background = 'transparent' }}
-    />
+    >
+      {/* The GRIP. A resize edge whose only affordance is a cursor change is one nobody discovers:
+          you have to already suspect it is draggable to put the pointer there and find out. So the
+          edge says so — a small rounded bar at the vertical middle, dim until pointed at. */}
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute', top: '50%', left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: 4, height: 34, borderRadius: 2,
+          background: 'var(--border)', pointerEvents: 'none',
+          transition: 'background 0.15s',
+        }}
+        className="ag-aside-grip"
+      />
+    </div>
   )
 }

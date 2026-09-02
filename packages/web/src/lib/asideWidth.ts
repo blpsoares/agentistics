@@ -20,7 +20,13 @@ export const ASIDE_MIN = 220
  */
 export const ASIDE_MAX = 520
 
-export const ASIDE_DEFAULT = 300
+/**
+ * The width both workspaces open at, before anybody drags anything.
+ *
+ * One figure for both. Each having its own meant the aside resized every time the workspace switch
+ * was pressed, which reads as the sidebar breaking rather than as the content changing.
+ */
+export const ASIDE_DEFAULT = 268
 
 /** The stored width, clamped, with anything unreadable falling back to the default. */
 export function resolveAsideWidth(stored: string | null, viewport?: number): number {

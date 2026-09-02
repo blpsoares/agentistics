@@ -64,7 +64,7 @@ import { TopBar } from './components/nav/TopBar'
 import { SessionsAside } from './components/nav/SessionsAside'
 import { AsideResizer } from './components/nav/AsideResizer'
 import { modeOfPath } from './lib/workspaceMode'
-import { ASIDE_DEFAULT, resolveAsideWidth } from './lib/asideWidth'
+import { ASIDE_DEFAULT } from './lib/asideWidth'
 import { useFleet } from './lib/fleet'
 import { MemberConnectionStatus } from './components/MemberConnectionStatus'
 import { OwnerSetup } from './components/OwnerSetup'
@@ -1433,16 +1433,19 @@ export default function AppLayout() {
    * narrower one truncates words that were sized to fit. A session list is the opposite — the titles
    * are the user's own sentences.
    */
-  const [asideWidth, setAsideWidth] = useState(() => {
-    try { return resolveAsideWidth(localStorage.getItem('agentistics-aside-width'), window.innerWidth) }
-    catch { return ASIDE_DEFAULT }
-  })
-  const commitAsideWidth = (w: number) => {
-    try { localStorage.setItem('agentistics-aside-width', String(w)) } catch { /* private mode */ }
-  }
-  // Sessions mode drives the stored width; the dashboard keeps its fixed one, so switching back
-  // never leaves the nav labels in a column somebody sized for session titles.
-  const liveAsideWidth = modeOfPath(location.pathname) === 'sessions' ? asideWidth : SIDEBAR_W
+  const [asideWidth, setAsideWidth] = useState(ASIDE_DEFAULT)
+  /**
+   * Deliberately NOT persisted. The width holds for the whole visit — it survives switching
+   * workspaces and moving between sessions — and a reload starts from the default again. That is
+   * the user's call: a stored width is a decision that outlives the reason for it, and the one it
+   * outlives worst is "I widened it to read one long title".
+   */
+  const commitAsideWidth = (_w: number) => { /* session-scoped by design; see above */ }
+  // ONE width for both workspaces. Giving each its own made the aside jump every time the switch
+  // was pressed — the sidebar visibly resizing on a control whose job is to change what is IN it.
+  // Only the sessions workspace offers the handle, but whatever it is dragged to applies to both.
+  const liveAsideWidth = asideWidth
+  const inSessionsWorkspace = modeOfPath(location.pathname) === 'sessions'
   const toggleSidebar = useCallback(() => setSidebarCollapsed(v => {
     const next = !v
     try { localStorage.setItem('agentistics-sidebar-collapsed', next ? '1' : '0') } catch { /* ignore */ }
@@ -2829,22 +2832,37 @@ export default function AppLayout() {
       </header>
 
       {/* Main content — routed pages render here via <Outlet /> */}
-      <main style={{
-        maxWidth: 1400,
-        margin: '0 auto',
-        width: '100%',
-        boxSizing: 'border-box',
-        flex: 1,
-        // Fill at least the viewport so the footer always sits below the fold (a scroll away),
-        // even on short pages — it never floats up into a half-empty screen.
-        minHeight: '100vh',
-        // The bottom padding clears the fixed nav, so it has to grow with it: installed as a PWA
-        // the bar is 56px + the home-indicator inset, and a flat 80px hid the last card.
-        padding: isMobile ? '16px 16px calc(24px + var(--mobile-nav-h))' : '24px 32px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: isMobile ? 14 : 20,
-      }}>
+      {/* The sessions workspace is an APPLICATION PANE, not a document: it holds a terminal and a
+          conversation, both of which scroll inside themselves and must fill the window exactly.
+          Every dashboard page is the opposite — a column of cards, centred and padded, that grows
+          past the fold. So the two get different frames rather than one frame with the sessions
+          case fighting a max-width, a page-level scroll and a footer it has no use for. */}
+      <main style={
+        inSessionsWorkspace
+          ? {
+              width: '100%', boxSizing: 'border-box', flex: 1, minWidth: 0,
+              // The exact window minus the fixed strip. Not `minHeight`: this pane must not grow,
+              // or its inner scrollers never receive a bounded height and scroll the page instead.
+              height: isMobile ? 'calc(100vh - var(--mobile-nav-h))' : `calc(100vh - ${TOPBAR_H}px)`,
+              display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            }
+          : {
+              maxWidth: 1400,
+              margin: '0 auto',
+              width: '100%',
+              boxSizing: 'border-box',
+              flex: 1,
+              // Fill at least the viewport so the footer always sits below the fold (a scroll away),
+              // even on short pages — it never floats up into a half-empty screen.
+              minHeight: '100vh',
+              // The bottom padding clears the fixed nav, so it has to grow with it: installed as a
+              // PWA the bar is 56px + the home-indicator inset, and a flat 80px hid the last card.
+              padding: isMobile ? '16px 16px calc(24px + var(--mobile-nav-h))' : '24px 32px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: isMobile ? 14 : 20,
+            }
+      }>
         <Outlet context={{
           data,
           derived,

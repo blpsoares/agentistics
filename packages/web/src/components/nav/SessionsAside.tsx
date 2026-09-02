@@ -129,7 +129,7 @@ export function SessionsAside({
             unavailable={unavailable} searching={query !== ''}
           />
         ) : groups.map(group => (
-          <div key={group.key} style={{ marginBottom: 10 }}>
+          <div key={group.key} style={{ marginBottom: 16 }}>
             <div style={{
               display: 'flex', alignItems: 'baseline', gap: 6,
               padding: '6px 9px 7px', fontSize: 10.5, fontWeight: 700,
@@ -138,6 +138,7 @@ export function SessionsAside({
               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.label}</span>
               <span style={{ marginLeft: 'auto', fontWeight: 600, opacity: 0.75 }}>{group.sessions.length}</span>
             </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {group.sessions.map(s => (
               <SessionRow
                 key={s.id}
@@ -146,6 +147,7 @@ export function SessionsAside({
                 onOpen={() => navigate(`/sessions/${s.id}`)}
               />
             ))}
+            </div>
           </div>
         ))}
       </div>
