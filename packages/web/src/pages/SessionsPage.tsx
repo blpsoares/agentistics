@@ -23,12 +23,16 @@ import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { FleetOverview } from '../components/sessions/FleetOverview'
+import { FiltersBar } from '../components/FiltersBar'
 import { SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
 import { SessionsAside } from '../components/nav/SessionsAside'
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
-  const { lang, isCentral, theme, filters } = ctx
+  const {
+    lang, isCentral, theme, filters, setFilters, activeOnly, setActiveOnly,
+    availableProjects, sessionCountByProject, models, availableHarnesses,
+  } = ctx
   const pt = lang === 'pt'
   const { sessionId } = useParams()
   const navigate = useNavigate()
@@ -99,19 +103,41 @@ export default function SessionsPage() {
       )
     }
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: '10px 12px' }}>
-        <SessionsAside
-          lang={pt ? 'pt' : 'en'}
-          rows={fleet.rows}
-          finishedTasks={fleet.finishedTasks}
-          loading={loading}
-          unsupported={unsupported}
-          filters={filters}
-          // Fixed true: mobile has no FiltersBar to turn it off with yet (the shared header is
-          // desktop-only for now — see App.tsx). Still the right DEFAULT for this workspace.
-          activeOnly
-          {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
-        />
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+        {/* The mobile FiltersBar — its OWN "+ Filtro" compact shape, not a shrunk copy of the
+            desktop bar. Same `filters`/`activeOnly` state the desktop shared header edits (both
+            come from `AppContext`, computed once in App.tsx), scoped to the four dimensions that
+            describe a live fleet row — `only` here matches the desktop Sessions call, minus the
+            central-only dimensions (members/teams/machines/presence/tags) this workspace has never
+            offered on either layout. */}
+        <div style={{ flexShrink: 0, borderBottom: '1px solid var(--border)', padding: '4px 8px' }}>
+          <FiltersBar
+            compact
+            only={['harnesses', 'repos', 'projects', 'models']}
+            activeOnly={activeOnly}
+            onActiveOnlyChange={setActiveOnly}
+            filters={filters}
+            onChange={setFilters}
+            projects={availableProjects}
+            sessionCountByProject={sessionCountByProject}
+            models={models}
+            harnesses={availableHarnesses}
+            users={[]}
+            lang={lang}
+          />
+        </div>
+        <div style={{ flex: 1, minHeight: 0, padding: '10px 12px' }}>
+          <SessionsAside
+            lang={pt ? 'pt' : 'en'}
+            rows={fleet.rows}
+            finishedTasks={fleet.finishedTasks}
+            loading={loading}
+            unsupported={unsupported}
+            filters={filters}
+            activeOnly={activeOnly}
+            {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
+          />
+        </div>
       </div>
     )
   }

@@ -1,4 +1,4 @@
-import type { BillingReadiness, BillingSettings, CostBasis, MonthlyCommitment, SavedComparison, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId } from '@agentistics/core'
+import type { BillingReadiness, BillingSettings, CostBasis, MonthlyCommitment, SavedComparison, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId, Project } from '@agentistics/core'
 import type { useDerivedStats } from '../hooks/useData'
 import type { PlanBasisView } from '../hooks/usePlanBasis'
 import type { TagDef } from './tagMatch'
@@ -49,6 +49,18 @@ export interface AppContext {
   // filters
   filters: Filters
   setFilters: React.Dispatch<React.SetStateAction<Filters>>
+  /** The fleet's own "only what is running" switch — see `FiltersBar`'s `onActiveOnlyChange` doc
+   *  comment. Lives here (not in `Filters`) so the Sessions workspace's mobile FiltersBar can read
+   *  and write the SAME state the desktop shared header already does, computed once in App.tsx. */
+  activeOnly: boolean
+  setActiveOnly: (v: boolean) => void
+  /** The SAME memoized values the desktop header's `FiltersBar` already gets — computed once in
+   *  App.tsx from `data`/`filters`, so the mobile Sessions workspace's own `FiltersBar` can reuse
+   *  them verbatim instead of re-deriving (and risking disagreeing with) the same filter options.
+   *  `sessionCountByProject`/`models` are declared further down already — this only adds the two
+   *  the dashboard's own context never needed. */
+  availableProjects: Project[]
+  availableHarnesses: HarnessId[]
 
   // preferences
   lang: Lang
