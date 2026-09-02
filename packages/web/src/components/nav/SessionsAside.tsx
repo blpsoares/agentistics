@@ -15,19 +15,40 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Eye, EyeOff, ListFilter, Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import { Eye, EyeOff, Filter as FilterIcon, ListFilter, Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import type { Filters, HarnessId } from '@agentistics/core'
 import {
   ACTIVE_STATES, DEFAULT_ORDER, GROUPINGS,
   filterSessions, groupSessions, sessionNotify,
   type ControlSession, type SessionGroupingId,
 } from '@agentistics/tui/control/session-fleet'
 import { controlStrings, sessionWordBook } from '@agentistics/tui/control/i18n'
+import { filterFleet } from '../../lib/fleetFilter'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { dayLabels, daysAgo } from '../../lib/sessionDays'
 import { NewSessionModal } from '../sessions/NewSessionModal'
 import {
   MAX_PINNED, getPinnedIds, pinnedServerSnapshot, subscribePinnedSessions, togglePinnedSession,
 } from '../../lib/pinnedSessions'
+
+/**
+ * The fleet's OWN filter dimensions — harness, project, repo, model — each a fact a row carries
+ * itself. Deliberately not the dashboard's `Filters` state: that one scopes stored METRICS (a date
+ * range, a set of models over history) and was removed from this workspace on purpose (see
+ * `fleetFilter.ts`'s header) — a fleet is what is running now, not a historical window. This block
+ * builds the narrower `Filters` shape `filterFleet` actually reads and owns no rule of its own.
+ */
+interface FleetFilterState {
+  harnesses: HarnessId[]
+  projects: string[]
+  repos: string[]
+  models: string[]
+}
+const EMPTY_FLEET_FILTER: FleetFilterState = { harnesses: [], projects: [], repos: [], models: [] }
+
+function toggleValue<T>(list: readonly T[], value: T): T[] {
+  return list.includes(value) ? list.filter(v => v !== value) : [...list, value]
+}
 
 export interface SessionsAsideProps {
   lang: 'pt' | 'en'
@@ -118,6 +139,9 @@ export function SessionsAside({
    * name THIS switch rather than blaming the search: the rows behind it are still there.
    */
   const [onlyActive, setOnlyActive] = useState(true)
+  /** The fleet's own filter block — harness/project/repo/model. See `FleetFilterState` above. */
+  const [fleetFilter, setFleetFilter] = useState<FleetFilterState>(EMPTY_FLEET_FILTER)
+  const [filterOpen, setFilterOpen] = useState(false)
   /**
    * The pinned set, from the module that already owns it.
    *
@@ -154,17 +178,52 @@ export function SessionsAside({
   /** The grouping names, from the control center's own table — never a second set of words. */
   const groupWords = strings.sessionsGroupings as Record<string, string>
 
+  // The values the filter block can offer, read off the WHOLE fleet rather than the filtered result —
+  // narrowing to "codex" must not make every other harness's chip disappear, or there would be no way
+  // back to it without clearing the block first.
+  const harnessOptions = useMemo(
+    () => Array.from(new Set(rows.map(r => r.harness).filter(h => h !== ''))).sort() as HarnessId[],
+    [rows],
+  )
+  const projectOptions = useMemo(
+    () => Array.from(new Set(rows.map(r => r.project).filter(p => p !== ''))).sort(),
+    [rows],
+  )
+  const repoOptions = useMemo(
+    () => Array.from(new Set(rows.map(r => r.repo).filter((r): r is string => r !== undefined))).sort(),
+    [rows],
+  )
+  const modelOptions = useMemo(
+    () => Array.from(new Set(rows.map(r => r.model).filter((m): m is string => m !== undefined))).sort(),
+    [rows],
+  )
+  const fleetFiltersAsFilters: Filters = useMemo(() => ({
+    dateRange: 'all', customStart: '', customEnd: '',
+    projects: fleetFilter.projects, repos: fleetFilter.repos, models: fleetFilter.models,
+    harnesses: fleetFilter.harnesses,
+  }), [fleetFilter])
+  const filterCount = fleetFilter.harnesses.length + fleetFilter.projects.length
+    + fleetFilter.repos.length + fleetFilter.models.length
+
   // `now` is read once per arrangement rather than per row: two rows landing either side of midnight
   // during one render would be banded against two different "today"s.
   const active = useMemo(() => new Set<string>(ACTIVE_STATES), [])
-  const matched = useMemo(() => {
-    const searched = filterSessions(rows, query)
-    return onlyActive ? searched.filter(r => active.has(r.state)) : searched
-  }, [rows, query, onlyActive, active])
+  // `filterFleet` owns harness/project/repo/model AND `activeOnly`, but the onlyActive switch needs
+  // its OWN withheld count (see `hidden` below) independent of the value filters, so it is applied
+  // here as an ordinary array filter rather than through `activeOnly: true`.
+  const valueFiltered = useMemo(
+    () => filterFleet({ rows, filters: fleetFiltersAsFilters, activeOnly: false }).rows,
+    [rows, fleetFiltersAsFilters],
+  )
+  const searched = useMemo(() => filterSessions(valueFiltered, query), [valueFiltered, query])
+  const matched = useMemo(
+    () => (onlyActive ? searched.filter(r => active.has(r.state)) : searched),
+    [searched, onlyActive, active],
+  )
   /** How many rows the switch is withholding, so the row can say what turning it off would show. */
   const hidden = useMemo(
-    () => (onlyActive ? filterSessions(rows, query).filter(r => !active.has(r.state)).length : 0),
-    [rows, query, onlyActive, active],
+    () => (onlyActive ? searched.filter(r => !active.has(r.state)).length : 0),
+    [searched, onlyActive, active],
   )
 
   /** The pinned rows, in the order they were pinned. Their own band, above everything. */
@@ -318,6 +377,80 @@ export function SessionsAside({
         )}
       </div>
 
+      {/* The fleet's OWN filter block — harness/project/repo/model, each a fact a row carries
+          itself. Absent from the dashboard's FiltersBar on purpose (see `fleetFilter.ts`); a
+          section with only one option offers nothing to narrow and is left out entirely. */}
+      {(harnessOptions.length > 1 || projectOptions.length > 1 || repoOptions.length > 1
+        || modelOptions.length > 1) && (
+        <div style={{ position: 'relative', padding: '0 2px' }}>
+          <button
+            onClick={() => setFilterOpen(v => !v)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 7, width: '100%',
+              padding: '6px 9px', borderRadius: 8, cursor: 'pointer', minHeight: tap,
+              border: '1px solid var(--border-subtle)',
+              background: filterCount > 0 ? 'var(--anthropic-orange-dim)' : 'transparent',
+              color: filterCount > 0 ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+              fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+            }}
+          >
+            <FilterIcon size={12} style={{ flexShrink: 0 }} />
+            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {pt ? 'Filtros' : 'Filters'}
+            </span>
+            {filterCount > 0 && (
+              <span style={{ marginLeft: 'auto', fontWeight: 700, opacity: 0.85, flexShrink: 0 }}>{filterCount}</span>
+            )}
+          </button>
+          {filterOpen && (
+            <>
+              <div onClick={() => setFilterOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 10 }} />
+              <div style={{
+                position: 'absolute', top: '100%', left: 2, right: 2, zIndex: 11, marginTop: 4,
+                background: 'var(--bg-surface)', border: '1px solid var(--border)',
+                borderRadius: 10, padding: 8, boxShadow: 'var(--ag-shadow-menu)',
+                maxHeight: 340, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10,
+              }}>
+                <FilterSection
+                  label={pt ? 'Assistente' : 'Harness'} tap={tap}
+                  options={harnessOptions} selected={fleetFilter.harnesses}
+                  render={h => (HARNESS_LABELS as Record<string, string>)[h] ?? h}
+                  onToggle={h => setFleetFilter(f => ({ ...f, harnesses: toggleValue(f.harnesses, h as HarnessId) }))}
+                />
+                <FilterSection
+                  label={pt ? 'Repositório' : 'Repository'} tap={tap}
+                  options={repoOptions} selected={fleetFilter.repos}
+                  onToggle={r => setFleetFilter(f => ({ ...f, repos: toggleValue(f.repos, r) }))}
+                />
+                <FilterSection
+                  label={pt ? 'Projeto' : 'Project'} tap={tap}
+                  options={projectOptions} selected={fleetFilter.projects}
+                  onToggle={p => setFleetFilter(f => ({ ...f, projects: toggleValue(f.projects, p) }))}
+                />
+                <FilterSection
+                  label={pt ? 'Modelo' : 'Model'} tap={tap}
+                  options={modelOptions} selected={fleetFilter.models}
+                  render={shortModel}
+                  onToggle={m => setFleetFilter(f => ({ ...f, models: toggleValue(f.models, m) }))}
+                />
+                {filterCount > 0 && (
+                  <button
+                    onClick={() => setFleetFilter(EMPTY_FLEET_FILTER)}
+                    style={{
+                      alignSelf: 'flex-start', padding: '5px 10px', borderRadius: 7, cursor: 'pointer',
+                      border: '1px solid var(--border-subtle)', background: 'transparent',
+                      color: 'var(--anthropic-orange)', fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
+                    }}
+                  >
+                    {pt ? 'Limpar filtros' : 'Clear filters'}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       <button
         onClick={() => setOnlyActive(v => !v)}
         style={{
@@ -383,6 +516,8 @@ export function SessionsAside({
             unavailable={unavailable} searching={query !== ''}
             withheld={onlyActive ? hidden : 0}
             onShowAll={() => setOnlyActive(false)}
+            filterNarrowed={filterCount > 0 && valueFiltered.length < rows.length}
+            onClearFilters={() => setFleetFilter(EMPTY_FLEET_FILTER)}
           />
         ) : groups.map(group => (
           <div key={group.key} style={{ marginBottom: 16 }}>
@@ -430,11 +565,19 @@ export function SessionsAside({
  * somewhere different — and the fifth is the one that must name the switch, because the rows are
  * still there and blaming the search would send somebody to clear a field that is already empty.
  */
-function EmptyReason({ pt, loading, unsupported, unavailable, searching, withheld, onShowAll }: {
+function EmptyReason({
+  pt, loading, unsupported, unavailable, searching, withheld, onShowAll, filterNarrowed, onClearFilters,
+}: {
   pt: boolean; loading: boolean; unsupported: boolean; unavailable?: string; searching: boolean
   /** How many rows the only-running switch is holding back. */
   withheld: number
   onShowAll: () => void
+  /** The fleet's own filter block (harness/project/repo/model) hid every row — a SEPARATE fact
+      from the only-running switch, and checked first: with the block narrowing to nothing, the
+      switch and the search both read as empty too, and blaming either would send someone to clear
+      a control that was never the cause. */
+  filterNarrowed: boolean
+  onClearFilters: () => void
 }) {
   const text = loading
     ? (pt ? 'Lendo as sessões desta máquina…' : 'Reading this machine’s sessions…')
@@ -444,13 +587,15 @@ function EmptyReason({ pt, loading, unsupported, unavailable, searching, withhel
           : 'This install cannot list sessions — a central aggregates many machines and hosts none of their sessions.')
       : unavailable
         ? unavailable
-        : withheld > 0
-          ? (pt
-              ? `Nada rodando agora. ${withheld} ${withheld === 1 ? 'conversa está' : 'conversas estão'} escondida${withheld === 1 ? '' : 's'} pelo filtro.`
-              : `Nothing is running right now. ${withheld} ${withheld === 1 ? 'conversation is' : 'conversations are'} hidden by the filter.`)
-          : searching
-            ? (pt ? 'Nenhuma sessão corresponde à busca.' : 'No session matches that search.')
-            : (pt ? 'Nenhuma sessão nesta máquina ainda.' : 'No sessions on this machine yet.')
+        : filterNarrowed
+          ? (pt ? 'Nenhuma sessão corresponde aos filtros.' : 'No session matches the filters.')
+          : withheld > 0
+            ? (pt
+                ? `Nada rodando agora. ${withheld} ${withheld === 1 ? 'conversa está' : 'conversas estão'} escondida${withheld === 1 ? '' : 's'} pelo filtro.`
+                : `Nothing is running right now. ${withheld} ${withheld === 1 ? 'conversation is' : 'conversations are'} hidden by the filter.`)
+            : searching
+              ? (pt ? 'Nenhuma sessão corresponde à busca.' : 'No session matches that search.')
+              : (pt ? 'Nenhuma sessão nesta máquina ainda.' : 'No sessions on this machine yet.')
 
   return (
     <div style={{
@@ -459,7 +604,19 @@ function EmptyReason({ pt, loading, unsupported, unavailable, searching, withhel
     }}>
       <span>{text}</span>
       {/* The way out, named rather than left for the reader to find. */}
-      {!loading && !unsupported && !unavailable && withheld > 0 && (
+      {!loading && !unsupported && !unavailable && filterNarrowed && (
+        <button
+          onClick={onClearFilters}
+          style={{
+            alignSelf: 'flex-start', padding: '5px 10px', borderRadius: 7, cursor: 'pointer',
+            border: '1px solid var(--border-subtle)', background: 'transparent',
+            color: 'var(--anthropic-orange)', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+          }}
+        >
+          {pt ? 'Limpar filtros' : 'Clear filters'}
+        </button>
+      )}
+      {!loading && !unsupported && !unavailable && !filterNarrowed && withheld > 0 && (
         <button
           onClick={onShowAll}
           style={{
@@ -471,6 +628,48 @@ function EmptyReason({ pt, loading, unsupported, unavailable, searching, withhel
           {pt ? 'Mostrar todas' : 'Show all'}
         </button>
       )}
+    </div>
+  )
+}
+
+/** One dimension of the fleet's own filter block. Absent when there is nothing to narrow. */
+function FilterSection({ label, options, selected, tap, render, onToggle }: {
+  label: string
+  options: readonly string[]
+  selected: readonly string[]
+  tap?: number
+  render?: (v: string) => string
+  onToggle: (v: string) => void
+}) {
+  if (options.length < 2) return null
+  return (
+    <div>
+      <div style={{
+        fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+        color: 'var(--text-tertiary)', marginBottom: 4,
+      }}>
+        {label}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+        {options.map(o => {
+          const on = selected.includes(o)
+          return (
+            <button
+              key={o}
+              onClick={() => onToggle(o)}
+              style={{
+                padding: '4px 9px', borderRadius: 999, cursor: 'pointer', minHeight: tap,
+                border: `1px solid ${on ? 'var(--anthropic-orange)' : 'var(--border-subtle)'}`,
+                background: on ? 'var(--anthropic-orange-dim)' : 'transparent',
+                color: on ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                fontFamily: 'inherit', fontSize: 11, fontWeight: on ? 650 : 500,
+              }}
+            >
+              {render ? render(o) : o}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
