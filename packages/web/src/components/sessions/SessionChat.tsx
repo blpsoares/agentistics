@@ -125,7 +125,6 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   }, [turns, echo.length])
 
   const lastAssistant = [...turns].reverse().find(t => t.role === 'assistant' && !t.pending && t.text.trim() !== '')
-  const newest = turns[turns.length - 1]
 
   const live = useMemo(() => {
     if (!term.frame) return null
@@ -167,8 +166,25 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const loading = payload === null
   const canPrompt = !loading && session.actionable && !blocked && payload.live !== false
 
-  /** Show the WORKING note when the session is busy and there is no in-flight text to show. */
-  const showWorking = working && live === null && !loading
+  /**
+   * What the session is DOING, from the newest ASSISTANT turn.
+   *
+   * The newest turn of all is frequently the user's own message, which carries no tools — reading
+   * it meant the actions vanished the instant you sent something.
+   */
+  const newestAssistant = useMemo(
+    () => [...turns].reverse().find(t => t.role === 'assistant'),
+    [turns],
+  )
+
+  /**
+   * The working note shows whenever the session is busy, INCLUDING while there is live text.
+   *
+   * They are different facts: the live bubble is what the assistant is SAYING, the note is what it
+   * is DOING. Gating the note on the absence of live text hid the actions for exactly as long as
+   * the screen had anything on it, which is most of the time a session is working.
+   */
+  const showWorking = working && !loading
 
   async function upload(files: readonly File[]): Promise<void> {
     if (files.length === 0) return
@@ -317,8 +333,8 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
           {showWorking && (
             <WorkingNote
               lang={lang}
-              {...(newest?.tools ? { tools: newest.tools } : {})}
-              thinking={Boolean(newest?.thinking)}
+              {...(newestAssistant?.tools ? { tools: newestAssistant.tools } : {})}
+              thinking={Boolean(newestAssistant?.thinking)}
             />
           )}
 
@@ -342,7 +358,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               width: 34, height: 34, borderRadius: 17, cursor: 'pointer',
               border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-              color: 'var(--text-secondary)', boxShadow: '0 6px 20px rgba(0,0,0,0.32)',
+              color: 'var(--text-secondary)', boxShadow: 'var(--ag-shadow-pop)',
             }}
           >
             <ArrowDown size={16} />

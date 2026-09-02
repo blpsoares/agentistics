@@ -20,6 +20,10 @@
 
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+// A single newline is a LINE BREAK here. Without this plugin markdown collapses it to a space, so a
+// message written across several lines renders as one run-on paragraph — which is what "the
+// messages are not formatted" turned out to mean. `HarnessChat` has always used it.
+import remarkBreaks from 'remark-breaks'
 import { User } from 'lucide-react'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { HarnessMark } from './HarnessMark'
@@ -105,8 +109,16 @@ export function ChatBubble({ turn, lang, harness, provisional }: ChatBubbleProps
           </div>
         )}
 
-        <div className="ag-chat-md" style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.text}</ReactMarkdown>
+        <div
+          className="ag-chat-md"
+          style={{
+            // The base is inline as well as in the sheet: a bubble whose stylesheet failed should
+            // still read as a message rather than as unstyled 14px page text.
+            minWidth: 0, overflowWrap: 'anywhere',
+            fontSize: 13.5, lineHeight: 1.65, color: 'var(--text-primary)',
+          }}
+        >
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{turn.text}</ReactMarkdown>
         </div>
       </div>
     </div>

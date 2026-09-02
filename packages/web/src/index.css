@@ -521,3 +521,23 @@ html, body {
 button:hover .ag-row-pin,
 button:focus-within .ag-row-pin,
 .ag-row-pin:focus-visible { opacity: 1 !important; }
+
+/* ---------------------------------------------------------------------------
+   Elevation and scrim, per theme.
+
+   A shadow is not theme-neutral. The dark values were tuned against near-black and read as a grey
+   smear over #fafafc; the light theme needs a lighter, tighter one. Same for the modal scrim: 55%
+   black over a light page is a blackout, not a scrim.
+   --------------------------------------------------------------------------- */
+:root {
+  --ag-shadow-seg: 0 1px 3px rgba(0, 0, 0, 0.18);
+  --ag-shadow-pop: 0 6px 20px rgba(0, 0, 0, 0.32);
+  --ag-shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.4);
+  --ag-scrim: rgba(0, 0, 0, 0.55);
+}
+[data-theme="light"] {
+  --ag-shadow-seg: 0 1px 2px rgba(16, 24, 40, 0.08);
+  --ag-shadow-pop: 0 4px 14px rgba(16, 24, 40, 0.12);
+  --ag-shadow-menu: 0 10px 28px rgba(16, 24, 40, 0.16);
+  --ag-scrim: rgba(16, 24, 40, 0.38);
+}

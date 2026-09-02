@@ -61,7 +61,7 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 22,
       }}>
         <Stat
-          icon={<Activity size={15} />} tone="#22c55e"
+          icon={<Activity size={15} />} tone="var(--accent-green)"
           label={pt ? 'Rodando' : 'Running'} value={String(s.running)}
           note={pt ? `de ${s.total} no total` : `of ${s.total} total`}
         />
@@ -85,7 +85,7 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
               : (pt ? 'somado nas sessões vivas' : 'summed across live sessions')}
         />
         <Stat
-          icon={<FolderGit2 size={15} />} tone="#a855f7"
+          icon={<FolderGit2 size={15} />} tone="var(--accent-purple)"
           label={pt ? 'Projetos' : 'Projects'} value={String(s.projects)}
           note={pt ? 'com sessão registrada' : 'with a session on record'}
         />

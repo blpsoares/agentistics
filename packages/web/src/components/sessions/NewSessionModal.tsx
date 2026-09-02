@@ -134,7 +134,7 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
       style={{
         position: 'fixed', inset: 0, zIndex: 400,
-        background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(3px)',
+        background: 'var(--ag-scrim)', backdropFilter: 'blur(3px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
       }}
     >
@@ -235,7 +235,7 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
                     {/* A repository and a plain directory are different things, and the mark says
                         which. Read from the store's own answer, never guessed from the path. */}
                     {p.repo
-                      ? <FolderGit2 size={15} style={{ color: '#a855f7', flexShrink: 0 }} />
+                      ? <FolderGit2 size={15} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
                       : <Folder size={15} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />}
                     <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <span style={{ fontSize: 12.5, fontWeight: on ? 650 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

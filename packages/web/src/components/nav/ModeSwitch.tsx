@@ -90,7 +90,7 @@ export function ModeSwitch({ lang, collapsed = false, attention = 0 }: ModeSwitc
               borderRadius: 8, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
               fontSize: 12.5, fontWeight: on ? 700 : 500, whiteSpace: 'nowrap',
               background: on ? 'var(--bg-surface)' : 'transparent',
-              boxShadow: on ? '0 1px 3px rgba(0,0,0,0.18)' : 'none',
+              boxShadow: on ? 'var(--ag-shadow-seg)' : 'none',
               color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
               transition: 'background 0.15s, color 0.15s',
             }}

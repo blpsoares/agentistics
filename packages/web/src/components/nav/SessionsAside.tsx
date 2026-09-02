@@ -14,9 +14,10 @@
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ListFilter, Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import { Eye, EyeOff, ListFilter, Pin, PinOff, Plus, Search, X } from 'lucide-react'
 import {
-  DEFAULT_ORDER, GROUPINGS, filterSessions, groupSessions, sessionNotify,
+  ACTIVE_STATES, DEFAULT_ORDER, GROUPINGS,
+  filterSessions, groupSessions, sessionNotify,
   type ControlSession, type SessionGroupingId,
 } from '@agentistics/tui/control/session-fleet'
 import { controlStrings, sessionWordBook } from '@agentistics/tui/control/i18n'
@@ -41,7 +42,7 @@ export interface SessionsAsideProps {
 
 /** The colour a state is said in. `running` is its own token, not `success`, which reads teal. */
 const STATE_COLOR: Record<string, string> = {
-  working: '#22c55e',
+  working: 'var(--accent-green)',
   waiting: 'var(--anthropic-orange)',
   'waiting-approval': 'var(--anthropic-orange)',
   exited: 'var(--text-tertiary)',
@@ -93,6 +94,15 @@ export function SessionsAside({
   const [grouping, setGrouping] = useState<SessionGroupingId>('day')
   const [groupingOpen, setGroupingOpen] = useState(false)
   /**
+   * Only the conversations that are RUNNING. On by default, matching `DEFAULT_SESSION_VIEW` in the
+   * terminal cockpit — a machine with months of named work otherwise opens on all of it, and the
+   * handful doing something right now is what the workspace is for.
+   *
+   * It is strict, so when nothing is running the list is empty — which is why `EmptyReason` has to
+   * name THIS switch rather than blaming the search: the rows behind it are still there.
+   */
+  const [onlyActive, setOnlyActive] = useState(true)
+  /**
    * The pinned set, from the module that already owns it.
    *
    * `useSyncExternalStore` rather than local state because the store is shared — `RecentSessions`
@@ -130,7 +140,16 @@ export function SessionsAside({
 
   // `now` is read once per arrangement rather than per row: two rows landing either side of midnight
   // during one render would be banded against two different "today"s.
-  const matched = useMemo(() => filterSessions(rows, query), [rows, query])
+  const active = useMemo(() => new Set<string>(ACTIVE_STATES), [])
+  const matched = useMemo(() => {
+    const searched = filterSessions(rows, query)
+    return onlyActive ? searched.filter(r => active.has(r.state)) : searched
+  }, [rows, query, onlyActive, active])
+  /** How many rows the switch is withholding, so the row can say what turning it off would show. */
+  const hidden = useMemo(
+    () => (onlyActive ? filterSessions(rows, query).filter(r => !active.has(r.state)).length : 0),
+    [rows, query, onlyActive, active],
+  )
 
   /** The pinned rows, in the order they were pinned. Their own band, above everything. */
   const pinnedRows = useMemo(
@@ -260,7 +279,7 @@ export function SessionsAside({
             <div style={{
               position: 'absolute', top: '100%', left: 2, right: 2, zIndex: 11, marginTop: 4,
               background: 'var(--bg-surface)', border: '1px solid var(--border)',
-              borderRadius: 10, padding: 4, boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
+              borderRadius: 10, padding: 4, boxShadow: 'var(--ag-shadow-menu)',
               maxHeight: 280, overflowY: 'auto',
             }}>
               {GROUPINGS.map(g => (
@@ -282,6 +301,28 @@ export function SessionsAside({
           </>
         )}
       </div>
+
+      <button
+        onClick={() => setOnlyActive(v => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 7, width: 'calc(100% - 4px)',
+          margin: '0 2px', padding: '6px 9px', borderRadius: 8, cursor: 'pointer',
+          border: '1px solid var(--border-subtle)',
+          background: onlyActive ? 'var(--anthropic-orange-dim)' : 'transparent',
+          color: onlyActive ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+          fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+        }}
+      >
+        {onlyActive ? <Eye size={12} style={{ flexShrink: 0 }} /> : <EyeOff size={12} style={{ flexShrink: 0 }} />}
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {pt ? 'Só as que estão rodando' : 'Only what is running'}
+        </span>
+        {/* The count of what is being withheld. A switch that narrows silently is one people
+            conclude is broken when the list looks short. */}
+        {onlyActive && hidden > 0 && (
+          <span style={{ marginLeft: 'auto', fontWeight: 700, opacity: 0.8, flexShrink: 0 }}>+{hidden}</span>
+        )}
+      </button>
 
       {pinNotice && (
         <p role="status" style={{
@@ -323,6 +364,8 @@ export function SessionsAside({
           <EmptyReason
             pt={pt} loading={loading} unsupported={unsupported}
             unavailable={unavailable} searching={query !== ''}
+            withheld={onlyActive ? hidden : 0}
+            onShowAll={() => setOnlyActive(false)}
           />
         ) : groups.map(group => (
           <div key={group.key} style={{ marginBottom: 16 }}>
@@ -360,8 +403,20 @@ export function SessionsAside({
  * asked yet", "this machine may not be asked", "the poll failed", "your search matched nothing" and
  * "there are genuinely no sessions" send a reader to five different places.
  */
-function EmptyReason({ pt, loading, unsupported, unavailable, searching }: {
+/**
+ * Why the list is empty, in words, plus the way out when there is one.
+ *
+ * Six different facts, and rendering any of them as the others is the confident-zero defect: not
+ * asked yet, this machine may not be asked, the poll failed, your search matched nothing, the
+ * only-running switch is withholding rows, and there are genuinely none. Each sends a reader
+ * somewhere different — and the fifth is the one that must name the switch, because the rows are
+ * still there and blaming the search would send somebody to clear a field that is already empty.
+ */
+function EmptyReason({ pt, loading, unsupported, unavailable, searching, withheld, onShowAll }: {
   pt: boolean; loading: boolean; unsupported: boolean; unavailable?: string; searching: boolean
+  /** How many rows the only-running switch is holding back. */
+  withheld: number
+  onShowAll: () => void
 }) {
   const text = loading
     ? (pt ? 'Lendo as sessões desta máquina…' : 'Reading this machine’s sessions…')
@@ -371,16 +426,33 @@ function EmptyReason({ pt, loading, unsupported, unavailable, searching }: {
           : 'This install cannot list sessions — a central aggregates many machines and hosts none of their sessions.')
       : unavailable
         ? unavailable
-        : searching
-          ? (pt ? 'Nenhuma sessão corresponde à busca.' : 'No session matches that search.')
-          : (pt ? 'Nenhuma sessão nesta máquina ainda.' : 'No sessions on this machine yet.')
+        : withheld > 0
+          ? (pt
+              ? `Nada rodando agora. ${withheld} ${withheld === 1 ? 'conversa está' : 'conversas estão'} escondida${withheld === 1 ? '' : 's'} pelo filtro.`
+              : `Nothing is running right now. ${withheld} ${withheld === 1 ? 'conversation is' : 'conversations are'} hidden by the filter.`)
+          : searching
+            ? (pt ? 'Nenhuma sessão corresponde à busca.' : 'No session matches that search.')
+            : (pt ? 'Nenhuma sessão nesta máquina ainda.' : 'No sessions on this machine yet.')
 
   return (
     <div style={{
       padding: '14px 10px', fontSize: 11.5, lineHeight: 1.55,
-      color: 'var(--text-tertiary)',
+      color: 'var(--text-tertiary)', display: 'flex', flexDirection: 'column', gap: 8,
     }}>
-      {text}
+      <span>{text}</span>
+      {/* The way out, named rather than left for the reader to find. */}
+      {!loading && !unsupported && !unavailable && withheld > 0 && (
+        <button
+          onClick={onShowAll}
+          style={{
+            alignSelf: 'flex-start', padding: '5px 10px', borderRadius: 7, cursor: 'pointer',
+            border: '1px solid var(--border-subtle)', background: 'transparent',
+            color: 'var(--anthropic-orange)', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+          }}
+        >
+          {pt ? 'Mostrar todas' : 'Show all'}
+        </button>
+      )}
     </div>
   )
 }

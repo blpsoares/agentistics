@@ -129,7 +129,7 @@ function Segment({ on, onClick, icon, label }: {
         whiteSpace: 'nowrap',
         background: on ? 'var(--bg-surface)' : 'transparent',
         color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
-        boxShadow: on ? '0 1px 3px rgba(0,0,0,0.18)' : 'none',
+        boxShadow: on ? 'var(--ag-shadow-seg)' : 'none',
         transition: 'background 0.15s, color 0.15s',
       }}
     >
