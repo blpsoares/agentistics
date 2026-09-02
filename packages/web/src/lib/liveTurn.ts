@@ -36,6 +36,30 @@ const CHROME = [
 /** A line that is only box drawing, punctuation or whitespace says nothing. */
 const NOTHING = /^[\s─━═│┃║╭╮╰╯┌┐└┘├┤┬┴┼·•.]*$/
 
+/**
+ * The emulator's escape sequences, which the chat has no use for.
+ *
+ * The frame is ANSI-PRESERVING (xterm.js needs the codes), so this is what turns it into plain text
+ * for the "live" bubble. The old pattern matched the CSI PARAMETERS (`[38;5;208m`) but never the ESC
+ * byte (0x1B) that actually starts the sequence — so every stripped code left its leading control
+ * character behind, which a monospace font renders as a stray glyph (a block, a box) sitting right
+ * where the colour code used to be. That is what "the reasoning bubble is full of garbage
+ * characters" turned out to mean: not unstripped chrome LINES (this module's other job below), but
+ * unstripped chrome BYTES inside otherwise-real lines.
+ */
+export function stripAnsi(s: string): string {
+  return s
+    // CSI: ESC [ ... final-byte (colours, cursor moves, etc).
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    // OSC: ESC ] ... terminated by BEL or ESC \ (window titles, hyperlinks).
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    // Any other two-byte escape (charset selection, etc).
+    .replace(/\x1b./g, '')
+    // A lone ESC with nothing captured after it (frame cut mid-sequence) and other stray C0
+    // controls a terminal draws with but plain text has no use for. Tab and newline are speech.
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+}
+
 export interface LiveTurnInput {
   /** The frame's lines, top to bottom, already stripped of ANSI by the terminal channel. */
   lines: readonly string[]

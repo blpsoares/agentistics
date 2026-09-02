@@ -37,7 +37,7 @@ import { WorkingNote } from './WorkingNote'
 import { useTerminalStream } from '../../hooks/useTerminalStream'
 import { isImagePath } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
-import { liveTurnText } from '../../lib/liveTurn'
+import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
 
 interface ChatPayload {
@@ -57,6 +57,9 @@ export interface SessionChatProps {
 
 /** Matches the fleet poll. The transcript only changes when a turn lands, so faster buys nothing. */
 const CHAT_POLL_MS = 3000
+
+/** How tall the composer's field may grow before it scrolls internally instead. */
+const TEXTAREA_MAX_HEIGHT = 140
 
 /**
  * How far from the bottom still counts as "at the tail", in px.
@@ -100,6 +103,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   /** Has this conversation been placed at its end yet? Opening mid-history is disorienting. */
   const landedRef = useRef(false)
 
@@ -112,6 +116,22 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     setAttached([])
     setReplyTo(null)
   }, [session.id])
+
+  /**
+   * Grow the field WITH the draft, up to `TEXTAREA_MAX_HEIGHT`, then let it scroll internally.
+   *
+   * `rows={1}` plus a CSS `maxHeight` alone never grows: a textarea's own height stays fixed at
+   * its `rows` unless something sets it explicitly, so a multi-line draft either scrolled inside a
+   * single visible line or was invisible past it — "I can't see my own prompt". Resetting to
+   * `'auto'` before reading `scrollHeight` is required: skip it and a field that GREW once can only
+   * ever read its own (already tall) scrollHeight back, so deleting text never shrinks it again.
+   */
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT)}px`
+  }, [draft])
 
   useEffect(() => {
     let alive = true
@@ -161,6 +181,11 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
   }, [])
+
+  /** ONE stable reference for every bubble's reply button — see `ChatBubble`'s memo. */
+  const onReplyToTurn = useCallback((t: ChatTurn) => {
+    setReplyTo({ role: t.role, text: t.text }); setAtTail(true); toTail()
+  }, [toTail])
 
   /**
    * Land at the END on first paint, then follow the tail only while the reader is already there.
@@ -370,7 +395,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
               turn={t}
               lang={lang}
               harness={session.harness}
-              {...(canPrompt ? { onReply: () => { setReplyTo({ role: t.role, text: t.text }); setAtTail(true); toTail() } } : {})}
+              {...(canPrompt ? { onReply: onReplyToTurn } : {})}
             />
           ))}
 
@@ -378,14 +403,14 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
             <ChatBubble key={`echo-${i}`} turn={{ role: 'user', text }} lang={lang} harness={session.harness} />
           ))}
 
-          {live !== null && (
-            <ChatBubble
-              turn={{ role: 'assistant', text: live }}
-              lang={lang}
-              harness={session.harness}
-              provisional
-            />
-          )}
+          {/* `live` (the screen read off the terminal frame) is deliberately NOT rendered here any
+              more — it used to show as a full-size bubble, and a CLI's own screen carries its own
+              chrome (a footer like "auto mode on · esc to interrupt") that `liveTurn.ts`'s line
+              filter cannot promise to catch for every harness, so a raw, oversized read-from-the-
+              screen block was both the wrong SIZE for a "something is happening" signal and the
+              wrong PLACE for whatever chrome slipped through. `live` still drives the follow-the-
+              tail effect below (new screen content is a sign to keep scrolling), and `WorkingNote`
+              is the one and only "the session is busy" indicator now — small, grey, no raw text. */}
 
           {/* The quiet line saying the session is busy. AFTER the messages, deliberately not styled
               as one — it is the only place the reasoning and the tool calls surface, and rendering
@@ -618,6 +643,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   {uploading ? <Loader size={15} className="ag-working-spin" /> : <Paperclip size={15} />}
                 </button>
                 <textarea
+                  ref={textareaRef}
                   value={draft}
                   onChange={e => setDraft(e.target.value)}
                   onPaste={onPaste}
@@ -635,7 +661,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   style={{
                     flex: 1, resize: 'none', border: 'none', outline: 'none', background: 'transparent',
                     color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 13.5,
-                    lineHeight: 1.5, maxHeight: 140, padding: '6px 6px',
+                    lineHeight: 1.5, maxHeight: TEXTAREA_MAX_HEIGHT, overflowY: 'auto', padding: '6px 6px',
                   }}
                 />
                 {/* Working's own stop, right beside the field it does not block. Absent the moment
@@ -684,11 +710,6 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       </div>
     </div>
   )
-}
-
-/** The emulator's escape sequences, which the chat has no use for. */
-function stripAnsi(s: string): string {
-  return s.replace(/\[[0-9;?]*[A-Za-z]/g, '')
 }
 
 /**

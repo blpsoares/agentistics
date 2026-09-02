@@ -18,7 +18,7 @@
  * than the bubble, and letting it set the width is how a message ends up outside its own card.
  */
 
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 // A single newline is a LINE BREAK here. Without this plugin markdown collapses it to a space, so a
@@ -50,13 +50,25 @@ export interface ChatBubbleProps {
   /** Read off the terminal screen and not yet committed to the transcript. Labelled as such. */
   provisional?: boolean
   /**
-   * Quote this turn in the composer. Absent where the session cannot be written to — a reply
+   * Quote THIS turn in the composer. Absent where the session cannot be written to — a reply
    * control on a row that will refuse the message is a control that teaches the wrong thing.
+   *
+   * Takes the turn rather than closing over it, so the PARENT can hand every bubble the SAME
+   * function reference (one `useCallback`, not one closure per row) — the memo above only pays off
+   * if `onReply` is actually stable across a re-render caused by something unrelated, like typing.
    */
-  onReply?: () => void
+  onReply?: (turn: ChatTurn) => void
 }
 
-export function ChatBubble({ turn, lang, harness, provisional, onReply }: ChatBubbleProps) {
+/**
+ * Memoized: a long conversation renders hundreds of these, and every one of them re-rendered on
+ * every keystroke in the composer, because `draft` lives in the same component as the turns list —
+ * a state change anywhere re-renders every child unless the child says it doesn't need to. That is
+ * what "typing is slow and stuck" turned out to mean on a session with a real amount of history.
+ * `onReply` is a fresh closure per render in the parent, so this alone would not have been enough —
+ * see `SessionChat.tsx`'s `useCallback` on it.
+ */
+export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, onReply }: ChatBubbleProps) {
   const pt = lang === 'pt'
   const mine = turn.role === 'user'
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
@@ -129,7 +141,7 @@ export function ChatBubble({ turn, lang, harness, provisional, onReply }: ChatBu
         {onReply && !provisional && (
           <button
             className="ag-bubble-reply"
-            onClick={onReply}
+            onClick={() => onReply(turn)}
             aria-label={pt ? 'Responder' : 'Reply'}
             title={pt ? 'Responder' : 'Reply'}
             style={{
@@ -182,7 +194,7 @@ export function ChatBubble({ turn, lang, harness, provisional, onReply }: ChatBu
       )}
     </div>
   )
-}
+})
 
 /** One attachment, as a small square. Falls back to a plain chip when the image fails to load. */
 function AttachmentThumb({ path, onOpen }: { path: string; onOpen: () => void }) {

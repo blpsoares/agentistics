@@ -1,5 +1,33 @@
 import { expect, test, describe } from 'bun:test'
-import { liveTurnText } from './liveTurn'
+import { liveTurnText, stripAnsi } from './liveTurn'
+
+describe('stripAnsi', () => {
+  test('strips a CSI sequence, ESC byte included', () => {
+    // The bug: a pattern matching only "[38;5;208m" left the ESC byte behind, which a monospace
+    // font renders as a stray glyph — that byte has to go too, not just its parameters.
+    expect(stripAnsi('\x1b[38;5;208mhello\x1b[0m')).toBe('hello')
+  })
+
+  test('strips several codes inside one line, keeping the words between them', () => {
+    expect(stripAnsi('\x1b[1mBold\x1b[0m and \x1b[31mred\x1b[0m text')).toBe('Bold and red text')
+  })
+
+  test('strips an OSC sequence terminated by BEL', () => {
+    expect(stripAnsi('\x1b]0;window title\x07after')).toBe('after')
+  })
+
+  test('strips a lone ESC with nothing captured after it', () => {
+    expect(stripAnsi('before\x1b')).toBe('before')
+  })
+
+  test('leaves tabs and newlines alone — they are speech, not chrome', () => {
+    expect(stripAnsi('a\tb\nc')).toBe('a\tb\nc')
+  })
+
+  test('text with no escape sequences at all is untouched', () => {
+    expect(stripAnsi('plain text')).toBe('plain text')
+  })
+})
 
 describe('liveTurnText', () => {
   test('returns the text the screen is showing while the session works', () => {
