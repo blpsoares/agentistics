@@ -2134,7 +2134,7 @@ export interface KeyHelp {
 export function sessionKeyHelp(w: {
   move: string; open: string; attach: string; menu: string; section: string
   newSession: string; search: string; clear: string; kill: string; rename: string
-  note: string; task: string; mark: string; onlyActive: string
+  note: string; task: string; mark: string; bulkStop: string; onlyActive: string
   openTask: string; finishTask: string; recent: string; cascade: string
   group: string; layout: string; detail: string; menuFold: string
   reset: string; tabs: string; help: string; quit: string
@@ -2156,6 +2156,10 @@ export function sessionKeyHelp(w: {
     { keys: 'ctrl+f', what: w.search },
     { keys: 'esc', what: w.clear },
     { keys: 'x', what: w.kill },
+    // Stopping several at once is its OWN gesture, deliberately behind a chord: `x` alone acts on the
+    // one row under the cursor, and pinning rows never arms it. `ctrl+x` enters the mode where
+    // `space` selects for stopping.
+    { keys: 'ctrl+x', what: w.bulkStop },
     { keys: 'r', what: w.rename },
     { keys: 'm', what: w.note },
     { keys: 't', what: w.task },

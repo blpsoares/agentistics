@@ -29,16 +29,24 @@ export interface PaneProps {
    * is drawn unfocused rather than competing for attention it cannot receive.
    */
   focused?: boolean
+  /**
+   * Paint the frame and title in the DANGER colour, overriding focus.
+   *
+   * A pane in a destructive mode (bulk-stop) is not merely focused — the whole box is a warning, so
+   * the border and its title go red and outrank the accent a focused pane would otherwise wear.
+   */
+  alert?: boolean
   width: number
   /** Total rows INCLUDING the frame. Content gets `height - 2`. */
   height: number
   children?: React.ReactNode
 }
 
-export function Pane({ title = '', badge = '', focused, width, height, children }: PaneProps) {
+export function Pane({ title = '', badge = '', focused, alert, width, height, children }: PaneProps) {
   if (height <= 0 || width <= 0) return null
 
-  const border = focused ? COLORS.accent : COLORS.border
+  const border = alert ? COLORS.danger : focused ? COLORS.accent : COLORS.border
+  const titleColor = alert ? COLORS.danger : focused ? COLORS.accent : COLORS.label
 
   // Too short to frame. Rather than draw a box with no inside — or, worse, let Ink composite the
   // border rows on top of the content — the pane gives up its frame and keeps its rows. This is the
@@ -59,7 +67,7 @@ export function Pane({ title = '', badge = '', focused, width, height, children 
         {top.head}
         {/* Never `dimColor`: at half intensity over a dark background the title is unreadable, and
             it is the only thing on the frame that says what the box holds. */}
-        <Text color={focused ? COLORS.accent : COLORS.label} bold>
+        <Text color={titleColor} bold>
           {top.title}
         </Text>
         {top.gap}

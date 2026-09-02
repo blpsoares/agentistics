@@ -113,6 +113,10 @@ import {
   type SessionFilters,
   type StatusShortcut,
 } from '../sessions'
+import {
+  BULK_STOP_OFF, bulkKillList, reduceBulkStop, rowMark,
+  type BulkStopState,
+} from '../bulk-stop'
 import { isActivation, wheelDelta } from '../mouse'
 import { usePointer } from '../pointer'
 import { truncate } from '../../components/Primitives'
@@ -379,6 +383,15 @@ export function Sessions({
   const [marked, setMarked] = useState<ReadonlySet<string>>(
     () => new Set(migrateSessionFilters(view).marked),
   )
+  /**
+   * Bulk-stop mode — a SEPARATE, ephemeral selection for stopping several sessions at once.
+   *
+   * Deliberately NOT the pinned set and NOT persisted: pinning is a highlighter you return to,
+   * stopping is destructive, and the whole point of splitting them is that arming `x` on a set of
+   * rows can never be a side effect of pinning them. It resets to `BULK_STOP_OFF` on every mount, so
+   * a destructive selection can never resurrect on the next open.
+   */
+  const [bulk, setBulk] = useState<BulkStopState>(BULK_STOP_OFF)
   /**
    * Whether the menu is folded away entirely, for when the list is what you came to read.
    *
@@ -837,19 +850,15 @@ export function Sessions({
     if (a === 'search') { setAsk({ kind: 'search' }); return }
     if (a === 'group') { setAsk({ kind: 'view' }); return }
 
-    // Batch actions when items are marked
+    // Batch actions when items are pinned — but NEVER `kill`. Pinning is a highlighter, not a
+    // selection: `x` acts on the one row under the cursor (below), and stopping several at once is
+    // the explicit bulk-stop mode (`ctrl+x`). This is the defect that started the journey — `x`
+    // offering to stop exactly the rows a person had pinned to come back to.
     if (marked.size > 0) {
       const markedList = (fleet?.sessions ?? []).filter(sess => marked.has(sess.id))
       if (a === 'prompt') {
         setAsk({ kind: 'batchPrompt', sessions: markedList })
         return
-      }
-      if (a === 'kill') {
-        const activeMarked = markedList.filter(sess => sess.state === 'working' || sess.state === 'waiting' || sess.state === 'waiting-approval')
-        if (activeMarked.length > 0) {
-          setAsk({ kind: 'batchKill', sessions: activeMarked })
-          return
-        }
       }
       if (a === 'reopenFell' || a === 'resume') {
         const openSessions = markedList.filter(sess => sess.state === 'working' || sess.state === 'waiting' || sess.state === 'waiting-approval')
@@ -935,6 +944,31 @@ export function Sessions({
     setAsk({ kind, session: selected })
   }, [selected, host, run, onExit, s])
 
+  /** `ctrl+x`: arm bulk-stop from normal mode, or leave it (discarding the selection) from armed. */
+  const toggleBulkStop = useCallback(() => {
+    setBulk(st => reduceBulkStop(st, { kind: st.active ? 'leave' : 'enter' }))
+  }, [])
+
+  /** `space` while armed: select or unselect a STOPPABLE row for stopping — never a closed one. */
+  const toggleStopRow = useCallback((sess: ControlSession) => {
+    if (!canClose(sess)) return
+    setBulk(st => reduceBulkStop(st, { kind: 'toggle', id: sess.id }))
+  }, [])
+
+  /**
+   * `x` while armed: stop the SELECTION and leave the mode by itself.
+   *
+   * The kill targets exactly the selected rows (`bulkKillList`) — never the pinned set, never the
+   * cursor — and the confirmation names their count. The mode is left the instant the confirm is
+   * raised, so the red is already gone while the question is up and `space` pins again the moment it
+   * is answered. An empty selection just leaves the mode.
+   */
+  const runBulkStop = useCallback(() => {
+    const targets = bulkKillList(fleet?.sessions ?? [], bulk.selection)
+    setBulk(st => reduceBulkStop(st, { kind: targets.length > 0 ? 'executed' : 'leave' }))
+    if (targets.length > 0) setAsk({ kind: 'batchKill', sessions: targets })
+  }, [fleet?.sessions, bulk.selection])
+
   /**
    * Jump the menu to a section, whatever the focus was.
    *
@@ -996,6 +1030,9 @@ export function Sessions({
     setHideDetail(false)
     setLayout(DEFAULT_SESSION_VIEW.layout ?? 'list')
     setMarked(new Set(DEFAULT_MARKED))
+    // A reset leaves bulk-stop mode too — a destructive selection is never something to carry across
+    // "put it back how it opens".
+    setBulk(BULK_STOP_OFF)
     setQuery('')
     toTop()
   }, [toTop])
@@ -1100,6 +1137,24 @@ export function Sessions({
       if (key.leftArrow) return setActionIndex(Math.max(0, liveAt - 1))
       if (key.rightArrow) return setActionIndex(Math.min(liveActions.length - 1, liveAt + 1))
       return
+    }
+
+    // Bulk-stop mode owns the VERBS. `ctrl+x` toggles it — arming from normal mode, leaving from
+    // armed — and it is read before everything else so nothing can shadow it. While armed, `space`
+    // selects a stoppable row, `x` stops the selection and leaves, and `esc` cancels; navigation
+    // still moves the cursor, and EVERY other verb is swallowed. Pinning `space` and the rename,
+    // note and single-stop keys must not fire on a screen the user has armed to destroy several
+    // sessions at once — the one moment an ambiguous keyboard is genuinely dangerous.
+    if (key.ctrl && input === 'x') { toggleBulkStop(); return }
+    if (bulk.active) {
+      if (key.escape) { setBulk(st => reduceBulkStop(st, { kind: 'leave' })); return }
+      if (input === ' ') { if (selected) toggleStopRow(selected); return }
+      if (input === 'x') { runBulkStop(); return }
+      const isNav = key.upArrow || key.downArrow || key.leftArrow || key.rightArrow
+        || key.pageUp || key.pageDown || key.home || key.end
+        || input === 'j' || input === 'k' || input === 'g' || input === 'G'
+      // A verb is ignored; a navigation key falls through to the movement handlers at the bottom.
+      if (!isNav) return
     }
 
     // `enter` on a session opens its MANAGEMENT rather than attaching to it.
@@ -1348,6 +1403,21 @@ export function Sessions({
       ? { capture: true, hints: [s.keyRestoreAnswer] }
       : ask
       ? { capture: true, hints: [s.keyBack] }
+      : bulk.active
+      // Armed to stop: the footer names ONLY the keys the mode answers — select, stop, cancel — plus
+      // how to move and how to leave agentop. Every other verb is swallowed, so naming one would be
+      // the exact bug this footer exists to prevent.
+      ? {
+          capture: false,
+          claimArrows: true,
+          hints: [
+            s.keyQuit,
+            s.sessionsBulkHints.select,
+            s.sessionsBulkHints.stop,
+            s.sessionsBulkHints.cancel,
+            s.keyMove,
+          ],
+        }
       : focus === 'aside' && cockpit.aside > 0
         // The menu is a vertical list, so it answers ↑↓ and enter — and `esc` is the way back to the
         // sessions. A hint for a key that does nothing here is the one bug this footer prevents.
@@ -1394,7 +1464,7 @@ export function Sessions({
               s.keySessionsReset,
             ],
           })
-  }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping,
+  }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping, bulk.active,
       selected?.canApprove, selected?.canChoose, canPrompt, menuHidden, restoring, asideList, asideRow])
 
   usePointer(p => {
@@ -1831,7 +1901,11 @@ export function Sessions({
       ) : null}
 
       <Pane
-        title={s.tabsShort.sessions}
+        // While bulk-stop is armed the pane IS the announcement: a red frame and a red title naming
+        // the mode and the running count, so a person can tell from the screen alone that `space`
+        // now selects for stopping — no keypress to remember.
+        title={bulk.active ? s.sessionsBulkTitle(bulkKillList(fleet?.sessions ?? [], bulk.selection).length) : s.tabsShort.sessions}
+        alert={bulk.active}
         focused={focus === 'list' && !actionsFocused}
         width={cockpit.list}
         height={cockpit.band}
@@ -1920,6 +1994,7 @@ export function Sessions({
                       headed={headed}
                       selected={selected?.id === card.id}
                       marked={marked.has(card.id)}
+                      stopSelected={bulk.selection.has(card.id)}
                       width={grid.cardWidth}
                       height={b.height}
                       words={cardWords}
@@ -1973,6 +2048,7 @@ export function Sessions({
                 session={row.session}
                 selected={selected?.id === row.session.id}
                 marked={marked.has(row.session.id)}
+                stopSelected={bulk.selection.has(row.session.id)}
                 notify={notifyWidth}
                 ages={ages}
                 columns={columns}
@@ -2202,13 +2278,16 @@ function SummaryRow({
   )
 }
 
-function SessionRowView({ session, selected, marked, notify, ages, columns, width, closeCell }: {
+function SessionRowView({ session, selected, marked, stopSelected, notify, ages, columns, width, closeCell }: {
   session: ControlSession
   selected: boolean
   /** Already-localized ages by session id — this component owns no clock and no strings. */
   ages: ReadonlyMap<string, string>
   /** The user's own highlight. Survives re-sorting, and outlives the cursor moving away. */
   marked: boolean
+  /** Armed for stopping in bulk-stop mode — RED, and it outranks pinned so the danger is never
+   *  hidden behind the harmless highlight. */
+  stopSelected: boolean
   /** Columns the notification dot takes — `0` when nothing on screen is waiting. */
   notify: number
   columns: SessionColumns
@@ -2220,16 +2299,21 @@ function SessionRowView({ session, selected, marked, notify, ages, columns, widt
   // forgotten runs a harness nobody recorded. An empty one simply gets no colour.
   const harnessColor = harnessColorOf(session.harness)
   const gap = '  '
+  // Stop-selected outranks pinned (`rowMark`): a red full block for "armed to stop", the cyan half
+  // block for "pinned". The two states can never be told apart by shape alone.
+  const mark = rowMark(marked, stopSelected)
+  const markColor = mark === 'stop' ? COLORS.danger : mark === 'pinned' ? COLORS.info : undefined
+  const markChar = mark === 'stop' ? '█' : mark === 'pinned' ? '▌' : ' '
 
   return (
     <Text wrap="truncate">
       {/* Two cells, and they answer different questions: the caret is WHERE THE CURSOR IS, the bar
-          is WHAT YOU MARKED. Sharing one cell would make a mark vanish under the cursor, which is
-          the one moment you are looking straight at it. The bar is `info` rather than the accent
-          on purpose — the accent means focus everywhere else in this app, and a highlight that
-          wore it would read as "this is selected" on four rows at once. */}
+          is WHAT YOU PINNED — or, in red, what you have armed to stop. Sharing one cell would make a
+          mark vanish under the cursor, which is the one moment you are looking straight at it. The
+          bar is `info` rather than the accent on purpose — the accent means focus everywhere else in
+          this app, and a highlight that wore it would read as "this is selected" on four rows. */}
       <Text color={selected ? COLORS.info : undefined} underline={selected}>{selected ? '❯' : ' '}</Text>
-      <Text color={marked ? COLORS.info : undefined} bold={marked}>{marked ? '▌' : ' '}</Text>
+      <Text color={markColor} bold={mark !== 'none'}>{markChar}</Text>
       {/* The NOTIFICATION. Three cells rather than one, because the row you are on, the row you
           marked and the row that needs you are three facts that can all be true at once — and the
           one that must survive is this, since it is the only one the machine is telling YOU. It
@@ -2270,9 +2354,12 @@ function SessionRowView({ session, selected, marked, notify, ages, columns, widt
       </Text>
       {columns.title > 0 ? (
         <Text
-          color={selected ? COLORS.info : marked ? COLORS.info : undefined}
+          // Stop-selected paints the title red too, so an armed row reads red end to end — except
+          // under the cursor, where the focus highlight wins the title and the red bar still signals
+          // the stop. Precedence: cursor, then stop, then pinned.
+          color={selected ? COLORS.info : stopSelected ? COLORS.danger : marked ? COLORS.info : undefined}
           underline={selected}
-          bold={selected || marked}
+          bold={selected || stopSelected || marked}
         >
           {gap + padCell(session.title, columns.title)}
         </Text>
@@ -2493,7 +2580,7 @@ function GroupHeading({ band, width }: {
  * The lines come from the pure `cardLines`, cut from the bottom by `fitCardLines`, so what the card
  * gives up on a short terminal is decided in one place and tested there.
  */
-function SessionCard({ session, group, headed, selected, marked, width, height, words }: {
+function SessionCard({ session, group, headed, selected, marked, stopSelected, width, height, words }: {
   session: ControlSession
   /** The group this card belongs to — the heading's own words, or the project when there is none. */
   group: string
@@ -2501,6 +2588,8 @@ function SessionCard({ session, group, headed, selected, marked, width, height, 
   headed: boolean
   selected: boolean
   marked: boolean
+  /** Armed for stopping — the card frame and title go red, and it outranks pinned. */
+  stopSelected: boolean
   width: number
   height: number
   /** The already-localized words, composed once by the screen — see `cardWords`. */
@@ -2521,6 +2610,7 @@ function SessionCard({ session, group, headed, selected, marked, width, height, 
       // dropped. `paneBadgeRoom` is that frame's own arithmetic.
       badge={truncate(badge, paneBadgeRoom(title, width))}
       focused={selected}
+      alert={stopSelected}
       width={width}
       height={height}
     >
@@ -2532,6 +2622,7 @@ function SessionCard({ session, group, headed, selected, marked, width, height, 
           labelWidth={cardLabelWidth(lines, inner)}
           marked={marked}
           selected={selected}
+          stopSelected={stopSelected}
           stateColor={STATE_COLOR[session.state]}
           bold={session.state === 'waiting-approval'}
         />
@@ -2549,13 +2640,15 @@ function SessionCard({ session, group, headed, selected, marked, width, height, 
  * assistant is saying) take no indent: they are the card's headline, and pushing them right to line
  * up with a label they do not have would spend the width for nothing.
  */
-function CardLineView({ line, width, labelWidth, marked, selected, stateColor, bold }: {
+function CardLineView({ line, width, labelWidth, marked, selected, stopSelected, stateColor, bold }: {
   line: CardLine
   width: number
   /** Columns the label column takes, or `0` to draw no labels at all. */
   labelWidth: number
   marked: boolean
   selected: boolean
+  /** Armed for stopping — the title goes red, outranking pinned. */
+  stopSelected: boolean
   stateColor: string | undefined
   bold: boolean
 }) {
@@ -2570,7 +2663,7 @@ function CardLineView({ line, width, labelWidth, marked, selected, stateColor, b
   }
   if (line.kind === 'title') {
     return (
-      <Text wrap="truncate" color={selected ? SESSION_FOCUS_ACCENT : marked ? COLORS.info : undefined} bold>
+      <Text wrap="truncate" color={selected ? SESSION_FOCUS_ACCENT : stopSelected ? COLORS.danger : marked ? COLORS.info : undefined} bold>
         {truncate(line.text, width)}
       </Text>
     )
@@ -2775,7 +2868,7 @@ function Question({
   if (ask.kind === 'batchKill') {
     return (
       <ConfirmPrompt
-        label={`Deseja encerrar as ${ask.sessions.length} sessões ativas selecionadas?`}
+        label={s.sessionsBulkKillConfirm(ask.sessions.length)}
         yesLabel={s.yes}
         noLabel={s.no}
         width={width}
