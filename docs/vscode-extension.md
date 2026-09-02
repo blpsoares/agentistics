@@ -272,6 +272,28 @@ where the plain address would have worked.
 For the same reason the **webview never fetches**: a webview's `localhost` is the browser's. The
 extension host is the process that sits beside the fleet, so it is the process that asks.
 
+## The two icons, and why they are different files
+
+- **`media/icon.png`** is the gallery image — the one on the extension's marketplace page. It is
+  the full-colour agentistics mark, squared, so the card does not letterbox a 323x441 image.
+  Regenerate it from the vector source beside it:
+
+  ```bash
+  convert media/logo.svg -background none -gravity center -extent 441x441 -resize 256x256 media/icon.png
+  ```
+
+- **`media/icon.svg`** is the activity-bar icon and is deliberately MONOCHROME (`currentColor`).
+  VS Code tints that one itself — dim when the view is inactive, the theme's foreground when it is
+  — so the coloured mark would sit at one shade while every neighbour responds, which reads as a
+  broken icon rather than a branded one.
+
+## The README is the marketplace page
+
+`packages/vscode/README.md` is what somebody reads to decide whether to install, and it is rendered
+from the packaged copy — so **changing it costs a version**. It is written for that reader, not for
+somebody already in the repository, and its links are ABSOLUTE: a relative link works on GitHub and
+404s on the marketplace.
+
 ## Versioning
 
 The extension is versioned **independently** of the product. It ships to a marketplace on its own
@@ -321,9 +343,28 @@ step once the token is a repository secret.
 do not allow those editors to use it. Needs an eclipse.org account and a published-agreement
 signature, then `bunx ovsx publish -p "$OVSX_TOKEN"`.
 
-Publishing to either registry is deliberately NOT automated yet: both need credentials that only a
-maintainer can create, and a release step that silently no-ops without them is worse than one that
-does not exist.
+**Both are automated** by `.github/workflows/publish-vscode.yml`, on the extension's OWN tag:
+
+```bash
+git tag vscode-v1.0.1 && git push origin vscode-v1.0.1
+```
+
+Its own tag, and not the product release, because the extension is versioned on its own line:
+tying them together would publish an unchanged extension every time the server ships, and would
+make a one-line extension fix wait for a server release.
+
+Two secrets, added once in **Settings → Secrets and variables → Actions** — which is a browser, so
+nobody needs to be logged in on any particular machine:
+
+| Secret | | |
+|---|---|---|
+| `VSCE_PAT` | required | the Azure DevOps PAT above. Missing, the job FAILS: tagging a publish and getting silence is the outcome the workflow exists to prevent. |
+| `OVSX_PAT` | optional | Open VSX. Missing, it is skipped with a notice — a second registry is a decision, and its absence must not fail a publish that already succeeded. |
+
+The job **refuses a tag that disagrees with the manifest**. Publishing 1.0.0 under a tag that says
+1.0.1 is a lie about which code is in the marketplace, and neither a version nor a tag can be taken
+back. It also attaches the `.vsix` to a release for that tag, so an editor that reads neither
+registry still has a file.
 
 ## Where each piece lives
 

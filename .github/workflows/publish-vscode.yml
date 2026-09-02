@@ -1,0 +1,125 @@
+# Publish the VS Code extension.
+#
+# Its OWN workflow, on its OWN tag, because the extension is versioned on its own line
+# (`packages/vscode/package.json` is deliberately absent from `release.yml`'s PKG_FILES). Tying it
+# to the product release would publish an extension that did not change every time the server ships,
+# and would make a one-line extension fix wait for a server release.
+#
+#   git tag vscode-v1.0.1 && git push origin vscode-v1.0.1
+#
+# Secrets, added once in the repository settings — no local login anywhere:
+#   VSCE_PAT  Azure DevOps PAT, scope `Marketplace → Manage`, organisation `All accessible`.
+#             REQUIRED: tagging a publish and getting silence is the failure this job exists to
+#             prevent, so its absence fails the job rather than skipping.
+#   OVSX_PAT  Open VSX token — the registry VSCodium, Cursor, Windsurf and Gitpod read, since the
+#             Marketplace's terms exclude them. OPTIONAL: a second registry is a decision, and its
+#             absence skips with a notice rather than failing a publish that already succeeded.
+name: Publish VS Code extension
+
+on:
+  push:
+    tags: ['vscode-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # attach the .vsix to a release for the tag
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/vscode
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: .
+        run: bun install --frozen-lockfile
+
+      # `embedded-dist.generated.ts` is gitignored, and the extension's type graph reaches the
+      # workspace. Same step `ci.yml` runs, for the same reason.
+      - name: Ensure type stub
+        working-directory: .
+        run: bun run stub
+
+      - name: Type check
+        working-directory: .
+        run: bun tsc --noEmit
+
+      - name: Test
+        working-directory: .
+        run: bun test
+
+      # The tag and the manifest must AGREE. Publishing 1.0.0 under a tag that says 1.0.1 is a lie
+      # about which code is in the marketplace, and neither a version nor a tag can be taken back —
+      # so a mismatch stops here, before anything is published.
+      - name: Check the tag against the manifest
+        id: version
+        run: |
+          VERSION=$(bun -e 'console.log(require("./package.json").version)')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "vsix=agentistics-vscode-${VERSION}.vsix" >> $GITHUB_OUTPUT
+
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ "${GITHUB_REF}" = "${TAG}" ]; then
+            echo "▶ manual run — publishing the manifest's own version, v$VERSION"
+            exit 0
+          fi
+          if [ "$TAG" != "vscode-v$VERSION" ]; then
+            echo "::error::tag $TAG does not match packages/vscode/package.json ($VERSION)."
+            echo "::error::Bump the manifest, or tag vscode-v$VERSION."
+            exit 1
+          fi
+
+      - name: Package
+        run: bun run build && bunx @vscode/vsce package --no-dependencies
+
+      - name: Publish to the VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::error::VSCE_PAT is not set. Add it in Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          bunx @vscode/vsce publish --no-dependencies --packagePath "${{ steps.version.outputs.vsix }}"
+
+      # Open VSX is what VSCodium, Cursor, Windsurf and Gitpod read — the Marketplace's terms do not
+      # let them use it. Skipped, loudly, when no token is configured.
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "::notice::OVSX_PAT is not set — skipping Open VSX. VSCodium, Cursor and Windsurf read that registry, not the Marketplace."
+            exit 0
+          fi
+          bunx ovsx publish "${{ steps.version.outputs.vsix }}" -p "$OVSX_PAT"
+
+      # The .vsix on a release of its own, so somebody who cannot reach either registry — an air-gapped
+      # machine, an editor that reads neither — still has a file to install.
+      - name: Attach the .vsix to a release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          NOTES="VS Code extension v${{ steps.version.outputs.version }}.
+
+          Install from the editor, or:
+          \`code --install-extension ${{ steps.version.outputs.vsix }}\`"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${{ steps.version.outputs.vsix }}" --clobber
+          else
+            gh release create "$TAG" \
+              --title "VS Code extension v${{ steps.version.outputs.version }}" \
+              --notes "$NOTES" \
+              "${{ steps.version.outputs.vsix }}"
+          fi
