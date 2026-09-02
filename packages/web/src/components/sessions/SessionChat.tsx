@@ -3,9 +3,9 @@
  *
  * TWO SOURCES, each used for what it is good at, because neither can do the whole job:
  *
- * - The TRANSCRIPT (`/api/fleet/chat`) is the truth — role-tagged, complete, with the tool calls and
- *   the reasoning the assistant recorded. It arrives per TURN, because Claude writes a message to
- *   its JSONL once the message is finished. It can never stream token by token.
+ * - The TRANSCRIPT (`/api/fleet/chat`) is the truth — role-tagged, complete, exactly what the
+ *   assistant wrote. It arrives per TURN, because Claude writes a message to its JSONL once the
+ *   message is finished. It can never stream token by token.
  * - The FRAME (`/api/fleet/stream`, captured twice a second) is live — it is the terminal, and the
  *   text appears on it as it is produced. But it is a rendered TUI, wrapped to the pane width with
  *   a status strip and an input box in it.
@@ -14,6 +14,12 @@
  * frame and replaced by the transcript's version the moment it lands. The live bubble is labelled
  * as read-from-the-screen and never becomes history: a misread frame is corrected within seconds,
  * while a misread turn kept as history would be wrong forever.
+ *
+ * A SENT MESSAGE IS ECHOED IMMEDIATELY. It reaches the session the instant it is typed into the
+ * pane, but it only enters the transcript when the harness writes it, which is a poll or two later
+ * — so pressing enter appeared to do nothing while the message had in fact been delivered. That was
+ * reported. The echo is dropped as soon as the transcript carries the same text, so it can never
+ * become a duplicate or survive a send that silently failed.
  *
  * WHERE IT CANNOT EXIST IT SAYS SO. The link from a live session to its transcript is exact only
  * for Claude Code, which names our tmux session in its own record. Everywhere else the server
@@ -27,8 +33,10 @@ import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { ApprovalCard } from './ApprovalCard'
 import { ChatBubble, type ChatTurn } from './ChatBubble'
+import { WorkingNote } from './WorkingNote'
 import { useTerminalStream } from '../../hooks/useTerminalStream'
 import { liveTurnText } from '../../lib/liveTurn'
+import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
 
 interface ChatPayload {
   turns: ChatTurn[]
@@ -51,6 +59,8 @@ const CHAT_POLL_MS = 3000
 /** How far from the bottom still counts as "at the tail", in px. */
 const TAIL_SLACK = 120
 
+interface Attachment { name: string; path: string }
+
 export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const pt = lang === 'pt'
   const [payload, setPayload] = useState<ChatPayload | null>(null)
@@ -58,6 +68,8 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const [sending, setSending] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [atTail, setAtTail] = useState(true)
+  /** Messages sent from here and not yet seen in the transcript. See the header. */
+  const [echo, setEcho] = useState<string[]>([])
   /**
    * Files written to THIS MACHINE, whose paths go into the message.
    *
@@ -65,18 +77,20 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
    * no channel a byte array could travel down — but every one of these CLIs reads a file it is
    * pointed at. The chip says the name; the message carries the path.
    */
-  const [attached, setAttached] = useState<Array<{ name: string; path: string }>>([])
+  const [attached, setAttached] = useState<Attachment[]>([])
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   /** Has this conversation been placed at its end yet? Opening mid-history is disorienting. */
   const landedRef = useRef(false)
 
-  // A different session is a different conversation: forget where the last one was scrolled to.
+  // A different session is a different conversation: forget everything local about the last one.
   useEffect(() => {
     landedRef.current = false
     setPayload(null)
     setAtTail(true)
+    setEcho([])
+    setAttached([])
   }, [session.id])
 
   useEffect(() => {
@@ -96,8 +110,22 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const working = session.state === 'working'
   const { state: term } = useTerminalStream(working ? session.id : null)
 
-  const turns = payload?.turns ?? []
+  const turns = useMemo(() => payload?.turns ?? [], [payload])
+
+  // Retire an echo the moment the transcript carries it. Compared on collapsed whitespace, because
+  // the harness re-wraps what it stores and an exact match would leave the echo standing forever
+  // beside its own committed copy.
+  useEffect(() => {
+    if (echo.length === 0) return
+    const seen = new Set(turns.filter(t => t.role === 'user').map(t => collapse(t.text)))
+    setEcho(list => {
+      const kept = list.filter(text => !seen.has(collapse(text)))
+      return kept.length === list.length ? list : kept
+    })
+  }, [turns, echo.length])
+
   const lastAssistant = [...turns].reverse().find(t => t.role === 'assistant' && !t.pending && t.text.trim() !== '')
+  const newest = turns[turns.length - 1]
 
   const live = useMemo(() => {
     if (!term.frame) return null
@@ -127,7 +155,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     if (!el || payload === null) return
     if (!landedRef.current) { el.scrollTop = el.scrollHeight; landedRef.current = true; return }
     if (atTail) el.scrollTop = el.scrollHeight
-  }, [turns.length, live, payload, atTail])
+  }, [turns.length, live, payload, atTail, echo.length])
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current
@@ -139,10 +167,13 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const loading = payload === null
   const canPrompt = !loading && session.actionable && !blocked && payload.live !== false
 
-  async function attach(files: FileList | null) {
-    if (!files || files.length === 0) return
+  /** Show the WORKING note when the session is busy and there is no in-flight text to show. */
+  const showWorking = working && live === null && !loading
+
+  async function upload(files: readonly File[]): Promise<void> {
+    if (files.length === 0) return
     setUploading(true)
-    for (const file of Array.from(files)) {
+    for (const file of files) {
       const body = new FormData()
       body.append('file', file)
       try {
@@ -161,18 +192,72 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     if (fileRef.current) fileRef.current.value = ''
   }
 
+  function pick(list: FileList | null): void {
+    if (!list) return
+    const room = attachmentRoom(attached.length)
+    const files = Array.from(list).slice(0, room)
+    if (files.length < list.length) {
+      setNotice(pt
+        ? `No máximo ${MAX_ATTACHMENTS} anexos por mensagem.`
+        : `At most ${MAX_ATTACHMENTS} attachments per message.`)
+    }
+    void upload(files)
+  }
+
+  /**
+   * A paste is three different things and `planPaste` decides which — see that module.
+   *
+   * The handler only PREVENTS the default when it is doing something else with the clipboard; an
+   * ordinary paste falls through to the textarea, which handles the caret and the undo stack better
+   * than any manual insert.
+   */
+  function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>): void {
+    if (!canPrompt) return
+    const plan = planPaste({
+      files: Array.from(e.clipboardData.files),
+      text: e.clipboardData.getData('text/plain'),
+      existing: attached.length,
+    })
+    if (plan.kind === 'text') return
+    e.preventDefault()
+    if (plan.kind === 'files') { void upload(plan.files); return }
+    if (plan.kind === 'textFile') {
+      // Too big to type into a pane. Attached as a file instead, and the chip says so.
+      void upload([new File([plan.text], plan.name, { type: 'text/plain' })])
+      setNotice(pt
+        ? 'O texto colado era grande demais para digitar na sessão, então foi anexado como arquivo.'
+        : 'The pasted text was too large to type into the session, so it was attached as a file.')
+    }
+  }
+
+  function onDrop(e: React.DragEvent<HTMLDivElement>): void {
+    if (!canPrompt) return
+    if (e.dataTransfer.files.length === 0) return
+    e.preventDefault()
+    pick(e.dataTransfer.files)
+  }
+
   async function send() {
     const text = draft.trim()
     // A message that is ONLY attachments is still a message: the paths are the content.
-    if (text === '' && attached.length === 0) return
-    if (sending) return
+    if ((text === '' && attached.length === 0) || sending) return
     // Paths first, on their own lines, then what was typed — the assistant reads the files it is
     // pointed at, and burying the paths inside a sentence makes them easy to miss.
     const full = [...attached.map(a => a.path), text].filter(x => x !== '').join('\n')
     setSending(true)
     const out = await act({ id: session.id, action: 'prompt', text: full })
     setSending(false)
-    if (out.ok) { setDraft(''); setAttached([]); setAtTail(true); toTail() }
+    if (out.ok) {
+      // Echoed straight away. It is already in the session; the transcript catches up in a poll or
+      // two, and this is what makes pressing enter visibly do something.
+      setEcho(list => [...list, full])
+      setDraft('')
+      setAttached([])
+      setAtTail(true)
+      toTail()
+      setNotice(null)
+      return
+    }
     setNotice(out.message)
   }
 
@@ -192,7 +277,11 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
+      onDragOver={e => { if (canPrompt && e.dataTransfer.types.includes('Files')) e.preventDefault() }}
+      onDrop={onDrop}
+    >
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -201,12 +290,16 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
         <div style={{ maxWidth: 820, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}>
           {loading ? (
             <Loading pt={pt} />
-          ) : turns.length === 0 && live === null ? (
+          ) : turns.length === 0 && live === null && echo.length === 0 ? (
             <Muted text={pt ? 'Esta conversa ainda não tem mensagens.' : 'This conversation has no messages yet.'} />
           ) : null}
 
           {turns.map((t, i) => (
             <ChatBubble key={i} turn={t} lang={lang} harness={session.harness} />
+          ))}
+
+          {echo.map((text, i) => (
+            <ChatBubble key={`echo-${i}`} turn={{ role: 'user', text }} lang={lang} harness={session.harness} />
           ))}
 
           {live !== null && (
@@ -215,6 +308,17 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
               lang={lang}
               harness={session.harness}
               provisional
+            />
+          )}
+
+          {/* The quiet line saying the session is busy. AFTER the messages, deliberately not styled
+              as one — it is the only place the reasoning and the tool calls surface, and rendering
+              those as chat entries buried the sentences actually addressed to the user. */}
+          {showWorking && (
+            <WorkingNote
+              lang={lang}
+              {...(newest?.tools ? { tools: newest.tools } : {})}
+              thinking={Boolean(newest?.thinking)}
             />
           )}
 
@@ -262,6 +366,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     : 'This session is waiting on an answer to a question of its own. Answer it in the card above — anything typed here would go into the dialog’s own filter.'}
                 </p>
               )}
+
               {attached.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                   {attached.map(a => (
@@ -296,6 +401,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   </span>
                 </div>
               )}
+
               <div style={{
                 display: 'flex', alignItems: 'flex-end', gap: 8,
                 background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
@@ -306,7 +412,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   ref={fileRef}
                   type="file"
                   multiple
-                  onChange={e => void attach(e.target.files)}
+                  onChange={e => pick(e.target.files)}
                   style={{ display: 'none' }}
                 />
                 <button
@@ -321,11 +427,12 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     cursor: canPrompt && !uploading ? 'pointer' : 'default',
                   }}
                 >
-                  {uploading ? <Loader size={15} /> : <Paperclip size={15} />}
+                  {uploading ? <Loader size={15} className="ag-working-spin" /> : <Paperclip size={15} />}
                 </button>
                 <textarea
                   value={draft}
                   onChange={e => setDraft(e.target.value)}
+                  onPaste={onPaste}
                   onKeyDown={e => {
                     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() }
                   }}
@@ -352,7 +459,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     cursor: (draft.trim() === '' && attached.length === 0) || !canPrompt ? 'default' : 'pointer',
                   }}
                 >
-                  {sending ? <Loader size={15} /> : <Send size={15} />}
+                  {sending ? <Loader size={15} className="ag-working-spin" /> : <Send size={15} />}
                 </button>
               </div>
               {notice && (
@@ -373,13 +480,18 @@ function stripAnsi(s: string): string {
   return s.replace(/\[[0-9;?]*[A-Za-z]/g, '')
 }
 
+/** Whitespace-insensitive, because the harness re-wraps what it stores. */
+function collapse(s: string): string {
+  return s.replace(/\s+/g, ' ').trim()
+}
+
 function Loading({ pt }: { pt: boolean }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
       padding: '48px 0', color: 'var(--text-tertiary)', fontSize: 12.5,
     }}>
-      <Loader size={16} />
+      <Loader size={16} className="ag-working-spin" />
       {pt ? 'Lendo a conversa…' : 'Reading the conversation…'}
     </div>
   )

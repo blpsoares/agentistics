@@ -415,17 +415,86 @@ html, body {
   background: var(--anthropic-orange);
 }
 
-/* Chat markdown: wide content scrolls inside its own bubble rather than pushing the bubble out of
-   the pane. A code fence or a table is routinely wider than the column, and letting it set the
-   width is how a message ends up outside its own card. */
-.ag-chat-md { min-width: 0; }
-.ag-chat-md pre,
-.ag-chat-md table { max-width: 100%; overflow-x: auto; }
-.ag-chat-md pre { white-space: pre; }
-.ag-chat-md code { overflow-wrap: anywhere; }
-.ag-chat-md p:first-child { margin-top: 0; }
-.ag-chat-md p:last-child { margin-bottom: 0; }
-.ag-chat-md img { max-width: 100%; height: auto; }
+/* ---------------------------------------------------------------------------
+   Chat markdown.
+
+   `ReactMarkdown` emits plain semantic HTML and inherits whatever the page gives it — which in a
+   bubble is nothing, so headings, lists, code and tables all rendered as undifferentiated text.
+   These are the styles that were missing.
+
+   Everything wide is clipped and scrolled INSIDE the bubble: a code fence or a table is routinely
+   wider than the column, and letting it set the width is how a message ends up outside its card.
+   --------------------------------------------------------------------------- */
+.ag-chat-md { min-width: 0; font-size: 13.5px; line-height: 1.65; color: var(--text-primary); }
+
+.ag-chat-md > :first-child { margin-top: 0; }
+.ag-chat-md > :last-child { margin-bottom: 0; }
+
+.ag-chat-md p { margin: 0 0 10px; }
+.ag-chat-md h1, .ag-chat-md h2, .ag-chat-md h3,
+.ag-chat-md h4, .ag-chat-md h5, .ag-chat-md h6 {
+  margin: 16px 0 8px; line-height: 1.3; font-weight: 700; color: var(--text-primary);
+}
+.ag-chat-md h1 { font-size: 17px; }
+.ag-chat-md h2 { font-size: 15.5px; }
+.ag-chat-md h3 { font-size: 14px; }
+.ag-chat-md h4, .ag-chat-md h5, .ag-chat-md h6 { font-size: 13px; }
+
+.ag-chat-md ul, .ag-chat-md ol { margin: 0 0 10px; padding-left: 22px; }
+.ag-chat-md li { margin: 3px 0; }
+.ag-chat-md li > p { margin: 0; }
+.ag-chat-md li::marker { color: var(--text-tertiary); }
+
+/* A task list is a list of states, not of bullets. */
+.ag-chat-md li:has(> input[type="checkbox"]) { list-style: none; margin-left: -18px; }
+.ag-chat-md input[type="checkbox"] { margin-right: 7px; accent-color: var(--anthropic-orange); }
+
+.ag-chat-md a { color: var(--anthropic-orange); text-decoration: none; }
+.ag-chat-md a:hover { text-decoration: underline; }
+
+.ag-chat-md strong { font-weight: 700; color: var(--text-primary); }
+.ag-chat-md em { font-style: italic; }
+.ag-chat-md del { opacity: 0.6; }
+
+.ag-chat-md blockquote {
+  margin: 0 0 10px; padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--border); color: var(--text-secondary);
+}
+
+.ag-chat-md hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+
+/* Inline code sits INSIDE a sentence and must not break the line box; a fence is a block that
+   scrolls. Distinguished by the parent, because ReactMarkdown uses <code> for both. */
+.ag-chat-md code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+.ag-chat-md :not(pre) > code {
+  padding: 1.5px 5px; border-radius: 5px;
+  background: var(--bg-base); border: 1px solid var(--border-subtle);
+  color: var(--text-primary); overflow-wrap: anywhere;
+}
+.ag-chat-md pre {
+  margin: 0 0 10px; padding: 10px 12px; border-radius: 9px;
+  background: var(--bg-base); border: 1px solid var(--border-subtle);
+  max-width: 100%; overflow-x: auto; white-space: pre;
+}
+.ag-chat-md pre code {
+  padding: 0; border: none; background: transparent;
+  color: var(--text-secondary); white-space: pre; line-height: 1.55;
+}
+
+/* The table scrolls in its own box rather than widening the bubble. */
+.ag-chat-md table {
+  display: block; max-width: 100%; overflow-x: auto;
+  border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px;
+}
+.ag-chat-md th, .ag-chat-md td {
+  border: 1px solid var(--border-subtle); padding: 5px 9px; text-align: left; white-space: nowrap;
+}
+.ag-chat-md th { background: var(--bg-elevated); font-weight: 700; }
+
+.ag-chat-md img { max-width: 100%; height: auto; border-radius: 8px; }
 
 /* The maximum effort level, when chosen. A brief emphatic pulse rather than a standing animation:
    it marks the moment of the choice — the slowest and most expensive setting — and then stops. */
@@ -440,3 +509,15 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .ag-effort-peak { animation: none; }
 }
+
+/* The working spinner. `lucide` ships a static glyph; the rotation is ours. */
+@keyframes ag-working-spin { to { transform: rotate(360deg); } }
+.ag-working-spin { animation: ag-working-spin 900ms linear infinite; }
+@media (prefers-reduced-motion: reduce) { .ag-working-spin { animation: none; } }
+
+/* The row's pin. Hidden until the row is hovered or something in it has focus — a column of pin
+   glyphs down an unpinned list is noise beside the titles they sit next to — but always visible
+   once set, and always reachable by keyboard. */
+button:hover .ag-row-pin,
+button:focus-within .ag-row-pin,
+.ag-row-pin:focus-visible { opacity: 1 !important; }

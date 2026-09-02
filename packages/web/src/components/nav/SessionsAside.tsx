@@ -12,17 +12,20 @@
  * decoration.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Plus, Search, X } from 'lucide-react'
+import { ListFilter, Pin, PinOff, Plus, Search, X } from 'lucide-react'
 import {
-  DEFAULT_ORDER, filterSessions, groupSessions, sessionNotify,
-  type ControlSession,
+  DEFAULT_ORDER, GROUPINGS, filterSessions, groupSessions, sessionNotify,
+  type ControlSession, type SessionGroupingId,
 } from '@agentistics/tui/control/session-fleet'
 import { controlStrings, sessionWordBook } from '@agentistics/tui/control/i18n'
 import { HARNESS_COLORS } from '../../lib/harness'
 import { dayLabels, daysAgo } from '../../lib/sessionDays'
 import { NewSessionModal } from '../sessions/NewSessionModal'
+import {
+  MAX_PINNED, getPinnedIds, pinnedServerSnapshot, subscribePinnedSessions, togglePinnedSession,
+} from '../../lib/pinnedSessions'
 
 export interface SessionsAsideProps {
   lang: 'pt' | 'en'
@@ -62,6 +65,18 @@ const STATE_WASH: Record<string, string> = {
   'waiting-approval': 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
 }
 
+/**
+ * What a pin is stored under.
+ *
+ * The CONVERSATION where the harness reports one, because a managed row's id is its tmux session
+ * name and is minted fresh on every reopen — keying by that would unpin a conversation at exactly
+ * the moment somebody who pinned it wants it back. Where no conversation link can ever exist
+ * (codex, kimi, gemini, agy — see `conversationBlind`) the row id is the only key there is.
+ */
+function pinKeyOf(row: ControlSession): string {
+  return row.conversationId ?? row.id
+}
+
 export function SessionsAside({
   lang, rows, finishedTasks, loading, unsupported, unavailable,
 }: SessionsAsideProps) {
@@ -70,6 +85,34 @@ export function SessionsAside({
   const { sessionId } = useParams()
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
+  /**
+   * What the bands stand for. `day` by default; every dimension the terminal cockpit offers is
+   * offered here, from the same `GROUPINGS` table, so the two can never disagree about what a
+   * grouping means or what a band is called.
+   */
+  const [grouping, setGrouping] = useState<SessionGroupingId>('day')
+  const [groupingOpen, setGroupingOpen] = useState(false)
+  /**
+   * The pinned set, from the module that already owns it.
+   *
+   * `useSyncExternalStore` rather than local state because the store is shared — `RecentSessions`
+   * reads the same one — and two components holding their own copy is how a pin lands in one list
+   * and not the other. Its rules (a hard limit of three, the fourth REFUSED rather than silently
+   * swapped) live there and are not re-decided here.
+   */
+  const pins = useSyncExternalStore(subscribePinnedSessions, getPinnedIds, pinnedServerSnapshot)
+  const pinned = useMemo(() => new Set(pins), [pins])
+  const flip = (row: ControlSession) => {
+    const out = togglePinnedSession(pinKeyOf(row))
+    if (!out.ok && out.reason === 'limit') {
+      setPinNotice(pt
+        ? `No máximo ${MAX_PINNED} conversas fixadas. Solte uma antes de fixar outra.`
+        : `At most ${MAX_PINNED} pinned conversations. Unpin one first.`)
+      return
+    }
+    setPinNotice(null)
+  }
+  const [pinNotice, setPinNotice] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
   // The top bar's magnifier focuses this field. An event rather than a prop because the button and
@@ -82,25 +125,40 @@ export function SessionsAside({
   }, [])
 
   const strings = useMemo(() => controlStrings(lang), [lang])
+  /** The grouping names, from the control center's own table — never a second set of words. */
+  const groupWords = strings.sessionsGroupings as Record<string, string>
 
   // `now` is read once per arrangement rather than per row: two rows landing either side of midnight
   // during one render would be banded against two different "today"s.
+  const matched = useMemo(() => filterSessions(rows, query), [rows, query])
+
+  /** The pinned rows, in the order they were pinned. Their own band, above everything. */
+  const pinnedRows = useMemo(
+    () => pins.map(k => matched.find(r => pinKeyOf(r) === k)).filter((r): r is ControlSession => r !== undefined),
+    [pins, matched],
+  )
+
   const groups = useMemo(() => {
     const now = Date.now()
     const words = sessionWordBook(strings, dayLabels(lang, now))
-    const matched = filterSessions(rows, query)
-    const banded = groupSessions(matched, 'day', words, finishedTasks, DEFAULT_ORDER)
-    // Newest band first, and a band that is not a day at all — the rows with no timestamp — last:
-    // it is an absence, and an absence has no place among the dates.
+    // A pinned row is shown ONCE, in its own band. Leaving it in its ordinary band too would make
+    // the list longer than the fleet and the count beside each heading wrong.
+    const rest = matched.filter(r => !pinned.has(pinKeyOf(r)))
+    const banded = groupSessions(rest, grouping, words, finishedTasks, DEFAULT_ORDER)
+    // Only the DAY grouping has a natural order — newest first, with the band that is not a day at
+    // all (rows with no timestamp) last, because an absence has no place among the dates. Every
+    // other dimension keeps the order `groupSessions` produced; re-sorting it here would be a
+    // second opinion about an arrangement that module already decided.
+    if (grouping !== 'day') return banded
     return [...banded].sort((a, b) => {
       const da = daysAgo(a.key, now), db = daysAgo(b.key, now)
       if (da === undefined) return 1
       if (db === undefined) return -1
       return da - db
     })
-  }, [rows, query, finishedTasks, strings, lang])
+  }, [matched, pinned, grouping, finishedTasks, strings, lang])
 
-  const total = groups.reduce((n, g) => n + g.sessions.length, 0)
+  const total = groups.reduce((n, g) => n + g.sessions.length, 0) + pinnedRows.length
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 10, paddingTop: 4 }}>
@@ -173,7 +231,94 @@ export function SessionsAside({
         )}
       </div>
 
+      {/* What the bands stand for. Every dimension the terminal cockpit offers, from the same
+          `GROUPINGS` table — a hand-written list here would be a second answer to what a grouping
+          means, which is the defect the dimension table exists to remove. */}
+      <div style={{ position: 'relative', padding: '0 2px' }}>
+        <button
+          onClick={() => setGroupingOpen(v => !v)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 7, width: '100%',
+            padding: '6px 9px', borderRadius: 8, cursor: 'pointer',
+            border: '1px solid var(--border-subtle)', background: 'transparent',
+            color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+          }}
+        >
+          <ListFilter size={12} style={{ flexShrink: 0 }} />
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {pt ? 'Agrupar: ' : 'Group by: '}{groupWords[grouping] ?? grouping}
+          </span>
+        </button>
+        {groupingOpen && (
+          <>
+            {/* Click-away. A popover that only closes on its own trigger is one people close by
+                navigating away from the page. */}
+            <div
+              onClick={() => setGroupingOpen(false)}
+              style={{ position: 'fixed', inset: 0, zIndex: 10 }}
+            />
+            <div style={{
+              position: 'absolute', top: '100%', left: 2, right: 2, zIndex: 11, marginTop: 4,
+              background: 'var(--bg-surface)', border: '1px solid var(--border)',
+              borderRadius: 10, padding: 4, boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
+              maxHeight: 280, overflowY: 'auto',
+            }}>
+              {GROUPINGS.map(g => (
+                <button
+                  key={g}
+                  onClick={() => { setGrouping(g); setGroupingOpen(false) }}
+                  style={{
+                    display: 'block', width: '100%', textAlign: 'left',
+                    padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer',
+                    background: g === grouping ? 'var(--anthropic-orange-dim)' : 'transparent',
+                    color: g === grouping ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    fontFamily: 'inherit', fontSize: 12.5, fontWeight: g === grouping ? 650 : 500,
+                  }}
+                >
+                  {groupWords[g] ?? g}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {pinNotice && (
+        <p role="status" style={{
+          margin: '0 4px', fontSize: 11, lineHeight: 1.45, color: 'var(--anthropic-orange)',
+        }}>
+          {pinNotice}
+        </p>
+      )}
+
       <div className="ag-noscroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+        {/* The pinned band, above everything and OUTSIDE the grouping — that is what pinning is
+            for: the two or three sessions that must not move when the arrangement changes. */}
+        {pinnedRows.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 9px 7px', fontSize: 10.5, fontWeight: 700,
+              textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--anthropic-orange)',
+            }}>
+              <Pin size={11} />
+              <span>{pt ? 'Fixadas' : 'Pinned'}</span>
+              <span style={{ marginLeft: 'auto', fontWeight: 600, opacity: 0.75 }}>{pinnedRows.length}</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {pinnedRows.map(s => (
+                <SessionRow
+                  key={`pin-${s.id}`}
+                  session={s}
+                  selected={s.id === sessionId || s.conversationId === sessionId}
+                  pinned
+                  onPin={() => flip(s)}
+                  onOpen={() => navigate(`/sessions/${s.id}`)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
         {total === 0 ? (
           <EmptyReason
             pt={pt} loading={loading} unsupported={unsupported}
@@ -195,6 +340,8 @@ export function SessionsAside({
                 key={s.id}
                 session={s}
                 selected={s.id === sessionId || s.conversationId === sessionId}
+                pinned={pinned.has(pinKeyOf(s))}
+                onPin={() => flip(s)}
                 onOpen={() => navigate(`/sessions/${s.id}`)}
               />
             ))}
@@ -238,8 +385,11 @@ function EmptyReason({ pt, loading, unsupported, unavailable, searching }: {
   )
 }
 
-function SessionRow({ session, selected, onOpen }: {
-  session: ControlSession; selected: boolean; onOpen: () => void
+function SessionRow({ session, selected, pinned, onPin, onOpen }: {
+  session: ControlSession; selected: boolean
+  pinned?: boolean
+  onPin?: () => void
+  onOpen: () => void
 }) {
   const wants = sessionNotify(session)
   const color = STATE_COLOR[session.state] ?? 'var(--text-tertiary)'
@@ -297,6 +447,33 @@ function SessionRow({ session, selected, onOpen }: {
           background: (HARNESS_COLORS as Record<string, string>)[session.harness] ?? 'var(--text-tertiary)',
         }}
       />
+      {/* The pin lives on the row rather than in a menu: it is a one-click decision about the row
+          you are looking at. `role="button"` on a span, because a <button> inside a <button> is
+          invalid HTML and browsers resolve it by dropping one of them. */}
+      {onPin && (
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label={pinned ? 'Unpin' : 'Pin'}
+          title={pinned ? 'Unpin' : 'Pin'}
+          onClick={e => { e.stopPropagation(); onPin() }}
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onPin() }
+          }}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            width: 20, height: 20, borderRadius: 6, cursor: 'pointer',
+            color: pinned ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+            // A pin nobody set is faint until the row is hovered: a column of pin glyphs down an
+            // unpinned list is noise beside the titles they sit next to.
+            opacity: pinned ? 1 : 0,
+            transition: 'opacity 0.15s',
+          }}
+          className="ag-row-pin"
+        >
+          {pinned ? <Pin size={12} /> : <PinOff size={12} />}
+        </span>
+      )}
     </button>
   )
 }

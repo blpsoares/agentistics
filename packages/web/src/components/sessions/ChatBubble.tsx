@@ -105,7 +105,7 @@ export function ChatBubble({ turn, lang, harness, provisional }: ChatBubbleProps
           </div>
         )}
 
-        <div className="ag-md ag-chat-md" style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+        <div className="ag-chat-md" style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.text}</ReactMarkdown>
         </div>
       </div>
