@@ -66,6 +66,7 @@ jobs:
           VERSION=$(bun -e 'console.log(require("./package.json").version)')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "vsix=agentistics-vscode-${VERSION}.vsix" >> $GITHUB_OUTPUT
+          echo "publisher=$(bun -e 'console.log(require("./package.json").publisher)')" >> $GITHUB_OUTPUT
 
           TAG="${GITHUB_REF#refs/tags/}"
           if [ "${GITHUB_REF}" = "${TAG}" ]; then
@@ -89,7 +90,7 @@ jobs:
             echo "::error::VSCE_PAT is not set. Add it in Settings → Secrets and variables → Actions."
             exit 1
           fi
-          bunx @vscode/vsce publish --no-dependencies --packagePath "${{ steps.version.outputs.vsix }}"
+          bunx @vscode/vsce publish --packagePath "${{ steps.version.outputs.vsix }}"
 
       # Open VSX is what VSCodium, Cursor, Windsurf and Gitpod read — the Marketplace's terms do not
       # let them use it. Skipped, loudly, when no token is configured.
@@ -101,6 +102,11 @@ jobs:
             echo "::notice::OVSX_PAT is not set — skipping Open VSX. VSCodium, Cursor and Windsurf read that registry, not the Marketplace."
             exit 0
           fi
+          # Open VSX refuses a publish into a namespace that does not exist, and the namespace is a
+          # SEPARATE call — the classic first-publish failure. Creating one that already exists is
+          # an error too, so both outcomes are fine and only a real failure below is not.
+          bunx ovsx create-namespace "${{ steps.version.outputs.publisher }}" -p "$OVSX_PAT" \
+            || echo "::notice::namespace ${{ steps.version.outputs.publisher }} already exists"
           bunx ovsx publish "${{ steps.version.outputs.vsix }}" -p "$OVSX_PAT"
 
       # The .vsix on a release of its own, so somebody who cannot reach either registry — an air-gapped
