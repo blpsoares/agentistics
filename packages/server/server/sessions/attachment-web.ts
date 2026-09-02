@@ -17,13 +17,30 @@
  */
 
 import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { AGENTISTICS_DATA_DIR } from '../config'
 import { storedAttachmentName } from './attachment-name'
 
 /** Where uploads land. Inside agentop's own directory, never beside the user's project. */
 export const ATTACHMENT_DIR = join(AGENTISTICS_DATA_DIR, 'attachments')
+
+/**
+ * Is `requested` actually inside `ATTACHMENT_DIR` — PURE, and the only thing standing between
+ * "show this attachment back" and an arbitrary local file read.
+ *
+ * A message's text carries the attachment's own path VERBATIM (that is what an attachment IS
+ * here — see the module header), so the read endpoint has to accept a path, not just a bare name.
+ * `resolve()` collapses every `..`/`.`/doubled separator BEFORE the prefix check, so a request for
+ * `ATTACHMENT_DIR/../../.ssh/id_rsa` resolves to a path that no longer starts with `ATTACHMENT_DIR`
+ * and is refused — checking the prefix on the RAW string first would miss exactly that case.
+ */
+export function resolveAttachmentRead(requested: string): string | null {
+  if (requested === '') return null
+  const base = resolve(ATTACHMENT_DIR) + sep
+  const resolved = resolve(requested)
+  return resolved.startsWith(base) ? resolved : null
+}
 
 /**
  * The ceiling on one upload.

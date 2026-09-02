@@ -43,6 +43,8 @@ describe('routeCapability', () => {
     expect(routeCapability('/api/fleet/spawn')).toBe('localShell')
     // An attachment writes a file to this machine and hands a session its path.
     expect(routeCapability('/api/fleet/attach')).toBe('localShell')
+    // Reading one back — the chat's inline image preview — is the other half of the same file.
+    expect(routeCapability('/api/fleet/attachment')).toBe('localShell')
   })
 
   it('maps the local chat routes', () => {

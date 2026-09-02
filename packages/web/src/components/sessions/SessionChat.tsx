@@ -35,6 +35,8 @@ import { ApprovalCard } from './ApprovalCard'
 import { ChatBubble, type ChatTurn } from './ChatBubble'
 import { WorkingNote } from './WorkingNote'
 import { useTerminalStream } from '../../hooks/useTerminalStream'
+import { isImagePath } from '../../lib/attachmentPreview'
+import { attachmentUrl } from '../../lib/attachmentUrl'
 import { liveTurnText } from '../../lib/liveTurn'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
 
@@ -486,7 +488,32 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
 
               {attached.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                  {attached.map(a => (
+                  {attached.map(a => isImagePath(a.path) ? (
+                    // The same square the sent message will wear (see ChatBubble's AttachmentThumb)
+                    // — what you see here is what the session's reply will show.
+                    <span key={a.path} title={a.name} style={{
+                      position: 'relative', display: 'block', width: 48, height: 48,
+                      borderRadius: 8, overflow: 'hidden', flexShrink: 0,
+                      border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+                    }}>
+                      <img
+                        src={attachmentUrl(a.path)} alt=""
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                      <button
+                        onClick={() => setAttached(list => list.filter(x => x.path !== a.path))}
+                        aria-label={pt ? `Remover ${a.name}` : `Remove ${a.name}`}
+                        style={{
+                          position: 'absolute', top: 2, right: 2,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          width: 16, height: 16, borderRadius: '50%', border: 'none', padding: 0,
+                          background: 'rgba(0,0,0,0.55)', color: '#fff', cursor: 'pointer',
+                        }}
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ) : (
                     <span key={a.path} title={a.path} style={{
                       display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%',
                       padding: '5px 8px', borderRadius: 8, minWidth: 0,

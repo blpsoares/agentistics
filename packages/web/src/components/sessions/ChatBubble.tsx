@@ -18,6 +18,7 @@
  * than the bubble, and letting it set the width is how a message ends up outside its own card.
  */
 
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 // A single newline is a LINE BREAK here. Without this plugin markdown collapses it to a space, so a
@@ -26,6 +27,9 @@ import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import { CornerUpLeft, User } from 'lucide-react'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
+import { splitImageAttachments } from '../../lib/attachmentPreview'
+import { attachmentUrl } from '../../lib/attachmentUrl'
+import { AttachmentLightbox } from './AttachmentLightbox'
 import { HarnessMark } from './HarnessMark'
 
 export interface ChatTurn {
@@ -55,10 +59,16 @@ export interface ChatBubbleProps {
 export function ChatBubble({ turn, lang, harness, provisional, onReply }: ChatBubbleProps) {
   const pt = lang === 'pt'
   const mine = turn.role === 'user'
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
 
-  // A turn that said nothing is not a message. Tool calls and reasoning are the work between
-  // messages, and the row's state already reports that the session is working.
-  if (turn.text.trim() === '') return null
+  // An attachment is a PATH the composer typed into the pane (see `attachmentPreview.ts`'s header),
+  // so it arrives in `turn.text` like any other line — pulled out here rather than at the source, so
+  // the SAME rule reads an echoed message and its later transcript copy identically.
+  const { images, text } = splitImageAttachments(turn.text)
+
+  // A turn that said nothing AND attached nothing is not a message. Tool calls and reasoning are
+  // the work between messages, and the row's state already reports that the session is working.
+  if (text.trim() === '' && images.length === 0) return null
 
   const color = (HARNESS_COLORS as Record<string, string>)[harness] ?? 'var(--text-secondary)'
   const name = (HARNESS_LABELS as Record<string, string>)[harness] ?? harness
@@ -134,18 +144,85 @@ export function ChatBubble({ turn, lang, harness, provisional, onReply }: ChatBu
           </button>
         )}
 
-        <div
-          className="ag-chat-md"
-          style={{
-            // The base is inline as well as in the sheet: a bubble whose stylesheet failed should
-            // still read as a message rather than as unstyled 14px page text.
-            minWidth: 0, overflowWrap: 'anywhere',
-            fontSize: 13.5, lineHeight: 1.65, color: 'var(--text-primary)',
-          }}
-        >
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{turn.text}</ReactMarkdown>
-        </div>
+        {/* Small squares ABOVE the text — what was attached, rendered rather than left as a bare
+            path nobody can read at a glance. Absent rows carry no rule of their own: an image that
+            fails to load (moved, or outside `ATTACHMENT_DIR`) falls back to a plain chip with its
+            name, never a broken-image icon with nothing to click. */}
+        {images.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {images.map((path, i) => (
+              <AttachmentThumb key={path} path={path} onOpen={() => setLightboxIndex(i)} />
+            ))}
+          </div>
+        )}
+
+        {text.trim() !== '' && (
+          <div
+            className="ag-chat-md"
+            style={{
+              // The base is inline as well as in the sheet: a bubble whose stylesheet failed should
+              // still read as a message rather than as unstyled 14px page text.
+              minWidth: 0, overflowWrap: 'anywhere',
+              fontSize: 13.5, lineHeight: 1.65, color: 'var(--text-primary)',
+            }}
+          >
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{text}</ReactMarkdown>
+          </div>
+        )}
       </div>
+
+      {lightboxIndex !== null && (
+        <AttachmentLightbox
+          paths={images}
+          index={lightboxIndex}
+          onIndexChange={setLightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          lang={lang}
+        />
+      )}
     </div>
+  )
+}
+
+/** One attachment, as a small square. Falls back to a plain chip when the image fails to load. */
+function AttachmentThumb({ path, onOpen }: { path: string; onOpen: () => void }) {
+  const [broken, setBroken] = useState(false)
+  const name = path.split('/').pop() ?? path
+
+  if (broken) {
+    return (
+      <span
+        title={path}
+        style={{
+          display: 'inline-flex', alignItems: 'center', maxWidth: 160,
+          padding: '5px 8px', borderRadius: 8, minWidth: 0,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+          fontSize: 11, color: 'var(--text-tertiary)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}
+      >
+        {name}
+      </span>
+    )
+  }
+
+  return (
+    <button
+      onClick={onOpen}
+      title={name}
+      aria-label={name}
+      style={{
+        display: 'block', width: 72, height: 72, padding: 0, borderRadius: 9, overflow: 'hidden',
+        border: '1px solid var(--border-subtle)', cursor: 'pointer', flexShrink: 0,
+        background: 'var(--bg-elevated)',
+      }}
+    >
+      <img
+        src={attachmentUrl(path)}
+        alt=""
+        onError={() => setBroken(true)}
+        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+      />
+    </button>
   )
 }

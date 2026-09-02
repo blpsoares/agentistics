@@ -49,6 +49,10 @@ const EXACT: ReadonlyMap<string, keyof Capabilities> = new Map<string, keyof Cap
   // An attachment WRITES A FILE to this machine's disk and hands the session its path. It touches
   // the host as directly as anything on this list.
   ['/api/fleet/attach', 'localShell'],
+  // Reading one back — the chat's inline image preview. Same capability as writing it: both sides
+  // of one file on this host's disk, and `resolveAttachmentRead` is what stops the read from
+  // becoming an arbitrary local file disclosure once it is behind this gate.
+  ['/api/fleet/attachment', 'localShell'],
   ['/api/fleet/act', 'localShell'],
   // The live terminal channel — an SSE stream of a session's SCREEN, colours and all. It is a read,
   // but it is a read of a coding assistant's terminal, so it rides the same `localShell` as

@@ -1016,7 +1016,7 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // `capability-guard.ts` has already refused both paths on an exposed profile.
     if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act' || url.pathname === '/api/fleet/stream' || url.pathname === '/api/fleet/chat' ||
         url.pathname === '/api/fleet/new' || url.pathname === '/api/fleet/spawn' ||
-        url.pathname === '/api/fleet/attach') {
+        url.pathname === '/api/fleet/attach' || url.pathname === '/api/fleet/attachment') {
       if (TEAM_CENTRAL) {
         return new Response(JSON.stringify({ error: 'fleet_central' }), {
           status: 404,
@@ -1094,6 +1094,33 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
+    }
+
+    // Reading an attachment BACK — the chat's inline image preview. `resolveAttachmentRead` is the
+    // whole of the security model here: a message carries the attachment's path verbatim (see
+    // attachment-web.ts's header), so this route necessarily accepts a path, and that function is
+    // what stops it becoming an arbitrary local file read. A path outside the attachment directory,
+    // or one naming nothing, gets exactly the same 404 — the difference is not this reader's to say.
+    if (url.pathname === '/api/fleet/attachment' && req.method === 'GET') {
+      const { resolveAttachmentRead } = await import('./sessions/attachment-web')
+      const resolved = resolveAttachmentRead(url.searchParams.get('path') ?? '')
+      if (!resolved) {
+        return new Response(null, { status: 404, headers: CORS_HEADERS })
+      }
+      const file = Bun.file(resolved)
+      if (!(await file.exists())) {
+        return new Response(null, { status: 404, headers: CORS_HEADERS })
+      }
+      return new Response(file, {
+        headers: {
+          ...CORS_HEADERS,
+          'Content-Type': file.type || 'application/octet-stream',
+          // Never cached beyond this response: the same path can be overwritten by a later
+          // attachment of the same session, and a shared browser cache keyed on the URL would then
+          // serve the wrong image under the right name.
+          'Cache-Control': 'private, no-store',
+        },
+      })
     }
 
     // What this machine can start, and from where. `q` searches the LOCAL project store, so the
