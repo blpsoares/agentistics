@@ -88,6 +88,16 @@ interface Props {
    *  `canCreateTagFromFilters` in lib/filtersToTag.ts — and omits this entirely otherwise, so
    *  FiltersBar itself stays filter-domain-only and never needs to know what a tag is. */
   onCreateTagFromFilters?: () => void
+  /**
+   * Hides the date-range presets and the custom range picker.
+   *
+   * Unlike `only`, which restricts the "+ Filter" ADD menu, the date row is drawn unconditionally —
+   * there was never a caller with nothing to say about time until the Sessions workspace's live
+   * fleet: a session is doing something NOW, and "last 7 days" would hide one that started eight
+   * days ago and is still running (see `fleetFilter.ts`). Defaults to false so every existing caller
+   * is unaffected.
+   */
+  hideDateRange?: boolean
 }
 
 const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [
@@ -119,7 +129,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, activeOnly, onActiveOnlyChange, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup }: Props) {
+export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, activeOnly, onActiveOnlyChange, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup, hideDateRange = false }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -264,6 +274,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
         padding: compact ? '10px 12px' : '8px 0',
       }}>
 
+        {!hideDateRange && (
+        <>
         {/* Date range presets — stretch to fill the row on mobile */}
         <div style={{ display: 'flex', gap: 3, width: isMobile ? '100%' : undefined }}>
           {DATE_RANGES.map(r => {
@@ -356,6 +368,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             </button>
           )}
         </div>
+        </>
+        )}
 
         {/* "Create tag with these filters" — only rendered when the caller has already decided the
             current filters map to a usable tag draft (see canCreateTagFromFilters). FiltersBar

@@ -28,7 +28,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, Loader, Paperclip, RotateCcw, Send, X } from 'lucide-react'
+import { ArrowDown, Loader, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { ApprovalCard } from './ApprovalCard'
@@ -56,8 +56,16 @@ export interface SessionChatProps {
 /** Matches the fleet poll. The transcript only changes when a turn lands, so faster buys nothing. */
 const CHAT_POLL_MS = 3000
 
-/** How far from the bottom still counts as "at the tail", in px. */
-const TAIL_SLACK = 120
+/**
+ * How far from the bottom still counts as "at the tail", in px.
+ *
+ * Kept small on purpose: a working session's live terminal frame re-renders this view on every
+ * frame the SSE channel delivers (`useTerminalStream`), and each one re-runs the follow effect
+ * below. At the old 120px, scrolling up by less than one ordinary message bubble still read as
+ * "at the tail" — so the very next frame yanked the reader straight back down mid-reply, which is
+ * exactly the thing this whole mechanism exists to prevent.
+ */
+const TAIL_SLACK = 24
 
 interface Attachment { name: string; path: string }
 
@@ -178,6 +186,22 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   /** The row's own reopen verb, if it has one. Enabled by the server, never inferred here. */
   const reopen = row?.verbs.find(v => v.action === 'resume')
   const [reopening, setReopening] = useState(false)
+  /**
+   * Stop the CURRENT turn, without ending the session — the composer's own "esc". Lives here, next
+   * to the field, rather than in the panel's header: it is the one thing reached for WHILE something
+   * is running, and it does not touch `canPrompt` — typing and sending stay live the whole time, so
+   * a reply queued while it works is not blocked on stopping it first. Absent unless the row can
+   * take it, since a stop control on an idle session would send Escape into its prompt.
+   */
+  const stopVerb = row?.verbs.find(v => v.action === 'interrupt')
+  const [stopping, setStopping] = useState(false)
+  async function stopNow() {
+    if (!stopVerb?.enabled || stopping) return
+    setStopping(true)
+    const out = await act({ id: session.id, action: 'interrupt' })
+    setStopping(false)
+    if (!out.ok) setNotice(out.message)
+  }
 
   async function reopenNow() {
     if (!reopen?.enabled || reopening) return
@@ -384,7 +408,10 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
           apart from the bubbles, which are `--bg-card` on `--bg-base`: at the same value it read as
           another message rather than as the place you type. */}
       <div style={{
-        position: 'relative', flexShrink: 0,
+        // `sticky` alongside `flexShrink:0` for the same reason the header above takes both — a
+        // scroll-away ancestor anywhere between here and the viewport must not carry this off with
+        // it, and sticky is the guarantee that holds even then.
+        position: 'sticky', bottom: 0, flexShrink: 0,
         borderTop: '1px solid var(--border)', padding: '12px 20px 14px',
         background: 'var(--bg-surface)',
       }}>
@@ -533,11 +560,13 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                 </div>
               )}
 
+              {/* Loose on the composer's own surface — no second card behind it. It used to sit in
+                  its own `--bg-base` box with a border, which read as a field floating inside the
+                  field that holds it; dropping both leaves it the same colour as its container. */}
               <div style={{
                 display: (!canPrompt && !blocked && reopen) ? 'none' : 'flex',
                 alignItems: 'flex-end', gap: 8,
-                background: 'var(--bg-base)', border: '1px solid var(--border)',
-                borderRadius: 12, padding: 8,
+                background: 'transparent', border: 'none', padding: 0,
                 opacity: canPrompt ? 1 : 0.55,
               }}>
                 <input
@@ -567,6 +596,9 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   onPaste={onPaste}
                   onKeyDown={e => {
                     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() }
+                    // The composer's own "esc": stops the CURRENT turn without touching the draft
+                    // or the field's own ability to keep taking text — see `stopNow`.
+                    if (e.key === 'Escape' && stopVerb?.enabled) { e.preventDefault(); void stopNow() }
                   }}
                   disabled={!canPrompt || sending}
                   rows={1}
@@ -579,6 +611,26 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     lineHeight: 1.5, maxHeight: 140, padding: '6px 6px',
                   }}
                 />
+                {/* Working's own stop, right beside the field it does not block. Absent the moment
+                    the turn ends — a stop control on an idle session would send Escape into its
+                    prompt, which is exactly the row's own gate on `interrupt`. */}
+                {working && stopVerb?.enabled && (
+                  <button
+                    onClick={() => void stopNow()}
+                    disabled={stopping}
+                    title={stopVerb.label}
+                    aria-label={stopVerb.label}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      width: 34, height: 34, borderRadius: 9, flexShrink: 0, cursor: stopping ? 'default' : 'pointer',
+                      border: '1px solid color-mix(in srgb, var(--accent-red) 45%, transparent)',
+                      background: 'color-mix(in srgb, var(--accent-red) 12%, transparent)',
+                      color: 'var(--accent-red)',
+                    }}
+                  >
+                    {stopping ? <Loader size={14} className="ag-working-spin" /> : <Square size={13} fill="currentColor" />}
+                  </button>
+                )}
                 <button
                   onClick={() => void send()}
                   disabled={!canPrompt || sending || (draft.trim() === '' && attached.length === 0)}

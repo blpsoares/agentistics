@@ -13,7 +13,7 @@
  */
 
 import { useState } from 'react'
-import { MessagesSquare, Square, TerminalSquare } from 'lucide-react'
+import { MessagesSquare, TerminalSquare } from 'lucide-react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { TerminalRegion } from '../RecentSessions'
@@ -46,7 +46,6 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
    * toggle must give one answer, and this is the one place that could quietly disagree.
    */
   const chattable = session.conversationBlind === undefined
-  const stopVerb = row?.verbs.find(v => v.action === 'interrupt')
 
   const [view, setView] = useState<SessionView>(chattable ? 'chat' : 'terminal')
   const active: SessionView = chattable ? view : 'terminal'
@@ -59,14 +58,18 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
     // element does nothing) and the jump-to-latest arrow never appearing (`scrollHeight` equals
     // `clientHeight`, so the reader always measures as "at the tail").
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-      {/* PINNED. `flexShrink: 0` keeps it out of the flex squeeze and the pane below owns the
-          scrolling, so the title and the view switch stay put however long the conversation runs.
-          They are what you need to know and what you need to reach at any point in it. */}
+      {/* PINNED. `flexShrink: 0` keeps it out of the flex squeeze so the pane below owns the
+          scrolling, and `position: sticky` is the second, independent guarantee of the same thing:
+          if ANY ancestor between here and the viewport ever ends up the one that scrolls (a
+          mis-measured `<main>` height, a future layout change), a flex-only header rides away with
+          it while a sticky one stays glued to the top of whichever box actually scrolls. Belt and
+          suspenders — `flexShrink:0` alone was reported to still let this header scroll out of
+          view in practice. */}
       <header style={{
         display: 'flex', alignItems: 'center', gap: 12,
         padding: '12px 20px', borderBottom: '1px solid var(--border)',
         background: 'var(--bg-surface)',
-        flexShrink: 0, minWidth: 0, position: 'relative', zIndex: 2,
+        flexShrink: 0, minWidth: 0, position: 'sticky', top: 0, zIndex: 2,
       }}>
         <div style={{ minWidth: 0, flex: 1 }}>
           <h1 style={{
@@ -101,28 +104,6 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
               icon={<TerminalSquare size={14} />} label={pt ? 'Terminal' : 'Terminal'}
             />
           </div>
-        )}
-
-        {/* Stop what it is doing, WITHOUT ending it. Its own control rather than an item in the
-            menu, because it is the one thing you reach for while watching a session run — and a
-            verb you want in a hurry does not belong two clicks deep. Absent unless the row can take
-            it, since a stop button on an idle session would send Escape into its prompt. */}
-        {stopVerb?.enabled && (
-          <button
-            onClick={() => void act({ id: session.id, action: 'interrupt' })}
-            title={stopVerb.label}
-            aria-label={stopVerb.label}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-              minHeight: 32, padding: '0 11px', borderRadius: 9, cursor: 'pointer',
-              border: '1px solid color-mix(in srgb, var(--accent-red) 45%, transparent)',
-              background: 'color-mix(in srgb, var(--accent-red) 12%, transparent)',
-              color: 'var(--accent-red)', fontFamily: 'inherit', fontSize: 12, fontWeight: 650,
-            }}
-          >
-            <Square size={11} fill="currentColor" />
-            {pt ? 'Parar' : 'Stop'}
-          </button>
         )}
 
         {/* The row's verbs. Every one of them, its label and whether it is enabled arrive already

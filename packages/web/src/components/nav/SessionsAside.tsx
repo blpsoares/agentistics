@@ -15,8 +15,8 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Eye, EyeOff, Filter as FilterIcon, ListFilter, Pin, PinOff, Plus, Search, X } from 'lucide-react'
-import type { Filters, HarnessId } from '@agentistics/core'
+import { Eye, EyeOff, Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import type { Filters, HarnessId, Project } from '@agentistics/core'
 import {
   ACTIVE_STATES, DEFAULT_ORDER, GROUPINGS,
   filterSessions, groupSessions, sessionNotify,
@@ -24,6 +24,7 @@ import {
 } from '@agentistics/tui/control/session-fleet'
 import { controlStrings, sessionWordBook } from '@agentistics/tui/control/i18n'
 import { filterFleet } from '../../lib/fleetFilter'
+import { FiltersBar } from '../FiltersBar'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { dayLabels, daysAgo } from '../../lib/sessionDays'
 import { NewSessionModal } from '../sessions/NewSessionModal'
@@ -37,6 +38,12 @@ import {
  * range, a set of models over history) and was removed from this workspace on purpose (see
  * `fleetFilter.ts`'s header) — a fleet is what is running now, not a historical window. This block
  * builds the narrower `Filters` shape `filterFleet` actually reads and owns no rule of its own.
+ *
+ * Rendered through the SAME `FiltersBar` the dashboard uses (`only` restricted to the four
+ * dimensions above, `hideDateRange` dropping the one control that means nothing for a live fleet)
+ * rather than a second, bespoke filter widget — a fleet's harness/project/repo/model chips are the
+ * same KIND of control the dashboard already has, and inventing a second implementation of "pick a
+ * value to narrow by" is exactly the defect this whole branch exists to remove.
  */
 interface FleetFilterState {
   harnesses: HarnessId[]
@@ -45,10 +52,6 @@ interface FleetFilterState {
   models: string[]
 }
 const EMPTY_FLEET_FILTER: FleetFilterState = { harnesses: [], projects: [], repos: [], models: [] }
-
-function toggleValue<T>(list: readonly T[], value: T): T[] {
-  return list.includes(value) ? list.filter(v => v !== value) : [...list, value]
-}
 
 export interface SessionsAsideProps {
   lang: 'pt' | 'en'
@@ -129,7 +132,6 @@ export function SessionsAside({
    * grouping means or what a band is called.
    */
   const [grouping, setGrouping] = useState<SessionGroupingId>('day')
-  const [groupingOpen, setGroupingOpen] = useState(false)
   /**
    * Only the conversations that are RUNNING. On by default, matching `DEFAULT_SESSION_VIEW` in the
    * terminal cockpit — a machine with months of named work otherwise opens on all of it, and the
@@ -141,7 +143,6 @@ export function SessionsAside({
   const [onlyActive, setOnlyActive] = useState(true)
   /** The fleet's own filter block — harness/project/repo/model. See `FleetFilterState` above. */
   const [fleetFilter, setFleetFilter] = useState<FleetFilterState>(EMPTY_FLEET_FILTER)
-  const [filterOpen, setFilterOpen] = useState(false)
   /**
    * The pinned set, from the module that already owns it.
    *
@@ -185,25 +186,40 @@ export function SessionsAside({
     () => Array.from(new Set(rows.map(r => r.harness).filter(h => h !== ''))).sort() as HarnessId[],
     [rows],
   )
-  const projectOptions = useMemo(
-    () => Array.from(new Set(rows.map(r => r.project).filter(p => p !== ''))).sort(),
-    [rows],
-  )
-  const repoOptions = useMemo(
-    () => Array.from(new Set(rows.map(r => r.repo).filter((r): r is string => r !== undefined))).sort(),
-    [rows],
-  )
   const modelOptions = useMemo(
     () => Array.from(new Set(rows.map(r => r.model).filter((m): m is string => m !== undefined))).sort(),
     [rows],
   )
+  // `FiltersBar`'s project picker and its repo dimension (derived from `Project.gitRemote`) both
+  // read a `Project[]`, which is the dashboard's shape — a fleet row is not one, so this is the
+  // adapter, built ONCE from the live rows rather than from stored data this workspace has none of.
+  // Keyed by `cwd`, which is also what `filterFleet`'s project match falls back to for an exact path.
+  const fleetProjects: Project[] = useMemo(() => {
+    const byPath = new Map<string, Project>()
+    for (const r of rows) {
+      if (r.cwd === '' || byPath.has(r.cwd)) continue
+      byPath.set(r.cwd, {
+        path: r.cwd, name: r.project || r.cwd, sessions: [],
+        ...(r.repo ? { gitRemote: r.repo } : {}),
+      })
+    }
+    return Array.from(byPath.values())
+  }, [rows])
+  const fleetSessionCountByProject = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const r of rows) { if (r.cwd !== '') counts[r.cwd] = (counts[r.cwd] ?? 0) + 1 }
+    return counts
+  }, [rows])
   const fleetFiltersAsFilters: Filters = useMemo(() => ({
     dateRange: 'all', customStart: '', customEnd: '',
     projects: fleetFilter.projects, repos: fleetFilter.repos, models: fleetFilter.models,
     harnesses: fleetFilter.harnesses,
   }), [fleetFilter])
-  const filterCount = fleetFilter.harnesses.length + fleetFilter.projects.length
-    + fleetFilter.repos.length + fleetFilter.models.length
+  const onFleetFiltersChange = (f: Filters) => {
+    setFleetFilter({
+      harnesses: f.harnesses ?? [], projects: f.projects, repos: f.repos ?? [], models: f.models,
+    })
+  }
 
   // `now` is read once per arrangement rather than per row: two rows landing either side of midnight
   // during one render would be banded against two different "today"s.
@@ -325,130 +341,46 @@ export function SessionsAside({
         )}
       </div>
 
-      {/* What the bands stand for. Every dimension the terminal cockpit offers, from the same
-          `GROUPINGS` table — a hand-written list here would be a second answer to what a grouping
-          means, which is the defect the dimension table exists to remove. */}
-      <div style={{ position: 'relative', padding: '0 2px' }}>
-        <button
-          onClick={() => setGroupingOpen(v => !v)}
+      {/* ALWAYS VISIBLE — never behind a second click. A native `<select>` rather than the earlier
+          popover: every dimension the terminal cockpit offers, from the same `GROUPINGS` table, so
+          the two can never disagree about what a grouping means or what a band is called. */}
+      <div style={{ padding: '0 2px' }}>
+        <select
+          value={grouping}
+          onChange={e => setGrouping(e.target.value as SessionGroupingId)}
           style={{
-            display: 'flex', alignItems: 'center', gap: 7, width: '100%',
-            padding: '6px 9px', borderRadius: 8, cursor: 'pointer', minHeight: tap,
-            border: '1px solid var(--border-subtle)', background: 'transparent',
-            color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+            width: '100%', minHeight: tap,
+            padding: '6px 9px', borderRadius: 8, cursor: 'pointer',
+            border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+            color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
           }}
         >
-          <ListFilter size={12} style={{ flexShrink: 0 }} />
-          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {pt ? 'Agrupar: ' : 'Group by: '}{groupWords[grouping] ?? grouping}
-          </span>
-        </button>
-        {groupingOpen && (
-          <>
-            {/* Click-away. A popover that only closes on its own trigger is one people close by
-                navigating away from the page. */}
-            <div
-              onClick={() => setGroupingOpen(false)}
-              style={{ position: 'fixed', inset: 0, zIndex: 10 }}
-            />
-            <div style={{
-              position: 'absolute', top: '100%', left: 2, right: 2, zIndex: 11, marginTop: 4,
-              background: 'var(--bg-surface)', border: '1px solid var(--border)',
-              borderRadius: 10, padding: 4, boxShadow: 'var(--ag-shadow-menu)',
-              maxHeight: 280, overflowY: 'auto',
-            }}>
-              {GROUPINGS.map(g => (
-                <button
-                  key={g}
-                  onClick={() => { setGrouping(g); setGroupingOpen(false) }}
-                  style={{
-                    display: 'block', width: '100%', textAlign: 'left',
-                    padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer', minHeight: tap,
-                    background: g === grouping ? 'var(--anthropic-orange-dim)' : 'transparent',
-                    color: g === grouping ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    fontFamily: 'inherit', fontSize: 12.5, fontWeight: g === grouping ? 650 : 500,
-                  }}
-                >
-                  {groupWords[g] ?? g}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
+          {GROUPINGS.map(g => (
+            <option key={g} value={g}>{pt ? 'Agrupar: ' : 'Group by: '}{groupWords[g] ?? g}</option>
+          ))}
+        </select>
       </div>
 
       {/* The fleet's OWN filter block — harness/project/repo/model, each a fact a row carries
-          itself. Absent from the dashboard's FiltersBar on purpose (see `fleetFilter.ts`); a
-          section with only one option offers nothing to narrow and is left out entirely. */}
-      {(harnessOptions.length > 1 || projectOptions.length > 1 || repoOptions.length > 1
+          itself — through the SAME `FiltersBar` the dashboard uses. A section with only one option
+          offers nothing to narrow, which is what `only` restricted to a dimension with >1 value
+          already achieves inside FiltersBar's own "+ Filter" menu; `hideDateRange` drops the one
+          control that means nothing for a live fleet (see `fleetFilter.ts`'s header). */}
+      {(harnessOptions.length > 1 || fleetProjects.some(p => p.gitRemote) || fleetProjects.length > 1
         || modelOptions.length > 1) && (
-        <div style={{ position: 'relative', padding: '0 2px' }}>
-          <button
-            onClick={() => setFilterOpen(v => !v)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 7, width: '100%',
-              padding: '6px 9px', borderRadius: 8, cursor: 'pointer', minHeight: tap,
-              border: '1px solid var(--border-subtle)',
-              background: filterCount > 0 ? 'var(--anthropic-orange-dim)' : 'transparent',
-              color: filterCount > 0 ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-              fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
-            }}
-          >
-            <FilterIcon size={12} style={{ flexShrink: 0 }} />
-            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {pt ? 'Filtros' : 'Filters'}
-            </span>
-            {filterCount > 0 && (
-              <span style={{ marginLeft: 'auto', fontWeight: 700, opacity: 0.85, flexShrink: 0 }}>{filterCount}</span>
-            )}
-          </button>
-          {filterOpen && (
-            <>
-              <div onClick={() => setFilterOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 10 }} />
-              <div style={{
-                position: 'absolute', top: '100%', left: 2, right: 2, zIndex: 11, marginTop: 4,
-                background: 'var(--bg-surface)', border: '1px solid var(--border)',
-                borderRadius: 10, padding: 8, boxShadow: 'var(--ag-shadow-menu)',
-                maxHeight: 340, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10,
-              }}>
-                <FilterSection
-                  label={pt ? 'Assistente' : 'Harness'} tap={tap}
-                  options={harnessOptions} selected={fleetFilter.harnesses}
-                  render={h => (HARNESS_LABELS as Record<string, string>)[h] ?? h}
-                  onToggle={h => setFleetFilter(f => ({ ...f, harnesses: toggleValue(f.harnesses, h as HarnessId) }))}
-                />
-                <FilterSection
-                  label={pt ? 'Repositório' : 'Repository'} tap={tap}
-                  options={repoOptions} selected={fleetFilter.repos}
-                  onToggle={r => setFleetFilter(f => ({ ...f, repos: toggleValue(f.repos, r) }))}
-                />
-                <FilterSection
-                  label={pt ? 'Projeto' : 'Project'} tap={tap}
-                  options={projectOptions} selected={fleetFilter.projects}
-                  onToggle={p => setFleetFilter(f => ({ ...f, projects: toggleValue(f.projects, p) }))}
-                />
-                <FilterSection
-                  label={pt ? 'Modelo' : 'Model'} tap={tap}
-                  options={modelOptions} selected={fleetFilter.models}
-                  render={shortModel}
-                  onToggle={m => setFleetFilter(f => ({ ...f, models: toggleValue(f.models, m) }))}
-                />
-                {filterCount > 0 && (
-                  <button
-                    onClick={() => setFleetFilter(EMPTY_FLEET_FILTER)}
-                    style={{
-                      alignSelf: 'flex-start', padding: '5px 10px', borderRadius: 7, cursor: 'pointer',
-                      border: '1px solid var(--border-subtle)', background: 'transparent',
-                      color: 'var(--anthropic-orange)', fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
-                    }}
-                  >
-                    {pt ? 'Limpar filtros' : 'Clear filters'}
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </div>
+        <FiltersBar
+          only={['harnesses', 'repos', 'projects', 'models']}
+          hideDateRange
+          compact
+          filters={fleetFiltersAsFilters}
+          onChange={onFleetFiltersChange}
+          projects={fleetProjects}
+          sessionCountByProject={fleetSessionCountByProject}
+          models={modelOptions}
+          harnesses={harnessOptions}
+          users={[]}
+          lang={lang}
+        />
       )}
 
       <button
@@ -516,7 +448,11 @@ export function SessionsAside({
             unavailable={unavailable} searching={query !== ''}
             withheld={onlyActive ? hidden : 0}
             onShowAll={() => setOnlyActive(false)}
-            filterNarrowed={filterCount > 0 && valueFiltered.length < rows.length}
+            filterNarrowed={
+              (fleetFilter.harnesses.length + fleetFilter.projects.length
+                + fleetFilter.repos.length + fleetFilter.models.length) > 0
+              && valueFiltered.length < rows.length
+            }
             onClearFilters={() => setFleetFilter(EMPTY_FLEET_FILTER)}
           />
         ) : groups.map(group => (
@@ -628,48 +564,6 @@ function EmptyReason({
           {pt ? 'Mostrar todas' : 'Show all'}
         </button>
       )}
-    </div>
-  )
-}
-
-/** One dimension of the fleet's own filter block. Absent when there is nothing to narrow. */
-function FilterSection({ label, options, selected, tap, render, onToggle }: {
-  label: string
-  options: readonly string[]
-  selected: readonly string[]
-  tap?: number
-  render?: (v: string) => string
-  onToggle: (v: string) => void
-}) {
-  if (options.length < 2) return null
-  return (
-    <div>
-      <div style={{
-        fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
-        color: 'var(--text-tertiary)', marginBottom: 4,
-      }}>
-        {label}
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-        {options.map(o => {
-          const on = selected.includes(o)
-          return (
-            <button
-              key={o}
-              onClick={() => onToggle(o)}
-              style={{
-                padding: '4px 9px', borderRadius: 999, cursor: 'pointer', minHeight: tap,
-                border: `1px solid ${on ? 'var(--anthropic-orange)' : 'var(--border-subtle)'}`,
-                background: on ? 'var(--anthropic-orange-dim)' : 'transparent',
-                color: on ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                fontFamily: 'inherit', fontSize: 11, fontWeight: on ? 650 : 500,
-              }}
-            >
-              {render ? render(o) : o}
-            </button>
-          )
-        })}
-      </div>
     </div>
   )
 }
