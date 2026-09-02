@@ -1,8 +1,8 @@
 # The VS Code extension
 
-`packages/vscode` puts the session fleet and the dashboard inside the editor: the sessions your
-machine is hosting, what each one is doing, which of them is blocked on you, and every verb the
-terminal cockpit offers — without leaving the window.
+`packages/vscode` puts the session fleet inside the editor: the sessions your machine is hosting,
+what each one is doing, which of them is blocked on you, their live screens to type into, and every
+verb the terminal cockpit offers — without leaving the window.
 
 It is a **client of the local `agentop server`** and nothing else. It never reads
 `~/.agentistics`, never talks to tmux, and never imports the session manager. That is a
@@ -16,11 +16,10 @@ name.
 VS Code window                          the machine
 ┌────────────────────────┐             ┌────────────────────────────┐
 │ Sessions view (webview)│  HTTP       │ agentop server :47291      │
-│ Sessions tab (webview) │ ──────────► │  /api/fleet                │
-│ Dashboard tab (iframe) │             │  /api/fleet/act            │
-│ status bar             │             │  /api/fleet/attach         │
-│ integrated terminal    │ ──tmux───►  │  /api/fleet/new            │
-└────────────────────────┘             │  /api/data                 │
+│ Session tabs (webview) │ ──────────► │  /api/fleet · /act · /new   │
+│ status bar             │             │  /api/fleet/stream · /input │
+│ integrated terminal    │ ──tmux───►  │  /api/fleet/attach          │
+└────────────────────────┘             │  /api/data · /api/rates     │
                                        └────────────────────────────┘
 ```
 
@@ -33,7 +32,6 @@ VS Code window                          the machine
 | **Verbs** | approve · prompt · rename · note · task · open the whole task · finish the task · kill · reopen | `POST /api/fleet/act` |
 | **Attach** | a real integrated terminal running the very `tmux` command the cockpit runs | `GET /api/fleet/attach` |
 | **New session** | the wizard: which assistants this machine can start, where, the task, the first message, model and effort | `GET`/`POST /api/fleet/new` |
-| **Dashboard** | the existing web dashboard, in a frame | `agentistics.dashboardUrl` (`:47292`) |
 | **Status bar** | today's cost, tokens and session count, plus how many sessions are waiting on you | `GET /api/data`, slowly |
 
 ## Two views, and why a session gets its own tab
@@ -210,10 +208,10 @@ The count in the status bar is a level and is only ever shown as one.
 | Setting | Default | What it is |
 |---|---|---|
 | `agentistics.apiUrl` | `http://127.0.0.1:47291` | the local server's api port |
-| `agentistics.dashboardUrl` | *derived* | the dashboard to frame; empty means api port **+ 1**, the server's own rule (`WEB_PORT`) |
 | `agentistics.language` | `auto` | `auto` follows VS Code's display language and falls back to English |
 | `agentistics.notifyOnAttention` | `true` | toast on the transition into blocked |
 | `agentistics.statusBar` | `true` | show today's totals |
+| `agentistics.currency` | `usd` | `brl` converts the status bar with the live rate the server already fetches (`/api/rates`), through the dashboard's own `fmtCost` |
 | `agentistics.statusBarRefreshSeconds` | `300` | `/api/data` is megabytes on a well-used machine, so this timer is deliberately slow; the fleet list refreshes every 5s regardless |
 
 A setting that cannot be parsed falls back to the default **and says so**: a working panel quietly
@@ -232,27 +230,21 @@ cross-harness. Tokens means all four counters (`sessionTokenTotal`).
 An unreachable server prints a sentence, never a zero — `R$ 0,00` from a machine whose server is
 not running is a confident, wrong answer to the one question the item exists to answer.
 
-## The Dashboard tab, and the header that used to make it blank
+## There is no Dashboard tab, and why
 
-The dashboard is FRAMED — the existing React application, not a second implementation of its
-charts, filters, PDF export and settings. Framing is full parity, permanently, for free.
+There was one: the web dashboard, framed in an editor tab. It never rendered. Three separate
+server-side blockers were found and fixed along the way — `frame-ancestors 'none'`, an
+`X-Frame-Options: DENY` that wins over a permissive CSP, and a `Cross-Origin-Resource-Policy:
+same-origin` that a COEP embedder drops silently — and after all three the frame was still blank.
+VS Code's own **Simple Browser**, which is the same webview-and-iframe mechanism, is blank on the
+same URL, so whatever remains is not this extension's configuration.
 
-It did not work at first, and the reason was on the server: every response carried
-`frame-ancestors 'none'` and `X-Frame-Options: DENY`, so the tab rendered an empty rectangle with
-nothing on screen saying why. The fix is deliberately narrow (`security-headers.ts`):
-
-- On a **`local` profile only** — the machine's own dashboard, on 127.0.0.1 — the policy becomes
-  `frame-ancestors vscode-webview:`. A VS Code webview document lives at `vscode-webview://<uuid>`;
-  a web page's origin is `http:` or `https:` and cannot be forged into another scheme, so this
-  admits the editor and nothing a page can ever present. It is deliberately **not**
-  `frame-ancestors 'self'`, which would let any same-origin page frame the dashboard, and not a
-  wildcard.
-- `X-Frame-Options` disappears on that profile, and that is the point rather than an oversight: the
-  header has two values, `DENY` and `SAMEORIGIN`, and neither can express "one scheme". Left at
-  `DENY` beside a permissive `frame-ancestors` it simply wins wherever it is honoured — which is
-  exactly how the blank tab happened. `frame-ancestors` is the modern and more expressive control.
-- Every other profile is untouched: `lan` and `public` keep `'none'` and keep the legacy header.
-  `security-headers.test.ts` pins both directions.
+It was removed rather than left in place. A tab that opens and shows nothing is worse than an
+absent feature: it costs a click, a command, a setting and a page of explanation, and it teaches
+people that the extension is broken. The metrics that were actually being used are in the **status
+bar**, which reads `/api/data` directly, and the dashboard itself is one `agentop` away in a real
+browser. The server-side header changes stay — they are correct on their own terms and they are
+what an editor needs if this is ever revisited.
 
 ## The design system
 

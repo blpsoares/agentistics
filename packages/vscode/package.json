@@ -59,11 +59,6 @@
         "icon": "$(window)"
       },
       {
-        "command": "agentistics.openDashboard",
-        "title": "Agentistics: Open the dashboard",
-        "icon": "$(graph)"
-      },
-      {
         "command": "agentistics.newSession",
         "title": "Agentistics: Start a session here"
       },
@@ -96,11 +91,6 @@
           "command": "agentistics.openSessions",
           "when": "view == agentistics.sessions",
           "group": "navigation@2"
-        },
-        {
-          "command": "agentistics.openDashboard",
-          "when": "view == agentistics.sessions",
-          "group": "navigation@3"
         }
       ]
     },
@@ -111,11 +101,6 @@
           "type": "string",
           "default": "http://127.0.0.1:47291",
           "markdownDescription": "The local `agentop server` API — port 47291 by default. Everything the extension knows comes from here; it never reads `~/.agentistics` or talks to tmux itself."
-        },
-        "agentistics.dashboardUrl": {
-          "type": "string",
-          "default": "http://127.0.0.1:47292",
-          "markdownDescription": "The web dashboard the Dashboard tab embeds — port 47292 by default (the API port + 1). Leave empty to derive it from `#agentistics.apiUrl#`."
         },
         "agentistics.language": {
           "type": "string",
@@ -142,6 +127,15 @@
           "default": 300,
           "minimum": 15,
           "markdownDescription": "How often to re-read today's totals. The fleet list refreshes every 5 seconds regardless — this timer is for `/api/data`, which is megabytes on a well-used machine, so it is deliberately slow."
+        },
+        "agentistics.currency": {
+          "type": "string",
+          "enum": [
+            "usd",
+            "brl"
+          ],
+          "default": "usd",
+          "markdownDescription": "Currency for the status bar. `brl` converts with the live rate the server already fetches (`/api/rates`), through the same formatter the dashboard uses — so the two can never disagree about the same day."
         }
       }
     }

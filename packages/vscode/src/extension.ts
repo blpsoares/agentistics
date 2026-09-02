@@ -11,7 +11,6 @@
 import * as vscode from 'vscode'
 import { AgentopClient } from './api'
 import { resolveEndpoints, type Endpoints } from './config'
-import { openDashboard } from './dashboard'
 import { resolveLang, strings, type Lang } from './i18n'
 import { disposePanels, openFleetPanel, openSessionPanel, retitleSessionPanel } from './panels'
 import { SessionsHub, SessionsViewProvider, themeKind } from './sessions'
@@ -27,27 +26,13 @@ export function activate(context: vscode.ExtensionContext): void {
   function read(): { endpoints: Endpoints; lang: Lang } {
     const config = vscode.workspace.getConfiguration('agentistics')
     return {
-      endpoints: resolveEndpoints({
-        apiUrl: config.get<string>('apiUrl'),
-        dashboardUrl: config.get<string>('dashboardUrl'),
-      }),
+      endpoints: resolveEndpoints({ apiUrl: config.get<string>('apiUrl') }),
       lang: resolveLang(config.get<string>('language'), vscode.env.language),
     }
   }
 
   function setting<T>(key: string, fallback: T): T {
     return vscode.workspace.getConfiguration('agentistics').get<T>(key) ?? fallback
-  }
-
-  function dashboardText() {
-    return {
-      title: 'Agentistics',
-      notice: lang === 'pt'
-        ? `Não dá para carregar ${endpoints.dashboard} — verifique agentistics.dashboardUrl.`
-        : `${endpoints.dashboard} cannot be loaded — check agentistics.dashboardUrl.`,
-      bar: words.dashboardBar ?? 'Showing',
-      openExternal: words.dashboardExternal ?? 'Open in a browser',
-    }
   }
 
   const hub = new SessionsHub(context, {
@@ -57,7 +42,6 @@ export function activate(context: vscode.ExtensionContext): void {
     lang: () => lang,
     notifyOnAttention: () => setting('notifyOnAttention', true),
     onAttention: count => statusBar.setAttention(count),
-    openDashboard: () => void openDashboard(endpoints.dashboard, dashboardText()),
     openTab: id => void openSessionTab(id),
   })
 
@@ -99,8 +83,6 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('agentistics.openSessions', () => {
       openFleetPanel(hub, `Agentistics — ${words.title}`)
     }),
-    vscode.commands.registerCommand('agentistics.openDashboard', () =>
-      openDashboard(endpoints.dashboard, dashboardText())),
     vscode.commands.registerCommand('agentistics.refresh', () => hub.refresh()),
     vscode.commands.registerCommand('agentistics.startServer', () => startServerInTerminal(words)),
     vscode.commands.registerCommand('agentistics.focusSessions', () =>
@@ -176,8 +158,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   async function readToday(): Promise<void> {
     if (!setting('statusBar', true)) return
-    const totals = await new AgentopClient(endpoints.api, lang).today(new Date())
-    statusBar.setTotals(totals)
+    const client = new AgentopClient(endpoints.api, lang)
+    const currency = setting<string>('currency', 'usd') === 'brl' ? 'BRL' : 'USD'
+    // The rate is only asked for when it is going to be used. It rides the same slow timer as the
+    // totals: an exchange rate that moved during the day does not change what today cost enough to
+    // be worth a request of its own.
+    const rate = currency === 'BRL' ? await client.brlRate() : null
+    statusBar.setCurrency(currency, rate)
+    statusBar.setTotals(await client.today(new Date()))
   }
 
   function restartTodayTimer(): void {

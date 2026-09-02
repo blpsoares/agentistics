@@ -207,7 +207,6 @@ function renderHeader(): void {
         if (state.wizard) post({ type: 'newOptions', query: '' })
         renderBody()
       }),
-      button(s('dashboard'), 'btn ghost', () => post({ type: 'openDashboard' })),
       button(s('refresh'), 'btn ghost icon', () => post({ type: 'refresh' })),
     )
   }
@@ -474,11 +473,14 @@ function patchSession(id: string): void {
   // weight than the path under it.
   dom.head.replaceChildren()
   const title = el('div', 'session-title')
-  title.append(stateDot(row))
-  title.append(el('h2', 'session-name', row.title))
-  title.append(iconButton('✎', s('rename'), 'icon-btn', () => {
+  // The pencil goes BEFORE the title. It edits the thing to its right, and a control that acts on
+  // something reads as belonging to it when it leads — on the far side it was one more thing in the
+  // row, next to the state pill it has nothing to do with.
+  title.append(iconButton('✎', s('rename'), 'icon-btn tiny', () => {
     openTextVerb(dom.head, row, 'rename', s('rename'), row.title)
   }))
+  title.append(stateDot(row))
+  title.append(el('h2', 'session-name', row.title))
   title.append(statePill(row))
   dom.head.append(title)
 
@@ -516,14 +518,16 @@ function patchSession(id: string): void {
   // already. Two ways to do one thing is two places to look and one of them is always the wrong
   // guess. What is left here is every verb that has no other home.
   dom.tools.replaceChildren()
-  if (!state.pinned) {
-    dom.tools.append(iconButton('⧉', s('openTab'), 'icon-btn', () => post({ type: 'openTab', id })))
-  }
   if (row.actionable) {
-    dom.tools.append(iconButton('⌨', s('attach'), 'icon-btn', () => post({ type: 'attach', id })))
+    // `>_` is a terminal. A keyboard glyph was a guess at what "attach" means to somebody who has
+    // not read the docs; this is the thing itself.
+    dom.tools.append(labelButton('>_', s('attachShort'), s('attach'), 'action', () => post({ type: 'attach', id })))
   }
-  dom.tools.append(iconButton('⎘', s('copyCommand'), 'icon-btn', () => post({ type: 'copy', text: row.attachCommand })))
-  dom.tools.append(iconButton('🗀', s('openFolder'), 'icon-btn', () => post({ type: 'openFolder', path: row.cwd })))
+  if (!state.pinned) {
+    dom.tools.append(labelButton('⧉', s('tabShort'), s('openTab'), 'action', () => post({ type: 'openTab', id })))
+  }
+  dom.tools.append(labelButton('⧉+', s('copyShort'), s('copyCommand'), 'action', () => post({ type: 'copy', text: row.attachCommand })))
+  dom.tools.append(labelButton('↗', s('folderShort'), s('openFolder'), 'action', () => post({ type: 'openFolder', path: row.cwd })))
 
   // The task verbs, and reopen. `approve` is the option list above, `prompt` is typing into the
   // screen, and the other four are the title's pencil and the two marks — so none of them appear
@@ -532,7 +536,9 @@ function patchSession(id: string): void {
   for (const [action, glyph] of TOOL_VERBS) {
     const verb = row.verbs.find(v => v.action === action)
     if (!verb) continue
-    const b = iconButton(glyph, verb.label, 'icon-btn', () => act(id, action))
+    // The server's own WORD is the label — it is the cockpit's wording, and inventing a shorter one
+    // here would be this panel disagreeing with the CLI about what a verb is called.
+    const b = labelButton(glyph, verb.label, verb.label, 'action', () => act(id, action))
     b.disabled = !verb.enabled
     // Present and disabled with its reason, never removed: a control that vanishes says nothing
     // about why.
@@ -544,13 +550,37 @@ function patchSession(id: string): void {
   if (kill) {
     // Red, and it ASKS. Stopping a session ends work in progress, and the one control on this
     // screen that cannot be undone should not sit among the others looking like them.
-    const stop = iconButton('⏹', kill.label, 'icon-btn danger', () => {
+    const stop = labelButton('■', kill.label, kill.label, 'action danger', () => {
       post({ type: 'kill', id, title: row.title })
     })
     stop.disabled = !kill.enabled
     if (kill.reason) stop.title = `${kill.label} — ${kill.reason}`
     dom.tools.append(stop)
   }
+}
+
+/**
+ * A glyph AND a word.
+ *
+ * An icon on its own is a control you learn by clicking — a keyboard for "attach", a folder for
+ * "open the folder" and a square for "stop" are all guesses at somebody else's mental model. The
+ * word removes the guess; the glyph is what makes the row scannable once the word has been read
+ * once. Under width pressure the CSS drops the word and the tooltip carries it.
+ */
+function labelButton(
+  glyph: string,
+  word: string,
+  title: string,
+  className: string,
+  onClick: () => void,
+): HTMLButtonElement {
+  const b = el('button', className)
+  b.append(el('span', 'action-glyph', glyph))
+  b.append(el('span', 'action-word', word))
+  b.title = title
+  b.setAttribute('aria-label', title)
+  b.addEventListener('click', onClick)
+  return b
 }
 
 /**
@@ -561,8 +591,8 @@ function patchSession(id: string): void {
  * the marks, `kill` is the red one below.
  */
 const TOOL_VERBS: readonly (readonly [FleetActionId, string])[] = [
-  ['resume', '⟲'],
-  ['openTask', '⧈'],
+  ['resume', '↻'],
+  ['openTask', '⚑'],
   ['finishTask', '✓'],
 ]
 

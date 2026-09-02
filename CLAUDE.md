@@ -1688,11 +1688,19 @@ packages/vscode/src/
   Cmd/Win are never swallowed, or the editor stops working inside the panel. Ordering is by
   construction: printable characters batched 25ms into one `text`, every send awaiting the previous
   one to the SAME session, so `abc`+Enter cannot land as Enter+`abc`.
-- **The dashboard is FRAMED, and that took a server change.** Every response carried
-  `frame-ancestors 'none'` + `X-Frame-Options: DENY`, so the tab was a blank rectangle. On a `local`
-  profile only, the policy is now `frame-ancestors vscode-webview:` and the legacy header is
-  OMITTED — it has two values and neither says "one scheme", so left at `DENY` it just wins. No page
-  gains anything: a page's origin cannot be another scheme.
+- **There is NO dashboard tab, and the removal is the finding.** Framing the web dashboard in a
+  webview was tried and abandoned. Three server-side blockers were found and fixed on the way —
+  `frame-ancestors 'none'`, an `X-Frame-Options: DENY` that wins over a permissive CSP, and a
+  `Cross-Origin-Resource-Policy: same-origin` that a COEP embedder drops in silence — and the frame
+  was STILL blank; VS Code's own Simple Browser, the same mechanism, is blank on the same URL. A tab
+  that opens and shows nothing is worse than an absent feature: it costs a click, a command, a
+  setting and a page of explanation, and it teaches people the extension is broken. The header
+  changes stay (they are correct on their own terms, and gated on the `local` profile) — see
+  `docs/vscode-extension.md`.
+- **The status bar can price in BRL** (`agentistics.currency`), through `@agentistics/core`'s own
+  `fmtCost` and the rate `/api/rates` already caches — the same rate and formatter the dashboard
+  uses, so the two can never disagree about one day. No rate means DOLLARS, never a converted figure
+  invented from a guess.
 
 ## Important rules
 

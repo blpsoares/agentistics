@@ -188,7 +188,6 @@ export type ViewMessage =
   | { type: 'openFolder'; path: string }
   | { type: 'newOptions'; query: string }
   | { type: 'spawn'; request: SpawnRequest; attach: boolean }
-  | { type: 'openDashboard' }
   | { type: 'startServer' }
   /** Start / stop receiving this session's screen. The host shares one stream per session. */
   | { type: 'watch'; id: string }

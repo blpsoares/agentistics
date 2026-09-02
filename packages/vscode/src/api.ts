@@ -174,6 +174,25 @@ export class AgentopClient {
     }
   }
 
+  /**
+   * The live USD→BRL rate the server already fetches and caches (`/api/rates`).
+   *
+   * Read from the server rather than converted here: it is the SAME rate the dashboard prices with,
+   * so the two surfaces can never show a different number for the same day. `null` when it cannot
+   * be read, and a null rate means the status bar shows dollars rather than a converted figure it
+   * invented.
+   */
+  async brlRate(): Promise<number | null> {
+    try {
+      const res = await fetch(this.url('/api/rates'), { signal: AbortSignal.timeout(TIMEOUT_MS) })
+      if (!res.ok) return null
+      const json = await res.json() as { brlRate?: unknown }
+      return typeof json.brlRate === 'number' && json.brlRate > 0 ? json.brlRate : null
+    } catch {
+      return null
+    }
+  }
+
   private networkError(): string {
     return this.lang === 'pt'
       ? 'Não foi possível falar com o agentop server desta máquina.'

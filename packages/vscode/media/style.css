@@ -433,6 +433,44 @@ button.chip { cursor: pointer; }
   margin-top: 8px;
 }
 
+/*
+ * A glyph AND a word. The word is what makes the control readable the first time; the glyph is what
+ * makes the row scannable afterwards. Below ~420px the word is dropped and the tooltip carries it —
+ * a wrapped three-row button strip costs more than the words save.
+ */
+.action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 11.5px;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.action:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--text-primary); border-color: var(--border-strong); }
+.action:disabled { opacity: .4; cursor: default; }
+.action-glyph {
+  font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-primary);
+}
+.action:disabled .action-glyph { color: inherit; }
+.action.danger { color: var(--red); border-color: rgba(239, 68, 68, .4); }
+.action.danger .action-glyph { color: var(--red); }
+.action.danger:hover:not(:disabled) { background: var(--red); color: #fff; border-color: var(--red); }
+.action.danger:hover:not(:disabled) .action-glyph { color: #fff; }
+
+@media (max-width: 420px) {
+  .action-word { display: none; }
+  .action { padding: 4px 7px; }
+}
+
 .approval {
   margin-top: var(--gap);
   padding: 10px 11px;

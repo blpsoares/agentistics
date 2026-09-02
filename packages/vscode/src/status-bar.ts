@@ -13,6 +13,7 @@
  */
 
 import * as vscode from 'vscode'
+import { fmtCost } from '@agentistics/core'
 import { fill } from './i18n'
 import { shortTokens, type TodayTotals } from './today'
 
@@ -22,10 +23,20 @@ export class StatusBar {
   /** `null` until the first read has come back — "not asked yet" is not "no answer". */
   private read = false
   private attention = 0
+  private currency: 'USD' | 'BRL' = 'USD'
+  /**
+   * The live USD→BRL rate, or `null`.
+   *
+   * A null rate with BRL selected shows DOLLARS, not a converted figure invented from a guess —
+   * the same rule the rest of this product follows about a number it cannot produce.
+   */
+  private rate: number | null = null
 
   constructor(private strings: Record<string, string>) {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
-    this.item.command = 'agentistics.openDashboard'
+    // Clicking it goes to the fleet — the dashboard tab it used to open is gone (a VS Code webview
+    // could not load the dashboard, and a control that does nothing is worse than no control).
+    this.item.command = 'agentistics.focusSessions'
     this.item.name = 'Agentistics'
   }
 
@@ -37,6 +48,13 @@ export class StatusBar {
   setTotals(totals: TodayTotals | null): void {
     this.totals = totals
     this.read = true
+    this.render()
+  }
+
+  /** The chosen currency, and the rate to reach it with. */
+  setCurrency(currency: 'USD' | 'BRL', rate: number | null): void {
+    this.currency = currency
+    this.rate = rate
     this.render()
   }
 
@@ -71,11 +89,11 @@ export class StatusBar {
       return
     }
 
-    const cost = this.totals.costUSD.toLocaleString('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      maximumFractionDigits: 2,
-    })
+    // `fmtCost` from `@agentistics/core` — the dashboard's own formatter, so the same day reads the
+    // same in both places, down to the separators. BRL without a rate falls back to dollars rather
+    // than printing a converted number nobody can stand behind.
+    const useBrl = this.currency === 'BRL' && this.rate !== null
+    const cost = fmtCost(this.totals.costUSD, useBrl ? 'BRL' : 'USD', useBrl ? this.rate! : 1)
     this.item.text = `$(pulse) ${fill(
       this.strings.statusToday ?? '{0} {1} {2}',
       cost,

@@ -9,8 +9,7 @@ Your coding-assistant fleet and your usage metrics, inside the editor.
 - **Attach** — a real integrated terminal running the very `tmux` command the terminal cockpit
   runs, with the real detach key printed beside it.
 - **New session** — pick an assistant, a directory, a task and a first message.
-- **Dashboard** — the full web dashboard in an editor tab.
-- **Status bar** — today's cost and tokens, and how many sessions are waiting on you.
+- **Status bar** — today's cost and tokens (in USD or BRL), and how many sessions are waiting on you.
 
 It is a client of the local `agentop server` (port 47291) — the same server the web dashboard and
 the terminal cockpit read. Start it with `agentop server`; the panel offers to do that for you when

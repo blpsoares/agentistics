@@ -35,7 +35,6 @@ export interface HubDeps {
   lang(): 'en' | 'pt'
   notifyOnAttention(): boolean
   onAttention(count: number): void
-  openDashboard(): void
   /** Open one session as its own editor tab. Wired in `extension.ts`, which owns panel creation. */
   openTab(id: string): void
 }
@@ -332,9 +331,6 @@ export class SessionsHub implements vscode.Disposable {
         }
         return
       }
-      case 'openDashboard':
-        this.deps.openDashboard()
-        return
       case 'startServer':
         startServerInTerminal(this.deps.strings())
         return
