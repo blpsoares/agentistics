@@ -34,8 +34,6 @@ export interface ChannelState {
   phase: ChannelPhase
   /** Ids of keystrokes sent but not yet acked, in send order (FIFO). */
   pending: number[]
-  /** Monotonic id handed to the next sent keystroke — lets the UI/tests identify one and time it (A3). */
-  nextId: number
   /** The verbatim failure reason on screen while `undelivered`, or null. */
   error: string | null
   /** A6 — a send failed or the channel dropped with keys in flight. Cleared only on a fresh open. */
@@ -46,7 +44,6 @@ export const INITIAL_CHANNEL: ChannelState = {
   armed: false,
   phase: 'idle',
   pending: [],
-  nextId: 1,
   error: null,
   undelivered: false,
 }
@@ -57,7 +54,10 @@ export type ChannelAction =
   | { type: 'connecting' }
   | { type: 'open' }
   | { type: 'closed'; reason?: string }
-  | { type: 'send' }
+  // The id is the CLIENT's monotonic seq, assigned by the transport (a ref) at send time — not by the
+  // reducer — so a burst of onData events can't collide reading stale state between renders (A2). The
+  // reducer only accounts for what the transport says it sent.
+  | { type: 'send'; id: number }
   | { type: 'ack'; id: number; ok: boolean; reason?: string }
 
 /** A key may be transmitted only while consent stands and the channel is open. */
@@ -105,7 +105,7 @@ export function channelReducer(state: ChannelState, action: ChannelAction): Chan
 
     case 'send':
       if (!canSend(state)) return state
-      return { ...state, pending: [...state.pending, state.nextId], nextId: state.nextId + 1 }
+      return { ...state, pending: [...state.pending, action.id] }
 
     case 'ack': {
       // Only meaningful while a key is actually in flight — a late/duplicate ack (pending drained by

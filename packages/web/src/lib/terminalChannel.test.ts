@@ -16,18 +16,18 @@ function run(start: ChannelState, ...actions: Parameters<typeof channelReducer>[
 
 describe('consent (mirrors #269) — raw typing is an explicit, revocable opt-in', () => {
   it('starts disarmed, idle, with nothing pending', () => {
-    expect(INITIAL_CHANNEL).toEqual({ armed: false, phase: 'idle', pending: [], nextId: 1, error: null, undelivered: false })
+    expect(INITIAL_CHANNEL).toEqual({ armed: false, phase: 'idle', pending: [], error: null, undelivered: false })
     expect(canSend(INITIAL_CHANNEL)).toBe(false)
   })
 
   it('cannot send while disarmed even if a channel were open', () => {
-    const s = channelReducer({ ...INITIAL_CHANNEL, phase: 'open' }, { type: 'send' })
+    const s = channelReducer({ ...INITIAL_CHANNEL, phase: 'open' }, { type: 'send', id: 1 })
     expect(pendingCount(s)).toBe(0)
     expect(canSend(s)).toBe(false)
   })
 
   it('disarm revokes consent and drops everything (a session you stopped driving keeps nothing)', () => {
-    const busy = run(open, { type: 'send' }, { type: 'send' })
+    const busy = run(open, { type: 'send', id: 1 }, { type: 'send', id: 2 })
     expect(pendingCount(busy)).toBe(2)
     expect(channelReducer(busy, { type: 'disarm' })).toEqual(INITIAL_CHANNEL)
   })
@@ -42,21 +42,20 @@ describe('channel lifecycle', () => {
 })
 
 describe('honest delivery (A6) — a key is never accounted delivered until its ack lands', () => {
-  it('send adds one pending keystroke, in order, each with a rising id', () => {
-    const s = run(open, { type: 'send' }, { type: 'send' })
+  it('send records the transport-assigned id, in order', () => {
+    const s = run(open, { type: 'send', id: 1 }, { type: 'send', id: 2 })
     expect(s.pending).toEqual([1, 2])
-    expect(s.nextId).toBe(3)
   })
 
   it('an OK ack for the expected id pops that key (verifiable pairing, not inferred FIFO)', () => {
-    const s = run(open, { type: 'send' }, { type: 'send' }, { type: 'ack', id: 1, ok: true })
+    const s = run(open, { type: 'send', id: 1 }, { type: 'send', id: 2 }, { type: 'ack', id: 1, ok: true })
     expect(s.pending).toEqual([2])
     expect(s.undelivered).toBe(false)
     expect(s.error).toBeNull()
   })
 
   it('a FAILED ack pops the key and surfaces the verbatim reason, marking undelivered', () => {
-    const s = run(open, { type: 'send' }, { type: 'ack', id: 1, ok: false, reason: 'session gone' })
+    const s = run(open, { type: 'send', id: 1 }, { type: 'ack', id: 1, ok: false, reason: 'session gone' })
     expect(s.pending).toEqual([])
     expect(s.undelivered).toBe(true)
     expect(s.error).toBe('session gone')
@@ -65,7 +64,7 @@ describe('honest delivery (A6) — a key is never accounted delivered until its 
   it('an ack whose id is NOT the expected head is a verifiable fault, never silently accepted', () => {
     // With an ordered channel + sequential server this cannot happen; if it does (reconnect, a lost
     // message), the mismatch is DETECTED and surfaced — the whole point of an id over inferred FIFO.
-    const s = run(open, { type: 'send' }, { type: 'send' }, { type: 'ack', id: 2, ok: true })
+    const s = run(open, { type: 'send', id: 1 }, { type: 'send', id: 2 }, { type: 'ack', id: 2, ok: true })
     expect(s.undelivered).toBe(true)
     expect(s.error).toBe('delivery confirmation out of order')
     // The expected key is NOT popped on a mismatch — the accounting stays honest.
@@ -73,13 +72,13 @@ describe('honest delivery (A6) — a key is never accounted delivered until its 
   })
 
   it('a stale/duplicate ack with no pending keys is ignored', () => {
-    const s = run(open, { type: 'send' }, { type: 'ack', id: 1, ok: true }, { type: 'ack', id: 1, ok: true })
+    const s = run(open, { type: 'send', id: 1 }, { type: 'ack', id: 1, ok: true }, { type: 'ack', id: 1, ok: true })
     expect(s.pending).toEqual([])
     expect(s.undelivered).toBe(false)
   })
 
   it('the channel dropping WITH keys in flight is an honest failure, not silence (A6)', () => {
-    const s = run(open, { type: 'send' }, { type: 'send' }, { type: 'closed', reason: 'network lost' })
+    const s = run(open, { type: 'send', id: 1 }, { type: 'send', id: 2 }, { type: 'closed', reason: 'network lost' })
     expect(s.phase).toBe('closed')
     expect(s.undelivered).toBe(true)
     expect(s.error).toBe('network lost')
@@ -88,14 +87,14 @@ describe('honest delivery (A6) — a key is never accounted delivered until its 
   })
 
   it('the channel dropping with NOTHING in flight is a clean close, no false alarm', () => {
-    const s = run(open, { type: 'send' }, { type: 'ack', id: 1, ok: true }, { type: 'closed' })
+    const s = run(open, { type: 'send', id: 1 }, { type: 'ack', id: 1, ok: true }, { type: 'closed' })
     expect(s.phase).toBe('closed')
     expect(s.undelivered).toBe(false)
     expect(s.error).toBeNull()
   })
 
   it('reopening the channel clears a prior failure so a fresh attempt starts honest', () => {
-    const dropped = run(open, { type: 'send' }, { type: 'closed', reason: 'network lost' })
+    const dropped = run(open, { type: 'send', id: 1 }, { type: 'closed', reason: 'network lost' })
     const back = run(dropped, { type: 'connecting' }, { type: 'open' })
     expect(back.phase).toBe('open')
     expect(back.undelivered).toBe(false)
@@ -104,7 +103,7 @@ describe('honest delivery (A6) — a key is never accounted delivered until its 
   })
 
   it('a late ack arriving after the channel closed cannot resurrect send-ability', () => {
-    const s = run(open, { type: 'send' }, { type: 'closed', reason: 'x' }, { type: 'ack', id: 1, ok: true })
+    const s = run(open, { type: 'send', id: 1 }, { type: 'closed', reason: 'x' }, { type: 'ack', id: 1, ok: true })
     expect(canSend(s)).toBe(false)
     expect(s.phase).toBe('closed')
   })

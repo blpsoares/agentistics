@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { classifyInput, type KeyIntent } from './terminalKeys'
+import { classifyInput, inputReasonText, type KeyIntent } from './terminalKeys'
 
 /** Small helper: assert a chunk classifies to an exact intent. */
 function intent(data: string): KeyIntent {
@@ -96,5 +96,21 @@ describe('allowlist — nothing else reaches the process', () => {
     // than silently reinterpret half of it as text and half as a key.
     expect(intent('ab\r')).toEqual({ kind: 'blocked', reason: 'unsupported-sequence' })
     expect(intent('a\x03')).toEqual({ kind: 'blocked', reason: 'unsupported-sequence' })
+  })
+})
+
+describe('inputReasonText — the server\'s stable reason codes made human (both languages)', () => {
+  it('maps every documented code in pt and en', () => {
+    for (const code of ['bad_json', 'bad_message', 'empty_text', 'text_too_long', 'bad_key', 'send_failed', 'error'] as const) {
+      expect(inputReasonText(code, 'en').length).toBeGreaterThan(0)
+      expect(inputReasonText(code, 'pt').length).toBeGreaterThan(0)
+    }
+  })
+  it('the load-bearing one — a keystroke that did not reach the process — reads as not delivered', () => {
+    expect(inputReasonText('send_failed', 'en').toLowerCase()).toContain('not delivered')
+    expect(inputReasonText('send_failed', 'pt').toLowerCase()).toContain('não')
+  })
+  it('an unknown code is shown verbatim rather than swallowed', () => {
+    expect(inputReasonText('some_new_code', 'en')).toBe('some_new_code')
   })
 })

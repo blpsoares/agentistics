@@ -104,3 +104,26 @@ export function classifyInput(data: string): KeyIntent {
 
   return { kind: 'blocked', reason: 'unsupported-sequence' }
 }
+
+/**
+ * The server's ack `reason` is a STABLE CODE (`docs/terminal-write-channel.md`), not prose — so the
+ * client owns the wording and the language. An unknown code is shown verbatim rather than swallowed:
+ * a reason the user cannot read still beats a silent failure.
+ */
+const REASON_TEXT: Record<string, { en: string; pt: string }> = {
+  bad_json: { en: 'the terminal sent a malformed message', pt: 'o terminal enviou uma mensagem malformada' },
+  bad_message: { en: 'the terminal sent an invalid message', pt: 'o terminal enviou uma mensagem inválida' },
+  empty_text: { en: 'nothing to send', pt: 'nada para enviar' },
+  text_too_long: { en: 'that input was too long to send at once', pt: 'essa entrada é longa demais para enviar de uma vez' },
+  bad_key: { en: 'that key is not allowed', pt: 'essa tecla não é permitida' },
+  send_failed: { en: 'not delivered — the key did not reach the session', pt: 'não entregue — a tecla não chegou à sessão' },
+  error: { en: 'the write channel hit an error', pt: 'o canal de escrita encontrou um erro' },
+  // Client-side close reasons (a socket close carries no server code): before-open vs after-open.
+  channel_unavailable: { en: 'the write channel could not be opened', pt: 'não foi possível abrir o canal de escrita' },
+  connection_lost: { en: 'the connection dropped; recent keys may not have been delivered', pt: 'a conexão caiu; as últimas teclas podem não ter sido entregues' },
+}
+
+export function inputReasonText(code: string, lang: 'pt' | 'en'): string {
+  const entry = REASON_TEXT[code]
+  return entry ? entry[lang] : code
+}
