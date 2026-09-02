@@ -28,7 +28,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, Loader, Paperclip, Send, X } from 'lucide-react'
+import { ArrowDown, Loader, Paperclip, RotateCcw, Send, X } from 'lucide-react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { ApprovalCard } from './ApprovalCard'
@@ -175,6 +175,20 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const blocked = (session.approvalLines?.length ?? 0) > 0
   const loading = payload === null
   const canPrompt = !loading && session.actionable && !blocked && payload.live !== false
+  /** The row's own reopen verb, if it has one. Enabled by the server, never inferred here. */
+  const reopen = row?.verbs.find(v => v.action === 'resume')
+  const [reopening, setReopening] = useState(false)
+
+  async function reopenNow() {
+    if (!reopen?.enabled || reopening) return
+    setReopening(true)
+    const out = await act({ id: session.id, action: 'resume' })
+    setReopening(false)
+    setNotice(out.message)
+    // The new row arrives on the next fleet poll under a NEW id; the page follows it there. Nothing
+    // to do here but say what happened — navigating from inside the composer would be this
+    // component deciding where the app goes.
+  }
 
   /**
    * What the session is DOING, from the newest ASSISTANT turn.
@@ -478,8 +492,50 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                 </div>
               )}
 
+              {/* A session that is not running cannot be written to, and a disabled field is a dead
+                  end. The conversation is still fully readable above; what is offered here is the
+                  way BACK INTO it. The verb is the row's own `resume`, which the server enables only
+                  when it has a conversation to reopen — where it does not, the sentence says why
+                  rather than a button that fails. */}
+              {!canPrompt && !blocked && reopen && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                  padding: '10px 12px', borderRadius: 12,
+                  background: 'var(--bg-base)', border: '1px solid var(--border)',
+                }}>
+                  <span style={{ flex: 1, minWidth: 160, fontSize: 12, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+                    {pt
+                      ? 'Esta sessão não está rodando, então não dá para escrever nela.'
+                      : 'This session is not running, so there is nothing to write to.'}
+                  </span>
+                  <button
+                    onClick={() => void reopenNow()}
+                    disabled={!reopen.enabled || reopening}
+                    title={reopen.reason}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
+                      padding: '9px 14px', borderRadius: 9, border: 'none',
+                      background: reopen.enabled ? 'var(--anthropic-orange)' : 'var(--bg-elevated)',
+                      color: reopen.enabled ? '#fff' : 'var(--text-tertiary)',
+                      cursor: reopen.enabled && !reopening ? 'pointer' : 'default',
+                      fontFamily: 'inherit', fontSize: 12.5, fontWeight: 650,
+                    }}
+                  >
+                    {reopening ? <Loader size={14} className="ag-working-spin" /> : <RotateCcw size={14} />}
+                    {reopen.label}
+                  </button>
+                  {/* Why it cannot be reopened, in the row's own words. */}
+                  {!reopen.enabled && reopen.reason && (
+                    <span style={{ width: '100%', fontSize: 11, lineHeight: 1.45, color: 'var(--text-tertiary)' }}>
+                      {reopen.reason}
+                    </span>
+                  )}
+                </div>
+              )}
+
               <div style={{
-                display: 'flex', alignItems: 'flex-end', gap: 8,
+                display: (!canPrompt && !blocked && reopen) ? 'none' : 'flex',
+                alignItems: 'flex-end', gap: 8,
                 background: 'var(--bg-base)', border: '1px solid var(--border)',
                 borderRadius: 12, padding: 8,
                 opacity: canPrompt ? 1 : 0.55,

@@ -1328,7 +1328,11 @@ export default function AppLayout() {
     // what turns that into the enrolment screen, which is the only thing that can clear it.
     if (teamSession?.central && (String(error).includes('401') || String(error).includes('403'))) reloadIam()
   }, [error, teamSession?.required, teamSession?.central, reloadIam])
-  const [theme, setThemeState] = useState<Theme>('dark')
+  const [theme, setThemeState] = useState<Theme>(() => {
+    // The LOCAL copy decides the first paint; `/api/preferences` corrects it a moment later if they
+    // disagree. Starting from a constant meant a light-theme user got a dark flash on every load.
+    try { return localStorage.getItem('agentistics-theme') === 'light' ? 'light' : 'dark' } catch { return 'dark' }
+  })
   const [currency, setCurrencyState] = useState<'USD' | 'BRL'>('USD')
 
   // Surface server-pushed notifications (member connection/auth errors) as toasts + bell.
@@ -1340,7 +1344,27 @@ export default function AppLayout() {
   useEffect(() => { if (isCentral) setLiveUpdates(true) }, [isCentral, setLiveUpdates])
 
   const setLang = useCallback((l: Lang) => setLangState(l), [])
-  const setTheme = useCallback((t: Theme) => setThemeState(t), [])
+  /**
+   * Set the theme AND remember it.
+   *
+   * It used to only set state, so the sidebar's and the mobile sheet's toggles changed the theme
+   * for exactly as long as the tab lived and a refresh came back dark — only the Settings modal
+   * ever wrote it. Reported.
+   *
+   * BOTH stores, deliberately. `preferences.json` is the durable one and is what a second browser
+   * or a fresh profile reads; `localStorage` is what the pre-React guard in `index.html` reads to
+   * stamp `data-theme` BEFORE the bundle loads, which is what stops a light-theme user seeing a
+   * dark flash on every load. Writing only the server would keep that flash forever.
+   */
+  const setTheme = useCallback((t: Theme) => {
+    setThemeState(t)
+    try { localStorage.setItem('agentistics-theme', t) } catch { /* private mode */ }
+    fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme: t }),
+    }).catch(() => { /* the local copy still holds for this browser */ })
+  }, [])
   const setCurrency = useCallback((c: 'USD' | 'BRL') => setCurrencyState(c), [])
 
   // How this machine is actually billed. Local only — it never travels to a central.
@@ -1610,7 +1634,11 @@ export default function AppLayout() {
       setCostBasisState(nextBilling.costBasis ?? 'api')
       setComparisons(normalizeComparisons((prefs as Record<string, unknown>).comparisons))
       if (prefs.lang) setLangState(prefs.lang)
-      if (prefs.theme) setThemeState(prefs.theme)
+      if (prefs.theme) {
+        setThemeState(prefs.theme)
+        // The server is the durable answer; mirror it locally so the next first paint agrees.
+        try { localStorage.setItem('agentistics-theme', prefs.theme) } catch { /* private mode */ }
+      }
       if (prefs.currency) setCurrencyState(prefs.currency)
       if (prefs.cardOrder) setCardOrder(migrateCardOrder(prefs.cardOrder))
       if (prefs.chatModel) setChatModel(prefs.chatModel as ChatModelId)
@@ -2435,7 +2463,22 @@ export default function AppLayout() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth), paddingTop: isMobile ? 0 : TOPBAR_H, transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+    <div style={{
+      // The sessions workspace is a FIXED-HEIGHT column that does not scroll as a page: the filters
+      // bar and the session pane are its two children, and the pane owns the scrolling. `minHeight`
+      // was the bug behind "the header is still not fixed" — with the filters bar above it, header
+      // plus a `100vh - topbar` pane exceeds the viewport, so the whole PAGE scrolled and took the
+      // session's own header with it. Every other page keeps `minHeight`, because a document should
+      // grow past the fold.
+      ...(inSessionsWorkspace
+        ? { height: isMobile ? '100dvh' : '100vh', overflow: 'hidden' }
+        : { minHeight: '100vh' }),
+      background: 'var(--bg-base)', display: 'flex', flexDirection: 'column',
+      paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth),
+      paddingTop: isMobile ? 0 : TOPBAR_H,
+      boxSizing: 'border-box',
+      transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)',
+    }}>
       {/* The billing prompt. Mounted HERE, after the archive consent gate's early return above, so
           the two can never stack on a first launch — one blocking modal behind one dismissible one
           is a pile nobody reads. It is the same component for the first-run invite and for the
@@ -2842,9 +2885,13 @@ export default function AppLayout() {
         inSessionsWorkspace
           ? {
               width: '100%', boxSizing: 'border-box', flex: 1, minWidth: 0,
-              // The exact window minus the fixed strip. Not `minHeight`: this pane must not grow,
-              // or its inner scrollers never receive a bounded height and scroll the page instead.
-              height: isMobile ? 'calc(100dvh - var(--mobile-nav-h))' : `calc(100vh - ${TOPBAR_H}px)`,
+              // `flex: 1` + `minHeight: 0` inside the fixed-height column above. NOT a viewport
+              // calculation: the filters bar is a sibling here, so any `100vh - constant` is wrong
+              // by whatever height that bar happens to have — which is what made the pane taller
+              // than its room and pushed the page into scrolling.
+              minHeight: 0,
+              // The mobile bottom nav is fixed over the page, so the pane has to end above it.
+              ...(isMobile ? { paddingBottom: 'var(--mobile-nav-h)' } : {}),
               display: 'flex', flexDirection: 'column', overflow: 'hidden',
             }
           : {

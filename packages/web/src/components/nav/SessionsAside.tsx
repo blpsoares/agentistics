@@ -22,7 +22,7 @@ import {
   type ControlSession, type SessionGroupingId,
 } from '@agentistics/tui/control/session-fleet'
 import { controlStrings, sessionWordBook } from '@agentistics/tui/control/i18n'
-import { HARNESS_COLORS } from '../../lib/harness'
+import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { dayLabels, daysAgo } from '../../lib/sessionDays'
 import { NewSessionModal } from '../sessions/NewSessionModal'
 import {
@@ -75,6 +75,18 @@ const STATE_WASH: Record<string, string> = {
  * the moment somebody who pinned it wants it back. Where no conversation link can ever exist
  * (codex, kimi, gemini, agy — see `conversationBlind`) the row id is the only key there is.
  */
+/**
+ * A model id, shortened for a narrow column.
+ *
+ * The provider prefix and the dated suffix are what a person already knows or does not care about
+ * in a sidebar — `anthropic/claude-sonnet-4-5-20250929` becomes `claude-sonnet-4-5`. The full id is
+ * on the row's `title` attribute, so nothing is lost.
+ */
+function shortModel(model: string): string {
+  const bare = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model
+  return bare.replace(/-\d{8}$/, '')
+}
+
 function pinKeyOf(row: ControlSession): string {
   return row.conversationId ?? row.id
 }
@@ -493,6 +505,7 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen }: {
       onMouseLeave={e => {
         if (!selected) e.currentTarget.style.background = STATE_WASH[session.state] ?? 'transparent'
       }}
+      title={session.model ? `${session.title}\n${session.model}` : session.title}
     >
       {/* The dot marks a row that WANTS somebody. It never carries the message alone — the state
           word is beside it — because a fact said only in colour is a fact some readers never get. */}
@@ -512,21 +525,39 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen }: {
           {session.title}
         </span>
         <span style={{
+          display: 'flex', alignItems: 'center', gap: 5, minWidth: 0,
           fontSize: 10.5, color: wants ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
-          {session.stateLabel}
-          {session.task ? ` · ${session.task}` : ''}
+          <span style={{ flexShrink: 0 }}>{session.stateLabel}</span>
+          <span style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+          <span style={{
+            color: (HARNESS_COLORS as Record<string, string>)[session.harness] ?? 'var(--text-tertiary)',
+            fontWeight: 650, flexShrink: 0,
+          }}>
+            {(HARNESS_LABELS as Record<string, string>)[session.harness] ?? session.harness}
+          </span>
+          {/* The model, when the row knows one. A row that does not is not "some default model" —
+              it is unknown, and inventing a name there is the confident-zero defect in words. */}
+          {session.model && (
+            <>
+              <span style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {shortModel(session.model)}
+              </span>
+            </>
+          )}
+          {session.task && (
+            <>
+              <span style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {session.task}
+              </span>
+            </>
+          )}
         </span>
       </span>
-      <span
-        aria-hidden
-        title={session.harness}
-        style={{
-          width: 5, height: 5, borderRadius: 3, flexShrink: 0,
-          background: (HARNESS_COLORS as Record<string, string>)[session.harness] ?? 'var(--text-tertiary)',
-        }}
-      />
+      {/* The assistant, NAMED. It was a 5px dot, which carries the fact in colour alone — and a
+          colour is not a name. The model sits with it on the meta line below. */}
       {/* The pin lives on the row rather than in a menu: it is a one-click decision about the row
           you are looking at. `role="button"` on a span, because a <button> inside a <button> is
           invalid HTML and browsers resolve it by dropping one of them. */}

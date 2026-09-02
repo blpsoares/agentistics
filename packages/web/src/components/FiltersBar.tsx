@@ -11,6 +11,20 @@ import { format } from 'date-fns'
 import { useIsMobile } from '../hooks/useIsMobile'
 
 interface Props {
+  /**
+   * The FLEET's own dimension: keep only what is running.
+   *
+   * Not part of `Filters`, and deliberately so — `Filters` scopes stored METRICS, while this is a
+   * statement about what a session is doing right now, which no metric has. It is passed in rather
+   * than owned here, because the workspace decides its default: on entering the sessions workspace
+   * it is ON, and it is dropped on the way back to the dashboard, where it would mean nothing.
+   *
+   * Absent on every surface that has no fleet — the control is then not rendered at all rather than
+   * rendered inert.
+   */
+  activeOnly?: boolean
+  onActiveOnlyChange?: (on: boolean) => void
+
   filters: Filters
   onChange: (f: Filters) => void
   projects: Project[]
@@ -105,7 +119,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup }: Props) {
+export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, activeOnly, onActiveOnlyChange, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
