@@ -1,48 +1,74 @@
-# Agentistics for VS Code
+# Agentistics
 
-Your coding-assistant fleet and your usage metrics, inside the editor.
+**Your coding-assistant fleet, inside the editor.** Every Claude Code, Codex, Gemini, Copilot, Kimi
+and Antigravity session your machine is running — what each one is doing, which of them is blocked
+waiting on you, their live screens to type into — without leaving VS Code.
 
-- **Sessions** — every session this machine hosts, grouped by project, with what each one is doing
-  and which of them is blocked on you. Approve the dialog it is showing (by picking the option, not
-  by pressing a key that takes whichever row is highlighted), send it a line, rename it, file it
-  under a task, stop it, reopen it.
-- **Attach** — a real integrated terminal running the very `tmux` command the terminal cockpit
-  runs, with the real detach key printed beside it.
-- **New session** — pick an assistant, a directory, a task and a first message.
-- **Status bar** — today's cost and tokens (in USD or BRL), and how many sessions are waiting on you.
+It is a client of [agentistics](https://github.com/blpsoares/agentistics), the local analytics and
+session manager for AI coding assistants.
 
-It is a client of the local `agentop server` (port 47291) — the same server the web dashboard and
-the terminal cockpit read. Start it with `agentop server`; the panel offers to do that for you when
-nothing is answering.
+---
 
-Full documentation: [`docs/vscode-extension.md`](../../docs/vscode-extension.md).
+## What it does
 
-## Versioning
+**Sees the whole fleet.** Every session, grouped by project, with the one that needs you at the top.
+A coloured stripe, a dot and a word — so a blocked session is findable in a list of forty without
+reading any of them. Pin the ones you keep coming back to.
 
-The extension is versioned on **its own line**, not the product's. It ships to a marketplace on its
-own cadence and its users upgrade it independently of the `agentop` binary, so a version that jumped
-every time the server released would say nothing about what changed in the editor. Bump it by hand
-here; `release.yml` deliberately leaves `packages/vscode/package.json` out of the files a product
-release stamps.
+**Shows the live screen.** Not a log: the actual terminal the assistant is drawing, colours and
+cursor included, streamed from the session itself.
 
-## Build
+**Lets you type into it.** Click the screen and your keys go to the session — every key, including
+Enter, Esc, Tab, the arrows and Ctrl-C. No text box, no implicit submit. The keystroke ordering is a
+property of the connection rather than a hope, and one that does not land says so.
 
-```bash
-bun run build:vscode     # from the repo root
-bun run package:vscode   # a .vsix
-```
+**Answers its questions.** When a session is waiting on a permission prompt, the options are read
+off its screen and listed — you pick one. There is no blind "approve" button, because a key that
+takes whichever row happens to be highlighted is choosing for you.
 
-## The two icons, and why they are different files
+**Every verb the terminal cockpit has.** Rename, note, file under a task, open the whole task,
+finish it, reopen a session that fell, stop one (with a confirmation, in red).
 
-- **`media/icon.png`** is the gallery image — the one on the extension's page. It is the full
-  colour agentistics mark, square, so the marketplace card does not letterbox it. Regenerate it
-  from the vector source with:
+**Attaches for real.** One click opens a VS Code integrated terminal running the very `tmux` command
+`agentop` runs, with the real detach key — read from the backend, never guessed.
 
-  ```bash
-  convert media/logo.svg -background none -gravity center -extent 441x441 -resize 256x256 media/icon.png
-  ```
+**Opens sessions as editor tabs.** Several at once, one per session, each keeping its own scroll and
+its own half-typed line.
 
-- **`media/icon.svg`** is the activity-bar icon and is deliberately MONOCHROME (`currentColor`).
-  VS Code tints that one itself — dim when the view is inactive, the theme's foreground when it is
-  — so the coloured mark would sit at one shade while every neighbour responds, which reads as a
-  broken icon rather than a branded one.
+**Tells you what today cost.** Cost, tokens and session count in the status bar, in USD or BRL, plus
+how many sessions are waiting on you — and a notification the moment one starts waiting, fired on
+the transition, never on the level.
+
+## Requirements
+
+- **[agentistics](https://github.com/blpsoares/agentistics) running locally** — `agentop server`.
+  The panel says so and offers to start it when nothing is answering.
+- **tmux**, for the session-management half — so Linux and macOS, or **WSL** on Windows. The metrics
+  and the status bar work wherever the server runs.
+
+The extension never reads your files or your `~/.agentistics` directly and never talks to tmux
+itself: everything it shows comes from the local server over HTTP, on `127.0.0.1`.
+
+## Settings
+
+| Setting | Default | What it is |
+|---|---|---|
+| `agentistics.apiUrl` | `http://127.0.0.1:47291` | the local server's API |
+| `agentistics.language` | `auto` | follows VS Code's display language; English otherwise |
+| `agentistics.currency` | `usd` | `brl` converts with the live rate the server already fetches |
+| `agentistics.notifyOnAttention` | `true` | notify when a session starts waiting on you |
+| `agentistics.statusBar` | `true` | show today's totals |
+| `agentistics.statusBarRefreshSeconds` | `300` | how often to re-read them |
+
+## Commands
+
+`Agentistics: Start a session here` · `Open a session in a tab` · `Attach to a session in a
+terminal` · `Open the whole fleet in an editor tab` · `Start the local agentop server` · `Refresh`
+
+---
+
+Full documentation:
+[docs/vscode-extension.md](https://github.com/blpsoares/agentistics/blob/main/docs/vscode-extension.md).
+Issues and source: [github.com/blpsoares/agentistics](https://github.com/blpsoares/agentistics).
+
+MIT.

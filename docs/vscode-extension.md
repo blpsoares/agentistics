@@ -272,6 +272,28 @@ where the plain address would have worked.
 For the same reason the **webview never fetches**: a webview's `localhost` is the browser's. The
 extension host is the process that sits beside the fleet, so it is the process that asks.
 
+## The two icons, and why they are different files
+
+- **`media/icon.png`** is the gallery image — the one on the extension's marketplace page. It is
+  the full-colour agentistics mark, squared, so the card does not letterbox a 323x441 image.
+  Regenerate it from the vector source beside it:
+
+  ```bash
+  convert media/logo.svg -background none -gravity center -extent 441x441 -resize 256x256 media/icon.png
+  ```
+
+- **`media/icon.svg`** is the activity-bar icon and is deliberately MONOCHROME (`currentColor`).
+  VS Code tints that one itself — dim when the view is inactive, the theme's foreground when it is
+  — so the coloured mark would sit at one shade while every neighbour responds, which reads as a
+  broken icon rather than a branded one.
+
+## The README is the marketplace page
+
+`packages/vscode/README.md` is what somebody reads to decide whether to install, and it is rendered
+from the packaged copy — so **changing it costs a version**. It is written for that reader, not for
+somebody already in the repository, and its links are ABSOLUTE: a relative link works on GitHub and
+404s on the marketplace.
+
 ## Versioning
 
 The extension is versioned **independently** of the product. It ships to a marketplace on its own
@@ -290,8 +312,59 @@ bun run package:vscode   # a .vsix, via @vscode/vsce
 Then `F5` from the repo, or install the `.vsix` with
 `code --install-extension packages/vscode/agentistics-vscode-*.vsix`.
 
-Marketplace / Open VSX publishing is packaging and distribution, and is deliberately not wired up
-here.
+## Installing it, and distributing it
+
+Three routes, in order of how much they need from a maintainer.
+
+**1. The `.vsix` on the GitHub release** — works today, needs no account from anybody.
+
+```bash
+# Download agentistics-vscode-<version>.vsix from the release page, then:
+code --install-extension agentistics-vscode-1.0.0.vsix
+```
+
+The release workflow packages and attaches it beside the binaries. It is attached rather than
+version-stamped by the release: the extension carries its own version, so the file says which
+extension shipped *alongside* that server release rather than claiming to be the same thing. If
+packaging fails, the server release still goes out and the asset is simply absent — an editor
+extension must not hold back a binary.
+
+**2. The VS Code Marketplace** — what "install it from the editor" means for most people. It needs,
+once:
+
+- an Azure DevOps organisation, and a Personal Access Token scoped to **Marketplace → Manage**;
+- a publisher at <https://marketplace.visualstudio.com/manage> whose id is exactly the `publisher`
+  field in `packages/vscode/package.json`.
+
+Then `bunx @vscode/vsce publish -p "$VSCE_TOKEN"` from `packages/vscode`, or the same as a release
+step once the token is a repository secret.
+
+**3. Open VSX** — the registry VSCodium, Cursor, Windsurf and Gitpod read; the Marketplace's terms
+do not allow those editors to use it. Needs an eclipse.org account and a published-agreement
+signature, then `bunx ovsx publish -p "$OVSX_TOKEN"`.
+
+**Both are automated** by `.github/workflows/publish-vscode.yml`, on the extension's OWN tag:
+
+```bash
+git tag vscode-v1.0.1 && git push origin vscode-v1.0.1
+```
+
+Its own tag, and not the product release, because the extension is versioned on its own line:
+tying them together would publish an unchanged extension every time the server ships, and would
+make a one-line extension fix wait for a server release.
+
+Two secrets, added once in **Settings → Secrets and variables → Actions** — which is a browser, so
+nobody needs to be logged in on any particular machine:
+
+| Secret | | |
+|---|---|---|
+| `VSCE_PAT` | required | the Azure DevOps PAT above. Missing, the job FAILS: tagging a publish and getting silence is the outcome the workflow exists to prevent. |
+| `OVSX_PAT` | optional | Open VSX. Missing, it is skipped with a notice — a second registry is a decision, and its absence must not fail a publish that already succeeded. |
+
+The job **refuses a tag that disagrees with the manifest**. Publishing 1.0.0 under a tag that says
+1.0.1 is a lie about which code is in the marketplace, and neither a version nor a tag can be taken
+back. It also attaches the `.vsix` to a release for that tag, so an editor that reads neither
+registry still has a file.
 
 ## Where each piece lives
 

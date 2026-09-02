@@ -279,6 +279,24 @@ jobs:
           git tag "$TAG"
           git push origin main "$TAG"
 
+      # The VS Code extension, as an installable file on the release.
+      #
+      # It is how somebody without a marketplace account installs it:
+      # `code --install-extension agentistics-vscode-<v>.vsix`. The extension carries its OWN
+      # version (see PKG_FILES above), so the attached file says which extension shipped ALONGSIDE
+      # this server release rather than claiming to be the same thing.
+      #
+      # `continue-on-error` on purpose: a failure to package an editor extension must not hold back
+      # a server release. It stays visible in the run, and the attach below is skipped rather than
+      # publishing a release with a broken asset.
+      - name: Package the VS Code extension
+        id: vsix
+        if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          bun run package:vscode
+          echo "path=$(ls packages/vscode/*.vsix | head -1)" >> $GITHUB_OUTPUT
+
       - name: Publish versioned release + update latest
         if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         env:
@@ -286,6 +304,10 @@ jobs:
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${{ steps.version.outputs.next }}"
+          # Empty when the packaging step failed — every command below then degrades to the binaries
+          # rather than aborting a server release over an editor extension. Unquoted for exactly that
+          # reason: quoted, an empty value becomes an empty ARGUMENT and `gh` refuses it.
+          VSIX="${{ steps.vsix.outputs.path }}"
 
           # Create the versioned release (Linux binary only; Windows installer added by build-desktop job).
           # `gh release create` fails outright when the release already exists, which turns a
@@ -293,13 +315,14 @@ jobs:
           # failure at the first step. Upload into it instead when it is already there.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG already exists — uploading the binaries into it"
-            gh release upload "$TAG" ./release/agentop ./release/agentop.exe --clobber
+            gh release upload "$TAG" ./release/agentop ./release/agentop.exe $VSIX --clobber
           else
             gh release create "$TAG" \
               --title "v${VERSION}" \
               --notes-file /tmp/release-notes.md \
               ./release/agentop \
-              ./release/agentop.exe
+              ./release/agentop.exe \
+              $VSIX
           fi
 
           # Update the rolling latest pointer
@@ -321,7 +344,8 @@ jobs:
             --title "Latest build ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
             --notes-file /tmp/release-notes.md \
             ./release/agentop \
-            ./release/agentop.exe
+            ./release/agentop.exe \
+            $VSIX
 
   build-desktop:
     name: Build Tauri Desktop (Windows)
