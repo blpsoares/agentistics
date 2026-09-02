@@ -414,3 +414,29 @@ html, body {
 [role="separator"]:focus-visible .ag-aside-grip {
   background: var(--anthropic-orange);
 }
+
+/* Chat markdown: wide content scrolls inside its own bubble rather than pushing the bubble out of
+   the pane. A code fence or a table is routinely wider than the column, and letting it set the
+   width is how a message ends up outside its own card. */
+.ag-chat-md { min-width: 0; }
+.ag-chat-md pre,
+.ag-chat-md table { max-width: 100%; overflow-x: auto; }
+.ag-chat-md pre { white-space: pre; }
+.ag-chat-md code { overflow-wrap: anywhere; }
+.ag-chat-md p:first-child { margin-top: 0; }
+.ag-chat-md p:last-child { margin-bottom: 0; }
+.ag-chat-md img { max-width: 100%; height: auto; }
+
+/* The maximum effort level, when chosen. A brief emphatic pulse rather than a standing animation:
+   it marks the moment of the choice — the slowest and most expensive setting — and then stops. */
+@keyframes ag-effort-peak {
+  0%   { transform: scale(1);    box-shadow: 0 0 0 0 currentColor; }
+  45%  { transform: scale(1.05); box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 22%, transparent); }
+  100% { transform: scale(1);    box-shadow: 0 0 0 0 transparent; }
+}
+.ag-effort-peak { animation: ag-effort-peak 520ms ease-out 1; }
+
+/* Motion is decoration here; the colour and the label carry the meaning on their own. */
+@media (prefers-reduced-motion: reduce) {
+  .ag-effort-peak { animation: none; }
+}

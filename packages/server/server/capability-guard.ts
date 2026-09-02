@@ -42,6 +42,13 @@ const EXACT: ReadonlyMap<string, keyof Capabilities> = new Map<string, keyof Cap
   // fleet it belongs to and for a stronger reason: this is the assistant's and the user's actual
   // words, not a list of rows.
   ['/api/fleet/chat', 'localShell'],
+  // Starting a session SPAWNS AN ASSISTANT on this host and bills somebody for it. `/api/fleet/new`
+  // reads what may be started and from where; `/api/fleet/spawn` does it.
+  ['/api/fleet/new', 'localShell'],
+  ['/api/fleet/spawn', 'localShell'],
+  // An attachment WRITES A FILE to this machine's disk and hands the session its path. It touches
+  // the host as directly as anything on this list.
+  ['/api/fleet/attach', 'localShell'],
   ['/api/fleet/act', 'localShell'],
   // The live terminal channel — an SSE stream of a session's SCREEN, colours and all. It is a read,
   // but it is a read of a coding assistant's terminal, so it rides the same `localShell` as

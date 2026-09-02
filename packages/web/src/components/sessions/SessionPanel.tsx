@@ -92,7 +92,7 @@ export function SessionPanel({ session, row, lang, theme, act, authorName }: Ses
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {active === 'chat' ? (
-          <SessionChat session={session} lang={lang} act={act} />
+          <SessionChat session={session} {...(row ? { row } : {})} lang={lang} act={act} />
         ) : (
           <div style={{ flex: 1, minHeight: 0, padding: 16, display: 'flex', flexDirection: 'column' }}>
             {/* The very component the sessions list uses. Assembling a second one from the stream

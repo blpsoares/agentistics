@@ -27,6 +27,23 @@ export interface ChatTurn {
   role: 'user' | 'assistant'
   text: string
   /**
+   * The tools this turn INVOKED, with the first line of each call's own input.
+   *
+   * The chat view renders these as the actions the assistant took, the way the terminal shows
+   * `Running 1 shell command…` with the command under it. Without them a conversation reads as
+   * the assistant talking to itself between long silences, when what happened in the silence is
+   * most of the work.
+   */
+  tools?: Array<{ name: string; detail?: string }>
+  /**
+   * The assistant's extended thinking, when the transcript carries it.
+   *
+   * Kept apart from `text` rather than concatenated: it is reasoning, not an answer, and the UI
+   * shows it collapsed. Merging the two would put paragraphs of deliberation above every reply
+   * with nothing marking where one ends.
+   */
+  thinking?: string
+  /**
    * This is not something the assistant SAID — it is a synthesized note that a tool call has been
    * written to the transcript and no text has followed it yet, which is exactly the window where a
    * session is visibly busy and the pane would otherwise show nothing (or a stale turn from before
@@ -123,6 +140,51 @@ function extractAssistantText(e: Record<string, unknown>): string | null {
 }
 
 /** The tool names an assistant entry is calling, when it carries no text at all — see `ChatTurn.pending`. */
+/** The tools one assistant event invoked, each with the first meaningful line of its input. */
+function extractToolCalls(e: Record<string, unknown>): Array<{ name: string; detail?: string }> {
+  if (e.type !== 'assistant') return []
+  const msgContent = (e.message as Record<string, unknown> | undefined)?.content
+  if (!Array.isArray(msgContent)) return []
+  const out: Array<{ name: string; detail?: string }> = []
+  for (const part of msgContent as Record<string, unknown>[]) {
+    if (part.type !== 'tool_use' || typeof part.name !== 'string') continue
+    out.push({ name: part.name, ...(toolDetail(part.input) ? { detail: toolDetail(part.input)! } : {}) })
+  }
+  return out
+}
+
+/**
+ * The one line worth showing for a tool call.
+ *
+ * Named fields in priority order rather than a dump of the input: `command` is what a shell call
+ * IS, and a path is what a file call is. Everything else is truncated hard — a tool input can be a
+ * whole file, and a chat bubble is not where that belongs.
+ */
+function toolDetail(input: unknown): string | null {
+  if (typeof input !== 'object' || input === null) return null
+  const o = input as Record<string, unknown>
+  for (const key of ['command', 'file_path', 'path', 'pattern', 'query', 'url', 'description']) {
+    const v = o[key]
+    if (typeof v === 'string' && v.trim() !== '') {
+      const line = v.trim().split('\n')[0]!
+      return line.length > 200 ? `${line.slice(0, 200)}…` : line
+    }
+  }
+  return null
+}
+
+/** The assistant's extended thinking in one event, when it carries any. */
+function extractThinking(e: Record<string, unknown>): string | null {
+  if (e.type !== 'assistant') return null
+  const msgContent = (e.message as Record<string, unknown> | undefined)?.content
+  if (!Array.isArray(msgContent)) return null
+  const parts = (msgContent as Record<string, unknown>[])
+    .filter(p => p.type === 'thinking' && typeof p.thinking === 'string')
+    .map(p => (p.thinking as string).trim())
+    .filter(t => t !== '')
+  return parts.length > 0 ? parts.join('\n\n') : null
+}
+
 function extractToolActivity(e: Record<string, unknown>): string[] | null {
   if (e.type !== 'assistant') return null
   const msgContent = (e.message as Record<string, unknown> | undefined)?.content
@@ -215,11 +277,23 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
 
     const userText = extractUserText(e)
     if (userText) { turns.push({ role: 'user', text: userText }); continue }
+
+    // An assistant event can carry text, thinking and tool calls at once, and all three belong to
+    // the same turn. Emitted together rather than as separate rows: they happened together, and
+    // splitting them puts the reasoning under the answer it produced.
     const assistantText = extractAssistantText(e)
-    if (assistantText) { turns.push({ role: 'assistant', text: assistantText }); continue }
-    if (isNewest) {
-      const tools = extractToolActivity(e)
-      if (tools) turns.push({ role: 'assistant', text: toolActivityLabel(tools), pending: true })
+    const calls = extractToolCalls(e)
+    const thinking = extractThinking(e)
+    if (assistantText || calls.length > 0 || thinking) {
+      turns.push({
+        role: 'assistant',
+        text: assistantText ?? '',
+        ...(calls.length > 0 ? { tools: calls } : {}),
+        ...(thinking ? { thinking } : {}),
+        // Only the NEWEST event can be "still running": the same shape earlier in the file is a
+        // finished call whose result already exists further down.
+        ...(isNewest && !assistantText && calls.length > 0 ? { pending: true } : {}),
+      })
     }
   }
   turns.reverse()

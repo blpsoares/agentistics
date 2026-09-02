@@ -1132,9 +1132,10 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
       </nav>
       )}
 
-      {/* The resize handle, only in the workspace whose width is the user's to choose, and only
-          while the sidebar is open — there is nothing to resize about a 64px rail. */}
-      {mode === 'sessions' && !collapsed && (
+      {/* The resize handle. In BOTH workspaces — the dashboard's labels benefit from a wider
+          column too, and a control that exists on one screen and vanishes on the next reads as
+          broken. Only while the sidebar is open: there is nothing to resize about a 64px rail. */}
+      {!collapsed && (
         <AsideResizer
           width={width}
           onResize={w => { setDragging(true); onResize(w) }}
@@ -3058,7 +3059,10 @@ export default function AppLayout() {
         />
       )}
 
-      {/* Footer */}
+      {/* Footer — dashboard only. The sessions workspace is an application pane that fills the
+          window exactly and scrolls inside itself; a marketing footer under a terminal is a strip
+          of links nobody can reach without first scrolling a pane that does not scroll. */}
+      {!inSessionsWorkspace && (
       <footer style={{
         borderTop: '1px solid var(--border)',
         background: 'var(--bg-surface)',
@@ -3201,6 +3205,7 @@ export default function AppLayout() {
           </div>
         </div>
       </footer>
+      )}
 
       {/* Global notification toasts (auto-dismiss with an exit animation; history in the bell) */}
       <NotificationToasts lang={lang} />

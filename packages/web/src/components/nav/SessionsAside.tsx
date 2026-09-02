@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Search, X } from 'lucide-react'
+import { Plus, Search, X } from 'lucide-react'
 import {
   DEFAULT_ORDER, filterSessions, groupSessions, sessionNotify,
   type ControlSession,
@@ -22,6 +22,7 @@ import {
 import { controlStrings, sessionWordBook } from '@agentistics/tui/control/i18n'
 import { HARNESS_COLORS } from '../../lib/harness'
 import { dayLabels, daysAgo } from '../../lib/sessionDays'
+import { NewSessionModal } from '../sessions/NewSessionModal'
 
 export interface SessionsAsideProps {
   lang: 'pt' | 'en'
@@ -46,6 +47,21 @@ const STATE_COLOR: Record<string, string> = {
   unknown: 'var(--text-tertiary)',
 }
 
+/**
+ * The wash behind a LIVE row, so its state is readable without reading the word.
+ *
+ * Only the two active states get one. A tint on every row is a list with no contrast left, and the
+ * point of the wash is that the handful of rows doing something stand out from the history under
+ * them. It is a WASH, never the row's whole background: the selected row's own highlight has to
+ * stay distinguishable from it, or selection stops being visible on exactly the rows you select
+ * most.
+ */
+const STATE_WASH: Record<string, string> = {
+  working: 'color-mix(in srgb, #22c55e 10%, transparent)',
+  waiting: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+  'waiting-approval': 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+}
+
 export function SessionsAside({
   lang, rows, finishedTasks, loading, unsupported, unavailable,
 }: SessionsAsideProps) {
@@ -53,6 +69,7 @@ export function SessionsAside({
   const navigate = useNavigate()
   const { sessionId } = useParams()
   const [query, setQuery] = useState('')
+  const [creating, setCreating] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
 
   // The top bar's magnifier focuses this field. An event rather than a prop because the button and
@@ -87,6 +104,40 @@ export function SessionsAside({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 10, paddingTop: 4 }}>
+      <button
+        onClick={() => setCreating(true)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          margin: '0 2px', padding: '9px 12px', borderRadius: 9, cursor: 'pointer',
+          border: '1px dashed var(--border)', background: 'transparent',
+          color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600,
+        }}
+        onMouseEnter={e => {
+          e.currentTarget.style.borderColor = 'var(--anthropic-orange)'
+          e.currentTarget.style.color = 'var(--anthropic-orange)'
+        }}
+        onMouseLeave={e => {
+          e.currentTarget.style.borderColor = 'var(--border)'
+          e.currentTarget.style.color = 'var(--text-secondary)'
+        }}
+      >
+        <Plus size={14} />
+        {pt ? 'Nova sessão' : 'New session'}
+      </button>
+
+      {creating && (
+        <NewSessionModal
+          lang={lang}
+          onClose={() => setCreating(false)}
+          onStarted={id => {
+            setCreating(false)
+            // Straight into it. The row will arrive on the next poll; navigating now means the
+            // panel is already open on it when it does.
+            if (id) navigate(`/sessions/${id}`)
+          }}
+        />
+      )}
+
       <div style={{ position: 'relative', padding: '0 2px' }}>
         <Search
           size={13}
@@ -198,13 +249,20 @@ function SessionRow({ session, selected, onOpen }: {
       style={{
         display: 'flex', alignItems: 'center', gap: 8, width: '100%',
         padding: '9px 9px', borderRadius: 9, border: 'none', textAlign: 'left',
-        background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
+        background: selected ? 'var(--anthropic-orange-dim)' : (STATE_WASH[session.state] ?? 'transparent'),
+        // A live row also carries a coloured edge. The wash alone is faint by design, and an edge
+        // survives a light theme and a colour-blind reader where a 10% tint does not.
+        boxShadow: selected || !STATE_WASH[session.state]
+          ? undefined
+          : `inset 2px 0 0 ${STATE_COLOR[session.state] ?? 'transparent'}`,
         color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
         cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
         transition: 'background 0.15s',
       }}
       onMouseEnter={e => { if (!selected) e.currentTarget.style.background = 'var(--bg-elevated)' }}
-      onMouseLeave={e => { if (!selected) e.currentTarget.style.background = 'transparent' }}
+      onMouseLeave={e => {
+        if (!selected) e.currentTarget.style.background = STATE_WASH[session.state] ?? 'transparent'
+      }}
     >
       {/* The dot marks a row that WANTS somebody. It never carries the message alone — the state
           word is beside it — because a fact said only in colour is a fact some readers never get. */}

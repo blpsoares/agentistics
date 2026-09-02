@@ -1014,7 +1014,9 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // take. A central never answers it: it aggregates many machines and hosts none of their
     // sessions, so a fleet read there would be this box's own processes under someone else's page.
     // `capability-guard.ts` has already refused both paths on an exposed profile.
-    if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act' || url.pathname === '/api/fleet/stream' || url.pathname === '/api/fleet/chat') {
+    if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act' || url.pathname === '/api/fleet/stream' || url.pathname === '/api/fleet/chat' ||
+        url.pathname === '/api/fleet/new' || url.pathname === '/api/fleet/spawn' ||
+        url.pathname === '/api/fleet/attach') {
       if (TEAM_CENTRAL) {
         return new Response(JSON.stringify({ error: 'fleet_central' }), {
           status: 404,
@@ -1056,6 +1058,105 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // The live terminal channel: an SSE stream of one session's screen. Read-only (Phase 1). Already
     // gated by `localShell` (capability-guard) and 404'd on a central above, so this handler only has
     // to enforce SCOPE — the session must be one this machine manages — and the stream ceiling.
+    // One attachment: written to agentop's own directory, its PATH returned for the message. A
+    // multipart body rather than JSON, so a 20 MB file is not base64-inflated by a third on the way.
+    if (url.pathname === '/api/fleet/attach' && req.method === 'POST') {
+      try {
+        const { storeAttachment, MAX_ATTACHMENT_BYTES } = await import('./sessions/attachment-web')
+        const lang = url.searchParams.get('lang') === 'pt' ? 'pt' : 'en'
+        const len = Number(req.headers.get('content-length') ?? '0')
+        // Refused on the DECLARED length before the body is read: buffering it first is the thing
+        // the limit exists to prevent.
+        if (Number.isFinite(len) && len > MAX_ATTACHMENT_BYTES * 1.1) {
+          return new Response(JSON.stringify({ ok: false, message: 'too_large' }), {
+            status: 413,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const form = await req.formData()
+        const file = form.get('file')
+        if (!(file instanceof File)) {
+          return new Response(JSON.stringify({ ok: false, message: 'bad_request' }), {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const out = await storeAttachment(lang, {
+          name: file.name,
+          bytes: new Uint8Array(await file.arrayBuffer()),
+        })
+        return new Response(JSON.stringify(out), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // What this machine can start, and from where. `q` searches the LOCAL project store, so the
+    // picker works with the server's own data cold.
+    if (url.pathname === '/api/fleet/new' && req.method === 'GET') {
+      try {
+        const { webHarnesses, webProjects, webTasks } = await import('./sessions/spawn-web')
+        const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
+        const host = await hostForFleet(fleetLang(url.searchParams.get('lang')))
+        const q = url.searchParams.get('q') ?? ''
+        const [harnesses, projects, tasks] = await Promise.all([
+          webHarnesses(host),
+          webProjects(host, q),
+          webTasks(host),
+        ])
+        return new Response(JSON.stringify({ harnesses, projects, tasks }), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify(safeError(err, { verbose: PROFILE === 'local' }).body), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // Start one session, or reopen everything that fell. Both spawn real assistants.
+    if (url.pathname === '/api/fleet/spawn' && req.method === 'POST') {
+      try {
+        const { spawnFromWeb, reopenFellFromWeb } = await import('./sessions/spawn-web')
+        const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
+        const lang = fleetLang(url.searchParams.get('lang'))
+        const host = await hostForFleet(lang)
+        const body = await readJsonLimited<Record<string, unknown>>(req, LIMITS.bodyBytes)
+        if (!body.ok) {
+          return new Response(JSON.stringify({ ok: false, message: 'bad_request' }), {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const v = body.value
+        const out = v['reopenFell'] === true
+          ? await reopenFellFromWeb(host, lang)
+          : await spawnFromWeb(host, lang, {
+              harness: String(v['harness'] ?? ''),
+              cwd: String(v['cwd'] ?? ''),
+              ...(v['task'] ? { task: String(v['task']) } : {}),
+              ...(v['prompt'] ? { prompt: String(v['prompt']) } : {}),
+              ...(v['model'] ? { model: String(v['model']) } : {}),
+              ...(v['effort'] ? { effort: String(v['effort']) } : {}),
+              ...(v['label'] ? { label: String(v['label']) } : {}),
+            })
+        return new Response(JSON.stringify(out), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     // One hosted session's conversation, for the workspace's chat view. Claude only in practice —
     // the module refuses in words wherever the live-session -> conversation link is not exact.
     if (url.pathname === '/api/fleet/chat' && req.method === 'GET') {

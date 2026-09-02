@@ -37,6 +37,12 @@ describe('routeCapability', () => {
     // The chat view reads the assistant's and the user's actual WORDS out of a transcript on this
     // machine. If anything on this list must be unreachable from outside, it is this one.
     expect(routeCapability('/api/fleet/chat')).toBe('localShell')
+    // Starting a session spawns a billable assistant on this host. Both halves are guarded: the
+    // one that says what may be started, and the one that starts it.
+    expect(routeCapability('/api/fleet/new')).toBe('localShell')
+    expect(routeCapability('/api/fleet/spawn')).toBe('localShell')
+    // An attachment writes a file to this machine and hands a session its path.
+    expect(routeCapability('/api/fleet/attach')).toBe('localShell')
   })
 
   it('maps the local chat routes', () => {
