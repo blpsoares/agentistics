@@ -79,8 +79,28 @@ export function createEventStream(makeES: () => EventSource): EventStream {
   return { subscribe }
 }
 
-/** The app-wide shared `/api/events` stream. */
-export const eventStream: EventStream = createEventStream(() => new EventSource('/api/events'))
+/**
+ * A code-split bundle DUPLICATES this module into several chunks — measured on the production
+ * build, `useData`, `index` and `ConnectionSettings` each carried their own copy. A plain
+ * module-level `const` is then a PER-COPY singleton: `useData`'s copy opens one `/api/events`
+ * socket and the notification hook's copy (in `index`) opens a SECOND, which is exactly the
+ * double-connection this module exists to remove (verified in the browser: 2 live sockets on the
+ * production dashboard before this). So the ONE instance is anchored on `globalThis` — the first
+ * duplicated copy to run creates it, every other copy reuses it, giving a true cross-chunk
+ * singleton and one socket. `createEventStream` stays a pure factory (the tests drive it directly);
+ * only the app-wide instance is shared this way.
+ */
+const GLOBAL_KEY = '__agentisticsEventStream__'
+type EventStreamHolder = { [GLOBAL_KEY]?: EventStream }
+
+/** Return the ONE cross-chunk-shared EventStream, creating it on first use. */
+export function sharedEventStream(makeES: () => EventSource): EventStream {
+  const holder = globalThis as unknown as EventStreamHolder
+  return (holder[GLOBAL_KEY] ??= createEventStream(makeES))
+}
+
+/** The app-wide shared `/api/events` stream — one socket for the whole app, across every chunk. */
+export const eventStream: EventStream = sharedEventStream(() => new EventSource('/api/events'))
 
 /** Subscribe to one `/api/events` event type on the shared socket. */
 export function subscribeEvent(type: string, handler: StreamEventHandler): () => void {

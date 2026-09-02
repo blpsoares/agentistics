@@ -1,5 +1,5 @@
-import { describe, test, expect } from 'bun:test'
-import { createEventStream } from './eventStream'
+import { describe, test, expect, afterEach } from 'bun:test'
+import { createEventStream, sharedEventStream } from './eventStream'
 
 /** A minimal fake EventSource that records lifecycle and lets a test emit named events. */
 class FakeES {
@@ -92,5 +92,31 @@ describe('createEventStream — one shared socket, ref-counted', () => {
     off()
     all()[0]!.emit('change')
     expect(n).toBe(1)
+  })
+})
+
+// The bug this guards: a code-split bundle duplicates the module into several chunks, so a plain
+// module-level `const` becomes a per-copy singleton and each chunk opens its own socket. Measured
+// on the production build (2 live /api/events sockets from the `useData` and `index` chunks).
+// `sharedEventStream` anchors the ONE instance on globalThis so every duplicated copy shares it.
+describe('sharedEventStream — one instance across duplicated module copies', () => {
+  afterEach(() => { delete (globalThis as Record<string, unknown>)['__agentisticsEventStream__'] })
+
+  test('two callers (standing in for two chunk copies) get the SAME instance', () => {
+    let made = 0
+    const a = sharedEventStream(() => { made++; return new FakeES() as unknown as EventSource })
+    const b = sharedEventStream(() => { made++; return new FakeES() as unknown as EventSource })
+    expect(a).toBe(b)
+  })
+
+  test("the second copy's factory is never used — only the first creates the stream", () => {
+    let firstUsed = 0, secondUsed = 0
+    const a = sharedEventStream(() => { firstUsed++; return new FakeES() as unknown as EventSource })
+    const b = sharedEventStream(() => { secondUsed++; return new FakeES() as unknown as EventSource })
+    // Subscribing on EITHER handle must open exactly ONE socket, from the FIRST factory.
+    a.subscribe('change', () => {})
+    b.subscribe('notification', () => {})
+    expect(firstUsed).toBe(1)
+    expect(secondUsed).toBe(0)
   })
 })
