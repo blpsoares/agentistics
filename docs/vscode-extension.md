@@ -34,6 +34,41 @@ VS Code window                          the machine
 | **New session** | the wizard: which assistants this machine can start, where, the task, the first message, model and effort | `GET`/`POST /api/fleet/new` |
 | **Status bar** | today's cost, tokens and session count, plus how many sessions are waiting on you | `GET /api/data`, slowly |
 
+## Parity with the cockpit — arranged by the SERVER
+
+Grouping, ordering, filtering and the scoped search are the cockpit's, not a second implementation:
+`GET /api/fleet?view=1` runs `filterSessions` → `sessionKept` → `sortSessions` → `groupSessions`
+— the same four pure functions the terminal cockpit and `agentop session ls` run — and puts the
+bands on the wire already labelled (`fleet-arrange.ts`).
+
+That is the third of three options, and the other two are why:
+
+1. **Re-implement it in the client.** A second set of rules, which is the defect this repository is
+   built against, and it drifts the day a dimension is added.
+2. **Widen `FleetRow` until it IS a `ControlSession`** and make the pure functions generic. That
+   couples the wire to an internal shape and rewrites modules three other surfaces depend on.
+3. **Arrange it on the server**, where the real `ControlSession`s already are.
+
+So the panel sends what the person chose and renders what comes back. It holds no list of
+groupings, sorts or scopes either — those arrive from the response, already localized, so a
+dimension added to `SESSION_DIMENSIONS` appears in the editor without a line changing here.
+
+- **Group by** none · status · repo · project · task · harness · model · marked
+- **Sort by** state · name · started · recent · usage · project, either direction
+- **Filter** by any dimension, with counts. The counts are over the WHOLE fleet, never the filtered
+  one: counting survivors makes every unselected value read zero the moment one filter is on, which
+  turns the menu into a dead end you can only narrow.
+- **Search in** name · folder · harness · note · task · prompt · **transcript** — the last one is a
+  text scan of the conversation on disk, and is the reason the search runs on the server at all.
+- **A task band** carries the task's own verbs: reopen the whole task, mark it finished (its band
+  is struck through, never hidden — it is still a thing that happened), delete it. They live on the
+  BAND because a task is not a session.
+- **Sessions that fell together** — a reboot, a laptop closed — are offered as one group to reopen.
+  The server resolves which sessions were in it (`crash-group.ts`), and it errs toward excluding: a
+  row with no evidence it was ever alive is never in the group.
+
+The **cascade** is still absent, for the reason below.
+
 ## Two views, and why a session gets its own tab
 
 The panel has exactly two views. `list` is the fleet — cards, grouped by project, most urgent

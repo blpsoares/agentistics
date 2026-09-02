@@ -14,7 +14,7 @@
 
 import type { SessionMeta } from '@agentistics/core'
 import type {
-  FleetActionId, FleetPayload, LinkStatus, NewOptions, SpawnRequest,
+  Arrangement, FleetActionId, FleetPayload, LinkStatus, NewOptions, SpawnRequest,
 } from './protocol'
 import { todayTotals, type TodayTotals } from './today'
 
@@ -55,9 +55,11 @@ export class AgentopClient {
    * either as an empty fleet would be a confident "nothing is running" from a machine that was
    * never allowed to look.
    */
-  async fleet(): Promise<{ link: LinkStatus; payload?: FleetPayload }> {
+  async fleet(view?: Arrangement): Promise<{ link: LinkStatus; payload?: FleetPayload }> {
     try {
-      const res = await fetch(this.url('/api/fleet'), { signal: AbortSignal.timeout(TIMEOUT_MS) })
+      const res = await fetch(this.url('/api/fleet', viewParams(view)), {
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      })
       if (res.status === 403 || res.status === 404) {
         return { link: { state: 'refused', url: this.api } }
       }
@@ -173,4 +175,29 @@ export class AgentopClient {
       ? 'Não foi possível falar com o agentop server desta máquina.'
       : 'Could not reach the agentop server on this machine.'
   }
+}
+
+/**
+ * The arrangement, as query parameters.
+ *
+ * `filters` travels as JSON because it maps a dimension to arbitrary VALUES — a project path, a
+ * model id — and flattening that into query parameters needs an escaping convention nobody would
+ * remember. Everything else is a plain scalar, so a request stays readable in a log.
+ *
+ * An absent arrangement asks for no `view` at all, and the server then does not compute one.
+ */
+function viewParams(view?: Arrangement): Record<string, string> {
+  if (!view) return {}
+  const params: Record<string, string> = {
+    view: '1',
+    group: view.grouping,
+    sort: view.sort,
+    dir: view.dir,
+  }
+  if (view.query.trim()) params.q = view.query
+  if (view.onlyActive) params.active = '1'
+  if (view.scopes.length > 0) params.scopes = view.scopes.join(',')
+  const filters = Object.entries(view.filters).filter(([, v]) => v.length > 0)
+  if (filters.length > 0) params.filters = JSON.stringify(Object.fromEntries(filters))
+  return params
 }

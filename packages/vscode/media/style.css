@@ -198,6 +198,50 @@ button.chip { cursor: pointer; }
 .chip.h-kimi { color: #ec4899; border-color: rgba(236, 72, 153, .45); }
 .chip.harness.on { color: #fff; }
 
+/*
+ * The arrangement panel — group, sort, filter, scope.
+ *
+ * Inside the sticky header, so the controls that decide what the list shows sit with the search
+ * that also does, and scroll away together when you are reading the list itself.
+ */
+.arrange {
+  margin-top: var(--gap);
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  max-height: 46vh;
+  overflow: auto;
+}
+.arrange .field { margin-bottom: 9px; }
+.arrange .field:last-child { margin-bottom: 0; }
+
+/* A number ON a chip: how many rows carry that value, or how many filters are narrowing the list. */
+.count-badge {
+  margin-left: 5px;
+  padding: 0 4px;
+  border-radius: 6px;
+  font-size: 10px;
+  background: rgba(127, 127, 127, .25);
+}
+.chip.on .count-badge { background: rgba(255, 255, 255, .25); }
+
+/* Sessions that fell together. Amber rather than red: nothing is broken, something is waiting. */
+.fell {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  flex-wrap: wrap;
+  margin: var(--gap) 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+}
+
+/* A task the user marked finished — dimmed, never hidden: it is still a thing that happened. */
+.group.done .group-name { text-decoration: line-through; opacity: .7; }
+
 /* ---------------------------------------------------------------- banners */
 
 .banner, .result { display: none; }
@@ -507,6 +551,36 @@ button.chip { cursor: pointer; }
   background: var(--bg-base);
   border-radius: var(--radius-sm);
 }
+
+/*
+ * The way back to the live edge.
+ *
+ * Absolute over the screen's own frame, bottom-right, and shown ONLY when the reader has left the
+ * tail: a control that is always there is one more thing on a 300px panel, and one that is there
+ * when it would do nothing teaches people to ignore it.
+ */
+.screen-frame { position: relative; }
+.to-tail {
+  display: none;
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
+}
+.to-tail.visible { display: flex; }
+.to-tail:hover { background: var(--accent-light); border-color: var(--accent-light); }
 
 /* The live screen. It scrolls INSIDE its own box — the page never scrolls sideways. */
 .screen-box {

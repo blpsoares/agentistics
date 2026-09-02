@@ -15,7 +15,11 @@ import * as vscode from 'vscode'
 import { AgentopClient } from './api'
 import { readAttention, type AttentionMemory } from './attention'
 import { fill } from './i18n'
-import type { FleetPayload, HostMessage, LinkStatus, Route, ViewMessage } from './protocol'
+import {
+  DEFAULT_ARRANGEMENT,
+  type Arrangement, type FleetPayload, type HostMessage, type LinkStatus, type Route,
+  type ViewMessage,
+} from './protocol'
 import { InputSockets } from './input'
 import { TerminalStreams, type TerminalEvent } from './streams'
 import { attachInTerminal, startServerInTerminal } from './terminal'
@@ -28,6 +32,15 @@ const EMPTY: FleetPayload = { sessions: [], attention: 0, tasks: [] }
 
 /** Where the pins live. Global rather than per-workspace: a session is not a property of a folder. */
 const PINNED_KEY = 'agentistics.pinnedSessions'
+
+/**
+ * Where the ARRANGEMENT lives.
+ *
+ * Held by the host and shared by every surface, the way the cockpit persists `sessionView`: two
+ * panels showing the same fleet grouped two different ways is two answers to one question, and the
+ * one you are not looking at is always the one that is right.
+ */
+const ARRANGE_KEY = 'agentistics.arrangement'
 
 export interface HubDeps {
   client(): AgentopClient
@@ -151,7 +164,7 @@ export class SessionsHub implements vscode.Disposable {
   }
 
   private async poll(): Promise<void> {
-    const { link, payload } = await this.deps.client().fleet()
+    const { link, payload } = await this.deps.client().fleet(this.arrangement())
     this.link = link
     // A failed poll keeps the PREVIOUS fleet, exactly as the cockpit's poller does: the last known
     // truth beats a confident empty list, and the banner above it already says the link is down.
@@ -174,7 +187,23 @@ export class SessionsHub implements vscode.Disposable {
       strings: this.deps.strings(),
       lang: this.deps.lang(),
       pinned: this.pinned(),
+      arrangement: this.arrangement(),
     }
+  }
+
+  private arrangement(): Arrangement {
+    return { ...DEFAULT_ARRANGEMENT, ...this.context.globalState.get<Partial<Arrangement>>(ARRANGE_KEY, {}) }
+  }
+
+  /**
+   * Merge one change into the arrangement and re-read.
+   *
+   * A PARTIAL from the surface, merged here: sending the whole thing would make two panels race
+   * each other back to whatever each last rendered.
+   */
+  private async setArrangement(change: Partial<Arrangement>): Promise<void> {
+    await this.context.globalState.update(ARRANGE_KEY, { ...this.arrangement(), ...change })
+    await this.poll()
   }
 
   /**
@@ -268,6 +297,17 @@ export class SessionsHub implements vscode.Disposable {
       case 'pin':
         await this.setPinned(msg.id, msg.pinned)
         return
+      case 'arrange':
+        await this.setArrangement(msg.change)
+        return
+      case 'reopenFell': {
+        // The cockpit's own grouping of what fell together — the host resolves it; nothing here
+        // decides which sessions were in it.
+        const out = await this.deps.client().act({ id: '', action: 'reopenFell' })
+        this.broadcast({ type: 'result', ok: out.ok, message: out.message })
+        await this.poll()
+        return
+      }
       case 'openTab':
         this.deps.openTab(msg.id)
         // The sidebar goes BACK to the list. Otherwise the same session is open twice, in two

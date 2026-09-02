@@ -20,6 +20,8 @@
 export type FleetActionId =
   | 'approve' | 'prompt' | 'rename' | 'note' | 'task' | 'kill' | 'resume'
   | 'openTask' | 'finishTask'
+  /** The two that act on something other than one row — see the server's own note. */
+  | 'reopenFell' | 'deleteTask'
 
 /** The verbs that need a line of text before they can run. */
 export const TEXT_VERBS: ReadonlySet<string> = new Set([
@@ -73,6 +75,12 @@ export interface FleetPayload {
   /** Already-localized reason this list may not be the whole truth. Never an empty list alone. */
   unavailable?: string
   tasks: string[]
+  /** The tasks marked finished — a statement about the work, not about any session. */
+  finishedTasks?: string[]
+  /** How many sessions FELL together, when some did. */
+  fell?: { count: number; atMs: number }
+  /** The same fleet, arranged. Present because the extension always asks for it. */
+  view?: FleetView
 }
 
 export interface HarnessOption {
@@ -118,6 +126,60 @@ export interface KeyPress {
   shift?: boolean
 }
 
+/**
+ * How the fleet is arranged — the cockpit's own vocabulary, carried as opaque strings.
+ *
+ * The ids are NOT enumerated here on purpose. `/api/fleet?view=1` answers with the groupings, sorts
+ * and scopes THIS build offers, each already labelled; a union written in the client would be a
+ * second list of the same table, and the day a dimension is added the extension would be the
+ * surface that silently does not offer it.
+ */
+export interface Arrangement {
+  grouping: string
+  sort: string
+  dir: 'asc' | 'desc'
+  query: string
+  onlyActive: boolean
+  /** Per dimension, the values kept. OR inside a dimension, AND between them. */
+  filters: Record<string, string[]>
+  /** Which fields the search looks in. Empty means every field. */
+  scopes: string[]
+}
+
+export const DEFAULT_ARRANGEMENT: Arrangement = {
+  grouping: 'project',
+  sort: 'state',
+  dir: 'desc',
+  query: '',
+  // The cockpit's `DEFAULT_SESSION_VIEW`: only what is running, grouped by project.
+  onlyActive: true,
+  filters: {},
+  scopes: [],
+}
+
+export interface FleetGroup {
+  key: string
+  /** Already localized by the server, from the word book the cockpit's own bands use. */
+  label: string
+  done?: boolean
+  rows: FleetRow[]
+}
+
+export interface FacetValue { key: string; label: string; count: number }
+export interface Facet { id: string; label: string; values: FacetValue[] }
+
+/** The arranged fleet, as the server computed it. */
+export interface FleetView {
+  groups: FleetGroup[]
+  shown: number
+  total: number
+  applied: { grouping: string; sort: string; dir: 'asc' | 'desc' }
+  facets: Facet[]
+  groupings: { id: string; label: string }[]
+  sorts: { id: string; label: string }[]
+  scopes: { id: string; label: string }[]
+}
+
 /** How this window is doing at reaching the machine's server. */
 export type LinkState =
   /** Answering. */
@@ -160,6 +222,8 @@ export type HostMessage =
       lang: 'en' | 'pt'
       /** Session ids the user pinned. Ordered by nothing — the list decides how they are shown. */
       pinned: string[]
+      /** What the fleet is currently arranged by. Held by the HOST, so every surface agrees. */
+      arrangement: Arrangement
     }
   /** How this surface opens, and whether it may navigate. Sent once, before anything else. */
   | { type: 'mount'; route: Route; pinned: boolean; theme: 'dark' | 'light' }
@@ -194,6 +258,16 @@ export type ViewMessage =
   | { type: 'unwatch'; id: string }
   /** Open this session as its own editor tab — several may be open at once. */
   | { type: 'openTab'; id: string }
+  /**
+   * Change how the fleet is arranged.
+   *
+   * A PARTIAL: the surface sends what the person just changed, and the host merges it into the one
+   * arrangement every surface reads. Sending the whole thing would make two panels race each other
+   * back to whatever each last rendered.
+   */
+  | { type: 'arrange'; change: Partial<Arrangement> }
+  /** Reopen every session that fell together — the cockpit's own `task-reopen` grouping. */
+  | { type: 'reopenFell' }
   /**
    * Stop a session, ASKING FIRST.
    *
