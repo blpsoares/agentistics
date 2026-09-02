@@ -49,24 +49,30 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
       style={{
         position: 'fixed', top: 0, left: 0, right: 0, height, zIndex: 300,
         display: 'flex', alignItems: 'center',
-        padding: '0 10px', boxSizing: 'border-box',
+        padding: collapsed ? '0 6px 0 0' : '0 10px', boxSizing: 'border-box',
         background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)',
       }}
     >
       {/* Over the aside's own column, so the two read as one left edge whatever the width. */}
+      {/* Sized to the aside beneath so the two read as one left edge. Collapsed it takes the whole
+          64px rather than insetting: the mark and the toggle together need 52 of it, and the inset
+          that looks right at 248px is what would push the toggle out of the rail. */}
       <div style={{
-        width: Math.max(0, asideWidth - 20),
-        display: 'flex', alignItems: 'center', gap: 4, minWidth: 0,
+        width: collapsed ? asideWidth : Math.max(0, asideWidth - 20),
+        display: 'flex', alignItems: 'center', gap: collapsed ? 2 : 4, minWidth: 0,
         justifyContent: collapsed ? 'center' : 'flex-start',
       }}>
-        {!collapsed && (
-          <img
-            src='/minimalistLogo.png'
-            alt="agentistics"
-            style={{ height: 26, width: 'auto', flexShrink: 0, marginRight: 'auto' }}
-          />
-        )}
-        {onSearch && (
+        {/* The mark shows in BOTH states. A collapsed sidebar is still the product's left edge, and
+            an earlier pass hid it there — leaving the app with no identity anywhere on screen. */}
+        <img
+          src='/minimalistLogo.png'
+          alt="agentistics"
+          style={{ height: collapsed ? 22 : 26, width: 'auto', flexShrink: 0, marginRight: collapsed ? 0 : 'auto' }}
+        />
+        {/* Collapsed, the rail holds the mark and the toggle and nothing else: three controls in
+            64px is three cramped controls. Search is one keystroke away (Ctrl+K) and one click away
+            once the sidebar is open. */}
+        {onSearch && !collapsed && (
           <button
             onClick={onSearch}
             aria-label={pt ? 'Buscar' : 'Search'}
@@ -80,7 +86,8 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
           onClick={onToggleSidebar}
           aria-label={collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}
           title={`${collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}  ·  Ctrl+B`}
-          style={iconBtn} onMouseEnter={hover(true)} onMouseLeave={hover(false)}
+          style={{ ...iconBtn, width: collapsed ? 28 : 30, height: collapsed ? 28 : 30 }}
+          onMouseEnter={hover(true)} onMouseLeave={hover(false)}
         >
           <PanelLeft size={16} />
         </button>

@@ -86,7 +86,7 @@ export function SessionsAside({
   const total = groups.reduce((n, g) => n + g.sessions.length, 0)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 10, paddingTop: 4 }}>
       <div style={{ position: 'relative', padding: '0 2px' }}>
         <Search
           size={13}
@@ -99,7 +99,7 @@ export function SessionsAside({
           placeholder={pt ? 'Buscar sessão…' : 'Search sessions…'}
           style={{
             width: '100%', boxSizing: 'border-box',
-            padding: '7px 26px 7px 28px', borderRadius: 8,
+            padding: '9px 26px 9px 30px', borderRadius: 9,
             border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
             color: 'var(--text-primary)', fontFamily: 'inherit',
             // 16px on mobile or iOS Safari zooms the viewport; the global guard in index.css
@@ -132,7 +132,7 @@ export function SessionsAside({
           <div key={group.key} style={{ marginBottom: 10 }}>
             <div style={{
               display: 'flex', alignItems: 'baseline', gap: 6,
-              padding: '4px 8px 5px', fontSize: 10.5, fontWeight: 700,
+              padding: '6px 9px 7px', fontSize: 10.5, fontWeight: 700,
               textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)',
             }}>
               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.label}</span>
@@ -195,7 +195,7 @@ function SessionRow({ session, selected, onOpen }: {
       onClick={onOpen}
       style={{
         display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-        padding: '7px 8px', borderRadius: 8, border: 'none', textAlign: 'left',
+        padding: '9px 9px', borderRadius: 9, border: 'none', textAlign: 'left',
         background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
         color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
         cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
@@ -214,7 +214,7 @@ function SessionRow({ session, selected, onOpen }: {
           opacity: wants ? 1 : 0.55,
         }}
       />
-      <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
         <span style={{
           fontSize: 12.5, fontWeight: selected || wants ? 650 : 500,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',

@@ -62,7 +62,9 @@ import { Login } from './components/Login'
 import { ModeSwitch } from './components/nav/ModeSwitch'
 import { TopBar } from './components/nav/TopBar'
 import { SessionsAside } from './components/nav/SessionsAside'
+import { AsideResizer } from './components/nav/AsideResizer'
 import { modeOfPath } from './lib/workspaceMode'
+import { ASIDE_DEFAULT, resolveAsideWidth } from './lib/asideWidth'
 import { useFleet } from './lib/fleet'
 import { MemberConnectionStatus } from './components/MemberConnectionStatus'
 import { OwnerSetup } from './components/OwnerSetup'
@@ -981,9 +983,13 @@ function CollapsedTip({ label, show, children }: { label: string; show: boolean;
   )
 }
 
-function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, theme, onToggleTheme, onToggleLang, onExport, principal }: {
+function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, onResize, onCommitWidth, onToggle, theme, onToggleTheme, onToggleLang, onExport, principal }: {
   lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean
   collapsed: boolean; onToggle: () => void
+  /** The width in force. Fixed in the dashboard workspace, user-set in the sessions one. */
+  width: number
+  onResize: (w: number) => void
+  onCommitWidth: (w: number) => void
   theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onExport: () => void
   principal?: IamAccount
 }) {
@@ -1032,6 +1038,8 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
   const { fleet, loading: fleetLoading, unsupported: fleetUnsupported } = useFleet(pt ? 'pt' : 'en', !isCentral)
   const attention = fleet.attention
   const mode = modeOfPath(location.pathname)
+  // A resize in progress. Only used to suspend the collapse animation — see the aside's `transition`.
+  const [dragging, setDragging] = useState(false)
 
   const items: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
     { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={17} /> },
@@ -1055,10 +1063,16 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
   return (
     <aside style={{
       position: 'fixed', top: TOPBAR_H, left: 0, bottom: 0,
-      width: collapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, zIndex: 200,
+      width: collapsed ? SIDEBAR_W_COLLAPSED : width, zIndex: 200,
       background: 'var(--bg-surface)', borderRight: '1px solid var(--border)',
-      display: 'flex', flexDirection: 'column', padding: '14px 12px', boxSizing: 'border-box',
-      transition: 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1)', overflow: 'hidden',
+      display: 'flex', flexDirection: 'column', padding: collapsed ? '12px 8px' : '14px 12px', boxSizing: 'border-box',
+      // `fixed` is already a positioning context, so the resize handle on the edge places against
+      // it. Visible overflow, because that handle straddles the border by design and clipping it
+      // would leave half the hit area.
+      overflow: 'visible',
+      // The collapse ANIMATES; a drag must not. The width follows the pointer during a resize, and
+      // a transition on it makes the edge lag behind the cursor and then catch up.
+      transition: dragging ? 'none' : 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1)',
     }}>
       {/* The workspace switch, PINNED above the scrolling body. */}
       <div style={{ padding: '0 2px 10px' }}>
@@ -1081,7 +1095,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
           {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
         />
       ) : (
-      <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
+      <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 5, overflowY: 'auto', overflowX: 'hidden', flex: 1, paddingTop: 4 }}>
         {items.map(item => {
           const active = item.to === '/'
             ? location.pathname === '/'
@@ -1096,9 +1110,11 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
                 end={item.to === '/'}
                 aria-label={collapsed ? label : undefined}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 11, minWidth: 0,
-                  padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
-                  borderRadius: 9, textDecoration: 'none',
+                  display: 'flex', alignItems: 'center', gap: 12, minWidth: 0,
+                  // 40px of row. The list was laid out at 10px vertical padding and read as cramped
+                  // — a nav item is a target as well as a label, and 36px is the floor for one.
+                  padding: collapsed ? '11px 0' : '11px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
+                  borderRadius: 10, textDecoration: 'none',
                   fontSize: 13.5, fontWeight: active ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
                   color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
                   background: active ? 'var(--anthropic-orange-dim)' : 'transparent',
@@ -1114,6 +1130,17 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
           )
         })}
       </nav>
+      )}
+
+      {/* The resize handle, only in the workspace whose width is the user's to choose, and only
+          while the sidebar is open — there is nothing to resize about a 64px rail. */}
+      {mode === 'sessions' && !collapsed && (
+        <AsideResizer
+          width={width}
+          onResize={w => { setDragging(true); onResize(w) }}
+          onCommit={w => { setDragging(false); onCommitWidth(w) }}
+          lang={pt ? 'pt' : 'en'}
+        />
       )}
 
       {/* Footer — Row A account · thin divider · Row B config actions */}
@@ -1400,6 +1427,22 @@ export default function AppLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem('agentistics-sidebar-collapsed') === '1' } catch { return false }
   })
+  /**
+   * The sessions workspace's sidebar width. Only that workspace is resizable: the dashboard's body
+   * is a fixed list of labels with a known longest item, so a wider column buys nothing there and a
+   * narrower one truncates words that were sized to fit. A session list is the opposite — the titles
+   * are the user's own sentences.
+   */
+  const [asideWidth, setAsideWidth] = useState(() => {
+    try { return resolveAsideWidth(localStorage.getItem('agentistics-aside-width'), window.innerWidth) }
+    catch { return ASIDE_DEFAULT }
+  })
+  const commitAsideWidth = (w: number) => {
+    try { localStorage.setItem('agentistics-aside-width', String(w)) } catch { /* private mode */ }
+  }
+  // Sessions mode drives the stored width; the dashboard keeps its fixed one, so switching back
+  // never leaves the nav labels in a column somebody sized for session titles.
+  const liveAsideWidth = modeOfPath(location.pathname) === 'sessions' ? asideWidth : SIDEBAR_W
   const toggleSidebar = useCallback(() => setSidebarCollapsed(v => {
     const next = !v
     try { localStorage.setItem('agentistics-sidebar-collapsed', next ? '1' : '0') } catch { /* ignore */ }
@@ -2388,7 +2431,7 @@ export default function AppLayout() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W), paddingTop: isMobile ? 0 : TOPBAR_H, transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth), paddingTop: isMobile ? 0 : TOPBAR_H, transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
       {/* The billing prompt. Mounted HERE, after the archive consent gate's early return above, so
           the two can never stack on a first launch — one blocking modal behind one dismissible one
           is a pile nobody reads. It is the same component for the first-run invite and for the
@@ -2409,7 +2452,7 @@ export default function AppLayout() {
         <TopBar
           lang={lang === 'pt' ? 'pt' : 'en'}
           height={TOPBAR_H}
-          asideWidth={sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W}
+          asideWidth={sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth}
           collapsed={sidebarCollapsed}
           onToggleSidebar={toggleSidebar}
           {...(modeOfPath(location.pathname) === 'sessions'
@@ -2424,6 +2467,9 @@ export default function AppLayout() {
         isCentral={isCentral}
         hasWorkflows={(data.workflows?.length ?? 0) > 0}
         collapsed={sidebarCollapsed}
+        width={liveAsideWidth}
+        onResize={setAsideWidth}
+        onCommitWidth={commitAsideWidth}
         onToggle={toggleSidebar}
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
