@@ -104,6 +104,8 @@ interface Options {
   pending: boolean
   /** Make the fake host REFUSE to spawn, which is the wizard's failure path. */
   failSpawn: boolean
+  /** Not one assistant CLI on PATH, which is the wizard's EMPTY list and its own sentence. */
+  noHarness: boolean
   /**
    * Show the "your last sessions were these" offer.
    *
@@ -141,16 +143,31 @@ const USAGE = `
                             gate: --pending --keys enter,right,enter
     --fail-spawn            the new-session wizard's spawn is refused, so its failure
                             path is drawn: --fail-spawn --keys a,enter,enter,enter,enter,enter,enter
+    --no-harness            no assistant CLI is installed, so the wizard's harness list is
+                            empty and says why: --no-harness --keys n
     --restore               the machine lost its fleet, so the "start these again?"
                             offer is drawn in front of the list
     --group <arrangement>   open the sessions list already arranged this way, e.g.
                             \`--screen sessions --group tree\` for the cascade
 `
 
+/**
+ * The harnesses agentop knows how to start but cannot find here. Real bins, because the sentence
+ * the wizard draws is made of them.
+ */
+const MISSING_HARNESSES = [
+  { id: 'claude', bin: 'claude' },
+  { id: 'codex', bin: 'codex' },
+  { id: 'kimi', bin: 'kimi' },
+  { id: 'gemini', bin: 'gemini' },
+  { id: 'copilot', bin: 'copilot' },
+  { id: 'antigravity', bin: 'agy' },
+]
+
 function parseArgs(argv: string[]): Options {
   const opts: Options = {
     cols: 100, rows: 34, lang: 'en', screen: 'services', mode: 'solo', keys: [], task: 'off',
-    pending: false, failSpawn: false, restore: false,
+    pending: false, failSpawn: false, noHarness: false, restore: false,
   }
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]
@@ -175,6 +192,7 @@ function parseArgs(argv: string[]): Options {
       case '--cascade': opts.cascade = true; break
       case '--pending': opts.pending = true; break
       case '--fail-spawn': opts.failSpawn = true; break
+      case '--no-harness': opts.noHarness = true; break
       case '--restore': opts.restore = true; break
       case '--task':
         opts.task = value === 'done' ? 'done' : 'running'
@@ -444,11 +462,19 @@ function fakeHost(opts: Options, apiUrl?: string): ControlHost {
       ? { ...FAKE_FLEET, restorable: FAKE_RESTORABLE }
       : FAKE_FLEET),
     restoreSessions: done,
-    startableHarnesses: async () => [
-      { id: 'claude', label: 'claude', modelSuggestions: ['opus', 'sonnet', 'haiku'], supportsModel: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
-      { id: 'codex', label: 'codex', modelSuggestions: ['gpt-5.4', 'gpt-5.4-mini'], supportsModel: true, efforts: [] },
-      { id: 'kimi', label: 'kimi', modelSuggestions: ['kimi-k3'], supportsModel: true, efforts: [] },
-    ],
+    // `--no-harness` drives the wizard's EMPTY list, which has its own sentence: on a real machine
+    // it means not one assistant CLI resolved on PATH, and the layout of that answer needs looking
+    // at as much as the list does.
+    startableHarnesses: async () => (opts.noHarness
+      ? { options: [], missing: MISSING_HARNESSES }
+      : {
+        options: [
+          { id: 'claude', label: 'claude', modelSuggestions: ['opus', 'sonnet', 'haiku'], supportsModel: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+          { id: 'codex', label: 'codex', modelSuggestions: ['gpt-5.4', 'gpt-5.4-mini'], supportsModel: true, efforts: [] },
+          { id: 'kimi', label: 'kimi', modelSuggestions: ['kimi-k3'], supportsModel: true, efforts: [] },
+        ],
+        missing: MISSING_HARNESSES.filter(m => !['claude', 'codex', 'kimi'].includes(m.id)),
+      }),
     searchProjects: async (query: string) => FAKE_PROJECTS
       .filter(p => p.label.toLowerCase().includes(query.trim().toLowerCase())),
     // `--fail-spawn` drives the wizard's REFUSAL path, which is the one that used to eat the

@@ -95,7 +95,23 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          (`Record<HarnessId, SpawnSpec|null>` — a harness with no spec is
   │                          ABSENT from the wizard, never offered and failing), the PURE
   │                          `tmux-cli.ts` (every tmux argv and parse), `session-ref.ts` and the
-  │                          `managed-sessions.json` registry. **Every flag is read from the
+  │                          `managed-sessions.json` registry. **A spec answers "do we know this
+  │                          CLI's argv" and NOT "is it installed here"**, and the wizard offered
+  │                          every spec it had: picking a harness whose `bin` is not on PATH
+  │                          created a tmux session that died on `command not found`, on a screen
+  │                          nobody is looking at. `harness-install.ts` is the ONE resolution both
+  │                          front doors read — the cockpit through
+  │                          `ControlHost.startableHarnesses`, `agentop session` through its usage
+  │                          and its spawn paths — because one gesture implemented twice drifts.
+  │                          It is PURE over an injected probe (`resolveStartable`) with `Bun.which`
+  │                          CACHED behind a short TTL: the answer is asked for on every wizard
+  │                          mount and every spawn, and a cache held for the life of the process
+  │                          would go on denying a CLI installed a minute ago. Absent, never
+  │                          disabled — but an EMPTY list names the commands that would fill it
+  │                          (`wizNoHarness`), the same rule `liveEmptyNotice` follows, and a
+  │                          missing tmux keeps its own sentence because it stops every session
+  │                          rather than one row. `missingBin` is the guard one line before each
+  │                          spawn, for the reopens and fleet requests the wizard never filters. **Every flag is read from the
   │                          tool's own `--help`, never guessed** — codex's reasoning effort is
   │                          deliberately absent for that reason, while agy's IS wired up because
   │                          its `--help` prints the closed set. `kimi` and `copilot` get their

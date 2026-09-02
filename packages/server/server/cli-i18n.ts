@@ -237,6 +237,14 @@ export interface CliStrings {
   sessStartedBg: (name: string) => string
   sessSpawnFailed: (reason: string) => string
   sessSpawnUnsupported: (harness: string) => string
+  /**
+   * A harness agentop knows how to start whose CLI is not on this machine's PATH.
+   *
+   * Deliberately a DIFFERENT sentence from `sessSpawnUnsupported`: "agentop cannot drive it" and
+   * "it is not installed here" send someone to two different places, and only one of them is fixed
+   * by installing something. The command is named because it is the only actionable part.
+   */
+  sessSpawnNotInstalled: (harness: string, bin: string) => string
   sessSpawnNoResume: (harness: string) => string
   sessSpawnNoModel: (harness: string) => string
   sessSpawnNoEffort: (harness: string) => string
@@ -580,6 +588,8 @@ const EN: CliStrings = {
   sessStartedBg: (name: string) => `started ${name} in the background.`,
   sessSpawnFailed: (reason: string) => `could not start the session: ${reason}`,
   sessSpawnUnsupported: (harness: string) => `agentop cannot start ${harness} yet.`,
+  sessSpawnNotInstalled: (harness: string, bin: string) =>
+    `${harness} is not installed here — there is no \`${bin}\` on PATH.`,
   sessSpawnNoResume: (harness: string) => `${harness} cannot reopen a conversation by id.`,
   sessSpawnNoModel: (harness: string) => `${harness} has no model flag, so a model cannot be set.`,
   sessSpawnNoEffort: (harness: string) => `${harness} has no effort flag, so an effort cannot be set.`,
@@ -861,6 +871,8 @@ const PT: CliStrings = {
   sessStartedBg: (name: string) => `${name} iniciada em background.`,
   sessSpawnFailed: (reason: string) => `não deu para iniciar a sessão: ${reason}`,
   sessSpawnUnsupported: (harness: string) => `o agentop ainda não inicia ${harness}.`,
+  sessSpawnNotInstalled: (harness: string, bin: string) =>
+    `${harness} não está instalado aqui — não existe \`${bin}\` no PATH.`,
   sessSpawnNoResume: (harness: string) => `${harness} não reabre conversa por id.`,
   sessSpawnNoModel: (harness: string) => `${harness} não tem flag de modelo, então não dá para definir um.`,
   sessSpawnNoEffort: (harness: string) => `${harness} não tem flag de effort, então não dá para definir um.`,

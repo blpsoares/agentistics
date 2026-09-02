@@ -290,15 +290,16 @@ export interface FleetNewOptions {
   /** The tasks that already exist here, so filing the new session is a pick, not a spelling test. */
   tasks: string[]
   /**
-   * This machine cannot start sessions at all (no backend on this platform, or a host that does not
-   * implement it). Said in words: an empty harness list on its own reads as a broken wizard.
+   * Nothing can be started here, and why — no backend on this platform, a host that does not
+   * implement it, or not one assistant CLI on PATH. Said in words: an empty harness list on its own
+   * reads as a broken wizard.
    */
   unavailable?: string
 }
 
 /**
  * The wizard's own data. Never throws — a machine that cannot answer says so in a sentence, and an
- * empty list is only ever a real "there is nothing here".
+ * empty list always comes with the reason it is empty.
  */
 export async function readNewOptions(lang: CliLang, query: string): Promise<FleetNewOptions> {
   const s = controlStrings(lang)
@@ -307,13 +308,20 @@ export async function readNewOptions(lang: CliLang, query: string): Promise<Flee
     if (!host.startableHarnesses || !host.spawnSession) {
       return { harnesses: [], projects: [], tasks: [], unavailable: s.sessionsNoHost }
     }
-    const [harnesses, projects, tasks] = await Promise.all([
+    const [startable, projects, tasks] = await Promise.all([
       host.startableHarnesses(),
       host.searchProjects ? host.searchProjects(query).catch(() => []) : Promise.resolve([]),
       host.sessionTasks ? host.sessionTasks().catch(() => []) : Promise.resolve([]),
     ])
+    // An empty list is never left to speak for itself. The harnesses agentop knows how to start are
+    // narrowed to the CLIs that resolve on this machine, so "nothing to offer" means every one of
+    // them is missing — and the commands that would fill the list are the only actionable fact.
+    const unavailable = startable.options.length === 0
+      ? { unavailable: s.wizNoHarness(startable.missing.map(m => m.bin)) }
+      : {}
     return {
-      harnesses: harnesses.map(h => ({
+      ...unavailable,
+      harnesses: startable.options.map(h => ({
         id: h.id,
         label: h.label,
         modelSuggestions: [...h.modelSuggestions],
@@ -377,7 +385,7 @@ export async function runFleetSpawn(
   const host = await hostFor(lang)
   if (!host.spawnSession || !host.startableHarnesses) return { ok: false, message: s.sessionsNoHost }
 
-  const decision = planFleetSpawn(body, await host.startableHarnesses())
+  const decision = planFleetSpawn(body, (await host.startableHarnesses()).options)
   if (!decision.ok) {
     const detail = decision.detail ?? ''
     const message =
