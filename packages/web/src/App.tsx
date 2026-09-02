@@ -983,14 +983,21 @@ function CollapsedTip({ label, show, children }: { label: string; show: boolean;
   )
 }
 
-function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle, theme, onToggleTheme, onToggleLang, onExport, principal }: {
+function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, peek = false, onPeek, onToggle, theme, onToggleTheme, onToggleLang, onExport, principal }: {
   lang: Lang; harnesses?: HarnessId[]; isCentral?: boolean; hasWorkflows?: boolean
   collapsed: boolean; onToggle: () => void
+  /** The collapsed aside, held open by a hover on the top bar's toggle. See `TopBarProps.onPeek`. */
+  peek?: boolean
+  onPeek?: (open: boolean) => void
   theme: Theme; onToggleTheme: () => void; onToggleLang: () => void; onExport: () => void
   principal?: IamAccount
 }) {
   const location = useLocation()
   const pt = lang === 'pt'
+  // The aside is COLLAPSED as a setting and SHRUNK as a state. Hovering the top bar's toggle holds
+  // it open without expanding it, and everything the body draws must read the state, not the
+  // setting — otherwise the flyout renders the icon rail at full width.
+  const shrunk = collapsed && !peek
   // History, for the icon row. This ships as an installed PWA, where there is no browser chrome to
   // fall back on — in a plain tab they duplicate the browser's own, which is a cost worth paying
   // for the standalone case.
@@ -1054,19 +1061,42 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
     color: 'var(--text-secondary)', cursor: 'pointer', transition: 'all 0.15s',
   }
   return (
-    <aside style={{
-      position: 'fixed', top: TOPBAR_H, left: 0, bottom: 0, width: collapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, zIndex: 200,
+    <aside
+      // The pointer arrives on the top bar's toggle and then moves DOWN into the panel. Without
+      // this the panel closes the instant you reach for anything in it.
+      onMouseEnter={() => { if (collapsed) onPeek?.(true) }}
+      onMouseLeave={() => onPeek?.(false)}
+      style={{
+      position: 'fixed', top: TOPBAR_H, left: 0, bottom: 0,
+      width: shrunk ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, zIndex: 200,
+      // While flying out it floats OVER the page rather than pushing it: the page's left padding is
+      // computed from `collapsed`, the setting, so nothing reflows underneath.
+      boxShadow: peek ? '0 18px 48px rgba(0,0,0,0.45)' : 'none',
+      borderTopRightRadius: peek ? 14 : 0, borderBottomRightRadius: peek ? 14 : 0,
       background: 'var(--bg-surface)', borderRight: '1px solid var(--border)',
       display: 'flex', flexDirection: 'column', padding: '14px 12px', boxSizing: 'border-box',
       transition: 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1)', overflow: 'hidden',
     }}>
-      {/* The workspace switch, PINNED. The icon row that used to sit here moved to `TopBar`: it is
-          window chrome, not sidebar content, and in the reference layout it spans ABOVE the aside.
-          Keeping it inside meant the icons stacked into the 64px rail when collapsed. */}
+      {/* The mark. It stays in the aside in BOTH states — a collapsed sidebar is still the product's
+          left edge, and dropping it there left the app with no identity anywhere on screen. The
+          window's controls live one row up, in `TopBar`; these two never share a row, so neither
+          can overlap the other. */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: shrunk ? 'center' : 'flex-start',
+        padding: shrunk ? '0 0 10px' : '0 4px 10px', minHeight: 34,
+      }}>
+        <img
+          src='/minimalistLogo.png'
+          alt="agentistics"
+          style={{ height: shrunk ? 26 : 32, width: 'auto', flexShrink: 0 }}
+        />
+      </div>
+
+      {/* The workspace switch, PINNED above the scrolling body. */}
       <div style={{ padding: '0 2px 10px' }}>
-        <ModeSwitch lang={lang} collapsed={collapsed} attention={attention} />
+        <ModeSwitch lang={lang} collapsed={shrunk} attention={attention} />
         {/* Member machine: live connection status + latency to the central. Null unless connected. */}
-        {!collapsed && !isCentral && <div style={{ marginTop: 8 }}><MemberConnectionStatus lang={lang} compact /></div>}
+        {!shrunk && !isCentral && <div style={{ marginTop: 8 }}><MemberConnectionStatus lang={lang} compact /></div>}
       </div>
 
       <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
@@ -1078,14 +1108,14 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
               : location.pathname.startsWith(item.to)
           const label = pt ? item.labelPt : item.labelEn
           return (
-            <CollapsedTip key={item.to} label={label} show={collapsed}>
+            <CollapsedTip key={item.to} label={label} show={shrunk}>
               <NavLink
                 to={item.to}
                 end={item.to === '/'}
-                aria-label={collapsed ? label : undefined}
+                aria-label={shrunk ? label : undefined}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 11, minWidth: 0,
-                  padding: collapsed ? '10px 0' : '10px 12px', justifyContent: collapsed ? 'center' : 'flex-start',
+                  padding: shrunk ? '10px 0' : '10px 12px', justifyContent: shrunk ? 'center' : 'flex-start',
                   borderRadius: 9, textDecoration: 'none',
                   fontSize: 13.5, fontWeight: active ? 700 : 500, fontFamily: 'inherit', whiteSpace: 'nowrap',
                   color: active ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
@@ -1096,7 +1126,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
                 onMouseLeave={e => { if (!active) { const t = e.currentTarget as HTMLAnchorElement; t.style.color = 'var(--text-secondary)'; t.style.background = 'transparent' } }}
               >
                 <span style={{ flexShrink: 0, display: 'flex' }}>{item.icon}</span>
-                {!collapsed && label}
+                {!shrunk && label}
               </NavLink>
             </CollapsedTip>
           )
@@ -1107,25 +1137,25 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
       <div style={{ paddingTop: 10, marginTop: 6, borderTop: '1px solid var(--border)' }}>
         {/* Row A — account: a single profile button (avatar) opening a popover menu */}
         {principal && (
-          <div style={{ display: 'flex', justifyContent: collapsed ? 'center' : 'stretch', paddingBottom: 10 }}>
-            <CollapsedTip label={principal.name} show={collapsed}>
+          <div style={{ display: 'flex', justifyContent: shrunk ? 'center' : 'stretch', paddingBottom: 10 }}>
+            <CollapsedTip label={principal.name} show={shrunk}>
               <button ref={avatarRef} onClick={openMenu} aria-haspopup="menu" aria-expanded={menuOpen}
-                title={collapsed ? undefined : principal.name}
+                title={shrunk ? undefined : principal.name}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, width: collapsed ? 'auto' : '100%',
-                  padding: collapsed ? 0 : '4px 6px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit',
+                  display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, width: shrunk ? 'auto' : '100%',
+                  padding: shrunk ? 0 : '4px 6px', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit',
                   border: '1px solid transparent', background: menuOpen ? 'var(--bg-elevated)' : 'transparent', transition: 'background 0.15s',
                 }}
                 onMouseEnter={e => { if (!menuOpen) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)' }}
                 onMouseLeave={e => { if (!menuOpen) (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}>
                 <span style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11.5, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', flexShrink: 0 }}>{principal.name.slice(0, 2)}</span>
-                {!collapsed && (
+                {!shrunk && (
                   <span style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
                     <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{principal.name}</span>
                     <span style={{ display: 'block', fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{roleLabel}</span>
                   </span>
                 )}
-                {!collapsed && <ChevronDown size={14} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />}
+                {!shrunk && <ChevronDown size={14} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />}
               </button>
             </CollapsedTip>
           </div>
@@ -1174,29 +1204,29 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
         {principal && <div style={{ height: 1, background: 'var(--border)', marginBottom: 10 }} />}
 
         {/* Row B — config actions (theme · language · export · settings), evenly spaced */}
-        <div style={{ display: 'flex', flexDirection: collapsed ? 'column' : 'row', alignItems: 'center', gap: 6 }}>
-          <CollapsedTip label={pt ? 'Tema' : 'Theme'} show={collapsed}>
-            <button onClick={onToggleTheme} aria-label={pt ? 'Tema' : 'Theme'} title={collapsed ? undefined : (theme === 'dark' ? (pt ? 'Tema claro' : 'Light theme') : (pt ? 'Tema escuro' : 'Dark theme'))} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1 }}
+        <div style={{ display: 'flex', flexDirection: shrunk ? 'column' : 'row', alignItems: 'center', gap: 6 }}>
+          <CollapsedTip label={pt ? 'Tema' : 'Theme'} show={shrunk}>
+            <button onClick={onToggleTheme} aria-label={pt ? 'Tema' : 'Theme'} title={shrunk ? undefined : (theme === 'dark' ? (pt ? 'Tema claro' : 'Light theme') : (pt ? 'Tema escuro' : 'Dark theme'))} style={{ ...footBtn, width: shrunk ? 34 : 'auto', flex: shrunk ? undefined : 1 }}
               onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
               onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
               {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
             </button>
           </CollapsedTip>
-          <CollapsedTip label={pt ? 'Idioma' : 'Language'} show={collapsed}>
-            <button onClick={onToggleLang} aria-label={pt ? 'Idioma' : 'Language'} title={collapsed ? undefined : (pt ? 'Switch to English' : 'Mudar para Português')} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, gap: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
+          <CollapsedTip label={pt ? 'Idioma' : 'Language'} show={shrunk}>
+            <button onClick={onToggleLang} aria-label={pt ? 'Idioma' : 'Language'} title={shrunk ? undefined : (pt ? 'Switch to English' : 'Mudar para Português')} style={{ ...footBtn, width: shrunk ? 34 : 'auto', flex: shrunk ? undefined : 1, gap: 5, fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
               onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-primary)' }}
               onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)' }}>
-              <Globe size={14} />{!collapsed && (pt ? 'EN' : 'PT')}
+              <Globe size={14} />{!shrunk && (pt ? 'EN' : 'PT')}
             </button>
           </CollapsedTip>
-          <CollapsedTip label={pt ? 'Exportar' : 'Export'} show={collapsed}>
-            <button onClick={onExport} aria-label={pt ? 'Exportar relatório PDF' : 'Export PDF report'} title={collapsed ? undefined : (pt ? 'Exportar relatório PDF' : 'Export PDF report')}
-              style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, borderColor: 'var(--anthropic-orange)50', color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)' }}>
+          <CollapsedTip label={pt ? 'Exportar' : 'Export'} show={shrunk}>
+            <button onClick={onExport} aria-label={pt ? 'Exportar relatório PDF' : 'Export PDF report'} title={shrunk ? undefined : (pt ? 'Exportar relatório PDF' : 'Export PDF report')}
+              style={{ ...footBtn, width: shrunk ? 34 : 'auto', flex: shrunk ? undefined : 1, borderColor: 'var(--anthropic-orange)50', color: 'var(--anthropic-orange)', background: 'var(--anthropic-orange-dim)' }}>
               <Download size={15} />
             </button>
           </CollapsedTip>
-          <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={collapsed}>
-            <NavLink to="/settings" aria-label={pt ? 'Configurações' : 'Settings'} title={collapsed ? undefined : (pt ? 'Configurações' : 'Settings')} style={{ ...footBtn, width: collapsed ? 34 : 'auto', flex: collapsed ? undefined : 1, textDecoration: 'none' }}
+          <CollapsedTip label={pt ? 'Configurações' : 'Settings'} show={shrunk}>
+            <NavLink to="/settings" aria-label={pt ? 'Configurações' : 'Settings'} title={shrunk ? undefined : (pt ? 'Configurações' : 'Settings')} style={{ ...footBtn, width: shrunk ? 34 : 'auto', flex: shrunk ? undefined : 1, textDecoration: 'none' }}
               onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-primary)' }}
               onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.color = 'var(--text-secondary)' }}>
               <SlidersHorizontal size={15} />
@@ -1387,6 +1417,14 @@ export default function AppLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem('agentistics-sidebar-collapsed') === '1' } catch { return false }
   })
+  /**
+   * The collapsed aside, revealed on hover without being expanded.
+   *
+   * State lives here rather than in either component because the POINTER is on the top bar's toggle
+   * while the PANEL is the aside — and the aside must be able to hold it open when the pointer moves
+   * into it, or the panel closes the instant you reach for anything in it.
+   */
+  const [sidebarPeek, setSidebarPeek] = useState(false)
   const toggleSidebar = useCallback(() => setSidebarCollapsed(v => {
     const next = !v
     try { localStorage.setItem('agentistics-sidebar-collapsed', next ? '1' : '0') } catch { /* ignore */ }
@@ -2396,9 +2434,9 @@ export default function AppLayout() {
         <TopBar
           lang={lang === 'pt' ? 'pt' : 'en'}
           height={TOPBAR_H}
-          asideWidth={sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W}
           collapsed={sidebarCollapsed}
           onToggleSidebar={toggleSidebar}
+          onPeek={setSidebarPeek}
         />
       )}
       {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
@@ -2408,6 +2446,8 @@ export default function AppLayout() {
         isCentral={isCentral}
         hasWorkflows={(data.workflows?.length ?? 0) > 0}
         collapsed={sidebarCollapsed}
+        peek={sidebarPeek}
+        onPeek={setSidebarPeek}
         onToggle={toggleSidebar}
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}

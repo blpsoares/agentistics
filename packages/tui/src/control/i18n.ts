@@ -739,6 +739,7 @@ const EN: ControlStrings = {
   sessionsFilterNoHistory: 'without closed conversations',
   sessionsFilterNamed: 'plus named',
   sessionsGroupings: {
+    day: 'day',
     repo: 'repository',
     task: 'task',
     none: 'flat',
@@ -750,6 +751,7 @@ const EN: ControlStrings = {
     marked: 'marked',
   },
   sessionsUnfiled: {
+    day: 'no date recorded',
     harness: 'harness unknown',
     model: 'no model recorded',
     project: 'no directory recorded',
@@ -1208,6 +1210,7 @@ const PT: ControlStrings = {
   sessionsFilterNoHistory: 'sem conversas fechadas',
   sessionsFilterNamed: 'mais as nomeadas',
   sessionsGroupings: {
+    day: 'dia',
     repo: 'repositório',
     task: 'tarefa',
     none: 'lista',
@@ -1219,6 +1222,7 @@ const PT: ControlStrings = {
     marked: 'marcadas',
   },
   sessionsUnfiled: {
+    day: 'sem data registrada',
     harness: 'harness desconhecido',
     model: 'sem modelo registrado',
     project: 'sem diretório registrado',
@@ -1529,6 +1533,7 @@ export function controlStrings(lang: CliLang): ControlStrings {
 export function sessionWordBook(c: ControlStrings): DimensionWordBook {
   return dimensionWordBook({
     labels: {
+      day: c.sessionsGroupings.day,
       status: c.sessionsGroupings.status,
       harness: c.sessionsGroupings.harness,
       model: c.sessionsGroupings.model,

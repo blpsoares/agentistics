@@ -17,10 +17,18 @@ import { ArrowLeft, ArrowRight, PanelLeft } from 'lucide-react'
 export interface TopBarProps {
   lang: 'pt' | 'en'
   height: number
-  /** Width of the aside beneath, so the mark and the toggle line up with it. */
-  asideWidth: number
   collapsed: boolean
   onToggleSidebar: () => void
+  /**
+   * Hovering the sidebar toggle while the aside is COLLAPSED reveals the whole sidebar as a
+   * floating panel. Reported by the pointer here and rendered by the aside itself, which is what
+   * keeps it one sidebar: a flyout that drew its own copy of the body would be a second one to
+   * drift.
+   *
+   * `onFocus` opens it too. A panel reachable only by hover is unreachable to a keyboard, and there
+   * is no hover at all on a touch screen.
+   */
+  onPeek: (open: boolean) => void
 }
 
 const iconBtn: React.CSSProperties = {
@@ -30,7 +38,7 @@ const iconBtn: React.CSSProperties = {
   transition: 'background 0.15s, color 0.15s',
 }
 
-export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar }: TopBarProps) {
+export function TopBar({ lang, height, collapsed, onToggleSidebar, onPeek }: TopBarProps) {
   const pt = lang === 'pt'
   const navigate = useNavigate()
 
@@ -49,38 +57,36 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar }:
         background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)',
       }}
     >
-      {/* The mark sits over the aside's own column, so the two read as one edge. */}
-      <div style={{ width: Math.max(0, asideWidth - 20), display: 'flex', alignItems: 'center', gap: 2, minWidth: 0 }}>
-        <button
-          onClick={onToggleSidebar}
-          aria-label={collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}
-          title={`${collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}  Ctrl+B`}
-          style={iconBtn}
-          onMouseEnter={hover(true)}
-          onMouseLeave={hover(false)}
-        >
-          <PanelLeft size={16} />
-        </button>
-        <button
-          onClick={() => navigate(-1)}
-          aria-label={pt ? 'Voltar' : 'Back'} title={pt ? 'Voltar' : 'Back'}
-          style={iconBtn} onMouseEnter={hover(true)} onMouseLeave={hover(false)}
-        >
-          <ArrowLeft size={16} />
-        </button>
-        <button
-          onClick={() => navigate(1)}
-          aria-label={pt ? 'Avançar' : 'Forward'} title={pt ? 'Avançar' : 'Forward'}
-          style={iconBtn} onMouseEnter={hover(true)} onMouseLeave={hover(false)}
-        >
-          <ArrowRight size={16} />
-        </button>
-      </div>
-      <img
-        src='/minimalistLogo.png'
-        alt="agentistics"
-        style={{ height: 24, width: 'auto', flexShrink: 0, opacity: 0.9 }}
-      />
+      {/* LEFT, over the aside's own column. They are the window's controls and they read as the
+          first thing on the row; the aside below keeps the mark. */}
+      <button
+        onClick={onToggleSidebar}
+        onMouseEnter={() => { if (collapsed) onPeek(true) }}
+        onMouseLeave={() => onPeek(false)}
+        onFocus={() => { if (collapsed) onPeek(true) }}
+        onBlur={() => onPeek(false)}
+        aria-label={collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}
+        title={`${collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}  ·  Ctrl+B`}
+        style={iconBtn}
+        onMouseOver={hover(true)}
+        onMouseOut={hover(false)}
+      >
+        <PanelLeft size={16} />
+      </button>
+      <button
+        onClick={() => navigate(-1)}
+        aria-label={pt ? 'Voltar' : 'Back'} title={pt ? 'Voltar' : 'Back'}
+        style={iconBtn} onMouseEnter={hover(true)} onMouseLeave={hover(false)}
+      >
+        <ArrowLeft size={16} />
+      </button>
+      <button
+        onClick={() => navigate(1)}
+        aria-label={pt ? 'Avançar' : 'Forward'} title={pt ? 'Avançar' : 'Forward'}
+        style={iconBtn} onMouseEnter={hover(true)} onMouseLeave={hover(false)}
+      >
+        <ArrowRight size={16} />
+      </button>
     </div>
   )
 }
