@@ -11,7 +11,7 @@ import {
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowLeft, ArrowRight, PanelLeft,
   GitBranch, Users, LogOut, Server, KeyRound, Tag as TagIcon,
-  ShieldCheck, Cpu, MessagesSquare, TerminalSquare, Square,
+  ShieldCheck, Cpu, MessagesSquare, TerminalSquare,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import { usePlanBasis } from './hooks/usePlanBasis'
@@ -2876,7 +2876,6 @@ export default function AppLayout() {
             `SessionPanel` goes back to drawing its own, self-contained. */}
         {inSessionsWorkspace && !isMobile && selectedFleetSession && (() => {
           const chattable = selectedFleetSession.conversationBlind === undefined
-          const stopVerb = selectedSessionRow?.verbs.find(v => v.action === 'interrupt')
           return (
             <div style={{
               borderTop: '1px solid var(--border)',
@@ -2917,26 +2916,10 @@ export default function AppLayout() {
                 </div>
               )}
 
-              {/* Working's own stop — mirrors the composer's, for the moment the reader is looking
-                  at the terminal view instead and still wants to interrupt without hunting for the
-                  field. Absent the instant the turn ends, same gate as everywhere else it appears. */}
-              {selectedFleetSession.state === 'working' && stopVerb?.enabled && (
-                <button
-                  onClick={() => void headerFleetAct({ id: selectedFleetSession.id, action: 'interrupt' })}
-                  title={stopVerb.label}
-                  aria-label={stopVerb.label}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-                    minHeight: 32, padding: '0 11px', borderRadius: 9, cursor: 'pointer',
-                    border: '1px solid color-mix(in srgb, var(--accent-red) 45%, transparent)',
-                    background: 'color-mix(in srgb, var(--accent-red) 12%, transparent)',
-                    color: 'var(--accent-red)', fontFamily: 'inherit', fontSize: 12, fontWeight: 650,
-                  }}
-                >
-                  <Square size={11} fill="currentColor" />
-                  {lang === 'pt' ? 'Parar' : 'Stop'}
-                </button>
-              )}
+              {/* No interrupt button here any more — it duplicated the composer's own (Chat view)
+                  and the terminal pane already takes a literal Escape keystroke (Terminal view).
+                  Two stop controls on screen at once read as one broken control, not two working
+                  ones. */}
 
               {selectedSessionRow && (
                 <SessionActions
