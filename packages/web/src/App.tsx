@@ -60,6 +60,7 @@ import { resolveArchiveChoice } from './lib/archive'
 import { TeamLogin } from './components/TeamLogin'
 import { Login } from './components/Login'
 import { ModeSwitch } from './components/nav/ModeSwitch'
+import { TopBar } from './components/nav/TopBar'
 import { modeOfPath } from './lib/workspaceMode'
 import { useFleet } from './lib/fleet'
 import { MemberConnectionStatus } from './components/MemberConnectionStatus'
@@ -942,6 +943,14 @@ function MobileBottomNav({
   )
 }
 
+/**
+ * The fixed window chrome above everything, including the aside.
+ *
+ * It holds the icons that belong to the WINDOW rather than to the sidebar — history, the sidebar
+ * toggle, the mark. They lived in the aside for one iteration and stacked into the 64px rail the
+ * moment it was collapsed, which is the tell that they were never sidebar content.
+ */
+const TOPBAR_H = 44
 const SIDEBAR_W = 248
 const SIDEBAR_W_COLLAPSED = 64
 
@@ -1046,48 +1055,18 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, onToggle
   }
   return (
     <aside style={{
-      position: 'fixed', top: 0, left: 0, bottom: 0, width: collapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, zIndex: 200,
+      position: 'fixed', top: TOPBAR_H, left: 0, bottom: 0, width: collapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, zIndex: 200,
       background: 'var(--bg-surface)', borderRight: '1px solid var(--border)',
       display: 'flex', flexDirection: 'column', padding: '14px 12px', boxSizing: 'border-box',
       transition: 'width 0.22s cubic-bezier(0.22, 1, 0.36, 1)', overflow: 'hidden',
     }}>
-      {/* The aside's own chrome: an icon row, then the pinned workspace switch below it.
-          Deliberately NOT a copy of the reference's five icons — back and forward earn their place
-          because this ships as an installed PWA with no browser chrome, but a search button would
-          have nothing to open in the dashboard workspace, and a control that does nothing is
-          indistinguishable from one that is broken. It arrives with the sessions list, which is
-          the thing there is to search. */}
-      <div style={{ padding: '0 2px 10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, minHeight: 34 }}>
-          {!collapsed && <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 26, width: 'auto', flexShrink: 0, marginRight: 'auto' }} />}
-          {!collapsed && (
-            <>
-              <button onClick={() => navigate(-1)} aria-label={pt ? 'Voltar' : 'Back'} title={pt ? 'Voltar' : 'Back'}
-                style={{ ...footBtn, width: 28, height: 28, border: 'none' }}>
-                <ArrowLeft size={15} />
-              </button>
-              <button onClick={() => navigate(1)} aria-label={pt ? 'Avançar' : 'Forward'} title={pt ? 'Avançar' : 'Forward'}
-                style={{ ...footBtn, width: 28, height: 28, border: 'none' }}>
-                <ArrowRight size={15} />
-              </button>
-            </>
-          )}
-          <button onClick={onToggle} aria-label={collapsed ? (pt ? 'Expandir' : 'Expand') : (pt ? 'Recolher' : 'Collapse')}
-            title={collapsed ? (pt ? 'Expandir' : 'Expand') : (pt ? 'Recolher' : 'Collapse')}
-            style={{ ...footBtn, width: 28, height: 28, border: 'none', marginLeft: collapsed ? 'auto' : 0, marginRight: collapsed ? 'auto' : 0 }}>
-            <PanelLeft size={15} />
-          </button>
-        </div>
-        {/* Member machine: live connection status + latency to the central (mirrors the
-            central's presence line). Renders null unless this instance is a connected member. */}
-        {!collapsed && !isCentral && <div style={{ marginTop: 6 }}><MemberConnectionStatus lang={lang} compact /></div>}
-      </div>
-
-      {/* The workspace switch — PINNED. It sits above the scrolling body and never moves with it:
-          the sessions list can run to hundreds of rows, and a switch that scrolls away strands
-          somebody in a workspace with no visible way back. */}
+      {/* The workspace switch, PINNED. The icon row that used to sit here moved to `TopBar`: it is
+          window chrome, not sidebar content, and in the reference layout it spans ABOVE the aside.
+          Keeping it inside meant the icons stacked into the 64px rail when collapsed. */}
       <div style={{ padding: '0 2px 10px' }}>
         <ModeSwitch lang={lang} collapsed={collapsed} attention={attention} />
+        {/* Member machine: live connection status + latency to the central. Null unless connected. */}
+        {!collapsed && !isCentral && <div style={{ marginTop: 8 }}><MemberConnectionStatus lang={lang} compact /></div>}
       </div>
 
       <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 3, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
@@ -2396,7 +2375,7 @@ export default function AppLayout() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W), transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg-base)', display: 'flex', flexDirection: 'column', paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W), paddingTop: isMobile ? 0 : TOPBAR_H, transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)' }}>
       {/* The billing prompt. Mounted HERE, after the archive consent gate's early return above, so
           the two can never stack on a first launch — one blocking modal behind one dismissible one
           is a pile nobody reads. It is the same component for the first-run invite and for the
@@ -2412,6 +2391,16 @@ export default function AppLayout() {
           void saveBilling({ ...billing, introDismissed: true })
         }}
       />
+      {/* Fixed window chrome, above the aside — desktop only. */}
+      {!isMobile && (
+        <TopBar
+          lang={lang === 'pt' ? 'pt' : 'en'}
+          height={TOPBAR_H}
+          asideWidth={sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W}
+          collapsed={sidebarCollapsed}
+          onToggleSidebar={toggleSidebar}
+        />
+      )}
       {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
       {!isMobile && <SideNav
         lang={lang}
@@ -2430,7 +2419,9 @@ export default function AppLayout() {
       <header style={{
         background: 'var(--bg-surface)',
         position: 'sticky',
-        top: 0,
+        // Under the fixed window chrome, not at the viewport top: the filters bar is page chrome
+        // and the TopBar is window chrome, and one must not slide beneath the other.
+        top: isMobile ? 0 : TOPBAR_H,
         zIndex: 100,
         backdropFilter: 'blur(12px)',
         WebkitBackdropFilter: 'blur(12px)',

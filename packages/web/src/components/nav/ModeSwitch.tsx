@@ -59,7 +59,11 @@ export function ModeSwitch({ lang, collapsed = false, attention = 0 }: ModeSwitc
         // `min-width: auto`, which refuses to shrink below its content — so icon + label + badge
         // pushed the second segment straight out through the aside's right edge. Reported as
         // "o botao de sessions ta passando pra fora"; it is the default, not the styling.
-        display: 'flex', gap: 3, padding: 3, borderRadius: 10, minWidth: 0, width: '100%',
+        // COLLAPSED IT STACKS. The rail leaves about 36px of inner width, and two segments side
+        // by side there is not a tight fit, it is an impossible one — the icons piled on top of
+        // each other. A segmented control that cannot fit its segments becomes a list of them.
+        display: 'flex', flexDirection: collapsed ? 'column' : 'row',
+        gap: 3, padding: 3, borderRadius: 10, minWidth: 0, width: '100%',
         boxSizing: 'border-box',
         background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
       }}
@@ -82,7 +86,7 @@ export function ModeSwitch({ lang, collapsed = false, attention = 0 }: ModeSwitc
               position: 'relative',
               // 36px is the desktop figure. The mobile form of this control is rendered by
               // MobileBottomNav, which carries the 44px touch target its own rows use.
-              minHeight: 36, padding: collapsed ? '0' : '0 8px',
+              minHeight: 34, padding: collapsed ? '0' : '0 8px',
               borderRadius: 8, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
               fontSize: 12.5, fontWeight: on ? 700 : 500, whiteSpace: 'nowrap',
               background: on ? 'var(--bg-surface)' : 'transparent',
