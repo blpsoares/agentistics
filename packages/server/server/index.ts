@@ -2084,6 +2084,43 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       return new Response(res.body, { status: res.status, headers })
     }
 
+    // GET /api/team/machine-fleet?machineId=… — one machine's session fleet, RELAYED.
+    //
+    // Central-only, and it does no host work: the fleet comes from the machine over the reverse
+    // channel, never from this box's own tmux (which is what the TEAM_CENTRAL block on
+    // /api/fleet* exists to prevent, and that block stays). Deliberately NOT in
+    // capability-guard.ts — it spawns nothing, reads no transcript and touches no dotfile; the
+    // reasoning is written down in machine-fleet-route.ts and pinned by capability-guard.test.ts,
+    // so the absence is a decision rather than an omission.
+    if (url.pathname === '/api/team/machine-fleet' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const principal = await getPrincipal(req)
+      if (!principal) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const machineId = url.searchParams.get('machineId') ?? ''
+      const [{ resolveMachineFleet }, { listMachines }, agent, consent, relay] = await Promise.all([
+        import('./machine-fleet-route'),
+        import('./team-tokens'),
+        import('./team-agent'),
+        import('./machine-consent'),
+        import('./machine-fleet-relay'),
+      ])
+      const answer = await resolveMachineFleet(principal, machineId, {
+        listMachines,
+        isOnline: id => agent.hasAgentSocket(id),
+        consentOf: id => consent.effectiveConsent(id),
+        // `notifyMember` is the same send every central→member push already uses; the relay owns
+        // the correlation and the timeout.
+        request: id => relay.requestMachineFleet(id, payload => agent.notifyMember(id, payload)),
+      })
+      return new Response(JSON.stringify(answer), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     // /api/team/proposals — LOCAL, same-origin: the restriction proposals this machine has
     // received and decrypted, and the dismissal of one. Reading them changes nothing; APPLYING one
     // is the ordinary PATCH /api/team/connections/:id the user's click performs, never a server

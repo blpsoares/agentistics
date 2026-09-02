@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X, Loader2 } from 'lucide-react'
+import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X, Loader2, MonitorSmartphone } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { ConnectionsPanel } from '../../components/team/ConnectionsPanel'
 import { SectionHeader, Section, Select, Checkbox, ConfirmModal, RecordCard, RecordCardAction, SaveBar, runSaveSteps } from './primitives'
 import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { machineConsentView } from './machineConsentView'
+import { MachineFleetDrawer } from './MachineFleetDrawer'
 
 // interfaces
 interface MachineInfo {
@@ -575,6 +576,10 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   // Per-machine display values shared by the desktop row and the mobile card, so the two
   // renderings cannot drift apart.
+  // Which machine's relayed fleet is open. Only ever set for a machine whose row carries a
+  // consent, which the server sends only to the machine's OWN accounts.
+  const [fleetMachine, setFleetMachine] = useState<MachineInfo | null>(null)
+
   const machineView = (m: MachineInfo) => {
     const ownerIds = m.accountIds ?? (m.accountId ? [m.accountId] : [])
     const owners = m.owners ?? []
@@ -785,6 +790,11 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                   ]}
                   actions={
                     <>
+                      {v.consent?.tone === 'granted' && (
+                        <RecordCardAction label="View sessions" onClick={() => setFleetMachine(m)}>
+                          <MonitorSmartphone size={14} /> {pt ? 'Sessões' : 'Sessions'}
+                        </RecordCardAction>
+                      )}
                       {v.canManage && (
                         <RecordCardAction label="Edit machine" onClick={() => openEditMachine(m)}>
                           <Pencil size={14} /> {pt ? 'Editar' : 'Edit'}
@@ -906,6 +916,19 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                     </td>
                     <td style={td} onClick={e => e.stopPropagation()}>
                       <div style={{ display: 'flex', gap: 6 }}>
+                        {/* Only for a machine that has AGREED. A row that has not said, or that
+                            says no, gets no button — the state is already spelled out in the
+                            status cell, and a control whose only outcome is a refusal is a
+                            control that reads as broken. */}
+                        {consent?.tone === 'granted' && (
+                          <button
+                            style={{ ...ghostBtn, padding: '4px 8px' }}
+                            onClick={e => { e.stopPropagation(); setFleetMachine(m) }}
+                            title={pt ? 'Ver sessões' : 'View sessions'}
+                          >
+                            <MonitorSmartphone size={12} />
+                          </button>
+                        )}
                         {canManage && (
                           <button
                             style={{ ...ghostBtn, padding: '4px 8px' }}
@@ -946,6 +969,18 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* One machine's relayed session fleet — a READ, for its owning account only. Mounted only
+          while a machine is selected, so no request travels behind a closed panel. */}
+      {fleetMachine && (
+        <MachineFleetDrawer
+          open
+          machineId={fleetMachine.id}
+          machineName={fleetMachine.machineName}
+          lang={pt ? 'pt' : 'en'}
+          onClose={() => setFleetMachine(null)}
+        />
       )}
 
       {/* Add machine drawer */}

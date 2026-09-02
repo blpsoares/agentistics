@@ -410,6 +410,49 @@ export function announceRemoteConsentNow(connId: string): void {
   })()
 }
 
+/**
+ * Answer one central's `fleet-request`.
+ *
+ * Never throws and never answers on the wrong shape: a frame with no rid is dropped silently, and
+ * the central's own timeout is what turns that into a sentence. Refusing to answer is also the
+ * correct response to a withdrawn consent — the central distinguishes "did not answer" from
+ * "says no" through `machine-consent.ts`, which the machine keeps up to date by announcement.
+ */
+async function answerFleetRequest(connId: string, socket: WebSocket, raw: string): Promise<void> {
+  try {
+    const msg = JSON.parse(raw) as { type?: string; rid?: unknown }
+    if (msg?.type !== 'fleet-request' || typeof msg.rid !== 'string' || !msg.rid) return
+    const conn = readTeamConnections(await readPreferences()).find(c => c.id === connId)
+    if (!conn) return
+    const [{ buildMachineFleetReply }, { readFleet }, { buildApiResponse }, { resolveLang }] = await Promise.all([
+      import('./sessions/machine-fleet'),
+      import('./sessions/fleet-web'),
+      import('./data'),
+      import('./cli-lang'),
+    ])
+    const lang = await resolveLang()
+    const reply = await buildMachineFleetReply(conn, lang, {
+      readFleet: async l => {
+        const payload = await readFleet(l)
+        return {
+          rows: payload.rows as unknown as Record<string, unknown>[],
+          attention: payload.attention,
+          ...(payload.unavailable ? { unavailable: payload.unavailable } : {}),
+        }
+      },
+      readIndexSources: async () => {
+        const data = await buildApiResponse()
+        return { sessions: data.sessions, projects: data.projects.map(p => ({ path: p.path, gitRemote: p.gitRemote })) }
+      },
+    })
+    // A machine that has not agreed sends NOTHING. An empty reply would read as "no sessions",
+    // which is a statement about the fleet rather than about consent.
+    if (!reply) return
+    if (socket.readyState !== WebSocket.OPEN) return
+    socket.send(JSON.stringify({ type: 'fleet-reply', rid: msg.rid, reply }))
+  } catch { /* the central's timeout reports this as a machine that did not answer */ }
+}
+
 /** Open a socket for ONE connection. Self-guards against a duplicate open (an already
  *  OPEN/CONNECTING socket for this id short-circuits). Never throws. */
 function openConnection(conn: TeamConnection): void {
@@ -449,6 +492,15 @@ function openConnection(conn: TeamConnection): void {
   // persist `user`, maybe nudge open dashboards to refetch.
   socket.addEventListener('message', (ev: MessageEvent) => {
     const raw = typeof ev.data === 'string' ? ev.data : ''
+    // 'fleet-request' — this central is asking for the fleet. Answered only if THIS machine has
+    // agreed, re-read from preferences on every frame rather than trusted from the asker: the
+    // central asking is never the authority, and a switch turned off a moment ago must take effect
+    // on this frame rather than at the next handshake. See sessions/machine-fleet.ts for the two
+    // narrowings the answer goes through.
+    if (raw.includes('"fleet-request"')) {
+      void answerFleetRequest(conn.id, socket, raw)
+      return
+    }
     const decision = decodeAgentFrame(raw, { connectionId: conn.id, central: labelOf(conn) })
     if (decision.notification) {
       const notification = decision.notification
