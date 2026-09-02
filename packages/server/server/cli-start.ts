@@ -34,7 +34,7 @@ import { writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
 import {
-  DEFAULT_TEAM, HARNESS_ORDER, repoShortName,
+  DEFAULT_TEAM, repoShortName,
   type HarnessId, type TeamConnection,
 } from '@agentistics/core'
 import type {
@@ -56,6 +56,7 @@ import type {
   ServiceRuntimeState,
   ServiceState,
   SessionHarnessOption,
+  StartableHarnesses,
   SessionViewPrefs,
   SpawnSessionRequest,
   SpawnSessionResult,
@@ -100,7 +101,10 @@ import { cliStrings, type CliLang, type CliStrings } from './cli-i18n'
 import { resolveLang } from './cli-lang'
 import { scanProcesses } from './live-sessions'
 import { resolveBackend } from './sessions'
-import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
+import { planSpawn } from './sessions/spawn-spec'
+// The ONE resolution of "which assistant can this machine actually start", shared with
+// `agentop session` — see `harness-install.ts`.
+import { missingBin, startableHere } from './sessions/harness-install'
 import { planTakeover } from './sessions/takeover'
 import { findProjects } from './sessions/project-source'
 import { candidatePath } from './sessions/project-search'
@@ -1489,6 +1493,13 @@ async function spawnManaged(req: {
   const backend = await resolveBackend()
   const blocked = await backend.unavailable()
   if (blocked) return { ok: false, message: blocked }
+
+  // The wizard never offers an absent CLI, but a REOPEN names a harness the registry recorded
+  // months ago and a fleet request names whatever it was sent. Checked here, one line before the
+  // spawn, rather than trusted from the caller: `command not found` inside tmux is a session that
+  // is created, dies, and reports nothing to anyone.
+  const absentBin = missingBin(req.harness)
+  if (absentBin) return { ok: false, message: s.sessSpawnNotInstalled(req.harness, absentBin) }
 
   const planned = planSpawn({
     harness: req.harness,
@@ -2998,23 +3009,28 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
     },
 
     /**
-     * Derived from `SPAWN_SPECS`, never a second hand-written list.
+     * Derived from `SPAWN_SPECS` and from this machine's PATH, never a second hand-written list.
      *
-     * A harness with no spec is ABSENT from the wizard rather than offered and failing — the same
-     * rule `agentop session`'s `STARTABLE` already follows, and the reason the two can never drift.
+     * A harness with no spec is ABSENT from the wizard rather than offered and failing, and so is
+     * one whose CLI does not resolve here — offering it produces a tmux session that dies on
+     * `command not found`, on a screen nobody is looking at. `startableHere()` is the ONE
+     * resolution `agentop session` reads too, which is the reason the two can never drift.
+     *
+     * The ones left out travel as `missing`: the wizard says nothing about them while there is
+     * something to offer, and names their commands when there is not.
      */
-    async startableHarnesses(): Promise<SessionHarnessOption[]> {
-      return HARNESS_ORDER.flatMap(id => {
-        const spec = SPAWN_SPECS[id]
-        if (!spec) return []
-        return [{
+    async startableHarnesses(): Promise<StartableHarnesses> {
+      const here = startableHere()
+      return {
+        options: here.installed.map(({ id, spec }): SessionHarnessOption => ({
           id,
           label: id,
           modelSuggestions: spec.modelSuggestions,
           supportsModel: spec.modelFlag !== undefined,
           efforts: spec.efforts ?? [],
-        }]
-      })
+        })),
+        missing: here.missing.map(m => ({ id: m.id, bin: m.bin })),
+      }
     },
 
     async searchProjects(query: string): Promise<ProjectOption[]> {

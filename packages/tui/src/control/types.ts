@@ -1406,17 +1406,41 @@ export interface ControlHost {
   /**
    * The harnesses this machine can actually START, with what each of them accepts.
    *
-   * Derived by the host from the spawn specs, so a harness with no spec is ABSENT from the wizard
-   * rather than offered and failing — the same rule the CLI already follows. The wizard renders
-   * whatever comes back and knows nothing about which CLI takes which flag.
+   * Derived by the host from the spawn specs AND from whether each CLI resolves on PATH, so a
+   * harness agentop cannot drive — or one that is simply not installed here — is ABSENT from the
+   * wizard rather than offered and failing. The wizard renders whatever comes back and knows
+   * nothing about which CLI takes which flag, nor which command it lives behind.
+   *
+   * The ones left out come back too, in `missing`: an empty list has to be able to say WHY.
    */
-  startableHarnesses?(): Promise<SessionHarnessOption[]>
+  startableHarnesses?(): Promise<StartableHarnesses>
 
   /** Places a new session could start, ranked. `query` may be empty, which opens on recency. */
   searchProjects?(query: string): Promise<ProjectOption[]>
 
   /** Start one. An attached request comes back with a ticket the shell hands to `ControlExit`. */
   spawnSession?(req: SpawnSessionRequest): Promise<SpawnSessionResult>
+}
+
+/**
+ * What this machine can start, and what it cannot.
+ *
+ * Two lists rather than one flagged list, because this screen's convention is ABSENT, never
+ * disabled: a harness that is not installed is not a choice being withheld, it is not a choice. The
+ * `missing` half exists so the wizard can say why an EMPTY list is empty and name what would fill
+ * it — the same rule `liveEmptyNotice` follows for the live panel, and the services screen for a
+ * runtime that cannot run here.
+ */
+export interface StartableHarnesses {
+  options: SessionHarnessOption[]
+  missing: MissingHarness[]
+}
+
+/** A harness agentop knows how to start whose CLI does not resolve here, and the command it needs. */
+export interface MissingHarness {
+  id: string
+  /** The command that would make it startable. The only actionable fact about the absence. */
+  bin: string
 }
 
 /** One harness the wizard may offer, and the shape of the questions it earns. */

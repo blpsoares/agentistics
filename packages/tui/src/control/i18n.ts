@@ -546,6 +546,14 @@ export interface ControlStrings {
   /** Said under a failure: nothing you typed was thrown away. */
   wizKeptDraft: string
   wizNoSpawn: string
+  /**
+   * Why the assistant list is EMPTY, naming the commands that would fill it.
+   *
+   * A wizard that opens on an empty list is indistinguishable from a broken one. `bins` are the
+   * commands agentop would run — the only actionable fact about the absence — and it can itself be
+   * empty on a build that knows how to start nothing at all, which is a different sentence.
+   */
+  wizNoHarness: (bins: string[]) => string
   wizNeedHarness: string
   wizNeedCwd: string
   wizAttached: string
@@ -1042,6 +1050,9 @@ const EN: ControlStrings = {
   wizStarting: 'starting…',
   wizKeptDraft: 'nothing you typed was lost — esc goes back a step, or try again',
   wizNoSpawn: 'this build cannot start sessions.',
+  wizNoHarness: (bins: string[]) => bins.length > 0
+    ? `no assistant is installed here. agentop starts a session by running one of these commands: ${bins.join(', ')} — install one and open this wizard again.`
+    : 'this build knows how to start no assistant at all.',
   wizNeedHarness: 'pick an assistant first.',
   wizNeedCwd: 'pick a folder first.',
   wizAttached: 'attached — take this terminal now',
@@ -1504,6 +1515,9 @@ const PT: ControlStrings = {
   wizStarting: 'iniciando…',
   wizKeptDraft: 'nada do que você digitou foi perdido — esc volta um passo, ou tente de novo',
   wizNoSpawn: 'esta build não consegue iniciar sessões.',
+  wizNoHarness: (bins: string[]) => bins.length > 0
+    ? `nenhum assistente está instalado aqui. O agentop inicia uma sessão rodando um destes comandos: ${bins.join(', ')} — instale um e abra este assistente de novo.`
+    : 'esta build não sabe iniciar nenhum assistente.',
   wizNeedHarness: 'escolha um assistente primeiro.',
   wizNeedCwd: 'escolha uma pasta primeiro.',
   wizAttached: 'anexada — assume este terminal agora',

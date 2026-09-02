@@ -4,8 +4,10 @@
  * Every question the CLI's flags express, asked in the order a person decides them: which assistant,
  * where, which model, how hard to think, what to say first, and whether to take the terminal now.
  * Nothing here knows which CLI takes which flag — the host answers `startableHarnesses()` from the
- * spawn specs, so a harness with no spec is ABSENT rather than offered and failing, and a harness
- * with no model flag is never asked about a model.
+ * spawn specs NARROWED to the CLIs that resolve on this machine's PATH, so a harness agentop cannot
+ * drive, or one that is simply not installed, is ABSENT rather than offered and failing; a harness
+ * with no model flag is never asked about a model. An empty list is not left to speak for itself:
+ * it names the commands that would fill it.
  *
  * The `where` step is the one that earns the wizard its place: a search field over the projects and
  * repositories this machine has actually worked in, opening on the directory you are standing in.
@@ -15,12 +17,16 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Box, Text, useInput } from 'ink'
 import type {
   ControlHost, ProjectOption, SessionHarnessOption, SpawnSessionRequest, SpawnSessionResult,
+  StartableHarnesses,
 } from '../types'
 import type { ControlStrings } from '../i18n'
 import { resolveListKey, windowOffset, type NavKey } from '../nav'
 import {
   PROJECT_LEAD, padCell, planSubmit, projectColumns, projectPickRows, type ProjectRow,
 } from '../sessions'
+// `.ts` explicitly: `Surface.tsx` sits beside `surface.ts` and the resolver picks the component
+// file otherwise. Same import `Surface.tsx` itself writes for the arithmetic it draws.
+import { clampLines, wrapText } from '../surface.ts'
 
 /**
  * What KIND of place each candidate is, at a glance.
@@ -79,7 +85,14 @@ export function SessionWizard({ host, strings: s, width, height, isActive, onCan
 }) {
   const [step, setStep] = useState<Step>('harness')
   const [draft, setDraft] = useState<Draft>({})
-  const [harnesses, setHarnesses] = useState<SessionHarnessOption[] | null>(null)
+  /**
+   * What this machine can start — and what it cannot, so an empty list can say why.
+   *
+   * `null` means the host has not answered YET, which is a different thing from an empty list and
+   * must not read as one: "reading…" while it loads, the reason once it is known.
+   */
+  const [startable, setStartable] = useState<StartableHarnesses | null>(null)
+  const harnesses = startable?.options ?? null
   /** Why the last attempt did not start. Shown in the wizard, which stays put so nothing is lost. */
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -88,7 +101,7 @@ export function SessionWizard({ host, strings: s, width, height, isActive, onCan
     const read = host.startableHarnesses
     if (!read) return
     let alive = true
-    void read.call(host).then(list => { if (alive) setHarnesses(list) })
+    void read.call(host).then(found => { if (alive) setStartable(found) })
     return () => { alive = false }
   }, [host])
 
@@ -165,7 +178,10 @@ export function SessionWizard({ host, strings: s, width, height, isActive, onCan
       <Picker
         label={s.wizHarness}
         options={(harnesses ?? []).map(h => ({ key: h.id, label: h.label }))}
-        empty={s.sessionsLoading}
+        // Three different facts, three different sentences. A harness that is not installed is
+        // ABSENT rather than shown and refused — but a list that is empty BECAUSE of that has to
+        // name the commands that would fill it, or it is indistinguishable from a broken screen.
+        empty={startable === null ? s.sessionsLoading : s.wizNoHarness(startable.missing.map(m => m.bin))}
         width={width}
         height={height}
         isActive={isActive}
@@ -355,7 +371,11 @@ function Picker({ label, options, empty, width, height, isActive, onPick }: {
       <Text bold>{truncate(label, width)}</Text>
       <Box height={1} />
       {options.length === 0 ? (
-        <Text dimColor>{truncate(empty, width)}</Text>
+        // WRAPPED, not truncated. The empty sentence is the only thing on this screen, and the
+        // half a narrow terminal would cut is the half naming what would fill the list.
+        clampLines(wrapText(empty, width), page, width).map((line, i) => (
+          <Text key={i} dimColor>{line}</Text>
+        ))
       ) : (
         options.slice(offset, offset + page).map((o, i) => {
           const active = offset + i === at

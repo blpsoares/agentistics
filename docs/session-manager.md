@@ -294,6 +294,15 @@ The folder step is a searchable table of every directory under your home — fol
 and why it is being offered — grouped by repository, with the directory you are standing in first.
 It reads the local store, so it works with the server stopped.
 
+The harness step offers **only the assistants installed on this machine**. agentop knows how to
+start six of them, and a CLI that does not resolve on your `PATH` is absent from the list rather
+than offered and failing — picking one would create a tmux session that dies immediately on
+`command not found`, on a screen nobody is looking at. If none of them resolve the list is empty and
+says so, naming the commands that would fill it. `agentop session --help` answers the same question
+from the same resolution: it prints what can be started **here**, and names the rest with the
+command each one needs. A missing `tmux` is a different sentence — that stops every session, not one
+row.
+
 `--bg` detaches and returns immediately. Without it the session takes over your terminal; the detach
 keystroke is printed before it does. `--cwd` defaults to the directory you are in.
 

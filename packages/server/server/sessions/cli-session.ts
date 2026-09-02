@@ -24,6 +24,10 @@ import { toControlSession } from './control-session'
 import { recordedRepo, repoFacts } from './repo-facts'
 import { emptyReason, renderSessionTable, resolveWidth } from './session-table'
 import { SPAWN_SPECS, planSpawn } from './spawn-spec'
+// Whether a harness's CLI actually resolves HERE — the same resolution the cockpit's wizard reads
+// through `ControlHost.startableHarnesses`, so the two lists can never disagree. See
+// `harness-install.ts`.
+import { missingBin, startableHere } from './harness-install'
 import { rulesFor } from './attention-rules'
 // The harness half of a rename. Shared with the cockpit's Rename verb — see `rename.ts`.
 import { renameInHarness, renameMessage } from './rename'
@@ -54,10 +58,24 @@ function spawnPromptArg(plan: SpawnPlan, harness: HarnessId): { initialPrompt?: 
   return { initialPrompt: { ...plan.initialPrompt, ...(rules ? { rules } : {}) } }
 }
 
-/** Derived from the specs, never a second hand-written list — the two could not then disagree. */
+/**
+ * The harnesses agentop knows how to spawn — derived from the specs, never a second hand-written
+ * list. It answers "do we know this CLI's argv" and NOT "is it installed here": that second
+ * question is `startableHere()`, and `explainPlanError` below is careful to keep the two sentences
+ * apart, because only one of them is fixed by installing something.
+ */
 const STARTABLE: HarnessId[] = HARNESS_ORDER.filter(h => SPAWN_SPECS[h] !== null)
 
-const USAGE = `Usage:
+/**
+ * A harness whose CLI is not on PATH, said in one sentence with the command that would fix it.
+ *
+ * The English twin of `CliStrings.sessSpawnNotInstalled` — `agentop session` prints its own words,
+ * exactly as it already renders `SpawnPlanError` itself rather than through the cockpit's strings.
+ */
+const notInstalled = (harness: string, bin: string) =>
+  `${harness} is not installed here — there is no \`${bin}\` on PATH.`
+
+const USAGE_BODY = `Usage:
   agentop session <harness> [-p "prompt"] [--bg] [--model <id>] [--effort <level>] [--cwd <path>] [--name "label"]
   agentop session ls     [--all] [--group ${GROUPINGS.join('|')}] [--json]
   agentop session list
@@ -90,7 +108,31 @@ Orchestrating several at once — the form an assistant should use:
       --session "codex: port the tests" \\
       --session "gemini: review the migration"
 
-Harnesses that can be started: ${STARTABLE.join(', ')}`
+`
+
+/**
+ * The usage text, with the harness line answered for THIS machine.
+ *
+ * It used to name every harness with a spawn spec, which reads as an offer — and picking one that
+ * is not installed produces a tmux session that dies on `command not found` with nobody watching.
+ * The ones agentop knows but cannot run here are still NAMED, with their command: absent from the
+ * offer, present in the explanation.
+ */
+function usage(): string {
+  const here = startableHere()
+  const installed = here.installed.map(h => h.id)
+  const absent = here.missing.map(m => `${m.id} (${m.bin})`)
+  const lines = [
+    installed.length > 0
+      ? `Harnesses that can be started here: ${installed.join(', ')}`
+      : 'No assistant CLI was found on PATH, so nothing can be started here yet.',
+  ]
+  if (absent.length > 0) {
+    lines.push(`agentop also knows how to start ${absent.join(', ')} — not found on this machine's PATH.`)
+  }
+  // `USAGE_BODY` already ends on its blank line — a second newline here would open a gap.
+  return `${USAGE_BODY}${lines.join('\n')}`
+}
 
 /**
  * A reconciled row as `resolveSessionRef` needs it. Unlike the registry alone, this includes
@@ -116,8 +158,8 @@ function explainPlanError(e: SpawnPlanError): string {
 
 export async function runSession(argv: string[]): Promise<number> {
   const cmd = parseSessionArgs(argv)
-  if (cmd.kind === 'help') { console.log(USAGE); return 0 }
-  if (cmd.kind === 'error') { console.error(cmd.message); console.error(`\n${USAGE}`); return 1 }
+  if (cmd.kind === 'help') { console.log(usage()); return 0 }
+  if (cmd.kind === 'error') { console.error(cmd.message); console.error(`\n${usage()}`); return 1 }
 
   const backend = await resolveBackend()
   const blocked = await backend.unavailable()
@@ -197,6 +239,11 @@ async function start(
   // is written verbatim into the registry, where `list` would print it back meaningless from
   // anywhere else.
   const cwd = cmd.cwd ? resolve(cmd.cwd) : process.cwd()
+  // Before anything is spawned, like the plan itself: a harness whose CLI is not here starts a tmux
+  // session that dies on `command not found`, and `spawnFailure` below would report the shell's
+  // words rather than the one fact that fixes it.
+  const absent = missingBin(cmd.harness)
+  if (absent) { console.error(notInstalled(cmd.harness, absent)); return 1 }
   const planned = planSpawn({
     harness: cmd.harness, cwd, prompt: cmd.prompt, model: cmd.model, effort: cmd.effort,
     conversationId: randomUUID(),
@@ -299,6 +346,8 @@ async function batch(
 
   for (const spec of cmd.specs) {
     const cwd = spec.cwd ? resolve(spec.cwd) : process.cwd()
+    const absent = missingBin(spec.harness)
+    if (absent) { failed.push({ harness: spec.harness, reason: notInstalled(spec.harness, absent) }); continue }
     const planned = planSpawn({
       harness: spec.harness,
       cwd,
@@ -409,7 +458,9 @@ async function openTask(task: string, json: boolean, backend: SessionBackend): P
   for (const row of plan.reopen) {
     const m = row.entry
     const planned = planSpawn({ harness: m.harness, cwd: m.cwd, resumeId: row.resumeId })
-    if (!planned.ok) { skipped.push(m.id); continue }
+    // A task filed months ago can name a harness whose CLI has since gone. Skipped and COUNTED,
+    // like every other row that cannot be reopened — never spawned into an immediate death.
+    if (!planned.ok || missingBin(m.harness)) { skipped.push(m.id); continue }
     const id = newSessionId()
     try {
       await backend.spawn({ id, cwd: m.cwd, argv: planned.plan.argv })
@@ -700,6 +751,12 @@ async function attach(ref: string, backend: SessionBackend): Promise<number> {
 async function takeOver(ref: string, backend: SessionBackend): Promise<number | null> {
   const live = await liveAgentFor(ref)
   if (!live) return null
+
+  // Checked BEFORE the plan, and so before any thought of closing anything: ending somebody's
+  // running assistant and then discovering its CLI is gone loses the turn for nothing. It is its
+  // own sentence rather than `resumable: false`, which would report a capability the harness has.
+  const absent = missingBin(live.harness)
+  if (absent) { console.error(notInstalled(live.harness, absent)); return 1 }
 
   const planned = planSpawn({ harness: live.harness, cwd: live.cwd, resumeId: live.sessionId })
   const plan = planTakeover({

@@ -174,6 +174,8 @@ export type {
   ServiceRuntimeState,
   ServiceState,
   SessionHarnessOption,
+  StartableHarnesses,
+  MissingHarness,
   SessionState,
   SessionViewPrefs,
   SpawnSessionRequest,
