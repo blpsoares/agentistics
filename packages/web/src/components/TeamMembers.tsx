@@ -3,6 +3,7 @@ import { Users, Plus, Trash2, Copy, CheckCheck, RefreshCw, AlertCircle, Pencil, 
 import type { MemberPresence } from '@agentistics/core'
 import { copyText } from '../lib/clipboard'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { sharedEventStream } from '../lib/eventStream'
 
 /** Shared 5-column grid for the desktop members table (status · user · label · last-seen · actions).
  *  minmax(0,…) lets the flexible columns actually shrink so long values ellipsize instead of
@@ -172,12 +173,11 @@ export function TeamMembers({ lang, presence }: Props) {
   // Instant refresh on server events (a member connecting/disconnecting fires an
   // immediate SSE 'change'), with a 10s poll as a fallback for latency drift.
   useEffect(() => {
-    const es = new EventSource('/api/events')
-    const onChange = () => { void loadMembers(true) }
-    es.addEventListener('change', onChange)
-    es.onerror = () => { /* browser auto-reconnects; ignore */ }
+    // Share the app's one `/api/events` socket (see lib/eventStream.ts). The 10s poll stays as a
+    // latency-drift fallback.
+    const unsubscribe = sharedEventStream().subscribe('change', () => { void loadMembers(true) })
     const id = setInterval(() => { void loadMembers(true) }, 10_000)
-    return () => { es.removeEventListener('change', onChange); es.close(); clearInterval(id) }
+    return () => { unsubscribe(); clearInterval(id) }
   }, [loadMembers])
 
   // Load the central's include-offline-data policy.
