@@ -1327,7 +1327,15 @@ export default function AppLayout() {
   // Flip to login screen when any API call returns 401 (team password set but cookie expired)
   useEffect(() => {
     if (error && error.includes('401') && teamSession?.required) {
-      setTeamSession({ required: true, authed: false })
+      // SPREAD, never a fresh object. This line predates centrals (it was written when the only
+      // gate was the shared team password) and replacing the whole state dropped `central`, which
+      // is the flag deciding WHICH login screen renders. On a central every /api/data call 401s
+      // until an account signs in, so the first one erased `central` and the app fell through to
+      // the legacy shared-password form — a form the server retired ("shared-password login
+      // retired; use account login"), so it could never succeed. Measured on a live central: the
+      // account login screen was unreachable, with a working `/api/team/session` reporting
+      // `central: true` on every poll.
+      setTeamSession(s => ({ ...(s ?? {}), required: true, authed: false }))
     }
     // 403 too, and for a reason that cost someone their whole first-run: the moment an owner
     // account is created, the gate starts refusing /api/data with `mfa_enrollment_required`
