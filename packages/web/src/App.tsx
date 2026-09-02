@@ -2464,15 +2464,7 @@ export default function AppLayout() {
 
   return (
     <div style={{
-      // The sessions workspace is a FIXED-HEIGHT column that does not scroll as a page: the filters
-      // bar and the session pane are its two children, and the pane owns the scrolling. `minHeight`
-      // was the bug behind "the header is still not fixed" — with the filters bar above it, header
-      // plus a `100vh - topbar` pane exceeds the viewport, so the whole PAGE scrolled and took the
-      // session's own header with it. Every other page keeps `minHeight`, because a document should
-      // grow past the fold.
-      ...(inSessionsWorkspace
-        ? { height: isMobile ? '100dvh' : '100vh', overflow: 'hidden' }
-        : { minHeight: '100vh' }),
+      minHeight: '100vh',
       background: 'var(--bg-base)', display: 'flex', flexDirection: 'column',
       paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth),
       paddingTop: isMobile ? 0 : TOPBAR_H,
@@ -2525,6 +2517,12 @@ export default function AppLayout() {
         principal={iam?.account}
       />}
       {/* Header */}
+      {/* Page chrome, and only where a page wants it. The sessions workspace is an application
+          pane whose own header is pinned inside it; a second strip above it both duplicated the
+          role and, being a sibling of a `100vh - topbar` pane, pushed the document into scrolling —
+          which is what made that inner header scroll away. The filters it holds scope stored
+          METRICS, which is not what a live fleet is. */}
+      {!inSessionsWorkspace && (
       <header style={{
         background: 'var(--bg-surface)',
         position: 'sticky',
@@ -2567,7 +2565,7 @@ export default function AppLayout() {
             (a slim summary row) so it doesn't eat the viewport while scrolling;
             the harness chips sit on their own row above the date/projects/models
             controls. Desktop always shows the full bar. */}
-        {data && !isCustomPage && isMobile && (
+        {data && !isCustomPage && !inSessionsWorkspace && isMobile && (
           <div style={{ borderTop: '1px solid var(--border)', width: '100%', boxSizing: 'border-box' }}>
             {/* Collapsed slim row — visible only when minimized; tap to expand. */}
             {filtersCollapsed && (
@@ -2702,7 +2700,7 @@ export default function AppLayout() {
             </div>
           </div>
         )}
-        {data && !isCustomPage && !isMobile && (
+        {data && !isCustomPage && !inSessionsWorkspace && !isMobile && (
           <div style={{
             maxWidth: 1400, margin: '0 auto', padding: '5px 32px', width: '100%', boxSizing: 'border-box',
             display: 'flex', alignItems: 'flex-start', gap: 14,
@@ -2874,6 +2872,7 @@ export default function AppLayout() {
         )
       })()}
       </header>
+      )}
 
       {/* Main content — routed pages render here via <Outlet /> */}
       {/* The sessions workspace is an APPLICATION PANE, not a document: it holds a terminal and a
@@ -2885,13 +2884,12 @@ export default function AppLayout() {
         inSessionsWorkspace
           ? {
               width: '100%', boxSizing: 'border-box', flex: 1, minWidth: 0,
-              // `flex: 1` + `minHeight: 0` inside the fixed-height column above. NOT a viewport
-              // calculation: the filters bar is a sibling here, so any `100vh - constant` is wrong
-              // by whatever height that bar happens to have — which is what made the pane taller
-              // than its room and pushed the page into scrolling.
+              // The exact window minus the fixed strip. This is only correct because the filters
+              // bar is NOT rendered in this workspace — see the header's own condition. While it
+              // was, root content exceeded the viewport by that bar's height, the PAGE scrolled,
+              // and the session's own header scrolled away with it.
+              height: isMobile ? 'calc(100dvh - var(--mobile-nav-h))' : `calc(100vh - ${TOPBAR_H}px)`,
               minHeight: 0,
-              // The mobile bottom nav is fixed over the page, so the pane has to end above it.
-              ...(isMobile ? { paddingBottom: 'var(--mobile-nav-h)' } : {}),
               display: 'flex', flexDirection: 'column', overflow: 'hidden',
             }
           : {

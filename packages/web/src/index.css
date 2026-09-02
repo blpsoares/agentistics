@@ -94,33 +94,14 @@
 }
 
 /* Header and footer are always dark in both themes */
-[data-theme="light"] footer {
-  --bg-surface: #111118;
-  --bg-card: #16161f;
-  --bg-elevated: #1e1e2e;
-  --bg-secondary: rgba(255, 255, 255, 0.04);
-  --border: rgba(255, 255, 255, 0.06);
-  --border-subtle: rgba(255, 255, 255, 0.03);
-  --text-primary: rgba(255, 255, 255, 0.92);
-  --text-secondary: rgba(255, 255, 255, 0.5);
-  --text-tertiary: rgba(255, 255, 255, 0.28);
-  --anthropic-orange: #f59e0b;
-  --anthropic-orange-light: #fbbf24;
-  --anthropic-orange-dim: rgba(245, 158, 11, 0.15);
-}
+/* The header and the footer used to be pinned DARK in the light theme — an explicit re-declaration
+   of the dark palette scoped to those two elements, so a light page carried two dark ribbons. It
+   was a deliberate design choice and it is being removed on the owner's instruction: switching to
+   the light theme is expected to light the whole application, and two elements that ignore it read
+   as a bug rather than as a decision. They now inherit `[data-theme="light"]` like everything else.
 
-[data-theme="light"] header {
-  --bg-surface: #111118;
-  --bg-elevated: #1e1e2e;
-  --bg-secondary: rgba(255, 255, 255, 0.04);
-  --border: rgba(255, 255, 255, 0.07);
-  --text-primary: rgba(255, 255, 255, 0.92);
-  --text-secondary: rgba(255, 255, 255, 0.5);
-  --text-tertiary: rgba(255, 255, 255, 0.28);
-  --anthropic-orange: #f59e0b;
-  --anthropic-orange-light: #fbbf24;
-  --anthropic-orange-dim: rgba(245, 158, 11, 0.15);
-}
+   To bring it back, restore a block of the same shape — nothing else depends on those overrides. */
+
 
 [data-theme="light"] ::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.15);
