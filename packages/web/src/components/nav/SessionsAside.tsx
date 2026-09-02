@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Eye, EyeOff, ListFilter, Pin, PinOff, Plus, Search, X } from 'lucide-react'
 import {
@@ -83,6 +84,9 @@ export function SessionsAside({
 }: SessionsAsideProps) {
   const pt = lang === 'pt'
   const navigate = useNavigate()
+  // 44px is the MOBILE figure. Applying it on desktop turns a compact list into a row of buttons.
+  const isMobile = useIsMobile()
+  const tap = isMobile ? 44 : undefined
   const { sessionId } = useParams()
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
@@ -185,7 +189,7 @@ export function SessionsAside({
         onClick={() => setCreating(true)}
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-          margin: '0 2px', padding: '9px 12px', borderRadius: 9, cursor: 'pointer',
+          margin: '0 2px', padding: '9px 12px', borderRadius: 9, cursor: 'pointer', minHeight: tap,
           border: '1px dashed var(--border)', background: 'transparent',
           color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600,
         }}
@@ -258,7 +262,7 @@ export function SessionsAside({
           onClick={() => setGroupingOpen(v => !v)}
           style={{
             display: 'flex', alignItems: 'center', gap: 7, width: '100%',
-            padding: '6px 9px', borderRadius: 8, cursor: 'pointer',
+            padding: '6px 9px', borderRadius: 8, cursor: 'pointer', minHeight: tap,
             border: '1px solid var(--border-subtle)', background: 'transparent',
             color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
           }}
@@ -288,7 +292,7 @@ export function SessionsAside({
                   onClick={() => { setGrouping(g); setGroupingOpen(false) }}
                   style={{
                     display: 'block', width: '100%', textAlign: 'left',
-                    padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer',
+                    padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer', minHeight: tap,
                     background: g === grouping ? 'var(--anthropic-orange-dim)' : 'transparent',
                     color: g === grouping ? 'var(--text-primary)' : 'var(--text-secondary)',
                     fontFamily: 'inherit', fontSize: 12.5, fontWeight: g === grouping ? 650 : 500,
@@ -306,7 +310,7 @@ export function SessionsAside({
         onClick={() => setOnlyActive(v => !v)}
         style={{
           display: 'flex', alignItems: 'center', gap: 7, width: 'calc(100% - 4px)',
-          margin: '0 2px', padding: '6px 9px', borderRadius: 8, cursor: 'pointer',
+          margin: '0 2px', padding: '6px 9px', borderRadius: 8, cursor: 'pointer', minHeight: tap,
           border: '1px solid var(--border-subtle)',
           background: onlyActive ? 'var(--anthropic-orange-dim)' : 'transparent',
           color: onlyActive ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
@@ -353,6 +357,7 @@ export function SessionsAside({
                   session={s}
                   selected={s.id === sessionId || s.conversationId === sessionId}
                   pinned
+                  {...(tap ? { tap } : {})}
                   onPin={() => flip(s)}
                   onOpen={() => navigate(`/sessions/${s.id}`)}
                 />
@@ -384,6 +389,7 @@ export function SessionsAside({
                 session={s}
                 selected={s.id === sessionId || s.conversationId === sessionId}
                 pinned={pinned.has(pinKeyOf(s))}
+                {...(tap ? { tap } : {})}
                 onPin={() => flip(s)}
                 onOpen={() => navigate(`/sessions/${s.id}`)}
               />
@@ -457,8 +463,10 @@ function EmptyReason({ pt, loading, unsupported, unavailable, searching, withhel
   )
 }
 
-function SessionRow({ session, selected, pinned, onPin, onOpen }: {
+function SessionRow({ session, selected, pinned, tap, onPin, onOpen }: {
   session: ControlSession; selected: boolean
+  /** Minimum row height on mobile — 44px, and undefined on desktop. */
+  tap?: number
   pinned?: boolean
   onPin?: () => void
   onOpen: () => void
@@ -470,7 +478,7 @@ function SessionRow({ session, selected, pinned, onPin, onOpen }: {
       onClick={onOpen}
       style={{
         display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-        padding: '9px 9px', borderRadius: 9, border: 'none', textAlign: 'left',
+        padding: '9px 9px', borderRadius: 9, border: 'none', textAlign: 'left', minHeight: tap,
         background: selected ? 'var(--anthropic-orange-dim)' : (STATE_WASH[session.state] ?? 'transparent'),
         // A live row also carries a coloured edge. The wash alone is faint by design, and an edge
         // survives a light theme and a colour-blind reader where a 10% tint does not.
@@ -538,7 +546,9 @@ function SessionRow({ session, selected, pinned, onPin, onOpen }: {
             color: pinned ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
             // A pin nobody set is faint until the row is hovered: a column of pin glyphs down an
             // unpinned list is noise beside the titles they sit next to.
-            opacity: pinned ? 1 : 0,
+            // There is no hover on a touch screen, so the pin is always visible there. On desktop
+            // it appears with the row — see `.ag-row-pin` in index.css.
+            opacity: pinned || tap ? 1 : 0,
             transition: 'opacity 0.15s',
           }}
           className="ag-row-pin"

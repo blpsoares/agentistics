@@ -2844,7 +2844,7 @@ export default function AppLayout() {
               width: '100%', boxSizing: 'border-box', flex: 1, minWidth: 0,
               // The exact window minus the fixed strip. Not `minHeight`: this pane must not grow,
               // or its inner scrollers never receive a bounded height and scroll the page instead.
-              height: isMobile ? 'calc(100vh - var(--mobile-nav-h))' : `calc(100vh - ${TOPBAR_H}px)`,
+              height: isMobile ? 'calc(100dvh - var(--mobile-nav-h))' : `calc(100vh - ${TOPBAR_H}px)`,
               display: 'flex', flexDirection: 'column', overflow: 'hidden',
             }
           : {

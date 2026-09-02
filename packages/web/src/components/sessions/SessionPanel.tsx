@@ -18,6 +18,7 @@ import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { TerminalRegion } from '../RecentSessions'
 import { SessionChat } from './SessionChat'
+import { SessionActions } from './SessionActions'
 
 export type SessionView = 'chat' | 'terminal'
 
@@ -30,9 +31,11 @@ export interface SessionPanelProps {
   act: (req: { id: string; action: FleetActionId; text?: string; choice?: number })
     => Promise<{ ok: boolean; message: string }>
   authorName?: string
+  /** Called after a verb that removes the row — the panel has nothing left to show. */
+  onGone?: () => void
 }
 
-export function SessionPanel({ session, row, lang, theme, act, authorName }: SessionPanelProps) {
+export function SessionPanel({ session, row, lang, theme, act, authorName, onGone }: SessionPanelProps) {
   const pt = lang === 'pt'
 
   /**
@@ -87,6 +90,17 @@ export function SessionPanel({ session, row, lang, theme, act, authorName }: Ses
               icon={<TerminalSquare size={14} />} label={pt ? 'Terminal' : 'Terminal'}
             />
           </div>
+        )}
+
+        {/* The row's verbs. Every one of them, its label and whether it is enabled arrive already
+            decided by `sessionActions` — the same answer the terminal cockpit resolves against. */}
+        {row && (
+          <SessionActions
+            row={row}
+            lang={lang}
+            act={act}
+            {...(onGone ? { onGone } : {})}
+          />
         )}
       </header>
 
