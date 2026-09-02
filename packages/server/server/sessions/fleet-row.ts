@@ -2,7 +2,7 @@
  * fleet-row.ts — PURE. One `ControlSession`, shaped into the row the WEB Sessions page draws, with
  * the verbs it may offer already decided.
  *
- * The decision is NOT made here. `sessionActions` (`@agentistics/tui/control/sessions`) is the one
+ * The decision is NOT made here. `sessionActions` (`@agentistics/tui/control/session-verbs`) is the one
  * answer to "what can this row take", and the cockpit resolves every keypress against it; this
  * module calls it and carries the result over the wire. A browser-side re-derivation would be a
  * second set of rules — the bug `task-reopen.ts` exists to have fixed once — and it would go wrong
@@ -14,8 +14,8 @@
  * carries the command that does it instead of a button that cannot.
  */
 
-import { actionWords, sessionActions, type SessionAction } from '@agentistics/tui/control/sessions'
-import type { ControlSession } from '@agentistics/tui/control'
+import { actionWords, sessionActions, type SessionAction } from '@agentistics/tui/control/session-verbs'
+import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { ControlStrings } from '@agentistics/tui/control/i18n'
 
 /**
