@@ -112,6 +112,10 @@ channel rides exactly the gates `/api/fleet` and `/api/fleet/act` carry:
 ## Latency (measured, local, disposable tmux session)
 
 - **Write path (WS send → ack):** median ~9 ms, p95 ~130 ms — the channel's own contribution.
-- **End-to-end echo (key → visible on screen via SSE):** median ~380 ms — dominated by the **read**
-  channel's 500 ms poll (`TERMINAL_POLL_MS`), which this unit does not change. Fluid direct typing
-  would want that poll tuned; that is a read-channel decision, deliberately out of scope here.
+- **End-to-end echo (key → visible on screen via SSE):** median ~7.7 ms, worst ~31 ms (n=15). A
+  delivered keystroke calls `nudgeTerminal()` (`terminal-web.ts`), which makes the read channel
+  capture the pane immediately instead of waiting for the next `TERMINAL_POLL_MS` tick — see
+  [terminal-channel.md](terminal-channel.md) for the mechanism and for the *different* case (a
+  process printing with nobody typing) that the nudge does not cover and the poll still dominates.
+  This superseded an earlier measurement of this section (~380 ms, poll-dominated) taken before the
+  nudge existed.
