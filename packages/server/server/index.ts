@@ -73,6 +73,7 @@ import { LIMITS, readJsonLimited } from './limits'
 // and React, so this server names only `fleet-row.ts` — the two handlers load the implementation by
 // dynamic import. Naming `fleet-web` here even in a type position measurably pulled that graph in.
 import type { FleetActionRequest } from './sessions/fleet-row'
+import type { FleetSpawnBody } from './sessions/fleet-spawn'
 // The live-terminal WRITE channel (Phase 2b). Statically importable — unlike `fleet-web`, this
 // module's own graph is light (registry + the two pure input modules) and resolves the heavy backend
 // LAZILY, so naming its WS handlers here does not pull the Ink/session-view graph into a server that
@@ -335,7 +336,13 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
   const res = await handleRequestInner(req, server)
   if (!res) return res // WebSocket upgrade handed off
   const isApi = new URL(req.url).pathname.startsWith('/api/')
-  for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi }))) {
+  // `embed` — may an editor frame this dashboard? Only on a `local` profile: the machine's own
+  // dashboard, bound to 127.0.0.1, which is the only deployment where the thing doing the framing
+  // is the user's own VS Code window rather than someone else's page. The allowance itself is a
+  // single scheme no web page can present (`security-headers.ts`), and everything the fleet routes
+  // can do stays behind `localShell` regardless.
+  const embed = PROFILE === 'local'
+  for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi, embed }))) {
     res.headers.set(k, v)
   }
   // A sliding-session refresh recorded by the auth gate. Appended (not set) so a route that
@@ -1034,8 +1041,12 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // `agentop session ls` prints, with the same `sessionActions` decision about what each one may
     // take. A central never answers it: it aggregates many machines and hosts none of their
     // sessions, so a fleet read there would be this box's own processes under someone else's page.
-    // `capability-guard.ts` has already refused both paths on an exposed profile.
-    if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act' || url.pathname === '/api/fleet/stream' || url.pathname === '/api/fleet/input') {
+    // `capability-guard.ts` has already refused every one of these paths on an exposed profile.
+    //
+    // The test is a PREFIX rather than a list of names: each new fleet route added below would
+    // otherwise have to remember to join a second table, and the one that forgot would be a central
+    // answering a question about sessions it does not host.
+    if (url.pathname === '/api/fleet' || url.pathname.startsWith('/api/fleet/')) {
       if (TEAM_CENTRAL) {
         return new Response(JSON.stringify({ error: 'fleet_central' }), {
           status: 404,
@@ -1063,6 +1074,73 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           })
         }
         const out = await runFleetAction(fleetLang(url.searchParams.get('lang')), body.value)
+        return new Response(JSON.stringify(out), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // What it takes to ATTACH to one session — the argv and the real detach key, never the act
+    // itself. A client with a terminal of its own (the VS Code extension's integrated terminal, a
+    // shell) runs it; the browser has the row's `attachCommand` to copy instead. `null` from the
+    // host means this machine cannot attach to that row at all, which is a 404 and not an empty
+    // ticket: a client handed an empty argv would open a terminal that does nothing.
+    if (url.pathname === '/api/fleet/attach' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { readAttachTicket, fleetLang } = await import('./sessions/fleet-web')
+      const ticket = await readAttachTicket(fleetLang(url.searchParams.get('lang')), id)
+      if (!ticket) {
+        return new Response(JSON.stringify({ error: 'not_found' }), {
+          status: 404,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify(ticket), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // The wizard, as data: which harnesses this machine can START, where a session could start, and
+    // the tasks that already exist. A GET because it asks a question and changes nothing — the
+    // project search is a `q` on it, so a client can re-ask as the user types.
+    if (url.pathname === '/api/fleet/new' && req.method === 'GET') {
+      const { readNewOptions, fleetLang } = await import('./sessions/fleet-web')
+      const out = await readNewOptions(
+        fleetLang(url.searchParams.get('lang')),
+        url.searchParams.get('q') ?? '',
+      )
+      return new Response(JSON.stringify(out), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // Start one. The most powerful thing on this route table: it spawns a billable coding assistant,
+    // with a prompt, in a directory the request names — see the header of `runFleetSpawn` for why
+    // this one call reads a directory from the body when `resume` refuses to, and `fleet-spawn.ts`
+    // for every check made on it. `localShell` is what bounds it: unreachable on a `lan` or `public`
+    // profile whoever is authenticated.
+    if (url.pathname === '/api/fleet/new' && req.method === 'POST') {
+      try {
+        const { runFleetSpawn, fleetLang } = await import('./sessions/fleet-web')
+        const body = await readJsonLimited<FleetSpawnBody>(req, LIMITS.bodyBytes)
+        if (!body.ok) {
+          return new Response(JSON.stringify({ ok: false, message: 'bad_request' }), {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const out = await runFleetSpawn(fleetLang(url.searchParams.get('lang')), body.value)
         return new Response(JSON.stringify(out), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })

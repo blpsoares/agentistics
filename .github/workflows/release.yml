@@ -26,6 +26,11 @@ jobs:
     env:
       # The packages a release stamps its version onto, in ONE place.
       #
+      # `packages/vscode` is deliberately ABSENT. The extension is versioned on its own line: it
+      # ships to a marketplace on its own cadence, its users upgrade it independently of the binary,
+      # and a version that jumped every time the server released would say nothing about what
+      # changed in the editor. Bump it by hand in `packages/vscode/package.json`.
+      #
       # There were two lists: the bump script wrote the files and `git add` staged them, and they
       # were not the same list. Adding `packages/tui` to the first alone meant the file was written
       # in the runner's working tree and thrown away — which is why the tui package went out at
