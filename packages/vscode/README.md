@@ -17,6 +17,14 @@ nothing is answering.
 
 Full documentation: [`docs/vscode-extension.md`](../../docs/vscode-extension.md).
 
+## Versioning
+
+The extension is versioned on **its own line**, not the product's. It ships to a marketplace on its
+own cadence and its users upgrade it independently of the `agentop` binary, so a version that jumped
+every time the server released would say nothing about what changed in the editor. Bump it by hand
+here; `release.yml` deliberately leaves `packages/vscode/package.json` out of the files a product
+release stamps.
+
 ## Build
 
 ```bash

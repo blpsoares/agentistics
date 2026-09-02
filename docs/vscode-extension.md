@@ -270,6 +270,14 @@ where the plain address would have worked.
 For the same reason the **webview never fetches**: a webview's `localhost` is the browser's. The
 extension host is the process that sits beside the fleet, so it is the process that asks.
 
+## Versioning
+
+The extension is versioned **independently** of the product. It ships to a marketplace on its own
+cadence and its users upgrade it separately from the `agentop` binary, so a version that moved with
+every server release would carry no information about what changed in the editor.
+`packages/vscode/package.json` is therefore absent from `PKG_FILES` in `release.yml` — the list of
+files a product release stamps its version onto — and is bumped by hand.
+
 ## Building it
 
 ```bash
