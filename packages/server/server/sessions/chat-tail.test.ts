@@ -103,6 +103,45 @@ describe('readRecentChatTurns', () => {
     ])
   })
 
+  // The reader takes the END of the file, not the whole of it — a live session's transcript is
+  // re-read on every poll, and reading megabytes to show six lines is what made /api/fleet take
+  // seconds. These two pin the part that can go wrong silently: the window must never COST turns.
+  test('reads the last turns out of a transcript far larger than the tail window', async () => {
+    // ~2 MB of history in front of them, so the read starts mid-file and mid-line.
+    const filler: string[] = []
+    for (let i = 0; i < 200; i++) filler.push(assistantTurn('x'.repeat(10_000)))
+    await writeFile(file, [
+      ...filler,
+      userTurn('the last question'),
+      assistantTurn('the last answer'),
+    ].join('\n') + '\n')
+
+    const turns = await readRecentChatTurns(file, 2)
+    expect(turns).toEqual([
+      { role: 'user', text: 'the last question' },
+      { role: 'assistant', text: 'the last answer' },
+    ])
+  })
+
+  test('widens the window rather than returning fewer turns than were asked for', async () => {
+    // One enormous newest entry: the first window lands entirely INSIDE it, so the partial-line rule
+    // discards everything and the pass finds nothing. Truncating there would silently drop five real
+    // turns; the reader must read further back instead.
+    await writeFile(file, [
+      userTurn('one'),
+      assistantTurn('two'),
+      userTurn('three'),
+      assistantTurn('four'),
+      userTurn('five'),
+      assistantTurn('y'.repeat(400_000)),
+    ].join('\n') + '\n')
+
+    const turns = await readRecentChatTurns(file, 6)
+    expect(turns.map(t => t.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant'])
+    expect(turns[0]).toEqual({ role: 'user', text: 'one' })
+    expect(turns[5]!.text.length).toBe(400_000)
+  })
+
   test('filters out tool-result-only user entries', async () => {
     await writeFile(file, [
       userTurn('do the thing'),
