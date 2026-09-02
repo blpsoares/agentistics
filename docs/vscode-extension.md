@@ -290,8 +290,40 @@ bun run package:vscode   # a .vsix, via @vscode/vsce
 Then `F5` from the repo, or install the `.vsix` with
 `code --install-extension packages/vscode/agentistics-vscode-*.vsix`.
 
-Marketplace / Open VSX publishing is packaging and distribution, and is deliberately not wired up
-here.
+## Installing it, and distributing it
+
+Three routes, in order of how much they need from a maintainer.
+
+**1. The `.vsix` on the GitHub release** — works today, needs no account from anybody.
+
+```bash
+# Download agentistics-vscode-<version>.vsix from the release page, then:
+code --install-extension agentistics-vscode-1.0.0.vsix
+```
+
+The release workflow packages and attaches it beside the binaries. It is attached rather than
+version-stamped by the release: the extension carries its own version, so the file says which
+extension shipped *alongside* that server release rather than claiming to be the same thing. If
+packaging fails, the server release still goes out and the asset is simply absent — an editor
+extension must not hold back a binary.
+
+**2. The VS Code Marketplace** — what "install it from the editor" means for most people. It needs,
+once:
+
+- an Azure DevOps organisation, and a Personal Access Token scoped to **Marketplace → Manage**;
+- a publisher at <https://marketplace.visualstudio.com/manage> whose id is exactly the `publisher`
+  field in `packages/vscode/package.json`.
+
+Then `bunx @vscode/vsce publish -p "$VSCE_TOKEN"` from `packages/vscode`, or the same as a release
+step once the token is a repository secret.
+
+**3. Open VSX** — the registry VSCodium, Cursor, Windsurf and Gitpod read; the Marketplace's terms
+do not allow those editors to use it. Needs an eclipse.org account and a published-agreement
+signature, then `bunx ovsx publish -p "$OVSX_TOKEN"`.
+
+Publishing to either registry is deliberately NOT automated yet: both need credentials that only a
+maintainer can create, and a release step that silently no-ops without them is worse than one that
+does not exist.
 
 ## Where each piece lives
 
