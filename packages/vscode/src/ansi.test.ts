@@ -125,6 +125,17 @@ describe('the cursor', () => {
     expect(out).toMatch(/class="cursor" style="[^"]*background:/)
   })
 
+  it('never inherits the cell\'s dimming', () => {
+    // The cell under the cursor is very often dim — a placeholder, a ghost completion, the inactive
+    // half of a prompt — and a block drawn at 60% opacity is invisible exactly where somebody is
+    // looking for it. That is what "não aparece o _" turned out to be.
+    const out = ansiToHtml(`${ESC}[2mghost`, 'dark', { x: 0, y: 0 })
+    const cursor = out.match(/<span class="cursor"[^>]*>/)![0]
+    expect(cursor).not.toContain('opacity')
+    // …while the text beside it keeps it.
+    expect(out).toContain('opacity:.6')
+  })
+
   it('draws nothing when the caller passes none — a dead pane has no cursor', () => {
     expect(ansiToHtml('abc', 'dark', null)).not.toContain('cursor')
     expect(ansiToHtml('abc', 'dark')).not.toContain('cursor')

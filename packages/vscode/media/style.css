@@ -507,8 +507,7 @@ button.chip { cursor: pointer; }
 .screen:hover .cursor, .screen:not(:focus) .cursor { animation: none; }
 @keyframes cursor-blink { 50% { opacity: .35; } }
 
-.verbs-box { margin-top: var(--gap); }
-.verbs { display: flex; flex-wrap: wrap; gap: 5px; }
+/* The inline editor the pencil and the marks open. */
 .text-verb { display: flex; gap: 5px; margin-top: 8px; align-items: center; }
 .text-verb input { flex: 1; }
 

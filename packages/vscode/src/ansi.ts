@@ -257,7 +257,11 @@ export function ansiToHtml(
  * assistant happens to be drawing — a hardcoded white block vanishes on a white selection bar.
  */
 function cursorCell(ch: string, pen: Pen, theme: XtermTheme): string {
-  const style = penStyle({ ...pen, inverse: !pen.inverse }, theme)
+  // `dim` is DROPPED, and that is the whole reason this was invisible in practice. The cell under
+  // the cursor is very often dim — a placeholder, a ghost completion, the inactive half of a prompt
+  // — and inheriting it drew the block at 60% opacity exactly where somebody is looking for it. A
+  // cursor is chrome, not content: it takes the cell's colours, inverted, and none of its emphasis.
+  const style = penStyle({ ...pen, inverse: !pen.inverse, dim: false, italic: false }, theme)
   return `<span class="cursor"${style ? ` style="${style}"` : ''}>${escapeHtml(ch)}</span>`
 }
 

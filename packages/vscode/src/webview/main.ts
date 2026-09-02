@@ -18,7 +18,6 @@
 import { ansiToHtml } from '../ansi'
 import { fill } from '../i18n'
 import {
-  TEXT_VERBS,
   type FleetActionId, type FleetRow, type HostMessage, type LinkStatus,
   type NewOptions, type Route, type SpawnRequest, type ViewMessage,
 } from '../protocol'
@@ -282,7 +281,6 @@ interface SessionDom {
   pre: HTMLPreElement
   status: HTMLElement
   strip: HTMLElement
-  verbs: HTMLElement
 }
 
 let sessionDom: SessionDom | null = null
@@ -422,10 +420,11 @@ function buildSession(id: string): HTMLElement {
   const tools = el('div', 'session-tools')
   const approval = el('div', 'approval-slot')
   const { screenBox, pre, status, strip } = buildScreen(row)
-  const verbs = el('div', 'verbs-box')
-  root.append(head, tools, approval, screenBox, verbs)
+  // The action row goes UNDER the screen: the terminal is why anybody opened this, and controls
+  // above it push it down the panel.
+  root.append(head, approval, screenBox, tools)
 
-  sessionDom = { id, root, head, tools, approval, screenBox, pre, status, strip, verbs }
+  sessionDom = { id, root, head, tools, approval, screenBox, pre, status, strip }
   patchSession(id)
   return root
 }
@@ -478,6 +477,11 @@ function patchSession(id: string): void {
   // The action row lives UNDER the screen, as icons: in a sidebar four wide buttons wrapped into
   // three rows and pushed the terminal off the bottom. Every one carries a tooltip and an
   // aria-label, because an icon alone is a control you have to learn by clicking.
+  // ONE action row, under the screen. There used to be a second, wider one below it listing every
+  // verb by name — and after the title got its pencil and the marks got their `＋`, half of that
+  // row was the same thing said twice: Rename, Note, Task and Stop session all had a control
+  // already. Two ways to do one thing is two places to look and one of them is always the wrong
+  // guess. What is left here is every verb that has no other home.
   dom.tools.replaceChildren()
   if (!state.pinned) {
     dom.tools.append(iconButton('⧉', s('openTab'), 'icon-btn', () => post({ type: 'openTab', id })))
@@ -485,8 +489,24 @@ function patchSession(id: string): void {
   if (row.actionable) {
     dom.tools.append(iconButton('⌨', s('attach'), 'icon-btn', () => post({ type: 'attach', id })))
   }
-  dom.tools.append(iconButton('⧉̸', s('copyCommand'), 'icon-btn', () => post({ type: 'copy', text: row.attachCommand })))
+  dom.tools.append(iconButton('⎘', s('copyCommand'), 'icon-btn', () => post({ type: 'copy', text: row.attachCommand })))
   dom.tools.append(iconButton('🗀', s('openFolder'), 'icon-btn', () => post({ type: 'openFolder', path: row.cwd })))
+
+  // The task verbs, and reopen. `approve` is the option list above, `prompt` is typing into the
+  // screen, and the other four are the title's pencil and the two marks — so none of them appear
+  // here. A verb the server sent that this panel has no home for would be silently missing, so the
+  // set is explicit rather than "whatever is left".
+  for (const [action, glyph] of TOOL_VERBS) {
+    const verb = row.verbs.find(v => v.action === action)
+    if (!verb) continue
+    const b = iconButton(glyph, verb.label, 'icon-btn', () => act(id, action))
+    b.disabled = !verb.enabled
+    // Present and disabled with its reason, never removed: a control that vanishes says nothing
+    // about why.
+    if (verb.reason) b.title = `${verb.label} — ${verb.reason}`
+    dom.tools.append(b)
+  }
+
   const kill = row.verbs.find(v => v.action === 'kill')
   if (kill) {
     // Red, and it ASKS. Stopping a session ends work in progress, and the one control on this
@@ -495,13 +515,23 @@ function patchSession(id: string): void {
       post({ type: 'kill', id, title: row.title })
     })
     stop.disabled = !kill.enabled
-    if (kill.reason) stop.title = kill.reason
+    if (kill.reason) stop.title = `${kill.label} — ${kill.reason}`
     dom.tools.append(stop)
   }
-
-  dom.verbs.replaceChildren()
-  dom.verbs.append(...renderVerbs(row))
 }
+
+/**
+ * The verbs that live in the action row, and the glyph each one gets.
+ *
+ * Everything else the server offers has a home of its own on this screen: `approve` is the option
+ * list, `prompt` is typing into the terminal, `rename` is the title's pencil, `note` and `task` are
+ * the marks, `kill` is the red one below.
+ */
+const TOOL_VERBS: readonly (readonly [FleetActionId, string])[] = [
+  ['resume', '⟲'],
+  ['openTask', '⧈'],
+  ['finishTask', '✓'],
+]
 
 /** An icon control. The label is never only in the glyph: it is the tooltip and the accessible name. */
 function iconButton(glyph: string, label: string, className: string, onClick: () => void): HTMLButtonElement {
@@ -759,29 +789,6 @@ function onScreenPaste(id: string, e: ClipboardEvent): void {
     if (line) post({ type: 'input', id, text: line })
     if (index < lines.length - 1) post({ type: 'input', id, key: { key: 'Enter' } })
   })
-}
-
-function renderVerbs(row: FleetRow): HTMLElement[] {
-  const box = el('div', 'verbs-inner')
-  box.append(el('div', 'section-label', s('verbsFor')))
-  const verbs = el('div', 'verbs')
-  for (const verb of row.verbs) {
-    // `approve` is drawn above as the option list — a bare button here would be the very
-    // "pick whatever is highlighted" this screen exists to avoid.
-    if (verb.action === 'approve' && row.dialogOptions?.length) continue
-    const b = el('button', 'btn tiny', verb.label)
-    b.disabled = !verb.enabled
-    // Present and disabled, never removed: a row that drops from nine verbs to four reads as a
-    // broken feature, and absence says nothing about why.
-    if (verb.reason) b.title = verb.reason
-    b.addEventListener('click', () => {
-      if (TEXT_VERBS.has(verb.action)) openTextVerb(box, row, verb.action as FleetActionId, verb.label)
-      else act(row.id, verb.action as FleetActionId)
-    })
-    verbs.append(b)
-  }
-  box.append(verbs)
-  return [box]
 }
 
 /** The four verbs that need a line of text. Inline, because a modal over a 300px panel is a wall. */
