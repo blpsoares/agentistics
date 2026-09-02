@@ -13,7 +13,7 @@
  */
 
 import { useState } from 'react'
-import { MessagesSquare, TerminalSquare } from 'lucide-react'
+import { MessagesSquare, Square, TerminalSquare } from 'lucide-react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { TerminalRegion } from '../RecentSessions'
@@ -46,16 +46,27 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
    * toggle must give one answer, and this is the one place that could quietly disagree.
    */
   const chattable = session.conversationBlind === undefined
+  const stopVerb = row?.verbs.find(v => v.action === 'interrupt')
 
   const [view, setView] = useState<SessionView>(chattable ? 'chat' : 'terminal')
   const active: SessionView = chattable ? view : 'terminal'
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    // `flex: 1` + `minHeight: 0`, NOT `height: 100%`. In a column flex container a percentage
+    // height on an item that is itself being flexed does not reliably resolve, and when it does not
+    // the scroll container inside grows to its content instead of scrolling — which is the single
+    // cause of two reported bugs: the conversation opening at the top (scrollTop on a non-scrolling
+    // element does nothing) and the jump-to-latest arrow never appearing (`scrollHeight` equals
+    // `clientHeight`, so the reader always measures as "at the tail").
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      {/* PINNED. `flexShrink: 0` keeps it out of the flex squeeze and the pane below owns the
+          scrolling, so the title and the view switch stay put however long the conversation runs.
+          They are what you need to know and what you need to reach at any point in it. */}
       <header style={{
         display: 'flex', alignItems: 'center', gap: 12,
         padding: '12px 20px', borderBottom: '1px solid var(--border)',
-        flexShrink: 0, minWidth: 0,
+        background: 'var(--bg-surface)',
+        flexShrink: 0, minWidth: 0, position: 'relative', zIndex: 2,
       }}>
         <div style={{ minWidth: 0, flex: 1 }}>
           <h1 style={{
@@ -92,6 +103,28 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
           </div>
         )}
 
+        {/* Stop what it is doing, WITHOUT ending it. Its own control rather than an item in the
+            menu, because it is the one thing you reach for while watching a session run — and a
+            verb you want in a hurry does not belong two clicks deep. Absent unless the row can take
+            it, since a stop button on an idle session would send Escape into its prompt. */}
+        {stopVerb?.enabled && (
+          <button
+            onClick={() => void act({ id: session.id, action: 'interrupt' })}
+            title={stopVerb.label}
+            aria-label={stopVerb.label}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+              minHeight: 32, padding: '0 11px', borderRadius: 9, cursor: 'pointer',
+              border: '1px solid color-mix(in srgb, var(--accent-red) 45%, transparent)',
+              background: 'color-mix(in srgb, var(--accent-red) 12%, transparent)',
+              color: 'var(--accent-red)', fontFamily: 'inherit', fontSize: 12, fontWeight: 650,
+            }}
+          >
+            <Square size={11} fill="currentColor" />
+            {pt ? 'Parar' : 'Stop'}
+          </button>
+        )}
+
         {/* The row's verbs. Every one of them, its label and whether it is enabled arrive already
             decided by `sessionActions` — the same answer the terminal cockpit resolves against. */}
         {row && (
@@ -104,7 +137,7 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
         )}
       </header>
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {active === 'chat' ? (
           <SessionChat session={session} {...(row ? { row } : {})} lang={lang} act={act} />
         ) : (

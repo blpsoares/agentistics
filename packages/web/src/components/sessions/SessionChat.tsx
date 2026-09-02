@@ -71,6 +71,15 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   /** Messages sent from here and not yet seen in the transcript. See the header. */
   const [echo, setEcho] = useState<string[]>([])
   /**
+   * The message being replied to.
+   *
+   * There is no reply THREAD to send: the transport types a line into a pane, and these CLIs have
+   * one linear conversation. So a reply is a QUOTE — the quoted lines are prefixed with `> ` and
+   * sent above what you write, which is what the assistant will actually see and is the same thing
+   * mail has always done. Saying it plainly beats a UI that implies threading the session cannot do.
+   */
+  const [replyTo, setReplyTo] = useState<{ role: 'user' | 'assistant'; text: string } | null>(null)
+  /**
    * Files written to THIS MACHINE, whose paths go into the message.
    *
    * That is what an attachment can be here: the composer types a line into a tmux pane, so there is
@@ -91,6 +100,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     setAtTail(true)
     setEcho([])
     setAttached([])
+    setReplyTo(null)
   }, [session.id])
 
   useEffect(() => {
@@ -259,7 +269,10 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     if ((text === '' && attached.length === 0) || sending) return
     // Paths first, on their own lines, then what was typed — the assistant reads the files it is
     // pointed at, and burying the paths inside a sentence makes them easy to miss.
-    const full = [...attached.map(a => a.path), text].filter(x => x !== '').join('\n')
+    // Quote first, then the paths, then what was typed. The quote is trimmed to a few lines: a
+    // reply that repeats forty lines back at the session costs it context for no benefit.
+    const quote = replyTo ? quoteLines(replyTo.text) : ''
+    const full = [quote, ...attached.map(a => a.path), text].filter(x => x !== '').join('\n')
     setSending(true)
     const out = await act({ id: session.id, action: 'prompt', text: full })
     setSending(false)
@@ -269,6 +282,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       setEcho(list => [...list, full])
       setDraft('')
       setAttached([])
+      setReplyTo(null)
       setAtTail(true)
       toTail()
       setNotice(null)
@@ -294,7 +308,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
 
   return (
     <div
-      style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
+      style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
       onDragOver={e => { if (canPrompt && e.dataTransfer.types.includes('Files')) e.preventDefault() }}
       onDrop={onDrop}
     >
@@ -311,7 +325,13 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
           ) : null}
 
           {turns.map((t, i) => (
-            <ChatBubble key={i} turn={t} lang={lang} harness={session.harness} />
+            <ChatBubble
+              key={i}
+              turn={t}
+              lang={lang}
+              harness={session.harness}
+              {...(canPrompt ? { onReply: () => { setReplyTo({ role: t.role, text: t.text }); setAtTail(true); toTail() } } : {})}
+            />
           ))}
 
           {echo.map((text, i) => (
@@ -345,7 +365,15 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
         </div>
       </div>
 
-      <div style={{ position: 'relative', borderTop: '1px solid var(--border)', padding: '12px 20px 14px' }}>
+      {/* PINNED, and on its OWN surface. It never scrolls with the conversation — replying to
+          something further up used to mean scroll down, write, scroll back — and it is a shade
+          apart from the bubbles, which are `--bg-card` on `--bg-base`: at the same value it read as
+          another message rather than as the place you type. */}
+      <div style={{
+        position: 'relative', flexShrink: 0,
+        borderTop: '1px solid var(--border)', padding: '12px 20px 14px',
+        background: 'var(--bg-surface)',
+      }}>
         {/* Back to the end. Only while the reader has actually scrolled away — a control that is
             always there teaches nothing about where you are. */}
         {!atTail && !loading && (
@@ -381,6 +409,38 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     ? 'Esta sessão está esperando resposta a uma pergunta dela. Responda no card acima — o que você digitar aqui iria para o filtro do diálogo.'
                     : 'This session is waiting on an answer to a question of its own. Answer it in the card above — anything typed here would go into the dialog’s own filter.'}
                 </p>
+              )}
+
+              {/* What is being replied to, above the field, with a way to drop it. */}
+              {replyTo && (
+                <div style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 8,
+                  padding: '7px 10px', borderRadius: 9, minWidth: 0,
+                  background: 'var(--bg-elevated)',
+                  borderLeft: '3px solid var(--anthropic-orange)',
+                }}>
+                  <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--anthropic-orange)' }}>
+                      {pt ? 'Respondendo' : 'Replying to'}
+                    </span>
+                    <span style={{
+                      fontSize: 11.5, lineHeight: 1.45, color: 'var(--text-tertiary)',
+                      display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                    }}>
+                      {replyTo.text}
+                    </span>
+                  </span>
+                  <button
+                    onClick={() => setReplyTo(null)}
+                    aria-label={pt ? 'Cancelar resposta' : 'Cancel reply'}
+                    style={{
+                      display: 'flex', border: 'none', background: 'transparent', padding: 2,
+                      color: 'var(--text-tertiary)', cursor: 'pointer', flexShrink: 0,
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
               )}
 
               {attached.length > 0 && (
@@ -420,7 +480,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
 
               <div style={{
                 display: 'flex', alignItems: 'flex-end', gap: 8,
-                background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                background: 'var(--bg-base)', border: '1px solid var(--border)',
                 borderRadius: 12, padding: 8,
                 opacity: canPrompt ? 1 : 0.55,
               }}>
@@ -494,6 +554,20 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
 /** The emulator's escape sequences, which the chat has no use for. */
 function stripAnsi(s: string): string {
   return s.replace(/\[[0-9;?]*[A-Za-z]/g, '')
+}
+
+/**
+ * A quoted excerpt, `> `-prefixed, bounded.
+ *
+ * Bounded because the quote is spent CONTEXT: a reply that echoes forty lines back at the session
+ * costs it window for nothing it does not already have. Four lines names the message; an ellipsis
+ * says there was more.
+ */
+function quoteLines(text: string): string {
+  const lines = text.trim().split('\n')
+  const head = lines.slice(0, 4).map(l => `> ${l}`)
+  if (lines.length > 4) head.push('> …')
+  return head.join('\n')
 }
 
 /** Whitespace-insensitive, because the harness re-wraps what it stores. */

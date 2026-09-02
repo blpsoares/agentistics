@@ -63,7 +63,7 @@ export default function SessionsPage() {
   if (isMobile) {
     if (panel) {
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           <button
             onClick={() => navigate('/sessions')}
             style={{
@@ -83,7 +83,7 @@ export default function SessionsPage() {
       )
     }
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, padding: '10px 12px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: '10px 12px' }}>
         <SessionsAside
           lang={pt ? 'pt' : 'en'}
           rows={fleet.rows}
@@ -102,7 +102,7 @@ export default function SessionsPage() {
   if (panel) return panel
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {/* A link to a session that is no longer in the list is not the same as no link at all, and
           the overview would silently swallow the difference — so it is said, once, above it. */}
       {sessionId !== undefined && !loading && (

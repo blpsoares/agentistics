@@ -24,7 +24,7 @@ import remarkGfm from 'remark-gfm'
 // message written across several lines renders as one run-on paragraph — which is what "the
 // messages are not formatted" turned out to mean. `HarnessChat` has always used it.
 import remarkBreaks from 'remark-breaks'
-import { User } from 'lucide-react'
+import { CornerUpLeft, User } from 'lucide-react'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { HarnessMark } from './HarnessMark'
 
@@ -45,9 +45,14 @@ export interface ChatBubbleProps {
   harness: string
   /** Read off the terminal screen and not yet committed to the transcript. Labelled as such. */
   provisional?: boolean
+  /**
+   * Quote this turn in the composer. Absent where the session cannot be written to — a reply
+   * control on a row that will refuse the message is a control that teaches the wrong thing.
+   */
+  onReply?: () => void
 }
 
-export function ChatBubble({ turn, lang, harness, provisional }: ChatBubbleProps) {
+export function ChatBubble({ turn, lang, harness, provisional, onReply }: ChatBubbleProps) {
   const pt = lang === 'pt'
   const mine = turn.role === 'user'
 
@@ -59,7 +64,7 @@ export function ChatBubble({ turn, lang, harness, provisional }: ChatBubbleProps
   const name = (HARNESS_LABELS as Record<string, string>)[harness] ?? harness
 
   return (
-    <div style={{
+    <div className="ag-bubble" style={{
       display: 'flex', gap: 10, minWidth: 0,
       flexDirection: mine ? 'row-reverse' : 'row',
       alignItems: 'flex-start',
@@ -89,7 +94,7 @@ export function ChatBubble({ turn, lang, harness, provisional }: ChatBubbleProps
         display: 'flex', flexDirection: 'column', gap: 6,
         background: mine ? 'var(--bg-elevated)' : 'var(--bg-card)',
         border: '1px solid var(--border-subtle)',
-        borderRadius: 14, padding: '11px 14px',
+        borderRadius: 14, padding: '11px 14px', position: 'relative',
       }}>
         {!mine && (
           <div style={{
@@ -107,6 +112,26 @@ export function ChatBubble({ turn, lang, harness, provisional }: ChatBubbleProps
               </>
             )}
           </div>
+        )}
+
+        {/* Reply. Revealed with the bubble rather than standing on every message — a column of
+            controls down a conversation competes with the words. Always reachable by keyboard. */}
+        {onReply && !provisional && (
+          <button
+            className="ag-bubble-reply"
+            onClick={onReply}
+            aria-label={pt ? 'Responder' : 'Reply'}
+            title={pt ? 'Responder' : 'Reply'}
+            style={{
+              position: 'absolute', top: 6, [mine ? 'left' : 'right']: 6,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 24, height: 24, borderRadius: 7, cursor: 'pointer',
+              border: '1px solid var(--border-subtle)', background: 'var(--bg-surface)',
+              color: 'var(--text-tertiary)', opacity: 0, transition: 'opacity 0.15s',
+            } as React.CSSProperties}
+          >
+            <CornerUpLeft size={12} />
+          </button>
         )}
 
         <div

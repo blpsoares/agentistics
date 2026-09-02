@@ -20,6 +20,8 @@ import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 export type FleetActionId =
   | 'resume' | 'approve' | 'prompt' | 'rename' | 'note' | 'task' | 'kill'
   | 'openTask' | 'finishTask'
+  /** Stop the current turn without ending the session. See the server's own union. */
+  | 'interrupt'
 
 /** The verbs this page can PERFORM. The rest are shown, dimmed, with their reason. */
 export const PERFORMABLE: ReadonlySet<FleetActionId> = new Set<FleetActionId>([

@@ -2597,6 +2597,32 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
      * The same rule `agentop session kill` follows, and for the same reason: clearing the entry on an
      * unconfirmed kill turns a still-running session into one nothing can name again.
      */
+    /**
+     * Stop the current turn without ending the session.
+     *
+     * `Escape` is the key, taken from what `attention-rules.ts` already records these CLIs printing
+     * while they work — `esc to interrupt` — rather than assumed. It is REFUSED unless the session
+     * is measurably working: Escape into an idle prompt closes whatever the harness has open (a
+     * picker, a dialog, its own transcript view), which is not what "stop" means and is not undone
+     * by pressing it again.
+     */
+    async interruptSession(id: string): Promise<ActionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+
+      // Read the pane's LIVENESS the same way `answerSession` does, rather than trusting a poll
+      // snapshot: this sends a keystroke into a real terminal, and a five-second-old view of what is
+      // running is exactly what would send it into a session that has since ended.
+      const live = (await backend.list().catch(() => [])).find(b => b.id === id)
+      if (!live?.alive) return { ok: false, message: s.sessNotRunning }
+
+      return (await backend.sendKey(id, 'Escape'))
+        ? { ok: true, message: s.sessInterrupted(id) }
+        : { ok: false, message: s.sessSendFailed(id) }
+    },
+
     async killSession(id: string): Promise<ActionResult> {
       const s = S()
       const backend = await resolveBackend()

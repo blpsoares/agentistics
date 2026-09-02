@@ -163,6 +163,12 @@ export async function runFleetAction(
     case 'kill':
       if (!host.killSession) return { ok: false, message: s.sessionsNoHost }
       return await host.killSession(req.id)
+    case 'interrupt': {
+      // Only meaningful on a session that is actually doing something: pressing Escape into an idle
+      // prompt closes whatever the harness has open, which is not what "stop" means.
+      if (!host.interruptSession) return { ok: false, message: s.sessionsNoHost }
+      return await host.interruptSession(req.id)
+    }
     // The two TASK verbs act on the piece of WORK the row is filed under, never on a task named in
     // the request: a caller that could pass its own string could reopen every session of any task
     // on this machine. The row is looked up in the fleet and its own `task` is what is used.
