@@ -34,6 +34,9 @@ describe('routeCapability', () => {
     // The live terminal channel streams a session's SCREEN. It is a read, but a read of a coding
     // assistant's terminal, so it must be as unreachable on an exposed profile as the fleet itself.
     expect(routeCapability('/api/fleet/stream')).toBe('localShell')
+    // The live terminal WRITE channel (WS) types key-by-key into a session, control keys included —
+    // strictly more power than the line prompt, so it rides localShell too (A5: refused off `local`).
+    expect(routeCapability('/api/fleet/input')).toBe('localShell')
   })
 
   it('maps the local chat routes', () => {
