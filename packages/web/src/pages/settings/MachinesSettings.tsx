@@ -6,6 +6,7 @@ import { ConnectionsPanel } from '../../components/team/ConnectionsPanel'
 import { SectionHeader, Section, Select, Checkbox, ConfirmModal, RecordCard, RecordCardAction, SaveBar, runSaveSteps } from './primitives'
 import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { machineConsentView } from './machineConsentView'
 
 // interfaces
 interface MachineInfo {
@@ -23,6 +24,15 @@ interface MachineInfo {
   lastSeenAt: string | null
   online?: boolean
   latencyMs?: number | null
+  /**
+   * What this machine has announced about session management from here — present ONLY when the
+   * viewer is one of the machine's own accounts (`machineOwnedBy` server-side), which is narrower
+   * than the `canManageMachine` that decided the row is visible at all.
+   *
+   * `undefined` (may not ask) and `null` (has not said) are DIFFERENT and both meaningful; see
+   * `machineConsentView`.
+   */
+  remoteConsent?: { sessions: boolean; screens: boolean; atMs: number } | null
 }
 
 interface PublicAccount {
@@ -575,6 +585,9 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       teamNames: machineTeamIds(m).map(id => teamNameById.get(id) ?? id),
       statusColor: m.online ? '#10b981' : '#6b7280',
       statusLabel: m.online ? 'online' : 'offline',
+      // Resolved HERE so the desktop row and the mobile card cannot say different things about
+      // the same machine — the same reason every other value on this object is shared.
+      consent: machineConsentView(m.remoteConsent, m.online ?? false, pt ? 'pt' : 'en'),
     }
   }
 
@@ -765,6 +778,10 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                     // instead of the desktop's truncated chip + "+N" pill.
                     { label: pt ? 'Time' : 'Team', value: v.teamNames.length === 0 ? '—' : v.teamNames.join(', ') },
                     { label: pt ? 'Último acesso' : 'Last seen', value: m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never') },
+                    // The card has the room the table cell does not, so it prints the SENTENCE.
+                    // The desktop row's chip carries it as a title, which a touch device cannot
+                    // reach at all — a fact only reachable by hovering is not on a phone.
+                    ...(v.consent ? [{ label: pt ? 'Sessões' : 'Sessions', value: v.consent.text }] : []),
                   ]}
                   actions={
                     <>
@@ -814,7 +831,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
             </thead>
             <tbody>
               {machines.map(m => {
-                const { statusColor, statusLabel, canManage, ownerDisplay, ownerEmailDisplay } = machineView(m)
+                const { statusColor, statusLabel, canManage, ownerDisplay, ownerEmailDisplay, consent } = machineView(m)
                 return (
                   <tr key={m.id}
                     onClick={canManage ? () => openEditMachine(m) : undefined}
@@ -860,10 +877,28 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                       })()}
                     </td>
                     <td style={td}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                         <div style={{ width: 6, height: 6, borderRadius: '50%', background: statusColor }} />
                         <span>{statusLabel}</span>
                         {m.latencyMs != null && <span style={{ color: 'var(--text-tertiary)' }}>· {m.latencyMs}ms</span>}
+                        {/* Only ever drawn for the machine's OWN accounts — the server omits the
+                            field for everyone else, so there is nothing here to gate again. It
+                            rides the status cell rather than taking a column: the column would be
+                            empty on every row for most viewers, and a header naming a fact the
+                            table never shows is worse than no header. */}
+                        {consent && (
+                          <span
+                            title={consent.text}
+                            style={{
+                              padding: '1px 7px', borderRadius: 999, fontSize: 10, fontWeight: 700,
+                              whiteSpace: 'nowrap',
+                              border: `1px solid ${consent.tone === 'granted' ? 'var(--accent-green)' : 'var(--border)'}`,
+                              color: consent.tone === 'granted' ? 'var(--accent-green)' : 'var(--text-tertiary)',
+                            }}
+                          >
+                            {consent.short}
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td style={td}>

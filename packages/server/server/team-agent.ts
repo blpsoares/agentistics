@@ -144,6 +144,10 @@ export function unregisterAgent(ws: ServerWebSocket<AgentSocketData>): void {
   // leaving stale rows on the dashboard until the TTL expires.
   if (sockets.size === 0) {
     void import('./team-live').then(m => m.clearMemberLive(memberId)).catch(() => { /* best-effort */ })
+    // Same lifetime, same reason: a consent is a statement the machine is making NOW. Keeping the
+    // last known answer would have the central saying "this machine allows session management"
+    // about a laptop that has been shut for a week.
+    void import('./machine-consent').then(m => m.forgetMachineConsent(memberId)).catch(() => { /* best-effort */ })
     agentSockets.delete(memberId)
     // Record the drop; after the grace, the machine counts as offline. Fire a presence update
     // AT grace-expiry so the dashboard flips without waiting for its next poll.
@@ -207,9 +211,9 @@ export function getPresenceSignals(now = Date.now()): Map<string, PresenceSignal
  * Called when a member sends a WebSocket message to the central. On-demand
  * chat retrieval (the former 'chat-result' message) has been removed — the
  * central no longer requests or accepts chat content over this channel.
- * Reserved for future non-chat reverse-channel message types; currently a
- * no-op since members send no messages other than protocol-level pong frames
- * (handled separately by Bun's WebSocket `pong` event → onAgentPong).
+ * The member→central types are exactly two, both unsolicited statements about the machine that
+ * sent them and neither carrying chat: 'live-sessions' (what is open) and 'remote-consent' (what
+ * this machine permits a central to do with its sessions). Anything else is dropped.
  */
 export function onAgentMessage(
   ws: ServerWebSocket<AgentSocketData>,
@@ -222,7 +226,23 @@ export function onAgentMessage(
   try {
     const text = typeof raw === 'string' ? raw : raw.toString('utf8')
     if (!text) return
-    const msg = JSON.parse(text) as { type?: string; sessionIds?: unknown; processes?: unknown; sessionActivities?: unknown }
+    const msg = JSON.parse(text) as {
+      type?: string; sessionIds?: unknown; processes?: unknown; sessionActivities?: unknown
+      sessions?: unknown; screens?: unknown
+    }
+    // 'remote-consent' — what this machine has agreed a central may do with its SESSIONS. Two
+    // booleans, unsolicited, announced by the machine on connect and whenever a switch moves. The
+    // central never asks for it and it carries no session, no screen and no rule; see
+    // `machine-consent.ts` and `remoteSessions.ts`.
+    if (msg?.type === 'remote-consent') {
+      void import('./machine-consent').then(m => {
+        // The machine id comes from the AUTHENTICATED SOCKET, never the frame — a member cannot
+        // agree on another machine's behalf, the same rule 'live-sessions' below follows.
+        m.recordMachineConsent(ws.data.memberId, msg.sessions, msg.screens)
+        onPresenceChange?.()
+      }).catch(() => { /* best-effort */ })
+      return
+    }
     if (msg?.type !== 'live-sessions') return
     const sessionIds = Array.isArray(msg.sessionIds)
       ? msg.sessionIds.filter((x): x is string => typeof x === 'string')

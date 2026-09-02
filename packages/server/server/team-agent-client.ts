@@ -16,7 +16,7 @@
 // Never throws; all errors are swallowed internally.
 
 import type { TeamConnection } from '@agentistics/core'
-import { readTeamConnections, normalizeTeamConfig } from '@agentistics/core'
+import { readTeamConnections, normalizeTeamConfig, resolveRemoteConsent } from '@agentistics/core'
 import { readPreferences, updateTeamConfig } from './preferences'
 
 // ---------------------------------------------------------------------------
@@ -382,6 +382,34 @@ function scheduleReconnect(connId: string): void {
   }, delay)
 }
 
+/**
+ * Announce this machine's REMOTE-SESSION CONSENT to one central, now.
+ *
+ * Unsolicited and one-directional, exactly like `live-sessions` above and for the same reason: the
+ * central asks this machine nothing. It is a statement about what the machine has agreed to, so it
+ * is sent on connect (a central that restarted has forgotten) and again the moment the switch moves
+ * — `handlePatchConnection` calls this, because a consent WITHDRAWN that took until the next
+ * reconnect to arrive is a central acting on an agreement that no longer exists.
+ *
+ * The payload is two booleans. It carries no session, no screen and no rule.
+ */
+export function announceRemoteConsentNow(connId: string): void {
+  const socket = activeWs.get(connId)
+  if (!socket || socket.readyState !== WebSocket.OPEN) return
+  void (async () => {
+    try {
+      const conn = readTeamConnections(await readPreferences()).find(c => c.id === connId)
+      if (!conn) return
+      // Sent RESOLVED, never as the two raw fields: `resolveRemoteConsent` is the only place the
+      // pair is interpreted, and a central re-deriving it would be a second implementation of the
+      // rule that screens require sessions.
+      const consent = resolveRemoteConsent(conn.allowRemoteSessions, conn.allowRemoteScreens)
+      if (socket.readyState !== WebSocket.OPEN) return
+      socket.send(JSON.stringify({ type: 'remote-consent', sessions: consent.sessions, screens: consent.screens }))
+    } catch { /* best-effort — the next connect re-announces */ }
+  })()
+}
+
 /** Open a socket for ONE connection. Self-guards against a duplicate open (an already
  *  OPEN/CONNECTING socket for this id short-circuits). Never throws. */
 function openConnection(conn: TeamConnection): void {
@@ -409,6 +437,10 @@ function openConnection(conn: TeamConnection): void {
   socket.addEventListener('open', () => {
     backoffIdx.set(conn.id, 0) // successful open — reset this connection's backoff
     startLiveReporting(conn.id, socket)
+    // A central holds this in memory only (like every live fact on this channel), so a central
+    // that restarted has forgotten it. Re-stating it on every open is what makes the absence of a
+    // report mean "this machine is not here", never "it has not said yet".
+    announceRemoteConsentNow(conn.id)
   })
 
   // Inbound admin actions from the central: 'renamed' (the central renamed this machine) and
