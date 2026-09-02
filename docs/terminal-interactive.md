@@ -102,39 +102,35 @@ A session that goes un-typable *while armed* (killed, or falls onto a dialog) is
 automatically and shows the block sentence, so an armed composer can never sit over a session where
 every send would fail.
 
-## Phase 2b — the raw keystroke channel, `POST /api/fleet/input`
+## Escalation — Phase 2b (raw keystroke channel), `packages/server` — DELIVERED
 
-Full char-mode interactivity (Ctrl-C, the arrows that move a highlighted option, Esc, Tab
-completion inside the tool, typing that does not submit, answering a raw dialog by keypress) needs
-individual keys, and the line composer above cannot express one. That endpoint now exists, built
-for the VS Code extension's live screen — see [`docs/vscode-extension.md`](vscode-extension.md).
+Full char-mode interactivity (Ctrl-C, arrows, Esc, Tab, no-submit typing, answering raw dialogs by
+keypress) requires a server write endpoint that forwards individual keys to the backend's existing
+`sendKey` / `sendText` primitives **without** the implicit Enter. That server channel now exists as
+**`WS /api/fleet/input`** — a WebSocket rather than a POST, because per-keystroke HTTP arrives out of
+order; ordering is guaranteed by one connection per session plus a per-connection serial send queue,
+and every message is confirmed with an ack. It is gated by the same `localShell` capability and scope
+as the read stream, plus a same-origin (CSWSH) check, and audits one entry per channel opened rather
+than per keystroke. The full server contract — message shape, the closed key allowlist, why there is
+no local echo — is [`docs/terminal-write-channel.md`](terminal-write-channel.md). The line composer
+above **stays** and is unchanged: it remains the right tool for pasting a block and for when the
+socket drops.
 
-```
-POST /api/fleet/input        { id, text }  |  { id, key: { key, ctrl?, alt?, shift? } }
-→ { ok, message }            message always present, already localized
-```
+### Consumers
 
-- **`text` is typed literally and submits NOTHING** (`sendLiteral`, `send-keys -l`), which is the
-  whole difference from `prompt`: a person typing presses Enter when they mean it. `sendLiteral` is
-  its own backend method rather than a flag on `sendText`, because the two answer different
-  questions and a flag lets a caller ask the wrong one by omission — `sendText` delivers a MESSAGE,
-  and a message that is never submitted was never sent.
-- **`key` is one key, in the BROWSER's vocabulary**, mapped to tmux's by the pure `fleet-input.ts`.
-  One mapping, on the side that has to validate it anyway. **Nothing outside the table is sent**:
-  `send-keys` given an unrecognised name does not fail cleanly — it falls back to sending the
-  string — so a bogus key would become typed text in somebody's live session. An unmapped key is
-  refused in a sentence naming the combination.
-- **It does NOT refuse an open dialog**, and that is the difference from `prompt` rather than an
-  omission. A LINE typed past a question goes into the dialog's own filter and its submit takes
-  whichever option is highlighted; a KEY press is what answers that dialog, and the caller is
-  looking at the frame. Scope and life are still checked: the session must be one this machine
-  manages, and running.
-- **Same gate as the read channel** — `localShell` (403 on any exposed profile) via the
-  `/api/fleet` prefix in `capability-guard.ts`, and 404 on a central.
-- **Ordering is the client's job and is done by construction.** HTTP requests can complete out of
-  order, so the extension serialises sends per session (`api.ts`): each waits for the previous one
-  to the same session, and printable characters are batched for 25ms into one `text`, so `abc` then
-  Enter can never arrive as Enter then `abc`.
+Two, and they read the same contract: the dashboard's live terminal, and the VS Code extension's
+session panel (`packages/vscode/src/input.ts`), where the extension HOST opens the socket because a
+webview's `localhost` is the editor client's — under Remote-SSH or WSL that is not the machine the
+sessions run on.
 
-The line composer above is unchanged and remains the right shape for the dashboard, where there is
-no focusable screen to type into.
+The extension briefly shipped an HTTP `POST /api/fleet/input` of its own, before this landed. It is
+gone: two write channels for one act is the duplication this repository is built against, and the
+socket is the better of the two — ordering is a property of the transport rather than of a
+client-side queue, and every keystroke is ACKED, so "it did not land" is a fact the UI can be told
+rather than a silence. The client keeps its own copy of the key allowlist so it does not ASK for
+what will be refused (a modifier press, a media key, each of which would otherwise cost the user an
+ack failure for a key nobody meant to send); the server validates membership regardless.
+
+A delivered keystroke NUDGES the read channel (`nudgeTerminal`). There is no local echo by design,
+so the character appears on the next capture — and the capture cadence is tuned for WATCHING a
+session, which is nothing when reading one and an eternity when typing into it.

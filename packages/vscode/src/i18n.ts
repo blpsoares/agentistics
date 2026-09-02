@@ -77,6 +77,7 @@ const EN: Record<string, string> = {
 
   // The composer. Typing into a live session changes another running process mid-work, so the
   // region is read-only until somebody says otherwise.
+  keyRefused: 'That keystroke was not delivered ({0}).',
   typingStart: 'Click to type',
   typingIdle: 'The screen is read-only until it has the keyboard.',
   typingLive: 'Typing goes to this session',
@@ -169,6 +170,7 @@ const PT: Record<string, string> = {
   sessionGone: 'Esta sessão não está mais na frota.',
   screenTruncated: 'Há mais histórico acima do que esta tela carrega.',
 
+  keyRefused: 'Essa tecla não foi entregue ({0}).',
   typingStart: 'Clique para digitar',
   typingIdle: 'A tela é só leitura até receber o teclado.',
   typingLive: 'O que você digitar vai para esta sessão',

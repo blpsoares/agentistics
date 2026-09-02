@@ -14,17 +14,9 @@
 
 import type { SessionMeta } from '@agentistics/core'
 import type {
-  FleetActionId, FleetPayload, KeyPress, LinkStatus, NewOptions, SpawnRequest,
+  FleetActionId, FleetPayload, LinkStatus, NewOptions, SpawnRequest,
 } from './protocol'
 import { todayTotals, type TodayTotals } from './today'
-
-/**
- * The in-flight input send, per session — see `input()`.
- *
- * Module-level rather than per-client: a new `AgentopClient` is built per call site, and a queue
- * that lived on the instance would order nothing.
- */
-const INPUT_QUEUE = new Map<string, Promise<void>>()
 
 export interface AttachTicket {
   argv: string[]
@@ -90,23 +82,6 @@ export class AgentopClient {
   /** Start a session. Same shape, same rule about whose words the answer is in. */
   async spawn(req: SpawnRequest): Promise<ActionResult & { id?: string }> {
     return await this.post('/api/fleet/new', req)
-  }
-
-  /**
-   * One keystroke, or literal characters with no submit, into a live session.
-   *
-   * **Serialised per session.** HTTP requests can complete out of order, and nothing would
-   * guarantee that keystroke N lands before N+1 — which on a terminal means letters arriving
-   * shuffled, silently. Each send waits for the previous one to the SAME session, so the order is
-   * the order they were pressed, by construction. Different sessions do not wait on each other.
-   */
-  async input(id: string, input: { text?: string; key?: KeyPress }): Promise<ActionResult> {
-    const previous = INPUT_QUEUE.get(id) ?? Promise.resolve()
-    const next = previous
-      .catch(() => undefined)
-      .then(() => this.post('/api/fleet/input', { id, ...input }))
-    INPUT_QUEUE.set(id, next.then(() => undefined, () => undefined))
-    return await next
   }
 
   private async post(path: string, body: unknown): Promise<ActionResult & { id?: string }> {

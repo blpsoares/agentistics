@@ -363,15 +363,15 @@ export interface SessionBackend {
    */
   sendText(id: string, text: string): Promise<boolean>
   /**
-   * Type characters and press NOTHING — the same literal send as `sendText` without the submit.
+   * Type literal text into the session WITHOUT submitting — the first half of `sendText`, exposed on
+   * its own for the browser's key-by-key write channel (`input-web.ts`), where an implicit `Enter`
+   * would turn every keystroke into a submitted turn.
    *
-   * Its own method rather than a flag on `sendText`, because the two answer different questions and
-   * a flag would let a caller ask the wrong one by omission. `sendText` delivers a MESSAGE (and a
-   * message that is never submitted was never sent); this delivers KEYSTROKES, where an implicit
-   * Enter would submit somebody's half-typed line for them. The raw input channel is the caller
-   * that needs it: a person typing into a live screen presses Enter themselves, when they mean it.
+   * Uses the SAME `sendKeysLiteralArgs` builder `sendText` uses, minus the trailing named `Enter`, so
+   * this exposes an existing path rather than adding a mechanism. `false` when the backend could not
+   * deliver it; never a throw, for the same reason as `sendText`.
    */
-  sendLiteral(id: string, text: string): Promise<boolean>
+  sendTextRaw(id: string, text: string): Promise<boolean>
   /**
    * Press ONE named key — the backend's own vocabulary (`Enter`, `Escape`).
    *

@@ -1676,27 +1676,18 @@ packages/vscode/src/
 - **The panel wears the DASHBOARD's palette**, not VS Code chrome, and follows
   `activeColorTheme` for dark/light (the ANSI palette with it). A panel that looks like a different
   product from the dashboard beside it is a different product as far as the eye is concerned.
-- **You type into the SCREEN, not into a text field.** `POST /api/fleet/input` (Phase 2b, the
-  escalation `docs/terminal-interactive.md` named) carries `text` typed literally with NO submit, or
-  ONE key in the browser's vocabulary mapped to tmux's by the pure `fleet-input.ts` — which REFUSES
-  anything outside its table, because `send-keys` does not fail cleanly on an unknown name, it sends
-  the string, and a bogus key becomes typed text in a live session. `sendLiteral` is its own backend
-  method rather than a flag on `sendText`: the latter delivers a MESSAGE and a message that is never
-  submitted was never sent. Unlike `prompt` it does NOT refuse an open dialog — a key is what
-  answers a dialog, and the caller is watching the frame. FOCUS is the consent gate (every terminal
-  works that way) and the strip under the screen says which state you are in; `ctrl+shift+*` and
-  Cmd/Win are never swallowed, or the editor stops working inside the panel. Ordering is by
-  construction: printable characters batched 25ms into one `text`, every send awaiting the previous
-  one to the SAME session, so `abc`+Enter cannot land as Enter+`abc`.
-- **There is NO dashboard tab, and the removal is the finding.** Framing the web dashboard in a
-  webview was tried and abandoned. Three server-side blockers were found and fixed on the way —
-  `frame-ancestors 'none'`, an `X-Frame-Options: DENY` that wins over a permissive CSP, and a
-  `Cross-Origin-Resource-Policy: same-origin` that a COEP embedder drops in silence — and the frame
-  was STILL blank; VS Code's own Simple Browser, the same mechanism, is blank on the same URL. A tab
-  that opens and shows nothing is worse than an absent feature: it costs a click, a command, a
-  setting and a page of explanation, and it teaches people the extension is broken. The header
-  changes stay (they are correct on their own terms, and gated on the `local` profile) — see
-  `docs/vscode-extension.md`.
+- **You type into the SCREEN, not into a text field**, over the WS write channel at
+  `/api/fleet/input` (`input-protocol.ts` / `input-channel.ts` / `input-web.ts`, Phase 2b). One
+  socket per session, FIFO by construction, one ack per keystroke. The extension briefly shipped an
+  HTTP `POST` of the same name and it is GONE — two write channels for one act is the duplication
+  this repo is built against, and the socket wins on both counts (ordering is the transport's, and a
+  keystroke that did not land is a fact rather than a silence). `input.ts` keeps a copy of the key
+  allowlist so the client does not ASK for what will be refused — a modifier press or a media key
+  would otherwise cost the user an ack failure for a key nobody meant to send — and the server
+  validates membership regardless. FOCUS is the consent gate (every terminal works that way) and the
+  strip under the screen says which state you are in; `ctrl+shift+*` and Cmd/Win are never swallowed,
+  or the editor stops working inside the panel. A delivered keystroke NUDGES the read channel, or the
+  character waits out a capture interval tuned for watching rather than typing.
 - **The status bar can price in BRL** (`agentistics.currency`), through `@agentistics/core`'s own
   `fmtCost` and the rate `/api/rates` already caches — the same rate and formatter the dashboard
   uses, so the two can never disagree about one day. No rate means DOLLARS, never a converted figure

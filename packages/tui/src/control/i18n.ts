@@ -420,14 +420,6 @@ export interface ControlStrings {
   spawnCwdRelative: (cwd: string) => string
   spawnUnknownEffort: (effort: string) => string
   spawnModelUnsupported: (harness: string) => string
-  /**
-   * The RAW INPUT channel's refusals (`fleet-input.ts`). A key outside tmux's own vocabulary is
-   * refused rather than passed through: `send-keys` does not fail cleanly on an unknown name, it
-   * falls back to sending the string, so a bogus key becomes typed text in a live session.
-   */
-  inputUnknownKey: (combo: string) => string
-  inputControlChars: string
-  inputTooLong: string
   keySessionsGroup: string
   keySessionsAttach: string
   /** How to put the arrangement back to how the app opens on a fresh machine. */
@@ -960,9 +952,6 @@ const EN: ControlStrings = {
   spawnCwdRelative: cwd => `${cwd} is not an absolute path, and a relative one would resolve against this server's own directory.`,
   spawnUnknownEffort: e => `${e} is not a reasoning effort this CLI accepts.`,
   spawnModelUnsupported: h => `${h} has no model flag — a model was asked for and it could not be honoured.`,
-  inputUnknownKey: combo => `${combo} is not a key this session can be sent.`,
-  inputControlChars: 'control characters are keys — send them as keys, not as text.',
-  inputTooLong: 'that is more text than one keystroke channel call may carry.',
   keySessionsGroup: 'v group',
   keySessionsAttach: 'o attach',
   keySessionsReset: '^r reset view',
@@ -1425,9 +1414,6 @@ const PT: ControlStrings = {
   spawnCwdRelative: cwd => `${cwd} não é um caminho absoluto, e um relativo seria resolvido a partir do diretório do próprio servidor.`,
   spawnUnknownEffort: e => `${e} não é um nível de esforço que esta CLI aceite.`,
   spawnModelUnsupported: h => `${h} não tem flag de modelo — um modelo foi pedido e não teria como ser aplicado.`,
-  inputUnknownKey: combo => `${combo} não é uma tecla que dê para enviar a esta sessão.`,
-  inputControlChars: 'caracteres de controle são teclas — envie como tecla, não como texto.',
-  inputTooLong: 'isso é mais texto do que uma chamada do canal de teclas pode carregar.',
   keySessionsGroup: 'v agrupar',
   keySessionsAttach: 'o anexar',
   keySessionsReset: '^r restaurar view',

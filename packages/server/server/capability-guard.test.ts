@@ -38,6 +38,9 @@ describe('routeCapability', () => {
     // assistant in a directory the caller names — the most powerful call on the whole route table.
     expect(routeCapability('/api/fleet/attach')).toBe('localShell')
     expect(routeCapability('/api/fleet/new')).toBe('localShell')
+    // The live terminal WRITE channel (WS) types key-by-key into a session, control keys included —
+    // strictly more power than the line prompt, so it rides localShell too (A5: refused off `local`).
+    expect(routeCapability('/api/fleet/input')).toBe('localShell')
   })
 
   it('guards a fleet route nobody has written yet', () => {

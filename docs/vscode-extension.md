@@ -88,12 +88,13 @@ Enter, Esc, Tab, the arrows and Ctrl-C. There is no text field to compose a line
 dashboard's shape, where there is no focusable screen to type into, and it cannot express any of the
 keys above.
 
-That needed a server endpoint, which is now `POST /api/fleet/input` — the escalation
-[`docs/terminal-interactive.md`](terminal-interactive.md) named and did not build. `text` is typed
-literally with **no submit**; `key` is one key press in the browser's vocabulary, mapped to tmux's
-by the pure `fleet-input.ts`, which refuses anything outside its table rather than passing it
-through (`send-keys` falls back to sending an unknown name as a string, so a bogus key becomes
-typed text in a live session).
+That rides the WebSocket write channel at `/api/fleet/input`
+([`docs/terminal-interactive.md`](terminal-interactive.md), Phase 2b): one socket per session, one
+JSON message per keystroke, one ack per message. `text` is typed literally with **no submit**;
+`key` is one name from the server's closed allowlist. The HOST opens the socket — a webview's
+`localhost` is the editor client's, which under Remote-SSH or WSL is not the machine the sessions
+run on — and `input.ts` keeps a copy of the allowlist so the client does not ASK for what will be
+refused, while the server validates membership regardless.
 
 - **Focus is the gate.** Every terminal emulator works this way: click it and you are typing into
   it, click away and you are not. It is the same explicit, per-session, revocable decision the
@@ -103,10 +104,11 @@ typed text in a live session).
   authority is the server (`localShell`, scope, and a session that is running).
 - **The editor keeps working.** `ctrl+shift+*` and anything with Cmd/Win is a VS Code command and
   is never swallowed.
-- **Order is guaranteed by construction.** Printable characters are batched for 25ms into one
-  `text` — one HTTP round trip per keystroke is ~5 requests a second per typist, each spawning a
-  `tmux send-keys` — and every send waits for the previous one to the SAME session, so `abc` then
-  Enter cannot arrive as Enter then `abc`. A non-printable key flushes the buffer before it goes.
+- **Order is a property of the transport.** One socket per session, FIFO by construction, with a
+  client `seq` echoed in each ack — so `abc` then Enter cannot arrive as Enter then `abc`, and a
+  keystroke that did not land is a fact the panel is told rather than a silence. Printable
+  characters are still batched for 25ms into one `text`: fewer messages, and each one spawns a
+  `tmux send-keys` on the host.
 - **A paste is one `text` per line, with Enter between them** — the newlines in a paste are Enter
   presses, and Enter is a key.
 - **A dialog does not block typing here**, unlike the dashboard's line composer: answering a dialog
@@ -299,6 +301,7 @@ here.
 | `src/api.ts` | the only process that talks HTTP; every method total, no method inventing a value |
 | `src/sessions.ts` | one poll, any number of surfaces; performs every action |
 | `src/streams.ts` | one live screen per session, shared by every surface watching it |
+| `src/input.ts` | the write channel's socket, and **pure** `wireFor` — what this client puts on the wire |
 | `src/panels.ts` | the editor tabs — one per session, keyed so asking twice reveals rather than duplicates |
 | `src/ansi.ts` | **pure** — one terminal frame, rendered as HTML, in the dashboard's palette |
 | `src/protocol.ts` | the wire shapes, and the note about why no rule lives on this side |

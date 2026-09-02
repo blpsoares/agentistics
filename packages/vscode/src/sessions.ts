@@ -16,6 +16,7 @@ import { AgentopClient } from './api'
 import { readAttention, type AttentionMemory } from './attention'
 import { fill } from './i18n'
 import type { FleetPayload, HostMessage, LinkStatus, Route, ViewMessage } from './protocol'
+import { InputSockets } from './input'
 import { TerminalStreams, type TerminalEvent } from './streams'
 import { attachInTerminal, startServerInTerminal } from './terminal'
 import { sessionsHtml } from './webview/html'
@@ -60,6 +61,7 @@ export function themeKind(): 'dark' | 'light' {
 export class SessionsHub implements vscode.Disposable {
   private readonly surfaces = new Map<vscode.Webview, Surface>()
   private readonly streams: TerminalStreams
+  private readonly inputs: InputSockets
   private timer: ReturnType<typeof setInterval> | undefined
   private memory: AttentionMemory = null
   private link: LinkStatus = { state: 'down', url: '' }
@@ -70,6 +72,7 @@ export class SessionsHub implements vscode.Disposable {
     private readonly deps: HubDeps,
   ) {
     this.streams = new TerminalStreams(() => this.deps.api())
+    this.inputs = new InputSockets(() => this.deps.api())
   }
 
   /** Wire a webview up: its HTML, its route, its messages, and its share of the current state. */
@@ -234,22 +237,33 @@ export class SessionsHub implements vscode.Disposable {
         await this.poll()
         return
       }
-      case 'input': {
-        // No result on success: a toast per keystroke is not feedback, the screen is. A REFUSAL is
-        // reported, because a key that silently did nothing is indistinguishable from a session
-        // that is ignoring you.
-        const out = await this.deps.client().input(msg.id, {
-          ...(msg.text !== undefined ? { text: msg.text } : {}),
-          ...(msg.key ? { key: msg.key } : {}),
-        })
-        if (!out.ok) this.broadcast({ type: 'result', ok: false, message: out.message })
+      case 'input':
+        // Straight onto this session's socket. No result on success: a toast per keystroke is not
+        // feedback, the screen is. A REFUSED keystroke is reported, because a key that silently did
+        // nothing is indistinguishable from a session that is ignoring you — and the ack is what
+        // makes that distinction available at all.
+        this.inputs.send(
+          msg.id,
+          msg.text !== undefined ? { text: msg.text } : msg.key!,
+          ack => {
+            if (ack.ok) return
+            const strings = this.deps.strings()
+            this.broadcast({
+              type: 'result',
+              ok: false,
+              message: fill(strings.keyRefused ?? '{0}', ack.reason ?? 'error'),
+            })
+          },
+        )
         return
-      }
       case 'watch':
         this.streams.watch(msg.id, surface.onTerminal)
         return
       case 'unwatch':
         this.streams.unwatch(msg.id, surface.onTerminal)
+        // The write socket goes with the read stream: nobody is looking at that session any more,
+        // and a socket held open for a screen nobody can see counts against the server's ceiling.
+        this.inputs.close(msg.id)
         return
       case 'pin':
         await this.setPinned(msg.id, msg.pinned)
@@ -340,6 +354,7 @@ export class SessionsHub implements vscode.Disposable {
   dispose(): void {
     this.stop()
     this.streams.dispose()
+    this.inputs.dispose()
     this.surfaces.clear()
   }
 }
