@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { refreshNotifications } from '../lib/notifications'
+import { sharedEventStream } from '../lib/eventStream'
 
 /**
  * Loads the notification history from the server on mount, then subscribes to the SSE
@@ -22,10 +23,8 @@ import { refreshNotifications } from '../lib/notifications'
 export function useNotificationStream(_lang: 'pt' | 'en'): void {
   useEffect(() => {
     void refreshNotifications()
-    const es = new EventSource('/api/events')
-    const handler = () => { void refreshNotifications() }
-    es.addEventListener('notification', handler)
-    es.onerror = () => { /* browser auto-reconnects */ }
-    return () => { es.removeEventListener('notification', handler); es.close() }
+    // Share the app's one `/api/events` socket (see lib/eventStream.ts); the frame's `data` is
+    // ignored here as documented above — the event's arrival is the whole signal.
+    return sharedEventStream().subscribe('notification', () => { void refreshNotifications() })
   }, [])
 }

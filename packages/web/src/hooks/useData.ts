@@ -3,6 +3,7 @@ import type { AppData, Filters, DateRange, AgentInvocation, HarnessId, SessionMe
 import { calcStreak, calcCost, sessionModelUsage, sessionCostUSD, getModelPrice, MODEL_PRICING, HARNESS_CAPABILITIES, filterByUsers, filterByHarnesses, filterByTeams, filterByMachines, resolveMachineCacheScope, distinctHarnesses, mergeStatsCaches, repoShortName, HARNESS_ORDER, EMPTY_TOKENS, addTokens, sessionTokens, sessionTokenTotal, sumTokens, totalTokens, usageTokenTotal, usageTokens } from '@agentistics/core'
 import { subDays, isAfter, isBefore, parseISO, format, differenceInCalendarDays, addDays, getDay } from 'date-fns'
 import { makeTagFilter, type TagDef } from '../lib/tagMatch'
+import { sharedEventStream } from '../lib/eventStream'
 
 /**
  * True only for a non-empty string. `start_time`/`end_time`/`date` fields are typed as `string`
@@ -282,9 +283,9 @@ export function useData() {
   // when Claude writes new session data to ~/.claude/.
   useEffect(() => {
     if (!liveUpdates) return
-    const es = new EventSource('/api/events')
-    es.addEventListener('change', () => { void fetchData() })
-    return () => { es.close() }
+    // Share the app's one `/api/events` socket (see lib/eventStream.ts) rather than opening a
+    // second connection just for the dashboard's live refresh.
+    return sharedEventStream().subscribe('change', () => { void fetchData() })
   }, [liveUpdates, fetchData])
 
   // Fallback polling at the selected interval when live updates are enabled.
