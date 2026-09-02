@@ -19,6 +19,7 @@
  */
 
 import { readRegistry } from './registry'
+import { nudgeTerminal } from './terminal-web'
 import { createInputChannel, type InputChannel } from './input-channel'
 import { encodeAck } from './input-protocol'
 import type { SessionBackend } from './types'
@@ -78,6 +79,12 @@ export function inputSocketCount(): number {
  * straight back on this socket. There is no "ready" frame and no local echo: the WS open event is the
  * client's go-ahead, and a character appears only when the SESSION draws it (read back over SSE), so
  * the UI can never paint a keystroke that did not land.
+ *
+ * A delivered keystroke NUDGES the read channel. There is no local echo by design, so the character
+ * appears on the next capture — and the capture cadence is tuned for WATCHING a session (500ms),
+ * which is nothing when you are reading one and an eternity when you are typing into it. `nudge`
+ * captures immediately instead of at the next tick; it is a no-op for a session nobody is watching,
+ * so it costs exactly the surfaces that would see the difference.
  */
 export function openInputSocket(ws: InputSocket): void {
   const state = ws.data.fleetInput
@@ -85,8 +92,16 @@ export function openInputSocket(ws: InputSocket): void {
   openSockets++
   const { id } = state
   state.channel = createInputChannel({
-    sendText: async text => (await getBackend()).sendTextRaw(id, text),
-    sendKey: async key => (await getBackend()).sendKey(id, key),
+    sendText: async text => {
+      const ok = await (await getBackend()).sendTextRaw(id, text)
+      if (ok) nudgeTerminal(id)
+      return ok
+    },
+    sendKey: async key => {
+      const ok = await (await getBackend()).sendKey(id, key)
+      if (ok) nudgeTerminal(id)
+      return ok
+    },
     emit: ack => { try { ws.send(encodeAck(ack)) } catch { /* socket already closed */ } },
   })
 }

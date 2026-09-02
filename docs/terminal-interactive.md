@@ -115,3 +115,22 @@ than per keystroke. The full server contract — message shape, the closed key a
 no local echo — is [`docs/terminal-write-channel.md`](terminal-write-channel.md). The line composer
 above **stays** and is unchanged: it remains the right tool for pasting a block and for when the
 socket drops.
+
+### Consumers
+
+Two, and they read the same contract: the dashboard's live terminal, and the VS Code extension's
+session panel (`packages/vscode/src/input.ts`), where the extension HOST opens the socket because a
+webview's `localhost` is the editor client's — under Remote-SSH or WSL that is not the machine the
+sessions run on.
+
+The extension briefly shipped an HTTP `POST /api/fleet/input` of its own, before this landed. It is
+gone: two write channels for one act is the duplication this repository is built against, and the
+socket is the better of the two — ordering is a property of the transport rather than of a
+client-side queue, and every keystroke is ACKED, so "it did not land" is a fact the UI can be told
+rather than a silence. The client keeps its own copy of the key allowlist so it does not ASK for
+what will be refused (a modifier press, a media key, each of which would otherwise cost the user an
+ack failure for a key nobody meant to send); the server validates membership regardless.
+
+A delivered keystroke NUDGES the read channel (`nudgeTerminal`). There is no local echo by design,
+so the character appears on the next capture — and the capture cadence is tuned for WATCHING a
+session, which is nothing when reading one and an eternity when typing into it.

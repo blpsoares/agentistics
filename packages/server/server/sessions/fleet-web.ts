@@ -19,11 +19,14 @@
 import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import { controlStrings } from '@agentistics/tui/control/i18n'
+import { sessionRunning } from '@agentistics/tui/control/session-dimensions'
 import { fleetRow, type FleetActionRequest, type FleetRow } from './fleet-row'
+import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
 
 // The REQUEST shape lives in the leaf `fleet-row.ts` so `index.ts` can name it without naming
 // this module — see the note there.
 export type { FleetRow, FleetVerb, FleetActionId, FleetActionRequest } from './fleet-row'
+export type { FleetSpawnBody } from './fleet-spawn'
 
 export interface FleetPayload {
   sessions: FleetRow[]
@@ -179,4 +182,177 @@ export async function runFleetAction(
       return { ok: out.ok, message: out.message }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Attaching, and starting something new.
+//
+// Both are the SAME indirection as the two above: the host answers, and this module carries the
+// answer over the wire. Neither adds a rule.
+
+/** Everything a client needs to enter a session in a terminal IT owns. */
+export interface FleetAttachTicket {
+  /** The command, already split. Run it with the caller's own stdio — nothing here spawns it. */
+  argv: string[]
+  /** The REAL detach keystroke, read from the backend, never assumed to be `Ctrl-b`. */
+  detachHint: string
+  /** What is being attached to, for the sentence printed on the way in. */
+  label: string
+}
+
+/**
+ * What it takes to attach to one session, or `null` when this machine cannot attach to it.
+ *
+ * Returned rather than PERFORMED, exactly as it is for the cockpit — and for the same reason, one
+ * step further out: attaching needs a real tty, and an HTTP server has none to give. A client with
+ * a terminal of its own (the VS Code extension's integrated terminal, a shell) runs the argv; a
+ * client without one (a browser tab) has the row's `attachCommand` to copy instead.
+ *
+ * The DETACH KEY travels with it because it is the one fact the user cannot recover alone: a tmux
+ * prefix they rebound makes a guessed hint actively wrong, and someone who cannot get out is
+ * stranded in a buffer that hides their shell.
+ */
+export async function readAttachTicket(
+  lang: CliLang,
+  id: string,
+): Promise<FleetAttachTicket | null> {
+  const host = await hostFor(lang)
+  if (!host.attachSession || !host.sessions) return null
+
+  // SCOPE, checked here and not left to the backend. `attachSession` composes the command from the
+  // id it is given — it does not ask whether that session exists — so an id off the wire came back
+  // as a perfectly well-formed ticket for nothing, and the client opened a terminal that printed
+  // `no such session` and sat there. The same check `/api/fleet/stream` makes for the same reason:
+  // the row must be one this machine manages AND be running, or there is nothing to attach TO. An
+  // external row is refused on `actionable`: agentop did not start it, so it owns no pane to enter.
+  const fleet = await host.sessions()
+  const row = fleet.sessions.find(r => r.id === id)
+  if (!row || !row.actionable || !sessionRunning(row)) return null
+
+  const ticket = await host.attachSession(id)
+  if (!ticket) return null
+  return { argv: [...ticket.argv], detachHint: ticket.detachHint, label: ticket.label }
+}
+
+/** The questions a start EARNS, and the places it could happen — the wizard, as data. */
+export interface FleetNewOptions {
+  /**
+   * Derived by the host from the spawn specs, so a harness with no spec is ABSENT rather than
+   * offered and failing — the same rule the cockpit's wizard and the CLI already follow.
+   */
+  harnesses: {
+    id: string
+    label: string
+    /** Suggestions to OFFER, never a validation list — see `planFleetSpawn`. */
+    modelSuggestions: string[]
+    supportsModel: boolean
+    /** A genuine closed enum, printed by the CLI itself. Empty means it has no effort flag. */
+    efforts: string[]
+  }[]
+  /** Ranked places, from the LOCAL store — so the picker answers with no network and a cold cache. */
+  projects: { path: string; label: string; repo?: string; detail: string; source: string }[]
+  /** The tasks that already exist here, so filing the new session is a pick, not a spelling test. */
+  tasks: string[]
+  /**
+   * This machine cannot start sessions at all (no backend on this platform, or a host that does not
+   * implement it). Said in words: an empty harness list on its own reads as a broken wizard.
+   */
+  unavailable?: string
+}
+
+/**
+ * The wizard's own data. Never throws — a machine that cannot answer says so in a sentence, and an
+ * empty list is only ever a real "there is nothing here".
+ */
+export async function readNewOptions(lang: CliLang, query: string): Promise<FleetNewOptions> {
+  const s = controlStrings(lang)
+  try {
+    const host = await hostFor(lang)
+    if (!host.startableHarnesses || !host.spawnSession) {
+      return { harnesses: [], projects: [], tasks: [], unavailable: s.sessionsNoHost }
+    }
+    const [harnesses, projects, tasks] = await Promise.all([
+      host.startableHarnesses(),
+      host.searchProjects ? host.searchProjects(query).catch(() => []) : Promise.resolve([]),
+      host.sessionTasks ? host.sessionTasks().catch(() => []) : Promise.resolve([]),
+    ])
+    return {
+      harnesses: harnesses.map(h => ({
+        id: h.id,
+        label: h.label,
+        modelSuggestions: [...h.modelSuggestions],
+        supportsModel: h.supportsModel,
+        efforts: [...h.efforts],
+      })),
+      projects: projects.map(p => ({
+        path: p.path,
+        label: p.label,
+        ...(p.repo ? { repo: p.repo } : {}),
+        detail: p.detail,
+        source: p.source,
+      })),
+      tasks,
+    }
+  } catch (e) {
+    return {
+      harnesses: [],
+      projects: [],
+      tasks: [],
+      unavailable: e instanceof Error ? e.message : String(e),
+    }
+  }
+}
+
+export interface FleetSpawnResponse {
+  ok: boolean
+  /** Already localized, and always present. */
+  message: string
+  /** The id of the session that was started, so the caller can attach to the very one it created. */
+  id?: string
+}
+
+/**
+ * Start one session on this machine.
+ *
+ * This is the one fleet call that takes a DIRECTORY from the request rather than reading it off a
+ * row — `resume` above refuses to, and says why. The difference is the question being asked:
+ * reopening names an existing conversation, so a directory in the body could only ever contradict
+ * it, while STARTING is the act of choosing where work happens and has nothing else to read it
+ * from. The power that comes with it is real and is bounded by exposure rather than by wording:
+ * `capability-guard.ts` maps this route to `localShell`, so it is unreachable on a `lan` or
+ * `public` profile whoever is authenticated — the same gate the rest of the fleet already sits
+ * behind, for the same reason.
+ *
+ * The request is read by the pure `planFleetSpawn` against the harnesses THIS host says it can
+ * start, so the checks the wizard makes by construction are made here explicitly, and the refusal
+ * is a sentence naming the offending value. Nothing is repaired: a request asking for a model on a
+ * harness with no model flag is refused rather than started without it, because a session that is
+ * not the one asked for is worse than no session.
+ *
+ * `attach` is forced false by the plan and cannot be requested: this process has no tty to hand
+ * over. A caller that wants to enter what it started asks `readAttachTicket` for the id that comes
+ * back here.
+ */
+export async function runFleetSpawn(
+  lang: CliLang,
+  body: FleetSpawnBody,
+): Promise<FleetSpawnResponse> {
+  const s = controlStrings(lang)
+  const host = await hostFor(lang)
+  if (!host.spawnSession || !host.startableHarnesses) return { ok: false, message: s.sessionsNoHost }
+
+  const decision = planFleetSpawn(body, await host.startableHarnesses())
+  if (!decision.ok) {
+    const detail = decision.detail ?? ''
+    const message =
+      decision.reason === 'unknown_harness' ? s.spawnUnknownHarness(detail)
+      : decision.reason === 'cwd_missing' ? s.spawnCwdMissing
+      : decision.reason === 'cwd_relative' ? s.spawnCwdRelative(detail)
+      : decision.reason === 'unknown_effort' ? s.spawnUnknownEffort(detail)
+      : s.spawnModelUnsupported(detail)
+    return { ok: false, message }
+  }
+
+  const out = await host.spawnSession(decision.plan)
+  return { ok: out.ok, message: out.message, ...(out.id ? { id: out.id } : {}) }
 }
