@@ -9,9 +9,20 @@ import { AGENTISTICS_DATA_DIR } from './config.ts'
 import { cliStrings, type CliLang, type CliStrings } from './cli-i18n.ts'
 
 const GITHUB_REPO = 'blpsoares/agentistics'
-const RELEASE_BASE = `https://github.com/${GITHUB_REPO}/releases/latest/download`
-/** Where a user goes when self-install is refused (unsupported platform/arch). */
+/** Version-addressed download root: `.../releases/download/v<version>/<asset>`.
+ *  NOT `.../releases/latest/download` — that resolves through GitHub's rolling "Latest"
+ *  flag, so a later release taking the flag while lacking the `agentop` asset would send
+ *  the download to a 404. Addressing the exact version the command already resolved is what
+ *  makes a future publish unable to divert the binary again (the bug that started this journey). */
+const RELEASE_DOWNLOAD_BASE = `https://github.com/${GITHUB_REPO}/releases/download`
+/** Where a user goes when self-install is refused (unsupported platform/arch). A page for a
+ *  person, not a download origin — safe to keep pointing at the releases index. */
 export const RELEASES_PAGE = `https://github.com/${GITHUB_REPO}/releases`
+
+/** Pure: the download URL for a specific version's asset. The tag is `v<version>`. */
+export function assetUrl(version: string, asset: string): string {
+  return `${RELEASE_DOWNLOAD_BASE}/v${version}/${asset}`
+}
 
 const _ESC = '\x1b'
 const _R  = `${_ESC}[0m`
@@ -46,11 +57,13 @@ export interface UpgradeTarget {
   url: string
 }
 
-/** Pure: the asset for a platform/arch pair, or null when self-install is not supported. */
-export function resolveUpgradeAsset(platformId: string, arch: string): UpgradeTarget | null {
+/** Pure: the asset + version-addressed URL for a platform/arch pair, or null when self-install
+ *  is not supported. `version` is the already-resolved target so the URL never depends on the
+ *  "Latest" flag; callers that only need the support check pass the version they resolved. */
+export function resolveUpgradeAsset(platformId: string, arch: string, version: string): UpgradeTarget | null {
   const key = `${platformId}/${arch}`
-  if (key === 'linux/x64') return { asset: 'agentop', url: `${RELEASE_BASE}/agentop` }
-  if (key === 'win32/x64') return { asset: 'agentop.exe', url: `${RELEASE_BASE}/agentop.exe` }
+  if (key === 'linux/x64') return { asset: 'agentop', url: assetUrl(version, 'agentop') }
+  if (key === 'win32/x64') return { asset: 'agentop.exe', url: assetUrl(version, 'agentop.exe') }
   return null
 }
 
@@ -87,10 +100,10 @@ export function verifyDownload(
 /**
  * Pure: does `agentop --version` output prove this binary is the release we expect?
  *
- * `>=` rather than `===` on purpose: the download URL points at the ROLLING `latest` release,
- * which is republished on every build, so it can legitimately be one bump ahead of the newest
- * version listed by the releases API. An OLDER (or unparseable) version means we downloaded
- * the wrong thing and must not install it.
+ * The URL now addresses the EXACT resolved version, so the binary should report exactly it.
+ * `>=` rather than `===` is kept as defensive tolerance — a tag republished one patch ahead
+ * still verifies — while an OLDER (or unparseable) version means we downloaded the wrong thing
+ * and must not install it.
  */
 export function checkBinaryVersionOutput(
   out: string,
@@ -480,7 +493,7 @@ export async function startBackgroundUpgrade(version: string): Promise<Backgroun
   // Never self-install over a dev checkout's runtime — see isInstalledBinary.
   if (!isInstalledBinary(process.execPath, process.argv[1])) return 'not-installed'
   // No published asset for this platform/arch → an unattended install would brick it.
-  if (!resolveUpgradeAsset(process.platform, process.arch)) return 'unsupported'
+  if (!resolveUpgradeAsset(process.platform, process.arch, version)) return 'unsupported'
   // A previously failing target backs off instead of re-downloading on every shell.
   if (!shouldAttemptUpgrade(readUpgradeFailure(), version, Date.now())) return 'backoff'
 
@@ -655,8 +668,9 @@ export async function runUpgrade(lang: CliLang = 'en'): Promise<number> {
   }
   stampUpgradeLock(info.latest)
 
-  // Platform/arch gate — refuse BEFORE downloading anything.
-  const target = resolveUpgradeAsset(process.platform, process.arch)
+  // Platform/arch gate — refuse BEFORE downloading anything. The URL is addressed to the
+  // version we just resolved (info.latest), never GitHub's "Latest" flag.
+  const target = resolveUpgradeAsset(process.platform, process.arch, info.latest)
   if (!target) {
     const id = `${process.platform}/${process.arch}`
     process.stderr.write(
@@ -686,8 +700,16 @@ export async function runUpgrade(lang: CliLang = 'en'): Promise<number> {
   }
 
   if (!resp.ok) {
-    console.error(`Download failed: HTTP ${resp.status}`)
-    recordUpgradeFailure(info.latest, `download failed: HTTP ${resp.status}`)
+    // A 404 on a version-addressed URL is a specific, non-network fact: the release exists but
+    // its binary was never published. Say WHICH version and WHICH asset so it is not mistaken
+    // for a dropped connection. Other statuses stay a generic transport failure.
+    if (resp.status === 404) {
+      process.stderr.write(`\n  ${_RD}${s.upgradeAssetMissing(info.latest, target.asset, target.url)}${_R}\n\n`)
+      recordUpgradeFailure(info.latest, `release asset ${target.asset} missing for v${info.latest} (HTTP 404)`)
+    } else {
+      console.error(`Download failed: HTTP ${resp.status}`)
+      recordUpgradeFailure(info.latest, `download failed: HTTP ${resp.status}`)
+    }
     return 1
   }
 

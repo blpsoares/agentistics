@@ -1,6 +1,7 @@
 import { test, expect } from 'bun:test'
 import {
   resolveUpgradeAsset,
+  assetUrl,
   verifyDownload,
   looksLikeExecutable,
   checkBinaryVersionOutput,
@@ -13,6 +14,21 @@ import {
   UPGRADE_BACKOFF_STEPS_MS,
   MIN_BINARY_BYTES,
 } from './upgrade'
+import { cliStrings } from './cli-i18n'
+
+// --- version-addressed download ---------------------------------------------
+// The binary is addressed by the RESOLVED version, never by GitHub's rolling "Latest"
+// flag: `.../releases/download/v<version>/<asset>`. A later release taking the flag can
+// no longer redirect the download to a release that lacks the asset (the bug that
+// originated this journey). `releases/latest/download` must not appear in a download URL.
+
+test('assetUrl addresses the exact version, not the "latest" alias', () => {
+  expect(assetUrl('2.5.0', 'agentop'))
+    .toBe('https://github.com/blpsoares/agentistics/releases/download/v2.5.0/agentop')
+  expect(assetUrl('2.5.0', 'agentop.exe'))
+    .toBe('https://github.com/blpsoares/agentistics/releases/download/v2.5.0/agentop.exe')
+  expect(assetUrl('2.5.0', 'agentop')).not.toContain('releases/latest/download')
+})
 
 // --- platform/arch gate -----------------------------------------------------
 // .github/workflows/release.yml publishes exactly two compiled assets: `agentop`
@@ -21,23 +37,38 @@ import {
 // arm64 box replaces a working binary with one the kernel cannot exec.
 
 test('only the platform/arch pairs the release workflow publishes are self-installable', () => {
-  expect(resolveUpgradeAsset('linux', 'x64')).toEqual({
+  expect(resolveUpgradeAsset('linux', 'x64', '2.5.0')).toEqual({
     asset: 'agentop',
-    url: 'https://github.com/blpsoares/agentistics/releases/latest/download/agentop',
+    url: 'https://github.com/blpsoares/agentistics/releases/download/v2.5.0/agentop',
   })
-  expect(resolveUpgradeAsset('win32', 'x64')).toEqual({
+  expect(resolveUpgradeAsset('win32', 'x64', '2.5.0')).toEqual({
     asset: 'agentop.exe',
-    url: 'https://github.com/blpsoares/agentistics/releases/latest/download/agentop.exe',
+    url: 'https://github.com/blpsoares/agentistics/releases/download/v2.5.0/agentop.exe',
   })
 })
 
 test('unsupported platform/arch combinations are refused', () => {
-  expect(resolveUpgradeAsset('linux', 'arm64')).toBeNull()   // Raspberry Pi / Ampere VM
-  expect(resolveUpgradeAsset('linux', 'arm')).toBeNull()
-  expect(resolveUpgradeAsset('darwin', 'arm64')).toBeNull()  // no macOS asset at all
-  expect(resolveUpgradeAsset('darwin', 'x64')).toBeNull()
-  expect(resolveUpgradeAsset('win32', 'arm64')).toBeNull()
-  expect(resolveUpgradeAsset('freebsd', 'x64')).toBeNull()
+  expect(resolveUpgradeAsset('linux', 'arm64', '2.5.0')).toBeNull()   // Raspberry Pi / Ampere VM
+  expect(resolveUpgradeAsset('linux', 'arm', '2.5.0')).toBeNull()
+  expect(resolveUpgradeAsset('darwin', 'arm64', '2.5.0')).toBeNull()  // no macOS asset at all
+  expect(resolveUpgradeAsset('darwin', 'x64', '2.5.0')).toBeNull()
+  expect(resolveUpgradeAsset('win32', 'arm64', '2.5.0')).toBeNull()
+  expect(resolveUpgradeAsset('freebsd', 'x64', '2.5.0')).toBeNull()
+})
+
+// --- a missing asset is not a network failure -------------------------------
+// When the addressed release exists but never published the binary, the message must
+// name WHICH version and WHICH asset so a person can tell it apart from a dropped
+// connection. A bare "HTTP 404" fails this.
+
+test('the asset-missing message names the version and the asset (en + pt)', () => {
+  const url = assetUrl('2.5.0', 'agentop')
+  for (const lang of ['en', 'pt'] as const) {
+    const msg = cliStrings(lang).upgradeAssetMissing('2.5.0', 'agentop', url)
+    expect(msg).toContain('2.5.0')       // which version
+    expect(msg).toContain('agentop')     // which asset
+    expect(msg).toContain('404')         // it was found-but-empty, not unreachable
+  }
 })
 
 // --- download verification --------------------------------------------------
@@ -79,8 +110,9 @@ test('verifyDownload rejects truncated payloads and non-executables', () => {
 
 test('the downloaded binary must identify itself as the expected version (or newer)', () => {
   expect(checkBinaryVersionOutput('agentop v1.7.0\n', '1.7.0')).toEqual({ ok: true, found: '1.7.0' })
-  // The download URL is the ROLLING `latest` release, which can be one bump ahead of the
-  // newest version the releases API lists — newer is fine, older is not.
+  // The URL now addresses the exact resolved version, so the binary should report exactly it;
+  // `>=` is kept as defensive tolerance (a tag republished one patch ahead) — newer is fine,
+  // older means we downloaded the wrong thing.
   expect(checkBinaryVersionOutput('agentop v1.7.1\n', '1.7.0')).toEqual({ ok: true, found: '1.7.1' })
   expect(checkBinaryVersionOutput('agentop v1.6.9\n', '1.7.0')).toEqual({ ok: false, found: '1.6.9' })
   // Nothing usable printed → the file did not run (wrong arch, corrupt, killed).

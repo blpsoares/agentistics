@@ -389,6 +389,7 @@ export interface CliStrings {
   upgradeLockUnavailable: string
   upgradeUnsupported: (target: string) => string
   upgradeManualHow: (url: string) => string
+  upgradeAssetMissing: (version: string, asset: string, url: string) => string
   upgradeVerifyFailed: (reason: string) => string
   upgradeRolledBack: (backup: string) => string
   upgradeUntouched: string
@@ -677,6 +678,10 @@ const EN: CliStrings = {
   upgradeLockUnavailable: 'Could not write the upgrade lock; continuing without it.',
   upgradeUnsupported: (target) => `No agentop release is published for ${target}, so it cannot upgrade itself.`,
   upgradeManualHow: (url) => `Download the right binary for your platform and replace it by hand: ${url}`,
+  upgradeAssetMissing: (version, asset, url) =>
+    `Release v${version} is missing its \`${asset}\` binary (HTTP 404): ${url}\n` +
+    `  The release exists but did not publish this asset — this is not a network failure. ` +
+    `Wait for the release to publish the binary, or install it by hand.`,
   upgradeVerifyFailed: (reason) => `Upgrade aborted: ${reason}.`,
   upgradeRolledBack: (backup) => `The previous binary was restored from ${backup}.`,
   upgradeUntouched: 'The installed binary was left untouched.',
@@ -958,6 +963,10 @@ const PT: CliStrings = {
   upgradeLockUnavailable: 'Não consegui escrever o lock de upgrade; seguindo sem ele.',
   upgradeUnsupported: (target) => `Não existe release do agentop para ${target}, então ele não pode se atualizar sozinho.`,
   upgradeManualHow: (url) => `Baixe o binário da sua plataforma e troque na mão: ${url}`,
+  upgradeAssetMissing: (version, asset, url) =>
+    `A release v${version} está sem o binário \`${asset}\` (HTTP 404): ${url}\n` +
+    `  A release existe, mas não publicou esse anexo — isto não é falha de rede. ` +
+    `Espere a release publicar o binário, ou instale na mão.`,
   upgradeVerifyFailed: (reason) => `Upgrade abortado: ${reason}.`,
   upgradeRolledBack: (backup) => `O binário anterior foi restaurado de ${backup}.`,
   upgradeUntouched: 'O binário instalado não foi tocado.',
