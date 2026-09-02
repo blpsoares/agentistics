@@ -21,6 +21,7 @@ import {
   type FleetActionId, type FleetRow, type HostMessage, type LinkStatus,
   type NewOptions, type Route, type SpawnRequest, type ViewMessage,
 } from '../protocol'
+import { shortenPath } from '../paths'
 import { buildView, type FleetView } from '../view-model'
 // The browser half of the terminal contract, imported from the dashboard rather than restated: the
 // phase machine, the parsers and the SENTENCE that says whether you are looking at a live screen, a
@@ -79,6 +80,8 @@ const state = {
   terminals: new Map<string, TerminalState>(),
   /** True once the screen has the keyboard — see `renderScreen`. */
   typing: false,
+  /** Session ids the user pinned. Kept by the HOST, so a reload and every tab agree. */
+  pins: new Set<string>(),
   /** The session whose stream this surface has asked for. */
   watching: null as string | null,
 }
@@ -322,14 +325,29 @@ function renderList(): HTMLElement {
     return box
   }
 
+  // Pinned rows lead, in their own band. A pin is somebody saying "this one, whatever else is
+  // going on" — leaving it in its project band, ordered by urgency like everything else, honours
+  // the click and hides the row it was meant to surface.
+  const pinnedRows = view.groups.flatMap(g => g.rows).filter(r => state.pins.has(r.id))
+  if (pinnedRows.length > 0) {
+    box.append(groupHeading(`★ ${s('pinnedGroup')}`, pinnedRows.length))
+    for (const row of pinnedRows) box.append(renderCard(row))
+  }
+
   for (const group of view.groups) {
-    const heading = el('div', 'group')
-    heading.append(el('span', 'group-name', group.project || '—'))
-    heading.append(el('span', 'group-count', String(group.rows.length)))
-    box.append(heading)
-    for (const row of group.rows) box.append(renderCard(row))
+    const rows = group.rows.filter(r => !state.pins.has(r.id))
+    if (rows.length === 0) continue
+    box.append(groupHeading(group.project || '—', rows.length))
+    for (const row of rows) box.append(renderCard(row))
   }
   return box
+}
+
+function groupHeading(name: string, count: number): HTMLElement {
+  const heading = el('div', 'group')
+  heading.append(el('span', 'group-name', name))
+  heading.append(el('span', 'group-count', String(count)))
+  return heading
 }
 
 function emptyState(view: FleetView): HTMLElement {
@@ -352,10 +370,21 @@ function emptyState(view: FleetView): HTMLElement {
   return box
 }
 
-/** One row, as a card. Clicking it opens the session — the list is a way in, not a control panel. */
+/**
+ * One row, as a card.
+ *
+ * The whole card opens the session — the list is a way IN, not a control panel; the two things that
+ * are not "open this" (pin it, open it in a tab) are icons in the corner, and they stop the click
+ * from reaching the card underneath.
+ *
+ * The state is said THREE ways, because this is the screen people scan rather than read: a coloured
+ * stripe down the left edge, the dot, and the word. The stripe is what makes a blocked session
+ * findable in a list of forty at a glance.
+ */
 function renderCard(row: FleetRow): HTMLElement {
   const card = el('div', `card state-${row.state}`)
   if (state.busy.has(row.id)) card.classList.add('busy')
+  if (state.pins.has(row.id)) card.classList.add('pinned')
 
   const open = el('button', 'card-open')
   open.addEventListener('click', () => go({ view: 'session', id: row.id }))
@@ -363,24 +392,28 @@ function renderCard(row: FleetRow): HTMLElement {
   const head = el('div', 'card-head')
   head.append(stateDot(row))
   head.append(el('span', 'card-title', row.title))
-  head.append(statePill(row))
   open.append(head)
 
   const meta = el('div', 'card-meta')
   meta.append(harnessChip(row.harness))
-  if (row.task) meta.append(el('span', 'chip task', row.task))
+  meta.append(statePill(row))
   if (row.model) meta.append(el('span', 'chip', row.model))
+  if (row.task) meta.append(el('span', 'chip task', row.task))
   open.append(meta)
-  open.append(el('div', 'card-cwd', row.cwd))
+  open.append(el('div', 'card-cwd', shortenPath(row.cwd)))
   if (row.note) open.append(el('div', 'card-note', row.note))
   card.append(open)
 
-  const actions = el('div', 'card-actions')
-  actions.append(button(s('openTab'), 'btn tiny ghost', () => post({ type: 'openTab', id: row.id })))
-  if (row.actionable) {
-    actions.append(button(s('attach'), 'btn tiny ghost', () => post({ type: 'attach', id: row.id })))
-  }
-  card.append(actions)
+  const corner = el('div', 'card-corner')
+  const pinned = state.pins.has(row.id)
+  corner.append(iconButton(
+    pinned ? '★' : '☆',
+    pinned ? s('unpin') : s('pin'),
+    pinned ? 'icon-btn tiny on' : 'icon-btn tiny',
+    () => post({ type: 'pin', id: row.id, pinned: !pinned }),
+  ))
+  corner.append(iconButton('⧉', s('openTab'), 'icon-btn tiny', () => post({ type: 'openTab', id: row.id })))
+  card.append(corner)
   return card
 }
 
@@ -1019,6 +1052,7 @@ window.addEventListener('message', event => {
     state.tasks = msg.fleet.tasks
     state.strings = msg.strings
     state.lang = msg.lang
+    state.pins = new Set(msg.pinned)
     state.busy.clear()
     render()
     return

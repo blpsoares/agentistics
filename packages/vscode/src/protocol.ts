@@ -152,7 +152,15 @@ export type Route =
 
 /** Extension host → webview. */
 export type HostMessage =
-  | { type: 'state'; link: LinkStatus; fleet: FleetPayload; strings: Record<string, string>; lang: 'en' | 'pt' }
+  | {
+      type: 'state'
+      link: LinkStatus
+      fleet: FleetPayload
+      strings: Record<string, string>
+      lang: 'en' | 'pt'
+      /** Session ids the user pinned. Ordered by nothing — the list decides how they are shown. */
+      pinned: string[]
+    }
   /** How this surface opens, and whether it may navigate. Sent once, before anything else. */
   | { type: 'mount'; route: Route; pinned: boolean; theme: 'dark' | 'light' }
   /** The editor's theme changed under a surface that is already open. */
@@ -196,6 +204,16 @@ export type ViewMessage =
    * dismiss by clicking past it, which a box drawn inside the panel would not be.
    */
   | { type: 'kill'; id: string; title: string }
+  /**
+   * Pin a session to the top of the list, or unpin it.
+   *
+   * Kept by the HOST in VS Code's `globalState`, not in the panel: a pin is a decision about a
+   * session and must survive a reload and be the same in the sidebar and in every tab. It is
+   * deliberately NOT written into `preferences.json` on the server — that file is the cockpit's
+   * own arrangement, and an editor reaching into it would be a second writer of somebody else's
+   * settings.
+   */
+  | { type: 'pin'; id: string; pinned: boolean }
   /**
    * A keystroke, or literal characters, straight into the live session.
    *

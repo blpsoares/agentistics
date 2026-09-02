@@ -58,7 +58,19 @@ export function sessionsHtml(shell: Shell): string {
   const csp = [
     "default-src 'none'",
     `img-src ${shell.cspSource} data:`,
-    `style-src ${shell.cspSource}`,
+    // `'unsafe-inline'` for STYLE, and it is load-bearing rather than lazy. A terminal frame is
+    // coloured per character run — 256 indexed colours plus truecolour — so every run carries a
+    // `style` attribute, and without this the browser drops every one of them: the screen renders
+    // as undifferentiated white text and the cursor, whose whole appearance is an inverted
+    // background, disappears. That is precisely how it was reported ("nenhuma cor tá aparecendo").
+    // Class names cannot express an arbitrary colour, so the alternative is a generated stylesheet
+    // kept in sync with the markup — a second moving part for no gain here.
+    //
+    // What it does NOT relax is the part that matters: `script-src` stays nonce-only, so injected
+    // markup still cannot execute. And with `default-src 'none'` there is no `img-src` or
+    // `connect-src` for CSS to reach — the classic style-injection exfiltration
+    // (`background: url(//attacker)`) has nowhere to send anything.
+    `style-src ${shell.cspSource} 'unsafe-inline'`,
     `font-src ${shell.cspSource}`,
     `script-src 'nonce-${shell.nonce}'`,
   ].join('; ')

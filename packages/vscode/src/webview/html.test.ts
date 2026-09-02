@@ -18,6 +18,15 @@ describe('sessionsHtml', () => {
     expect(html).toContain('nonce="n0nc3"')
     expect(html).not.toContain("script-src 'unsafe-inline'")
   })
+
+  it('admits inline STYLE, because a terminal frame is coloured per character run', () => {
+    // Without it the browser drops every `style` attribute the ANSI renderer emits: the screen is
+    // undifferentiated white text and the cursor — whose appearance is an inverted background —
+    // vanishes. Script stays nonce-only, which is the half that matters.
+    const html = sessionsHtml(SHELL)
+    expect(html).toContain("style-src vscode-webview://abc &#39;unsafe-inline&#39;")
+    expect(html).toContain("script-src &#39;nonce-n0nc3&#39;")
+  })
 })
 
 const TEXT = { notice: 'unreadable', bar: 'Showing', openExternal: 'Open in a browser' }

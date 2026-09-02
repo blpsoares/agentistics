@@ -257,16 +257,32 @@ button.chip { cursor: pointer; }
   padding: 0 6px;
 }
 
+/*
+ * A card is a whole click target with a corner of its own.
+ *
+ * The state is said THREE ways because this is the screen people SCAN: a stripe down the left edge,
+ * the dot, and the word. The stripe is what makes one blocked session findable in a list of forty
+ * without reading any of them.
+ */
 .card {
+  position: relative;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-card);
   margin-bottom: 6px;
   overflow: hidden;
-  transition: border-color .12s ease, background .12s ease;
+  transition: border-color .12s ease, background .12s ease, transform .12s ease;
+}
+.card::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 2px;
+  background: transparent;
 }
 .card:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
 .card.busy { opacity: .55; }
+.card.pinned { border-color: var(--accent); }
 
 .card-open {
   display: block;
@@ -276,29 +292,50 @@ button.chip { cursor: pointer; }
   border: none;
   color: inherit;
   font: inherit;
-  padding: 9px 11px 7px;
+  padding: 9px 56px 9px 12px;
   cursor: pointer;
 }
 .card-head { display: flex; align-items: center; gap: 7px; }
-.card-title { flex: 1; font-weight: 600; overflow-wrap: anywhere; }
-.card-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-.card-cwd {
-  margin-top: 5px;
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-  overflow-wrap: anywhere;
+.card-title {
+  flex: 1;
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.card-note { margin-top: 4px; font-size: 12px; color: var(--text-secondary); font-style: italic; }
-.card-actions {
+.card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
+.card-cwd {
+  margin-top: 6px;
+  font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-note {
+  margin-top: 5px;
+  padding-left: 7px;
+  border-left: 2px solid var(--border-strong);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+/* The two things that are not "open this session" — they sit out of the click target's way. */
+.card-corner {
+  position: absolute;
+  top: 6px;
+  right: 6px;
   display: flex;
-  gap: 5px;
-  padding: 0 11px 9px;
+  gap: 2px;
 }
 
 .dot { font-size: 9px; line-height: 1; color: var(--text-tertiary); }
 .state-waiting .dot, .state-waiting-approval .dot { color: var(--amber); }
 .state-working .dot { color: var(--green); }
-.state-waiting-approval { border-color: rgba(245, 158, 11, .45); }
+.card.state-waiting::before, .card.state-waiting-approval::before { background: var(--amber); }
+.card.state-working::before { background: var(--green); }
 .state-lost, .state-exited, .state-closed, .state-unknown { opacity: .8; }
 
 .state-pill {
@@ -361,6 +398,9 @@ button.chip { cursor: pointer; }
 .icon-btn:hover:not(:disabled) { background: var(--bg-card-hover); color: var(--text-primary); }
 .icon-btn:disabled { opacity: .4; cursor: default; }
 /* The one control that cannot be undone does not look like the others. */
+.icon-btn.tiny { font-size: 12px; padding: 2px 5px; background: transparent; border-color: transparent; }
+.icon-btn.tiny:hover:not(:disabled) { background: var(--bg-elevated); border-color: var(--border); }
+.icon-btn.tiny.on { color: var(--accent); }
 .icon-btn.danger { color: var(--red); border-color: rgba(239, 68, 68, .4); }
 .icon-btn.danger:hover:not(:disabled) { background: var(--red); color: #fff; border-color: var(--red); }
 

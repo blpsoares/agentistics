@@ -25,6 +25,9 @@ const POLL_MS = 5_000
 
 const EMPTY: FleetPayload = { sessions: [], attention: 0, tasks: [] }
 
+/** Where the pins live. Global rather than per-workspace: a session is not a property of a folder. */
+const PINNED_KEY = 'agentistics.pinnedSessions'
+
 export interface HubDeps {
   client(): AgentopClient
   api(): string
@@ -168,7 +171,28 @@ export class SessionsHub implements vscode.Disposable {
       fleet: this.fleet,
       strings: this.deps.strings(),
       lang: this.deps.lang(),
+      pinned: this.pinned(),
     }
+  }
+
+  /**
+   * The pinned ids, from VS Code's own global storage.
+   *
+   * The HOST keeps them, not the panel: a pin is a decision about a session and has to survive a
+   * reload and read the same in the sidebar and in every tab. Deliberately not written into the
+   * server's `preferences.json` — that file is the cockpit's arrangement, and an editor reaching
+   * into it would be a second writer of somebody else's settings.
+   */
+  private pinned(): string[] {
+    return this.context.globalState.get<string[]>(PINNED_KEY, [])
+  }
+
+  private async setPinned(id: string, pinned: boolean): Promise<void> {
+    const current = new Set(this.pinned())
+    if (pinned) current.add(id)
+    else current.delete(id)
+    await this.context.globalState.update(PINNED_KEY, [...current])
+    this.broadcast(this.stateMessage())
   }
 
   /** One toast per transition, with a way straight to the session it is about. */
@@ -227,6 +251,9 @@ export class SessionsHub implements vscode.Disposable {
         return
       case 'unwatch':
         this.streams.unwatch(msg.id, surface.onTerminal)
+        return
+      case 'pin':
+        await this.setPinned(msg.id, msg.pinned)
         return
       case 'openTab':
         this.deps.openTab(msg.id)
