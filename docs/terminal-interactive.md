@@ -172,9 +172,12 @@ highlighted option — direct typing is a **sighted** keystroke and IS allowed o
 you answer a prompt. So `awaiting-approval` no longer disarms the keystroke channel; the line
 composer shows a hint pointing at the terminal instead.
 
-**Latency (measured, local, disposable tmux session).** Write path (key → server ack) median **5 ms**,
-worst **10 ms**; key → tmux pane median **7 ms**; key → **screen** (visible in an SSE read frame,
-which is what the browser paints) median **380 ms**, worst **384 ms**, best **11 ms**. The write is
-effectively instant — the entire perceived echo delay is the read channel's 500 ms poll
-(`TERMINAL_POLL_MS`), tuned separately (journey `j-20260901-ik`); this is the baseline for that
-change.
+**Latency (measured, local, disposable tmux session).** Write path (key → server ack) median
+**5 ms**, worst **10 ms**; key → tmux pane median **7 ms**; key → **screen** (visible in an SSE read
+frame, which is what the browser paints) median **7 ms**, worst **11 ms** — because a delivered
+keystroke NUDGES the read channel (`nudgeTerminal`, `sessions/input-web.ts`), so the character is
+captured and streamed immediately rather than on the next 500 ms tick. Per-keystroke typing is
+therefore effectively instant. (Measured against the channel BEFORE the nudge landed, the same
+key → screen was ~380 ms, poll-bound — which is what the read-poll tuning of journey `j-20260901-ik`
+addresses for CONTINUOUS output, i.e. a process printing without keystrokes; keystroke echo itself
+no longer waits on the poll.)
