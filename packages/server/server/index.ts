@@ -362,6 +362,24 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
  */
 const refreshedCookies = new WeakMap<Request, string>()
 
+// A `filters` query parameter, or nothing. Junk is IGNORED rather than refused: a filter that
+// cannot be read is a narrower list than the caller asked for, and answering 400 to a poll would
+// take the whole fleet off somebody's screen over a stale bookmark.
+function readFilters(raw: string | null): { filters?: Record<string, string[]> } {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (typeof parsed !== 'object' || parsed === null) return {}
+    const out: Record<string, string[]> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (Array.isArray(value)) out[key] = value.filter((v): v is string => typeof v === 'string')
+    }
+    return Object.keys(out).length > 0 ? { filters: out } : {}
+  } catch {
+    return {}
+  }
+}
+
 async function handleRequestInner(req: Request, server: Server<WSData>): Promise<Response | undefined> {
     const url = new URL(req.url)
     // Collapse repeated slashes in the path. A member whose endpoint has a trailing slash
@@ -1057,7 +1075,25 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
 
     if (url.pathname === '/api/fleet' && req.method === 'GET') {
       const { readFleet, fleetLang } = await import('./sessions/fleet-web')
-      const payload = await readFleet(fleetLang(url.searchParams.get('lang')))
+      // The ARRANGEMENT is opt-in: a caller that sends `view=1` gets the fleet grouped, ordered and
+      // filtered the way the cockpit would (`fleet-arrange.ts`); everyone else gets the flat list
+      // they already read, and pays nothing for a grouping they do not draw.
+      const payload = await readFleet(
+        fleetLang(url.searchParams.get('lang')),
+        url.searchParams.get('view') === null ? undefined : {
+          ...(url.searchParams.get('group') ? { grouping: url.searchParams.get('group')! } : {}),
+          ...(url.searchParams.get('sort') ? { sort: url.searchParams.get('sort')! } : {}),
+          ...(url.searchParams.get('dir') ? { dir: url.searchParams.get('dir')! } : {}),
+          ...(url.searchParams.get('q') ? { query: url.searchParams.get('q')! } : {}),
+          ...(url.searchParams.get('scopes') ? { scopes: url.searchParams.get('scopes')!.split(',') } : {}),
+          ...(url.searchParams.get('marked') ? { marked: url.searchParams.get('marked')!.split(',') } : {}),
+          ...(url.searchParams.get('active') === '1' ? { onlyActive: true } : {}),
+          // `filters` is JSON because it is a map of dimension to VALUES, and values are arbitrary
+          // strings — a project path, a model id. Flattening that into query parameters would need
+          // an escaping convention nobody would remember.
+          ...(readFilters(url.searchParams.get('filters'))),
+        },
+      )
       return new Response(JSON.stringify(payload), {
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })

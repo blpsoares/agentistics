@@ -18,11 +18,11 @@
 import { ansiToHtml } from '../ansi'
 import { fill } from '../i18n'
 import {
-  type FleetActionId, type FleetRow, type HostMessage, type LinkStatus,
-  type NewOptions, type Route, type SpawnRequest, type ViewMessage,
+  DEFAULT_ARRANGEMENT,
+  type Arrangement, type FleetActionId, type FleetRow, type FleetView, type HostMessage,
+  type LinkStatus, type NewOptions, type Route, type SpawnRequest, type ViewMessage,
 } from '../protocol'
 import { shortenPath } from '../paths'
-import { buildView, type FleetView } from '../view-model'
 // The browser half of the terminal contract, imported from the dashboard rather than restated: the
 // phase machine, the parsers and the SENTENCE that says whether you are looking at a live screen, a
 // finished session or one that is gone. A second copy in an editor client would be a second set of
@@ -42,28 +42,22 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi()
 
+/** What this SURFACE remembers. The arrangement itself is the HOST's — every panel shares one. */
 interface Persisted {
-  query: string
-  onlyActive: boolean
+  arrangeOpen: boolean
 }
 
-/**
- * How the panel opens on a surface that has never chosen.
- *
- * ONLY ACTIVE, which is `DEFAULT_SESSION_VIEW` in the control center — stated there once so every
- * surface opens the same way. It is strict on purpose: a machine with months of named work shows
- * all of it otherwise, and the empty state says which switch is hiding the rest.
- */
-const DEFAULT_VIEW: Persisted = { query: '', onlyActive: true }
-
-const restored = (vscode.getState() as Persisted | undefined) ?? DEFAULT_VIEW
+const restored = (vscode.getState() as Persisted | undefined) ?? { arrangeOpen: false }
 
 const state = {
   route: { view: 'list' } as Route,
   pinned: false,
   theme: 'dark' as 'dark' | 'light',
-  query: restored.query ?? '',
-  onlyActive: restored.onlyActive ?? DEFAULT_VIEW.onlyActive,
+  /** How the fleet is arranged. Echoed back by the host, never decided here. */
+  arrangement: DEFAULT_ARRANGEMENT as Arrangement,
+  /** The arranged fleet the server computed. `null` until the first answer. */
+  view: null as FleetView | null,
+  arrangeOpen: restored.arrangeOpen ?? false,
   expanded: null as string | null,
   wizard: false,
   busy: new Set<string>(),
@@ -74,6 +68,8 @@ const state = {
   attention: 0,
   unavailable: undefined as string | undefined,
   tasks: [] as string[],
+  /** The sessions that fell together, when some did — the "reopen what fell" offer. */
+  fell: undefined as { count: number; atMs: number } | undefined,
   options: null as NewOptions | null,
   result: undefined as { ok: boolean; message: string } | undefined,
   /** Per session, so walking away and back does not lose a screen. */
@@ -106,7 +102,18 @@ function post(msg: ViewMessage): void {
 }
 
 function persist(): void {
-  vscode.setState({ query: state.query, onlyActive: state.onlyActive } satisfies Persisted)
+  vscode.setState({ arrangeOpen: state.arrangeOpen } satisfies Persisted)
+}
+
+/**
+ * Change the arrangement.
+ *
+ * The host owns it and re-polls; nothing is applied optimistically here. A local guess would show a
+ * grouping for one frame that the next poll then contradicts, and on a slow machine that flicker is
+ * the whole interaction.
+ */
+function arrange(change: Partial<Arrangement>): void {
+  post({ type: 'arrange', change })
 }
 
 function rowOf(id: string): FleetRow | undefined {
@@ -152,14 +159,17 @@ const body = el('main', 'body')
 
 const searchInput = el('input', 'search')
 searchInput.type = 'search'
-searchInput.value = state.query
+// Its value comes from the arrangement, which the host owns — filled in on the first `state`.
 
 function mount(): void {
   root.append(header, banner, resultLine, body)
+  // Debounced: every keystroke is a poll of the whole fleet, and the search runs server-side where
+  // the transcript scope can actually read a transcript.
+  let searchTimer: ReturnType<typeof setTimeout> | undefined
   searchInput.addEventListener('input', () => {
-    state.query = searchInput.value
-    persist()
-    renderBody()
+    clearTimeout(searchTimer)
+    const value = searchInput.value
+    searchTimer = setTimeout(() => arrange({ query: value }), 250)
   })
 }
 
@@ -225,14 +235,24 @@ function renderHeader(): void {
   if (state.route.view === 'list') {
     const filters = el('div', 'filters')
     searchInput.placeholder = s('searchPlaceholder')
-    const toggle = button(s('onlyActive'), state.onlyActive ? 'chip on' : 'chip', () => {
-      state.onlyActive = !state.onlyActive
+    if (searchInput.value !== state.arrangement.query && document.activeElement !== searchInput) {
+      // Only when the field is NOT being typed in: overwriting it from a poll eats a keystroke.
+      searchInput.value = state.arrangement.query
+    }
+    const open = button('⚙', state.arrangeOpen ? 'chip on' : 'chip', () => {
+      state.arrangeOpen = !state.arrangeOpen
       persist()
       render()
     })
-    toggle.setAttribute('aria-pressed', String(state.onlyActive))
-    filters.append(searchInput, toggle)
+    open.title = s('arrange')
+    open.setAttribute('aria-label', s('arrange'))
+    // A count of what is narrowing the list, so a filter left on from yesterday is visible without
+    // opening the panel — the thing that otherwise reads as "the fleet is empty".
+    const narrowing = activeFilterCount()
+    if (narrowing > 0) open.append(el('span', 'count-badge', String(narrowing)))
+    filters.append(searchInput, open)
     header.append(filters)
+    if (state.arrangeOpen) header.append(renderArrange())
   }
 }
 
@@ -312,21 +332,35 @@ function renderBody(): void {
 
 function renderList(): HTMLElement {
   const box = el('div', 'list')
-  const view = buildView(state.rows, { query: state.query, onlyActive: state.onlyActive })
+  const view = state.view
 
   if (state.unavailable) {
     // The list may not be the whole truth, and the server said why. Shown ABOVE the rows rather
     // than instead of them: a partial answer is still an answer.
     box.append(el('div', 'notice', state.unavailable))
   }
-  if (view.empty) {
+
+  // Sessions that FELL together — a reboot, a laptop closed. The offer is the whole group, because
+  // that is the shape of what happened; the server resolves which sessions were in it.
+  if (state.fell && state.fell.count > 0) {
+    const fell = el('div', 'fell')
+    fell.append(el('span', undefined, fill(s('fellCount'), state.fell.count)))
+    fell.append(button(s('reopenFell'), 'btn small primary', () => post({ type: 'reopenFell' })))
+    box.append(fell)
+  }
+
+  if (!view) {
+    box.append(el('div', 'empty', '…'))
+    return box
+  }
+  if (view.shown === 0) {
     box.append(emptyState(view))
     return box
   }
 
   // Pinned rows lead, in their own band. A pin is somebody saying "this one, whatever else is
-  // going on" — leaving it in its project band, ordered by urgency like everything else, honours
-  // the click and hides the row it was meant to surface.
+  // going on" — leaving it in its band, ordered like everything else, honours the click and hides
+  // the row it was meant to surface.
   const pinnedRows = view.groups.flatMap(g => g.rows).filter(r => state.pins.has(r.id))
   if (pinnedRows.length > 0) {
     box.append(groupHeading(`★ ${s('pinnedGroup')}`, pinnedRows.length))
@@ -336,36 +370,180 @@ function renderList(): HTMLElement {
   for (const group of view.groups) {
     const rows = group.rows.filter(r => !state.pins.has(r.id))
     if (rows.length === 0) continue
-    box.append(groupHeading(group.project || '—', rows.length))
+    box.append(groupHeading(group.label, rows.length, group))
     for (const row of rows) box.append(renderCard(row))
   }
   return box
 }
 
-function groupHeading(name: string, count: number): HTMLElement {
-  const heading = el('div', 'group')
+/**
+ * A band's heading, and — while grouping by task — the two things you can do to a TASK.
+ *
+ * They live on the band rather than on a row because a task is not a session: finishing one is a
+ * statement about the work, and deleting one removes a name, not a conversation.
+ */
+function groupHeading(
+  name: string,
+  count: number,
+  group?: { key: string; done?: boolean },
+): HTMLElement {
+  const heading = el('div', group?.done ? 'group done' : 'group')
   heading.append(el('span', 'group-name', name))
   heading.append(el('span', 'group-count', String(count)))
+
+  if (group && state.arrangement.grouping === 'task' && group.key && group.key !== UNFILED_KEY) {
+    const task = group.key
+    heading.append(iconButton('⚑', s('openTaskWhole'), 'icon-btn tiny', () => {
+      // The row's own verb, asked of any session in the band: the server reads the task off the row
+      // and never from the request, so a caller cannot reopen a task it does not own a session in.
+      const anchor = group ? rowsOfGroup(group.key)[0] : undefined
+      if (anchor) act(anchor.id, 'openTask')
+    }))
+    heading.append(iconButton(group.done ? '↺' : '✓', group.done ? s('unfinishTask') : s('finishTask'), 'icon-btn tiny', () => {
+      const anchor = rowsOfGroup(group.key)[0]
+      if (anchor) act(anchor.id, 'finishTask')
+    }))
+    heading.append(iconButton('␡', s('deleteTask'), 'icon-btn tiny danger', () => {
+      post({ type: 'act', id: '', action: 'deleteTask', text: task })
+    }))
+  }
   return heading
+}
+
+/** The `UNFILED` bucket the dimension table folds an absent value into. */
+const UNFILED_KEY = '\u0000unfiled'
+
+function rowsOfGroup(key: string): FleetRow[] {
+  return state.view?.groups.find(g => g.key === key)?.rows ?? []
+}
+
+/**
+ * How the fleet is arranged — group, sort, filter, and where the search looks.
+ *
+ * Every option in here is READ FROM THE SERVER (`view.groupings`, `view.sorts`, `view.facets`,
+ * `view.scopes`), already labelled in the user's language. A list written in the client would be a
+ * copy of the dimension table, and the day a dimension is added this panel is the surface that
+ * silently does not offer it.
+ */
+function renderArrange(): HTMLElement {
+  const box = el('div', 'arrange')
+  const view = state.view
+  if (!view) {
+    box.append(el('p', 'dim', s('loading')))
+    return box
+  }
+
+  box.append(pickerRow(s('arrangeGroup'), view.groupings, state.arrangement.grouping,
+    id => arrange({ grouping: id })))
+
+  const sortRow = pickerRow(s('arrangeSort'), view.sorts, state.arrangement.sort,
+    id => arrange({ sort: id }))
+  // The direction belongs beside the key it flips, not in a menu of its own.
+  const dir = button(state.arrangement.dir === 'desc' ? '↓' : '↑', 'chip', () => {
+    arrange({ dir: state.arrangement.dir === 'desc' ? 'asc' : 'desc' })
+  })
+  dir.title = s(state.arrangement.dir === 'desc' ? 'sortDesc' : 'sortAsc')
+  sortRow.querySelector('.chips')?.append(dir)
+  box.append(sortRow)
+
+  const active = button(s('onlyActive'), state.arrangement.onlyActive ? 'chip on' : 'chip',
+    () => arrange({ onlyActive: !state.arrangement.onlyActive }))
+  active.setAttribute('aria-pressed', String(state.arrangement.onlyActive))
+  const activeRow = el('div', 'field')
+  const activeChips = el('div', 'chips')
+  activeChips.append(active)
+  activeRow.append(activeChips)
+  box.append(activeRow)
+
+  // The search scopes. An empty selection means EVERY field — the same reading the cockpit gives
+  // it, so "none selected" is never a search that finds nothing.
+  box.append(multiRow(s('arrangeScopes'), view.scopes.map(x => ({ ...x, count: 0 })),
+    state.arrangement.scopes,
+    next => arrange({ scopes: next })))
+
+  for (const facet of view.facets) {
+    box.append(multiRow(
+      facet.label,
+      facet.values,
+      state.arrangement.filters[facet.id] ?? [],
+      next => arrange({ filters: { ...state.arrangement.filters, [facet.id]: next } }),
+    ))
+  }
+
+  if (activeFilterCount() > 0) {
+    box.append(button(s('clearFilters'), 'btn small', () => arrange({
+      filters: {}, scopes: [], query: '',
+    })))
+  }
+  return box
+}
+
+/** One-of-many. */
+function pickerRow(
+  label: string,
+  options: readonly { id: string; label: string }[],
+  current: string,
+  pick: (id: string) => void,
+): HTMLElement {
+  const row = el('div', 'field')
+  row.append(el('label', undefined, label))
+  const chips = el('div', 'chips')
+  for (const option of options) {
+    chips.append(button(option.label, option.id === current ? 'chip on' : 'chip', () => pick(option.id)))
+  }
+  row.append(chips)
+  return row
+}
+
+/** Many-of-many, with counts where there are any. */
+function multiRow(
+  label: string,
+  options: readonly { id?: string; key?: string; label: string; count: number }[],
+  selected: readonly string[],
+  set: (next: string[]) => void,
+): HTMLElement {
+  const row = el('div', 'field')
+  row.append(el('label', undefined, label))
+  const chips = el('div', 'chips')
+  for (const option of options) {
+    const key = option.id ?? option.key ?? ''
+    const on = selected.includes(key)
+    const chip = button(option.label, on ? 'chip on' : 'chip', () => {
+      set(on ? selected.filter(v => v !== key) : [...selected, key])
+    })
+    if (option.count > 0) chip.append(el('span', 'count-badge', String(option.count)))
+    chips.append(chip)
+  }
+  row.append(chips)
+  return row
+}
+
+/** How many controls are narrowing the list right now. */
+function activeFilterCount(): number {
+  const a = state.arrangement
+  const filters = Object.values(a.filters).filter(v => v.length > 0).length
+  return filters + (a.scopes.length > 0 ? 1 : 0) + (a.query.trim() ? 1 : 0)
 }
 
 function emptyState(view: FleetView): HTMLElement {
   const box = el('div', 'empty')
-  if (view.empty === 'none') {
+  // WHICH of the three facts emptied the list. Blaming the filter while a search removed the rows
+  // sends somebody to the wrong switch, and blaming a search while nothing is running at all hides
+  // that the switch is on — the same distinction `emptyReason` draws for `agentop session ls`.
+  if (view.total === 0) {
     box.append(el('p', undefined, s('emptyNone')), el('p', 'dim', s('emptyNoneHint')))
-  } else if (view.empty === 'onlyActive') {
-    // Naming the switch that is hiding them, and offering to lift it: those rows are still there
-    // and still reopenable, and an empty list that does not say which control emptied it reads as
-    // a fleet that has vanished.
-    box.append(el('p', undefined, s('emptyOnlyActive')), el('p', 'dim', s('emptyOnlyActiveHint')))
-    box.append(button(s('emptyOnlyActiveAction'), 'btn small', () => {
-      state.onlyActive = false
-      persist()
-      render()
-    }))
-  } else {
-    box.append(el('p', undefined, fill(s('emptyFiltered'), state.query.trim())))
+    return box
   }
+  if (state.arrangement.query.trim()) {
+    box.append(el('p', undefined, fill(s('emptyFiltered'), state.arrangement.query.trim())))
+  } else if (state.arrangement.onlyActive) {
+    box.append(el('p', undefined, s('emptyOnlyActive')), el('p', 'dim', s('emptyOnlyActiveHint')))
+    box.append(button(s('emptyOnlyActiveAction'), 'btn small', () => arrange({ onlyActive: false })))
+    return box
+  } else {
+    box.append(el('p', undefined, fill(s('emptyFilters'), view.total)))
+  }
+  box.append(button(s('clearFilters'), 'btn small', () => arrange({ filters: {}, scopes: [], query: '' })))
   return box
 }
 
@@ -661,7 +839,7 @@ function renderApproval(row: FleetRow): HTMLElement {
 /** How far from the bottom still counts as "following the tail". */
 const TAIL_SLACK = 40
 let screenEl: HTMLPreElement | null = null
-let screenWasAtBottom = true
+let tailButton: HTMLElement | null = null
 
 /**
  * The screen, and — when it has the keyboard — the thing you type into.
@@ -687,6 +865,17 @@ function buildScreen(row: FleetRow): {
   const status = el('div', 'screen-status')
   const strip = el('div', 'typing-strip')
 
+  // The way back to the live edge. It appears only when the reader has left it — a control that is
+  // always there is one more thing on a 300px panel, and one that is there when it would do nothing
+  // teaches people to ignore it.
+  const tail = el('button', 'to-tail')
+  tail.append(el('span', undefined, '↓'))
+  tail.addEventListener('click', () => {
+    pre.scrollTop = pre.scrollHeight
+    updateTailButton()
+  })
+  pre.addEventListener('scroll', updateTailButton)
+
   // Bound ONCE, to the element that lives for as long as this session is open. Re-binding on every
   // frame would mean re-creating this node, and re-creating a focused node takes the keyboard.
   pre.tabIndex = 0
@@ -695,9 +884,23 @@ function buildScreen(row: FleetRow): {
   pre.addEventListener('focus', () => { state.typing = true; paintTypingStrip(row.id) })
   pre.addEventListener('blur', () => { state.typing = false; paintTypingStrip(row.id) })
 
-  screenBox.append(pre, status, strip)
+  const frame = el('div', 'screen-frame')
+  frame.append(pre, tail)
+  screenBox.append(frame, status, strip)
   screenEl = pre
+  tailButton = tail
   return { screenBox, pre, status, strip }
+}
+
+/** Shown only away from the live edge. */
+function updateTailButton(): void {
+  if (!screenEl || !tailButton) return
+  tailButton.classList.toggle('visible', !atTail(screenEl))
+}
+
+/** Is the reader at the live edge? The slack is what keeps a one-pixel rounding error from lying. */
+function atTail(pre: HTMLElement): boolean {
+  return pre.scrollTop + pre.clientHeight >= pre.scrollHeight - TAIL_SLACK
 }
 
 /**
@@ -712,6 +915,16 @@ function paintScreen(row: FleetRow): void {
   const terminal = terminalOf(row.id)
   const status = terminalStatus(terminal, state.lang)
 
+  // Read the scroll BEFORE replacing the content, and put it back after.
+  //
+  // Assigning `innerHTML` resets `scrollTop` to 0, and this function runs on every fleet poll as
+  // well as on every frame — so without this the screen jumped back to its oldest line every five
+  // seconds, which is exactly "the chat opens on the first prompt instead of the last message".
+  // Following the tail is not enough on its own either: a reader who has scrolled UP to read
+  // something must not be yanked anywhere, so the previous position is restored verbatim.
+  const wasAtTail = atTail(dom.pre)
+  const previousTop = dom.pre.scrollTop
+
   // THE ONE PLACE THIS FILE ASSIGNS HTML. `ansiToHtml` escapes the frame before it colours it, and
   // returns spans and text nodes only — see its header. Nothing else here goes near innerHTML.
   dom.pre.innerHTML = terminal.frame
@@ -721,6 +934,9 @@ function paintScreen(row: FleetRow): void {
         status.showCursor ? terminal.frame.cursor : null,
       )
     : ''
+
+  dom.pre.scrollTop = wasAtTail ? dom.pre.scrollHeight : previousTop
+  updateTailButton()
 
   dom.status.replaceChildren()
   dom.status.append(el('span', `pill ${status.tone}`, status.label))
@@ -1080,6 +1296,9 @@ window.addEventListener('message', event => {
     state.attention = msg.fleet.attention
     state.unavailable = msg.fleet.unavailable
     state.tasks = msg.fleet.tasks
+    state.fell = msg.fleet.fell
+    state.view = msg.fleet.view ?? null
+    state.arrangement = msg.arrangement
     state.strings = msg.strings
     state.lang = msg.lang
     state.pins = new Set(msg.pinned)
@@ -1142,14 +1361,10 @@ function applyTerminal(id: string, event: string, data: string): void {
 
   // Only the screen's CONTENTS are repainted — never the element. A frame arrives up to twice a
   // second, and replacing a focused node takes the keyboard with it, which is what made typing die
-  // half a second after it started.
-  //
-  // Follow the tail only if the reader was already at it: yanking someone back to the bottom while
-  // they are reading further up is the single most annoying thing a live log can do.
-  screenWasAtBottom = !screenEl
-    || screenEl.scrollTop + screenEl.clientHeight >= screenEl.scrollHeight - TAIL_SLACK
+  // half a second after it started. The scroll is `paintScreen`'s business, because it is the thing
+  // that assigns the HTML that destroys it — a second copy of that rule here is how one of the two
+  // repaint paths ended up without it.
   paintScreen(row)
-  if (screenWasAtBottom && screenEl) screenEl.scrollTop = screenEl.scrollHeight
 }
 
 mount()

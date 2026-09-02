@@ -28,6 +28,8 @@ import type { ControlStrings } from '@agentistics/tui/control/i18n'
 const NOT_IN_BROWSER: ReadonlySet<SessionAction> = new Set<SessionAction>([
   'attach', 'new', 'search', 'group', 'reopenFell',
 ])
+// `reopenFell` is in that set because it is not a PER-ROW verb — it acts on the group of sessions
+// that fell together, which is a property of the fleet. It is reachable as its own action below.
 
 /**
  * What the page may ask to be done to one row — a strict subset of the cockpit's verbs.
@@ -41,6 +43,15 @@ const NOT_IN_BROWSER: ReadonlySet<SessionAction> = new Set<SessionAction>([
 export type FleetActionId =
   | 'approve' | 'prompt' | 'rename' | 'note' | 'task' | 'kill' | 'resume'
   | 'openTask' | 'finishTask'
+  /**
+   * The two that act on something other than one row, and carry no `id`.
+   *
+   * `reopenFell` takes back the group of sessions that fell together — a reboot, a laptop closed —
+   * which the cockpit resolves through `task-reopen.ts` and which no caller may name for itself.
+   * `deleteTask` removes a piece of work by NAME, which is why it is the one action here whose
+   * subject comes from `text`.
+   */
+  | 'reopenFell' | 'deleteTask'
 
 export interface FleetActionRequest {
   id: string

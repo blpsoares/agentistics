@@ -22,11 +22,15 @@ import { controlStrings } from '@agentistics/tui/control/i18n'
 import { sessionRunning } from '@agentistics/tui/control/session-dimensions'
 import { fleetRow, type FleetActionRequest, type FleetRow } from './fleet-row'
 import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
+import { arrangeFleet, type FleetArrangement, type FleetViewRequest } from './fleet-arrange'
 
 // The REQUEST shape lives in the leaf `fleet-row.ts` so `index.ts` can name it without naming
 // this module — see the note there.
 export type { FleetRow, FleetVerb, FleetActionId, FleetActionRequest } from './fleet-row'
 export type { FleetSpawnBody } from './fleet-spawn'
+export type {
+  FleetArrangement, FleetGroup, FleetViewRequest, Facet, FacetValue,
+} from './fleet-arrange'
 
 export interface FleetPayload {
   sessions: FleetRow[]
@@ -36,6 +40,18 @@ export interface FleetPayload {
   unavailable?: string
   /** The tasks that already exist here, so filing a session is a pick rather than a spelling test. */
   tasks: string[]
+  /** The tasks the user marked FINISHED — a statement about the work, not about any session. */
+  finishedTasks?: string[]
+  /** How many sessions FELL together, when some did — the "reopen what fell" offer. */
+  fell?: { count: number; atMs: number }
+  /**
+   * The same fleet, ARRANGED as the caller asked (`fleet-arrange.ts`).
+   *
+   * Beside `sessions` rather than instead of it: a client that wants the flat list — the dashboard's
+   * session drawer, anything matching a stored row to a live one — should not have to walk bands to
+   * find one id.
+   */
+  view?: FleetArrangement
 }
 
 
@@ -82,18 +98,27 @@ export function fleetLang(raw: string | null): CliLang {
  * reason would be a confident "nothing is running" from a machine that cannot tell — the same
  * defect `liveEmptyNotice` exists to prevent on the dashboard.
  */
-export async function readFleet(lang: CliLang): Promise<FleetPayload> {
+export async function readFleet(lang: CliLang, view?: FleetViewRequest): Promise<FleetPayload> {
   const s = controlStrings(lang)
   try {
     const host = await hostFor(lang)
     if (!host.sessions) return { sessions: [], attention: 0, tasks: [] }
     const fleet = await host.sessions()
     const tasks = host.sessionTasks ? await host.sessionTasks().catch(() => []) : []
+    const finishedTasks = fleet.finishedTasks ?? []
     return {
       sessions: fleet.sessions.map(row => fleetRow(row, s)),
       attention: fleet.attention,
       ...(fleet.unavailable ? { unavailable: fleet.unavailable } : {}),
       tasks,
+      ...(finishedTasks.length > 0 ? { finishedTasks: [...finishedTasks] } : {}),
+      // What FELL together, so a client can offer to reopen the lot — the cockpit's own grouping,
+      // which errs toward excluding: a session with no evidence it was ever alive is never in it.
+      ...(fleet.fell ? { fell: fleet.fell } : {}),
+      // The arrangement is computed only when a caller asks for one. The dashboard does not, and
+      // paying for a grouping nobody reads on every five-second poll is the kind of cost that never
+      // shows up in one profile and always shows up in a battery.
+      ...(view ? { view: arrangeFleet(fleet.sessions, view, s, finishedTasks) } : {}),
     }
   } catch (e) {
     return {
@@ -140,6 +165,17 @@ export async function runFleetAction(
     case 'kill':
       if (!host.killSession) return { ok: false, message: s.sessionsNoHost }
       return await host.killSession(req.id)
+    // Acts on the GROUP that fell together, not on a row — the caller names nothing, and the
+    // cockpit's own `task-reopen` arithmetic decides which sessions were in it. A caller that could
+    // pass a list could resurrect anything on this machine.
+    case 'reopenFell':
+      if (!host.reopenFell) return { ok: false, message: s.sessionsNoHost }
+      return await host.reopenFell()
+    // The one action whose subject is a NAME rather than a row: a task is not a session.
+    case 'deleteTask':
+      if (!host.deleteTask) return { ok: false, message: s.sessionsNoHost }
+      if (!text) return { ok: false, message: s.taskNone }
+      return await host.deleteTask(text)
     // The two TASK verbs act on the piece of WORK the row is filed under, never on a task named in
     // the request: a caller that could pass its own string could reopen every session of any task
     // on this machine. The row is looked up in the fleet and its own `task` is what is used.
