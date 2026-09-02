@@ -1903,3 +1903,24 @@ Do not mock the filesystem — the tested functions are pure and have no side ef
 
 - **pre-commit**: `bun tsc --noEmit` + `bun test`
 - **commit-msg**: commitlint enforces Conventional Commits (`feat:`, `fix:`, `chore:`, etc.)
+
+## The release's version bump — `versionBump.ts`, and the read that feeds it
+
+**The published version is decided by `bumpFromCommits` / `nextVersion` in `@agentistics/core`, and
+`.github/workflows/release.yml` only READS the commits and delegates.** The calculation was inline
+bash and nothing exercised it, so a defect was observable only in production, one release at a time
+— v1.23.1 shipped a `feat` as a patch. Two rules, both enforced by
+`packages/core/src/releaseWorkflow.lint.test.ts` (a grep over the workflows, the shape
+`tokens.lint.test.ts` uses over the product source):
+
+- **`git log --pretty=tformat:`, never `format:`.** `format:` omits the terminal newline on the LAST
+  record and `while IFS= read -r` silently drops a line without one, so the OLDEST commit of every
+  range went unclassified — and when that was the only `feat`, zero subjects were read. It is
+  harmless inside `$(…)`, which strips trailing newlines, and that is precisely why the wrong form
+  survives long enough to be copied into a loop. The lint bans the form outright in every workflow
+  and root shell script; `@git-format-intentional` plus a reason is the escape hatch.
+- **No bash bump default.** `bumpFromCommits` THROWS on an empty commit list, because a range that
+  has commits (`COMMIT_COUNT > 0`) yet yields none to classify is a reading defect, not a patch. A
+  `BUMP="patch"` floor in the shell converts that loud failure back into a quietly wrong release,
+  so the lint refuses one. A NON-empty list of only non-conventional subjects is a different thing
+  — the read worked, there is nothing to bump — and is a legitimate patch.
