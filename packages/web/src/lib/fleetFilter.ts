@@ -23,6 +23,7 @@
  */
 
 import type { Filters } from '@agentistics/core'
+import { repoShortName } from '@agentistics/core'
 import { ACTIVE_STATES, type ControlSession } from '@agentistics/tui/control/session-fleet'
 
 const ACTIVE = new Set<string>(ACTIVE_STATES)
@@ -55,7 +56,7 @@ export function filterFleet({ rows, filters, activeOnly }: FleetFilterInput): Fl
     // against both, because the dashboard's chips are built from stored session paths while the
     // fleet's rows are named by the directory they were spawned in.
     if (projects.size > 0 && !matchesProject(r, projects)) return false
-    if (repos.size > 0 && !(r.repo !== undefined && repos.has(r.repo))) return false
+    if (repos.size > 0 && !matchesRepo(r, repos)) return false
     // A row with no model recorded is not "some other model" — it is unknown, and a model filter
     // cannot say anything about it either way, so it is withheld like any non-match.
     if (models.size > 0 && !(r.model !== undefined && models.has(r.model))) return false
@@ -69,6 +70,27 @@ export function filterFleet({ rows, filters, activeOnly }: FleetFilterInput): Fl
   }
 }
 
+/**
+ * A row matches a repository filter by EITHER key shape.
+ *
+ * The two sides speak different vocabularies and always did: the dashboard's chips are canonical
+ * remote keys (`github.com/blpsoares/agentistics`, from `normalizeGitRemote`), while a fleet row
+ * carries the SHORT name the cockpit prints (`blpsoares/agentistics`). `repos.has(r.repo)` could
+ * therefore never be true, so filtering the session list by repository returned an empty list every
+ * single time — reported as "filtering by repo isn't working", and it was not working at all.
+ *
+ * Matched in both directions rather than by rewriting one side: the canonical key is what every
+ * stored session and every other filter is keyed on and must not be weakened, and the fleet's short
+ * name is what the row can produce without a git call. `repoShortName` is the existing conversion
+ * between them — there is no second normalisation invented here.
+ */
+function matchesRepo(r: ControlSession, repos: ReadonlySet<string>): boolean {
+  if (r.repo === undefined || r.repo === '') return false
+  if (repos.has(r.repo)) return true
+  for (const key of repos) if (repoShortName(key) === r.repo) return true
+  return false
+}
+
 /** A row matches a project filter by its own name, its group, or the tail of its path. */
 function matchesProject(r: ControlSession, projects: ReadonlySet<string>): boolean {
   if (r.project !== '' && projects.has(r.project)) return true
@@ -77,4 +99,42 @@ function matchesProject(r: ControlSession, projects: ReadonlySet<string>): boole
   // test would let a filter on `$HOME` match every session on the machine.
   if (projects.has(r.cwd)) return true
   return false
+}
+
+/**
+ * The values this fleet can actually be filtered BY.
+ *
+ * The Sessions workspace used to hand its filter bar the DASHBOARD's options — every harness, repo,
+ * project and model that appears anywhere in the stored metrics. But the list being filtered is the
+ * FLEET: what runs on this machine now, plus the conversations it can reopen. Those are different
+ * universes, and the gap is not small — on a real machine the metrics knew six harnesses while the
+ * fleet held three.
+ *
+ * So the bar offered "antigravity", and picking it emptied the list. Nothing was broken: there
+ * genuinely were no antigravity rows to keep. But a filter that offers a value it can only ever
+ * answer "nothing" to is indistinguishable from one that is failing, and it was reported as exactly
+ * that. An option is a promise that something might be behind it.
+ *
+ * Derived from the rows themselves, so the promise is always true. Repos are reported in BOTH
+ * shapes for the same reason `matchesRepo` accepts both: the chip the user clicks may have come
+ * from either vocabulary.
+ */
+export function fleetFilterOptions(rows: readonly ControlSession[]): {
+  harnesses: string[]
+  repos: string[]
+  projects: string[]
+  models: string[]
+} {
+  const harnesses = new Set<string>()
+  const repos = new Set<string>()
+  const projects = new Set<string>()
+  const models = new Set<string>()
+  for (const r of rows) {
+    if (r.harness) harnesses.add(r.harness)
+    if (r.repo) repos.add(r.repo)
+    if (r.project) projects.add(r.project)
+    if (r.model) models.add(r.model)
+  }
+  const sorted = (s: Set<string>) => [...s].sort((a, b) => a.localeCompare(b))
+  return { harnesses: sorted(harnesses), repos: sorted(repos), projects: sorted(projects), models: sorted(models) }
 }

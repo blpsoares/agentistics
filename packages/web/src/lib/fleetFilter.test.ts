@@ -1,7 +1,7 @@
-import { expect, test, describe } from 'bun:test'
+import { expect, it, test, describe } from 'bun:test'
 import type { Filters } from '@agentistics/core'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
-import { filterFleet } from './fleetFilter'
+import { filterFleet, fleetFilterOptions } from './fleetFilter'
 
 const BASE: Filters = {
   dateRange: '7d' as Filters['dateRange'],
@@ -103,5 +103,66 @@ describe('filterFleet', () => {
     })
     expect(out.rows).toHaveLength(1)
     expect(out.narrowed).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The repository vocabularies, and what the bar may offer
+// ---------------------------------------------------------------------------
+
+function repoRow(id: string, repo: string, extra: Record<string, unknown> = {}): never {
+  return {
+    id, title: id, harness: 'claude', cwd: `/home/me/${id}`, project: id, projectGroup: id,
+    state: 'working', stateLabel: 'working', repo, actionable: true, attached: false,
+    named: false, searchFields: [], ...extra,
+  } as never
+}
+
+describe('filterFleet — repository', () => {
+  const rows = [repoRow('a', 'blpsoares/agentistics'), repoRow('b', 'blpsoares/aipe')]
+
+  it('matches a CANONICAL remote key against the row\'s SHORT name', () => {
+    // The whole bug: the dashboard's chips are `github.com/org/repo` and a fleet row carries
+    // `org/repo`, so `repos.has(r.repo)` was never true and filtering by repository returned an
+    // empty list every single time.
+    const out = filterFleet({ rows, filters: { ...BASE, repos: ['github.com/blpsoares/agentistics'] }, activeOnly: false })
+    expect(out.rows.map(r => r.id)).toEqual(['a'])
+  })
+
+  it('still matches a short key given directly', () => {
+    const out = filterFleet({ rows, filters: { ...BASE, repos: ['blpsoares/aipe'] }, activeOnly: false })
+    expect(out.rows.map(r => r.id)).toEqual(['b'])
+  })
+
+  it('a row with no repository is withheld by a repo filter, never kept', () => {
+    const out = filterFleet({ rows: [repoRow('c', '')], filters: { ...BASE, repos: ['github.com/x/y'] }, activeOnly: false })
+    expect(out.rows).toEqual([])
+  })
+})
+
+describe('fleetFilterOptions', () => {
+  it('offers only what the fleet actually contains', () => {
+    // An option is a promise that something might be behind it. The bar used to be handed the
+    // DASHBOARD's harness list, so it offered antigravity against a fleet that had none — picking
+    // it emptied the list, which is indistinguishable from a broken filter.
+    const rows = [
+      repoRow('a', 'blpsoares/agentistics', { harness: 'claude', model: 'opus' }),
+      repoRow('b', '', { harness: 'codex', project: '', model: undefined }),
+    ]
+    const o = fleetFilterOptions(rows)
+    expect(o.harnesses).toEqual(['claude', 'codex'])
+    expect(o.repos).toEqual(['blpsoares/agentistics'])
+    expect(o.models).toEqual(['opus'])
+    expect(o.projects).toEqual(['a'])
+  })
+
+  it('drops empty values rather than offering a blank chip', () => {
+    const o = fleetFilterOptions([repoRow('a', '', { harness: '', project: '', model: '' })])
+    expect(o).toEqual({ harnesses: [], repos: [], projects: [], models: [] })
+  })
+
+  it('is stable and deduped, so the chips do not shuffle between polls', () => {
+    const rows = [repoRow('b', 'z/b'), repoRow('a', 'a/a'), repoRow('c', 'z/b')]
+    expect(fleetFilterOptions(rows).repos).toEqual(['a/a', 'z/b'])
   })
 })

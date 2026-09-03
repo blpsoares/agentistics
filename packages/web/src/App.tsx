@@ -78,6 +78,7 @@ import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
 import { ToggleSwitch } from './components/ToggleSwitch'
+import { fleetFilterOptions } from './lib/fleetFilter'
 
 // Team session state
 interface TeamSessionState {
@@ -1492,6 +1493,15 @@ export default function AppLayout() {
    */
   const { sessionId: selectedSessionId } = useParams()
   const { fleet: headerFleet, act: headerFleetAct } = useFleet(lang === 'pt' ? 'pt' : 'en', !isCentral)
+  /**
+   * What the SESSIONS filter bar may offer — derived from the FLEET, never from the dashboard's
+   * metrics. The two are different universes: the metrics knew six harnesses on this machine while
+   * the fleet held three, so the bar offered "antigravity" and picking it emptied the list. Nothing
+   * was broken — there were genuinely no antigravity rows — but a filter that can only ever answer
+   * "nothing" is indistinguishable from one that is failing, and it was reported as exactly that.
+   * An option is a promise that something might be behind it.
+   */
+  const fleetOptions = useMemo(() => fleetFilterOptions(headerFleet.rows), [headerFleet.rows])
   const headerFleetIndex = useFleetIndex(headerFleet.sessions)
   const selectedFleetSession = inSessionsWorkspace && selectedSessionId !== undefined
     ? headerFleet.rows.find(r => r.id === selectedSessionId || r.conversationId === selectedSessionId)
@@ -2732,7 +2742,12 @@ export default function AppLayout() {
                   modelGroups={modelGroups}
                   modelsInProject={modelsInProject}
                   users={usersWithMachines}
-                  harnesses={availableHarnesses}
+                  // HARNESSES come from the FLEET in the Sessions workspace and from the metrics
+                  // everywhere else. The bar offered all six the metrics know while the list it
+                  // filters held three, so picking "antigravity" emptied it — not a broken filter,
+                  // but indistinguishable from one. Projects and models stay on the metrics list
+                  // deliberately: `matchesProject` accepts a row's name, its group OR its path.
+                  harnesses={inSessionsWorkspace ? (fleetOptions.harnesses as typeof availableHarnesses) : availableHarnesses}
                   presence={data?.presence}
                   lang={lang}
                   compact
