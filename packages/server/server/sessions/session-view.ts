@@ -360,6 +360,9 @@ function hasTranscriptHit(v: SessionView, hits?: ReadonlySet<string>): boolean {
     || (v.resume !== undefined && hits.has(v.resume.sessionId))
 }
 
+/** The cap on closed (reopenable) conversations offered as rows. See the note at the slice. */
+export const DEFAULT_CLOSED_LIMIT = 300
+
 export function buildSessionViews(o: {
   reconciled: readonly ReconciledSession[]
   activity: ReadonlyMap<string, SessionActivity>
@@ -727,9 +730,22 @@ export function buildSessionViews(o: {
     if (conv) { shown.add(conv.sessionId); coveredConv.add(conv.sessionId) }
   }
 
-  const closed: SessionView[] = conversations
-    .filter(c => !shown.has(c.sessionId))
-    .slice(0, o.closedLimit ?? 12)
+  // How many CLOSED conversations become rows.
+  //
+  // It was a hard `12` that no caller ever overrode, so a machine with 544 consolidated
+  // conversations offered twelve of them and said nothing about the other 532 — reported as "it is
+  // not listing all my sessions, the list is not complete". The number was right for the terminal
+  // cockpit, whose pane holds a couple of dozen rows; it is arbitrary in a scrolling sidebar that
+  // also has a search field, where the whole point of history is finding something old.
+  //
+  // Raising it is CHEAP and that is why it is safe: `loadConversations()` has already read and
+  // sorted every one of them by the time this runs, so the slice only decides how many get mapped.
+  // It stays bounded rather than unbounded — several hundred rows is a list a person scrolls, a few
+  // thousand is one a browser renders slowly for no one's benefit — and `closedTotal` below reports
+  // what the bound withheld, so a capped list can say so instead of looking complete.
+  const closedCandidates = conversations.filter(c => !shown.has(c.sessionId))
+  const closed: SessionView[] = closedCandidates
+    .slice(0, o.closedLimit ?? DEFAULT_CLOSED_LIMIT)
     .map(c => {
       /**
        * The name the SESSION gave itself, when its own record can be found by conversation id.

@@ -15,13 +15,13 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import { Clock, Pin, PinOff, Plus, Search, X } from 'lucide-react'
 import type { Filters } from '@agentistics/core'
 import {
-  ACTIVE_STATES, DEFAULT_ORDER, filterSessions, groupSessions, sessionNotify, sortSessions,
+  ACTIVE_STATES, DEFAULT_ORDER, filterSessions, sessionNotify, sortSessions,
   type ControlSession,
 } from '@agentistics/tui/control/session-fleet'
-import { fleetWordBook, useGrouping } from '../../lib/fleetGrouping'
+import { rowSelected } from '../../lib/fleetSelection'
 import { filterFleet } from '../../lib/fleetFilter'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { NewSessionModal } from '../sessions/NewSessionModal'
@@ -120,11 +120,6 @@ export function SessionsAside({
   // 44px is the MOBILE figure. Applying it on desktop turns a compact list into a row of buttons.
   const isMobile = useIsMobile()
   const tap = isMobile ? 44 : undefined
-  // The arrangement is CHOSEN in the header, beside the filters, and only READ here. It was a
-  // labelled row inside this column and did not belong: "how is this list arranged" is the same
-  // kind of question as "what is in it", and the answers to that already live in the filter bar —
-  // a second control surface in the aside made one page ask twice, in two places.
-  const grouping = useGrouping()
   const { sessionId } = useParams()
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
@@ -188,30 +183,25 @@ export function SessionsAside({
   )
 
   /**
-   * The bands.
+   * TWO bands — Active and Inactive.
    *
-   * `active` is this page's own two-band split — what is running, ranked by what needs you most,
-   * and everything else beneath it. `DEFAULT_ORDER` (`state`, via `sessionRank`) is the SAME
-   * ranking the terminal cockpit breaks ties on, so "sorted by status" means one thing everywhere.
+   * A picker for the cockpit's other dimensions (day/repo/project/task/harness/model) was built,
+   * shipped and then REMOVED at the user's request: it read as another filter sitting beside the
+   * real ones, and nobody asked the list to be arranged seven ways. What the list is for is what
+   * is running, ranked by what needs you most, and everything else beneath it.
    *
-   * Every other arrangement is `groupSessions` — the cockpit's own, imported rather than rewritten.
-   * A browser copy would be a second set of rules for one fact, and it would sit outside
-   * `session-dimensions.test.ts`, which cross-checks that filtering to a bucket returns exactly the
-   * rows that bucket's band contains.
+   * `DEFAULT_ORDER` (`state`, via `sessionRank`) is the SAME ranking the terminal cockpit breaks
+   * ties on, so "sorted by status" means one thing in both places.
    */
   const bands = useMemo((): { label: string; rows: ControlSession[] }[] => {
     const rest = matched.filter(r => !pinned.has(pinKeyOf(r)))
-    if (grouping === 'active') {
-      return [
-        { label: pt ? 'Ativas' : 'Active', rows: sortSessions(rest.filter(r => active.has(r.state)), DEFAULT_ORDER) },
-        // Never computed while activeOnly is on — those rows are the ones the switch is
-        // withholding, not a second list to render beside it.
-        { label: pt ? 'Inativas' : 'Inactive', rows: activeOnly ? [] : sortSessions(rest.filter(r => !active.has(r.state)), DEFAULT_ORDER) },
-      ]
-    }
-    return groupSessions(rest, grouping, fleetWordBook(pt ? 'pt' : 'en'), finishedTasks, DEFAULT_ORDER)
-      .map(g => ({ label: g.label, rows: g.sessions }))
-  }, [matched, pinned, active, activeOnly, grouping, pt, finishedTasks])
+    return [
+      { label: pt ? 'Ativas' : 'Active', rows: sortSessions(rest.filter(r => active.has(r.state)), DEFAULT_ORDER) },
+      // Never computed while activeOnly is on — those rows are the ones the switch is withholding,
+      // not a second list to render beside it.
+      { label: pt ? 'Inativas' : 'Inactive', rows: activeOnly ? [] : sortSessions(rest.filter(r => !active.has(r.state)), DEFAULT_ORDER) },
+    ]
+  }, [matched, pinned, active, activeOnly, pt])
 
   const total = bands.reduce((n, b) => n + b.rows.length, 0) + pinnedRows.length
   const filterCount = (filters.harnesses?.length ?? 0) + filters.projects.length
@@ -296,6 +286,30 @@ export function SessionsAside({
         </p>
       )}
 
+      {/* The list is real but not current — either the machine stopped answering, or these rows
+          came out of the stored snapshot and no poll has confirmed them yet. `fleetStale.ts` owns
+          which of the two it is and words each differently; here it is only drawn.
+
+          ABOVE the scroller, not inside it: a caveat about every row below has to be readable
+          wherever the reader has scrolled to, and one that scrolls away is one seen once. It is
+          also drawn whether or not there are rows — this is the case of rows on screen that are no
+          longer true, which is precisely what an empty-state message cannot cover.
+
+          Deliberately NOT `--accent-red`: nothing has failed in the seeded case, and in the stale
+          case the machine being unreachable is a fact about the connection, not a fault in the
+          fleet. Same reasoning the cockpit's central pill applies to `stale`. */}
+      {stale && (
+        <p role="status" style={{
+          display: 'flex', alignItems: 'flex-start', gap: 6,
+          margin: '0 2px', padding: '7px 9px', borderRadius: 8,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+          fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)',
+        }}>
+          <Clock size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>{stale}</span>
+        </p>
+      )}
+
       <div className="ag-noscroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
         {/* The pinned band, above everything — that is what pinning is for: the two or three
             sessions that must not move when the arrangement changes. */}
@@ -315,7 +329,7 @@ export function SessionsAside({
                 <SessionRow
                   key={`pin-${s.id}`}
                   session={s}
-                  selected={s.id === sessionId || s.conversationId === sessionId}
+                  selected={rowSelected(s, sessionId)}
                   pinned
                   {...(tap ? { tap } : {})}
                   onPin={() => flip(s)}
@@ -338,7 +352,7 @@ export function SessionsAside({
               <SessionBand
                 // The label is not unique — two dimensions can legitimately produce one word, and
                 // an empty band still holds its place in the order.
-                key={`${grouping}-${i}-${b.label}`}
+                key={`${i}-${b.label}`}
                 label={b.label} rows={b.rows} pinned={pinned}
                 sessionId={sessionId} tap={tap} onPin={flip}
                 onOpen={s => navigate(`/sessions/${s.id}`)}
@@ -378,7 +392,7 @@ function SessionBand({ label, rows, pinned, sessionId, tap, onPin, onOpen }: {
           <SessionRow
             key={s.id}
             session={s}
-            selected={s.id === sessionId || s.conversationId === sessionId}
+            selected={rowSelected(s, sessionId)}
             pinned={pinned.has(pinKeyOf(s))}
             {...(tap ? { tap } : {})}
             onPin={() => onPin(s)}

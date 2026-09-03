@@ -1511,6 +1511,9 @@ export default function AppLayout() {
   // `SessionPanel`, so the ONE control (now in this shared header) and the ONE reader (the panel,
   // still deciding which component to mount) can never disagree about which view is showing without
   // threading a prop through `SessionsPage` for it.
+  /** A session's panel is open on this screen — mobile chrome steps out of its way. */
+  const sessionOpen = inSessionsWorkspace && selectedSessionId !== undefined
+
   const [sessionViewParams, setSessionViewParams] = useSearchParams()
   const sessionView: 'chat' | 'terminal' = sessionViewParams.get('view') === 'terminal' ? 'terminal' : 'chat'
   const setSessionView = useCallback((v: 'chat' | 'terminal') => {
@@ -2610,8 +2613,12 @@ export default function AppLayout() {
       //
       // Fixing it HERE rather than on `<main>` is the point: the container is what the flex
       // algorithm reads.
+      // The nav subtraction is conditional on the nav being THERE. With a session open the bar is
+      // not rendered (see its own note below), so still subtracting it would leave a 56px band of
+      // nothing under the composer — the same class of mismatch as the `min-height` that used to
+      // beat this line, seen from the other side.
       height: inSessionsWorkspace
-        ? (isMobile ? 'calc(100dvh - var(--mobile-nav-h))' : '100vh')
+        ? (isMobile ? (sessionOpen ? '100dvh' : 'calc(100dvh - var(--mobile-nav-h))') : '100vh')
         : undefined,
       background: 'var(--bg-base)', display: 'flex', flexDirection: 'column',
       paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth),
@@ -3241,8 +3248,14 @@ export default function AppLayout() {
 
       {hardwareOpen && <HardwareModal lang={lang} onClose={() => setHardwareOpen(false)} />}
 
-      {/* Mobile bottom navigation bar */}
-      {isMobile && (
+      {/* Mobile bottom navigation bar — HIDDEN while a session is open.
+          A session's panel is a full-screen reading-and-typing surface: the conversation fills the
+          column and the composer sits at its foot. Five destinations under a keyboard is chrome
+          competing with the thing it wraps, on a screen only 664px tall to begin with — the nav
+          was costing 56 of them plus the safe-area inset. It costs nothing to leave: the panel has
+          its own back arrow in the top bar, which is the way out and the only one a reader needs
+          while they are in it. The root's height drops the matching subtraction — see its note. */}
+      {isMobile && !sessionOpen && (
         <MobileBottomNav
           lang={lang}
           harnesses={data.harnesses}

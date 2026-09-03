@@ -40,18 +40,43 @@ export function fleetIsStale(s: FleetStaleState): boolean {
 }
 
 /**
- * The sentence, with how long it has been. The age is what makes it actionable — "a few seconds"
- * and "eleven minutes" call for different reactions, and a bare "may be out of date" leaves the
- * reader to guess which one they are in.
+ * How long ago, in the coarsest unit that still says something. The age is what makes either
+ * sentence below actionable — "a few seconds" and "eleven minutes" call for different reactions,
+ * and a bare "may be out of date" leaves the reader to guess which one they are in.
+ *
+ * Never negative: a clock that jumped backwards is not a list from the future.
  */
+function ageOf(since: number, now: number): string {
+  const secs = Math.max(0, Math.floor((now - since) / 1000))
+  return secs < 90 ? `${secs}s` : `${Math.floor(secs / 60)} min`
+}
+
+/** The sentence for a list whose machine has STOPPED ANSWERING. */
 export function fleetStaleNotice(s: FleetStaleState, now: number, lang: 'en' | 'pt'): string | null {
   if (!fleetIsStale(s)) return null
-  const pt = lang === 'pt'
-  const secs = Math.max(0, Math.floor((now - (s.lastOkMs ?? now)) / 1000))
-  const age = secs < 90
-    ? (pt ? `${secs}s` : `${secs}s`)
-    : (pt ? `${Math.floor(secs / 60)} min` : `${Math.floor(secs / 60)} min`)
-  return pt
+  const age = ageOf(s.lastOkMs ?? now, now)
+  return lang === 'pt'
     ? `Sem resposta da máquina há ${age}. Esta lista é a última que chegou, não o que está rodando agora.`
     : `No answer from this machine for ${age}. This list is the last one that arrived, not what is running now.`
+}
+
+/**
+ * The sentence for a list painted from the STORED SNAPSHOT, before the first live poll lands.
+ *
+ * It is a SEPARATE sentence, and that is the whole point of this function existing. A seeded list
+ * borrowed `fleetStaleNotice` — same shape of problem, real rows not yet confirmed — and the
+ * borrowed words say "no answer from this machine", which on a normal reopen is simply false: the
+ * machine has not been asked yet. Announcing a failure that did not happen, at the exact moment the
+ * page opens, is the alarming direction of the confident-wrong defect, and a warning that cries
+ * wolf on every visit is one people stop reading.
+ *
+ * `null` when there is no seed (`at <= 0`): a fresh visit with an empty list is LOADING, which has
+ * its own words, and `fleetIsStale` refuses the same case for the same reason.
+ */
+export function fleetSeedNotice(at: number, now: number, lang: 'en' | 'pt'): string | null {
+  if (!Number.isFinite(at) || at <= 0) return null
+  const age = ageOf(at, now)
+  return lang === 'pt'
+    ? `Última lista conhecida, de ${age} atrás — esperando esta máquina confirmar.`
+    : `Last known list, from ${age} ago — waiting for this machine to confirm it.`
 }
