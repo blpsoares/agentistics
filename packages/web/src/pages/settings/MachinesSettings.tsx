@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X, Loader2 } from 'lucide-react'
+import { Plus, Copy, Check, RotateCw, Trash2, Pencil, X, Loader2, MonitorSmartphone } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { ConnectionsPanel } from '../../components/team/ConnectionsPanel'
 import { SectionHeader, Section, Select, Checkbox, ConfirmModal, RecordCard, RecordCardAction, SaveBar, runSaveSteps } from './primitives'
 import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { machineConsentView } from './machineConsentView'
+import { MachineFleetDrawer } from './MachineFleetDrawer'
 
 // interfaces
 interface MachineInfo {
@@ -23,6 +25,15 @@ interface MachineInfo {
   lastSeenAt: string | null
   online?: boolean
   latencyMs?: number | null
+  /**
+   * What this machine has announced about session management from here — present ONLY when the
+   * viewer is one of the machine's own accounts (`machineOwnedBy` server-side), which is narrower
+   * than the `canManageMachine` that decided the row is visible at all.
+   *
+   * `undefined` (may not ask) and `null` (has not said) are DIFFERENT and both meaningful; see
+   * `machineConsentView`.
+   */
+  remoteConsent?: { sessions: boolean; screens: boolean; atMs: number } | null
 }
 
 interface PublicAccount {
@@ -565,6 +576,10 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
 
   // Per-machine display values shared by the desktop row and the mobile card, so the two
   // renderings cannot drift apart.
+  // Which machine's relayed fleet is open. Only ever set for a machine whose row carries a
+  // consent, which the server sends only to the machine's OWN accounts.
+  const [fleetMachine, setFleetMachine] = useState<MachineInfo | null>(null)
+
   const machineView = (m: MachineInfo) => {
     const ownerIds = m.accountIds ?? (m.accountId ? [m.accountId] : [])
     const owners = m.owners ?? []
@@ -575,6 +590,9 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       teamNames: machineTeamIds(m).map(id => teamNameById.get(id) ?? id),
       statusColor: m.online ? '#10b981' : '#6b7280',
       statusLabel: m.online ? 'online' : 'offline',
+      // Resolved HERE so the desktop row and the mobile card cannot say different things about
+      // the same machine — the same reason every other value on this object is shared.
+      consent: machineConsentView(m.remoteConsent, m.online ?? false, pt ? 'pt' : 'en'),
     }
   }
 
@@ -765,9 +783,18 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                     // instead of the desktop's truncated chip + "+N" pill.
                     { label: pt ? 'Time' : 'Team', value: v.teamNames.length === 0 ? '—' : v.teamNames.join(', ') },
                     { label: pt ? 'Último acesso' : 'Last seen', value: m.lastSeenAt ? new Date(m.lastSeenAt).toLocaleString() : (pt ? 'nunca' : 'never') },
+                    // The card has the room the table cell does not, so it prints the SENTENCE.
+                    // The desktop row's chip carries it as a title, which a touch device cannot
+                    // reach at all — a fact only reachable by hovering is not on a phone.
+                    ...(v.consent ? [{ label: pt ? 'Sessões' : 'Sessions', value: v.consent.text }] : []),
                   ]}
                   actions={
                     <>
+                      {v.consent?.tone === 'granted' && (
+                        <RecordCardAction label="View sessions" onClick={() => setFleetMachine(m)}>
+                          <MonitorSmartphone size={14} /> {pt ? 'Sessões' : 'Sessions'}
+                        </RecordCardAction>
+                      )}
                       {v.canManage && (
                         <RecordCardAction label="Edit machine" onClick={() => openEditMachine(m)}>
                           <Pencil size={14} /> {pt ? 'Editar' : 'Edit'}
@@ -814,7 +841,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
             </thead>
             <tbody>
               {machines.map(m => {
-                const { statusColor, statusLabel, canManage, ownerDisplay, ownerEmailDisplay } = machineView(m)
+                const { statusColor, statusLabel, canManage, ownerDisplay, ownerEmailDisplay, consent } = machineView(m)
                 return (
                   <tr key={m.id}
                     onClick={canManage ? () => openEditMachine(m) : undefined}
@@ -860,10 +887,28 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                       })()}
                     </td>
                     <td style={td}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                         <div style={{ width: 6, height: 6, borderRadius: '50%', background: statusColor }} />
                         <span>{statusLabel}</span>
                         {m.latencyMs != null && <span style={{ color: 'var(--text-tertiary)' }}>· {m.latencyMs}ms</span>}
+                        {/* Only ever drawn for the machine's OWN accounts — the server omits the
+                            field for everyone else, so there is nothing here to gate again. It
+                            rides the status cell rather than taking a column: the column would be
+                            empty on every row for most viewers, and a header naming a fact the
+                            table never shows is worse than no header. */}
+                        {consent && (
+                          <span
+                            title={consent.text}
+                            style={{
+                              padding: '1px 7px', borderRadius: 999, fontSize: 10, fontWeight: 700,
+                              whiteSpace: 'nowrap',
+                              border: `1px solid ${consent.tone === 'granted' ? 'var(--accent-green)' : 'var(--border)'}`,
+                              color: consent.tone === 'granted' ? 'var(--accent-green)' : 'var(--text-tertiary)',
+                            }}
+                          >
+                            {consent.short}
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td style={td}>
@@ -871,6 +916,19 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
                     </td>
                     <td style={td} onClick={e => e.stopPropagation()}>
                       <div style={{ display: 'flex', gap: 6 }}>
+                        {/* Only for a machine that has AGREED. A row that has not said, or that
+                            says no, gets no button — the state is already spelled out in the
+                            status cell, and a control whose only outcome is a refusal is a
+                            control that reads as broken. */}
+                        {consent?.tone === 'granted' && (
+                          <button
+                            style={{ ...ghostBtn, padding: '4px 8px' }}
+                            onClick={e => { e.stopPropagation(); setFleetMachine(m) }}
+                            title={pt ? 'Ver sessões' : 'View sessions'}
+                          >
+                            <MonitorSmartphone size={12} />
+                          </button>
+                        )}
                         {canManage && (
                           <button
                             style={{ ...ghostBtn, padding: '4px 8px' }}
@@ -911,6 +969,18 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* One machine's relayed session fleet — a READ, for its owning account only. Mounted only
+          while a machine is selected, so no request travels behind a closed panel. */}
+      {fleetMachine && (
+        <MachineFleetDrawer
+          open
+          machineId={fleetMachine.id}
+          machineName={fleetMachine.machineName}
+          lang={pt ? 'pt' : 'en'}
+          onClose={() => setFleetMachine(null)}
+        />
       )}
 
       {/* Add machine drawer */}

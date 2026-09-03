@@ -258,6 +258,12 @@ export interface ControlStrings {
   sessionsUnfiled: Record<SessionDimensionId, string>
   /** The band of rows the user MARKED — the filled side of the `marked` dimension. */
   sessionsMarkedBand: string
+  /** Stop the current turn without ending the session — the web's own verb. See `fleet-row.ts`. */
+  sessionsInterrupt: string
+  /** Why it is off: nothing is running to stop. */
+  sessionsInterruptIdle: string
+  /** Why a verb is off on a row agentop does not host. */
+  sessionsExternalRow: string
   sessionsUnknownHarness: string
   sessionsUnknownModel: string
   sessionsUnknownProject: string
@@ -751,6 +757,7 @@ const EN: ControlStrings = {
   sessionsFilterNoHistory: 'without closed conversations',
   sessionsFilterNamed: 'plus named',
   sessionsGroupings: {
+    day: 'day',
     repo: 'repository',
     task: 'task',
     none: 'flat',
@@ -762,6 +769,7 @@ const EN: ControlStrings = {
     marked: 'marked',
   },
   sessionsUnfiled: {
+    day: 'no date recorded',
     harness: 'harness unknown',
     model: 'no model recorded',
     project: 'no directory recorded',
@@ -773,6 +781,9 @@ const EN: ControlStrings = {
     marked: 'not marked',
   },
   sessionsMarkedBand: 'marked',
+  sessionsInterrupt: 'Stop what it is doing',
+  sessionsInterruptIdle: 'Nothing is running right now, so there is nothing to stop.',
+  sessionsExternalRow: 'This session was started outside agentop, so nothing here can act on it.',
   sessionsUnknownHarness: 'harness unknown',
   sessionsUnknownModel: 'no model recorded',
   sessionsUnknownProject: 'no directory recorded',
@@ -1225,6 +1236,7 @@ const PT: ControlStrings = {
   sessionsFilterNoHistory: 'sem conversas fechadas',
   sessionsFilterNamed: 'mais as nomeadas',
   sessionsGroupings: {
+    day: 'dia',
     repo: 'repositório',
     task: 'tarefa',
     none: 'lista',
@@ -1236,6 +1248,7 @@ const PT: ControlStrings = {
     marked: 'marcadas',
   },
   sessionsUnfiled: {
+    day: 'sem data registrada',
     harness: 'harness desconhecido',
     model: 'sem modelo registrado',
     project: 'sem diretório registrado',
@@ -1245,6 +1258,9 @@ const PT: ControlStrings = {
     marked: 'não marcadas',
   },
   sessionsMarkedBand: 'marcadas',
+  sessionsInterrupt: 'Parar o que está fazendo',
+  sessionsInterruptIdle: 'Nada está rodando agora, então não há o que parar.',
+  sessionsExternalRow: 'Esta sessão foi iniciada fora do agentop, então nada aqui age sobre ela.',
   sessionsUnknownHarness: 'harness desconhecido',
   sessionsUnknownModel: 'sem modelo registrado',
   sessionsUnknownProject: 'sem diretório registrado',
@@ -1548,9 +1564,22 @@ export function controlStrings(lang: CliLang): ControlStrings {
  * assembling its own: two assemblies is two chances for a band and the chip that selects it to be
  * called different things, which is the whole defect the dimension table exists to remove.
  */
-export function sessionWordBook(c: ControlStrings): DimensionWordBook {
+export function sessionWordBook(
+  c: ControlStrings,
+  /**
+   * What to call particular DAYS, keyed `YYYY-MM-DD`.
+   *
+   * Supplied by the caller rather than resolved here, because "today" and "yesterday" are relative
+   * to a clock this module does not read — and a string table that reads a clock is a string table
+   * whose answers go stale at midnight. A day nobody names falls back to its own key, which is
+   * already a readable date.
+   */
+  days?: Readonly<Record<string, string>>,
+): DimensionWordBook {
   return dimensionWordBook({
+    ...(days ? { days } : {}),
     labels: {
+      day: c.sessionsGroupings.day,
       status: c.sessionsGroupings.status,
       harness: c.sessionsGroupings.harness,
       model: c.sessionsGroupings.model,

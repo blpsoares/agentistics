@@ -1,6 +1,6 @@
 import { join, dirname } from 'path'
 import { mkdir, rename, writeFile, open, unlink, stat, readFile, utimes } from 'node:fs/promises'
-import { AGENTISTICS_DATA_DIR, CLAUDE_DIR } from './config'
+import { AGENTISTICS_DATA_DIR, DEFAULT_AGENTISTICS_DATA_DIR, CLAUDE_DIR } from './config'
 import type { BillingSettings, SavedComparison, TeamConfig } from '@agentistics/core'
 import { migrateTeamConfig } from '@agentistics/core'
 // TYPE-only, and the allowed direction: `server -> tui`. The arrangements are declared once, in
@@ -16,7 +16,53 @@ import { SEARCH_SCOPES, type SearchScope } from '@agentistics/tui/control/search
 // re-asked the consent gate every launch. We still READ the legacy file (and migrate it) so
 // native installs that predate this change keep their saved choices.
 export const PREFERENCES_FILE = join(AGENTISTICS_DATA_DIR, 'preferences.json')
-export const LEGACY_PREFERENCES_FILE = join(CLAUDE_DIR, 'agentistics-preferences.json')
+const LEGACY_PREFERENCES_PATH = join(CLAUDE_DIR, 'agentistics-preferences.json')
+
+/** Trailing separators are not part of a directory's identity — `AGENTISTICS_DIR=/tmp/x/` and
+ *  `/tmp/x` name the same place, and a raw string compare would treat one of them as isolated
+ *  and the other as the default install. Pure; no filesystem access, no cwd. */
+function sameDir(a: string, b: string): boolean {
+  const strip = (p: string) => p.replace(/[\\/]+$/, '')
+  return strip(a) === strip(b)
+}
+
+/**
+ * Which legacy file — if any — may seed `dataDir`, given the default install location.
+ *
+ * PURE. Returns `legacyFile` only for the DEFAULT data directory, and `null` for every other
+ * one, which is what makes the answer a fact about the directory rather than about whether an
+ * env var happened to be set: `AGENTISTICS_DIR` pointed AT the default still migrates.
+ *
+ * Why the restriction exists — a real, reproduced defect, not tidiness. `LEGACY_PREFERENCES_PATH`
+ * is derived from `CLAUDE_DIR`, the one persisted path in this product that is NOT under
+ * `AGENTISTICS_DATA_DIR`, so the migration read it no matter which data dir the instance was
+ * given. Starting a server with a brand-new, empty `AGENTISTICS_DIR` therefore wrote a
+ * `preferences.json` into it holding a `mode: 'member'` connection to a central the operator
+ * never configured — INCLUDING ITS BEARER TOKEN — and then created the connection state files
+ * for it. A second instance on one host, a container with its own volume and a test rig each
+ * silently inherited a credential, and would have pushed to that central under it. That is the
+ * same class of defect config.ts's header records (three isolated machines each pushing 108
+ * sessions belonging to none of them), reached through the one path that had escaped the rule:
+ * a path derived from `AGENTISTICS_DIR` may never be seeded from a location outside it.
+ *
+ * The legacy import itself is still correct where it belongs — `~/.claude/agentistics-preferences.json`
+ * is the predecessor of `$HOME/.agentistics/preferences.json` and of nothing else, so native
+ * installs that predate the move keep their saved choices.
+ */
+export function legacyPreferencesSource(
+  dataDir: string,
+  defaultDataDir: string,
+  legacyFile: string,
+): string | null {
+  return sameDir(dataDir, defaultDataDir) ? legacyFile : null
+}
+
+/** `null` on any instance given its own data dir — see `legacyPreferencesSource`. */
+export const LEGACY_PREFERENCES_FILE = legacyPreferencesSource(
+  AGENTISTICS_DATA_DIR,
+  DEFAULT_AGENTISTICS_DATA_DIR,
+  LEGACY_PREFERENCES_PATH,
+)
 
 export interface CustomGridItem {
   i: string
@@ -240,9 +286,13 @@ function defaultPrefs(): Preferences {
  *  side-effecting write. `writePreferencesTo`'s read-merge step uses this (never the
  *  write-triggering `readPreferencesFrom`) so it can never re-enter `enqueueWrite` from inside
  *  an already-running chained callback — see the deadlock note on `enqueueWrite`. */
-async function readEffective(primary: string, legacy: string): Promise<{ prefs: Preferences; migratedFromLegacy: boolean }> {
+async function readEffective(primary: string, legacy: string | null): Promise<{ prefs: Preferences; migratedFromLegacy: boolean }> {
   const p = await readJsonPrefs(primary)
   if (p) return { prefs: withMigratedTeam(p), migratedFromLegacy: false }
+  // `legacy === null` means this data dir has no legacy predecessor and MUST NOT be seeded from
+  // outside itself — see `legacyPreferencesSource`. It is not "the file is missing": nothing is
+  // even looked at, so an isolated instance cannot inherit a stranger's bearer token.
+  if (legacy === null) return { prefs: defaultPrefs(), migratedFromLegacy: false }
   let l: Preferences | null = null
   try {
     l = await readJsonPrefs(legacy)
@@ -258,7 +308,7 @@ async function readEffective(primary: string, legacy: string): Promise<{ prefs: 
 /** Read preferences from `primary`, falling back to `legacy` (and migrating it to `primary`
  *  best-effort) when the primary file is absent. Exported for tests; `readPreferences` binds
  *  the real paths. */
-export async function readPreferencesFrom(primary: string, legacy: string): Promise<Preferences> {
+export async function readPreferencesFrom(primary: string, legacy: string | null): Promise<Preferences> {
   const { prefs, migratedFromLegacy } = await readEffective(primary, legacy)
   if (!migratedFromLegacy) return prefs
   // One-time migration so future reads hit the writable primary. Routed through the SAME
@@ -702,7 +752,7 @@ export function guardTeamConnectionsWipe(
 }
 
 /** Merge `prefs` over the current preferences and persist to `primary`. Exported for tests. */
-export async function writePreferencesTo(primary: string, legacy: string, prefs: Preferences): Promise<void> {
+export async function writePreferencesTo(primary: string, legacy: string | null, prefs: Preferences): Promise<void> {
   return enqueueWrite(async () => {
     const release = await acquireFileLock(primary)
     try {
@@ -743,7 +793,7 @@ export type TeamConfigMutator = (current: TeamConfig) => TeamConfig | undefined
  *  from `writePreferences`), so the atomicity `updateTeamConfig` provides can be exercised
  *  against real tmp files and the REAL `enqueueWrite` chain, without ever touching the
  *  developer's actual `~/.agentistics/preferences.json`. */
-export async function updateTeamConfigAt(primary: string, legacy: string, mutate: TeamConfigMutator): Promise<TeamConfig> {
+export async function updateTeamConfigAt(primary: string, legacy: string | null, mutate: TeamConfigMutator): Promise<TeamConfig> {
   return enqueueWrite(async () => {
     const release = await acquireFileLock(primary)
     try {

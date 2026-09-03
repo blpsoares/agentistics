@@ -188,6 +188,10 @@ export interface CliStrings {
   /** The fallback title for a session the user never named. */
   sessUntitled: (harness: string, project: string) => string
   sessKilled: (id: string) => string
+  /** The turn was handed back. Deliberately distinct from `sessKilled` — the session is still up. */
+  sessInterrupted: (id: string) => string
+  /** Refused: Escape into an idle prompt closes whatever the harness has open, which is not "stop". */
+  sessInterruptIdle: (id: string) => string
   sessRestoreNone: string
   sessRestoreDeclined: (n: number) => string
   sessRestored: (opened: number, skipped: number) => string
@@ -535,6 +539,8 @@ const EN: CliStrings = {
   },
   sessUntitled: (harness: string, project: string) => (project ? `${harness} in ${project}` : harness),
   sessKilled: (id: string) => `stopped ${id}.`,
+  sessInterrupted: (id: string) => `asked ${id} to stop what it was doing — the session is still up.`,
+  sessInterruptIdle: (id: string) => `${id} is not working right now, so there is nothing to stop.`,
   sessRestoreNone: 'those sessions are no longer in the registry.',
   sessRestoreDeclined: (n: number) =>
     `left ${n} session${n === 1 ? '' : 's'} closed — still listed, still reopenable.`,
@@ -816,6 +822,8 @@ const PT: CliStrings = {
   },
   sessUntitled: (harness: string, project: string) => (project ? `${harness} em ${project}` : harness),
   sessKilled: (id: string) => `${id} encerrada.`,
+  sessInterrupted: (id: string) => `pedi para ${id} parar o que estava fazendo — a sessão continua de pé.`,
+  sessInterruptIdle: (id: string) => `${id} não está trabalhando agora, então não há o que parar.`,
   sessRestoreNone: 'essas sessões não estão mais no registro.',
   sessRestoreDeclined: (n: number) =>
     `${n} ${n === 1 ? 'sessão deixada fechada' : 'sessões deixadas fechadas'} — continuam listadas e reabríveis.`,

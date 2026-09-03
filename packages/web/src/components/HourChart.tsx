@@ -135,7 +135,7 @@ export function HourChart({ hourCounts, hourMeta, height = 336 }: Props) {
             width={44}
             interval={0}
           />
-          <Tooltip content={<CustomTooltip use24={use24} hourMeta={hourMeta} />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
+          <Tooltip content={<CustomTooltip use24={use24} hourMeta={hourMeta} />} cursor={{ fill: 'var(--ag-tint-1)' }} />
           <Bar dataKey="value" radius={[0, 2, 2, 0]}>
             {chartData.map(entry => (
               <Cell key={entry.hour} fill={getPeriodColor(parseInt(entry.hour))} fillOpacity={0.8} />

@@ -1281,6 +1281,20 @@ export interface ControlHost {
   killSession?(id: string): Promise<ActionResult>
 
   /**
+   * Stop the current turn WITHOUT ending the session.
+   *
+   * The opposite of `killSession`: that one destroys the session, this one hands the turn back and
+   * leaves it sitting at its prompt. The keystroke is `Escape`, which is exactly what
+   * `attention-rules.ts` records these CLIs printing while they work (`esc to interrupt`) — read
+   * from the probed rules rather than assumed.
+   *
+   * REFUSED on a session that is not working. Escape into an idle prompt closes whatever the
+   * harness happens to have open, which is not what "stop" means and is not recoverable by
+   * pressing it again.
+   */
+  interruptSession?(id: string): Promise<ActionResult>
+
+  /**
    * Type one line into a session and submit it, WITHOUT attaching to it.
    *
    * The ordinary case is a session that is working or waiting: the text lands in its prompt and it

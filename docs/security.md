@@ -446,6 +446,51 @@ page's origin is `http:` or `https:` and cannot be forged into another scheme, s
 ability to frame anything, and `lan` / `public` are untouched — they keep `frame-ancestors 'none'`
 and the legacy header. `security-headers.test.ts` pins both directions.
 
+## 8c. Managing a machine's sessions from a central — what is guaranteed, and what is not
+
+Reaching into another machine's live sessions is the most powerful thing a central can be asked to
+relay. Four things make it safe enough to offer, and one thing it explicitly does not promise.
+
+**It is off until the machine turns it on.** Absent consent reads as OFF — the same rule
+`chat-gate.ts` applies to the local shell, and deliberately not the `shareMode` migration rule that
+treats absence as the old default. Treating absence as ON here would hand every already-connected
+machine to its central on upgrade.
+
+**Only the machine's OWN accounts.** `machineOwnedBy` (`iam-view.ts`) is deliberately narrower than
+the `canManageMachine` that governs renaming, rotating and re-assigning a machine: administering a
+machine belongs to whoever runs the instance, reaching into its live sessions belongs to its user.
+An instance owner who is not this machine's account is refused, and gets the same `not-owner`
+answer as a stranger — so the route is not an oracle for which machines a central holds.
+
+**The screen and the conversation never travel.** The relayed row is built by an ALLOWLIST of keys
+(`reduceMachineFleetRow`), so `lastLines`, `chatTurns`, `approvalLines` and `dialogOptions` cannot
+cross even as a future field somebody adds to `ControlSession`. `machineFleet.test.ts` feeds a row
+carrying all of them and asserts none survives. This is what keeps the 410 on
+`GET /api/team/session-chat` meaningful.
+
+**`approve` and `prompt` are refused, and not merely disabled.** Neither can be offered honestly
+without the screen: a permission prompt is `1. Yes / 2. Yes, always / 3. No`, an `AskUserQuestion`
+can offer five answers that do different work, and a keystroke that answers cannot know which
+option it is taking. A button over a dialog nobody can read is the accident `parseDialogOptions`
+exists to prevent.
+
+**The machine is the authority, not the central.** Consent and the verb allowlist are re-read on
+the member on every request. The central's copy of those checks exists only to spare a round trip
+and answer the user instantly; a check that runs only on the party whose behaviour cannot be
+verified is not a check.
+
+**The stated non-guarantee.** Whoever runs the central administers machines and can re-assign one
+to another account. This switch is what stops session access being on without its owner choosing
+it — it is **not** a lock against a hostile central operator, and no surface claims otherwise: the
+confirmation dialog says so before the switch is turned on. A guarantee that hides its own edge is
+the kind people stop believing the first time they find the edge themselves.
+
+Everything relayed is audited on the central (`machine.session_action`, its own action rather than
+a flavour of `machine.update`, so an audit can answer "who killed my session") and announced on the
+machine itself — an action invisible on the machine it happened to is the failure this feature has
+to avoid. The session id is recorded and the text never is: a rename or a note is the user's own
+words about their own work.
+
 ## 9. Verifying it yourself
 
 Each control has tests next to it; these are the ones worth reading first:

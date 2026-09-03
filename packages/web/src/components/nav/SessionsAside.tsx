@@ -1,0 +1,569 @@
+/**
+ * SessionsAside — the fleet, in the sidebar's body.
+ *
+ * It arranges NOTHING itself. Grouping, ordering and search all come from
+ * `@agentistics/tui/control/session-fleet` — the very module the terminal cockpit resolves them
+ * with — because two implementations of "which band does this row belong to" is exactly the defect
+ * this whole branch exists to remove. What this file owns is the drawing.
+ *
+ * The list is the FLEET, not the stored history: it shows a session that is running with no stored
+ * conversation behind it (an `external` assistant, a `lost` row after a reboot, one started a moment
+ * ago), which the old page could not, because it listed metrics and hung the fleet off them as
+ * decoration.
+ */
+
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useIsMobile } from '../../hooks/useIsMobile'
+import { useNavigate, useParams } from 'react-router-dom'
+import { Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import type { Filters } from '@agentistics/core'
+import {
+  ACTIVE_STATES, DEFAULT_ORDER, filterSessions, groupSessions, sessionNotify, sortSessions,
+  type ControlSession,
+} from '@agentistics/tui/control/session-fleet'
+import { fleetWordBook, useGrouping } from '../../lib/fleetGrouping'
+import { filterFleet } from '../../lib/fleetFilter'
+import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
+import { NewSessionModal } from '../sessions/NewSessionModal'
+import {
+  MAX_PINNED, getPinnedIds, pinnedServerSnapshot, subscribePinnedSessions, togglePinnedSession,
+} from '../../lib/pinnedSessions'
+
+export interface SessionsAsideProps {
+  lang: 'pt' | 'en'
+  rows: readonly ControlSession[]
+  finishedTasks: readonly string[]
+  /** True until the first poll answers — an empty list before then is "not asked yet". */
+  loading: boolean
+  /** This machine may not be asked at all: a central, or a profile with no host power. */
+  unsupported: boolean
+  /** Already-localized reason the list may not be the whole truth. */
+  unavailable?: string
+  /**
+   * The SAME filters the dashboard's header uses — harness/project/repo/model narrow the fleet
+   * too now (see `filterFleet.ts`); every other dimension there (date range, tags, members…) is
+   * read only where a live row can actually answer it, which today is none of them. Owned by
+   * `App.tsx`, not here: the control that edits it (`FiltersBar`, in the shared sticky header) is
+   * a sibling of this aside, not a child of it.
+   */
+  filters: Filters
+  /**
+   * The fleet's OWN "only what is running" switch — not part of `Filters` (see `fleetFilter.ts`'s
+   * header), and also owned by `App.tsx` now so the SAME control in the header can default it ON
+   * for this workspace and OFF for the dashboard. This aside only reads it.
+   */
+  activeOnly: boolean
+  /**
+   * Already-worded reason the list may not be current (`fleetStale.ts`), or null when it is.
+   *
+   * Rendered whether or not the list is empty, which is what separates it from `EmptyReason`: the
+   * case it exists for is rows on screen that are no longer true.
+   */
+  stale?: string | null
+}
+
+/** The colour a state is said in. `running` is its own token, not `success`, which reads teal. */
+const STATE_COLOR: Record<string, string> = {
+  working: 'var(--accent-green)',
+  waiting: 'var(--anthropic-orange)',
+  'waiting-approval': 'var(--anthropic-orange)',
+  exited: 'var(--text-tertiary)',
+  lost: 'var(--text-tertiary)',
+  closed: 'var(--text-tertiary)',
+  unknown: 'var(--text-tertiary)',
+}
+
+/**
+ * The wash behind a LIVE row, so its state is readable without reading the word.
+ *
+ * Only the two active states get one. A tint on every row is a list with no contrast left, and the
+ * point of the wash is that the handful of rows doing something stand out from the history under
+ * them. It is a WASH, never the row's whole background: the selected row's own highlight has to
+ * stay distinguishable from it, or selection stops being visible on exactly the rows you select
+ * most.
+ */
+const STATE_WASH: Record<string, string> = {
+  working: 'color-mix(in srgb, #22c55e 10%, transparent)',
+  waiting: 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+  'waiting-approval': 'color-mix(in srgb, var(--anthropic-orange) 12%, transparent)',
+}
+
+/**
+ * What a pin is stored under.
+ *
+ * The CONVERSATION where the harness reports one, because a managed row's id is its tmux session
+ * name and is minted fresh on every reopen — keying by that would unpin a conversation at exactly
+ * the moment somebody who pinned it wants it back. Where no conversation link can ever exist
+ * (codex, kimi, gemini, agy — see `conversationBlind`) the row id is the only key there is.
+ */
+/**
+ * A model id, shortened for a narrow column.
+ *
+ * The provider prefix and the dated suffix are what a person already knows or does not care about
+ * in a sidebar — `anthropic/claude-sonnet-4-5-20250929` becomes `claude-sonnet-4-5`. The full id is
+ * on the row's `title` attribute, so nothing is lost.
+ */
+function shortModel(model: string): string {
+  const bare = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model
+  return bare.replace(/-\d{8}$/, '')
+}
+
+function pinKeyOf(row: ControlSession): string {
+  return row.conversationId ?? row.id
+}
+
+export function SessionsAside({
+  lang, rows, loading, unsupported, unavailable, filters, activeOnly, finishedTasks, stale,
+}: SessionsAsideProps) {
+  const pt = lang === 'pt'
+  const navigate = useNavigate()
+  // 44px is the MOBILE figure. Applying it on desktop turns a compact list into a row of buttons.
+  const isMobile = useIsMobile()
+  const tap = isMobile ? 44 : undefined
+  // The arrangement is CHOSEN in the header, beside the filters, and only READ here. It was a
+  // labelled row inside this column and did not belong: "how is this list arranged" is the same
+  // kind of question as "what is in it", and the answers to that already live in the filter bar —
+  // a second control surface in the aside made one page ask twice, in two places.
+  const grouping = useGrouping()
+  const { sessionId } = useParams()
+  const [query, setQuery] = useState('')
+  const [creating, setCreating] = useState(false)
+  /**
+   * The pinned set, from the module that already owns it.
+   *
+   * `useSyncExternalStore` rather than local state because the store is shared — `RecentSessions`
+   * reads the same one — and two components holding their own copy is how a pin lands in one list
+   * and not the other. Its rules (a hard limit of three, the fourth REFUSED rather than silently
+   * swapped) live there and are not re-decided here.
+   */
+  const pins = useSyncExternalStore(subscribePinnedSessions, getPinnedIds, pinnedServerSnapshot)
+  const pinned = useMemo(() => new Set(pins), [pins])
+  const flip = (row: ControlSession) => {
+    const out = togglePinnedSession(pinKeyOf(row))
+    if (!out.ok && out.reason === 'limit') {
+      setPinNotice(pt
+        ? `No máximo ${MAX_PINNED} conversas fixadas. Solte uma antes de fixar outra.`
+        : `At most ${MAX_PINNED} pinned conversations. Unpin one first.`)
+      return
+    }
+    setPinNotice(null)
+  }
+  const [pinNotice, setPinNotice] = useState<string | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  // The top bar's magnifier focuses this field. An event rather than a prop because the button and
+  // the field are in two different subtrees, and threading a ref through the whole shell to join
+  // them would put layout plumbing in every component between.
+  useEffect(() => {
+    const focus = () => searchRef.current?.focus()
+    window.addEventListener('agentistics:focus-session-search', focus)
+    return () => window.removeEventListener('agentistics:focus-session-search', focus)
+  }, [])
+
+  // `now` is read once per arrangement rather than per row: two rows landing either side of midnight
+  // during one render would be banded against two different "today"s.
+  const active = useMemo(() => new Set<string>(ACTIVE_STATES), [])
+  // `filterFleet` owns harness/project/repo/model AND `activeOnly`, but the switch needs its OWN
+  // withheld count (see `hidden` below) independent of the value filters, so it is applied here as
+  // an ordinary array filter rather than through `activeOnly: true`.
+  const valueFiltered = useMemo(
+    () => filterFleet({ rows, filters, activeOnly: false }).rows,
+    [rows, filters],
+  )
+  const searched = useMemo(() => filterSessions(valueFiltered, query), [valueFiltered, query])
+  const matched = useMemo(
+    () => (activeOnly ? searched.filter(r => active.has(r.state)) : searched),
+    [searched, activeOnly, active],
+  )
+  /** How many rows the switch is withholding, so the row can say what turning it off would show. */
+  const hidden = useMemo(
+    () => (activeOnly ? searched.filter(r => !active.has(r.state)).length : 0),
+    [searched, activeOnly, active],
+  )
+
+  /** The pinned rows, in the order they were pinned. Their own band, above everything. */
+  const pinnedRows = useMemo(
+    () => pins.map(k => matched.find(r => pinKeyOf(r) === k)).filter((r): r is ControlSession => r !== undefined),
+    [pins, matched],
+  )
+
+  /**
+   * The bands.
+   *
+   * `active` is this page's own two-band split — what is running, ranked by what needs you most,
+   * and everything else beneath it. `DEFAULT_ORDER` (`state`, via `sessionRank`) is the SAME
+   * ranking the terminal cockpit breaks ties on, so "sorted by status" means one thing everywhere.
+   *
+   * Every other arrangement is `groupSessions` — the cockpit's own, imported rather than rewritten.
+   * A browser copy would be a second set of rules for one fact, and it would sit outside
+   * `session-dimensions.test.ts`, which cross-checks that filtering to a bucket returns exactly the
+   * rows that bucket's band contains.
+   */
+  const bands = useMemo((): { label: string; rows: ControlSession[] }[] => {
+    const rest = matched.filter(r => !pinned.has(pinKeyOf(r)))
+    if (grouping === 'active') {
+      return [
+        { label: pt ? 'Ativas' : 'Active', rows: sortSessions(rest.filter(r => active.has(r.state)), DEFAULT_ORDER) },
+        // Never computed while activeOnly is on — those rows are the ones the switch is
+        // withholding, not a second list to render beside it.
+        { label: pt ? 'Inativas' : 'Inactive', rows: activeOnly ? [] : sortSessions(rest.filter(r => !active.has(r.state)), DEFAULT_ORDER) },
+      ]
+    }
+    return groupSessions(rest, grouping, fleetWordBook(pt ? 'pt' : 'en'), finishedTasks, DEFAULT_ORDER)
+      .map(g => ({ label: g.label, rows: g.sessions }))
+  }, [matched, pinned, active, activeOnly, grouping, pt, finishedTasks])
+
+  const total = bands.reduce((n, b) => n + b.rows.length, 0) + pinnedRows.length
+  const filterCount = (filters.harnesses?.length ?? 0) + filters.projects.length
+    + (filters.repos?.length ?? 0) + filters.models.length
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 10, paddingTop: 4 }}>
+      <button
+        onClick={() => setCreating(true)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          margin: '0 2px', padding: '9px 12px', borderRadius: 9, cursor: 'pointer', minHeight: tap,
+          border: '1px dashed var(--border)', background: 'transparent',
+          color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600,
+        }}
+        onMouseEnter={e => {
+          e.currentTarget.style.borderColor = 'var(--anthropic-orange)'
+          e.currentTarget.style.color = 'var(--anthropic-orange)'
+        }}
+        onMouseLeave={e => {
+          e.currentTarget.style.borderColor = 'var(--border)'
+          e.currentTarget.style.color = 'var(--text-secondary)'
+        }}
+      >
+        <Plus size={14} />
+        {pt ? 'Nova sessão' : 'New session'}
+      </button>
+
+      {creating && (
+        <NewSessionModal
+          lang={lang}
+          onClose={() => setCreating(false)}
+          onStarted={id => {
+            setCreating(false)
+            // Straight into it. The row will arrive on the next poll; navigating now means the
+            // panel is already open on it when it does.
+            if (id) navigate(`/sessions/${id}`)
+          }}
+        />
+      )}
+
+      <div style={{ position: 'relative', padding: '0 2px' }}>
+        <Search
+          size={13}
+          style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }}
+        />
+        <input
+          ref={searchRef}
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder={pt ? 'Buscar sessão…' : 'Search sessions…'}
+          style={{
+            width: '100%', boxSizing: 'border-box',
+            padding: '9px 26px 9px 30px', borderRadius: 9,
+            border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+            color: 'var(--text-primary)', fontFamily: 'inherit',
+            // 16px on mobile or iOS Safari zooms the viewport; the global guard in index.css
+            // handles it, so this stays the desktop figure and is not overridden inline.
+            fontSize: 12.5, outline: 'none',
+          }}
+        />
+        {query !== '' && (
+          <button
+            onClick={() => setQuery('')}
+            aria-label={pt ? 'Limpar busca' : 'Clear search'}
+            style={{
+              position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+              display: 'flex', border: 'none', background: 'transparent',
+              color: 'var(--text-tertiary)', cursor: 'pointer', padding: 2,
+            }}
+          >
+            <X size={12} />
+          </button>
+        )}
+      </div>
+
+      {pinNotice && (
+        <p role="status" style={{
+          margin: '0 4px', fontSize: 11, lineHeight: 1.45, color: 'var(--anthropic-orange)',
+        }}>
+          {pinNotice}
+        </p>
+      )}
+
+      <div className="ag-noscroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+        {/* The pinned band, above everything — that is what pinning is for: the two or three
+            sessions that must not move when the arrangement changes. */}
+        {pinnedRows.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 9px 7px', fontSize: 10.5, fontWeight: 700,
+              textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--anthropic-orange)',
+            }}>
+              <Pin size={11} />
+              <span>{pt ? 'Fixadas' : 'Pinned'}</span>
+              <span style={{ marginLeft: 'auto', fontWeight: 600, opacity: 0.75 }}>{pinnedRows.length}</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {pinnedRows.map(s => (
+                <SessionRow
+                  key={`pin-${s.id}`}
+                  session={s}
+                  selected={s.id === sessionId || s.conversationId === sessionId}
+                  pinned
+                  {...(tap ? { tap } : {})}
+                  onPin={() => flip(s)}
+                  onOpen={() => navigate(`/sessions/${s.id}`)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+        {total === 0 ? (
+          <EmptyReason
+            pt={pt} loading={loading} unsupported={unsupported}
+            unavailable={unavailable} searching={query !== ''}
+            withheld={activeOnly ? hidden : 0}
+            filterNarrowed={filterCount > 0 && valueFiltered.length < rows.length}
+          />
+        ) : (
+          <>
+            {bands.map((b, i) => (
+              <SessionBand
+                // The label is not unique — two dimensions can legitimately produce one word, and
+                // an empty band still holds its place in the order.
+                key={`${grouping}-${i}-${b.label}`}
+                label={b.label} rows={b.rows} pinned={pinned}
+                sessionId={sessionId} tap={tap} onPin={flip}
+                onOpen={s => navigate(`/sessions/${s.id}`)}
+              />
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** One band of the two-way (active/inactive) split. Absent when it would be empty — an empty
+ *  band with a heading and no rows under it is a label pretending to be information. */
+function SessionBand({ label, rows, pinned, sessionId, tap, onPin, onOpen }: {
+  label: string
+  rows: readonly ControlSession[]
+  pinned: ReadonlySet<string>
+  sessionId?: string
+  tap?: number
+  onPin: (row: ControlSession) => void
+  onOpen: (row: ControlSession) => void
+}) {
+  if (rows.length === 0) return null
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{
+        display: 'flex', alignItems: 'baseline', gap: 6,
+        padding: '6px 9px 7px', fontSize: 10.5, fontWeight: 700,
+        textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)',
+      }}>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+        <span style={{ marginLeft: 'auto', fontWeight: 600, opacity: 0.75 }}>{rows.length}</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {rows.map(s => (
+          <SessionRow
+            key={s.id}
+            session={s}
+            selected={s.id === sessionId || s.conversationId === sessionId}
+            pinned={pinned.has(pinKeyOf(s))}
+            {...(tap ? { tap } : {})}
+            onPin={() => onPin(s)}
+            onOpen={() => onOpen(s)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Why the list is empty, in words.
+ *
+ * Five different facts, and rendering any of them as the others is the confident-zero defect: not
+ * asked yet, this machine may not be asked, the poll failed, your search matched nothing, the
+ * fleet's own filters (harness/project/repo/model or "active only", now both in the shared header
+ * above) are withholding rows, and there are genuinely none. Each sends a reader somewhere
+ * different — the switch that would fix it is named rather than repeated as a second control here,
+ * since the real one already sits in the header this list scrolls under.
+ */
+function EmptyReason({
+  pt, loading, unsupported, unavailable, searching, withheld, filterNarrowed,
+}: {
+  pt: boolean; loading: boolean; unsupported: boolean; unavailable?: string; searching: boolean
+  /** How many rows the "active only" switch (now in the shared header) is holding back. */
+  withheld: number
+  /** The shared header's harness/project/repo/model filter hid every row — a SEPARATE fact from
+      the "active only" switch, and checked first: with the filter narrowing to nothing, the switch
+      and the search both read as empty too, and blaming either would point at a control that was
+      never the cause. */
+  filterNarrowed: boolean
+}) {
+  const text = loading
+    ? (pt ? 'Lendo as sessões desta máquina…' : 'Reading this machine’s sessions…')
+    : unsupported
+      ? (pt
+          ? 'Esta instalação não pode listar sessões — um central agrega várias máquinas e não hospeda as sessões de nenhuma delas.'
+          : 'This install cannot list sessions — a central aggregates many machines and hosts none of their sessions.')
+      : unavailable
+        ? unavailable
+        : filterNarrowed
+          ? (pt ? 'Nenhuma sessão corresponde aos filtros no topo.' : 'No session matches the filters above.')
+          : withheld > 0
+            ? (pt
+                ? `Nada rodando agora. ${withheld} ${withheld === 1 ? 'conversa está' : 'conversas estão'} escondida${withheld === 1 ? '' : 's'} por "Só ativas".`
+                : `Nothing is running right now. ${withheld} ${withheld === 1 ? 'conversation is' : 'conversations are'} hidden by "Active only".`)
+            : searching
+              ? (pt ? 'Nenhuma sessão corresponde à busca.' : 'No session matches that search.')
+              : (pt ? 'Nenhuma sessão nesta máquina ainda.' : 'No sessions on this machine yet.')
+
+  return (
+    <div style={{
+      padding: '14px 10px', fontSize: 11.5, lineHeight: 1.55,
+      color: 'var(--text-tertiary)',
+    }}>
+      {text}
+    </div>
+  )
+}
+
+
+function SessionRow({ session, selected, pinned, tap, onPin, onOpen }: {
+  session: ControlSession; selected: boolean
+  /** Minimum row height on mobile — 44px, and undefined on desktop. */
+  tap?: number
+  pinned?: boolean
+  onPin?: () => void
+  onOpen: () => void
+}) {
+  const wants = sessionNotify(session)
+  const color = STATE_COLOR[session.state] ?? 'var(--text-tertiary)'
+  return (
+    <button
+      onClick={onOpen}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+        padding: '9px 9px', borderRadius: 9, border: 'none', textAlign: 'left', minHeight: tap,
+        // SELECTED is NOT orange. Orange is already the state colour for a row that needs a person
+        // (`STATE_COLOR.waiting`), so the selected row wore the same tint as the alarm and the two
+        // became one signal: selecting a working session made it look like it was asking for you.
+        // Selection is a fact about where the READER is, so it uses the neutral surface tokens —
+        // a lifted background and a full-height accent-free edge — and leaves every colour on this
+        // list to mean exactly one thing about the SESSION.
+        background: selected ? 'var(--bg-elevated)' : (STATE_WASH[session.state] ?? 'transparent'),
+        // Two different edges, and they never collide: the STATE edge is the left rule a live row
+        // carries, and SELECTION replaces it with a brighter, full one plus an outline. The wash
+        // alone is faint by design, and an edge survives a light theme and a colour-blind reader
+        // where a 10% tint does not.
+        boxShadow: selected
+          ? 'inset 3px 0 0 var(--text-primary), inset 0 0 0 1px var(--border)'
+          : (STATE_WASH[session.state]
+            ? `inset 2px 0 0 ${STATE_COLOR[session.state] ?? 'transparent'}`
+            : undefined),
+        color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
+        cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
+        transition: 'background 0.15s',
+      }}
+      onMouseEnter={e => { if (!selected) e.currentTarget.style.background = 'var(--bg-elevated)' }}
+      onMouseLeave={e => {
+        if (!selected) e.currentTarget.style.background = STATE_WASH[session.state] ?? 'transparent'
+      }}
+      aria-current={selected ? 'true' : undefined}
+      title={session.model ? `${session.title}\n${session.model}` : session.title}
+    >
+      {/* The dot marks a row that WANTS somebody. It never carries the message alone — the state
+          word is beside it — because a fact said only in colour is a fact some readers never get. */}
+      <span
+        aria-hidden
+        style={{
+          width: 6, height: 6, borderRadius: 3, flexShrink: 0,
+          background: wants ? 'var(--anthropic-orange)' : color,
+          opacity: wants ? 1 : 0.55,
+        }}
+      />
+      <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <span style={{
+          fontSize: 12.5, fontWeight: selected || wants ? 650 : 500,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {session.title}
+        </span>
+        <span style={{
+          display: 'flex', alignItems: 'center', gap: 5, minWidth: 0,
+          fontSize: 10.5, color: wants ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+        }}>
+          <span style={{ flexShrink: 0 }}>{session.stateLabel}</span>
+          <span style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+          <span style={{
+            color: (HARNESS_COLORS as Record<string, string>)[session.harness] ?? 'var(--text-tertiary)',
+            fontWeight: 650, flexShrink: 0,
+          }}>
+            {(HARNESS_LABELS as Record<string, string>)[session.harness] ?? session.harness}
+          </span>
+          {/* The model, when the row knows one. A row that does not is not "some default model" —
+              it is unknown, and inventing a name there is the confident-zero defect in words. */}
+          {session.model && (
+            <>
+              <span style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {shortModel(session.model)}
+              </span>
+            </>
+          )}
+          {session.task && (
+            <>
+              <span style={{ opacity: 0.4, flexShrink: 0 }}>·</span>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {session.task}
+              </span>
+            </>
+          )}
+        </span>
+      </span>
+      {/* The assistant, NAMED. It was a 5px dot, which carries the fact in colour alone — and a
+          colour is not a name. The model sits with it on the meta line below. */}
+      {/* The pin lives on the row rather than in a menu: it is a one-click decision about the row
+          you are looking at. `role="button"` on a span, because a <button> inside a <button> is
+          invalid HTML and browsers resolve it by dropping one of them. */}
+      {onPin && (
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label={pinned ? 'Unpin' : 'Pin'}
+          title={pinned ? 'Unpin' : 'Pin'}
+          onClick={e => { e.stopPropagation(); onPin() }}
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onPin() }
+          }}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            width: 20, height: 20, borderRadius: 6, cursor: 'pointer',
+            color: pinned ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+            // A pin nobody set is faint until the row is hovered: a column of pin glyphs down an
+            // unpinned list is noise beside the titles they sit next to.
+            // There is no hover on a touch screen, so the pin is always visible there. On desktop
+            // it appears with the row — see `.ag-row-pin` in index.css.
+            opacity: pinned || tap ? 1 : 0,
+            transition: 'opacity 0.15s',
+          }}
+          className="ag-row-pin"
+        >
+          {pinned ? <Pin size={12} /> : <PinOff size={12} />}
+        </span>
+      )}
+    </button>
+  )
+}

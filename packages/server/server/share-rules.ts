@@ -356,6 +356,29 @@ export function filterShared<T extends Pick<SessionMeta, 'git_remote' | 'project
  *
  * With no restrictions the snapshot passes through untouched — the common case pays nothing.
  */
+/**
+ * May something known only by its DIRECTORY be shown to this central?
+ *
+ * The rule for anything that has a `cwd` and no session to attribute it to: a live process, and a
+ * row of the session fleet relayed to a machine's owning account. It is deliberately stricter than
+ * `sessionShared`, and the reason is worth keeping: **positive resolution only**. `repoKeyOf` falls
+ * back to `NO_REPO_KEY` for an unknown path, which under a denylist reads as "shared" unless the
+ * user also denied the no-repo bucket — and `cwd` is the sensitive field here, because a path is
+ * usually the repository's name. So an unrecognized directory is withheld in BOTH modes.
+ *
+ * Extracted from `filterLiveShared`, which now calls it, so the relayed fleet and the live-session
+ * snapshot cannot drift into two different answers about the same directory.
+ */
+export function cwdShared(cwd: string, rules: ShareRules, index?: PathRepoIndex): boolean {
+  // An unrestricted denylist shares everything; an allowlist NEVER takes this shortcut, because an
+  // empty one is the strictest rule there is rather than the absence of one.
+  if (rules.mode === 'denylist' && rules.sources.size === 0) return true
+  const key = index?.resolved.get(cwd)
+  if (!key) return false
+  const matched = rules.sources.has(repoSourceKey(key)) || rules.sources.has(projectSourceKey(cwd))
+  return rules.mode === 'allowlist' ? matched : !matched
+}
+
 export function filterLiveShared<
   P extends { cwd: string },
   A extends string = 'working' | 'waiting' | 'waiting-approval' | 'exited',
@@ -391,16 +414,7 @@ export function filterLiveShared<
   for (const [id, activity] of Object.entries(snapshot.liveSessionActivities ?? {})) {
     if (idShared(id)) liveSessionActivities[id] = activity as A
   }
-  const liveProcesses = snapshot.liveProcesses.filter(p => {
-    // Positive resolution only: `repoKeyOf` falls back to NO_REPO_KEY for an unknown path, which
-    // under a denylist would read as "shared" whenever the user has not also denied the no-repo
-    // bucket. A process has no session to attribute and `cwd` is the sensitive field — a path is
-    // usually the repository's name — so an unrecognized directory is withheld in BOTH modes.
-    const key = index?.resolved.get(p.cwd)
-    if (!key) return false
-    const matched = rules.sources.has(repoSourceKey(key)) || rules.sources.has(projectSourceKey(p.cwd))
-    return rules.mode === 'allowlist' ? matched : !matched
-  })
+  const liveProcesses = snapshot.liveProcesses.filter(p => cwdShared(p.cwd, rules, index))
   return { liveSessionIds, liveProcesses, liveSessionActivities }
 }
 

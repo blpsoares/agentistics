@@ -10,6 +10,8 @@ import {
   showPrefixArgs, trimCapture,
   type TerminalProfile,
 } from './tmux-cli'
+import { dependencyCommandLine } from './dependency-plan'
+import { probeDependency } from './dependency-probe'
 import { planPromptDelivery } from './initial-prompt'
 import type {
   BackendInitialPrompt, BackendSession, BackendSpawn, SessionBackend, TerminalCapture,
@@ -129,6 +131,32 @@ async function deliverInitialPrompt(id: string, d: BackendInitialPrompt): Promis
 }
 
 let tmuxPresent: boolean | null = null
+/** The install sentence, computed once — same cost as the presence check it already memoized. */
+let tmuxMissingReason: string | null = null
+
+/**
+ * Why tmux is missing, and what would fix it — NAMING the manager and showing the exact command,
+ * never a generic "install it" that leaves the reader to go find one themselves.
+ *
+ * `dependency-plan.ts` decides what to say; this only turns its three honest refusals into the one
+ * sentence every caller of `unavailable()` already knows how to show (a plain string, dimmed under
+ * the CLI's usage text, or a banner in the cockpit's Sessions tab).
+ */
+async function explainMissingTmux(): Promise<string> {
+  const plan = await probeDependency('tmux')
+  switch (plan.reason) {
+    case 'windows':
+      return 'tmux is not installed, and there is no Windows session backend — use WSL to manage background sessions.'
+    case 'no-manager':
+      return 'tmux is not installed, and no recognised package manager was found — install it yourself to manage background sessions.'
+    default: {
+      const line = dependencyCommandLine(plan)
+      return line
+        ? `tmux is not installed — install it with ${plan.manager}: ${line}`
+        : 'tmux is not installed — install it to manage background sessions'
+    }
+  }
+}
 
 export const tmuxBackend: SessionBackend = {
   id: 'tmux',
@@ -137,8 +165,9 @@ export const tmuxBackend: SessionBackend = {
     if (tmuxPresent === null) {
       const { code } = await tmux(['-V'])
       tmuxPresent = code === 0
+      if (!tmuxPresent) tmuxMissingReason = await explainMissingTmux()
     }
-    return tmuxPresent ? undefined : 'tmux is not installed — install it to manage background sessions'
+    return tmuxPresent ? undefined : tmuxMissingReason ?? 'tmux is not installed — install it to manage background sessions'
   },
 
   async spawn(req: BackendSpawn) {
