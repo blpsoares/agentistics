@@ -17,6 +17,7 @@ import { rulesFor } from './attention-rules'
 import { approvalTail, attentionOf, digestFrame, frameTail } from './attention'
 import { EMPTY_CONFIRM_MEMORY, confirmActivities, type ConfirmMemory } from './attention-confirm'
 import { readRecentChatTurns, resolveChatTranscriptPath, type ChatTurn } from './chat-tail'
+import { markFleetPhase } from './fleet-profile'
 import { parseDialogOptions, type DialogOption } from './dialog-choice'
 // Taking a running session back when its registry record is gone. See `session-adopt.ts`.
 import { planAdoptions } from './session-adopt'
@@ -187,6 +188,7 @@ export function createSessionsPoller(o: {
     }
 
     try {
+      const gatherStart = performance.now()
       const [registry, backendSessions, processes, conversations, harnessSessions] = await Promise.all([
         o.readRegistry(),
         o.backend.list(),
@@ -200,6 +202,7 @@ export function createSessionsPoller(o: {
           ? o.loadHarnessSessions().catch(() => emptyHarnessSessionIndex())
           : Promise.resolve(emptyHarnessSessionIndex()),
       ])
+      markFleetPhase('poll: gather (registry/backend.list/scanProcesses/conversations/harnessSessions)', gatherStart)
 
       const reconciled = reconcileSessions(registry, backendSessions)
       const harnessOf = new Map(registry.map(r => [r.id, r.harness]))
@@ -211,6 +214,7 @@ export function createSessionsPoller(o: {
       // attach to, rename or kill. Adoption never invents anything: see `session-adopt.ts`. It is
       // idempotent by construction (an adopted row stops being `unregistered`), so it writes once.
       if (o.adoptSessions) {
+        const adoptStart = performance.now()
         const adopt = planAdoptions({
           rows: reconciled,
           byManagedId: harnessSessions.byManagedId,
@@ -220,6 +224,7 @@ export function createSessionsPoller(o: {
         // Best effort, exactly like the heartbeat: a registry that cannot be written costs the
         // adoption, never the fleet on screen.
         if (adopt.length > 0) await o.adoptSessions(adopt).catch(() => undefined)
+        markFleetPhase(`poll: adoptSessions x${adopt.length}`, adoptStart)
       }
 
       const nextDigest = new Map<string, string>()
@@ -229,6 +234,7 @@ export function createSessionsPoller(o: {
       const dialogOptions = new Map<string, DialogOption[]>()
       const chatTails = new Map<string, ChatTurn[]>()
 
+      const captureStart = performance.now()
       await Promise.all(reconciled.map(r => limit(async () => {
         const b = r.backend
         if (!b) return // `lost`: the backend has nothing to capture and nothing to report.
@@ -277,6 +283,7 @@ export function createSessionsPoller(o: {
           if (options.length > 0) dialogOptions.set(r.id, options)
         }
       })))
+      markFleetPhase(`poll: capture+chatTail x${reconciled.length} (concurrency ${CAPTURE_CONCURRENCY})`, captureStart)
 
       // The heartbeat: one write, one timestamp, every session the backend reports as ALIVE. See
       // `crash-group.ts` for why one shared timestamp is what makes the grouping exact.
@@ -290,25 +297,33 @@ export function createSessionsPoller(o: {
 
       // The exact conversation, written down while there is still a harness to ask. Only where it
       // would CHANGE the registry, so this is one write per session and not one per poll.
+      const recordConvStart = performance.now()
+      let recordConvWrites = 0
       if (o.recordConversation) {
         for (const m of registry) {
           const exact = harnessSessions.byManagedId.get(m.id)?.sessionId
           if (!exact || m.conversationId === exact) continue
+          recordConvWrites++
           await o.recordConversation(m.id, exact).catch(() => undefined)
         }
       }
+      markFleetPhase(`poll: recordConversation x${recordConvWrites}`, recordConvStart)
 
       // The `/rename` name, captured WHILE there is still a harness file to read it from, so the
       // title outlives the process. Only a name a PERSON typed (`chosenName` drops the harness's own
       // invented `agentistics-77`), and only when it CHANGED — one write per rename, never per poll.
+      const recordNameStart = performance.now()
+      let recordNameWrites = 0
       if (o.recordHarnessName) {
         for (const m of registry) {
           const file = harnessSessions.byManagedId.get(m.id)
           const name = chosenName(file)
           if (!name || (m.harnessName === name && m.harnessNameSince === file?.nameSince)) continue
+          recordNameWrites++
           await o.recordHarnessName(m.id, name, file?.nameSince).catch(() => undefined)
         }
       }
+      markFleetPhase(`poll: recordHarnessName x${recordNameWrites}`, recordNameStart)
 
       // Decided against the BACKEND's own list rather than the reconciled statuses, because that is
       // the question: a row the backend has never heard of is one the machine took.
@@ -317,6 +332,7 @@ export function createSessionsPoller(o: {
 
       const canReadProc = await procAvailable()
       const sessionHardware = new Map<string, { pid?: number; cpuPercent?: number | null; rssBytes?: number | null }>()
+      const procStatStart = performance.now()
       if (canReadProc) {
         const panePids = await o.backend.listPanePids?.().catch(() => new Map<string, number>())
         for (const r of reconciled) {
@@ -345,6 +361,7 @@ export function createSessionsPoller(o: {
           }
         }
       }
+      if (canReadProc) markFleetPhase(`poll: procStat+procRss x${reconciled.length} (sequential)`, procStatStart)
 
       // Confirm the raw readings before anything downstream sees them: the count, the sort, the bell
       // and the TUI all read `activity`, so confirming here is the one place that makes every surface

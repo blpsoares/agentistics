@@ -1305,6 +1305,7 @@ export interface ControlHost {
    */
   promptSession?(id: string, text: string): Promise<ActionResult>
 
+
   /**
    * Answer the dialog this session is blocked on.
    *

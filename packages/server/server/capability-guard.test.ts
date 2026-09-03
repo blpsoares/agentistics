@@ -34,17 +34,22 @@ describe('routeCapability', () => {
     // The live terminal channel streams a session's SCREEN. It is a read, but a read of a coding
     // assistant's terminal, so it must be as unreachable on an exposed profile as the fleet itself.
     expect(routeCapability('/api/fleet/stream')).toBe('localShell')
-    // The chat view reads the assistant's and the user's actual WORDS out of a transcript on this
-    // machine. If anything on this list must be unreachable from outside, it is this one.
-    expect(routeCapability('/api/fleet/chat')).toBe('localShell')
-    // Starting a session spawns a billable assistant on this host. Both halves are guarded: the
-    // one that says what may be started, and the one that starts it.
-    expect(routeCapability('/api/fleet/new')).toBe('localShell')
-    expect(routeCapability('/api/fleet/spawn')).toBe('localShell')
-    // An attachment writes a file to this machine and hands a session its path.
+    // The attach ticket hands out the command that ENTERS a session, and `new` starts a fresh
+    // assistant in a directory the caller names — the most powerful call on the whole route table.
     expect(routeCapability('/api/fleet/attach')).toBe('localShell')
-    // Reading one back — the chat's inline image preview — is the other half of the same file.
-    expect(routeCapability('/api/fleet/attachment')).toBe('localShell')
+    expect(routeCapability('/api/fleet/new')).toBe('localShell')
+    // The live terminal WRITE channel (WS) types key-by-key into a session, control keys included —
+    // strictly more power than the line prompt, so it rides localShell too (A5: refused off `local`).
+    expect(routeCapability('/api/fleet/input')).toBe('localShell')
+  })
+
+  it('guards a fleet route nobody has written yet', () => {
+    // The registration is a PREFIX on purpose: an unregistered route is assumed harmless, so the
+    // next fleet route must be guarded by having been added at all, never by someone having
+    // remembered a second table. This assertion is what keeps that true.
+    expect(routeCapability('/api/fleet/anything-added-later')).toBe('localShell')
+    // …without swallowing a neighbour that merely starts with the same letters.
+    expect(routeCapability('/api/fleetwide')).toBeNull()
   })
 
   it('maps the local chat routes', () => {

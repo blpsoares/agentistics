@@ -414,6 +414,18 @@ export interface ControlStrings {
   sessionsNoHost: string
   /** Reopen was asked for on a row whose conversation cannot be resolved. */
   sessionsReopenNone: string
+  /**
+   * A START request that arrived over HTTP and cannot be honoured (`fleet-spawn.ts`).
+   *
+   * The cockpit's own wizard can produce none of these — it only ever offers what this machine can
+   * start — so they exist for the other front doors, and each names the offending value rather than
+   * refusing in the abstract.
+   */
+  spawnUnknownHarness: (harness: string) => string
+  spawnCwdMissing: string
+  spawnCwdRelative: (cwd: string) => string
+  spawnUnknownEffort: (effort: string) => string
+  spawnModelUnsupported: (harness: string) => string
   keySessionsGroup: string
   keySessionsAttach: string
   /** How to put the arrangement back to how the app opens on a fresh machine. */
@@ -946,6 +958,11 @@ const EN: ControlStrings = {
   sessionsClosedNote: 'not running — reopen it to pick this conversation back up.',
   sessionsNoHost: 'session control is not available on this machine.',
   sessionsReopenNone: 'no conversation to reopen — nothing on this machine resolves this row.',
+  spawnUnknownHarness: h => `this machine cannot start ${h} — no spawn spec for it here.`,
+  spawnCwdMissing: 'no directory given — a session has to start somewhere.',
+  spawnCwdRelative: cwd => `${cwd} is not an absolute path, and a relative one would resolve against this server's own directory.`,
+  spawnUnknownEffort: e => `${e} is not a reasoning effort this CLI accepts.`,
+  spawnModelUnsupported: h => `${h} has no model flag — a model was asked for and it could not be honoured.`,
   keySessionsGroup: 'v group',
   keySessionsAttach: 'o attach',
   keySessionsReset: '^r reset view',
@@ -1408,6 +1425,11 @@ const PT: ControlStrings = {
   sessionsClosedNote: 'não está rodando — reabra para retomar esta conversa.',
   sessionsNoHost: 'o controle de sessões não está disponível nesta máquina.',
   sessionsReopenNone: 'nenhuma conversa para reabrir — nada nesta máquina resolve esta linha.',
+  spawnUnknownHarness: h => `esta máquina não sabe iniciar ${h} — não há spawn spec para ele aqui.`,
+  spawnCwdMissing: 'nenhum diretório informado — uma sessão precisa começar em algum lugar.',
+  spawnCwdRelative: cwd => `${cwd} não é um caminho absoluto, e um relativo seria resolvido a partir do diretório do próprio servidor.`,
+  spawnUnknownEffort: e => `${e} não é um nível de esforço que esta CLI aceite.`,
+  spawnModelUnsupported: h => `${h} não tem flag de modelo — um modelo foi pedido e não teria como ser aplicado.`,
   keySessionsGroup: 'v agrupar',
   keySessionsAttach: 'o anexar',
   keySessionsReset: '^r restaurar view',

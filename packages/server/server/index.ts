@@ -73,6 +73,16 @@ import { LIMITS, readJsonLimited } from './limits'
 // and React, so this server names only `fleet-row.ts` — the two handlers load the implementation by
 // dynamic import. Naming `fleet-web` here even in a type position measurably pulled that graph in.
 import type { FleetActionRequest } from './sessions/fleet-row'
+import type { FleetSpawnBody } from './sessions/fleet-spawn'
+// The live-terminal WRITE channel (Phase 2b). Statically importable — unlike `fleet-web`, this
+// module's own graph is light (registry + the two pure input modules) and resolves the heavy backend
+// LAZILY, so naming its WS handlers here does not pull the Ink/session-view graph into a server that
+// never opens this page. The handlers must be reachable synchronously from the shared `_wsHandlers`.
+import {
+  openInputSocket, onInputMessage, closeInputSocket,
+  createInputState, inputSessionExists, inputAtCapacity, type FleetInputState,
+} from './sessions/input-web'
+import { wsInputOriginOk } from './sessions/input-protocol'
 // Type only: the module itself reaches `cli-start` → `@agentistics/tui/control` → Ink, and is
 // loaded by dynamic import inside the two /api/fleet handlers.
 import { canSeeMemberNames } from './iam-view'
@@ -293,15 +303,27 @@ ensureClaudeChat().catch(err => console.warn('[claude-chat] failed to initialize
 // Bun HTTP server
 // ---------------------------------------------------------------------------
 
-type WSData = { user: string; memberId: string; isAgent?: boolean }
+// Two kinds of socket ride these handlers: the member↔central reverse channel (`isAgent`) and the
+// browser's live-terminal WRITE channel (`fleetInput`). They are disjoint — an agent socket never
+// carries `fleetInput` and vice versa — so each handler dispatches on which field is present.
+type WSData = { user: string; memberId: string; isAgent?: boolean; fleetInput?: FleetInputState }
 
 // Shared WS + request handlers, so the binary can bind the SAME logic to two ports below:
 // PORT (47291 = api + mcp) and WEB_PORT (47292 = the web dashboard you open).
 const _wsHandlers = {
-  open(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; registerAgent(ws) },
-  message(ws: ServerWebSocket<WSData>, msg: string | Buffer) { if (!ws.data.isAgent) return; onAgentMessage(ws, msg) },
+  open(ws: ServerWebSocket<WSData>) {
+    if (ws.data.fleetInput) { openInputSocket(ws); return }
+    if (!ws.data.isAgent) return; registerAgent(ws)
+  },
+  message(ws: ServerWebSocket<WSData>, msg: string | Buffer) {
+    if (ws.data.fleetInput) { onInputMessage(ws, msg); return }
+    if (!ws.data.isAgent) return; onAgentMessage(ws, msg)
+  },
   pong(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; onAgentPong(ws) },
-  close(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; unregisterAgent(ws) },
+  close(ws: ServerWebSocket<WSData>) {
+    if (ws.data.fleetInput) { closeInputSocket(ws); return }
+    if (!ws.data.isAgent) return; unregisterAgent(ws)
+  },
 }
 
 /**
@@ -314,7 +336,13 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
   const res = await handleRequestInner(req, server)
   if (!res) return res // WebSocket upgrade handed off
   const isApi = new URL(req.url).pathname.startsWith('/api/')
-  for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi }))) {
+  // `embed` — may an editor frame this dashboard? Only on a `local` profile: the machine's own
+  // dashboard, bound to 127.0.0.1, which is the only deployment where the thing doing the framing
+  // is the user's own VS Code window rather than someone else's page. The allowance itself is a
+  // single scheme no web page can present (`security-headers.ts`), and everything the fleet routes
+  // can do stays behind `localShell` regardless.
+  const embed = PROFILE === 'local'
+  for (const [k, v] of Object.entries(securityHeaders({ tls: TEAM_TLS, dev: !SERVE_STATIC, isApi, embed }))) {
     res.headers.set(k, v)
   }
   // A sliding-session refresh recorded by the auth gate. Appended (not set) so a route that
@@ -333,6 +361,24 @@ async function handleRequest(req: Request, server: Server<WSData>): Promise<Resp
  * state and nothing leaks if a handler throws.
  */
 const refreshedCookies = new WeakMap<Request, string>()
+
+// A `filters` query parameter, or nothing. Junk is IGNORED rather than refused: a filter that
+// cannot be read is a narrower list than the caller asked for, and answering 400 to a poll would
+// take the whole fleet off somebody's screen over a stale bookmark.
+function readFilters(raw: string | null): { filters?: Record<string, string[]> } {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (typeof parsed !== 'object' || parsed === null) return {}
+    const out: Record<string, string[]> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (Array.isArray(value)) out[key] = value.filter((v): v is string => typeof v === 'string')
+    }
+    return Object.keys(out).length > 0 ? { filters: out } : {}
+  } catch {
+    return {}
+  }
+}
 
 async function handleRequestInner(req: Request, server: Server<WSData>): Promise<Response | undefined> {
     const url = new URL(req.url)
@@ -1013,10 +1059,12 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // `agentop session ls` prints, with the same `sessionActions` decision about what each one may
     // take. A central never answers it: it aggregates many machines and hosts none of their
     // sessions, so a fleet read there would be this box's own processes under someone else's page.
-    // `capability-guard.ts` has already refused both paths on an exposed profile.
-    if (url.pathname === '/api/fleet' || url.pathname === '/api/fleet/act' || url.pathname === '/api/fleet/stream' || url.pathname === '/api/fleet/chat' ||
-        url.pathname === '/api/fleet/new' || url.pathname === '/api/fleet/spawn' ||
-        url.pathname === '/api/fleet/attach' || url.pathname === '/api/fleet/attachment') {
+    // `capability-guard.ts` has already refused every one of these paths on an exposed profile.
+    //
+    // The test is a PREFIX rather than a list of names: each new fleet route added below would
+    // otherwise have to remember to join a second table, and the one that forgot would be a central
+    // answering a question about sessions it does not host.
+    if (url.pathname === '/api/fleet' || url.pathname.startsWith('/api/fleet/')) {
       if (TEAM_CENTRAL) {
         return new Response(JSON.stringify({ error: 'fleet_central' }), {
           status: 404,
@@ -1027,7 +1075,25 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
 
     if (url.pathname === '/api/fleet' && req.method === 'GET') {
       const { readFleet, fleetLang } = await import('./sessions/fleet-web')
-      const payload = await readFleet(fleetLang(url.searchParams.get('lang')))
+      // The ARRANGEMENT is opt-in: a caller that sends `view=1` gets the fleet grouped, ordered and
+      // filtered the way the cockpit would (`fleet-arrange.ts`); everyone else gets the flat list
+      // they already read, and pays nothing for a grouping they do not draw.
+      const payload = await readFleet(
+        fleetLang(url.searchParams.get('lang')),
+        url.searchParams.get('view') === null ? undefined : {
+          ...(url.searchParams.get('group') ? { grouping: url.searchParams.get('group')! } : {}),
+          ...(url.searchParams.get('sort') ? { sort: url.searchParams.get('sort')! } : {}),
+          ...(url.searchParams.get('dir') ? { dir: url.searchParams.get('dir')! } : {}),
+          ...(url.searchParams.get('q') ? { query: url.searchParams.get('q')! } : {}),
+          ...(url.searchParams.get('scopes') ? { scopes: url.searchParams.get('scopes')!.split(',') } : {}),
+          ...(url.searchParams.get('marked') ? { marked: url.searchParams.get('marked')!.split(',') } : {}),
+          ...(url.searchParams.get('active') === '1' ? { onlyActive: true } : {}),
+          // `filters` is JSON because it is a map of dimension to VALUES, and values are arbitrary
+          // strings — a project path, a model id. Flattening that into query parameters would need
+          // an escaping convention nobody would remember.
+          ...(readFilters(url.searchParams.get('filters'))),
+        },
+      )
       return new Response(JSON.stringify(payload), {
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
@@ -1044,6 +1110,73 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           })
         }
         const out = await runFleetAction(fleetLang(url.searchParams.get('lang')), body.value)
+        return new Response(JSON.stringify(out), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // What it takes to ATTACH to one session — the argv and the real detach key, never the act
+    // itself. A client with a terminal of its own (the VS Code extension's integrated terminal, a
+    // shell) runs it; the browser has the row's `attachCommand` to copy instead. `null` from the
+    // host means this machine cannot attach to that row at all, which is a 404 and not an empty
+    // ticket: a client handed an empty argv would open a terminal that does nothing.
+    if (url.pathname === '/api/fleet/attach' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { readAttachTicket, fleetLang } = await import('./sessions/fleet-web')
+      const ticket = await readAttachTicket(fleetLang(url.searchParams.get('lang')), id)
+      if (!ticket) {
+        return new Response(JSON.stringify({ error: 'not_found' }), {
+          status: 404,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify(ticket), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // The wizard, as data: which harnesses this machine can START, where a session could start, and
+    // the tasks that already exist. A GET because it asks a question and changes nothing — the
+    // project search is a `q` on it, so a client can re-ask as the user types.
+    if (url.pathname === '/api/fleet/new' && req.method === 'GET') {
+      const { readNewOptions, fleetLang } = await import('./sessions/fleet-web')
+      const out = await readNewOptions(
+        fleetLang(url.searchParams.get('lang')),
+        url.searchParams.get('q') ?? '',
+      )
+      return new Response(JSON.stringify(out), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // Start one. The most powerful thing on this route table: it spawns a billable coding assistant,
+    // with a prompt, in a directory the request names — see the header of `runFleetSpawn` for why
+    // this one call reads a directory from the body when `resume` refuses to, and `fleet-spawn.ts`
+    // for every check made on it. `localShell` is what bounds it: unreachable on a `lan` or `public`
+    // profile whoever is authenticated.
+    if (url.pathname === '/api/fleet/new' && req.method === 'POST') {
+      try {
+        const { runFleetSpawn, fleetLang } = await import('./sessions/fleet-web')
+        const body = await readJsonLimited<FleetSpawnBody>(req, LIMITS.bodyBytes)
+        if (!body.ok) {
+          return new Response(JSON.stringify({ ok: false, message: 'bad_request' }), {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const out = await runFleetSpawn(fleetLang(url.searchParams.get('lang')), body.value)
         return new Response(JSON.stringify(out), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1244,6 +1377,60 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           'Connection': 'keep-alive',
           'X-Accel-Buffering': 'no',
         },
+      })
+    }
+
+    // The live terminal WRITE channel (Phase 2b): a WebSocket that types key-by-key into one session
+    // — literal characters with NO implicit Enter, and named control keys (`C-c`). Ordering is
+    // guaranteed by ONE connection per session (TCP order) plus a per-connection serial queue on the
+    // server (sessions/input-channel.ts), and every message is confirmed by an ack. It already rides
+    // the SAME gates as `/api/fleet/act`: `localShell` (capability-guard, refused before this block)
+    // and the central-404 above — typing into a session is more power than its line prompt, not less.
+    // This handler adds the two checks a WS UPGRADE needs on top of those: SAME-ORIGIN (CSWSH —
+    // `localShell` being on does not stop a malicious page in the user's own browser from opening a
+    // socket to localhost) and SCOPE (the session must be one this machine manages), plus the ceiling.
+    if (url.pathname === '/api/fleet/input') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (!wsInputOriginOk({ origin: req.headers.get('origin'), host: url.host, allowlist: ALLOWED_ORIGINS, dev: !SERVE_STATIC })) {
+        void writeAudit({ action: 'fleet.input.denied', ip: clientIp, meta: { id, reason: 'origin' } })
+        return new Response(JSON.stringify({ error: 'forbidden_origin' }), {
+          status: 403,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (!(await inputSessionExists(id))) {
+        return new Response(JSON.stringify({ error: 'not_found' }), {
+          status: 404,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (inputAtCapacity()) {
+        return new Response(JSON.stringify({ error: 'too_many_streams' }), {
+          status: 503,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const upgraded = server.upgrade(req, {
+        // user/memberId are the agent-socket fields; a write socket carries none, and `fleetInput`
+        // is what the shared WS handlers dispatch on. The session id is fixed HERE — a message can
+        // never redirect a keystroke to another session.
+        data: { user: '', memberId: '', fleetInput: createInputState(id) },
+      })
+      if (upgraded) {
+        // ONE audit entry per channel opened — a keyboard was attached to a session — never one per
+        // keystroke, which would drown the log (the coalesced per-keystroke record is the web unit's).
+        void writeAudit({ action: 'fleet.input.open', ip: clientIp, meta: { id } })
+        return // handshake handed off to the shared websocket handlers
+      }
+      return new Response(JSON.stringify({ error: 'upgrade_failed' }), {
+        status: 500,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
     }
 

@@ -28,7 +28,16 @@ const RANK: Record<SessionState, number> = {
   closed: 6,
 }
 
-export function sessionRank(s: ControlSession): number {
+/**
+ * Takes the STATE and nothing else, and says so in its signature.
+ *
+ * Widened from `ControlSession` so the surfaces that hold a reduced row can rank it through this
+ * very function instead of restating the table: the VS Code extension is handed `FleetRow` over
+ * HTTP — a strict subset — and a ranking copied into an editor client would be a third answer to
+ * "what is most urgent", after the cockpit's and the browser's. Every existing caller passes a
+ * `ControlSession` and is unaffected.
+ */
+export function sessionRank(s: Pick<ControlSession, 'state'>): number {
   return RANK[s.state]
 }
 

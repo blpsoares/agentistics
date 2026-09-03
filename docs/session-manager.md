@@ -4,6 +4,13 @@
 sessions are hosted by tmux on its own socket (`-L agentop`), so they survive `agentop` exiting and
 never mix with your own tmux sessions.
 
+There are four front doors onto the same fleet and they hold ONE set of rules: this CLI, the
+control center's `sessions` tab, the web dashboard, and the
+[VS Code extension](vscode-extension.md). The last two reach it over `/api/fleet`, which resolves
+every verb, label and refusal through the same `sessionActions` the cockpit resolves each keypress
+against — a client that re-derived them would be another answer to "what may be done to this row",
+and the one that went wrong would offer a blind "approve" on a dialog with four different outcomes.
+
 ## Requirements
 
 tmux (Linux, macOS). **On Windows, run agentop inside WSL** — the CLI says so in those words rather

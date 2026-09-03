@@ -106,6 +106,7 @@ import { planTakeover } from './sessions/takeover'
 import { findProjects } from './sessions/project-source'
 import { candidatePath } from './sessions/project-search'
 import { recordedRepo, repoFacts } from './sessions/repo-facts'
+import { markFleetPhase, timeFleetPhase } from './sessions/fleet-profile'
 // The `SessionView` -> `ControlSession` mapping, extracted so `agentop session ls` draws the same
 // rows from the same decision rather than mapping the fleet a second time.
 import { toControlSession } from './sessions/control-session'
@@ -2534,21 +2535,31 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       // `S()` rather than `this.lang`: the language is a closure variable `setLang` reassigns, and
       // reading it through `this` would break the moment a caller detached the method.
       const s = S()
-      const poller = await ensureSessionsPoller()
-      const snap = await poller.poll()
+      // See `fleet-profile.ts`: this breakdown exists because the cold `/api/fleet` cost (~29s,
+      // measured after `chat-tail.ts`'s fix) has NOT been traced past `readRegistry`/`scanProcesses`/
+      // `loadConversations`/`loadHarnessSessions`/`backend.list` (individually measured and ruled
+      // out — they run inside `poller.poll()`'s own `Promise.all`). Every phase below is a candidate
+      // that has not yet been measured; run with `AGENTISTICS_PROFILE_FLEET=1` on the slow machine.
+      const poller = await timeFleetPhase('sessions: ensureSessionsPoller', ensureSessionsPoller)
+      const snap = await timeFleetPhase('sessions: poller.poll', () => poller.poll())
       // Carried on every snapshot so the cockpit can state it permanently: a user who cannot get
       // out of a session is stranded in a buffer that hides their shell, and a line printed once
       // before the handover scrolls away the moment anything else happens.
-      const detachHint = await (await resolveBackend()).detachHint().catch(() => '')
+      const detachHint = await timeFleetPhase(
+        'sessions: detachHint',
+        async () => (await resolveBackend()).detachHint().catch(() => ''),
+      )
       // Read on every snapshot rather than cached: the toggle and the verb both write it, and a
       // stale copy would leave a task the user just finished still heading a live section.
-      const finishedTasks = (await readPreferences()).finishedTasks ?? []
+      const finishedTasks = (await timeFleetPhase('sessions: readPreferences', readPreferences)).finishedTasks ?? []
       // Resolved per session and MEMOIZED by directory: a directory does not change repository, and
       // this poll runs every five seconds over the whole fleet — asking git three times per session
       // per tick would be a hundred processes a minute to learn the same thing. What the registry
       // recorded at spawn is handed over with it, so a worktree somebody has since removed keeps
       // the project it belongs to instead of becoming one.
+      const repoFactsStart = performance.now()
       const facts = await Promise.all(snap.sessions.map(v => repoFacts(v.cwd, v.recordedRepo)))
+      markFleetPhase(`sessions: repoFacts x${snap.sessions.length}`, repoFactsStart)
       // What the machine LOST and could start again — named row by row for the offer, from the
       // SAME selection the count below reports. Read off the snapshot the poll already produced
       // rather than recomputed, so the screen cannot be shown two answers to one question while a
@@ -2560,7 +2571,9 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       // the offer is a statement about the QUESTION, not about the event.
       const fellAt = snap.fell?.atMs
       const answered = fellAt !== undefined && dismissedFallMs !== null && fellAt <= dismissedFallMs
-      const restorable = answered ? [] : await restorableSessions(snap.fell?.entries ?? [])
+      const restorable = answered
+        ? []
+        : await timeFleetPhase('sessions: restorableSessions', () => restorableSessions(snap.fell?.entries ?? []))
       return {
         ...(restorable.length > 0 ? { restorable } : {}),
         sessions: snap.sessions.map((v, i) => toControlSession(v, s, facts[i])),

@@ -119,8 +119,14 @@ export function statusKey(state: SessionState): SessionState {
   return ACTIVE_STATES.includes(state) ? state : OFF_STATE
 }
 
-/** Is this session RUNNING right now — PURE. */
-export function sessionRunning(s: ControlSession): boolean {
+/**
+ * Is this session RUNNING right now — PURE.
+ *
+ * Takes the STATE and nothing else, for the reason `sessionRank` gives: a client holding a reduced
+ * row (the VS Code extension's `FleetRow`, read over HTTP) asks THIS function rather than restating
+ * which states count as active. Every existing caller passes a `ControlSession` and is unaffected.
+ */
+export function sessionRunning(s: Pick<ControlSession, 'state'>): boolean {
   return ACTIVE_STATES.includes(s.state)
 }
 

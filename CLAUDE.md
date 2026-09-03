@@ -21,6 +21,7 @@ packages/
   web/      (@agentistics/web)    — React + Vite frontend
   mcp/      (@agentistics/mcp)    — MCP server, publishable to npm standalone
   tui/      (@agentistics/tui)    — Ink (React) terminal dashboard + the `agentop` control center
+  vscode/   (agentistics-vscode)  — the VS Code extension: a CLIENT of the local server, no more
   desktop/                        — Tauri v2 Windows installer (spawns agentop as sidecar)
 ```
 
@@ -1620,6 +1621,116 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   toggle reassigns, so attaching to a session and detaching remounted the whole cockpit in the
   previous language, with nothing on screen to explain it and nothing to do but restart.
 
+## VS Code extension (`packages/vscode`)
+
+The fourth front door onto the fleet, after the CLI, the cockpit and the web dashboard. See
+`docs/vscode-extension.md`.
+
+```
+packages/vscode/src/
+  extension.ts   activation + wiring, nothing else
+  api.ts         the ONE process that talks HTTP; every method total
+  sessions.ts    SessionsHub: one poll, any number of surfaces, performs every action
+  streams.ts     one live screen per session (SSE), shared by every surface watching it
+  panels.ts      the editor tabs — one per session, keyed so asking twice REVEALS
+  ansi.ts        PURE: one terminal frame → HTML, in the dashboard's own palette
+  protocol.ts    the wire shapes (host <-> webview, and the server's answers)
+  view-model.ts  PURE: grouping, ordering, search, the three empty states
+  attention.ts   PURE: which sessions have just started needing a person
+  today.ts       PURE: today's totals + the day rule they use
+  config.ts      PURE: the two endpoints, the second derived from the first
+  i18n.ts        the extension's OWN chrome words, EN/PT — nothing about a session
+  terminal.ts    attach (a real integrated terminal) + starting the server
+  status-bar.ts  today, and the waiting count
+  webview/html.ts  PURE: the CSP'd documents and the escaping
+  webview/main.ts  the panel — DOM calls only
+```
+
+### Rules
+
+- **It is a CLIENT of `agentop server` and never anything more.** It must not read
+  `~/.agentistics`, talk to tmux, or import `server/sessions/*`. A second process
+  read-modify-writing `managed-sessions.json` beside the running server is the registry race
+  `registry.ts` documents — a record written by a short-lived process observed ERASED by a
+  longer-lived one, leaving a user in a session no verb could name.
+- **It holds no rule about what a session may take.** Every `enabled` flag, verb label and refusal
+  sentence arrives already decided from `/api/fleet`, which resolves them through the same
+  `sessionActions` the cockpit resolves every keypress against. The two exceptions are IMPORTED,
+  not restated: `sessionRank` (`@agentistics/tui/control/session-order`) and `sessionRunning`
+  (`.../session-dimensions`), both widened to `Pick<ControlSession, 'state'>` precisely so a client
+  holding the reduced `FleetRow` can call them.
+- **`approve` is an OPTION LIST, never a button.** The server reads the options off the live frame;
+  the panel lists them and sends the picked NUMBER. A single "approve" takes whichever row is
+  highlighted, which on "only my fix / promote everything / stop here" is choosing for someone.
+- **The webview never fetches, and never uses `innerHTML`.** Its `localhost` is the BROWSER's — in a
+  Remote-SSH window that is not the machine the sessions are on — so the extension host asks. And
+  every string on the panel is a session title, a note, a path or a line captured off a terminal: a
+  template literal is one unescaped `<` away from executing it. DOM calls only.
+- **The bell rings on the TRANSITION, never on the level**, and the FIRST poll announces nothing —
+  a machine with nine blocked sessions would greet the user with nine toasts. Only
+  `waiting-approval` raises a toast; plain `waiting` is where every turn ends, so a toast on it is a
+  toast per turn. It still counts toward the badge.
+- **An unreachable server prints a sentence, never a zero.** `down` (nothing answered), `refused`
+  (a central, or a profile with no host power) and a real empty fleet are three different facts and
+  keep three different sentences — the same N/A-versus-a-confident-0 rule the dashboard applies to
+  harness capabilities.
+- **The status bar's day is the UTC one** (`start_time.slice(0,10)`), matching the dashboard's own
+  date presets, and is summed PER SESSION — `stats-cache.json` is Claude-only and today's sessions
+  are all still on disk for every harness. Tokens is all four counters.
+- **`/api/data` gets its own slow timer** (default 300s). It is megabytes; the fleet poll is 5s and
+  a few kilobytes. Polling the large one at the small one's rate spends a megabyte a minute to move
+  a figure that changes once a turn.
+- **New server routes ride the `/api/fleet` PREFIX in `capability-guard.ts`.** It is a prefix and
+  not a list of names so the next fleet route is guarded by having been ADDED, never by having
+  remembered a second table; `capability-guard.test.ts` asserts a not-yet-written path resolves to
+  `localShell`. `POST /api/fleet/new` is the one fleet call that takes a DIRECTORY from the body
+  (`resume` refuses to, and says why) — `fleet-spawn.ts` is the pure reader, and it REFUSES rather
+  than repairs: a relative path resolves against the server's own cwd, an effort outside the CLI's
+  closed enum is a usage error nobody sees, and a model asked for on a harness with no model flag
+  would start a session that is not the one requested.
+- **`GET /api/fleet/attach` checks SCOPE before answering.** `attachSession` composes the command
+  from whatever id it is given, so an unknown id came back as a well-formed ticket for nothing and
+  the client opened a terminal that printed `no such session` and sat there.
+- **The cascade is deliberately absent.** It is measured against `ControlSession.projectRoot`, which
+  is not on the wire; a tree derived client-side by matching the project NAME against each `cwd`
+  goes wrong wherever a path segment repeats. A band per project plus the shortened directory is the
+  honest subset.
+- **TWO views, one document.** `list` is the fleet; `session` is one session's live screen, composer
+  and verbs. The sidebar walks between them (a 300px column cannot hold both); an editor TAB is
+  created PINNED to one session and never shows the list, which is what makes "several at once"
+  mean anything. Tabs are keyed by session id — asking twice REVEALS the one that exists — and are
+  titled with what the session is CALLED, because a tab strip of `3f5f21a8b0c1` is unusable.
+- **The HOST opens the terminal stream, never the webview** — a webview's `localhost` is the editor
+  client's, which under Remote-SSH/WSL is not the machine the sessions run on. One connection per
+  session shared by every watching surface (the server's own model), and **watching is tied to the
+  route**: capture is viewer-gated, so a surface that forgets to unwatch leaves a `capture-pane`
+  loop running for a screen nobody can see.
+- **The terminal's phase machine, its honesty line and the composer are IMPORTED from the dashboard**
+  (`packages/web/src/lib/terminalStream.ts` / `terminalInput.ts`, both dependency-free). A second
+  copy would be a second set of honesty rules, and "this screen is live" is the one thing this
+  feature may never be wrong about. Rendering is the pure `ansi.ts`, not xterm — `capture-pane` has
+  already resolved the redraws, so what is left is colour — but the PALETTE is the dashboard's own
+  `xtermTheme`, so one session reads the same in both places.
+- **The panel wears the DASHBOARD's palette**, not VS Code chrome, and follows
+  `activeColorTheme` for dark/light (the ANSI palette with it). A panel that looks like a different
+  product from the dashboard beside it is a different product as far as the eye is concerned.
+- **You type into the SCREEN, not into a text field**, over the WS write channel at
+  `/api/fleet/input` (`input-protocol.ts` / `input-channel.ts` / `input-web.ts`, Phase 2b). One
+  socket per session, FIFO by construction, one ack per keystroke. The extension briefly shipped an
+  HTTP `POST` of the same name and it is GONE — two write channels for one act is the duplication
+  this repo is built against, and the socket wins on both counts (ordering is the transport's, and a
+  keystroke that did not land is a fact rather than a silence). `input.ts` keeps a copy of the key
+  allowlist so the client does not ASK for what will be refused — a modifier press or a media key
+  would otherwise cost the user an ack failure for a key nobody meant to send — and the server
+  validates membership regardless. FOCUS is the consent gate (every terminal works that way) and the
+  strip under the screen says which state you are in; `ctrl+shift+*` and Cmd/Win are never swallowed,
+  or the editor stops working inside the panel. A delivered keystroke NUDGES the read channel, or the
+  character waits out a capture interval tuned for watching rather than typing.
+- **The status bar can price in BRL** (`agentistics.currency`), through `@agentistics/core`'s own
+  `fmtCost` and the rate `/api/rates` already caches — the same rate and formatter the dashboard
+  uses, so the two can never disagree about one day. No rate means DOLLARS, never a converted figure
+  invented from a guess.
+
 ## Important rules
 
 - **Anything agentop writes OUTSIDE its own directories is an explicit act of the user, and is
@@ -1830,3 +1941,24 @@ Do not mock the filesystem — the tested functions are pure and have no side ef
 
 - **pre-commit**: `bun tsc --noEmit` + `bun test`
 - **commit-msg**: commitlint enforces Conventional Commits (`feat:`, `fix:`, `chore:`, etc.)
+
+## The release's version bump — `versionBump.ts`, and the read that feeds it
+
+**The published version is decided by `bumpFromCommits` / `nextVersion` in `@agentistics/core`, and
+`.github/workflows/release.yml` only READS the commits and delegates.** The calculation was inline
+bash and nothing exercised it, so a defect was observable only in production, one release at a time
+— v1.23.1 shipped a `feat` as a patch. Two rules, both enforced by
+`packages/core/src/releaseWorkflow.lint.test.ts` (a grep over the workflows, the shape
+`tokens.lint.test.ts` uses over the product source):
+
+- **`git log --pretty=tformat:`, never `format:`.** `format:` omits the terminal newline on the LAST
+  record and `while IFS= read -r` silently drops a line without one, so the OLDEST commit of every
+  range went unclassified — and when that was the only `feat`, zero subjects were read. It is
+  harmless inside `$(…)`, which strips trailing newlines, and that is precisely why the wrong form
+  survives long enough to be copied into a loop. The lint bans the form outright in every workflow
+  and root shell script; `@git-format-intentional` plus a reason is the escape hatch.
+- **No bash bump default.** `bumpFromCommits` THROWS on an empty commit list, because a range that
+  has commits (`COMMIT_COUNT > 0`) yet yields none to classify is a reading defect, not a patch. A
+  `BUMP="patch"` floor in the shell converts that loud failure back into a quietly wrong release,
+  so the lint refuses one. A NON-empty list of only non-conventional subjects is a different thing
+  — the read worked, there is nothing to bump — and is a legitimate patch.

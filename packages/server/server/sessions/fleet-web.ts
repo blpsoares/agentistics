@@ -20,11 +20,19 @@ import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import { controlStrings } from '@agentistics/tui/control/i18n'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
+import { sessionRunning } from '@agentistics/tui/control/session-dimensions' 
 import { fleetRow, type FleetActionRequest, type FleetRow } from './fleet-row'
+import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
+import { arrangeFleet, type FleetArrangement, type FleetViewRequest } from './fleet-arrange'
+import { markFleetPhase, timeFleetPhase } from './fleet-profile'
 
 // The REQUEST shape lives in the leaf `fleet-row.ts` so `index.ts` can name it without naming
 // this module — see the note there.
 export type { FleetRow, FleetVerb, FleetActionId, FleetActionRequest } from './fleet-row'
+export type { FleetSpawnBody } from './fleet-spawn'
+export type {
+  FleetArrangement, FleetGroup, FleetViewRequest, Facet, FacetValue,
+} from './fleet-arrange'
 
 export interface FleetPayload {
   sessions: FleetRow[]
@@ -42,14 +50,24 @@ export interface FleetPayload {
    * it is not a new class of exposure. It is the same machine reading its own terminals.
    */
   rows: ControlSession[]
-  /** Tasks the user marked finished — a statement about the WORK, not about any session's state. */
-  finishedTasks: string[]
   /** How many are waiting on a person — the same count the cockpit's header carries. */
   attention: number
   /** Already-localized reason this list may not be the whole truth. Never an empty list alone. */
   unavailable?: string
   /** The tasks that already exist here, so filing a session is a pick rather than a spelling test. */
   tasks: string[]
+  /** The tasks the user marked FINISHED — a statement about the work, not about any session. */
+  finishedTasks?: string[]
+  /** How many sessions FELL together, when some did — the "reopen what fell" offer. */
+  fell?: { count: number; atMs: number }
+  /**
+   * The same fleet, ARRANGED as the caller asked (`fleet-arrange.ts`).
+   *
+   * Beside `sessions` rather than instead of it: a client that wants the flat list — the dashboard's
+   * session drawer, anything matching a stored row to a live one — should not have to walk bands to
+   * find one id.
+   */
+  view?: FleetArrangement
 }
 
 
@@ -82,8 +100,14 @@ async function hostFor(lang: CliLang): Promise<StartHost> {
   if (cached) return cached
   // Dynamic: `cli-start` reaches `@agentistics/tui/control`, which pulls in Ink and React. The HTTP
   // server must not carry that in its own import graph for the machines that never open this page.
+  // See `fleet-profile.ts`: this import is one of the untested candidates for the cold `/api/fleet`
+  // cost, split out from `createControlHost` so a profile run says which of the two it actually is.
+  const importStart = performance.now()
   const { createControlHost } = await import('../cli-start')
+  markFleetPhase('hostFor: import(cli-start)', importStart)
+  const constructStart = performance.now()
   const host = createControlHost(lang, NO_TERMINAL)
+  markFleetPhase('hostFor: createControlHost', constructStart)
   HOSTS.set(lang, host)
   return host
 }
@@ -101,20 +125,29 @@ export function fleetLang(raw: string | null): CliLang {
  * reason would be a confident "nothing is running" from a machine that cannot tell — the same
  * defect `liveEmptyNotice` exists to prevent on the dashboard.
  */
-export async function readFleet(lang: CliLang): Promise<FleetPayload> {
+export async function readFleet(lang: CliLang, view?: FleetViewRequest): Promise<FleetPayload> {
   const s = controlStrings(lang)
+  const totalStart = performance.now()
   try {
     const host = await hostFor(lang)
-    if (!host.sessions) return { sessions: [], rows: [], attention: 0, tasks: [], finishedTasks: [] }
-    const fleet = await host.sessions()
+    if (!host.sessions) return { sessions: [], rows: [], attention: 0, tasks: [] }
+    const fleet = await timeFleetPhase('readFleet: host.sessions()', () => host.sessions!())
     const tasks = host.sessionTasks ? await host.sessionTasks().catch(() => []) : []
+    const finishedTasks = fleet.finishedTasks ?? []
     return {
       sessions: fleet.sessions.map(row => fleetRow(row, s)),
       rows: fleet.sessions,
       attention: fleet.attention,
       ...(fleet.unavailable ? { unavailable: fleet.unavailable } : {}),
       tasks,
-      finishedTasks: fleet.finishedTasks ?? [],
+      ...(finishedTasks.length > 0 ? { finishedTasks: [...finishedTasks] } : {}),
+      // What FELL together, so a client can offer to reopen the lot — the cockpit's own grouping,
+      // which errs toward excluding: a session with no evidence it was ever alive is never in it.
+      ...(fleet.fell ? { fell: fleet.fell } : {}),
+      // The arrangement is computed only when a caller asks for one. The dashboard does not, and
+      // paying for a grouping nobody reads on every five-second poll is the kind of cost that never
+      // shows up in one profile and always shows up in a battery.
+      ...(view ? { view: arrangeFleet(fleet.sessions, view, s, finishedTasks) } : {}),
     }
   } catch (e) {
     return {
@@ -125,6 +158,8 @@ export async function readFleet(lang: CliLang): Promise<FleetPayload> {
       tasks: [],
       finishedTasks: [],
     }
+  } finally {
+    markFleetPhase('readFleet: total', totalStart)
   }
 }
 
@@ -169,6 +204,17 @@ export async function runFleetAction(
       if (!host.interruptSession) return { ok: false, message: s.sessionsNoHost }
       return await host.interruptSession(req.id)
     }
+    // Acts on the GROUP that fell together, not on a row — the caller names nothing, and the
+    // cockpit's own `task-reopen` arithmetic decides which sessions were in it. A caller that could
+    // pass a list could resurrect anything on this machine.
+    case 'reopenFell':
+      if (!host.reopenFell) return { ok: false, message: s.sessionsNoHost }
+      return await host.reopenFell()
+    // The one action whose subject is a NAME rather than a row: a task is not a session.
+    case 'deleteTask':
+      if (!host.deleteTask) return { ok: false, message: s.sessionsNoHost }
+      if (!text) return { ok: false, message: s.taskNone }
+      return await host.deleteTask(text)
     // The two TASK verbs act on the piece of WORK the row is filed under, never on a task named in
     // the request: a caller that could pass its own string could reopen every session of any task
     // on this machine. The row is looked up in the fleet and its own `task` is what is used.
@@ -211,4 +257,177 @@ export async function runFleetAction(
       return { ok: out.ok, message: out.message }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Attaching, and starting something new.
+//
+// Both are the SAME indirection as the two above: the host answers, and this module carries the
+// answer over the wire. Neither adds a rule.
+
+/** Everything a client needs to enter a session in a terminal IT owns. */
+export interface FleetAttachTicket {
+  /** The command, already split. Run it with the caller's own stdio — nothing here spawns it. */
+  argv: string[]
+  /** The REAL detach keystroke, read from the backend, never assumed to be `Ctrl-b`. */
+  detachHint: string
+  /** What is being attached to, for the sentence printed on the way in. */
+  label: string
+}
+
+/**
+ * What it takes to attach to one session, or `null` when this machine cannot attach to it.
+ *
+ * Returned rather than PERFORMED, exactly as it is for the cockpit — and for the same reason, one
+ * step further out: attaching needs a real tty, and an HTTP server has none to give. A client with
+ * a terminal of its own (the VS Code extension's integrated terminal, a shell) runs the argv; a
+ * client without one (a browser tab) has the row's `attachCommand` to copy instead.
+ *
+ * The DETACH KEY travels with it because it is the one fact the user cannot recover alone: a tmux
+ * prefix they rebound makes a guessed hint actively wrong, and someone who cannot get out is
+ * stranded in a buffer that hides their shell.
+ */
+export async function readAttachTicket(
+  lang: CliLang,
+  id: string,
+): Promise<FleetAttachTicket | null> {
+  const host = await hostFor(lang)
+  if (!host.attachSession || !host.sessions) return null
+
+  // SCOPE, checked here and not left to the backend. `attachSession` composes the command from the
+  // id it is given — it does not ask whether that session exists — so an id off the wire came back
+  // as a perfectly well-formed ticket for nothing, and the client opened a terminal that printed
+  // `no such session` and sat there. The same check `/api/fleet/stream` makes for the same reason:
+  // the row must be one this machine manages AND be running, or there is nothing to attach TO. An
+  // external row is refused on `actionable`: agentop did not start it, so it owns no pane to enter.
+  const fleet = await host.sessions()
+  const row = fleet.sessions.find(r => r.id === id)
+  if (!row || !row.actionable || !sessionRunning(row)) return null
+
+  const ticket = await host.attachSession(id)
+  if (!ticket) return null
+  return { argv: [...ticket.argv], detachHint: ticket.detachHint, label: ticket.label }
+}
+
+/** The questions a start EARNS, and the places it could happen — the wizard, as data. */
+export interface FleetNewOptions {
+  /**
+   * Derived by the host from the spawn specs, so a harness with no spec is ABSENT rather than
+   * offered and failing — the same rule the cockpit's wizard and the CLI already follow.
+   */
+  harnesses: {
+    id: string
+    label: string
+    /** Suggestions to OFFER, never a validation list — see `planFleetSpawn`. */
+    modelSuggestions: string[]
+    supportsModel: boolean
+    /** A genuine closed enum, printed by the CLI itself. Empty means it has no effort flag. */
+    efforts: string[]
+  }[]
+  /** Ranked places, from the LOCAL store — so the picker answers with no network and a cold cache. */
+  projects: { path: string; label: string; repo?: string; detail: string; source: string }[]
+  /** The tasks that already exist here, so filing the new session is a pick, not a spelling test. */
+  tasks: string[]
+  /**
+   * This machine cannot start sessions at all (no backend on this platform, or a host that does not
+   * implement it). Said in words: an empty harness list on its own reads as a broken wizard.
+   */
+  unavailable?: string
+}
+
+/**
+ * The wizard's own data. Never throws — a machine that cannot answer says so in a sentence, and an
+ * empty list is only ever a real "there is nothing here".
+ */
+export async function readNewOptions(lang: CliLang, query: string): Promise<FleetNewOptions> {
+  const s = controlStrings(lang)
+  try {
+    const host = await hostFor(lang)
+    if (!host.startableHarnesses || !host.spawnSession) {
+      return { harnesses: [], projects: [], tasks: [], unavailable: s.sessionsNoHost }
+    }
+    const [harnesses, projects, tasks] = await Promise.all([
+      host.startableHarnesses(),
+      host.searchProjects ? host.searchProjects(query).catch(() => []) : Promise.resolve([]),
+      host.sessionTasks ? host.sessionTasks().catch(() => []) : Promise.resolve([]),
+    ])
+    return {
+      harnesses: harnesses.map(h => ({
+        id: h.id,
+        label: h.label,
+        modelSuggestions: [...h.modelSuggestions],
+        supportsModel: h.supportsModel,
+        efforts: [...h.efforts],
+      })),
+      projects: projects.map(p => ({
+        path: p.path,
+        label: p.label,
+        ...(p.repo ? { repo: p.repo } : {}),
+        detail: p.detail,
+        source: p.source,
+      })),
+      tasks,
+    }
+  } catch (e) {
+    return {
+      harnesses: [],
+      projects: [],
+      tasks: [],
+      unavailable: e instanceof Error ? e.message : String(e),
+    }
+  }
+}
+
+export interface FleetSpawnResponse {
+  ok: boolean
+  /** Already localized, and always present. */
+  message: string
+  /** The id of the session that was started, so the caller can attach to the very one it created. */
+  id?: string
+}
+
+/**
+ * Start one session on this machine.
+ *
+ * This is the one fleet call that takes a DIRECTORY from the request rather than reading it off a
+ * row — `resume` above refuses to, and says why. The difference is the question being asked:
+ * reopening names an existing conversation, so a directory in the body could only ever contradict
+ * it, while STARTING is the act of choosing where work happens and has nothing else to read it
+ * from. The power that comes with it is real and is bounded by exposure rather than by wording:
+ * `capability-guard.ts` maps this route to `localShell`, so it is unreachable on a `lan` or
+ * `public` profile whoever is authenticated — the same gate the rest of the fleet already sits
+ * behind, for the same reason.
+ *
+ * The request is read by the pure `planFleetSpawn` against the harnesses THIS host says it can
+ * start, so the checks the wizard makes by construction are made here explicitly, and the refusal
+ * is a sentence naming the offending value. Nothing is repaired: a request asking for a model on a
+ * harness with no model flag is refused rather than started without it, because a session that is
+ * not the one asked for is worse than no session.
+ *
+ * `attach` is forced false by the plan and cannot be requested: this process has no tty to hand
+ * over. A caller that wants to enter what it started asks `readAttachTicket` for the id that comes
+ * back here.
+ */
+export async function runFleetSpawn(
+  lang: CliLang,
+  body: FleetSpawnBody,
+): Promise<FleetSpawnResponse> {
+  const s = controlStrings(lang)
+  const host = await hostFor(lang)
+  if (!host.spawnSession || !host.startableHarnesses) return { ok: false, message: s.sessionsNoHost }
+
+  const decision = planFleetSpawn(body, await host.startableHarnesses())
+  if (!decision.ok) {
+    const detail = decision.detail ?? ''
+    const message =
+      decision.reason === 'unknown_harness' ? s.spawnUnknownHarness(detail)
+      : decision.reason === 'cwd_missing' ? s.spawnCwdMissing
+      : decision.reason === 'cwd_relative' ? s.spawnCwdRelative(detail)
+      : decision.reason === 'unknown_effort' ? s.spawnUnknownEffort(detail)
+      : s.spawnModelUnsupported(detail)
+    return { ok: false, message }
+  }
+
+  const out = await host.spawnSession(decision.plan)
+  return { ok: out.ok, message: out.message, ...(out.id ? { id: out.id } : {}) }
 }

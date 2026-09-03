@@ -34,6 +34,10 @@ export type AuditAction =
   | 'config.update' | 'bootstrap.consume'
   | 'capability.denied' | 'authz.denied' | 'rate.blocked'
   | 'stepup.granted' | 'stepup.failure' | 'stepup.missing'
+  // A live-terminal WRITE channel was opened (a keyboard attached to a session) or refused — ONE
+  // entry per channel, never per keystroke. `fleet.input.denied` records a rejected WS upgrade
+  // (e.g. a cross-origin attempt); the capability refusal is already `capability.denied`.
+  | 'fleet.input.open' | 'fleet.input.denied'
 
 export interface AuditEvent {
   action: AuditAction

@@ -17,7 +17,10 @@
  * is never re-scanned on a later poll.
  */
 
-import { readFile, readdir, stat } from 'node:fs/promises'
+// `open` is the TAIL reader's (readRecentChatTurns, the 5s poll); `readFile` is the CHAT view's,
+// which deliberately reads the whole transcript — see readChatTurns' own note on why a cache there
+// would miss by construction. Two readers, two budgets, one import line.
+import { open, readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { PROJECTS_DIR } from '../config'
 import { UUID_RE } from '../git'
@@ -200,12 +203,58 @@ function toolActivityLabel(tools: string[]): string {
 }
 
 /**
+ * How much of the END of a transcript is read to find the last few turns, and how far that window
+ * is allowed to grow before the whole file is being read anyway.
+ *
+ * This used to read the WHOLE file. Parsing was already careful — from the end, stopping at `max` —
+ * but the read and the `split('\n')` were not, and they ran on every poll of every live session:
+ * the cache is keyed on mtime, and a session that is working changes its mtime every few seconds.
+ * Measured on one machine: nine active transcripts totalling 31 MB, re-read and re-split every five
+ * seconds, which is what made `/api/fleet` answer in 5-8 s warm and 36 s cold — long enough that the
+ * VS Code extension's fetch gave up and reported the server as unreachable while it was answering
+ * everything else instantly. It is the same disk-burner `searchTranscripts` is documented as
+ * avoiding, in the one place that runs on a timer.
+ *
+ * The window GROWS rather than truncating the answer: a window that happened to cut through the
+ * middle of the last six turns would silently show fewer of them, and a detail pane quietly missing
+ * the newest message is worse than a slow one. Growth is bounded, and a file smaller than the window
+ * is simply read whole — this is the same result as before, reached by reading far less.
+ */
+const TAIL_BYTES = 256 * 1024
+const MAX_TAIL_BYTES = 16 * 1024 * 1024
+
+/**
+ * The last `bytes` of a file, as text, plus whether that reached the file's start.
+ *
+ * A window that starts mid-file almost always starts mid-LINE, and can also start mid-CHARACTER for
+ * any multi-byte codepoint. Both are handled by the same rule: the caller drops everything before
+ * the first newline, so the partial line — and any broken byte sequence inside it — never reaches
+ * `JSON.parse`.
+ */
+async function readTailBytes(path: string, bytes: number): Promise<{ text: string; atStart: boolean } | null> {
+  let fh
+  try { fh = await open(path, 'r') } catch { return null }
+  try {
+    const size = (await fh.stat()).size
+    const start = Math.max(0, size - bytes)
+    const length = size - start
+    if (length === 0) return { text: '', atStart: true }
+    const buf = Buffer.alloc(length)
+    await fh.read(buf, 0, length, start)
+    return { text: buf.toString('utf-8'), atStart: start === 0 }
+  } catch {
+    return null
+  } finally {
+    await fh.close().catch(() => {})
+  }
+}
+
+/**
  * The most recent chat turns in a Claude transcript, oldest first.
  *
- * Reads the whole file (the same "tail -n" shape `cli-start.ts`'s `tailFile` already uses in this
- * codebase — there is no incremental byte-offset reader here) but parses from the END and stops as
- * soon as `max` turns are collected, so a long-running session's transcript is not fully
- * `JSON.parse`d every poll just to show the last few lines.
+ * Reads the END of the file and parses backwards from it, stopping as soon as `max` turns are
+ * collected — so a long-running session's transcript is neither fully read nor fully `JSON.parse`d
+ * to show the last few lines. See `TAIL_BYTES` for why the window grows instead of truncating.
  */
 export async function readRecentChatTurns(path: string, max = 6): Promise<ChatTurn[]> {
   let mtimeMs: number
@@ -214,8 +263,33 @@ export async function readRecentChatTurns(path: string, max = 6): Promise<ChatTu
   const hit = contentCache.get(path)
   if (hit && hit.mtimeMs === mtimeMs) return hit.turns
 
-  let content: string
-  try { content = await readFile(path, 'utf-8') } catch { return [] }
+  let turns = await readTurnsFromTail(path, max, TAIL_BYTES)
+  // Fewer turns than asked for, and the window did not reach the start of the file: the answer is
+  // incomplete because of the WINDOW, not because the transcript is short. Widen and read again.
+  let window = TAIL_BYTES
+  while (turns !== null && turns.turns.length < max && !turns.atStart && window < MAX_TAIL_BYTES) {
+    window = Math.min(window * 4, MAX_TAIL_BYTES)
+    turns = await readTurnsFromTail(path, max, window)
+  }
+  const found = turns?.turns ?? []
+
+  contentCache.set(path, { mtimeMs, turns: found })
+  return found
+}
+
+/** One pass over the last `windowBytes` of the transcript. `null` when the file could not be read. */
+async function readTurnsFromTail(
+  path: string,
+  max: number,
+  windowBytes: number,
+): Promise<{ turns: ChatTurn[]; atStart: boolean } | null> {
+  const tail = await readTailBytes(path, windowBytes)
+  if (!tail) return null
+
+  // Everything before the first newline belongs to a line this window cut in half — it is already
+  // present, whole, further up the file, and parsing the fragment would at best fail and at worst
+  // succeed on a truncated object.
+  const content = tail.atStart ? tail.text : tail.text.slice(tail.text.indexOf('\n') + 1)
 
   const lines = content.split('\n')
   const turns: ChatTurn[] = []
@@ -243,8 +317,7 @@ export async function readRecentChatTurns(path: string, max = 6): Promise<ChatTu
   }
   turns.reverse()
 
-  contentCache.set(path, { mtimeMs, turns })
-  return turns
+  return { turns, atStart: tail.atStart }
 }
 
 /**

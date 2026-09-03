@@ -32,32 +32,7 @@ const EXACT: ReadonlyMap<string, keyof Capabilities> = new Map<string, keyof Cap
   // deployment that should read a transcript but not this.
   ['/api/billing/detect', 'localTranscripts'],
   ['/api/hardware-resources', 'localProcesses'],
-  // The session fleet, and acting on it. `/api/fleet` alone captures each live session's SCREEN —
-  // a coding assistant's terminal, transcript and all — and `/api/fleet/act` types into it, sends
-  // it a keystroke that answers a permission prompt, or kills it. That is shell access with extra
-  // steps, so it rides `localShell` rather than the softer `localChat`: there is no deployment
-  // that should expose someone's keyboard to the internet and a shell is the honest name for it.
-  ['/api/fleet', 'localShell'],
-  // The CONVERSATION of one hosted session, read from its own transcript. Same capability as the
-  // fleet it belongs to and for a stronger reason: this is the assistant's and the user's actual
-  // words, not a list of rows.
-  ['/api/fleet/chat', 'localShell'],
-  // Starting a session SPAWNS AN ASSISTANT on this host and bills somebody for it. `/api/fleet/new`
-  // reads what may be started and from where; `/api/fleet/spawn` does it.
-  ['/api/fleet/new', 'localShell'],
-  ['/api/fleet/spawn', 'localShell'],
-  // An attachment WRITES A FILE to this machine's disk and hands the session its path. It touches
-  // the host as directly as anything on this list.
-  ['/api/fleet/attach', 'localShell'],
-  // Reading one back — the chat's inline image preview. Same capability as writing it: both sides
-  // of one file on this host's disk, and `resolveAttachmentRead` is what stops the read from
-  // becoming an arbitrary local file disclosure once it is behind this gate.
-  ['/api/fleet/attachment', 'localShell'],
-  ['/api/fleet/act', 'localShell'],
-  // The live terminal channel — an SSE stream of a session's SCREEN, colours and all. It is a read,
-  // but it is a read of a coding assistant's terminal, so it rides the same `localShell` as
-  // `/api/fleet`: there is no deployment that should stream someone's terminal to the internet.
-  ['/api/fleet/stream', 'localShell'],
+  // The session fleet is registered as a PREFIX below, not name by name — see the note there.
 ])
 
 /** Prefix (no trailing slash) → capability. Matches `<prefix>` and `<prefix>/…` only. */
@@ -67,6 +42,18 @@ const PREFIXES: ReadonlyArray<readonly [string, keyof Capabilities]> = [
   ['/api/gemini-sessions', 'localTranscripts'],
   ['/api/copilot-sessions', 'localTranscripts'],
   ['/api/nay-sessions', 'localTranscripts'],
+  // The session fleet, and everything under it. `/api/fleet` alone captures each live session's
+  // SCREEN — a coding assistant's terminal, transcript and all — `/api/fleet/act` types into it,
+  // answers a permission prompt for it or kills it, `/api/fleet/stream` streams that screen
+  // continuously, `/api/fleet/attach` hands out the command that enters it, and `/api/fleet/new`
+  // starts a fresh assistant in a directory the caller names. That is shell access with extra
+  // steps, so it rides `localShell` rather than the softer `localChat`: there is no deployment that
+  // should expose someone's keyboard to the internet and a shell is the honest name for it.
+  //
+  // A PREFIX and not five names: a route that is not registered here is assumed harmless, so the
+  // next fleet route someone adds must be guarded by having been added AT ALL, never by having
+  // remembered a second table.
+  ['/api/fleet', 'localShell'],
 ]
 
 export function routeCapability(pathname: string): keyof Capabilities | null {
