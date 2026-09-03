@@ -25,7 +25,7 @@ import remarkGfm from 'remark-gfm'
 // message written across several lines renders as one run-on paragraph — which is what "the
 // messages are not formatted" turned out to mean. `HarnessChat` has always used it.
 import remarkBreaks from 'remark-breaks'
-import { CornerUpLeft, User } from 'lucide-react'
+import { Clock, CornerUpLeft, User } from 'lucide-react'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { splitImageAttachments } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
@@ -36,6 +36,14 @@ export interface ChatTurn {
   role: 'user' | 'assistant'
   text: string
   pending?: boolean
+  /**
+   * This sat under the `user` role and no person wrote it — a background task reporting back, an
+   * injected reminder, a `!` command's stdout. The value NAMES the kind; it is never the body.
+   *
+   * It may not render as a message: it went out over the user's own avatar, and one of them was
+   * circled in a screenshot with "I didn't send that". See `chat-envelope.ts`.
+   */
+  system?: string
   /** Carried by the transcript; deliberately not rendered here. See the header. */
   tools?: Array<{ name: string; detail?: string }>
   /** Carried by the transcript; deliberately not rendered here. See the header. */
@@ -49,6 +57,16 @@ export interface ChatBubbleProps {
   harness: string
   /** Read off the terminal screen and not yet committed to the transcript. Labelled as such. */
   provisional?: boolean
+  /**
+   * SENT, and the session has not taken it yet.
+   *
+   * The echo already knew this — it is retired the moment the transcript carries the same text —
+   * and drew a bubble identical to a delivered one, so a message queued behind a working turn was
+   * indistinguishable from one already read. On a session mid-turn that wait is minutes, and the
+   * reader's only options were to assume or to send it again. Dim plus a word, never a spinner:
+   * the message IS there, it is the reading that has not happened.
+   */
+  awaiting?: boolean
   /**
    * Quote THIS turn in the composer. Absent where the session cannot be written to — a reply
    * control on a row that will refuse the message is a control that teaches the wrong thing.
@@ -68,7 +86,24 @@ export interface ChatBubbleProps {
  * `onReply` is a fresh closure per render in the parent, so this alone would not have been enough —
  * see `SessionChat.tsx`'s `useCallback` on it.
  */
-export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, onReply }: ChatBubbleProps) {
+/**
+ * The Portuguese for each note `chat-envelope.ts` produces.
+ *
+ * The server composes these in English because it has no language — every other already-localized
+ * refusal in this product is worded by the machine, but a note like this is chrome, not a machine's
+ * answer. An unmapped note falls through untranslated rather than being dropped: a missing
+ * translation is a small thing, a missing line is the defect this exists to fix.
+ */
+const SYSTEM_NOTE_PT: Record<string, string> = {
+  'background task reported back': 'tarefa em segundo plano respondeu',
+  'system reminder': 'lembrete do sistema',
+  'local-command caveat': 'aviso de comando local',
+  'command output': 'saída de comando',
+  'slash command': 'comando de barra',
+  'shell command': 'comando de shell',
+}
+
+export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, onReply }: ChatBubbleProps) {
   const pt = lang === 'pt'
   const mine = turn.role === 'user'
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
@@ -81,6 +116,26 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
   // A turn that said nothing AND attached nothing is not a message. Tool calls and reasoning are
   // the work between messages, and the row's state already reports that the session is working.
   if (text.trim() === '' && images.length === 0) return null
+
+  // NOT a message, and not drawn as one: no avatar, no bubble, no side. A dim centred note naming
+  // what the harness put in the transcript, so the reply below it still has something above it
+  // while nobody is credited with having typed it.
+  if (turn.system) {
+    return (
+      <div style={{
+        display: 'flex', justifyContent: 'center', padding: '2px 0',
+      }}>
+        <span style={{
+          fontSize: 10.5, lineHeight: 1.4, color: 'var(--text-tertiary)',
+          padding: '3px 10px', borderRadius: 999,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+          maxWidth: '90%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {pt ? SYSTEM_NOTE_PT[turn.system] ?? turn.system : turn.system}
+        </span>
+      </div>
+    )
+  }
 
   const color = (HARNESS_COLORS as Record<string, string>)[harness] ?? 'var(--text-secondary)'
   const name = (HARNESS_LABELS as Record<string, string>)[harness] ?? harness
@@ -117,6 +172,10 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
         background: mine ? 'var(--bg-elevated)' : 'var(--bg-card)',
         border: '1px solid var(--border-subtle)',
         borderRadius: 14, padding: '11px 14px', position: 'relative',
+        // Faded while the session has not read it. The TEXT stays fully legible — this is a
+        // statement about delivery, not about the message being less important to read back.
+        opacity: awaiting ? 0.62 : 1,
+        transition: 'opacity 0.2s',
       }}>
         {!mine && (
           <div style={{
@@ -179,6 +238,20 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
             }}
           >
             <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{text}</ReactMarkdown>
+          </div>
+        )}
+
+        {/* The label sits INSIDE the bubble, under the text: it is a fact about this message, and
+            a line floating beside the bubble would read as another message. `role="status"` so a
+            screen reader is told, since the fading alone says nothing to one. */}
+        {awaiting && (
+          <div role="status" style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            fontSize: 10, color: 'var(--text-tertiary)',
+            alignSelf: mine ? 'flex-end' : 'flex-start',
+          }}>
+            <Clock size={10} style={{ flexShrink: 0 }} />
+            <span>{pt ? 'aguardando a sessão ler' : 'waiting for the session to read it'}</span>
           </div>
         )}
       </div>
