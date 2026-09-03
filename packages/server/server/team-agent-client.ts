@@ -241,11 +241,14 @@ function startLiveReporting(connId: string, socket: WebSocket): void {
       const shared = shareRules.filterLiveShared(snap, data.sessions, rules, index)
 
       if (socket.readyState !== WebSocket.OPEN) return
+      // Every field comes off `shared` — nothing on this message is read from `snap` directly.
+      // The activities used to be, and a withheld repo's session announced its id and its state
+      // beside the two fields that were filtered.
       socket.send(JSON.stringify({
         type: 'live-sessions',
         sessionIds: shared.liveSessionIds,
         processes: shared.liveProcesses,
-        sessionActivities: snap.liveSessionActivities ?? {},
+        sessionActivities: shared.liveSessionActivities,
       }))
     } catch { /* transient — the next tick retries */ }
   }
