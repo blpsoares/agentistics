@@ -20,6 +20,9 @@ export interface ConnectionStatusEntry {
   org: string
   user: string
   label?: string
+  /** What the CENTRAL calls this machine, resolved from `whoami`. Absent on an older server, or on
+   *  a connection that has never completed a handshake — never a hostname substituted for it. */
+  machineName?: string
   lastSuccessAt: number | null
   errKind: 'auth' | 'net' | null
   latencyMs: number | null

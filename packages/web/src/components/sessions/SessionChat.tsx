@@ -28,7 +28,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, Loader, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
+import { ArrowDown, Cpu, Loader, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { ApprovalCard } from './ApprovalCard'
@@ -39,6 +39,8 @@ import { isImagePath } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
 import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
+import { dictationLocale, dictationSupport } from '../../lib/dictation'
+import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
 
 interface ChatPayload {
   turns: ChatTurn[]
@@ -79,6 +81,117 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const [payload, setPayload] = useState<ChatPayload | null>(null)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  /** Dictation. `recognitionRef` holds the live recogniser so a second click stops it. */
+  const [listening, setListening] = useState(false)
+  const recognitionRef = useRef<{ stop: () => void } | null>(null)
+  const dictation = useMemo(
+    () => dictationSupport(typeof window === 'undefined' ? undefined : (window as never), pt ? 'pt' : 'en'),
+    [pt],
+  )
+  /** The mid-conversation model picker, open or not. */
+  const [modelOpen, setModelOpen] = useState(false)
+  /** The menu AND its button, so an outside-click handler can tell "inside" from "outside". */
+  const modelMenuRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * Start or stop dictation.
+   *
+   * The recognised text is APPENDED to the draft and nothing is sent: what reaches the session is
+   * still what the user chose to send, exactly as if they had typed it. No audio leaves the
+   * browser — the recognition is the browser's own, and this product uploads nothing.
+   */
+  const toggleDictation = useCallback(() => {
+    if (listening) { recognitionRef.current?.stop(); return }
+    const w = window as unknown as { SpeechRecognition?: new () => never; webkitSpeechRecognition?: new () => never }
+    const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition
+    if (!Ctor) return
+    try {
+      const rec = new Ctor() as unknown as {
+        lang: string; continuous: boolean; interimResults: boolean
+        start: () => void; stop: () => void
+        onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
+        onend: (() => void) | null
+        onerror: (() => void) | null
+      }
+      rec.lang = dictationLocale(pt ? 'pt' : 'en')
+      rec.continuous = true
+      rec.interimResults = false
+      rec.onresult = e => {
+        let text = ''
+        for (let i = 0; i < e.results.length; i++) text += e.results[i]?.[0]?.transcript ?? ''
+        if (!text.trim()) return
+        // Appended with a separating space rather than replacing: somebody may have typed half a
+        // sentence before reaching for the microphone.
+        setDraft(d => (d.trim() === '' ? text.trim() : `${d.replace(/\s+$/, '')} ${text.trim()}`))
+      }
+      // Both end the same way. A recogniser that stopped on its own (a timeout, a denied
+      // permission) must not leave the button lit — a control that says it is listening when it
+      // is not is worse than one that never started.
+      rec.onend = () => { setListening(false); recognitionRef.current = null }
+      rec.onerror = () => { setListening(false); recognitionRef.current = null }
+      rec.start()
+      recognitionRef.current = rec
+      setListening(true)
+    } catch {
+      setListening(false)
+    }
+  }, [listening, pt])
+
+  // A click anywhere else closes the model menu. Requiring a second click on the button is the
+  // behaviour of a toggle, and a dropdown is not one — every menu in this app and every menu the
+  // reader has used elsewhere dismisses on an outside click, so needing to find the button again
+  // reads as the menu being stuck. `mousedown` rather than `click`, so it closes on the press
+  // instead of waiting for a release that may land somewhere else.
+  useEffect(() => {
+    if (!modelOpen) return
+    const close = (e: MouseEvent) => {
+      // A click INSIDE the menu (picking a model) must not be eaten by this — that path closes the
+      // menu itself, and closing here first would cancel the pick.
+      if (modelMenuRef.current?.contains(e.target as Node)) return
+      setModelOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    // Escape too: a menu that can only be dismissed with the mouse is one a keyboard cannot leave.
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModelOpen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [modelOpen])
+
+  // A recogniser left running after this panel unmounts keeps the tab's microphone indicator on
+  // for a session nobody is looking at.
+  useEffect(() => () => { recognitionRef.current?.stop() }, [])
+
+  /**
+   * The models this harness offers, from `/api/fleet/new` — the SAME source the New session wizard
+   * reads, so the two lists cannot disagree about what a harness accepts. Fetched once when the
+   * picker is first opened rather than on mount: most sessions are read, not re-modelled.
+   */
+  const [modelSuggestions, setModelSuggestions] = useState<string[]>([])
+  const modelReason = useMemo(() => modelSwitchReason(row?.harness ?? '', pt ? 'pt' : 'en'), [row, pt])
+  useEffect(() => {
+    if (modelReason || !row?.harness) return
+    let alive = true
+    fetch(`/api/fleet/new?lang=${pt ? 'pt' : 'en'}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { harnesses?: { id: string; modelSuggestions?: string[] }[] } | null) => {
+        if (!alive || !d?.harnesses) return
+        setModelSuggestions(d.harnesses.find(h => h.id === row.harness)?.modelSuggestions ?? [])
+      })
+      .catch(() => { /* no list, no picker — the control simply does not appear */ })
+    return () => { alive = false }
+  }, [row?.harness, modelReason, pt])
+
+  /** Switch the model mid-conversation by TYPING the harness's own command — see modelSwitch.ts. */
+  const switchModel = useCallback(async (model: string) => {
+    const line = modelSwitchLine(row?.harness ?? '', model)
+    setModelOpen(false)
+    if (!line) return
+    await act({ id: row!.id, action: 'prompt', text: line })
+  }, [row, act])
+
   const [notice, setNotice] = useState<string | null>(null)
   const [atTail, setAtTail] = useState(true)
   /** Messages sent from here and not yet seen in the transcript. See the header. */
@@ -439,8 +552,12 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
         // scroll-away ancestor anywhere between here and the viewport must not carry this off with
         // it, and sticky is the guarantee that holds even then.
         position: 'sticky', bottom: 0, flexShrink: 0,
-        borderTop: '1px solid var(--border)', padding: '12px 20px 14px',
-        background: 'var(--bg-surface)',
+        // NO border and NO surface of its own. This used to be a full-width footer bar with a rule
+        // across the top, which read as a region of the page rather than as a control — and the
+        // thing people recognise as "where I type" is a bounded field, not a strip. The FIELD
+        // below carries the border now; this element only positions it.
+        padding: '10px 20px 16px',
+        background: 'transparent',
       }}>
         {/* Back to the end. Only while the reader has actually scrolled away — a control that is
             always there teaches nothing about where you are. */}
@@ -617,9 +734,16 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   field that holds it; dropping both leaves it the same colour as its container. */}
               <div style={{
                 display: (!canPrompt && !blocked && reopen) ? 'none' : 'flex',
-                alignItems: 'flex-end', gap: 8,
-                background: 'transparent', border: 'none', padding: 0,
+                alignItems: 'flex-end', gap: 6,
+                // THE FIELD. A rounded, bordered, inset box — the shape a person recognises as
+                // somewhere to type. It was previously borderless and flush to the page edges,
+                // which is why it read as a footer.
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border)',
+                borderRadius: 14,
+                padding: '5px 6px 5px 8px',
                 opacity: canPrompt ? 1 : 0.55,
+                transition: 'border-color 0.15s',
               }}>
                 <input
                   ref={fileRef}
@@ -684,6 +808,81 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     {stopping ? <Loader size={14} className="ag-working-spin" /> : <Square size={13} fill="currentColor" />}
                   </button>
                 )}
+                {/* Dictation. ABSENT is not an option — the button is drawn either way and says why
+                    it cannot work, because a mic that fails on click is indistinguishable from a
+                    broken one. Nothing is uploaded: the recognition is the browser's own and what
+                    reaches the session is the text the user then chooses to send. */}
+                <button
+                  onClick={() => { if (dictation.state === 'ready') toggleDictation() }}
+                  disabled={!canPrompt || sending}
+                  title={dictation.reason ?? (listening
+                    ? (pt ? 'Parar de ouvir' : 'Stop listening')
+                    : (pt ? 'Ditar' : 'Dictate'))}
+                  aria-label={pt ? 'Ditar' : 'Dictate'}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 34, height: 34, borderRadius: 9, flexShrink: 0,
+                    border: listening ? '1px solid var(--accent-red)' : 'none',
+                    background: listening ? 'color-mix(in srgb, var(--accent-red) 12%, transparent)' : 'transparent',
+                    color: listening ? 'var(--accent-red)' : 'var(--text-tertiary)',
+                    cursor: canPrompt && dictation.state === 'ready' ? 'pointer' : 'default',
+                    opacity: dictation.state === 'ready' ? 1 : 0.45,
+                  }}
+                >
+                  <Mic size={15} />
+                </button>
+
+                {/* The model, mid-conversation. Only where the command was VERIFIED against the
+                    running CLI (claude's `/model`); everywhere else the control says so rather
+                    than typing a guessed slash command into a live session. */}
+                {modelSuggestions.length > 0 && (
+                  <div ref={modelMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
+                    <button
+                      onClick={() => { if (!modelReason) setModelOpen(v => !v) }}
+                      disabled={!canPrompt || sending}
+                      title={modelReason ?? (pt ? 'Trocar de modelo' : 'Switch model')}
+                      aria-label={pt ? 'Trocar de modelo' : 'Switch model'}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: 34, height: 34, borderRadius: 9, border: 'none',
+                        background: 'transparent', color: 'var(--text-tertiary)',
+                        cursor: canPrompt && !modelReason ? 'pointer' : 'default',
+                        opacity: modelReason ? 0.45 : 1,
+                      }}
+                    >
+                      <Cpu size={15} />
+                    </button>
+                    {modelOpen && (
+                      <div style={{
+                        position: 'absolute', bottom: 40, right: 0, zIndex: 50,
+                        minWidth: 160, padding: 4, borderRadius: 9,
+                        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                      }}>
+                        {modelSuggestions.map(m => (
+                          <button
+                            key={m}
+                            onClick={() => { void switchModel(m) }}
+                            style={{
+                              display: 'block', width: '100%', textAlign: 'left',
+                              padding: '7px 10px', borderRadius: 6, border: 'none',
+                              background: 'transparent', color: 'var(--text-primary)',
+                              fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer',
+                            }}
+                          >
+                            {m}
+                          </button>
+                        ))}
+                        {/* Said inside the menu, because this is a line typed INTO the session and
+                            the session answers it — it is not a setting this page owns. */}
+                        <p style={{ margin: '4px 6px 2px', fontSize: 10, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
+                          {pt ? 'Envia /model para a sessão.' : 'Sends /model to the session.'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <button
                   onClick={() => void send()}
                   disabled={!canPrompt || sending || (draft.trim() === '' && attached.length === 0)}

@@ -500,12 +500,22 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen }: {
       style={{
         display: 'flex', alignItems: 'center', gap: 8, width: '100%',
         padding: '9px 9px', borderRadius: 9, border: 'none', textAlign: 'left', minHeight: tap,
-        background: selected ? 'var(--anthropic-orange-dim)' : (STATE_WASH[session.state] ?? 'transparent'),
-        // A live row also carries a coloured edge. The wash alone is faint by design, and an edge
-        // survives a light theme and a colour-blind reader where a 10% tint does not.
-        boxShadow: selected || !STATE_WASH[session.state]
-          ? undefined
-          : `inset 2px 0 0 ${STATE_COLOR[session.state] ?? 'transparent'}`,
+        // SELECTED is NOT orange. Orange is already the state colour for a row that needs a person
+        // (`STATE_COLOR.waiting`), so the selected row wore the same tint as the alarm and the two
+        // became one signal: selecting a working session made it look like it was asking for you.
+        // Selection is a fact about where the READER is, so it uses the neutral surface tokens —
+        // a lifted background and a full-height accent-free edge — and leaves every colour on this
+        // list to mean exactly one thing about the SESSION.
+        background: selected ? 'var(--bg-elevated)' : (STATE_WASH[session.state] ?? 'transparent'),
+        // Two different edges, and they never collide: the STATE edge is the left rule a live row
+        // carries, and SELECTION replaces it with a brighter, full one plus an outline. The wash
+        // alone is faint by design, and an edge survives a light theme and a colour-blind reader
+        // where a 10% tint does not.
+        boxShadow: selected
+          ? 'inset 3px 0 0 var(--text-primary), inset 0 0 0 1px var(--border)'
+          : (STATE_WASH[session.state]
+            ? `inset 2px 0 0 ${STATE_COLOR[session.state] ?? 'transparent'}`
+            : undefined),
         color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
         cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
         transition: 'background 0.15s',
@@ -514,6 +524,7 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen }: {
       onMouseLeave={e => {
         if (!selected) e.currentTarget.style.background = STATE_WASH[session.state] ?? 'transparent'
       }}
+      aria-current={selected ? 'true' : undefined}
       title={session.model ? `${session.title}\n${session.model}` : session.title}
     >
       {/* The dot marks a row that WANTS somebody. It never carries the message alone — the state

@@ -17,6 +17,20 @@ import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { formatUptime, summarizeFleet } from '../../lib/fleetSummary'
 
+/**
+ * The container geometry the sessions workspace shares with the header's filter row.
+ *
+ * BOTH numbers, because matching only one is what produced the second version of this bug: with
+ * equal padding but no shared max width, the two lined up at 1440px and drifted 53px apart at
+ * 1773px — the header's row lives in a centred 1400px box, so its left edge MOVES with the window
+ * and a left-aligned body cannot follow it.
+ *
+ * Named once and used by both, because the alignment IS the requirement: whatever these become,
+ * the row above and the body below have to move together.
+ */
+export const PAGE_INSET = 32
+export const PAGE_MAX_WIDTH = 1400
+
 export interface FleetOverviewProps {
   lang: 'pt' | 'en'
   rows: readonly ControlSession[]
@@ -46,8 +60,23 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
     )
   }
 
+  // ALIGNED WITH THE HEADER'S FILTER BAR — the thing directly above it, and the only edge a
+  // reader can compare it against.
+  //
+  // It took two wrong attempts to get here, and both are worth stating. It began centred in a
+  // 980px box while the header was centred in a 1400px one, so at 1262px the body sat 200px to the
+  // right of the filters. Left-aligning it fixed that width and broke every wider one: the header
+  // is CENTRED, so its left edge moves, and a left-aligned body only agrees with it by accident.
+  // Matching the geometry — same max width, same inset, same centring — is the only thing that
+  // holds at every size.
   return (
-    <div style={{ padding: '28px 24px', maxWidth: 980, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+    <div style={{
+      padding: `28px ${PAGE_INSET}px`,
+      maxWidth: PAGE_MAX_WIDTH,
+      margin: '0 auto',
+      width: '100%',
+      boxSizing: 'border-box',
+    }}>
       <h1 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>
         {pt ? 'Suas sessões' : 'Your sessions'}
       </h1>
@@ -63,7 +92,10 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
         <Stat
           icon={<Activity size={15} />} tone="var(--accent-green)"
           label={pt ? 'Rodando' : 'Running'} value={String(s.running)}
-          note={pt ? `de ${s.total} no total` : `of ${s.total} total`}
+          // Names the UNIVERSE: "of 23 total" sat a few centimetres from a header reading "961
+          // sessions" and invited the reader to compare two counts of different things. This one
+          // is the fleet on this machine; that one is the whole metrics history.
+          note={pt ? `de ${s.total} nesta máquina` : `of ${s.total} on this machine`}
         />
         <Stat
           icon={<Bell size={15} />} tone="var(--anthropic-orange)"
@@ -95,6 +127,17 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
         <h2 style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>
           {pt ? 'Por assistente' : 'By assistant'}
         </h2>
+        {/* Said once, under the heading, because a list with a single row invites the question
+            "where are my other assistants". They are not missing: this section counts the fleet on
+            this machine, and an assistant with nothing running and nothing recorded here has no
+            row — which is a real zero, not an unmeasured one. Their history is on the dashboard. */}
+        {s.harnesses.length === 1 && (
+          <p style={{ margin: '0 0 10px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+            {pt
+              ? 'Só assistentes com sessão nesta máquina aparecem aqui. O histórico dos outros está no painel.'
+              : 'Only assistants with a session on this machine appear here. The others’ history is on the dashboard.'}
+          </p>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {s.harnesses.map(h => {
             const color = (HARNESS_COLORS as Record<string, string>)[h.harness] ?? 'var(--text-tertiary)'
@@ -105,12 +148,21 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
                 <span style={{ width: 110, fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)', flexShrink: 0 }}>
                   {label}
                 </span>
-                {/* The bar is a proportion of the fleet; the numbers beside it are the fact. A bar
-                    alone would be a share nobody can read off the screen. */}
-                <span style={{ flex: 1, height: 8, borderRadius: 4, background: 'var(--bg-elevated)', overflow: 'hidden', minWidth: 60 }}>
+                {/* The bar is a share of the fleet, 0–100, and the SHARE IS SAID IN A NUMBER
+                    beside it. A full bar with no figure is unreadable in the ordinary case where
+                    one assistant holds everything: it looks like a progress bar that finished
+                    rather than "this is all of them", which is what a reader asked about it. */}
+                <span
+                  role="img"
+                  aria-label={`${pct}%`}
+                  style={{ flex: 1, height: 8, borderRadius: 4, background: 'var(--bg-elevated)', overflow: 'hidden', minWidth: 60 }}
+                >
                   <span style={{ display: 'block', width: `${pct}%`, height: '100%', background: color, borderRadius: 4 }} />
                 </span>
-                <span style={{ fontSize: 12, color: 'var(--text-tertiary)', width: 112, textAlign: 'right', flexShrink: 0 }}>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)', width: 44, textAlign: 'right', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                  {pct}%
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--text-tertiary)', width: 120, textAlign: 'right', flexShrink: 0 }}>
                   {h.running > 0
                     ? (pt ? `${h.count} · ${h.running} viva${h.running > 1 ? 's' : ''}` : `${h.count} · ${h.running} live`)
                     : (pt ? `${h.count} · nenhuma viva` : `${h.count} · none live`)}

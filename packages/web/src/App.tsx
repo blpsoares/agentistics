@@ -77,6 +77,7 @@ import { StepUpPrompt } from './components/StepUpPrompt'
 import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
+import { ToggleSwitch } from './components/ToggleSwitch'
 
 // Team session state
 interface TeamSessionState {
@@ -459,23 +460,6 @@ function LiveSettingsModal({
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [onClose])
-
-  const ToggleSwitch = ({ on, onToggle }: { on: boolean; onToggle: () => void }) => (
-    <button
-      onClick={onToggle}
-      style={{
-        position: 'relative', width: 32, height: 18, borderRadius: 9,
-        border: 'none', background: on ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-        cursor: 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0,
-      }}
-    >
-      <span style={{
-        position: 'absolute', top: 3, left: on ? 17 : 3,
-        width: 12, height: 12, borderRadius: '50%', background: '#fff',
-        transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-      }} />
-    </button>
-  )
 
   const allIntervals = [
     ...(riskyMode ? LIVE_INTERVAL_OPTIONS_RISKY : []),
