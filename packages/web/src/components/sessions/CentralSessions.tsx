@@ -21,18 +21,29 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { MonitorSmartphone } from 'lucide-react'
+import type { Filters } from '@agentistics/core'
 import { MachineFleetPanel } from '../../pages/settings/MachineFleetPanel'
+import { SessionsAside } from '../nav/SessionsAside'
 import { centralMachineList, pickCentralMachine, type CentralMachine } from '../../lib/centralMachines'
+import { relayedToSessions, type RelayedRow } from '../../lib/relayedSessions'
 
 /** Remembers the machine you were last looking at, per browser. */
 const PICK_KEY = 'agentistics-central-machine'
 
-export function CentralSessions({ lang }: { lang: 'pt' | 'en' }) {
+export function CentralSessions({ lang, filters, activeOnly }: {
+  lang: 'pt' | 'en'
+  /** The SAME filters the header edits — the list narrows exactly as it does on a machine. */
+  filters: Filters
+  activeOnly: boolean
+}) {
   const pt = lang === 'pt'
   const [machines, setMachines] = useState<CentralMachine[] | null>(null)
   const [me, setMe] = useState<string>('')
   const [failed, setFailed] = useState(false)
   const [picked, setPicked] = useState<string | null>(null)
+  /** The chosen machine's relayed rows, for the list. `null` = not read yet. */
+  const [rows, setRows] = useState<RelayedRow[] | null>(null)
+  const [rowsFor, setRowsFor] = useState<string | null>(null)
 
   useEffect(() => {
     let live = true
@@ -66,6 +77,27 @@ export function CentralSessions({ lang }: { lang: 'pt' | 'en' }) {
     if (machines === null) return
     setPicked(prev => prev ?? pickCentralMachine(list, localStorage.getItem(PICK_KEY)))
   }, [machines, list])
+
+  // The rows the LIST draws. The panel below reads the same route for the verbs — one extra call
+  // per machine change, and the alternative was threading the answer out of the panel, which would
+  // make the panel's own hosts depend on a caller that does not exist for them.
+  useEffect(() => {
+    if (!picked) { setRows(null); return }
+    let live = true
+    setRows(null); setRowsFor(picked)
+    void (async () => {
+      try {
+        const res = await fetch(`/api/team/machine-fleet?machineId=${encodeURIComponent(picked)}`)
+        const body = res.ok ? await res.json() as { reply?: { rows?: RelayedRow[] } } : null
+        if (live) setRows(body?.reply?.rows ?? [])
+      } catch {
+        if (live) setRows([])
+      }
+    })()
+    return () => { live = false }
+  }, [picked])
+
+  const sessions = useMemo(() => relayedToSessions(rows ?? []), [rows])
 
   const choose = (id: string) => {
     setPicked(id)
@@ -122,7 +154,26 @@ export function CentralSessions({ lang }: { lang: 'pt' | 'en' }) {
       )}
 
       {picked
-        ? <MachineFleetPanel open machineId={picked} lang={pt ? 'pt' : 'en'} />
+        ? (
+          <>
+            {/* THE SAME LIST a machine draws — grouping, ordering, search, the state words and the
+                row's own shape are decided in one place for both. Its "new session" is withheld:
+                starting one spawns a process on the HOST, which a central cannot do for someone
+                else's machine. */}
+            <SessionsAside
+              lang={lang}
+              rows={sessions}
+              finishedTasks={[]}
+              loading={rows === null || rowsFor !== picked}
+              unsupported={false}
+              filters={filters}
+              activeOnly={activeOnly}
+              hideNew
+              onOpenRow={() => { /* the verbs are in the panel below — see its own header */ }}
+            />
+            <MachineFleetPanel open machineId={picked} lang={pt ? 'pt' : 'en'} />
+          </>
+        )
         : (
           <Note text={list.blocked.length > 0
             ? (pt
