@@ -1,11 +1,36 @@
-import { exec } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { readdir } from 'fs/promises'
 import { join } from 'path'
 import type { ProjectGitStats } from '@agentistics/core'
+import { openGitStatsCache, NOOP_GIT_STATS_CACHE, type GitStatsCache } from './git-stats-cache'
+import { GIT_STATS_CACHE_FILE } from './config'
 import { normalizeGitRemote } from '@agentistics/core'
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
+
+/** Run git WITHOUT a shell.
+ *
+ *  Two defects came from going through `/bin/sh -c`. A timeout kills the process `exec` started —
+ *  the SHELL — and the `git` underneath it survives, orphaned, still holding its hundreds of
+ *  megabytes: that is why processes outlived the server that spawned them and had to be reaped by
+ *  hand. And every argument was interpolated into a command string, so a repository path
+ *  containing a quote was a broken command at best.
+ *
+ *  `execFile` makes git the direct child, so the timeout lands on the process actually doing the
+ *  work, and arguments are passed as a vector — no quoting, no shell. */
+async function git(
+  repoPath: string,
+  args: string[],
+  opts: { timeout: number; maxBuffer: number }
+): Promise<string> {
+  // On Windows a POSIX path is a WSL path and git must be reached through `wsl`.
+  const useWsl = process.platform === 'win32' && repoPath.startsWith('/')
+  const file = useWsl ? 'wsl' : 'git'
+  const argv = useWsl ? ['git', '-C', repoPath, ...args] : ['-C', repoPath, ...args]
+  const { stdout } = await execFileAsync(file, argv, { ...opts, env: gitEnv() })
+  return stdout
+}
 
 // UUID regex: 8-4-4-4-12 hex groups
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -19,18 +44,6 @@ export function decodeProjectDir(dirName: string): string {
   }
   // Relative or unknown — just return as-is prefixed with /
   return '/' + dirName.replace(/-/g, '/')
-}
-
-/**
- * Builds the git command prefix. On Windows, POSIX paths (starting with '/')
- * are Linux/WSL paths and must be run via `wsl git`; Windows-native paths
- * (e.g. C:\...) use the regular `git` binary directly.
- */
-function gitCmd(projectPath: string): string {
-  if (process.platform === 'win32' && projectPath.startsWith('/')) {
-    return 'wsl git'
-  }
-  return 'git'
 }
 
 /** Cost guards for repository statistics.
@@ -86,11 +99,12 @@ export async function getGitFileStats(
     // add 1 minute buffer on each side so the commits made during the session are included
     const after = new Date(new Date(afterIso).getTime() - 60_000).toISOString()
     const before = new Date(new Date(beforeIso).getTime() + 60_000).toISOString()
-    const { stdout } = await execAsync(
-      `${gitCmd(projectPath)} -C "${projectPath}" log --numstat --after="${after}" --before="${before}" --format=""`,
-      // Bounded like the repo walk: a session window is small, but `--numstat` output is read into
-      // memory whole, and the default buffer is what makes a pathological repo unbounded.
-      { timeout: 5000, env: gitEnv(), maxBuffer: STATS_MAX_BUFFER }
+    // Bounded like the repo walk: a session window is small, but `--numstat` output is read into
+    // memory whole, and the default buffer is what makes a pathological repo unbounded.
+    const stdout = await git(
+      projectPath,
+      ['log', '--numstat', `--after=${after}`, `--before=${before}`, '--format='],
+      { timeout: 5000, maxBuffer: STATS_MAX_BUFFER }
     )
     let linesAdded = 0, linesRemoved = 0
     const filesSeen = new Set<string>()
@@ -111,15 +125,15 @@ export async function getGitFileStats(
 /**
  * Read a repo's `origin` remote URL and return it normalized (`host/org/repo`, no protocol),
  * or `undefined` when the path isn't a git repo or has no origin remote. Reuses the same
- * `gitCmd` (Windows/WSL) split and no-prompt env guard as the stats helpers so a misconfigured
+ * Windows/WSL split and no-prompt env guard as the stats helpers so a misconfigured
  * remote can never hang the scan. This is the local-machine source of the group-by-repo key.
  */
 export async function getGitRemote(projectPath: string): Promise<string | undefined> {
-  const cmd = gitCmd(projectPath)
   try {
-    const { stdout } = await execAsync(
-      `${cmd} -C "${projectPath}" config --get remote.origin.url`,
-      { timeout: 3000, env: gitEnv(), maxBuffer: 1024 * 1024 }
+    const stdout = await git(
+      projectPath,
+      ['config', '--get', 'remote.origin.url'],
+      { timeout: 3000, maxBuffer: 1024 * 1024 }
     )
     const normalized = normalizeGitRemote(stdout.trim())
     return normalized || undefined
@@ -146,6 +160,34 @@ async function withStatsSlot<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** The on-disk half of the memo, opened once and shared.
+ *
+ *  The in-process memo dies with the process, and on a real machine the server restarts
+ *  constantly — an upgrade, a crash, a `dev:api` left running, a supervisor relaunching it. Every
+ *  restart used to pay the full price again for numbers already computed. Rows are keyed on a
+ *  COMMIT, so they can never be stale: they are facts about an immutable object, not guesses about
+ *  the current state. */
+let diskCache: GitStatsCache | null = null
+let diskCacheOpening: Promise<GitStatsCache> | null = null
+
+async function disk(): Promise<GitStatsCache> {
+  if (diskCache) return diskCache
+  if (!diskCacheOpening) {
+    // Read the override at OPEN time, not at import time, so a caller (a test, a sandboxed run)
+    // can point this at its own file rather than the user's real store.
+    const file = process.env.AGENTISTICS_GIT_STATS_CACHE_FILE || GIT_STATS_CACHE_FILE
+    diskCacheOpening = openGitStatsCache(file)
+      .then(c => { diskCache = c; return c })
+      .catch(() => NOOP_GIT_STATS_CACHE)
+  }
+  return diskCacheOpening
+}
+
+/** Drop rows not read since `cutoffMs`. Called by the build that owns the cadence. */
+export async function gcGitStatsCache(cutoffMs: number): Promise<number> {
+  return (await disk()).gc(cutoffMs)
+}
+
 interface Memo<T> { at: number; value: T }
 const toplevelMemo = new Map<string, Memo<string | undefined>>()
 const statsMemo = new Map<string, Memo<ProjectGitStats | undefined>>()
@@ -157,12 +199,17 @@ function memoRead<T>(memo: Map<string, Memo<T>>, key: string): { hit: true; valu
   return { hit: true, value: entry.value }
 }
 
-/** Drop every memoized git read. Exported for tests and for a caller that knows the working
- *  trees moved under it; the TTL covers the ordinary case. */
+/** Drop the IN-PROCESS memos. The disk rows are deliberately left: they are keyed on immutable
+ *  commits, so there is nothing there to be wrong. Exported for tests and for a caller that knows
+ *  the working trees moved under it; the TTL covers the ordinary case. */
 export function clearGitStatsCache(): void {
   toplevelMemo.clear()
   statsMemo.clear()
   walkCount = 0
+  // Also drop the open handle, so a caller that has just repointed the store gets the new one.
+  try { diskCache?.close() } catch { /* already closed */ }
+  diskCache = null
+  diskCacheOpening = null
 }
 
 /** How many `--numstat` walks have actually been spent since the last cache clear.
@@ -190,10 +237,7 @@ let walkCount = 0
  *  go stale on the commit it must notice. */
 async function resolveHead(repoPath: string): Promise<string | undefined> {
   try {
-    const { stdout } = await execAsync(
-      `${gitCmd(repoPath)} -C "${repoPath}" rev-parse HEAD`,
-      { timeout: 3000, env: gitEnv(), maxBuffer: 1024 * 1024 }
-    )
+    const stdout = await git(repoPath, ['rev-parse', 'HEAD'], { timeout: 3000, maxBuffer: 1024 * 1024 })
     return stdout.trim() || undefined
   } catch {
     // No HEAD: an empty repository. Nothing to walk, and nothing to cache under a commit.
@@ -213,10 +257,7 @@ async function resolveToplevel(projectPath: string): Promise<string | undefined>
   if (cached.hit) return cached.value
   let value: string | undefined
   try {
-    const { stdout } = await execAsync(
-      `${gitCmd(projectPath)} -C "${projectPath}" rev-parse --show-toplevel`,
-      { timeout: 3000, env: gitEnv(), maxBuffer: 1024 * 1024 }
-    )
+    const stdout = await git(projectPath, ['rev-parse', '--show-toplevel'], { timeout: 3000, maxBuffer: 1024 * 1024 })
     value = stdout.trim() || undefined
   } catch {
     value = undefined
@@ -233,12 +274,13 @@ async function resolveToplevel(projectPath: string): Promise<string | undefined>
  *  and file totals are those of the newest `STATS_MAX_COMMITS` commits. */
 async function countCommits(
   toplevel: string,
-  sinceArg: string
+  sinceArgs: string[]
 ): Promise<{ commits: number; since: string } | undefined> {
   try {
-    const { stdout } = await execAsync(
-      `${gitCmd(toplevel)} -C "${toplevel}" log --format="%ai"${sinceArg} HEAD`,
-      { timeout: 15_000, env: gitEnv(), maxBuffer: STATS_MAX_BUFFER }
+    const stdout = await git(
+      toplevel,
+      ['log', '--format=%ai', ...sinceArgs, 'HEAD'],
+      { timeout: 15_000, maxBuffer: STATS_MAX_BUFFER }
     )
     const dates = stdout.split('\n').map(l => l.trim()).filter(Boolean)
     if (dates.length === 0) return undefined
@@ -250,17 +292,18 @@ async function countCommits(
 
 /** The expensive half: walk `--numstat` and sum it. Bounded in commits, time and buffer. */
 async function walkRepoStats(toplevel: string, sinceIso?: string): Promise<ProjectGitStats | undefined> {
-  const sinceArg = sinceIso ? ` --since="${sinceIso}"` : ''
-  const totals = await countCommits(toplevel, sinceArg)
+  const sinceArgs = sinceIso ? [`--since=${sinceIso}`] : []
+  const totals = await countCommits(toplevel, sinceArgs)
   // No commits in the window is a complete, cacheable answer — not a reason to look elsewhere.
   if (!totals) return undefined
 
   return withStatsSlot(async () => {
     walkCount++
     try {
-      const { stdout } = await execAsync(
-        `${gitCmd(toplevel)} -C "${toplevel}" log --numstat --format="COMMIT %H %ai" --max-count=${STATS_MAX_COMMITS}${sinceArg} HEAD`,
-        { timeout: STATS_TIMEOUT_MS, env: gitEnv(), maxBuffer: STATS_MAX_BUFFER }
+      const stdout = await git(
+        toplevel,
+        ['log', '--numstat', '--format=COMMIT %H %ai', `--max-count=${STATS_MAX_COMMITS}`, ...sinceArgs, 'HEAD'],
+        { timeout: STATS_TIMEOUT_MS, maxBuffer: STATS_MAX_BUFFER }
       )
       let linesAdded = 0, linesRemoved = 0
       const filesSeen = new Set<string>()
@@ -311,9 +354,19 @@ async function statsForRepoRoot(toplevel: string, sinceIso?: string): Promise<Pr
   const running = statsInflight.get(key)
   if (running) return running
 
-  const run = walkRepoStats(toplevel, sinceIso)
+  const run = (async () => {
+    // Disk before walk: a restart, or a second instance, must not re-derive what is already known
+    // about this commit. Promoted into the in-process memo so the next read costs no query.
+    const stored = (await disk()).get(key)
+    if (stored) {
+      statsMemo.set(key, { at: Date.now(), value: stored.value })
+      return stored.value
+    }
+    return walkRepoStats(toplevel, sinceIso)
+  })()
     .then(value => {
       statsMemo.set(key, { at: Date.now(), value })
+      void disk().then(c => c.set(key, value)).catch(() => {})
       return value
     })
     .catch(() => {

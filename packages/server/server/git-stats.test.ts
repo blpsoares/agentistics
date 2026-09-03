@@ -50,7 +50,12 @@ async function addWorktree(repo: string, dir: string, branch: string): Promise<v
   await run(`git worktree add -q -b ${branch} "${dir}" HEAD`, { cwd: repo })
 }
 
-beforeEach(() => { clearGitStatsCache() })
+beforeEach(async () => {
+  // Point the persistent store at a throwaway file: these tests must never read or write the
+  // user's real repository statistics.
+  process.env.AGENTISTICS_GIT_STATS_CACHE_FILE = join(await mkdtemp(join(tmpdir(), 'gitdb-')), 'git-stats.db')
+  clearGitStatsCache()
+})
 
 test('a repository is walked once, not once per subdirectory', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gitstats-'))
@@ -143,6 +148,39 @@ test('worktrees parked on one commit share a single walk', async () => {
   expect(fromOne).toEqual(fromRepo!)
   expect(fromTwo).toEqual(fromRepo!)
   expect(gitStatsWalkCount()).toBe(1)
+})
+
+test('a restart does not re-walk what a previous run already knew', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gitstats-'))
+  const repo = join(root, 'repo')
+  await makeRepo(repo, ['a.txt', 'b.txt'])
+
+  const first = await getProjectGitStats(repo)
+  expect(gitStatsWalkCount()).toBe(1)
+
+  // `clearGitStatsCache` drops everything a process holds in memory — which is exactly what dying
+  // and starting again does. The disk store is keyed on the COMMIT, so it is still valid, and on
+  // this machine the server restarts constantly: an upgrade, a crash, a dev server someone left
+  // running. Each of those used to pay the full 18s walk again for numbers already computed.
+  clearGitStatsCache()
+
+  expect(await getProjectGitStats(repo)).toEqual(first!)
+  expect(gitStatsWalkCount()).toBe(0)
+})
+
+test('two instances running side by side walk a repository once between them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gitstats-'))
+  const repo = join(root, 'repo')
+  await makeRepo(repo, ['a.txt'])
+
+  // Same store, two processes' worth of memory. Four servers were once found running at once on
+  // one laptop, each walking every repository independently.
+  await getProjectGitStats(repo)
+  expect(gitStatsWalkCount()).toBe(1)
+  clearGitStatsCache()
+  await getProjectGitStats(repo)
+
+  expect(gitStatsWalkCount()).toBe(0)
 })
 
 test('concurrent callers for one repo share a single in-flight walk', async () => {
