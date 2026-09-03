@@ -21,6 +21,7 @@ import {
   ACTIVE_STATES, DEFAULT_ORDER, filterSessions, sessionNotify, sortSessions,
   type ControlSession,
 } from '@agentistics/tui/control/session-fleet'
+import { rowSelected } from '../../lib/fleetSelection'
 import { filterFleet } from '../../lib/fleetFilter'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { NewSessionModal } from '../sessions/NewSessionModal'
@@ -304,7 +305,7 @@ export function SessionsAside({
                 <SessionRow
                   key={`pin-${s.id}`}
                   session={s}
-                  selected={s.id === sessionId || s.conversationId === sessionId}
+                  selected={rowSelected(s, sessionId)}
                   pinned
                   {...(tap ? { tap } : {})}
                   onPin={() => flip(s)}
@@ -367,7 +368,7 @@ function SessionBand({ label, rows, pinned, sessionId, tap, onPin, onOpen }: {
           <SessionRow
             key={s.id}
             session={s}
-            selected={s.id === sessionId || s.conversationId === sessionId}
+            selected={rowSelected(s, sessionId)}
             pinned={pinned.has(pinKeyOf(s))}
             {...(tap ? { tap } : {})}
             onPin={() => onPin(s)}

@@ -760,20 +760,6 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   onChange={e => pick(e.target.files)}
                   style={{ display: 'none' }}
                 />
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  disabled={!canPrompt || uploading}
-                  aria-label={pt ? 'Anexar arquivo' : 'Attach file'}
-                  title={pt ? 'Anexar arquivo' : 'Attach file'}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    width: 34, height: 34, borderRadius: 9, border: 'none', flexShrink: 0,
-                    background: 'transparent', color: 'var(--text-tertiary)',
-                    cursor: canPrompt && !uploading ? 'pointer' : 'default',
-                  }}
-                >
-                  {uploading ? <Loader size={15} className="ag-working-spin" /> : <Paperclip size={15} />}
-                </button>
                 <textarea
                   ref={textareaRef}
                   value={draft}
@@ -797,8 +783,31 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   }}
                 />
 
-                {/* The controls, on their own line under the text. */}
+                {/* The controls, on their own line under the text. ATTACH opens the row on the
+                    left and the acting group closes it on the right — the two halves are what the
+                    control does: attach only prepares a message, the group at the other end sends
+                    it, stops the turn, or opens what is used rarely. */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={!canPrompt || uploading}
+                  aria-label={pt ? 'Anexar arquivo' : 'Attach file'}
+                  title={pt ? 'Anexar arquivo' : 'Attach file'}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 34, height: 34, borderRadius: 9, border: 'none', flexShrink: 0,
+                    background: 'transparent', color: 'var(--text-tertiary)',
+                    cursor: canPrompt && !uploading ? 'pointer' : 'default',
+                  }}
+                >
+                  {uploading ? <Loader size={15} className="ag-working-spin" /> : <Paperclip size={15} />}
+                </button>
+
+                {/* Stop · Send · More, held together at the far end. `marginLeft: auto` on the
+                    GROUP rather than on send, so the three keep their order and their spacing
+                    whether or not the stop is there — a margin on send alone would push the more
+                    button off to the right on its own the moment a turn ended. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
                 {/* Working's own stop, right beside the field it does not block. Absent the moment
                     the turn ends — a stop control on an idle session would send Escape into its
                     prompt, which is exactly the row's own gate on `interrupt`. */}
@@ -819,6 +828,21 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     {stopping ? <Loader size={14} className="ag-working-spin" /> : <Square size={13} fill="currentColor" />}
                   </button>
                 )}
+                <button
+                  onClick={() => void send()}
+                  disabled={!canPrompt || sending || (draft.trim() === '' && attached.length === 0)}
+                  aria-label={pt ? 'Enviar' : 'Send'}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 34, height: 34, borderRadius: 9, border: 'none', flexShrink: 0,
+                    background: (draft.trim() === '' && attached.length === 0) || !canPrompt ? 'transparent' : 'var(--anthropic-orange)',
+                    color: (draft.trim() === '' && attached.length === 0) || !canPrompt ? 'var(--text-tertiary)' : '#fff',
+                    cursor: (draft.trim() === '' && attached.length === 0) || !canPrompt ? 'default' : 'pointer',
+                  }}
+                >
+                  {sending ? <Loader size={15} className="ag-working-spin" /> : <Send size={15} />}
+                </button>
+
                 {/* Mic and model live behind ONE button. Four controls plus the field on a
                     390px screen is a row where the buttons win, and these two are the pair a person
                     reaches for occasionally — attach and send are the ones used every turn.
@@ -843,7 +867,9 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
 
                   {moreOpen && (
                     <div style={{
-                      position: 'absolute', bottom: 40, left: 0, zIndex: 50,
+                      // Anchored on its RIGHT edge: the button now sits at the end of the row, and
+                      // a menu opening rightwards from there would leave the screen.
+                      position: 'absolute', bottom: 40, right: 0, zIndex: 50,
                       minWidth: 210, maxWidth: 260, padding: 4, borderRadius: 10,
                       background: 'var(--bg-elevated)', border: '1px solid var(--border)',
                       boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
@@ -915,23 +941,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   )}
                 </div>
 
-                <button
-                  onClick={() => void send()}
-                  disabled={!canPrompt || sending || (draft.trim() === '' && attached.length === 0)}
-                  aria-label={pt ? 'Enviar' : 'Send'}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    // Pushed to the far end of the row — the one control that ACTS sits apart from
-                    // the ones that only prepare.
-                    marginLeft: 'auto',
-                    width: 34, height: 34, borderRadius: 9, border: 'none', flexShrink: 0,
-                    background: (draft.trim() === '' && attached.length === 0) || !canPrompt ? 'transparent' : 'var(--anthropic-orange)',
-                    color: (draft.trim() === '' && attached.length === 0) || !canPrompt ? 'var(--text-tertiary)' : '#fff',
-                    cursor: (draft.trim() === '' && attached.length === 0) || !canPrompt ? 'default' : 'pointer',
-                  }}
-                >
-                  {sending ? <Loader size={15} className="ag-working-spin" /> : <Send size={15} />}
-                </button>
+                </div>
                 </div>
               </div>
               {notice && (
