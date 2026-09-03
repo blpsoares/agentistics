@@ -430,8 +430,8 @@ function EmptyReason({
     ? (pt ? 'Lendo as sessões desta máquina…' : 'Reading this machine’s sessions…')
     : unsupported
       ? (pt
-          ? 'Esta instalação não pode listar sessões — um central agrega várias máquinas e não hospeda as sessões de nenhuma delas.'
-          : 'This install cannot list sessions — a central aggregates many machines and hosts none of their sessions.')
+          ? 'Um central agrega várias máquinas e não hospeda as sessões de nenhuma delas, então esta lista está sempre vazia aqui. Para ver as sessões de uma máquina, abra Configurações → Máquinas e escolha a máquina — ela aparece lá se tiver liberado o acesso.'
+          : 'A central aggregates many machines and hosts none of their sessions, so this list is always empty here. To see a machine’s sessions, open Settings → Machines and pick the machine — it appears there if it has granted access.')
       : unavailable
         ? unavailable
         : filterNarrowed
