@@ -11,7 +11,7 @@ import { validateOwnerInput, verifyBootstrapToken, consumeBootstrapToken } from 
 import { listTeams, createTeam, createOrgTeam, getTeam, deleteTeam } from './teams'
 import { backfillTokenTeamIds, listMachines, mintMachineToken, mintMachine, machineUserFor, revokeToken, rotateToken, setMachineTeams, setMachineTeamsAndExclusions, setMachineLabel, setMachineOwners, detachTeamFromAllMachines, detachAccountFromAllMachines } from './team-tokens'
 import { getCentralConfig } from './central-config'
-import { packConnectToken } from '@agentistics/core'
+import { packConnectToken, machineSessionsAllowed, canGrantMachineSessions, machineSessionAccounts, resolveSessionGrant } from '@agentistics/core'
 import { backfillRepoTeamIds } from './team-repos'
 import {
   makePrincipalSessionCookieHeader,
@@ -970,7 +970,13 @@ export async function handleMachines(req: Request, ip = 'unknown'): Promise<Resp
         // `null` (has not said) and `{sessions:false}` (says no) are DIFFERENT facts and both
         // travel — one sends the owner to check whether the machine is running, the other to the
         // switch. Absent means the caller may not ask.
-        ...(machineOwnedBy(principal, m) ? { remoteConsent: machineConsent(m.id) } : {}),
+        // The SESSION gate, deliberately narrower than `machineOwnedBy`: linking an account is
+        // administration, reaching into the machine's terminals is a grant the owner makes on
+        // purpose. See `@agentistics/core/machineSessions`.
+        ...(machineSessionsAllowed(principal, m) ? { remoteConsent: machineConsent(m.id) } : {}),
+        // The grant list itself, so the owner's drawer can draw a switch per linked account. Only
+        // the person who may CHANGE it is told what it currently is.
+        ...(canGrantMachineSessions(principal, m) ? { sessionAccountIds: machineSessionAccounts(m) } : {}),
       }
     })
 
@@ -1001,8 +1007,20 @@ export async function handleMachines(req: Request, ip = 'unknown'): Promise<Resp
       }
       // The machine's display identity follows its (first) owner account, so a re-assigned machine
       // stops showing the previous — possibly deleted — account's name.
+      // The SESSION grant, when the body carries one. Only the machine's OWNER may decide it —
+      // not an instance owner, who administers the installation and is deliberately not given the
+      // ability to hand out other people's terminals. A body that asks for it without the right is
+      // REFUSED rather than silently ignored: a switch that reports success and changes nothing is
+      // worse than one that says no.
+      let grant: string[] | undefined
+      if (Array.isArray(b.sessionAccountIds)) {
+        if (!canGrantMachineSessions(principal, machine)) {
+          return json({ error: 'only the machine owner may grant session management' }, 403)
+        }
+        grant = resolveSessionGrant(accountIds, b.sessionAccountIds.filter((x): x is string => typeof x === 'string'))
+      }
       const nextUser = accountIds[0] ? (await getAccount(accountIds[0]))?.name : undefined
-      await setMachineOwners(ownerId, accountIds, nextUser)
+      await setMachineOwners(ownerId, accountIds, nextUser, grant)
       // Tell the machine over the reverse WebSocket so a solo/member instance refreshes the
       // "Connected as" panel instead of showing the old account until its next handshake.
       try {
