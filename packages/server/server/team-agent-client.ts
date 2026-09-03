@@ -253,6 +253,8 @@ export function liveReportNeedsData(
 }
 
 const liveTimers = new Map<string, ReturnType<typeof setInterval>>()
+/** Per connection, the re-announce timer — cleared with the live timer it rides beside. */
+const consentTimers = new Map<string, ReturnType<typeof setInterval>>()
 
 /**
  * Report this machine's live sessions to ONE central over its reverse channel.
@@ -334,6 +336,15 @@ function startLiveReporting(connId: string, socket: WebSocket): void {
   const timer = setInterval(() => { void send() }, LIVE_REPORT_INTERVAL_MS)
   timer.unref?.()
   liveTimers.set(connId, timer)
+
+  // Its own timer rather than a counter on the one above: the two answer different questions at
+  // different rates, and folding them together would tie a consent re-statement to whatever the
+  // live report's cadence becomes next.
+  const consentTimer = setInterval(() => {
+    if (socket.readyState === WebSocket.OPEN) announceRemoteConsentNow(connId)
+  }, CONSENT_REANNOUNCE_MS)
+  consentTimer.unref?.()
+  consentTimers.set(connId, consentTimer)
 }
 
 function stopLiveReporting(connId: string): void {
@@ -341,6 +352,14 @@ function stopLiveReporting(connId: string): void {
   if (timer) {
     clearInterval(timer)
     liveTimers.delete(connId)
+  }
+  // The consent re-announce is started by `startLiveReporting` and must be stopped here, or a
+  // torn-down connection leaves a timer firing against a socket that is gone. It is cleared in
+  // the same function for exactly that reason — two lifecycles to remember is one to forget.
+  const consentTimer = consentTimers.get(connId)
+  if (consentTimer) {
+    clearInterval(consentTimer)
+    consentTimers.delete(connId)
   }
 }
 
@@ -461,6 +480,25 @@ function scheduleReconnect(connId: string): void {
     })()
   }, delay)
 }
+
+/**
+ * How often the consent is RE-STATED on an already-open socket.
+ *
+ * The announcement used to happen exactly once per connection, and that made it fragile in a way
+ * that only shows up in a real deployment. A central holds the consent in memory for the socket's
+ * lifetime (`machine-consent.ts`), so it forgets on restart — and it recovers only because the
+ * socket drops and the machine announces again on reconnect. Put a reverse proxy in front of the
+ * central, which is how one is normally exposed, and that assumption breaks: the backend can
+ * restart while the member's TCP connection to the PROXY stays up, so the member never reconnects,
+ * never re-announces, and the central sits with an empty registry believing this machine has said
+ * nothing. The owner then reads "this machine has not said whether it allows session management" —
+ * which is a true sentence about the central's memory and a false one about the machine.
+ *
+ * A single frame arriving is not something to depend on when re-stating it costs two booleans.
+ * Slow on purpose: 60s is far below any human's patience for "why is it not showing" and far above
+ * anything that could be called chatter.
+ */
+const CONSENT_REANNOUNCE_MS = 60_000
 
 /**
  * Announce this machine's REMOTE-SESSION CONSENT to one central, now.
