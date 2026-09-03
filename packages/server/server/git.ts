@@ -62,7 +62,18 @@ const STATS_TTL_MS = 10 * 60_000
  *  peak on a laptop; this cap is inside the module so no caller can exceed it by accident. */
 const STATS_MAX_CONCURRENT = 2
 
-const gitEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' })
+/** Environment for every git call: no credential prompt, and no inherited repository.
+ *
+ *  `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` OVERRIDE `-C <path>`. The server is routinely
+ *  started from inside a git context — a hook, a worktree command — and one inherited variable
+ *  would silently point every one of these reads at a repository other than the one asked for. */
+const gitEnv = (): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' }
+  delete env.GIT_DIR
+  delete env.GIT_WORK_TREE
+  delete env.GIT_INDEX_FILE
+  return env
+}
 
 export async function getGitFileStats(
   projectPath: string,
@@ -151,6 +162,43 @@ function memoRead<T>(memo: Map<string, Memo<T>>, key: string): { hit: true; valu
 export function clearGitStatsCache(): void {
   toplevelMemo.clear()
   statsMemo.clear()
+  walkCount = 0
+}
+
+/** How many `--numstat` walks have actually been spent since the last cache clear.
+ *
+ *  The whole defect was doing this work repeatedly, so "how many times did it run" is the property
+ *  worth pinning — a test that only checks the returned numbers passes just as happily on code that
+ *  recomputes them thirty-four times. Reset by `clearGitStatsCache`. */
+export function gitStatsWalkCount(): number {
+  return walkCount
+}
+let walkCount = 0
+
+/** `HEAD` for a path, as a commit SHA — the identity the stats memo is keyed on.
+ *
+ *  A `--numstat` walk is a pure function of (starting commit, window), so the SHA is the exact key.
+ *  It buys two things the repository ROOT could not:
+ *
+ *   - worktrees collapse. A linked worktree has its OWN toplevel (`.worktrees/x` is not the parent
+ *     repo), so keying on the root left 34 worktrees of one repository walking the shared history
+ *     34 times. Every worktree parked on the same commit now shares one walk.
+ *   - it self-invalidates. Commit, and the SHA changes, so the new numbers appear on the next read
+ *     instead of waiting out the TTL — which is what makes a 10 minute TTL safe to have at all.
+ *
+ *  Not memoized: `rev-parse HEAD` costs ~0.02s, and memoizing it is precisely how the cache would
+ *  go stale on the commit it must notice. */
+async function resolveHead(repoPath: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execAsync(
+      `${gitCmd(repoPath)} -C "${repoPath}" rev-parse HEAD`,
+      { timeout: 3000, env: gitEnv(), maxBuffer: 1024 * 1024 }
+    )
+    return stdout.trim() || undefined
+  } catch {
+    // No HEAD: an empty repository. Nothing to walk, and nothing to cache under a commit.
+    return undefined
+  }
 }
 
 /** The repository ROOT containing `projectPath`, or `undefined` when it is not inside a repo.
@@ -208,6 +256,7 @@ async function walkRepoStats(toplevel: string, sinceIso?: string): Promise<Proje
   if (!totals) return undefined
 
   return withStatsSlot(async () => {
+    walkCount++
     try {
       const { stdout } = await execAsync(
         `${gitCmd(toplevel)} -C "${toplevel}" log --numstat --format="COMMIT %H %ai" --max-count=${STATS_MAX_COMMITS}${sinceArg} HEAD`,
@@ -247,12 +296,15 @@ async function walkRepoStats(toplevel: string, sinceIso?: string): Promise<Proje
 
 /** Stats for one repository root, memoized on (root, window).
  *
- *  Keyed on the resolved toplevel, so the 34 worktree paths and 7 subdirectories that all point at
- *  one repository share a single walk. Concurrent callers join the in-flight promise instead of
- *  starting a second one, and the result — INCLUDING `undefined` — is cached, so a repo with
- *  nothing to report is asked once per TTL rather than on every 30s rebuild. */
+ *  Keyed on (HEAD commit, window), not on the path: every subdirectory of a repo and every worktree
+ *  parked on the same commit share one walk, and a new commit is picked up immediately rather than
+ *  at the end of the TTL. Concurrent callers join the in-flight promise instead of starting a
+ *  second one, and the result — INCLUDING `undefined` — is cached, so a repo with nothing to report
+ *  is asked once per TTL rather than on every 30s rebuild. */
 async function statsForRepoRoot(toplevel: string, sinceIso?: string): Promise<ProjectGitStats | undefined> {
-  const key = `${toplevel}\u0000${sinceIso ?? ''}`
+  const head = await resolveHead(toplevel)
+  if (!head) return undefined
+  const key = `${head}\u0000${sinceIso ?? ''}`
   const cached = memoRead(statsMemo, key)
   if (cached.hit) return cached.value
 

@@ -15,9 +15,19 @@ import { promisify } from 'util'
 import { mkdtemp, mkdir, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { getProjectGitStats, clearGitStatsCache } from './git'
+import { getProjectGitStats, clearGitStatsCache, gitStatsWalkCount } from './git'
 
-const run = promisify(exec)
+const execAsync = promisify(exec)
+
+/** Run git with every inherited `GIT_*` variable stripped.
+ *
+ *  Under the full suite these tests share a process with others that set `GIT_DIR` / `GIT_INDEX_FILE`,
+ *  and an inherited one points this fixture's git at somebody else's repository — `git worktree add`
+ *  fails with "index file open failed". Isolated here rather than depending on suite ordering. */
+function run(command: string, opts: { cwd: string }): Promise<{ stdout: string; stderr: string }> {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')))
+  return execAsync(command, { ...opts, env })
+}
 
 /** A repo with one commit per file, plus any extra subdirectories requested. */
 async function makeRepo(dir: string, files: string[], subdirs: string[] = []): Promise<void> {
@@ -33,6 +43,11 @@ async function makeRepo(dir: string, files: string[], subdirs: string[] = []): P
     await writeFile(join(dir, s, 'file.txt'), 'x\n')
     await run(`git add -A && git commit -q -m "add ${s}"`, { cwd: dir })
   }
+}
+
+/** A linked worktree of `repo` at `dir`, checked out on the same commit. */
+async function addWorktree(repo: string, dir: string, branch: string): Promise<void> {
+  await run(`git worktree add -q -b ${branch} "${dir}" HEAD`, { cwd: repo })
 }
 
 beforeEach(() => { clearGitStatsCache() })
@@ -83,22 +98,51 @@ test('a non-repository directory with no repos inside reports nothing', async ()
   expect(await getProjectGitStats(root)).toBeUndefined()
 })
 
-test('a walked repository is memoized, and the memo is what the TTL clears', async () => {
+test('a repository is walked once and then served from the memo', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gitstats-'))
   const repo = join(root, 'repo')
   await makeRepo(repo, ['a.txt'])
 
   expect((await getProjectGitStats(repo))?.commits).toBe(1)
+  expect(gitStatsWalkCount()).toBe(1)
+
+  // Reading it again spends nothing. This is the property that keeps the 30s data-cache rebuild
+  // from re-running git every 30s, forever, which is what the storm actually was.
+  await getProjectGitStats(repo)
+  await getProjectGitStats(repo)
+  expect(gitStatsWalkCount()).toBe(1)
+})
+
+test('a new commit is picked up without waiting out the TTL', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gitstats-'))
+  const repo = join(root, 'repo')
+  await makeRepo(repo, ['a.txt'])
+  expect((await getProjectGitStats(repo))?.commits).toBe(1)
 
   await writeFile(join(repo, 'b.txt'), 'b\n')
   await run('git add -A && git commit -q -m "add b.txt"', { cwd: repo })
 
-  // Still 1: the second call answered from the memo instead of spending another walk. This is the
-  // property that keeps the 30s data-cache rebuild from re-running git every 30s.
-  expect((await getProjectGitStats(repo))?.commits).toBe(1)
-
-  clearGitStatsCache()
+  // The memo is keyed on the HEAD commit, so committing invalidates it by construction — a 10
+  // minute TTL never hides work you just did.
   expect((await getProjectGitStats(repo))?.commits).toBe(2)
+})
+
+test('worktrees parked on one commit share a single walk', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gitstats-'))
+  const repo = join(root, 'repo')
+  await makeRepo(repo, ['a.txt', 'b.txt'])
+  // A linked worktree has its OWN toplevel, so deduplicating by repository root did not catch
+  // these — and this machine had 34 of them against one repository.
+  await addWorktree(repo, join(root, 'wt-one'), 'one')
+  await addWorktree(repo, join(root, 'wt-two'), 'two')
+
+  const fromRepo = await getProjectGitStats(repo)
+  const fromOne = await getProjectGitStats(join(root, 'wt-one'))
+  const fromTwo = await getProjectGitStats(join(root, 'wt-two'))
+
+  expect(fromOne).toEqual(fromRepo!)
+  expect(fromTwo).toEqual(fromRepo!)
+  expect(gitStatsWalkCount()).toBe(1)
 })
 
 test('concurrent callers for one repo share a single in-flight walk', async () => {
@@ -109,4 +153,6 @@ test('concurrent callers for one repo share a single in-flight walk', async () =
   // Eight callers is the width of the caller-side limiter that used to mean eight walks.
   const all = await Promise.all(Array.from({ length: 8 }, () => getProjectGitStats(repo)))
   for (const s of all) expect(s?.commits).toBe(2)
+  // Eight callers, one walk: the later ones joined the in-flight promise.
+  expect(gitStatsWalkCount()).toBe(1)
 })
