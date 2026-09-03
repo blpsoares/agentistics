@@ -18,9 +18,13 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Pin, PinOff, Plus, Search, X } from 'lucide-react'
 import type { Filters } from '@agentistics/core'
 import {
-  ACTIVE_STATES, DEFAULT_ORDER, filterSessions, sessionNotify, sortSessions,
+  ACTIVE_STATES, DEFAULT_ORDER, filterSessions, groupSessions, sessionNotify, sortSessions,
   type ControlSession,
 } from '@agentistics/tui/control/session-fleet'
+import {
+  FLEET_GROUPINGS, fleetWordBook, groupingLabel, readGrouping, writeGrouping,
+  type FleetGrouping,
+} from '../../lib/fleetGrouping'
 import { filterFleet } from '../../lib/fleetFilter'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { NewSessionModal } from '../sessions/NewSessionModal'
@@ -105,13 +109,17 @@ function pinKeyOf(row: ControlSession): string {
 }
 
 export function SessionsAside({
-  lang, rows, loading, unsupported, unavailable, filters, activeOnly,
+  lang, rows, loading, unsupported, unavailable, filters, activeOnly, finishedTasks,
 }: SessionsAsideProps) {
   const pt = lang === 'pt'
   const navigate = useNavigate()
   // 44px is the MOBILE figure. Applying it on desktop turns a compact list into a row of buttons.
   const isMobile = useIsMobile()
   const tap = isMobile ? 44 : undefined
+  // Read once, lazily: a per-viewer view preference, like a collapsed section — not something the
+  // server needs to know, and not something worth a round trip on every mount.
+  const [grouping, setGroupingState] = useState<FleetGrouping>(() => readGrouping())
+  const setGrouping = (id: FleetGrouping) => { setGroupingState(id); writeGrouping(id) }
   const { sessionId } = useParams()
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
@@ -175,23 +183,32 @@ export function SessionsAside({
   )
 
   /**
-   * TWO bands only, for now — Active and Inactive — dropping the cockpit's full grouping picker
-   * (day/repo/project/task/harness/model/marked). That picker is real work for a later, more
-   * stable pass; today's ask is simpler: what is running, ranked by what needs you most, and
-   * everything else beneath it. `DEFAULT_ORDER` (`state`, via `sessionRank`) is the SAME ranking
-   * the terminal cockpit breaks ties on, so "sorted by status" means one thing everywhere.
+   * The bands.
+   *
+   * `active` is this page's own two-band split — what is running, ranked by what needs you most,
+   * and everything else beneath it. `DEFAULT_ORDER` (`state`, via `sessionRank`) is the SAME
+   * ranking the terminal cockpit breaks ties on, so "sorted by status" means one thing everywhere.
+   *
+   * Every other arrangement is `groupSessions` — the cockpit's own, imported rather than rewritten.
+   * A browser copy would be a second set of rules for one fact, and it would sit outside
+   * `session-dimensions.test.ts`, which cross-checks that filtering to a bucket returns exactly the
+   * rows that bucket's band contains.
    */
-  const { activeRows, inactiveRows } = useMemo(() => {
+  const bands = useMemo((): { label: string; rows: ControlSession[] }[] => {
     const rest = matched.filter(r => !pinned.has(pinKeyOf(r)))
-    return {
-      activeRows: sortSessions(rest.filter(r => active.has(r.state)), DEFAULT_ORDER),
-      // Never computed while activeOnly is on — those rows are the ones the switch is withholding,
-      // not a second list to render beside it.
-      inactiveRows: activeOnly ? [] : sortSessions(rest.filter(r => !active.has(r.state)), DEFAULT_ORDER),
+    if (grouping === 'active') {
+      return [
+        { label: pt ? 'Ativas' : 'Active', rows: sortSessions(rest.filter(r => active.has(r.state)), DEFAULT_ORDER) },
+        // Never computed while activeOnly is on — those rows are the ones the switch is
+        // withholding, not a second list to render beside it.
+        { label: pt ? 'Inativas' : 'Inactive', rows: activeOnly ? [] : sortSessions(rest.filter(r => !active.has(r.state)), DEFAULT_ORDER) },
+      ]
     }
-  }, [matched, pinned, active, activeOnly])
+    return groupSessions(rest, grouping, fleetWordBook(pt ? 'pt' : 'en'), finishedTasks, DEFAULT_ORDER)
+      .map(g => ({ label: g.label, rows: g.sessions }))
+  }, [matched, pinned, active, activeOnly, grouping, pt, finishedTasks])
 
-  const total = activeRows.length + inactiveRows.length + pinnedRows.length
+  const total = bands.reduce((n, b) => n + b.rows.length, 0) + pinnedRows.length
   const filterCount = (filters.harnesses?.length ?? 0) + filters.projects.length
     + (filters.repos?.length ?? 0) + filters.models.length
 
@@ -266,6 +283,34 @@ export function SessionsAside({
         )}
       </div>
 
+      {/* The arrangement. A <select> rather than a chip row: eight options do not fit a 260px
+          aside on desktop or a 390px screen on mobile, and a horizontal scroller hides the ones
+          nobody has scrolled to. It carries a LABEL because "Projeto" alone, sitting under a
+          search field, reads as a filter rather than as how the list is banded. */}
+      <label style={{
+        display: 'flex', alignItems: 'center', gap: 8, margin: '0 2px',
+        fontSize: 11, color: 'var(--text-tertiary)',
+      }}>
+        <span style={{ flexShrink: 0 }}>{pt ? 'Agrupar por' : 'Group by'}</span>
+        <select
+          value={grouping}
+          onChange={e => setGrouping(e.target.value as FleetGrouping)}
+          style={{
+            flex: 1, minWidth: 0, minHeight: tap ?? 28,
+            padding: '0 8px', borderRadius: 8,
+            border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+            color: 'var(--text-primary)', fontFamily: 'inherit',
+            // The global 16px guard in index.css covers the mobile zoom case for form fields; this
+            // stays the desktop figure and is not overridden inline.
+            fontSize: 12, cursor: 'pointer',
+          }}
+        >
+          {FLEET_GROUPINGS.map(id => (
+            <option key={id} value={id}>{groupingLabel(id, pt ? 'pt' : 'en')}</option>
+          ))}
+        </select>
+      </label>
+
       {pinNotice && (
         <p role="status" style={{
           margin: '0 4px', fontSize: 11, lineHeight: 1.45, color: 'var(--anthropic-orange)',
@@ -312,17 +357,16 @@ export function SessionsAside({
           />
         ) : (
           <>
-            {/* Only TWO bands for now — see the `activeRows`/`inactiveRows` doc comment above. */}
-            <SessionBand
-              label={pt ? 'Ativas' : 'Active'} rows={activeRows} pinned={pinned}
-              sessionId={sessionId} tap={tap} onPin={flip}
-              onOpen={s => navigate(`/sessions/${s.id}`)}
-            />
-            <SessionBand
-              label={pt ? 'Inativas' : 'Inactive'} rows={inactiveRows} pinned={pinned}
-              sessionId={sessionId} tap={tap} onPin={flip}
-              onOpen={s => navigate(`/sessions/${s.id}`)}
-            />
+            {bands.map((b, i) => (
+              <SessionBand
+                // The label is not unique — two dimensions can legitimately produce one word, and
+                // an empty band still holds its place in the order.
+                key={`${grouping}-${i}-${b.label}`}
+                label={b.label} rows={b.rows} pinned={pinned}
+                sessionId={sessionId} tap={tap} onPin={flip}
+                onOpen={s => navigate(`/sessions/${s.id}`)}
+              />
+            ))}
           </>
         )}
       </div>
