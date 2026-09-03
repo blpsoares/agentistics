@@ -256,8 +256,20 @@ export interface ControlStrings {
   sessionsGroupings: Record<SessionGroupingId, string>
   /** What each dimension's 'no value' bucket is called. Same reason it is a `Record`. */
   sessionsUnfiled: Record<SessionDimensionId, string>
-  /** The band of rows the user MARKED — the filled side of the `marked` dimension. */
+  /** The band of rows the user PINNED — the filled side of the `marked` dimension. */
   sessionsMarkedBand: string
+  /**
+   * The list pane's title while the bulk-stop mode is on.
+   *
+   * The title rather than only a banner, because the title is the one part of this pane that is
+   * drawn at every width and every height: a mode you can be in without the screen saying so is the
+   * defect this replaces, and a announcement that the narrow layout drops would reintroduce it.
+   */
+  sessionsPaneStopMode: string
+  /** The banner over the list while the mode is on: what is picked, and every key that works. */
+  sessionsStopBanner: (picked: number) => string
+  /** The confirmation for stopping the PICKED set. It states the count, because the count is the act. */
+  sessionsStopManyConfirm: (n: number) => string
   sessionsUnknownHarness: string
   sessionsUnknownModel: string
   sessionsUnknownProject: string
@@ -303,7 +315,7 @@ export interface ControlStrings {
   sessionsKeyWhat: {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
-    note: string; task: string; mark: string; onlyActive: string
+    note: string; task: string; mark: string; onlyActive: string; bulkStop: string
     openTask: string; finishTask: string; recent: string; cascade: string
     group: string; layout: string; detail: string; menuFold: string
     reset: string
@@ -521,6 +533,10 @@ export interface ControlStrings {
   keySessionsActive: string
   keySessionsDetail: string
   keySessionsMark: string
+  /** Footer hints that stand in for the ordinary ones while the bulk-stop mode is on. */
+  keySessionsStopPick: string
+  keySessionsStopRun: string
+  keySessionsStopLeave: string
   keySessionsClosed: string
   keySessionsNoTask: string
   /** How to change screen where the arrows belong to the screen itself. */
@@ -759,7 +775,7 @@ const EN: ControlStrings = {
     model: 'model',
     project: 'project',
     status: 'state',
-    marked: 'marked',
+    marked: 'pinned',
   },
   sessionsUnfiled: {
     harness: 'harness unknown',
@@ -770,9 +786,14 @@ const EN: ControlStrings = {
     // Unreachable in practice — every row wears a state — but a bucket without a name is a heading
     // the screen cannot draw, so it is named rather than left to render blank.
     status: 'state unrecorded',
-    marked: 'not marked',
+    marked: 'not pinned',
   },
-  sessionsMarkedBand: 'marked',
+  sessionsMarkedBand: 'pinned',
+  sessionsPaneStopMode: 'sessions · STOP MODE',
+  sessionsStopBanner: (picked: number) =>
+    `STOP MODE · ${picked} selected to stop · space selects · x stops them · ctrl+x leaves`,
+  sessionsStopManyConfirm: (n: number) =>
+    `Stop the ${n} selected session${n === 1 ? '' : 's'}? The assistant running in each is ended.`,
   sessionsUnknownHarness: 'harness unknown',
   sessionsUnknownModel: 'no model recorded',
   sessionsUnknownProject: 'no directory recorded',
@@ -840,7 +861,8 @@ const EN: ControlStrings = {
     finishTask: 'mark its task finished',
     recent: 'the last conversations, newest first, ungrouped',
     cascade: 'cascade the rows by directory',
-    mark: 'mark this row, and keep it marked',
+    mark: 'pin this row, and keep it pinned',
+    bulkStop: 'stop several at once — space selects, x stops them, ctrl+x leaves',
     onlyActive: 'show what is not running too — closed, ended and lost',
     layout: 'list or cards',
     group: 'change the grouping',
@@ -1021,7 +1043,10 @@ const EN: ControlStrings = {
   sessionsHideClosed: 'closed: hidden',
   keySessionsActive: 'c only active',
   keySessionsDetail: 'd detail',
-  keySessionsMark: 'space mark',
+  keySessionsMark: 'space pin',
+  keySessionsStopPick: 'space select',
+  keySessionsStopRun: 'x stop selected',
+  keySessionsStopLeave: 'ctrl+x leave',
   keySessionsClosed: 'c closed',
   keySessionsNoTask: 'u unfiled',
   keyTabsAlt: '[ ] screens',
@@ -1233,7 +1258,7 @@ const PT: ControlStrings = {
     model: 'modelo',
     project: 'projeto',
     status: 'estado',
-    marked: 'marcadas',
+    marked: 'fixadas',
   },
   sessionsUnfiled: {
     harness: 'harness desconhecido',
@@ -1242,9 +1267,17 @@ const PT: ControlStrings = {
     task: 'sem tarefa',
     repo: 'sem repositório',
     status: 'estado não registrado',
-    marked: 'não marcadas',
+    marked: 'não fixadas',
   },
-  sessionsMarkedBand: 'marcadas',
+  sessionsMarkedBand: 'fixadas',
+  sessionsPaneStopMode: 'sessões · MODO ENCERRAR',
+  sessionsStopBanner: (picked: number) =>
+    `MODO ENCERRAR · ${picked} selecionada${picked === 1 ? '' : 's'}`
+    + ' · espaço seleciona · x encerra · ctrl+x sai',
+  sessionsStopManyConfirm: (n: number) =>
+    (n === 1
+      ? 'Encerrar a 1 sessão selecionada? O assistente que roda nela é finalizado.'
+      : `Encerrar as ${n} sessões selecionadas? O assistente que roda em cada uma é finalizado.`),
   sessionsUnknownHarness: 'harness desconhecido',
   sessionsUnknownModel: 'sem modelo registrado',
   sessionsUnknownProject: 'sem diretório registrado',
@@ -1304,7 +1337,8 @@ const PT: ControlStrings = {
     finishTask: 'marca a tarefa dela como finalizada',
     recent: 'as últimas conversas, mais recentes primeiro, sem agrupamento',
     cascade: 'exibe em cascata por diretório',
-    mark: 'marca esta linha, e mantém marcada',
+    mark: 'fixa esta linha, e mantém fixada',
+    bulkStop: 'encerra várias de uma vez — espaço seleciona, x encerra, ctrl+x sai',
     onlyActive: 'mostra também o que não está rodando — fechadas, encerradas e perdidas',
     layout: 'lista ou cards',
     group: 'muda o agrupamento',
@@ -1483,7 +1517,10 @@ const PT: ControlStrings = {
   sessionsHideClosed: 'fechadas: ocultas',
   keySessionsActive: 'c só ativas',
   keySessionsDetail: 'd detalhe',
-  keySessionsMark: 'space marcar',
+  keySessionsMark: 'space fixar',
+  keySessionsStopPick: 'space selecionar',
+  keySessionsStopRun: 'x encerrar selecionadas',
+  keySessionsStopLeave: 'ctrl+x sair',
   keySessionsClosed: 'c fechadas',
   keySessionsNoTask: 'u sem tarefa',
   keyTabsAlt: '[ ] telas',
