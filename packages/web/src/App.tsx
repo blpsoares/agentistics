@@ -2689,6 +2689,10 @@ export default function AppLayout() {
         // Beneath the fixed strip, never at the viewport top: one is window chrome and the other is
         // page chrome, and neither may slide under the other.
         top: isMobile ? 0 : TOPBAR_H,
+        // The status-bar band belongs to the BAR, not to the page under it: the header's own
+        // background and blur run up behind the clock, and its content starts below. Zero in a
+        // browser tab — see `--safe-top`.
+        ...(isMobile ? { paddingTop: 'var(--safe-top)' } : {}),
         zIndex: 100,
         backdropFilter: 'blur(12px)',
         WebkitBackdropFilter: 'blur(12px)',
