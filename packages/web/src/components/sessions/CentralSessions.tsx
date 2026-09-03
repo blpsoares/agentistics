@@ -44,6 +44,8 @@ export function CentralSessions({ lang, filters, activeOnly }: {
   /** The chosen machine's relayed rows, for the list. `null` = not read yet. */
   const [rows, setRows] = useState<RelayedRow[] | null>(null)
   const [rowsFor, setRowsFor] = useState<string | null>(null)
+  /** The row whose verbs are open. One at a time — this is the list, not a control panel. */
+  const [openRow, setOpenRow] = useState<string | null>(null)
 
   useEffect(() => {
     let live = true
@@ -82,6 +84,7 @@ export function CentralSessions({ lang, filters, activeOnly }: {
   // per machine change, and the alternative was threading the answer out of the panel, which would
   // make the panel's own hosts depend on a caller that does not exist for them.
   useEffect(() => {
+    setOpenRow(null)
     if (!picked) { setRows(null); return }
     let live = true
     setRows(null); setRowsFor(picked)
@@ -169,9 +172,32 @@ export function CentralSessions({ lang, filters, activeOnly }: {
               filters={filters}
               activeOnly={activeOnly}
               hideNew
-              onOpenRow={() => { /* the verbs are in the panel below — see its own header */ }}
+              onOpenRow={r => setOpenRow(prev => (prev === r.id ? null : r.id))}
             />
-            <MachineFleetPanel open machineId={picked} lang={pt ? 'pt' : 'en'} />
+
+            {/* Tapping a row opens ITS verbs, and nothing else. The panel used to draw the whole
+                fleet again underneath the list — the same sessions in a second shape, which is
+                what made the page read as two different listings. */}
+            {openRow && (
+              <div style={{
+                display: 'flex', flexDirection: 'column', gap: 8,
+                padding: '10px 12px', borderRadius: 10,
+                border: '1px solid var(--border)', background: 'var(--bg-elevated)',
+              }}>
+                <button
+                  onClick={() => setOpenRow(null)}
+                  style={{
+                    alignSelf: 'flex-start', minHeight: 32, padding: '4px 10px', borderRadius: 7,
+                    border: '1px solid var(--border-subtle)', background: 'transparent',
+                    color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 11.5,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {pt ? 'Fechar' : 'Close'}
+                </button>
+                <MachineFleetPanel open machineId={picked} lang={pt ? 'pt' : 'en'} onlyRow={openRow} hideHeader />
+              </div>
+            )}
           </>
         )
         : (

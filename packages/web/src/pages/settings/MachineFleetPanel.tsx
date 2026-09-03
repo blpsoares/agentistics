@@ -33,12 +33,22 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { machineFleetPanelView } from './machineFleetView'
 import { OVERLAY_TOP } from '../../lib/mobileOverlay'
 
-export function MachineFleetPanel({ open, machineId, lang }: {
+export function MachineFleetPanel({ open, machineId, lang, onlyRow, hideHeader }: {
   /** False keeps the panel silent: the request makes the machine build a real fleet (a tmux round
    *  trip per session), so it is never issued behind something nobody is looking at. */
   open: boolean
   machineId: string
   lang: 'en' | 'pt'
+  /**
+   * Render the verbs of ONE row and nothing else.
+   *
+   * The central's Sessions page draws the fleet with `SessionsAside` — the real list — and opens
+   * this for whichever row was tapped. Without it the page showed the fleet TWICE, in two
+   * different shapes, which is what "tá listando as sessões de outra forma" meant.
+   */
+  onlyRow?: string
+  /** Withholds the "asking the machine / refresh" strip, when a host already has one. */
+  hideHeader?: boolean
 }) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
@@ -108,13 +118,15 @@ export function MachineFleetPanel({ open, machineId, lang }: {
   }
 
   const view = machineFleetPanelView(answer, lang)
-  const rows = answer?.reply?.rows ?? []
+  const allRows = answer?.reply?.rows ?? []
+  const rows = onlyRow ? allRows.filter(r => r.id === onlyRow) : allRows
 
   // A FRAGMENT: the list and the "type the words" dialog are siblings, and the drawer used to be
   // the thing holding them together.
   return (
     <>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {!hideHeader && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <strong style={{ fontSize: 13 }}>
             {loading ? (pt ? 'Perguntando à máquina…' : 'Asking the machine…') : view.text}
@@ -137,11 +149,12 @@ export function MachineFleetPanel({ open, machineId, lang }: {
             {pt ? 'Atualizar' : 'Refresh'}
           </button>
         </div>
+        )}
 
         {/* The machine's own caveat, and what its sharing rules withheld. Two different facts, and
             neither is a fault — one is a limit the machine reported, the other is the user's own
             rule. Neither wears an alarm colour. */}
-        {view.notes.map(note => (
+        {!hideHeader && view.notes.map(note => (
           <p key={note} style={{ margin: 0, fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
             {note}
           </p>
