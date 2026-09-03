@@ -942,6 +942,44 @@ The display **name is set by the central** on the minted token — there is no n
   See [docs/architecture.md](docs/architecture.md#per-connection-repository-sharing) and
   [docs/security.md](docs/security.md#8-per-connection-sharing-rules--the-guarantee-stated-precisely).
 
+### Managing a machine's sessions FROM a central — the machine decides, always
+
+`docs/architecture.md` and `docs/security.md` carry the write-up; these are the invariants a
+harness working here must not break.
+
+- **Two consent switches, and absent reads as OFF** (`remoteSessions.ts`, core). `sessions` grants
+  the row and the screenless verbs; `screens` additionally grants the terminal. `screens` is never
+  in force without `sessions`, and withdrawing `sessions` CLEARS `screens` rather than leaving it
+  stored — a grant left behind returns the moment the first switch is flipped again, which is a
+  grant nobody re-made. Same rule as `chat-gate.ts`, deliberately NOT `shareMode`'s migration rule.
+- **The relayed row is an ALLOWLIST, never a delete-list** (`reduceMachineFleetRow`). A
+  spread-and-delete leaks the next field somebody adds to `ControlSession`, silently and on every
+  machine. `chatTurns`, `lastLines`, `approvalLines` and `dialogOptions` may never cross, and
+  `machineFleet.test.ts` asserts it over a row carrying all four.
+- **Rules first, then reduce.** The member applies `cwdShared` BEFORE building the row, so a
+  session in a withheld repository never becomes one — reducing first leaves no `cwd` to judge.
+  `withheld` is a count of SESSIONS and is reported, never silently subtracted.
+- **`machineActions.ts` is CLOSED.** A verb it does not know is refused. A new `FleetActionId` must
+  be listed there on purpose before a central can drive it. `approve`/`prompt` are excluded because
+  neither can be offered without the screen — refused with a sentence naming why, never a disabled
+  button implying it is merely off.
+- **The MACHINE re-checks everything.** Consent and the verb allowlist are re-read from preferences
+  on every request in `performMachineAction`. The central's copy of those checks spares a round
+  trip and nothing more: a check that runs only on the party whose behaviour cannot be verified is
+  not a check.
+- **`machineOwnedBy` is not `canManageMachine`.** The wider predicate is right for administering a
+  machine (rename, rotate, re-assign) and wrong for reaching into its sessions. An unknown machine
+  answers `not-owner` exactly like one you do not own, so the route is not an existence oracle.
+- **Four silences, four sentences**: `not-owner`, `refused`, `offline`, `silent`. An empty list may
+  never stand in for any of them. A machine that refuses while OFFLINE reports offline — the more
+  actionable half.
+- **The central composes no wording.** Every refusal is the machine's own already-localized
+  sentence, passed through untouched.
+- **`/api/fleet*` stays refused on a central** (`index.ts`'s `TEAM_CENTRAL` block, plus its
+  `localShell` entry in `capability-guard.ts`). The relay routes are separate and touch no host, and
+  their deliberate ABSENCE from `capability-guard.ts` is pinned by a test rather than left as an
+  omission.
+
 ---
 
 ## Cost basis — API vs plan
