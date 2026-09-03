@@ -18,7 +18,7 @@
  */
 
 import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, MessagesSquare, TerminalSquare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -26,6 +26,7 @@ import { FleetOverview } from '../components/sessions/FleetOverview'
 import { FiltersBar } from '../components/FiltersBar'
 import { SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
 import { SessionsAside } from '../components/nav/SessionsAside'
+import { SessionActions } from '../components/sessions/SessionActions'
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
@@ -71,9 +72,11 @@ export default function SessionsPage() {
       theme={theme === 'light' ? 'light' : 'dark'}
       act={act}
       onGone={() => navigate('/sessions')}
-      // Only on desktop: mobile keeps its own self-contained header (see SessionPanel's module
-      // doc) since the shared one is hidden there for lack of room.
-      {...(isMobile ? {} : { view: sessionView, onViewChange: setSessionView })}
+      // CONTROLLED on both layouts now. Passing `onViewChange` is what suppresses SessionPanel's
+      // own header, and mobile draws the same three things in the row that already holds the back
+      // button — one bar instead of two stacked ones saying overlapping things.
+      view={sessionView}
+      onViewChange={setSessionView}
     />
   )
 
@@ -81,24 +84,100 @@ export default function SessionsPage() {
   // Mobile: one column at a time.
   // ---------------------------------------------------------------------------
   if (isMobile) {
-    if (panel) {
+    if (panel && selected) {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-          <button
-            onClick={() => navigate('/sessions')}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              // 44px: this is the mobile figure, and it is the only way back from this screen.
-              minHeight: 44, padding: '0 14px', flexShrink: 0,
-              border: 'none', borderBottom: '1px solid var(--border)',
-              background: 'var(--bg-surface)', color: 'var(--text-secondary)',
-              fontFamily: 'inherit', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            }}
-          >
-            <ChevronLeft size={16} />
-            {pt ? 'Sessões' : 'Sessions'}
-          </button>
-          <div style={{ flex: 1, minHeight: 0 }}>{panel}</div>
+          {/* ONE bar. It used to be two: this back row, and SessionPanel's own header directly
+              under it carrying the title, the tabs and the verbs. On a 390px screen that spent
+              ~100px of a 664px viewport on chrome before a single message — and the back arrow
+              already says where you are, so the word beside it was the least useful thing there.
+              The arrow keeps its own 44px target; the title takes the room the label gave up. */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            minHeight: 44, padding: '0 10px', flexShrink: 0,
+            borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
+          }}>
+            <button
+              onClick={() => navigate('/sessions')}
+              aria-label={pt ? 'Voltar para as sessões' : 'Back to sessions'}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                // 44px is the mobile figure, and this is the only way back from this screen.
+                width: 44, height: 44, flexShrink: 0, marginLeft: -6,
+                border: 'none', background: 'transparent', color: 'var(--text-secondary)',
+                cursor: 'pointer',
+              }}
+            >
+              <ChevronLeft size={20} />
+            </button>
+
+            <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <span style={{
+                fontSize: 13, fontWeight: 650, color: 'var(--text-primary)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {selected.title}
+              </span>
+              {/* The state stays, on its own line: it is the one fact that changes while you read,
+                  and the row below is a conversation that does not repeat it. */}
+              <span style={{
+                fontSize: 10.5, color: 'var(--text-tertiary)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {selected.stateLabel}
+                {selected.project ? ` · ${selected.project}` : ''}
+              </span>
+            </div>
+
+            {/* Icons only — the words "Chat" and "Terminal" beside a title on a 390px screen push
+                the title to about six characters. The `aria-label` carries the name. */}
+            {selected.conversationBlind === undefined && (
+              <div role="tablist" style={{
+                display: 'flex', gap: 2, padding: 2, borderRadius: 9, flexShrink: 0,
+                background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+              }}>
+                {([
+                  ['chat', <MessagesSquare key="c" size={15} />, pt ? 'Conversa' : 'Chat'],
+                  ['terminal', <TerminalSquare key="t" size={15} />, 'Terminal'],
+                ] as const).map(([id, icon, label]) => (
+                  <button
+                    key={id}
+                    role="tab"
+                    aria-selected={sessionView === id}
+                    aria-label={label}
+                    onClick={() => setSessionView(id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      width: 38, height: 34, borderRadius: 7, border: 'none', cursor: 'pointer',
+                      background: sessionView === id ? 'var(--bg-surface)' : 'transparent',
+                      color: sessionView === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                    }}
+                  >
+                    {icon}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {rowIndex.get(selected.id) && (
+              <SessionActions
+                row={rowIndex.get(selected.id)!}
+                lang={pt ? 'pt' : 'en'}
+                act={act}
+                onGone={() => navigate('/sessions')}
+              />
+            )}
+          </div>
+          {/* `display: flex` is the load-bearing part, not `flex: 1`.
+              This div had `flex: 1, minHeight: 0` and no display, so it was a BLOCK. Its child —
+              SessionPanel's own `flex: 1 1 0%` column — was therefore not a flex item at all, and
+              a block child ignores its parent's height and grows to its content. Measured on an
+              iPhone 12 viewport: this div sat at the correct 620px while the panel inside it was
+              40.319px tall, which put the composer 40.305px down the page. The input was not
+              hidden — it was rendered far below the fold, and the conversation could not scroll
+              because the box that was supposed to scroll had no bounded height to scroll within.
+              `flex: 1` on a child means nothing until its PARENT is a flex container. */}
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{panel}</div>
         </div>
       )
     }

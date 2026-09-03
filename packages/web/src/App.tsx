@@ -2573,7 +2573,17 @@ export default function AppLayout() {
 
   return (
     <div style={{
-      minHeight: '100vh',
+      // `min-height` is NOT set in the sessions workspace, and that is the whole fix.
+      //
+      // CSS resolves `min-height` AFTER `height`, so a `min-height: 100vh` beats any smaller
+      // `height` — the column below asked for `calc(100dvh - var(--mobile-nav-h))` (608px on an
+      // iPhone 12) and computed 664px anyway, because this line said it may never be shorter than
+      // the full window. The composer sits at the bottom of that column, so those 56 lost pixels
+      // put it exactly underneath the fixed bottom nav: rendered, inside the viewport, and covered.
+      // Measured before the fix — input at 606-642, nav starting at 608.
+      //
+      // Everywhere else it stays, because a short page still has to fill the window.
+      ...(inSessionsWorkspace ? {} : { minHeight: '100vh' }),
       // The REAL cause of the session pane's header/composer "scrolling away" and landing at the
       // wrong spot: `<main>` below sets an explicit `height` for the sessions workspace, but a flex
       // item with `flex: 1 1 0%` computes its used size from the flex algorithm, not from its own
@@ -2583,7 +2593,26 @@ export default function AppLayout() {
       // bottom" call landed on an inner div that never actually had room to scroll. `position:
       // sticky` on the header/composer masked the visual symptom (they still track the PAGE's own
       // scroll) without fixing the underlying non-clipping — this fixes it at the source instead.
-      height: inSessionsWorkspace ? '100vh' : undefined,
+      // MOBILE GETS `dvh`, AND SUBTRACTS THE FIXED BOTTOM NAV — the desktop `100vh` is wrong on a
+      // phone twice over, and `<main>` below could not rescue it.
+      //
+      // `<main>` already asks for `calc(100dvh - var(--mobile-nav-h))`, which is the right figure.
+      // It never got it: `<main>` is `flex: 1 1 0%` inside THIS div, and a flex item's main-axis
+      // size comes from the flex algorithm distributing its CONTAINER's height, not from its own
+      // `height` — the very rule this comment block was written to record. So the child's careful
+      // arithmetic was overridden by the parent's `100vh`, and `100vh` on a phone is (a) taller
+      // than the visible area, because it does not shrink for the browser's collapsing URL bar,
+      // and (b) measured to the window's bottom edge, under the fixed 56px-plus-inset nav.
+      //
+      // The composer sits at the bottom of that column, so it was pushed below the fold and behind
+      // the nav — reported as "the input does not appear at all", with the conversation unable to
+      // scroll because the scrolling box never had a bounded height to scroll within.
+      //
+      // Fixing it HERE rather than on `<main>` is the point: the container is what the flex
+      // algorithm reads.
+      height: inSessionsWorkspace
+        ? (isMobile ? 'calc(100dvh - var(--mobile-nav-h))' : '100vh')
+        : undefined,
       background: 'var(--bg-base)', display: 'flex', flexDirection: 'column',
       paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth),
       paddingTop: isMobile ? 0 : TOPBAR_H,
@@ -3028,7 +3057,10 @@ export default function AppLayout() {
               // bar is NOT rendered in this workspace — see the header's own condition. While it
               // was, root content exceeded the viewport by that bar's height, the PAGE scrolled,
               // and the session's own header scrolled away with it.
-              height: isMobile ? 'calc(100dvh - var(--mobile-nav-h))' : `calc(100vh - ${TOPBAR_H}px)`,
+              // On MOBILE this fills the parent, which already subtracts the fixed nav (see the
+              // root's own note) — repeating the arithmetic here is what let the two disagree.
+              // Desktop still subtracts its own fixed top strip, which the root does not know about.
+              height: isMobile ? undefined : `calc(100vh - ${TOPBAR_H}px)`,
               minHeight: 0,
               display: 'flex', flexDirection: 'column', overflow: 'hidden',
             }
