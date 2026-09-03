@@ -17,6 +17,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import { fleetSeedNotice, fleetStaleNotice } from './fleetStale'
 import { cacheIsUsable, stripVolatile } from './fleetCache'
+import { getCentralMachine } from './centralMachinePick'
+import { relayedToSessions, type RelayedRow } from './relayedSessions'
 
 /** Mirrors `SessionAction` in `@agentistics/tui/control/sessions`, minus the verbs a page cannot do. */
 export type FleetActionId =
@@ -182,7 +184,69 @@ function emit(): void {
   for (const l of listeners) l()
 }
 
+/**
+ * On a CENTRAL there is no local fleet, and the workspace still has to work.
+ *
+ * The poller fetches the RELAYED fleet of whichever machine the aside's picker has chosen, and maps
+ * it into the very same shape a machine returns. That is what lets the aside, the overview in the
+ * centre and the header's counters stay one implementation: they read `fleet`, and none of them has
+ * to know which kind of install it is. The alternative — a second list drawn in the centre while
+ * the real aside said "no sessions on this machine yet" — is exactly what shipped and was wrong.
+ */
+let pollCentral = false
+
+export function setFleetSourceCentral(on: boolean): void {
+  if (pollCentral === on) return
+  pollCentral = on
+  snapshot = EMPTY; snapLoading = true; cachedAt = 0
+  emit()
+  if (timer !== null) void pollOnce()
+}
+
+async function pollCentralOnce(): Promise<void> {
+  const machineId = getCentralMachine()
+  if (!machineId) {
+    // No machine chosen is not a failed poll and not an empty fleet — the picker above the list
+    // is what answers it, so this reports "nothing to show" and stops.
+    snapshot = EMPTY; snapUnsupported = false; snapLoading = false; snapFailures = 0
+    emit(); return
+  }
+  try {
+    const res = await fetch(`/api/team/machine-fleet?machineId=${encodeURIComponent(machineId)}&lang=${pollLang}`)
+    if (!res.ok) { snapFailures++; return }
+    const body = await res.json() as { reply?: { rows?: RelayedRow[]; withheld?: number }; reason?: string }
+    if (!body.reply) {
+      // A named refusal is a complete ANSWER, exactly as a machine's 403 is: it clears the failure
+      // count rather than reading as silence. The picker states the reason in words.
+      snapshot = EMPTY; snapUnsupported = true; snapFailures = 0; snapLastOkMs = Date.now()
+      return
+    }
+    snapUnsupported = false
+    const rows = relayedToSessions(body.reply.rows ?? [])
+    snapshot = {
+      rows,
+      // `FleetRow` is the shaped view the panel reads; the relayed row already carries the same
+      // fields the list needs, and the verbs it may take came decided from the machine.
+      sessions: rows as unknown as FleetRow[],
+      attention: rows.filter(r => r.state === 'waiting' || r.state === 'waiting-approval').length,
+      // A relayed fleet carries no task list of its own: tasks are a local grouping, and a
+      // FINISHED task is a statement the machine's own user made. Neither is invented here.
+      tasks: [],
+      finishedTasks: [],
+    }
+    snapFailures = 0
+    snapLastOkMs = Date.now()
+    cachedAt = 0
+  } catch {
+    snapFailures++
+  } finally {
+    snapLoading = false
+    emit()
+  }
+}
+
 async function pollOnce(): Promise<void> {
+  if (pollCentral) return pollCentralOnce()
   try {
     const res = await fetch(`/api/fleet?lang=${pollLang}`)
     if (res.status === 403 || res.status === 404) {

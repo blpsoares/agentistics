@@ -27,7 +27,6 @@ import { FiltersBar } from '../components/FiltersBar'
 import { SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
 import { SessionsAside } from '../components/nav/SessionsAside'
 import { SessionActions } from '../components/sessions/SessionActions'
-import { CentralSessions } from '../components/sessions/CentralSessions'
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
@@ -42,7 +41,7 @@ export default function SessionsPage() {
 
   // Never on a central: it aggregates many machines and hosts none of their sessions, so the only
   // fleet it could read is its own box's, drawn under someone else's rows.
-  const { fleet, loading, unsupported: pollUnsupported, stale, act } = useFleet(pt ? 'pt' : 'en', !isCentral)
+  const { fleet, loading, unsupported: pollUnsupported, stale, act } = useFleet(pt ? 'pt' : 'en')
   /**
    * A CENTRAL cannot list a fleet, and must SAY so.
    *
@@ -55,7 +54,10 @@ export default function SessionsPage() {
    * The same N/A-versus-a-confident-0 rule the dashboard applies to harness capabilities: an empty
    * list may never stand in for "this install cannot answer".
    */
-  const unsupported = pollUnsupported || isCentral
+  // NOT `|| isCentral` any more: on a central the fleet is answered by the RELAY for the machine
+  // the aside's picker has chosen, so `unsupported` is again exactly what the poller reports —
+  // including the machine's own named refusal.
+  const unsupported = pollUnsupported
   const rowIndex = useFleetIndex(fleet.sessions)
 
   // Matched on BOTH ids for the same reason `fleetIndex` is keyed on both: a managed row is named
@@ -93,25 +95,6 @@ export default function SessionsPage() {
       onViewChange={setSessionView}
     />
   )
-
-  // ---------------------------------------------------------------------------
-  // A CENTRAL manages OTHER machines' sessions here.
-  //
-  // It hosts none of its own, so this page used to say exactly that and stop — true, and useless
-  // to somebody who came to manage the sessions of the machines they can reach. `CentralSessions`
-  // is the picker plus the relayed fleet, and it takes the whole page on both layouts: the local
-  // fleet, its filters and its "new session" button all describe a machine this install is not.
-  // ---------------------------------------------------------------------------
-  if (isCentral) {
-    return (
-      <div style={{
-        display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
-        overflowY: 'auto', padding: isMobile ? '10px 12px' : '20px 24px',
-      }}>
-        <CentralSessions lang={pt ? 'pt' : 'en'} filters={filters} activeOnly={activeOnly} />
-      </div>
-    )
-  }
 
   // ---------------------------------------------------------------------------
   // Mobile: one column at a time.
