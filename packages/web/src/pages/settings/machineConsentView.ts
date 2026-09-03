@@ -8,7 +8,14 @@
  *
  * Four states, and the two that look alike are the reason this is its own module:
  *
- * - **absent** — you may not ask. The row says nothing at all.
+ * - **absent** — you may not ask. It USED to say nothing at all, and that was the defect: an
+ *   instance OWNER manages every machine (`canManageMachine` short-circuits on the role) but owns
+ *   only the machines linked to their own account (`machineOwnedBy` deliberately does not), so an
+ *   owner opened the machine they administer, found no cell and no button, and had a feature that
+ *   was working correctly and looked broken. The boundary is right — reaching into a machine's
+ *   sessions is narrower than administering it — but a boundary nobody can see is one people
+ *   report as a bug, which is exactly what happened. It is now a SENTENCE (`tone: 'not-owner'`),
+ *   and the row still offers no button: stating a limit is not lifting it.
  * - **`null`** — this machine has not said. Not a refusal: a machine that is off, or one running a
  *   build that predates the announcement, is silent in exactly the same way. Reporting silence as
  *   "this machine refuses" would send someone to a switch to change something already set.
@@ -26,7 +33,7 @@ export interface MachineConsentFacts {
   atMs: number
 }
 
-export type MachineConsentTone = 'granted' | 'refused' | 'silent'
+export type MachineConsentTone = 'granted' | 'refused' | 'silent' | 'not-owner'
 
 export interface MachineConsentView {
   tone: MachineConsentTone
@@ -51,9 +58,28 @@ export function machineConsentView(
   consent: MachineConsentFacts | null | undefined,
   online: boolean,
   lang: 'en' | 'pt',
+  /**
+   * Does the VIEWER appear in this machine's own account list?
+   *
+   * Omitted by a caller that cannot tell, which keeps the old behaviour (draw nothing) rather than
+   * asserting a reason it does not know. Passed as `false` it produces the `not-owner` sentence —
+   * the machine is on screen because the viewer may administer it, and the reason its sessions are
+   * not is worth one line.
+   */
+  viewerOwnsMachine?: boolean,
 ): MachineConsentView | null {
-  if (consent === undefined) return null
   const pt = lang === 'pt'
+  if (consent === undefined) {
+    if (viewerOwnsMachine !== false) return null
+    return {
+      tone: 'not-owner',
+      screens: false,
+      short: pt ? 'outra conta' : 'another account',
+      text: pt
+        ? 'As sessões desta máquina só podem ser vistas pelas contas às quais ela está vinculada. Vincule sua conta a ela para chegar às sessões.'
+        : 'This machine’s sessions are reachable only by the accounts it is linked to. Link your account to it to reach them.',
+    }
+  }
   if (consent === null) {
     return {
       tone: 'silent',
