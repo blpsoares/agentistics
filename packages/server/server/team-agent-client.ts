@@ -203,6 +203,55 @@ const IDENTITY_RETRY_COOLDOWN_MS = 5 * 60_000
  */
 const LIVE_REPORT_INTERVAL_MS = 8_000
 
+/**
+ * How old the METRICS CORPUS behind a live-session report may be before this loop asks data.ts
+ * for a fresh one.
+ *
+ * The report itself keeps its `LIVE_REPORT_INTERVAL_MS` cadence — the /proc snapshot is the part
+ * that has to be current. The `ApiResponse` beside it is used for exactly two reads: resolving a
+ * live process to the session id it is writing, and building the share-rules path index. Both move
+ * at the pace of a session STARTING, not of a turn, so a corpus a minute old answers them.
+ *
+ * It exists because `buildApiResponse()` is not the cheap read its name suggests on a machine
+ * somebody is coding on. `sse.ts`'s watcher calls `invalidateCache()` on EVERY append to a live
+ * transcript, which zeroes data.ts's stale-while-revalidate timestamp — so its 30s TTL is
+ * permanently expired and every call KICKS A FULL REBUILD: a walk of every transcript on the
+ * machine, `git log --numstat` per project, and a peak measured at 550-810 MB.
+ *
+ * MEASURED 2026-09-03 on the reporter's own machine (846 MB of transcripts across 1.328 files,
+ * 6 live assistants, member mode, NO browser and no dashboard open):
+ *   - `agentop server` read 1.457 MB of file data PER MINUTE (92,6 GB cumulative in 81 minutes,
+ *     ~110 re-reads of a corpus that fits in RAM), burned 30% of one core continuously, spawned
+ *     bursts of up to 220 concurrent `git` children, and oscillated between 1,28 GB and 2,20 GB
+ *     of RSS with a 2,04 GB high-water mark.
+ *   - The SAME build in solo mode — same store, same code, same file churn, but no reverse
+ *     channel and therefore no live-report loop — idled at 188 MB, 1-2% CPU and 0 MB/min.
+ *   - A solo server driven with an 8s `/api/data` poll (this loop's cadence, same code path)
+ *     reproduced it: 188 MB -> 700 MB within four minutes.
+ *
+ * This is the same defect `peekPushContext()` in team-uploader.ts was added for, one module over:
+ * a poller whose cadence is set by what it WATCHES ended up setting the cadence of the most
+ * expensive computation in the process. The complete fix belongs in data.ts (a peek that never
+ * revalidates, or a floor on how often a background revalidation may start); this constant is the
+ * caller-side half, and it removes ~7 of the ~8 rebuild triggers this loop contributes per minute.
+ */
+export const LIVE_REPORT_DATA_MAX_AGE_MS = 60_000
+
+/**
+ * Whether the live-session report should ask for a fresh `ApiResponse`. PURE.
+ *
+ * `null` = this loop has never obtained one, which ALWAYS rebuilds: the first report has nothing
+ * to reuse, and reporting no sessions because the corpus was not ready would be worse than the
+ * one build. Thereafter it is a plain age test against `LIVE_REPORT_DATA_MAX_AGE_MS`.
+ */
+export function liveReportNeedsData(
+  lastBuiltAtMs: number | null,
+  nowMs: number,
+  maxAgeMs: number = LIVE_REPORT_DATA_MAX_AGE_MS,
+): boolean {
+  return lastBuiltAtMs === null || nowMs - lastBuiltAtMs >= maxAgeMs
+}
+
 const liveTimers = new Map<string, ReturnType<typeof setInterval>>()
 
 /**
@@ -226,6 +275,12 @@ const liveTimers = new Map<string, ReturnType<typeof setInterval>>()
 function startLiveReporting(connId: string, socket: WebSocket): void {
   stopLiveReporting(connId)
 
+  // The corpus this loop reads, held across ticks. See LIVE_REPORT_DATA_MAX_AGE_MS: calling
+  // buildApiResponse() every tick made THIS 8s timer the cadence of a full transcript walk.
+  // Per socket, so a torn-down connection drops its copy with the timer.
+  let heldData: Awaited<ReturnType<typeof import('./data').buildApiResponse>> | null = null
+  let heldAt: number | null = null
+
   const send = async (): Promise<void> => {
     if (socket.readyState !== WebSocket.OPEN) return
     try {
@@ -234,7 +289,15 @@ function startLiveReporting(connId: string, socket: WebSocket): void {
         import('./live-sessions'),
         import('./share-rules'),
       ])
-      const data = await buildApiResponse()
+      if (liveReportNeedsData(heldAt, Date.now())) {
+        heldData = await buildApiResponse()
+        // Stamped AFTER the await: a build that took 30s must not be born half expired, or a
+        // slow machine is exactly the one that goes back to rebuilding on every tick.
+        heldAt = Date.now()
+      }
+      // Non-null after the block above: the `null` age always rebuilds, and a build that throws
+      // leaves the catch below rather than reaching here.
+      const data = heldData!
       const snap = await getLiveSnapshot(data.sessions)
 
       // A connection that vanished mid-flight reports nothing: there is no denylist left to
