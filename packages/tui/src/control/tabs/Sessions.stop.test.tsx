@@ -101,13 +101,89 @@ function rig(): Rig {
     setSessionPollMs: async () => {},
     onOutput: () => () => {},
     readLog: async () => [],
-    sessions: async () => fleet(),
+    // DELIBERATELY SLOW. `sessions()` is a network-shaped call on a real host, and the CI runner
+    // resolved it later than a developer machine did — which is exactly what broke these tests
+    // when they waited out a fixed number of milliseconds before typing. Keeping a delay here
+    // means the frame gate in `drive` is exercised on every run rather than being satisfied by
+    // accident on a fast machine.
+    sessions: async () => { await sleep(SESSIONS_DELAY_MS); return fleet() },
     killSession: async (id: string) => { killed.push(id); return { ok: true, message: '' } },
   } as unknown as ControlHost
   return { killed, written, host }
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+/** How long the fake host takes to answer `sessions()`. See the rig. */
+const SESSIONS_DELAY_MS = 60
+
+/**
+ * The DEADLINE on a test, not a wait.
+ *
+ * Nothing here waits out a duration — every wait is a condition (`until` / `untilTrue`), and this
+ * is only how long a condition is given before it reports which one it was. It is generous because
+ * a loaded runner is the case that broke these tests once already, and because the failure it
+ * produces ("timed out waiting for the fleet to be drawn", with the frame attached) is worth far
+ * more than bun's bare per-test timeout.
+ */
+const DEADLINE_MS = 20_000
+
+/**
+ * Wait for a CONDITION, never for a duration.
+ *
+ * These tests used to type after `await sleep(150)`. That held on a developer machine and lost on
+ * the CI runner: `host.sessions()` had not resolved, the list was still drawing `reading…` over
+ * `0 sessions`, and every keystroke landed on an empty fleet — so `x` named nothing, the pinned
+ * band never existed and `killSession` was never called. Four tests failed for one reason, and the
+ * reason was the clock. A longer sleep would only move the number at which it next loses.
+ *
+ * The frame is the ground truth, so it is what is waited on. A timeout throws with the last frame
+ * attached, because the failure this replaces was diagnosable only by reading one.
+ */
+async function until(
+  read: () => string,
+  pred: (frame: string) => boolean,
+  what: string,
+  timeoutMs = 4000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+  let frame = read()
+  while (!pred(frame)) {
+    if (Date.now() > deadline) {
+      throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}.\nLast frame:\n${frame}`)
+    }
+    await sleep(5)
+    frame = read()
+  }
+  return frame
+}
+
+/** The same, for a fact that is not on the screen — what the host was actually asked to do. */
+async function untilTrue(pred: () => boolean, what: string, timeoutMs = 4000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!pred()) {
+    if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`)
+    await sleep(5)
+  }
+}
+
+/**
+ * Let one keystroke finish being drawn — a fixed number of event-loop TURNS, not a duration.
+ *
+ * A key press is pure state on this screen: Ink parses the bytes and re-renders without waiting on
+ * anything, so what a burst of keys needs between them is the loop draining, and that is a count of
+ * turns rather than a number of milliseconds. Everything that does depend on the host — the fleet
+ * arriving, the kills landing, the arrangement reaching the disk seam — is waited for by an
+ * explicit `until` instead, which is the whole point: a wait is either deterministic or it is a
+ * condition, never a guess about how fast the machine is.
+ *
+ * Waiting for the frame to stop MOVING was tried and rejected: the cockpit re-polls the fleet and
+ * animates, so "quiet for three reads" is a state this screen legitimately never reaches, and every
+ * keystroke then burned its whole cap — the suite went from seconds to five minutes while passing.
+ */
+async function flush(turns = 4): Promise<void> {
+  for (let i = 0; i < turns; i++) await sleep(0)
+}
 
 /**
  * Just the QUESTION pane, as one line of text.
@@ -139,7 +215,12 @@ function question(frame: string): string {
  * in one chunk is parsed as a single garbled escape sequence, and a question opens on a state
  * change the next key has to be able to see.
  */
-async function drive(host: ControlHost, keys: readonly string[]): Promise<{ frame: string; unmount: () => void }> {
+async function drive(
+  host: ControlHost,
+  keys: readonly string[],
+  /** What the screen must be showing before the frame is read. Named, so a timeout says what failed. */
+  ready?: { what: string; is: (frame: string) => boolean },
+): Promise<{ frame: string; unmount: () => void }> {
   const size = { columns: process.stdout.columns, rows: process.stdout.rows }
   Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true })
   Object.defineProperty(process.stdout, 'rows', { value: ROWS, configurable: true })
@@ -149,23 +230,35 @@ async function drive(host: ControlHost, keys: readonly string[]): Promise<{ fram
   // the instance and re-rendering is what makes the frame land at the requested width.
   Object.defineProperty(app.stdout, 'columns', { get: () => COLS, configurable: true })
   app.rerender(element)
-  await sleep(150)
-  for (const key of keys) {
-    app.stdin.write(key)
-    await sleep(60)
+  const read = () => plain(app.lastFrame())
+  const restore = () => {
+    Object.defineProperty(process.stdout, 'columns', { value: size.columns, configurable: true })
+    Object.defineProperty(process.stdout, 'rows', { value: size.rows, configurable: true })
   }
-  await sleep(80)
-  const frame = plain(app.lastFrame())
-  Object.defineProperty(process.stdout, 'columns', { value: size.columns, configurable: true })
-  Object.defineProperty(process.stdout, 'rows', { value: size.rows, configurable: true })
-  return { frame, unmount: () => app.unmount() }
+  try {
+    // THE FLEET HAS TO BE ON SCREEN BEFORE A KEY IS PRESSED. `pollFleet` awaits `host.sessions()`
+    // and only then commits a frame; until it does, the pane draws `reading…` over `0 sessions`
+    // and every keystroke acts on an empty list. This is the gate that used to be a sleep.
+    await until(read, f => f.includes('aaa11') && f.includes('ddd44'), 'the fleet to be drawn')
+    for (const key of keys) {
+      app.stdin.write(key)
+      await flush()
+    }
+    if (ready) await until(read, ready.is, ready.what)
+    return { frame: read(), unmount: () => { restore(); app.unmount() } }
+  } catch (err) {
+    restore()
+    app.unmount()
+    throw err
+  }
 }
 
 describe('pinning and stopping are two gestures', () => {
   test('`x` outside the mode names the ROW UNDER THE CURSOR, whatever is pinned', async () => {
     // THE REPORTED DEFECT. Two rows pinned with `space`, the cursor moved onto a third, `x`.
     const r = rig()
-    const { frame, unmount } = await drive(r.host, [' ', '\x1b[B', ' ', '\x1b[B', 'x'])
+    const { frame, unmount } = await drive(r.host, [' ', '\x1b[B', ' ', '\x1b[B', 'x'],
+      { what: 'the confirmation to open', is: f => f.includes('─ question ─') })
     try {
       // Both rows really are pinned, and really are in the band — the pin was not silently lost.
       expect(frame).toContain('pinned  2')
@@ -177,11 +270,12 @@ describe('pinning and stopping are two gestures', () => {
       // No count of anything. The old question was "encerrar as 2 sessões marcadas?".
       expect(asked).not.toMatch(/\d/)
     } finally { unmount() }
-  })
+  }, DEADLINE_MS)
 
   test('the mode is ANNOUNCED, and `space` inside it selects instead of pinning', async () => {
     const r = rig()
-    const { frame, unmount } = await drive(r.host, [CTRL_X, ' ', '\x1b[B', ' '])
+    const { frame, unmount } = await drive(r.host, [CTRL_X, ' ', '\x1b[B', ' '],
+      { what: 'two rows to be selected for stopping', is: f => f.includes('2 selected to stop') })
     try {
       // Readable from the screen alone: the pane title and the banner both say it, and the banner
       // names every key that works while it is on.
@@ -192,7 +286,7 @@ describe('pinning and stopping are two gestures', () => {
       // `space` did NOT pin: the pinned band does not exist, because nothing is pinned.
       expect(frame).not.toContain('pinned')
     } finally { unmount() }
-  })
+  }, DEADLINE_MS)
 
   test('`x` inside the mode stops exactly the picked rows, states the count, and LEAVES the mode', async () => {
     const r = rig()
@@ -202,29 +296,38 @@ describe('pinning and stopping are two gestures', () => {
       ' ', '\x1b[B', CTRL_X, ' ', '\x1b[B', ' ', '\x1b[B', ' ',
       // `x`, then up to `Yes`, then enter.
       'x', '\x1b[A', '\r',
-    ])
+    ], {
+      what: 'the three stopped rows to leave the list and the mode to close',
+      is: f => !f.includes('STOP MODE') && !f.includes('bravo'),
+    })
     try {
-      expect(r.killed.sort()).toEqual(['bbb22', 'ccc33', 'ddd44'])
+      await untilTrue(() => r.killed.length === 3, 'three sessions to be stopped')
+      expect(r.killed.slice().sort()).toEqual(['bbb22', 'ccc33', 'ddd44'])
       // The mode closed BY ITSELF — no second keystroke was typed after the confirmation.
       expect(frame).not.toContain('STOP MODE')
       // And the pinned row is still there, still pinned, still in its band.
       expect(frame).toContain('pinned')
       expect(frame).toContain('alpha')
     } finally { unmount() }
-  })
+  }, DEADLINE_MS)
 
   test('the confirmation inside the mode states how many rows are about to die', async () => {
     const r = rig()
-    const { frame, unmount } = await drive(r.host, [CTRL_X, ' ', '\x1b[B', ' ', '\x1b[B', ' ', 'x'])
+    const { frame, unmount } = await drive(r.host, [CTRL_X, ' ', '\x1b[B', ' ', '\x1b[B', ' ', 'x'],
+      { what: 'the confirmation to open', is: f => f.includes('─ question ─') })
     try {
       expect(frame).toContain('Stop the 3 selected sessions?')
       expect(r.killed).toEqual([])
     } finally { unmount() }
-  })
+  }, DEADLINE_MS)
 
   test('leaving the mode with `ctrl+x` stops nothing and leaves the pinned set alone', async () => {
     const r = rig()
-    const { frame, unmount } = await drive(r.host, [' ', '\x1b[B', CTRL_X, ' ', '\x1b[B', ' ', CTRL_X])
+    const { frame, unmount } = await drive(r.host, [' ', '\x1b[B', CTRL_X, ' ', '\x1b[B', ' ', CTRL_X],
+      {
+        what: 'the mode to be gone with the one pinned row still banded',
+        is: f => !f.includes('STOP MODE') && f.includes('pinned  1'),
+      })
     try {
       expect(r.killed).toEqual([])
       expect(frame).not.toContain('STOP MODE')
@@ -233,12 +336,14 @@ describe('pinning and stopping are two gestures', () => {
       // Re-entering finds nothing waiting: the banner counts zero.
       unmount()
     } finally { /* unmounted above */ }
-  })
+  }, DEADLINE_MS)
 
   test('the stop selection is never written to disk, and pinning still is', async () => {
     const r = rig()
-    const { unmount } = await drive(r.host, [' ', '\x1b[B', CTRL_X, ' ', '\x1b[B', ' '])
+    const { unmount } = await drive(r.host, [' ', '\x1b[B', CTRL_X, ' ', '\x1b[B', ' '],
+      { what: 'two rows to be selected for stopping', is: f => f.includes('2 selected to stop') })
     try {
+      await untilTrue(() => r.written.length > 0, 'the arrangement to reach the disk seam')
       // Pinning reached the disk seam...
       const last = r.written.at(-1)
       expect(last).toBeDefined()
@@ -249,17 +354,18 @@ describe('pinning and stopping are two gestures', () => {
       expect(all).not.toContain('bbb22')
       expect(all).not.toContain('ccc33')
     } finally { unmount() }
-  })
+  }, DEADLINE_MS)
 
   test('`esc` keeps its own job — it does not double as the way out of the mode', async () => {
     // Declared behaviour, held here so it cannot drift into a second exit by accident: `esc` on
     // this screen drops the search, then the project, then the task. `ctrl+x` is the one key that
     // leaves the mode.
     const r = rig()
-    const { frame, unmount } = await drive(r.host, [CTRL_X, ' ', ESC])
+    const { frame, unmount } = await drive(r.host, [CTRL_X, ' ', ESC],
+      { what: 'the mode to still be on after esc', is: f => f.includes('1 selected to stop') })
     try {
       expect(frame).toContain('STOP MODE')
       expect(frame).toContain('1 selected to stop')
     } finally { unmount() }
-  })
+  }, DEADLINE_MS)
 })
