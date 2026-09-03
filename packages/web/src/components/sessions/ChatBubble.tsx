@@ -25,7 +25,7 @@ import remarkGfm from 'remark-gfm'
 // message written across several lines renders as one run-on paragraph — which is what "the
 // messages are not formatted" turned out to mean. `HarnessChat` has always used it.
 import remarkBreaks from 'remark-breaks'
-import { Clock, CornerUpLeft, User } from 'lucide-react'
+import { Check, Clock, CornerUpLeft, Loader, User } from 'lucide-react'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { splitImageAttachments } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
@@ -36,6 +36,14 @@ export interface ChatTurn {
   role: 'user' | 'assistant'
   text: string
   pending?: boolean
+  /**
+   * A background TASK this turn started, by the label the assistant gave it.
+   *
+   * A watcher is the one tool call worth a line in a conversation: it is long, it is usually the
+   * thing the reader is waiting for, and its END is already reported. Rendered as a status line and
+   * never as a message — nobody said it.
+   */
+  task?: { label: string; running: boolean }
   /**
    * This sat under the `user` role and no person wrote it — a background task reporting back, an
    * injected reminder, a `!` command's stdout. The value NAMES the kind; it is never the body.
@@ -120,6 +128,35 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
   // NOT a message, and not drawn as one: no avatar, no bubble, no side. A dim centred note naming
   // what the harness put in the transcript, so the reply below it still has something above it
   // while nobody is credited with having typed it.
+  // A BACKGROUND TASK: a dim line, unattributed, that says whether it is still going. Drawn before
+  // the system note below because it is the same kind of thing — a fact about the session rather
+  // than something either side said — and it carries no bubble for the same reason.
+  if (turn.task) {
+    const running = turn.task.running
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '2px 0' }}>
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          fontSize: 10.5, lineHeight: 1.4,
+          color: running ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+          padding: '3px 10px', borderRadius: 999,
+          background: 'var(--bg-elevated)',
+          border: `1px solid ${running ? 'color-mix(in srgb, var(--anthropic-orange) 40%, transparent)' : 'var(--border-subtle)'}`,
+          maxWidth: '90%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {running
+            ? <Loader size={11} className="ag-working-spin" style={{ flexShrink: 0 }} />
+            : <Check size={11} style={{ flexShrink: 0 }} />}
+          <span>
+            {running
+              ? (pt ? `em segundo plano: ${turn.task.label}` : `in the background: ${turn.task.label}`)
+              : (pt ? `terminou: ${turn.task.label}` : `finished: ${turn.task.label}`)}
+          </span>
+        </span>
+      </div>
+    )
+  }
+
   if (turn.system) {
     return (
       <div style={{

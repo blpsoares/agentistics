@@ -1731,6 +1731,26 @@ packages/vscode/src/
   uses, so the two can never disagree about one day. No rate means DOLLARS, never a converted figure
   invented from a guess.
 
+## What each surface is CALLED
+
+Four front doors, and a person saying "the sessions screen" has to land on exactly one of them.
+These are the names to use in conversation, in commits and in comments; they are not
+interchangeable.
+
+- **the Sessions workspace** — the WEB one: `/sessions`, the aside with the fleet on the left and
+  the centre holding either the overview (`FleetOverview`) or the open session's chat and terminal.
+  On a central it is the same workspace, showing the relayed fleet of the machine its picker has
+  chosen. When someone says "a interface de sessões", "a tela de sessões" or "the sessions view",
+  this is it.
+- **the cockpit** — the TERMINAL one: `agentop`'s control center (`packages/tui/src/control`), whose
+  own `sessions` tab draws the fleet. Never call the web one a cockpit; the ambiguity is the whole
+  reason this list exists.
+- **the VS Code extension** — `packages/vscode`, a client of `agentop server` and nothing more.
+- **`agentop session …`** — the CLI verbs.
+
+The FLEET is what all four show: the live sessions plus the conversations that can be reopened. A
+"session" is one conversation; the "fleet" is the set.
+
 ## Important rules
 
 - **Anything agentop writes OUTSIDE its own directories is an explicit act of the user, and is

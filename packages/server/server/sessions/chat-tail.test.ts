@@ -239,3 +239,79 @@ describe('readRecentChatTurns', () => {
     ])
   })
 })
+
+/**
+ * A watcher is the one tool call worth a line in a conversation. Its END was already reported (the
+ * `<task-notification>` that comes back as a system note); only the START was missing, so a task
+ * appeared to finish having never begun.
+ */
+describe('background tasks', () => {
+  let root: string
+  let file: string
+
+  const bgStart = (id: string, description: string) => line({
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'x', description, run_in_background: true } }] },
+  })
+  const bgDone = (id: string) => line({
+    type: 'user',
+    message: { content: `<task-notification>\n<tool-use-id>${id}</tool-use-id>\n<status>completed</status>\n</task-notification>` },
+  })
+  const foreground = () => line({
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', id: 'tu_fg', name: 'Bash', input: { command: 'ls', description: 'List files' } }] },
+  })
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'chat-tail-bg-'))
+    const dir = join(root, '-p')
+    await mkdir(dir, { recursive: true })
+    file = join(dir, `${SESSION_ID}.jsonl`)
+    forgetChatTailPaths(); forgetChatTailContent()
+  })
+  afterEach(async () => { await rm(root, { recursive: true, force: true }) })
+
+  test('a started task is a RUNNING line, by the label the assistant gave it', async () => {
+    await writeFile(file, [bgStart('tu_1', 'Ship the grant')].join('\n') + '\n')
+    const turns = await readRecentChatTurns(file, 20)
+    const task = turns.find(t => t.task)
+    expect(task?.task).toEqual({ label: 'Ship the grant', running: true })
+  })
+
+  test('its notification settles it, paired by tool-use-id', async () => {
+    // The exact pairing: the notification carries the id of the very tool_use that launched it.
+    await writeFile(file, [bgStart('tu_1', 'Ship the grant'), bgDone('tu_1')].join('\n') + '\n')
+    const turns = await readRecentChatTurns(file, 20)
+    expect(turns.find(t => t.task)?.task).toEqual({ label: 'Ship the grant', running: false })
+  })
+
+  test("someone else's notification does not settle it", async () => {
+    await writeFile(file, [bgStart('tu_1', 'Watch the release'), bgDone('tu_other')].join('\n') + '\n')
+    expect(turns2(await readRecentChatTurns(file, 20)).running).toBe(true)
+  })
+
+  test('a FOREGROUND tool call draws no line at all', async () => {
+    // Rendering every tool call would turn a conversation into a command log — the discriminator is
+    // the tool's own `run_in_background`, never a guess about how long something might take.
+    await writeFile(file, [foreground()].join('\n') + '\n')
+    const turns = await readRecentChatTurns(file, 20)
+    expect(turns.some(t => t.task)).toBe(false)
+  })
+
+  test('two tasks are settled independently', async () => {
+    await writeFile(file, [
+      bgStart('tu_1', 'First'), bgStart('tu_2', 'Second'), bgDone('tu_2'),
+    ].join('\n') + '\n')
+    const byLabel = new Map(
+      (await readRecentChatTurns(file, 20)).filter(t => t.task).map(t => [t.task!.label, t.task!.running]),
+    )
+    expect(byLabel.get('First')).toBe(true)
+    expect(byLabel.get('Second')).toBe(false)
+  })
+})
+
+function turns2(turns: { task?: { label: string; running: boolean } }[]): { label: string; running: boolean } {
+  const t = turns.find(x => x.task)?.task
+  if (!t) throw new Error('no task line')
+  return t
+}
