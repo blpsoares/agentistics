@@ -1,6 +1,12 @@
 import { test, expect } from 'bun:test'
 import {
   resolveUpgradeAsset,
+  releaseAssetName,
+  releaseAssetUrl,
+  releaseTag,
+  downloadUpgradeAsset,
+  downloadFailureMessage,
+  downloadFailureReason,
   verifyDownload,
   looksLikeExecutable,
   checkBinaryVersionOutput,
@@ -12,7 +18,10 @@ import {
   upgradeBackoffMs,
   UPGRADE_BACKOFF_STEPS_MS,
   MIN_BINARY_BYTES,
+  type UpgradeTarget,
 } from './upgrade'
+import { cliStrings } from './cli-i18n'
+import { resolveLatestRelease } from './version'
 
 // --- platform/arch gate -----------------------------------------------------
 // .github/workflows/release.yml publishes exactly two compiled assets: `agentop`
@@ -21,23 +30,140 @@ import {
 // arm64 box replaces a working binary with one the kernel cannot exec.
 
 test('only the platform/arch pairs the release workflow publishes are self-installable', () => {
-  expect(resolveUpgradeAsset('linux', 'x64')).toEqual({
+  expect(resolveUpgradeAsset('linux', 'x64', '2.5.0')).toEqual({
     asset: 'agentop',
-    url: 'https://github.com/blpsoares/agentistics/releases/latest/download/agentop',
+    url: 'https://github.com/blpsoares/agentistics/releases/download/v2.5.0/agentop',
+    version: '2.5.0',
   })
-  expect(resolveUpgradeAsset('win32', 'x64')).toEqual({
+  expect(resolveUpgradeAsset('win32', 'x64', '2.5.0')).toEqual({
     asset: 'agentop.exe',
-    url: 'https://github.com/blpsoares/agentistics/releases/latest/download/agentop.exe',
+    url: 'https://github.com/blpsoares/agentistics/releases/download/v2.5.0/agentop.exe',
+    version: '2.5.0',
   })
 })
 
 test('unsupported platform/arch combinations are refused', () => {
-  expect(resolveUpgradeAsset('linux', 'arm64')).toBeNull()   // Raspberry Pi / Ampere VM
-  expect(resolveUpgradeAsset('linux', 'arm')).toBeNull()
-  expect(resolveUpgradeAsset('darwin', 'arm64')).toBeNull()  // no macOS asset at all
-  expect(resolveUpgradeAsset('darwin', 'x64')).toBeNull()
-  expect(resolveUpgradeAsset('win32', 'arm64')).toBeNull()
-  expect(resolveUpgradeAsset('freebsd', 'x64')).toBeNull()
+  expect(resolveUpgradeAsset('linux', 'arm64', '2.5.0')).toBeNull()   // Raspberry Pi / Ampere VM
+  expect(resolveUpgradeAsset('linux', 'arm', '2.5.0')).toBeNull()
+  expect(resolveUpgradeAsset('darwin', 'arm64', '2.5.0')).toBeNull()  // no macOS asset at all
+  expect(resolveUpgradeAsset('darwin', 'x64', '2.5.0')).toBeNull()
+  expect(resolveUpgradeAsset('win32', 'arm64', '2.5.0')).toBeNull()
+  expect(resolveUpgradeAsset('freebsd', 'x64', '2.5.0')).toBeNull()
+  // The gate is answerable WITHOUT a version — that is why the asset name is its own function.
+  expect(releaseAssetName('linux', 'arm64')).toBeNull()
+  expect(releaseAssetName('linux', 'x64')).toBe('agentop')
+})
+
+// --- the address is the RESOLVED VERSION, never GitHub's "Latest" flag -------
+// 2026-09-02 13:57 UTC: the extension's `vscode-v1.0.0` release (a `.vsix` and nothing else) was
+// published, took the "Latest" flag, and `/releases/latest/download/agentop` began answering 404
+// on every machine — while v2.5.0's binary sat published and intact. The two notions of "latest"
+// disagreed, and the download was reading the movable one.
+
+test('a release tag is normalized whether or not the version carries its v', () => {
+  expect(releaseTag('2.5.0')).toBe('v2.5.0')
+  expect(releaseTag('v2.5.0')).toBe('v2.5.0')
+  expect(releaseTag(' 2.5.0 ')).toBe('v2.5.0')
+  expect(releaseAssetUrl('v2.5.0', 'agentop'))
+    .toBe('https://github.com/blpsoares/agentistics/releases/download/v2.5.0/agentop')
+})
+
+test('no download URL is derived from the movable `latest` alias', () => {
+  for (const version of ['2.5.0', 'v2.5.0', '10.0.1']) {
+    for (const [platformId, arch] of [['linux', 'x64'], ['win32', 'x64']] as const) {
+      const target = resolveUpgradeAsset(platformId, arch, version)!
+      expect(target.url).not.toContain('releases/latest/download')
+      expect(target.url).toContain(`/releases/download/${releaseTag(version)}/`)
+    }
+  }
+})
+
+test('the release flagged "Latest" holding no agentop asset does not move the download', async () => {
+  // The releases API answer as it stood during the incident: the extension release was published
+  // most recently (so GitHub flags it "Latest") and carries no binary; v2.5.0 is the real newest
+  // agentop. `resolveLatestRelease` — what `getVersionInfo()` runs — ignores the non-semver tag.
+  const releases = [
+    { tag_name: 'vscode-v1.0.0', body: 'VS Code extension' },
+    { tag_name: 'v2.5.0', body: '' },
+    { tag_name: 'v2.4.0', body: '' },
+  ]
+  const resolved = resolveLatestRelease(releases, '2.4.0')
+  expect(resolved.latest).toBe('2.5.0')
+  expect(resolved.hasUpdate).toBe(true)
+
+  // The download must address THAT version — the fact the command already had in hand.
+  const target = resolveUpgradeAsset('linux', 'x64', resolved.latest)!
+  const asked: string[] = []
+  const spy = (async (url: any) => {
+    asked.push(String(url))
+    // Only the version-addressed URL carries the binary; the "latest" alias is the 404 of the incident.
+    if (String(url).includes('releases/latest/download')) {
+      return new Response('Not Found', { status: 404 })
+    }
+    return new Response(new Uint8Array([0x7f, 0x45, 0x4c, 0x46]))
+  }) as unknown as typeof fetch
+
+  const result = await downloadUpgradeAsset(target, spy)
+  expect(asked).toEqual(['https://github.com/blpsoares/agentistics/releases/download/v2.5.0/agentop'])
+  expect(result.ok).toBe(true)
+  expect(result.ok === true && Array.from(result.bytes)).toEqual([0x7f, 0x45, 0x4c, 0x46])
+})
+
+test('the module holds no `latest` download alias for either path to pick up again', async () => {
+  const src = await Bun.file(new URL('./upgrade.ts', import.meta.url)).text()
+  // Comments are stripped: the alias is NAMED in the prose that records the incident, and a trap
+  // that forbade writing it down would forbid explaining it. What must not come back is the CODE.
+  const code = src
+    .split('\n')
+    .filter(line => !/^\s*(\/\/|\/?\*)/.test(line))
+    .join('\n')
+  // RELEASES_PAGE (`/releases`) is a page for a PERSON and stays; the download ALIAS may not
+  // reappear — the manual path and the automatic one both take their address from this module.
+  expect(code).not.toContain('releases/latest/download')
+  // And there is exactly ONE place a download URL is built, so the two paths cannot diverge.
+  expect(code.split('/releases/download/').length - 1).toBe(1)
+})
+
+// --- a missing asset and a broken network are different sentences ------------
+
+const linuxTarget = (): UpgradeTarget => resolveUpgradeAsset('linux', 'x64', '2.5.0')!
+
+test('a 404 is reported as that version lacking the asset, never as a bare HTTP code', async () => {
+  const spy = (async () => new Response('Not Found', { status: 404 })) as unknown as typeof fetch
+  const result = await downloadUpgradeAsset(linuxTarget(), spy)
+  expect(result).toEqual({ ok: false, kind: 'missing-asset', status: 404 })
+
+  const target = linuxTarget()
+  const msg = downloadFailureMessage(result as any, target, cliStrings('en'))
+  expect(msg).toContain('v2.5.0')
+  expect(msg).toContain('agentop')
+  expect(msg).toContain(target.url)
+  // A person reading only this line must not conclude their connection failed.
+  expect(msg).toContain('network is fine')
+  expect(downloadFailureReason(result as any, target)).toBe('release v2.5.0 has no agentop asset (HTTP 404)')
+
+  const pt = downloadFailureMessage(result as any, target, cliStrings('pt'))
+  expect(pt).toContain('não tem o anexo agentop')
+})
+
+test('a network failure says so, and is not dressed up as a missing asset', async () => {
+  const spy = (async () => { throw new Error('The operation timed out') }) as unknown as typeof fetch
+  const result = await downloadUpgradeAsset(linuxTarget(), spy)
+  expect(result).toEqual({ ok: false, kind: 'network', message: 'The operation timed out' })
+
+  const msg = downloadFailureMessage(result as any, linuxTarget(), cliStrings('en'))
+  expect(msg).toContain('The operation timed out')
+  expect(msg).toContain('network failure')
+  expect(msg).not.toContain('does not carry')
+  expect(downloadFailureReason(result as any, linuxTarget())).toBe('download failed: The operation timed out')
+})
+
+test('a non-404 HTTP answer is neither of the two — it keeps its status', async () => {
+  const spy = (async () => new Response('nope', { status: 503 })) as unknown as typeof fetch
+  const result = await downloadUpgradeAsset(linuxTarget(), spy)
+  expect(result).toEqual({ ok: false, kind: 'http', status: 503 })
+  expect(downloadFailureMessage(result as any, linuxTarget(), cliStrings('en'))).toContain('HTTP 503')
+  expect(downloadFailureReason(result as any, linuxTarget())).toBe('download failed: HTTP 503')
 })
 
 // --- download verification --------------------------------------------------
@@ -79,8 +205,8 @@ test('verifyDownload rejects truncated payloads and non-executables', () => {
 
 test('the downloaded binary must identify itself as the expected version (or newer)', () => {
   expect(checkBinaryVersionOutput('agentop v1.7.0\n', '1.7.0')).toEqual({ ok: true, found: '1.7.0' })
-  // The download URL is the ROLLING `latest` release, which can be one bump ahead of the
-  // newest version the releases API lists — newer is fine, older is not.
+  // A release whose asset was compiled from a later commit reports the higher number — newer is
+  // fine, older is not: that is the direction this check exists to catch.
   expect(checkBinaryVersionOutput('agentop v1.7.1\n', '1.7.0')).toEqual({ ok: true, found: '1.7.1' })
   expect(checkBinaryVersionOutput('agentop v1.6.9\n', '1.7.0')).toEqual({ ok: false, found: '1.6.9' })
   // Nothing usable printed → the file did not run (wrong arch, corrupt, killed).
