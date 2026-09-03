@@ -70,11 +70,27 @@ interface Rig {
   /** Every `sessionView` the screen has written to disk, newest last. */
   written: Partial<SessionViewPrefs>[]
   host: ControlHost
+  /**
+   * Resolves the first time the screen ASKED for the fleet and was answered.
+   *
+   * A promise, not something to poll for — and that distinction is the whole of the CI failure this
+   * replaces. `drive` polled the frame every 5ms until the fleet appeared, running a regex over a
+   * 4KB frame two hundred times a second; on a saturated runner that competed with the very timers
+   * it was waiting on, so the gate starved the effect it was gating and every test timed out at it.
+   * Awaiting the host's own resolution costs nothing while it waits, which leaves a contended
+   * process alone to get there.
+   */
+  fleetServed: Promise<void>
+  /** How many times the screen has asked for the fleet. Reported when a wait gives up. */
+  polls: () => number
 }
 
 function rig(): Rig {
   const killed: string[] = []
   const written: Partial<SessionViewPrefs>[] = []
+  let served: () => void = () => {}
+  let polls = 0
+  const fleetServed = new Promise<void>(resolve => { served = resolve })
   const done = async () => ({ ok: true, message: '' })
   const fleet = (): ControlSessions => ({
     sessions: SESSIONS.filter(s => !killed.includes(s.id)),
@@ -106,10 +122,16 @@ function rig(): Rig {
     // when they waited out a fixed number of milliseconds before typing. Keeping a delay here
     // means the frame gate in `drive` is exercised on every run rather than being satisfied by
     // accident on a fast machine.
-    sessions: async () => { await sleep(SESSIONS_DELAY_MS); return fleet() },
+    sessions: async () => {
+      polls++
+      await sleep(SESSIONS_DELAY_MS)
+      const answer = fleet()
+      served()
+      return answer
+    },
     killSession: async (id: string) => { killed.push(id); return { ok: true, message: '' } },
   } as unknown as ControlHost
-  return { killed, written, host }
+  return { killed, written, host, fleetServed, polls: () => polls }
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -158,7 +180,9 @@ async function until(
     if (Date.now() > deadline) {
       throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}.\nLast frame:\n${frame}`)
     }
-    await sleep(5)
+    // 25ms, not 5. This loop runs a regex over the whole frame each turn, and at 5ms it was heavy
+    // enough on a loaded runner to compete with the timers it was waiting for.
+    await sleep(25)
     frame = read()
   }
   return frame
@@ -169,7 +193,7 @@ async function untilTrue(pred: () => boolean, what: string, timeoutMs = WAIT_MS)
   const deadline = Date.now() + timeoutMs
   while (!pred()) {
     if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`)
-    await sleep(5)
+    await sleep(25)
   }
 }
 
@@ -222,11 +246,12 @@ function question(frame: string): string {
  * change the next key has to be able to see.
  */
 async function drive(
-  host: ControlHost,
+  r: Rig,
   keys: readonly string[],
   /** What the screen must be showing before the frame is read. Named, so a timeout says what failed. */
   ready?: { what: string; is: (frame: string) => boolean },
 ): Promise<{ frame: string; unmount: () => void }> {
+  const host = r.host
   const size = { columns: process.stdout.columns, rows: process.stdout.rows }
   Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true })
   Object.defineProperty(process.stdout, 'rows', { value: ROWS, configurable: true })
@@ -244,8 +269,29 @@ async function drive(
   try {
     // THE FLEET HAS TO BE ON SCREEN BEFORE A KEY IS PRESSED. `pollFleet` awaits `host.sessions()`
     // and only then commits a frame; until it does, the pane draws `reading…` over `0 sessions`
-    // and every keystroke acts on an empty list. This is the gate that used to be a sleep.
-    await until(read, f => f.includes('aaa11') && f.includes('ddd44'), 'the fleet to be drawn')
+    // and every keystroke acts on an empty list — which is exactly what CI produced.
+    //
+    // Two steps, and the order matters. First WAIT ON THE HOST'S OWN PROMISE: that costs no CPU, so
+    // a contended runner is left alone to run the effect that does the asking. Only then poll for
+    // the commit, which is a couple of turns away because the data already exists.
+    await Promise.race([
+      r.fleetServed,
+      sleep(WAIT_MS).then(() => {
+        // The two halves are reported APART on purpose. "Never asked" means the screen's own effect
+        // did not run — a fact about the environment. "Asked but never drawn" means it did run and
+        // the commit is what is missing. One message covering both sends the next reader to the
+        // wrong place, and the next reader may well be CI rather than a person.
+        throw new Error(
+          `the screen never asked the host for the fleet within ${WAIT_MS}ms `
+          + `(sessions() called ${r.polls()} times).\nLast frame:\n${read()}`,
+        )
+      }),
+    ])
+    await until(
+      read,
+      f => f.includes('aaa11') && f.includes('ddd44'),
+      `the fleet to be DRAWN — the host answered (sessions() called ${r.polls()} times), the screen did not commit it`,
+    )
     for (const key of keys) {
       app.stdin.write(key)
       await flush()
@@ -263,7 +309,7 @@ describe('pinning and stopping are two gestures', () => {
   test('`x` outside the mode names the ROW UNDER THE CURSOR, whatever is pinned', async () => {
     // THE REPORTED DEFECT. Two rows pinned with `space`, the cursor moved onto a third, `x`.
     const r = rig()
-    const { frame, unmount } = await drive(r.host, [' ', '\x1b[B', ' ', '\x1b[B', 'x'],
+    const { frame, unmount } = await drive(r, [' ', '\x1b[B', ' ', '\x1b[B', 'x'],
       { what: 'the confirmation to open', is: f => f.includes('─ question ─') })
     try {
       // Both rows really are pinned, and really are in the band — the pin was not silently lost.
@@ -280,7 +326,7 @@ describe('pinning and stopping are two gestures', () => {
 
   test('the mode is ANNOUNCED, and `space` inside it selects instead of pinning', async () => {
     const r = rig()
-    const { frame, unmount } = await drive(r.host, [CTRL_X, ' ', '\x1b[B', ' '],
+    const { frame, unmount } = await drive(r, [CTRL_X, ' ', '\x1b[B', ' '],
       { what: 'two rows to be selected for stopping', is: f => f.includes('2 selected to stop') })
     try {
       // Readable from the screen alone: the pane title and the banner both say it, and the banner
@@ -298,7 +344,7 @@ describe('pinning and stopping are two gestures', () => {
     const r = rig()
     // Pin the first row, then pick the second, third and fourth for stopping. The pinned row is
     // deliberately not picked: it must survive.
-    const { frame, unmount } = await drive(r.host, [
+    const { frame, unmount } = await drive(r, [
       ' ', '\x1b[B', CTRL_X, ' ', '\x1b[B', ' ', '\x1b[B', ' ',
       // `x`, then up to `Yes`, then enter.
       'x', '\x1b[A', '\r',
@@ -319,7 +365,7 @@ describe('pinning and stopping are two gestures', () => {
 
   test('the confirmation inside the mode states how many rows are about to die', async () => {
     const r = rig()
-    const { frame, unmount } = await drive(r.host, [CTRL_X, ' ', '\x1b[B', ' ', '\x1b[B', ' ', 'x'],
+    const { frame, unmount } = await drive(r, [CTRL_X, ' ', '\x1b[B', ' ', '\x1b[B', ' ', 'x'],
       { what: 'the confirmation to open', is: f => f.includes('─ question ─') })
     try {
       expect(frame).toContain('Stop the 3 selected sessions?')
@@ -329,7 +375,7 @@ describe('pinning and stopping are two gestures', () => {
 
   test('leaving the mode with `ctrl+x` stops nothing and leaves the pinned set alone', async () => {
     const r = rig()
-    const { frame, unmount } = await drive(r.host, [' ', '\x1b[B', CTRL_X, ' ', '\x1b[B', ' ', CTRL_X],
+    const { frame, unmount } = await drive(r, [' ', '\x1b[B', CTRL_X, ' ', '\x1b[B', ' ', CTRL_X],
       {
         what: 'the mode to be gone with the one pinned row still banded',
         is: f => !f.includes('STOP MODE') && f.includes('pinned  1'),
@@ -346,7 +392,7 @@ describe('pinning and stopping are two gestures', () => {
 
   test('the stop selection is never written to disk, and pinning still is', async () => {
     const r = rig()
-    const { unmount } = await drive(r.host, [' ', '\x1b[B', CTRL_X, ' ', '\x1b[B', ' '],
+    const { unmount } = await drive(r, [' ', '\x1b[B', CTRL_X, ' ', '\x1b[B', ' '],
       { what: 'two rows to be selected for stopping', is: f => f.includes('2 selected to stop') })
     try {
       await untilTrue(() => r.written.length > 0, 'the arrangement to reach the disk seam')
@@ -367,7 +413,7 @@ describe('pinning and stopping are two gestures', () => {
     // this screen drops the search, then the project, then the task. `ctrl+x` is the one key that
     // leaves the mode.
     const r = rig()
-    const { frame, unmount } = await drive(r.host, [CTRL_X, ' ', ESC],
+    const { frame, unmount } = await drive(r, [CTRL_X, ' ', ESC],
       { what: 'the mode to still be on after esc', is: f => f.includes('1 selected to stop') })
     try {
       expect(frame).toContain('STOP MODE')
