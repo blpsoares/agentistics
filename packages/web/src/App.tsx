@@ -1501,7 +1501,7 @@ export default function AppLayout() {
    * "nothing" is indistinguishable from one that is failing, and it was reported as exactly that.
    * An option is a promise that something might be behind it.
    */
-  const fleetOptions = useMemo(() => fleetFilterOptions(headerFleet.rows), [headerFleet.rows])
+  const fleetOptions = useMemo(() => fleetFilterOptions(headerFleet.rows, activeOnly), [headerFleet.rows, activeOnly])
   const headerFleetIndex = useFleetIndex(headerFleet.sessions)
   const selectedFleetSession = inSessionsWorkspace && selectedSessionId !== undefined
     ? headerFleet.rows.find(r => r.id === selectedSessionId || r.conversationId === selectedSessionId)
@@ -2771,12 +2771,7 @@ export default function AppLayout() {
                   modelGroups={modelGroups}
                   modelsInProject={modelsInProject}
                   users={usersWithMachines}
-                  // HARNESSES come from the FLEET in the Sessions workspace and from the metrics
-                  // everywhere else. The bar offered all six the metrics know while the list it
-                  // filters held three, so picking "antigravity" emptied it — not a broken filter,
-                  // but indistinguishable from one. Projects and models stay on the metrics list
-                  // deliberately: `matchesProject` accepts a row's name, its group OR its path.
-                  harnesses={inSessionsWorkspace ? (fleetOptions.harnesses as typeof availableHarnesses) : availableHarnesses}
+                  harnesses={availableHarnesses}
                   presence={data?.presence}
                   lang={lang}
                   compact
@@ -2882,7 +2877,22 @@ export default function AppLayout() {
                 modelGroups={modelGroups}
                 modelsInProject={modelsInProject}
                 users={usersWithMachines}
-                harnesses={availableHarnesses}
+                // HARNESSES come from the FLEET here and from the metrics everywhere else. The bar
+                // offered all six the metrics know while the list it filters holds whatever is
+                // running — three on this machine — so picking "antigravity" emptied the list.
+                // Nothing was broken; there were genuinely no antigravity rows. But a filter that
+                // can only ever answer "nothing" is indistinguishable from one that is failing,
+                // and it was reported as exactly that. An option is a promise that something might
+                // be behind it.
+                //
+                // This is the SECOND FiltersBar in this file. The first one (inside the collapsible
+                // block above) is the dashboard's; an earlier attempt put the override there and
+                // changed nothing on screen, which is how a fix can be written, typechecked, tested
+                // and still be in the wrong place. Verified in a browser this time.
+                //
+                // Projects and models stay on the metrics list deliberately: `matchesProject`
+                // accepts a row's name, its group OR its path, so those chips do find fleet rows.
+                harnesses={inSessionsWorkspace ? (fleetOptions.harnesses as typeof availableHarnesses) : availableHarnesses}
                 presence={data?.presence}
                 lang={lang}
                 teams={teamsList}

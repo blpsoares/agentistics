@@ -119,7 +119,23 @@ function matchesProject(r: ControlSession, projects: ReadonlySet<string>): boole
  * shapes for the same reason `matchesRepo` accepts both: the chip the user clicks may have come
  * from either vocabulary.
  */
-export function fleetFilterOptions(rows: readonly ControlSession[]): {
+export function fleetFilterOptions(
+  rows: readonly ControlSession[],
+  /**
+   * The fleet's own "only what is running" switch, applied BEFORE the options are collected.
+   *
+   * Without it the promise breaks one layer deeper, and it did: with the switch on — which is how
+   * this workspace opens — the bar still offered every harness in the whole fleet, including two
+   * whose rows were all `closed`. Picking one emptied the list again, for the same reason and with
+   * the same "the filter is broken" reading. Measured on this machine: codex and copilot each had
+   * exactly one row, both closed.
+   *
+   * An option has to promise what the CURRENT view can show, not what the fleet contains in the
+   * abstract. Turning the switch off brings those harnesses back by itself, because the options
+   * are re-derived from the rows it stops withholding.
+   */
+  activeOnly = false,
+): {
   harnesses: string[]
   repos: string[]
   projects: string[]
@@ -130,6 +146,7 @@ export function fleetFilterOptions(rows: readonly ControlSession[]): {
   const projects = new Set<string>()
   const models = new Set<string>()
   for (const r of rows) {
+    if (activeOnly && !ACTIVE.has(r.state)) continue
     if (r.harness) harnesses.add(r.harness)
     if (r.repo) repos.add(r.repo)
     if (r.project) projects.add(r.project)
