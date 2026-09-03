@@ -21,7 +21,6 @@ import { DEFAULT_CARD_ORDER, migrateCardOrder, type CardId } from './lib/cardOrd
 import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
-import { useViewportDrift } from './hooks/useViewportDrift'
 import type { TagDef } from './lib/tagMatch'
 import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
 import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, SavedComparison, TeamConfig } from '@agentistics/core'
@@ -772,7 +771,7 @@ function MobileBottomNav({
         }}
       />
       <div style={{
-        position: 'fixed', left: 0, right: 0, bottom: 'calc(var(--mobile-nav-h) - var(--vp-drift))', zIndex: 320,
+        position: 'fixed', left: 0, right: 0, bottom: 'var(--mobile-nav-h)', zIndex: 320,
         background: 'var(--bg-surface)', borderTop: '1px solid var(--border)',
         borderRadius: '16px 16px 0 0', boxShadow: '0 -8px 30px rgba(0,0,0,0.35)',
         padding: '8px 12px 16px',
@@ -887,9 +886,7 @@ function MobileBottomNav({
         className="mobile-bottom-nav"
         style={{
           position: 'fixed',
-          // `bottom` lives in .mobile-bottom-nav, not here: it is `calc(-1 * var(--vp-drift))`,
-          // and an inline `bottom: 0` WINS over the class — which is exactly how this was tested
-          // once and did not move.
+          bottom: 0,
           left: 0,
           right: 0,
           zIndex: 330,
@@ -1268,9 +1265,6 @@ export default function AppLayout() {
       Array<'members' | 'teams' | 'machines' | 'presence' | 'repos' | 'tags' | 'projects' | 'models'>
     : undefined
   const isMobile = useIsMobile()
-  // Publishes `--vp-drift` (0 outside an installed iOS PWA) — see the hook. Called here, once,
-  // because the bottom nav and every layout that reserves room for it read the same number.
-  useViewportDrift()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [lang, setLangState] = useState<Lang>('en')
@@ -2624,7 +2618,7 @@ export default function AppLayout() {
       // nothing under the composer — the same class of mismatch as the `min-height` that used to
       // beat this line, seen from the other side.
       height: inSessionsWorkspace
-        ? (isMobile ? (sessionOpen ? '100dvh' : 'calc(100dvh - var(--mobile-nav-space))') : '100vh')
+        ? (isMobile ? (sessionOpen ? '100dvh' : 'calc(100dvh - var(--mobile-nav-h))') : '100vh')
         : undefined,
       background: 'var(--bg-base)', display: 'flex', flexDirection: 'column',
       paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth),
@@ -3102,7 +3096,7 @@ export default function AppLayout() {
               minHeight: '100vh',
               // The bottom padding clears the fixed nav, so it has to grow with it: installed as a
               // PWA the bar is 56px + the home-indicator inset, and a flat 80px hid the last card.
-              padding: isMobile ? '16px 16px calc(24px + var(--mobile-nav-space))' : '24px 32px',
+              padding: isMobile ? '16px 16px calc(24px + var(--mobile-nav-h))' : '24px 32px',
               display: 'flex',
               flexDirection: 'column',
               gap: isMobile ? 14 : 20,
