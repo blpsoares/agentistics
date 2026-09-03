@@ -108,7 +108,10 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
       {/* The remainder. `minWidth: 0` so a long session title truncates instead of pushing the
           strip wider than the window — the one thing a fixed full-width bar must never do. */}
       {trailing && (
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 4 }}>
+        // 9px, not 4: the title now starts on the same vertical line as the content inside the
+        // session below it, so the eye follows one edge down the page instead of two that are
+        // nearly the same and therefore read as a misalignment.
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 9 }}>
           {trailing}
         </div>
       )}

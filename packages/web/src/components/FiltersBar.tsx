@@ -406,6 +406,13 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
         {onActiveOnlyChange && (
           <label style={{ ...CTL, gap: 6, cursor: 'pointer', paddingRight: 4 }}>
             <Layers size={12} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+            {/* The WORD "group", always, never just the value. Showing only the current
+                arrangement put a control reading "Repository" beside "+ Filter" — and this bar's
+                filters already offer repo, project, harness and model, so it read as a duplicate
+                filter that had appeared from nowhere. It arranges the list; it narrows nothing. */}
+            <span style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>
+              {lang === 'pt' ? 'Agrupar:' : 'Group:'}
+            </span>
             <select
               value={grouping}
               onChange={e => setGroupingShared(e.target.value as FleetGrouping)}
