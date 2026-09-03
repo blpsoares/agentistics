@@ -16,7 +16,9 @@
  *
  * THREE GATES, in this order, and the order is the point:
  *   1. a signed-in principal;
- *   2. `machineOwnedBy` — the machine's OWN accounts, deliberately narrower than the
+ *   2. `machineSessionsAllowed` — the accounts the machine was CREATED for plus any EXPLICITLY
+ *      granted session management (`@agentistics/core/machineSessions`), deliberately narrower
+ *      than `machineOwnedBy`, which is itself narrower than the
  *      `canManageMachine` that governs renaming and re-assigning it. An instance owner who is not
  *      this machine's user is refused here, and gets the same `not-owner` answer as a stranger;
  *   3. the MACHINE's own consent, as it last announced it.
@@ -53,10 +55,10 @@ export async function resolveMachineFleet(
   machineId: string,
   deps: MachineFleetRouteDeps,
 ): Promise<MachineFleetAnswer> {
-  const { machineOwnedBy } = await import('./iam-view')
+  const { machineSessionsAllowed } = await import('@agentistics/core')
   const machine = (await deps.listMachines()).find(m => m.id === machineId)
   if (!machine) return { reply: null, reason: 'not-owner' }
-  if (!machineOwnedBy(principal as never, machine)) return { reply: null, reason: 'not-owner' }
+  if (!machineSessionsAllowed(principal as never, machine)) return { reply: null, reason: 'not-owner' }
 
   // Consent is checked BEFORE presence, so a machine that has said no is reported as refusing even
   // while it happens to be offline. The switch is the durable fact; being offline is a moment.
@@ -97,10 +99,10 @@ export async function resolveMachineAction(
   action: { action: string; id: string; text?: string },
   deps: MachineFleetRouteDeps & { act: (machineId: string, a: { action: string; id: string; text?: string }) => Promise<MachineActionReply | null> },
 ): Promise<MachineActionAnswer> {
-  const { machineOwnedBy } = await import('./iam-view')
+  const { machineSessionsAllowed } = await import('@agentistics/core')
   const machine = (await deps.listMachines()).find(m => m.id === machineId)
   if (!machine) return { reply: null, reason: 'not-owner' }
-  if (!machineOwnedBy(principal as never, machine)) return { reply: null, reason: 'not-owner' }
+  if (!machineSessionsAllowed(principal as never, machine)) return { reply: null, reason: 'not-owner' }
 
   const consent = deps.consentOf(machineId)
   if (!consent.sessions) return { reply: null, reason: deps.isOnline(machineId) ? 'refused' : 'offline' }
