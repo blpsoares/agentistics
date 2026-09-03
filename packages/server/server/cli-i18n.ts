@@ -389,6 +389,10 @@ export interface CliStrings {
   upgradeLockUnavailable: string
   upgradeUnsupported: (target: string) => string
   upgradeManualHow: (url: string) => string
+  /** The release exists and does not carry this asset — NOT a network failure. */
+  upgradeAssetMissing: (version: string, asset: string, url: string) => string
+  /** The network (or the server) failed — NOT a statement about what the release contains. */
+  upgradeDownloadFailed: (reason: string, url: string) => string
   upgradeVerifyFailed: (reason: string) => string
   upgradeRolledBack: (backup: string) => string
   upgradeUntouched: string
@@ -677,6 +681,10 @@ const EN: CliStrings = {
   upgradeLockUnavailable: 'Could not write the upgrade lock; continuing without it.',
   upgradeUnsupported: (target) => `No agentop release is published for ${target}, so it cannot upgrade itself.`,
   upgradeManualHow: (url) => `Download the right binary for your platform and replace it by hand: ${url}`,
+  upgradeAssetMissing: (version, asset, url) =>
+    `Release v${version} does not carry the ${asset} asset (HTTP 404 at ${url}). ` +
+    `Your network is fine — that version was published without this binary.`,
+  upgradeDownloadFailed: (reason, url) => `Could not download ${url}: ${reason}. This looks like a network failure, not a missing release asset.`,
   upgradeVerifyFailed: (reason) => `Upgrade aborted: ${reason}.`,
   upgradeRolledBack: (backup) => `The previous binary was restored from ${backup}.`,
   upgradeUntouched: 'The installed binary was left untouched.',
@@ -958,6 +966,10 @@ const PT: CliStrings = {
   upgradeLockUnavailable: 'Não consegui escrever o lock de upgrade; seguindo sem ele.',
   upgradeUnsupported: (target) => `Não existe release do agentop para ${target}, então ele não pode se atualizar sozinho.`,
   upgradeManualHow: (url) => `Baixe o binário da sua plataforma e troque na mão: ${url}`,
+  upgradeAssetMissing: (version, asset, url) =>
+    `A release v${version} não tem o anexo ${asset} (HTTP 404 em ${url}). ` +
+    `Sua rede está bem — essa versão foi publicada sem esse binário.`,
+  upgradeDownloadFailed: (reason, url) => `Não consegui baixar ${url}: ${reason}. Isso é falha de rede, não anexo faltando na release.`,
   upgradeVerifyFailed: (reason) => `Upgrade abortado: ${reason}.`,
   upgradeRolledBack: (backup) => `O binário anterior foi restaurado de ${backup}.`,
   upgradeUntouched: 'O binário instalado não foi tocado.',

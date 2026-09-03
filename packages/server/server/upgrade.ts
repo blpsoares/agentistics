@@ -9,8 +9,8 @@ import { AGENTISTICS_DATA_DIR } from './config.ts'
 import { cliStrings, type CliLang, type CliStrings } from './cli-i18n.ts'
 
 const GITHUB_REPO = 'blpsoares/agentistics'
-const RELEASE_BASE = `https://github.com/${GITHUB_REPO}/releases/latest/download`
-/** Where a user goes when self-install is refused (unsupported platform/arch). */
+/** Where a user goes when self-install is refused (unsupported platform/arch). It is a page for
+ *  a PERSON to read, never the origin of a binary — see the note above `releaseAssetUrl`. */
 export const RELEASES_PAGE = `https://github.com/${GITHUB_REPO}/releases`
 
 const _ESC = '\x1b'
@@ -42,16 +42,53 @@ const MACHINE_IMAGE = 'agentistics-machine'
 export interface UpgradeTarget {
   /** Release asset name, as published by the workflow. */
   asset: string
-  /** Full download URL for that asset. */
+  /** Full download URL for that asset, addressed by the RESOLVED version. */
   url: string
+  /** The version that URL points at — the one `getVersionInfo()` already resolved. */
+  version: string
 }
 
-/** Pure: the asset for a platform/arch pair, or null when self-install is not supported. */
-export function resolveUpgradeAsset(platformId: string, arch: string): UpgradeTarget | null {
+/** Pure: the asset name for a platform/arch pair, or null when self-install is not supported.
+ *  Separate from the URL so the platform GATE can be asked without naming a version. */
+export function releaseAssetName(platformId: string, arch: string): string | null {
   const key = `${platformId}/${arch}`
-  if (key === 'linux/x64') return { asset: 'agentop', url: `${RELEASE_BASE}/agentop` }
-  if (key === 'win32/x64') return { asset: 'agentop.exe', url: `${RELEASE_BASE}/agentop.exe` }
+  if (key === 'linux/x64') return 'agentop'
+  if (key === 'win32/x64') return 'agentop.exe'
   return null
+}
+
+/** Pure: the release tag the workflow publishes for a version (`2.5.0` and `v2.5.0` both → `v2.5.0`). */
+export function releaseTag(version: string): string {
+  return `v${version.trim().replace(/^v/i, '')}`
+}
+
+/**
+ * Pure: where ONE asset of ONE RESOLVED VERSION lives.
+ *
+ * **There are two notions of "latest" and they can disagree.** `/releases/latest/download/…` is
+ * an alias for whichever release carries GitHub's "Latest" FLAG, and GitHub moves that flag to the
+ * most recently PUBLISHED release — not the highest version, and not necessarily a release that
+ * carries this asset at all. On 2026-09-02 13:57 UTC the extension's `vscode-v1.0.0` release (whose
+ * only attachment is a `.vsix`) took the flag, and `agentop upgrade` answered `HTTP 404` on every
+ * machine while v2.5.0's binary sat published and intact.
+ *
+ * `runUpgrade` has the firm notion in hand before it downloads anything — `getVersionInfo()` has
+ * already resolved `info.latest` by reading the releases API and picking the highest semver — so the
+ * download addresses THAT version by tag. No future publication in this repository can move it.
+ */
+export function releaseAssetUrl(version: string, asset: string): string {
+  return `https://github.com/${GITHUB_REPO}/releases/download/${releaseTag(version)}/${asset}`
+}
+
+/**
+ * Pure: the download target for a platform/arch pair AT A RESOLVED VERSION, or null when
+ * self-install is not supported here. `version` is required on purpose: a target that could be
+ * built without one is a target that can go back to asking GitHub who "latest" is.
+ */
+export function resolveUpgradeAsset(platformId: string, arch: string, version: string): UpgradeTarget | null {
+  const asset = releaseAssetName(platformId, arch)
+  if (!asset) return null
+  return { asset, url: releaseAssetUrl(version, asset), version: releaseTag(version).slice(1) }
 }
 
 // ---------------------------------------------------------------------------
@@ -87,9 +124,10 @@ export function verifyDownload(
 /**
  * Pure: does `agentop --version` output prove this binary is the release we expect?
  *
- * `>=` rather than `===` on purpose: the download URL points at the ROLLING `latest` release,
- * which is republished on every build, so it can legitimately be one bump ahead of the newest
- * version listed by the releases API. An OLDER (or unparseable) version means we downloaded
+ * `>=` rather than `===`, and it stays that way now that the download is addressed by the resolved
+ * version: a release whose asset was compiled from a later commit reports the higher number, and
+ * refusing that would abort an upgrade over a discrepancy that is not a fault. What this check
+ * exists to catch is the other direction — an OLDER (or unparseable) version means we downloaded
  * the wrong thing and must not install it.
  */
 export function checkBinaryVersionOutput(
@@ -116,6 +154,83 @@ export function tempBinaryPath(currentBin: string, unique: string): string {
 /** Pure: where the replaced binary is kept so a failed install can be rolled back. */
 export function backupBinaryPath(currentBin: string): string {
   return `${currentBin}.bak`
+}
+
+// ---------------------------------------------------------------------------
+// The download, and what its failure MEANS
+//
+// A bare `Download failed: HTTP 404` is the message that made this defect expensive: it reads as
+// "the network is broken" to everyone who sees it, while what it actually said was "that version's
+// release does not carry this asset". Those two send a person to completely different places — one
+// to their connection, the other to the release page — so the outcome is classified and each kind
+// gets its own sentence.
+// ---------------------------------------------------------------------------
+
+export type DownloadResult =
+  | { ok: true; bytes: Uint8Array }
+  /** The URL resolved, the server answered, and that version has no such asset. */
+  | { ok: false; kind: 'missing-asset'; status: number }
+  /** The server answered, but with something else (5xx, a proxy page, a rate limit). */
+  | { ok: false; kind: 'http'; status: number }
+  /** Nothing was answered, or the transfer died mid-stream — a network fact, not a release one. */
+  | { ok: false; kind: 'network'; message: string }
+
+/**
+ * Fetches one release asset. `fetchImpl` is injectable so a test can state exactly which URL the
+ * command asks for — the whole point of this journey is which address the bytes come from.
+ *
+ * Reading the body is guarded together with the fetch: the transfer is ~140 MB, so the timeout
+ * firing mid-stream (or a reset connection) is the MOST likely failure of the whole command, and
+ * outside the guard it rejected out of `runUpgrade`, skipping `recordUpgradeFailure` — the backoff
+ * never learned about the one failure it exists to throttle.
+ */
+export async function downloadUpgradeAsset(
+  target: UpgradeTarget,
+  fetchImpl: typeof fetch = fetch,
+): Promise<DownloadResult> {
+  let resp: Response
+  try {
+    resp = await fetchImpl(target.url, {
+      headers: { 'User-Agent': `agentistics/${CURRENT_VERSION}` },
+      signal: AbortSignal.timeout(120_000),
+    })
+  } catch (err: any) {
+    return { ok: false, kind: 'network', message: err?.message ?? String(err) }
+  }
+  if (!resp.ok) {
+    return resp.status === 404
+      ? { ok: false, kind: 'missing-asset', status: resp.status }
+      : { ok: false, kind: 'http', status: resp.status }
+  }
+  try {
+    return { ok: true, bytes: new Uint8Array(await resp.arrayBuffer()) }
+  } catch (err: any) {
+    return { ok: false, kind: 'network', message: err?.message ?? String(err) }
+  }
+}
+
+/** Pure: the sentence a person reads. Names the version and the asset when the release is the
+ *  problem, and says it is the network when it is the network — never one wearing the other's word. */
+export function downloadFailureMessage(
+  result: Extract<DownloadResult, { ok: false }>,
+  target: UpgradeTarget,
+  s: CliStrings,
+): string {
+  if (result.kind === 'missing-asset') return s.upgradeAssetMissing(target.version, target.asset, target.url)
+  const reason = result.kind === 'http' ? `HTTP ${result.status}` : result.message
+  return s.upgradeDownloadFailed(reason, target.url)
+}
+
+/** Pure: the compact, language-free reason recorded for the backoff state. */
+export function downloadFailureReason(
+  result: Extract<DownloadResult, { ok: false }>,
+  target: UpgradeTarget,
+): string {
+  if (result.kind === 'missing-asset') {
+    return `release v${target.version} has no ${target.asset} asset (HTTP ${result.status})`
+  }
+  if (result.kind === 'http') return `download failed: HTTP ${result.status}`
+  return `download failed: ${result.message}`
 }
 
 // ---------------------------------------------------------------------------
@@ -475,12 +590,18 @@ export function isInstalledBinary(execPath: string, scriptPath: string | undefin
  *
  * Refuses (without downloading anything) when self-install is unsupported on this
  * platform/arch, and when the same version already failed recently (backoff).
+ *
+ * The child it spawns is `agentop upgrade`, so the bytes come from `runUpgrade` and there is ONE
+ * downloader — but the target is resolved HERE too, for the same `version` the caller decided on,
+ * and written into the log. Nobody watches this path, so an address that diverged from the manual
+ * one would be invisible until it broke; the log line is what makes it readable.
  */
 export async function startBackgroundUpgrade(version: string): Promise<BackgroundUpgradeResult> {
   // Never self-install over a dev checkout's runtime — see isInstalledBinary.
   if (!isInstalledBinary(process.execPath, process.argv[1])) return 'not-installed'
   // No published asset for this platform/arch → an unattended install would brick it.
-  if (!resolveUpgradeAsset(process.platform, process.arch)) return 'unsupported'
+  const target = resolveUpgradeAsset(process.platform, process.arch, version)
+  if (!target) return 'unsupported'
   // A previously failing target backs off instead of re-downloading on every shell.
   if (!shouldAttemptUpgrade(readUpgradeFailure(), version, Date.now())) return 'backoff'
 
@@ -491,7 +612,10 @@ export async function startBackgroundUpgrade(version: string): Promise<Backgroun
   try {
     // Guaranteed by isInstalledBinary above: execPath IS agentop, so it takes the
     // subcommand directly (no script argument to forward).
-    appendFileSync(AUTO_UPGRADE_LOG, `\n=== ${new Date().toISOString()} — auto-installing v${version} ===\n`)
+    appendFileSync(
+      AUTO_UPGRADE_LOG,
+      `\n=== ${new Date().toISOString()} — auto-installing v${version} from ${target.url} ===\n`,
+    )
     const fd = openSync(AUTO_UPGRADE_LOG, 'a')
     const { spawn } = await import('node:child_process')
     const child = spawn(process.execPath, ['upgrade'], {
@@ -655,8 +779,10 @@ export async function runUpgrade(lang: CliLang = 'en'): Promise<number> {
   }
   stampUpgradeLock(info.latest)
 
-  // Platform/arch gate — refuse BEFORE downloading anything.
-  const target = resolveUpgradeAsset(process.platform, process.arch)
+  // Platform/arch gate — refuse BEFORE downloading anything. The target is addressed by the
+  // version `getVersionInfo()` just resolved (`info.latest`, the one printed below), never by
+  // GitHub's movable "Latest" flag — see `releaseAssetUrl`.
+  const target = resolveUpgradeAsset(process.platform, process.arch, info.latest)
   if (!target) {
     const id = `${process.platform}/${process.arch}`
     process.stderr.write(
@@ -671,41 +797,22 @@ export async function runUpgrade(lang: CliLang = 'en'): Promise<number> {
     `\n  ${_D}Current:${_R} ${_WH}v${info.current}${_R}\n` +
     `  ${_D}Latest: ${_R} ${_GR}${_B}v${info.latest}${_R}\n\n`,
   )
-  process.stdout.write(`Downloading ${target.asset}...\n`)
+  process.stdout.write(`Downloading ${target.asset} (${target.url})...\n`)
 
-  let resp: Response
-  try {
-    resp = await fetch(target.url, {
-      headers: { 'User-Agent': `agentistics/${CURRENT_VERSION}` },
-      signal: AbortSignal.timeout(120_000),
-    })
-  } catch (err: any) {
-    console.error(`Download failed: ${err.message}`)
-    recordUpgradeFailure(info.latest, `download failed: ${err?.message ?? String(err)}`)
-    return 1
-  }
-
-  if (!resp.ok) {
-    console.error(`Download failed: HTTP ${resp.status}`)
-    recordUpgradeFailure(info.latest, `download failed: HTTP ${resp.status}`)
+  const downloaded = await downloadUpgradeAsset(target)
+  if (!downloaded.ok) {
+    process.stderr.write(`\n  ${_RD}${downloadFailureMessage(downloaded, target, s)}${_R}\n`)
+    if (downloaded.kind === 'missing-asset') {
+      process.stderr.write(`  ${s.upgradeManualHow(RELEASES_PAGE)}\n`)
+    }
+    process.stderr.write('\n')
+    // The backoff must still learn about EVERY one of these, or the throttle stops existing.
+    recordUpgradeFailure(info.latest, downloadFailureReason(downloaded, target))
     return 1
   }
 
   const currentBin = process.execPath
-  // Reading the body must be guarded too, not just the fetch: the transfer is ~140 MB, so the
-  // 120s timeout firing mid-stream (or a reset connection) is the MOST likely failure of the whole
-  // command. Outside the guard it rejected out of runUpgrade, skipping recordUpgradeFailure — so
-  // the backoff never learned about the one failure it exists to throttle, and the user got a raw
-  // stack trace instead of a message.
-  let bytes: Uint8Array
-  try {
-    bytes = new Uint8Array(await resp.arrayBuffer())
-  } catch (err: any) {
-    console.error(`Download failed: ${err?.message ?? String(err)}`)
-    recordUpgradeFailure(info.latest, `download interrupted: ${err?.message ?? String(err)}`)
-    return 1
-  }
-  const installed = await installDownloadedBinary(bytes, currentBin, info.latest, s)
+  const installed = await installDownloadedBinary(downloaded.bytes, currentBin, info.latest, s)
 
   if (!installed.ok) {
     if (installed.keptTmp) {
