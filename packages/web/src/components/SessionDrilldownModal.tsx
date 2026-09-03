@@ -17,6 +17,7 @@ import { fmt as fmtShort, fmtFull, workflowTokens } from '@agentistics/core'
 import { PrecisionToggle } from './PrecisionToggle'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { splitInlinedHistory } from '../lib/transcriptSplit'
+import { OVERLAY_TOP } from '../lib/mobileOverlay'
 
 interface Props {
   session: SessionMeta
@@ -137,7 +138,7 @@ export function SessionDrilldownModal({ session, globalModelUsage, currency, brl
         position: 'fixed', inset: 0, zIndex: 350,
         background: 'rgba(0,0,0,0.65)',
         display: 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'center',
-        padding: isMobile ? 0 : 24,
+        padding: isMobile ? OVERLAY_TOP : 24,
         backdropFilter: 'blur(4px)',
       }}
     >

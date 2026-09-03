@@ -24,6 +24,7 @@ import { encodeProjectDir } from '../lib/sessionTranscript'
 import { resumeCommand } from '../lib/resumeCommand'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { format, parseISO } from 'date-fns'
+import { OVERLAY_TOP } from '../lib/mobileOverlay'
 import {
   ChevronLeft,
   ChevronRight,
@@ -2154,7 +2155,7 @@ function CardModal({ statusPill, harness, title, meta, lang, onClose, children }
       onClick={onClose}
       style={{
         position: 'fixed', inset: 0, zIndex: 9998, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
-        display: 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'center', padding: isMobile ? 0 : 24,
+        display: 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'center', padding: isMobile ? OVERLAY_TOP : 24,
       }}
     >
       <div
