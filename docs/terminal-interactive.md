@@ -134,3 +134,50 @@ ack failure for a key nobody meant to send); the server validates membership reg
 A delivered keystroke NUDGES the read channel (`nudgeTerminal`). There is no local echo by design,
 so the character appears on the next capture — and the capture cadence is tuned for WATCHING a
 session, which is nothing when reading one and an eternity when typing into it.
+
+## Phase 2b — the web client (direct typing into the emulator)
+
+The dashboard now consumes that channel: click into the live terminal and type, and the keystrokes
+reach the session in order. Three pure modules plus one hook, wired into the existing card:
+
+- **`lib/terminalKeys.ts`** — classifies one `xterm.onData` chunk into a send intent: printable text
+  → literal (`send-keys -l`, **no Enter**), a named control/navigation key → the named path, or
+  **blocked**. It is an ALLOWLIST — a key reaching the process is a security decision, so only
+  recognized input is forwarded and everything else (other C0 controls, unmapped escape sequences,
+  mixed chunks) is refused and never shown as delivered. Admitted: printable text, `Enter`, `BSpace`,
+  `Tab`, the four arrows, the line-editing keys `Ctrl+A/E/U/W/K` ("edits the line" passes), and
+  `Ctrl+C`/`Ctrl+D` ("controls the process", admitted because A7/EOF ask for them). Refused:
+  `Ctrl+Z`, `Ctrl+\`, function keys, mouse, bracketed-paste. The server re-validates the closed set
+  (`bad_key`) — defence in depth, never trusting the client.
+- **`lib/terminalChannel.ts`** — the honesty accounting: consent (`armed`, revocable), channel
+  lifecycle, and per-keystroke acks matched against the expected head by a **client-assigned id**
+  (verifiable, not inferred FIFO). A failed ack or a dropped channel with keys in flight is surfaced
+  as **not delivered** — the load-bearing rule, now at keystroke scale.
+- **`hooks/useTerminalWrite.ts`** — the WebSocket glue: opens `WS /api/fleet/input?id=` when the row
+  is armed and typable, turns each `onData` chunk into one ordered message, and feeds acks back
+  through the reducer. **No local echo**: nothing is written to xterm here — a key appears only when
+  the session draws it back over the SSE read channel, so a key that did not land is never on screen
+  (A6, by construction).
+- **`SessionTerminal`** flips `disableStdin` off only while interactive and forwards `onData`;
+  **`TerminalRegion`** opens the channel and renders the one keystroke-channel status line
+  (connecting / live / not-delivered).
+
+**One consent, honestly described.** The composer's arming (`Type into this session`) also opens the
+keystroke channel — the copy now states that keys, `Ctrl+C` included, reach the process. Unarmed, the
+emulator is read-only and **no socket is opened**, so nothing can be sent (A5 by construction).
+
+**Answering a dialog by typing.** Unlike the blind line composer — which still refuses a
+`waiting-approval` row, because a submitted line lands in the dialog's filter and Enter takes the
+highlighted option — direct typing is a **sighted** keystroke and IS allowed on a dialog: it is how
+you answer a prompt. So `awaiting-approval` no longer disarms the keystroke channel; the line
+composer shows a hint pointing at the terminal instead.
+
+**Latency (measured, local, disposable tmux session).** Write path (key → server ack) median
+**5 ms**, worst **10 ms**; key → tmux pane median **7 ms**; key → **screen** (visible in an SSE read
+frame, which is what the browser paints) median **7 ms**, worst **11 ms** — because a delivered
+keystroke NUDGES the read channel (`nudgeTerminal`, `sessions/input-web.ts`), so the character is
+captured and streamed immediately rather than on the next 500 ms tick. Per-keystroke typing is
+therefore effectively instant. (Measured against the channel BEFORE the nudge landed, the same
+key → screen was ~380 ms, poll-bound — which is what the read-poll tuning of journey `j-20260901-ik`
+addresses for CONTINUOUS output, i.e. a process printing without keystrokes; keystroke echo itself
+no longer waits on the poll.)
