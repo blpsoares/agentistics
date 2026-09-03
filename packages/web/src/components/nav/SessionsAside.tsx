@@ -60,6 +60,22 @@ export interface SessionsAsideProps {
    * case it exists for is rows on screen that are no longer true.
    */
   stale?: string | null
+  /**
+   * What clicking a row does, when it is not "open it on THIS machine".
+   *
+   * The central's Sessions page draws the very same list for a machine's RELAYED rows, where
+   * `/sessions/:id` would open a local session that does not exist here. Absent on a machine,
+   * where the route is exactly right.
+   */
+  onOpenRow?: (row: ControlSession) => void
+  /**
+   * Withholds "New session".
+   *
+   * Starting one is a LOCAL act (`POST /api/fleet/new` spawns a process on the host), so a central
+   * drawing this list for someone else's machine must not offer it — a button whose only outcome
+   * is a refusal is a button that teaches the wrong thing.
+   */
+  hideNew?: boolean
 }
 
 /** The colour a state is said in. `running` is its own token, not `success`, which reads teal. */
@@ -114,6 +130,7 @@ function pinKeyOf(row: ControlSession): string {
 
 export function SessionsAside({
   lang, rows, loading, unsupported, unavailable, filters, activeOnly, finishedTasks, stale,
+  onOpenRow, hideNew,
 }: SessionsAsideProps) {
   const pt = lang === 'pt'
   const navigate = useNavigate()
@@ -209,6 +226,7 @@ export function SessionsAside({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 10, paddingTop: 4 }}>
+      {!hideNew && (
       <button
         onClick={() => setCreating(true)}
         style={{
@@ -229,6 +247,7 @@ export function SessionsAside({
         <Plus size={14} />
         {pt ? 'Nova sessão' : 'New session'}
       </button>
+      )}
 
       {creating && (
         <NewSessionModal
@@ -333,7 +352,7 @@ export function SessionsAside({
                   pinned
                   {...(tap ? { tap } : {})}
                   onPin={() => flip(s)}
-                  onOpen={() => navigate(`/sessions/${s.id}`)}
+                  onOpen={() => (onOpenRow ? onOpenRow(s) : navigate(`/sessions/${s.id}`))}
                 />
               ))}
             </div>
@@ -355,7 +374,7 @@ export function SessionsAside({
                 key={`${i}-${b.label}`}
                 label={b.label} rows={b.rows} pinned={pinned}
                 sessionId={sessionId} tap={tap} onPin={flip}
-                onOpen={s => navigate(`/sessions/${s.id}`)}
+                onOpen={s => (onOpenRow ? onOpenRow(s) : navigate(`/sessions/${s.id}`))}
               />
             ))}
           </>
