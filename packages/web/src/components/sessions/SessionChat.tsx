@@ -28,7 +28,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, Cpu, Loader, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
+import { ArrowDown, ChevronUp, Loader, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { ApprovalCard } from './ApprovalCard'
@@ -88,10 +88,10 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     () => dictationSupport(typeof window === 'undefined' ? undefined : (window as never), pt ? 'pt' : 'en'),
     [pt],
   )
-  /** The mid-conversation model picker, open or not. */
-  const [modelOpen, setModelOpen] = useState(false)
+  /** The composer's "more options" menu — dictation and the model live in it. */
+  const [moreOpen, setMoreOpen] = useState(false)
   /** The menu AND its button, so an outside-click handler can tell "inside" from "outside". */
-  const modelMenuRef = useRef<HTMLDivElement | null>(null)
+  const moreMenuRef = useRef<HTMLDivElement | null>(null)
 
   /**
    * Start or stop dictation.
@@ -143,22 +143,22 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   // reads as the menu being stuck. `mousedown` rather than `click`, so it closes on the press
   // instead of waiting for a release that may land somewhere else.
   useEffect(() => {
-    if (!modelOpen) return
+    if (!moreOpen) return
     const close = (e: MouseEvent) => {
       // A click INSIDE the menu (picking a model) must not be eaten by this — that path closes the
       // menu itself, and closing here first would cancel the pick.
-      if (modelMenuRef.current?.contains(e.target as Node)) return
-      setModelOpen(false)
+      if (moreMenuRef.current?.contains(e.target as Node)) return
+      setMoreOpen(false)
     }
     document.addEventListener('mousedown', close)
     // Escape too: a menu that can only be dismissed with the mouse is one a keyboard cannot leave.
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModelOpen(false) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMoreOpen(false) }
     document.addEventListener('keydown', onKey)
     return () => {
       document.removeEventListener('mousedown', close)
       document.removeEventListener('keydown', onKey)
     }
-  }, [modelOpen])
+  }, [moreOpen])
 
   // A recogniser left running after this panel unmounts keeps the tab's microphone indicator on
   // for a session nobody is looking at.
@@ -187,7 +187,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   /** Switch the model mid-conversation by TYPING the harness's own command — see modelSwitch.ts. */
   const switchModel = useCallback(async (model: string) => {
     const line = modelSwitchLine(row?.harness ?? '', model)
-    setModelOpen(false)
+    setMoreOpen(false)
     if (!line) return
     await act({ id: row!.id, action: 'prompt', text: line })
   }, [row, act])
@@ -734,7 +734,15 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   field that holds it; dropping both leaves it the same colour as its container. */}
               <div style={{
                 display: (!canPrompt && !blocked && reopen) ? 'none' : 'flex',
-                alignItems: 'flex-end', gap: 6,
+                // A COLUMN: the text gets the whole width, the controls sit under it.
+                //
+                // As one row the buttons and the field competed for the same line and the buttons
+                // always won — they are `flex-shrink: 0` and the textarea is not. Measured on an
+                // iPhone 12: 174px of typing space against ~180px of chrome, so a sentence wrapped
+                // at roughly half the width of a box that looked twice as wide. Stacking is what
+                // every chat composer does, and it is the only arrangement where the text gets the
+                // room the field appears to promise.
+                flexDirection: 'column', alignItems: 'stretch', gap: 2,
                 // THE FIELD. A rounded, bordered, inset box — the shape a person recognises as
                 // somewhere to type. It was previously borderless and flush to the page edges,
                 // which is why it read as a footer.
@@ -788,6 +796,9 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     lineHeight: 1.5, maxHeight: TEXTAREA_MAX_HEIGHT, overflowY: 'auto', padding: '6px 6px',
                   }}
                 />
+
+                {/* The controls, on their own line under the text. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 {/* Working's own stop, right beside the field it does not block. Absent the moment
                     the turn ends — a stop control on an idle session would send Escape into its
                     prompt, which is exactly the row's own gate on `interrupt`. */}
@@ -808,80 +819,101 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     {stopping ? <Loader size={14} className="ag-working-spin" /> : <Square size={13} fill="currentColor" />}
                   </button>
                 )}
-                {/* Dictation. ABSENT is not an option — the button is drawn either way and says why
-                    it cannot work, because a mic that fails on click is indistinguishable from a
-                    broken one. Nothing is uploaded: the recognition is the browser's own and what
-                    reaches the session is the text the user then chooses to send. */}
-                <button
-                  onClick={() => { if (dictation.state === 'ready') toggleDictation() }}
-                  disabled={!canPrompt || sending}
-                  title={dictation.reason ?? (listening
-                    ? (pt ? 'Parar de ouvir' : 'Stop listening')
-                    : (pt ? 'Ditar' : 'Dictate'))}
-                  aria-label={pt ? 'Ditar' : 'Dictate'}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    width: 34, height: 34, borderRadius: 9, flexShrink: 0,
-                    border: listening ? '1px solid var(--accent-red)' : 'none',
-                    background: listening ? 'color-mix(in srgb, var(--accent-red) 12%, transparent)' : 'transparent',
-                    color: listening ? 'var(--accent-red)' : 'var(--text-tertiary)',
-                    cursor: canPrompt && dictation.state === 'ready' ? 'pointer' : 'default',
-                    opacity: dictation.state === 'ready' ? 1 : 0.45,
-                  }}
-                >
-                  <Mic size={15} />
-                </button>
+                {/* Mic and model live behind ONE button. Four controls plus the field on a
+                    390px screen is a row where the buttons win, and these two are the pair a person
+                    reaches for occasionally — attach and send are the ones used every turn.
+                    A menu, not a second row: another row costs height, which is the thing a phone
+                    has least of. */}
+                <div ref={moreMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
+                  <button
+                    onClick={() => setMoreOpen(v => !v)}
+                    disabled={!canPrompt || sending}
+                    aria-label={pt ? 'Mais opções' : 'More options'}
+                    aria-expanded={moreOpen}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      width: 34, height: 34, borderRadius: 9, border: 'none',
+                      background: moreOpen ? 'var(--bg-surface)' : 'transparent',
+                      color: 'var(--text-tertiary)',
+                      cursor: canPrompt ? 'pointer' : 'default',
+                    }}
+                  >
+                    <ChevronUp size={15} style={{ transform: moreOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+                  </button>
 
-                {/* The model, mid-conversation. Only where the command was VERIFIED against the
-                    running CLI (claude's `/model`); everywhere else the control says so rather
-                    than typing a guessed slash command into a live session. */}
-                {modelSuggestions.length > 0 && (
-                  <div ref={modelMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
-                    <button
-                      onClick={() => { if (!modelReason) setModelOpen(v => !v) }}
-                      disabled={!canPrompt || sending}
-                      title={modelReason ?? (pt ? 'Trocar de modelo' : 'Switch model')}
-                      aria-label={pt ? 'Trocar de modelo' : 'Switch model'}
-                      style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        width: 34, height: 34, borderRadius: 9, border: 'none',
-                        background: 'transparent', color: 'var(--text-tertiary)',
-                        cursor: canPrompt && !modelReason ? 'pointer' : 'default',
-                        opacity: modelReason ? 0.45 : 1,
-                      }}
-                    >
-                      <Cpu size={15} />
-                    </button>
-                    {modelOpen && (
-                      <div style={{
-                        position: 'absolute', bottom: 40, right: 0, zIndex: 50,
-                        minWidth: 160, padding: 4, borderRadius: 9,
-                        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                        boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
-                      }}>
-                        {modelSuggestions.map(m => (
-                          <button
-                            key={m}
-                            onClick={() => { void switchModel(m) }}
-                            style={{
-                              display: 'block', width: '100%', textAlign: 'left',
-                              padding: '7px 10px', borderRadius: 6, border: 'none',
-                              background: 'transparent', color: 'var(--text-primary)',
-                              fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer',
-                            }}
-                          >
-                            {m}
-                          </button>
-                        ))}
-                        {/* Said inside the menu, because this is a line typed INTO the session and
-                            the session answers it — it is not a setting this page owns. */}
-                        <p style={{ margin: '4px 6px 2px', fontSize: 10, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
-                          {pt ? 'Envia /model para a sessão.' : 'Sends /model to the session.'}
+                  {moreOpen && (
+                    <div style={{
+                      position: 'absolute', bottom: 40, left: 0, zIndex: 50,
+                      minWidth: 210, maxWidth: 260, padding: 4, borderRadius: 10,
+                      background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                    }}>
+                      {/* DICTATION. Its refusal is a LINE, not a `title`: a phone has no hover, and
+                          this is exactly where it is refused most — the Web Speech API needs a
+                          secure context, so a dashboard reached over plain HTTP on a LAN never has
+                          a microphone. A control that silently does nothing there is one people
+                          report as broken, which is what happened. */}
+                      <button
+                        onClick={() => { if (dictation.state === 'ready') { setMoreOpen(false); toggleDictation() } }}
+                        disabled={dictation.state !== 'ready'}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+                          minHeight: 40, padding: '6px 8px', borderRadius: 7, border: 'none',
+                          background: listening ? 'color-mix(in srgb, var(--accent-red) 12%, transparent)' : 'transparent',
+                          color: listening ? 'var(--accent-red)' : 'var(--text-primary)',
+                          fontFamily: 'inherit', fontSize: 12.5,
+                          cursor: dictation.state === 'ready' ? 'pointer' : 'default',
+                          opacity: dictation.state === 'ready' ? 1 : 0.55,
+                        }}
+                      >
+                        <Mic size={14} style={{ flexShrink: 0 }} />
+                        <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                          <span>{listening ? (pt ? 'Parar de ouvir' : 'Stop listening') : (pt ? 'Ditar' : 'Dictate')}</span>
+                          {dictation.reason && (
+                            <span style={{ fontSize: 10.5, lineHeight: 1.4, color: 'var(--text-tertiary)', overflowWrap: 'anywhere' }}>
+                              {dictation.reason}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+
+                      {/* MODEL. Same treatment: where it cannot work, the menu says why instead of
+                          offering a control that answers nothing. */}
+                      {modelReason ? (
+                        <p style={{ margin: 0, padding: '6px 8px', fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)' }}>
+                          {modelReason}
                         </p>
-                      </div>
-                    )}
-                  </div>
-                )}
+                      ) : modelSuggestions.length > 0 && (
+                        <>
+                          <div style={{ height: 1, background: 'var(--border)', margin: '4px 2px' }} />
+                          <p style={{
+                            margin: '2px 8px 4px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+                            letterSpacing: '0.06em', color: 'var(--text-tertiary)',
+                          }}>
+                            {pt ? 'Modelo' : 'Model'}
+                          </p>
+                          {modelSuggestions.map(m => (
+                            <button
+                              key={m}
+                              onClick={() => { setMoreOpen(false); void switchModel(m) }}
+                              style={{
+                                display: 'block', width: '100%', textAlign: 'left',
+                                minHeight: 36, padding: '6px 8px', borderRadius: 7, border: 'none',
+                                background: 'transparent', color: 'var(--text-primary)',
+                                fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer',
+                              }}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                          <p style={{ margin: '2px 8px 4px', fontSize: 10, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
+                            {pt ? 'Envia /model para a sessão.' : 'Sends /model to the session.'}
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 <button
                   onClick={() => void send()}
@@ -889,6 +921,9 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   aria-label={pt ? 'Enviar' : 'Send'}
                   style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    // Pushed to the far end of the row — the one control that ACTS sits apart from
+                    // the ones that only prepare.
+                    marginLeft: 'auto',
                     width: 34, height: 34, borderRadius: 9, border: 'none', flexShrink: 0,
                     background: (draft.trim() === '' && attached.length === 0) || !canPrompt ? 'transparent' : 'var(--anthropic-orange)',
                     color: (draft.trim() === '' && attached.length === 0) || !canPrompt ? 'var(--text-tertiary)' : '#fff',
@@ -897,6 +932,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                 >
                   {sending ? <Loader size={15} className="ag-working-spin" /> : <Send size={15} />}
                 </button>
+                </div>
               </div>
               {notice && (
                 <p style={{ margin: '8px 0 0', fontSize: 11.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
