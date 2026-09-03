@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
-import { fleetStaleNotice, STALE_AFTER_FAILURES } from './fleetStale'
+import { fleetSeedNotice, fleetStaleNotice } from './fleetStale'
 import { cacheIsUsable, stripVolatile } from './fleetCache'
 
 /** Mirrors `SessionAction` in `@agentistics/tui/control/sessions`, minus the verbs a page cannot do. */
@@ -278,15 +278,15 @@ export function useFleet(lang: 'pt' | 'en', enabled = true): FleetState {
     unsupported: enabled ? snapUnsupported : false,
     // Resolved on every render rather than stored: the sentence carries how long it has been, and
     // a stored one would freeze that age at the moment the poll failed.
-    // A SEEDED list is stale in the same sense a failed poll's is — real rows, not yet confirmed —
-    // so it borrows the same sentence rather than inventing a second vocabulary for one idea. The
-    // seed's own timestamp stands in for `lastOkMs` until a live answer replaces it, and
-    // `STALE_AFTER_FAILURES` is passed as the failure count so the notice shows immediately: a
-    // seed IS unconfirmed from the first paint, which is not true of a poll that has merely missed
-    // once.
+    // A SEEDED list and a STALE one are both real rows not yet confirmed, and they get DIFFERENT
+    // sentences. The seed borrowed the stale one, which opens with "no answer from this machine" —
+    // false on a normal reopen, where the machine has not been asked yet. Announcing a failure that
+    // did not happen, at the moment the page opens, is a warning that cries wolf on every visit.
+    // The seed shows immediately (it IS unconfirmed from the first paint, unlike a poll that has
+    // merely missed once) and is replaced the instant a live answer lands.
     stale: enabled
-      ? (snapLastOkMs === null && cachedAt > 0
-        ? fleetStaleNotice({ failures: STALE_AFTER_FAILURES, lastOkMs: cachedAt }, Date.now(), lang)
+      ? (snapLastOkMs === null
+        ? fleetSeedNotice(cachedAt, Date.now(), lang)
         : fleetStaleNotice({ failures: snapFailures, lastOkMs: snapLastOkMs }, Date.now(), lang))
       : null,
     refresh,

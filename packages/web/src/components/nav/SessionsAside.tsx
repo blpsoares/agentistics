@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import { Clock, Pin, PinOff, Plus, Search, X } from 'lucide-react'
 import type { Filters } from '@agentistics/core'
 import {
   ACTIVE_STATES, DEFAULT_ORDER, filterSessions, sessionNotify, sortSessions,
@@ -283,6 +283,30 @@ export function SessionsAside({
           margin: '0 4px', fontSize: 11, lineHeight: 1.45, color: 'var(--anthropic-orange)',
         }}>
           {pinNotice}
+        </p>
+      )}
+
+      {/* The list is real but not current — either the machine stopped answering, or these rows
+          came out of the stored snapshot and no poll has confirmed them yet. `fleetStale.ts` owns
+          which of the two it is and words each differently; here it is only drawn.
+
+          ABOVE the scroller, not inside it: a caveat about every row below has to be readable
+          wherever the reader has scrolled to, and one that scrolls away is one seen once. It is
+          also drawn whether or not there are rows — this is the case of rows on screen that are no
+          longer true, which is precisely what an empty-state message cannot cover.
+
+          Deliberately NOT `--accent-red`: nothing has failed in the seeded case, and in the stale
+          case the machine being unreachable is a fact about the connection, not a fault in the
+          fleet. Same reasoning the cockpit's central pill applies to `stale`. */}
+      {stale && (
+        <p role="status" style={{
+          display: 'flex', alignItems: 'flex-start', gap: 6,
+          margin: '0 2px', padding: '7px 9px', borderRadius: 8,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+          fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)',
+        }}>
+          <Clock size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>{stale}</span>
         </p>
       )}
 
