@@ -1041,7 +1041,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
   // for the moment you are looking at the dashboard and a session starts needing you. `useFleet`
   // shares one poll across every consumer, so this costs no extra request. Never on a central: it
   // aggregates many machines and hosts none of their sessions.
-  const { fleet, loading: fleetLoading, unsupported: fleetUnsupported } = useFleet(pt ? 'pt' : 'en', !isCentral)
+  const { fleet, loading: fleetLoading, unsupported: fleetUnsupported, stale: fleetStale } = useFleet(pt ? 'pt' : 'en', !isCentral)
   const attention = fleet.attention
   const mode = modeOfPath(location.pathname)
   // A resize in progress. Only used to suspend the collapse animation — see the aside's `transition`.
@@ -1101,6 +1101,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
           filters={sessionsFilters}
           activeOnly={sessionsActiveOnly}
           {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
+          stale={fleetStale}
         />
       ) : (
       <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 5, overflowY: 'auto', overflowX: 'hidden', flex: 1, paddingTop: 4 }}>

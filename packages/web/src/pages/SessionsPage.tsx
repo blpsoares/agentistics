@@ -40,7 +40,7 @@ export default function SessionsPage() {
 
   // Never on a central: it aggregates many machines and hosts none of their sessions, so the only
   // fleet it could read is its own box's, drawn under someone else's rows.
-  const { fleet, loading, unsupported, act } = useFleet(pt ? 'pt' : 'en', !isCentral)
+  const { fleet, loading, unsupported, stale, act } = useFleet(pt ? 'pt' : 'en', !isCentral)
   const rowIndex = useFleetIndex(fleet.sessions)
 
   // Matched on BOTH ids for the same reason `fleetIndex` is keyed on both: a managed row is named
@@ -136,6 +136,7 @@ export default function SessionsPage() {
             filters={filters}
             activeOnly={activeOnly}
             {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
+            stale={stale}
           />
         </div>
       </div>

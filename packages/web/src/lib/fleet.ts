@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
+import { fleetStaleNotice } from './fleetStale'
 
 /** Mirrors `SessionAction` in `@agentistics/tui/control/sessions`, minus the verbs a page cannot do. */
 export type FleetActionId =
@@ -99,6 +100,14 @@ export interface FleetState {
    * machine that was never allowed to look.
    */
   unsupported: boolean
+  /**
+   * Already-worded reason the list on screen may not be current, or null.
+   *
+   * A failed poll keeps the previous list — reporting an empty fleet because one request 502'd
+   * would say "nothing is running" about a machine with nine live sessions — but the cockpit keeps
+   * the previous list PLUS a reason, and this is that reason. See `fleetStale.ts`.
+   */
+  stale: string | null
   refresh: () => void
   act: (req: {
     id: string
@@ -125,6 +134,9 @@ const listeners = new Set<() => void>()
 let snapshot: FleetPayload = EMPTY
 let snapLoading = true
 let snapUnsupported = false
+/** Consecutive failed polls, and when one last answered — the two facts `fleetStale.ts` reads. */
+let snapFailures = 0
+let snapLastOkMs: number | null = null
 let timer: ReturnType<typeof setInterval> | null = null
 let pollLang: 'pt' | 'en' = 'en'
 
@@ -136,15 +148,25 @@ async function pollOnce(): Promise<void> {
   try {
     const res = await fetch(`/api/fleet?lang=${pollLang}`)
     if (res.status === 403 || res.status === 404) {
-      // Not an empty fleet: this machine may not be asked. The two must stay distinguishable.
-      snapUnsupported = true; snapLoading = false; emit(); return
+      // Not an empty fleet: this machine may not be asked. The two must stay distinguishable, and
+      // a refusal is a complete ANSWER — it clears the failure count rather than reading as
+      // silence, which would eventually put a "no answer" notice over a perfectly clear one.
+      snapUnsupported = true; snapFailures = 0; snapLastOkMs = Date.now()
+      snapLoading = false; emit(); return
     }
-    if (!res.ok) return
+    // COUNTED, not swallowed. This used to `return` silently, so a server answering 502 on every
+    // poll left a minutes-old list on screen looking live — a stale list is worse than an empty
+    // one, because an empty one is obviously wrong.
+    if (!res.ok) { snapFailures++; return }
     const json = await res.json() as FleetPayload
     snapUnsupported = false
     snapshot = json
+    snapFailures = 0
+    snapLastOkMs = Date.now()
   } catch {
-    // Transient — keep the last known answer rather than reporting an empty fleet.
+    // Transient — keep the last known answer rather than reporting an empty fleet, and record that
+    // it did not arrive.
+    snapFailures++
   } finally {
     snapLoading = false
     emit()
@@ -214,6 +236,11 @@ export function useFleet(lang: 'pt' | 'en', enabled = true): FleetState {
     fleet: enabled ? snapshot : EMPTY,
     loading: enabled ? snapLoading : false,
     unsupported: enabled ? snapUnsupported : false,
+    // Resolved on every render rather than stored: the sentence carries how long it has been, and
+    // a stored one would freeze that age at the moment the poll failed.
+    stale: enabled
+      ? fleetStaleNotice({ failures: snapFailures, lastOkMs: snapLastOkMs }, Date.now(), lang)
+      : null,
     refresh,
     act,
   }

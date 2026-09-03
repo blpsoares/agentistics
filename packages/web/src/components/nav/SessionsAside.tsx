@@ -56,6 +56,13 @@ export interface SessionsAsideProps {
    * for this workspace and OFF for the dashboard. This aside only reads it.
    */
   activeOnly: boolean
+  /**
+   * Already-worded reason the list may not be current (`fleetStale.ts`), or null when it is.
+   *
+   * Rendered whether or not the list is empty, which is what separates it from `EmptyReason`: the
+   * case it exists for is rows on screen that are no longer true.
+   */
+  stale?: string | null
 }
 
 /** The colour a state is said in. `running` is its own token, not `success`, which reads teal. */
@@ -109,7 +116,7 @@ function pinKeyOf(row: ControlSession): string {
 }
 
 export function SessionsAside({
-  lang, rows, loading, unsupported, unavailable, filters, activeOnly, finishedTasks,
+  lang, rows, loading, unsupported, unavailable, filters, activeOnly, finishedTasks, stale,
 }: SessionsAsideProps) {
   const pt = lang === 'pt'
   const navigate = useNavigate()
@@ -310,6 +317,19 @@ export function SessionsAside({
           ))}
         </select>
       </label>
+
+      {/* ABOVE the list and rendered whether or not the list is empty — that is the whole point.
+          `EmptyReason` below only speaks when there is nothing to show, and the case this exists
+          for is the opposite one: rows on screen that are no longer true. */}
+      {stale && (
+        <p role="status" style={{
+          margin: '0 4px', padding: '7px 9px', borderRadius: 7,
+          fontSize: 11, lineHeight: 1.45, color: 'var(--anthropic-orange)',
+          background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
+        }}>
+          {stale}
+        </p>
+      )}
 
       {pinNotice && (
         <p role="status" style={{
