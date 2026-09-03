@@ -27,6 +27,7 @@ import { FiltersBar } from '../components/FiltersBar'
 import { SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
 import { SessionsAside } from '../components/nav/SessionsAside'
 import { SessionActions } from '../components/sessions/SessionActions'
+import { CentralSessions } from '../components/sessions/CentralSessions'
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
@@ -92,6 +93,25 @@ export default function SessionsPage() {
       onViewChange={setSessionView}
     />
   )
+
+  // ---------------------------------------------------------------------------
+  // A CENTRAL manages OTHER machines' sessions here.
+  //
+  // It hosts none of its own, so this page used to say exactly that and stop — true, and useless
+  // to somebody who came to manage the sessions of the machines they can reach. `CentralSessions`
+  // is the picker plus the relayed fleet, and it takes the whole page on both layouts: the local
+  // fleet, its filters and its "new session" button all describe a machine this install is not.
+  // ---------------------------------------------------------------------------
+  if (isCentral) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
+        overflowY: 'auto', padding: isMobile ? '10px 12px' : '20px 24px',
+      }}>
+        <CentralSessions lang={pt ? 'pt' : 'en'} />
+      </div>
+    )
+  }
 
   // ---------------------------------------------------------------------------
   // Mobile: one column at a time.
