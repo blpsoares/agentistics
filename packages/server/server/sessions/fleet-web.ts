@@ -23,6 +23,7 @@ import { sessionRunning } from '@agentistics/tui/control/session-dimensions'
 import { fleetRow, type FleetActionRequest, type FleetRow } from './fleet-row'
 import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
 import { arrangeFleet, type FleetArrangement, type FleetViewRequest } from './fleet-arrange'
+import { markFleetPhase, timeFleetPhase } from './fleet-profile'
 
 // The REQUEST shape lives in the leaf `fleet-row.ts` so `index.ts` can name it without naming
 // this module — see the note there.
@@ -79,8 +80,14 @@ async function hostFor(lang: CliLang): Promise<StartHost> {
   if (cached) return cached
   // Dynamic: `cli-start` reaches `@agentistics/tui/control`, which pulls in Ink and React. The HTTP
   // server must not carry that in its own import graph for the machines that never open this page.
+  // See `fleet-profile.ts`: this import is one of the untested candidates for the cold `/api/fleet`
+  // cost, split out from `createControlHost` so a profile run says which of the two it actually is.
+  const importStart = performance.now()
   const { createControlHost } = await import('../cli-start')
+  markFleetPhase('hostFor: import(cli-start)', importStart)
+  const constructStart = performance.now()
   const host = createControlHost(lang, NO_TERMINAL)
+  markFleetPhase('hostFor: createControlHost', constructStart)
   HOSTS.set(lang, host)
   return host
 }
@@ -100,10 +107,11 @@ export function fleetLang(raw: string | null): CliLang {
  */
 export async function readFleet(lang: CliLang, view?: FleetViewRequest): Promise<FleetPayload> {
   const s = controlStrings(lang)
+  const totalStart = performance.now()
   try {
     const host = await hostFor(lang)
     if (!host.sessions) return { sessions: [], attention: 0, tasks: [] }
-    const fleet = await host.sessions()
+    const fleet = await timeFleetPhase('readFleet: host.sessions()', () => host.sessions!())
     const tasks = host.sessionTasks ? await host.sessionTasks().catch(() => []) : []
     const finishedTasks = fleet.finishedTasks ?? []
     return {
@@ -127,6 +135,8 @@ export async function readFleet(lang: CliLang, view?: FleetViewRequest): Promise
       unavailable: e instanceof Error ? e.message : String(e),
       tasks: [],
     }
+  } finally {
+    markFleetPhase('readFleet: total', totalStart)
   }
 }
 
