@@ -155,6 +155,33 @@ function extractUserEntry(e: Record<string, unknown>): UserEntry | null {
   return entry
 }
 
+/**
+ * A message the person typed WHILE the assistant was working.
+ *
+ * Claude Code does not store these as `type: 'user'`. They are QUEUED, and land as an `attachment`
+ * of type `queued_command` carrying the prompt — so the chat pane, which only ever read user
+ * entries, showed the assistant answering a question nobody could see it being asked. Reported
+ * exactly that way: "esse ultimo prompt que te mandei n apareceu na interface de sessao".
+ *
+ * It is the PERSON's own words, typed by them, and it is rendered as theirs. It is read here and
+ * not through `classifyUserText`'s envelope table because it is not an envelope: nothing wraps the
+ * text, the entry's SHAPE is what identifies it.
+ */
+function extractQueuedText(e: Record<string, unknown>): string | null {
+  if (e.type !== 'attachment') return null
+  const a = e.attachment as Record<string, unknown> | undefined
+  if (!a || a.type !== 'queued_command') return null
+  const prompt = a.prompt
+  if (typeof prompt === 'string') return prompt.trim() || null
+  if (!Array.isArray(prompt)) return null
+  const text = (prompt as Record<string, unknown>[])
+    .filter(part => part.type === 'text' && typeof part.text === 'string')
+    .map(part => part.text as string)
+    .join('\n')
+    .trim()
+  return text || null
+}
+
 /** The turn one classified entry becomes. */
 function userTurn(entry: UserEntry): ChatTurn {
   return entry.kind === 'person'
@@ -337,6 +364,8 @@ async function readTurnsFromTail(
 
     const userEntry = extractUserEntry(e)
     if (userEntry) { turns.push(userTurn(userEntry)); continue }
+    const queued = extractQueuedText(e)
+    if (queued) { turns.push({ role: 'user', text: queued }); continue }
     const assistantText = extractAssistantText(e)
     if (assistantText) { turns.push({ role: 'assistant', text: assistantText }); continue }
     if (isNewest) {
@@ -379,6 +408,8 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
 
     const userEntry = extractUserEntry(e)
     if (userEntry) { turns.push(userTurn(userEntry)); continue }
+    const queued = extractQueuedText(e)
+    if (queued) { turns.push({ role: 'user', text: queued }); continue }
 
     // An assistant event can carry text, thinking and tool calls at once, and all three belong to
     // the same turn. Emitted together rather than as separate rows: they happened together, and
