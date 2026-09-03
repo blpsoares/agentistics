@@ -20,8 +20,8 @@
  * take effect on this frame rather than at the next handshake.
  */
 
-import type { MachineFleetReply, MachineFleetRow, TeamConnection } from '@agentistics/core'
-import { reduceMachineFleetRow, resolveRemoteConsent } from '@agentistics/core'
+import type { MachineActionReply, MachineFleetReply, MachineFleetRow, TeamConnection } from '@agentistics/core'
+import { reduceMachineFleetRow, remoteActionAllowed, resolveRemoteConsent } from '@agentistics/core'
 import type { CliLang } from '../cli-lang'
 
 /** What `buildMachineFleetReply` needs from the world, so the decision itself stays testable. */
@@ -76,7 +76,13 @@ export async function buildMachineFleetReply(
     // direction, and this channel is the sharpest one the product has.
     const shared = restricted ? (!!cwd && shareRules.cwdShared(cwd, rules, index)) : true
     if (!shared) { withheld++; continue }
-    rows.push(reduceMachineFleetRow(row))
+    // Narrowed to what may be driven from a central BEFORE the reduction, so a verb this machine
+    // will refuse never even appears on the row. Offering one and refusing it on the click is the
+    // control-that-reads-as-broken this codebase keeps arguing against.
+    const verbs = Array.isArray(row.verbs)
+      ? (row.verbs as { action?: unknown }[]).filter(v => typeof v?.action === 'string' && remoteActionAllowed(v.action, consent))
+      : undefined
+    rows.push(reduceMachineFleetRow({ ...row, ...(verbs ? { verbs } : {}) }))
   }
 
   return {
@@ -88,4 +94,56 @@ export async function buildMachineFleetReply(
     withheld,
     ...(fleet.unavailable ? { unavailable: fleet.unavailable } : {}),
   }
+}
+
+/**
+ * Perform one verb asked for by a central.
+ *
+ * THE MACHINE IS THE AUTHORITY, and this function is where that stops being a slogan. The consent
+ * is re-read from preferences on every request rather than trusted from the asker, and the verb is
+ * checked against `remoteActionAllowed` HERE as well as on the central — a central is the party
+ * whose behaviour this machine cannot verify, so a check that runs only there is not a check.
+ *
+ * `approve` and `prompt` are refused with a sentence naming WHY: they need the session's screen,
+ * which does not travel. A refusal that says nothing is indistinguishable from a broken control —
+ * the same rule `fleet-row.ts` states for a verb a row cannot take.
+ *
+ * The refusal wording is this machine's, in this machine's language, because every other refusal
+ * the user meets already is.
+ */
+export async function performMachineAction(
+  conn: Pick<TeamConnection, 'allowRemoteSessions' | 'allowRemoteScreens'>,
+  lang: CliLang,
+  req: { action: string; id: string; text?: string },
+  deps: { runAction: (lang: CliLang, req: { id: string; action: string; text?: string }) => Promise<MachineActionReply> },
+): Promise<MachineActionReply> {
+  const pt = lang === 'pt'
+  const consent = resolveRemoteConsent(conn.allowRemoteSessions, conn.allowRemoteScreens)
+  if (!consent.sessions) {
+    return {
+      ok: false,
+      message: pt
+        ? 'Esta máquina não permite gerenciar sessões a partir de uma central.'
+        : 'This machine does not allow session management from a central.',
+    }
+  }
+  if (!req.id) {
+    return { ok: false, message: pt ? 'Nenhuma sessão indicada.' : 'No session named.' }
+  }
+  if (!remoteActionAllowed(req.action, consent)) {
+    // Named rather than generic: "not allowed" would read the same for a verb that needs the
+    // screen and for one that does not exist, and they are different problems.
+    const needsScreen = req.action === 'approve' || req.action === 'prompt'
+    return {
+      ok: false,
+      message: needsScreen
+        ? (pt
+          ? 'Responder a uma sessão exige ver a tela dela, e a tela não sai desta máquina.'
+          : 'Answering a session needs to read its screen, and the screen does not leave this machine.')
+        : (pt
+          ? 'Esta ação não pode ser feita a partir de uma central.'
+          : 'This action cannot be performed from a central.'),
+    }
+  }
+  return await deps.runAction(lang, { id: req.id, action: req.action, text: req.text })
 }

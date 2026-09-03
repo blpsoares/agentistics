@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import {
-  requestMachineFleet, acceptMachineFleetReply, abandonMachineFleet, resetMachineFleetRelay,
+  requestMachineFleet, requestMachineAction, acceptMachineFleetReply, abandonMachineFleet,
+  resetMachineFleetRelay,
 } from './machine-fleet-relay'
 
 beforeEach(() => { resetMachineFleetRelay() })
@@ -114,5 +115,72 @@ describe('abandonMachineFleet', () => {
     const second = requestMachineFleet('m1', x => { rid = x.rid as string })
     acceptMachineFleetReply('m1', rid, okReply)
     expect((await second)!.attention).toBe(1)
+  })
+})
+
+describe('requestMachineAction', () => {
+  const act = { action: 'rename', id: 's1', text: 'new name' }
+
+  it('sends the verb and resolves with the MACHINE\'s own sentence', async () => {
+    let sent: Record<string, unknown> | null = null
+    const p = requestMachineAction('m1', act, x => { sent = x })
+    expect(sent!.op).toBe('act')
+    expect(sent!.action).toBe('rename')
+    expect(sent!.id).toBe('s1')
+    acceptMachineFleetReply('m1', sent!.rid, { ok: true, message: 'renamed' })
+    expect(await p).toEqual({ ok: true, message: 'renamed' })
+  })
+
+  it('NEVER joins an open action — two acts are two acts, even with the same verb', async () => {
+    // Collapsing them would report one person's result to somebody who asked for something else.
+    let sends = 0
+    let rid = ''
+    const a = requestMachineAction('m1', act, x => { sends++; rid = x.rid as string })
+    const b = requestMachineAction('m1', act, () => { sends++ })
+    expect(sends).toBe(1)
+    // The second is REFUSED outright rather than queued: a keystroke arriving a minute late is
+    // worse than one that plainly did not happen.
+    expect(await b).toBeNull()
+    acceptMachineFleetReply('m1', rid, { ok: true, message: 'renamed' })
+    expect((await a)!.ok).toBe(true)
+  })
+
+  it('a read and an action do not compete for one slot', async () => {
+    // Keying "one in flight" by machine alone would have a dashboard's background read block the
+    // button the user just pressed.
+    let readRid = '', actRid = ''
+    const r = requestMachineFleet('m1', x => { readRid = x.rid as string })
+    const a = requestMachineAction('m1', act, x => { actRid = x.rid as string })
+    expect(readRid).not.toBe('')
+    expect(actRid).not.toBe('')
+    expect(readRid).not.toBe(actRid)
+    acceptMachineFleetReply('m1', actRid, { ok: true, message: 'done' })
+    acceptMachineFleetReply('m1', readRid, okReply)
+    expect((await a)!.message).toBe('done')
+    expect((await r)!.attention).toBe(1)
+  })
+
+  it('an answer with no sentence is a FAILURE, never a silent success', async () => {
+    // Every refusal in this product is worded by the thing that made it; an answer this central
+    // cannot render must not be shown as "it worked".
+    for (const junk of [{ ok: true }, { ok: true, message: '' }, { message: 5 }, 'nope', null]) {
+      let rid = ''
+      const p = requestMachineAction('m1', act, x => { rid = x.rid as string })
+      acceptMachineFleetReply('m1', rid, junk)
+      expect(await p).toBeNull()
+    }
+  })
+
+  it('ok is trusted only as a literal boolean', async () => {
+    let rid = ''
+    const p = requestMachineAction('m1', act, x => { rid = x.rid as string })
+    acceptMachineFleetReply('m1', rid, { ok: 'yes', message: 'hm' })
+    expect(await p).toEqual({ ok: false, message: 'hm' })
+  })
+
+  it('a dropped socket settles an open ACTION too', async () => {
+    const p = requestMachineAction('m1', act, () => {}, 60_000)
+    abandonMachineFleet('m1')
+    expect(await p).toBeNull()
   })
 })

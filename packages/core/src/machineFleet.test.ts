@@ -50,7 +50,41 @@ describe('reduceMachineFleetRow', () => {
       project: 'agentistics', cwd: '/home/me/agentistics',
       task: 'parser', note: 'left mid-edit', model: 'claude-opus-5',
       conversationId: 'conv-1', named: true,
+      verbs: [{ action: 'kill', label: 'Kill', enabled: true }],
     })
+  })
+
+  it('a verb is rebuilt field by field, like the row itself', () => {
+    // A FleetVerb that grew a field carrying screen text would otherwise ride along inside an
+    // object nobody re-checked.
+    const out = reduceMachineFleetRow({
+      ...richRow,
+      verbs: [{ action: 'kill', label: 'Kill', enabled: true, dialogPreview: '1. Yes  2. No', extra: 1 }],
+    })
+    expect(out.verbs).toEqual([{ action: 'kill', label: 'Kill', enabled: true }])
+  })
+
+  it('keeps a DISABLED verb and its reason — a vanished button explains nothing', () => {
+    const out = reduceMachineFleetRow({
+      ...richRow,
+      verbs: [{ action: 'resume', label: 'Reopen', enabled: false, reason: 'no conversation to reopen' }],
+    })
+    expect(out.verbs).toEqual([{ action: 'resume', label: 'Reopen', enabled: false, reason: 'no conversation to reopen' }])
+  })
+
+  it('drops a malformed verb rather than rendering a nameless button', () => {
+    const out = reduceMachineFleetRow({
+      ...richRow,
+      verbs: [{ label: 'Mystery' }, null, 'kill', { action: '', label: 'x' }, { action: 'note', label: 'Note', enabled: 'yes' }],
+    })
+    // The survivor keeps its identity and is DISABLED: `enabled` is trusted only as a literal
+    // boolean, so a truthy value never turns into an offer.
+    expect(out.verbs).toEqual([{ action: 'note', label: 'Note', enabled: false }])
+  })
+
+  it('falls back to the action id when the machine sent no label', () => {
+    const out = reduceMachineFleetRow({ ...richRow, verbs: [{ action: 'kill', enabled: true }] })
+    expect(out.verbs).toEqual([{ action: 'kill', label: 'kill', enabled: true }])
   })
 
   it('keeps the state label the MACHINE resolved — a central must not re-derive its vocabulary', () => {

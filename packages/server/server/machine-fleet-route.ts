@@ -26,7 +26,8 @@
  * An empty list is never allowed to stand in for any of them.
  */
 
-import type { MachineFleetAnswer } from '@agentistics/core'
+import type { MachineActionReply, MachineFleetAnswer } from '@agentistics/core'
+import { remoteActionAllowed } from '@agentistics/core'
 
 export interface MachineFleetRouteDeps {
   /** The machines this central knows, already loaded. */
@@ -69,6 +70,44 @@ export async function resolveMachineFleet(
   if (!deps.isOnline(machineId)) return { reply: null, reason: 'offline' }
 
   const reply = await deps.request(machineId)
+  if (!reply) return { reply: null, reason: 'silent' }
+  return { reply }
+}
+
+export interface MachineActionAnswer {
+  reply: MachineActionReply | null
+  reason?: import('@agentistics/core').MachineFleetUnavailable
+}
+
+/**
+ * Resolve one VERB on one of another machine's sessions.
+ *
+ * The same three gates as the read, in the same order, plus the verb allowlist. That allowlist runs
+ * here as well as on the machine, and neither check is redundant: this one spares a member a
+ * pointless round trip and gives the user an instant answer, while the machine's is the one that
+ * actually decides — a central is the party whose behaviour a machine cannot verify.
+ *
+ * A refused verb answers `refused`, the same code a withdrawn consent gets, because from the
+ * caller's side they are one fact: this machine will not do it. The MACHINE's own sentence is what
+ * the UI shows whenever there is one; the central composes no wording of its own.
+ */
+export async function resolveMachineAction(
+  principal: { accountId: string; role: string },
+  machineId: string,
+  action: { action: string; id: string; text?: string },
+  deps: MachineFleetRouteDeps & { act: (machineId: string, a: { action: string; id: string; text?: string }) => Promise<MachineActionReply | null> },
+): Promise<MachineActionAnswer> {
+  const { machineOwnedBy } = await import('./iam-view')
+  const machine = (await deps.listMachines()).find(m => m.id === machineId)
+  if (!machine) return { reply: null, reason: 'not-owner' }
+  if (!machineOwnedBy(principal as never, machine)) return { reply: null, reason: 'not-owner' }
+
+  const consent = deps.consentOf(machineId)
+  if (!consent.sessions) return { reply: null, reason: deps.isOnline(machineId) ? 'refused' : 'offline' }
+  if (!remoteActionAllowed(action.action, consent)) return { reply: null, reason: 'refused' }
+  if (!deps.isOnline(machineId)) return { reply: null, reason: 'offline' }
+
+  const reply = await deps.act(machineId, action)
   if (!reply) return { reply: null, reason: 'silent' }
   return { reply }
 }

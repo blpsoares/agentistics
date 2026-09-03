@@ -1,8 +1,16 @@
 /**
- * MachineFleetDrawer.tsx — one machine's session fleet, relayed to its owning account.
+ * MachineFleetDrawer.tsx — one machine's session fleet, relayed to its owning account, and the
+ * screenless verbs performed on it.
  *
- * A READ. There are no verbs here: acting on another machine's sessions is the next phase, and
- * shipping a button before the thing behind it exists is how a control ends up silently inert.
+ * The verbs come from the MACHINE, already decided and already worded: it narrows its own
+ * `sessionActions` to what may be driven remotely (`machineActions.ts`) before the row is even
+ * built, so a button that appears here is one the machine has agreed to. `approve` and `prompt`
+ * are absent by construction — they cannot be offered without the session's screen, and the
+ * screen does not travel; the panel says that in words rather than showing a disabled button
+ * that implies it is coming back.
+ *
+ * A verb that takes TEXT asks for it first. A rename or a note is the user's own words about
+ * their own work, so it is typed here and sent once — never a blank submit.
  *
  * Every sentence comes from the pure `machineFleetPanelView`, which keeps the four refusals and the
  * one real "no sessions" apart. Nothing here may render an empty list for a fleet nobody managed to
@@ -14,7 +22,7 @@
 
 import { useEffect, useState } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
-import type { MachineFleetAnswer } from '@agentistics/core'
+import type { MachineActionReply, MachineFleetAnswer, MachineFleetRow } from '@agentistics/core'
 import { Drawer } from './Drawer'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { machineFleetPanelView } from './machineFleetView'
@@ -30,6 +38,14 @@ export function MachineFleetDrawer({ open, machineId, machineName, lang, onClose
   const isMobile = useIsMobile()
   const [answer, setAnswer] = useState<MachineFleetAnswer | null>(null)
   const [loading, setLoading] = useState(false)
+  /** The verb in flight, keyed `<sessionId>:<action>` — so only the pressed button reports busy. */
+  const [acting, setActing] = useState<string | null>(null)
+  /** The machine's own last sentence about a verb. Kept until the next act: an outcome that
+   *  vanishes on the next repaint is one the user may never have read. */
+  const [outcome, setOutcome] = useState<MachineActionReply | null>(null)
+  /** A verb that needs words, waiting for them. */
+  const [asking, setAsking] = useState<{ row: MachineFleetRow; action: string; label: string } | null>(null)
+  const [draft, setDraft] = useState('')
 
   async function load() {
     setLoading(true)
@@ -53,6 +69,37 @@ export function MachineFleetDrawer({ open, machineId, machineName, lang, onClose
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, machineId])
+
+  /** Verbs whose meaning IS the text they carry. Sent blank they would clear a name or a note,
+   *  which is a destructive edit nobody asked for. */
+  const NEEDS_TEXT = new Set(['rename', 'note', 'task'])
+
+  async function act(row: MachineFleetRow, action: string, text?: string) {
+    if (acting) return
+    setActing(`${row.id}:${action}`)
+    setOutcome(null)
+    try {
+      const res = await fetch('/api/team/machine-fleet/act', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machineId, id: row.id, action, ...(text !== undefined ? { text } : {}) }),
+      })
+      const body = res.ok ? ((await res.json()) as { reply: MachineActionReply | null; reason?: string }) : null
+      setOutcome(body?.reply ?? {
+        ok: false,
+        // The route's own refusal has no sentence of its own — it answers a reason code, because
+        // the wording of a real refusal belongs to the machine. This is the one case where there
+        // is no machine answer to show.
+        message: pt ? 'A máquina não respondeu a esta ação.' : 'The machine did not answer this action.',
+      })
+    } catch {
+      setOutcome({ ok: false, message: pt ? 'A máquina não respondeu a esta ação.' : 'The machine did not answer this action.' })
+    } finally {
+      setActing(null)
+      // Re-read: a kill or a rename changes the very list that was just drawn.
+      void load()
+    }
+  }
 
   const view = machineFleetPanelView(answer, lang)
   const rows = answer?.reply?.rows ?? []
@@ -134,19 +181,144 @@ export function MachineFleetDrawer({ open, machineId, machineName, lang, onClose
                     {r.note ? `${pt ? 'Nota' : 'Note'}: ${r.note}` : ''}
                   </div>
                 )}
+
+                {(r.verbs?.length ?? 0) > 0 && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
+                    {r.verbs!.map(v => (
+                      <button
+                        key={v.action}
+                        type="button"
+                        // The machine's own sentence for why it is off. A refused verb that
+                        // explains nothing is indistinguishable from a broken control.
+                        title={v.enabled ? undefined : v.reason}
+                        disabled={!v.enabled || acting !== null}
+                        onClick={() => {
+                          if (NEEDS_TEXT.has(v.action)) {
+                            setDraft(v.action === 'rename' ? r.title : v.action === 'note' ? (r.note ?? '') : (r.task ?? ''))
+                            setAsking({ row: r, action: v.action, label: v.label })
+                            return
+                          }
+                          void act(r, v.action)
+                        }}
+                        style={{
+                          minHeight: isMobile ? 44 : 26,
+                          padding: isMobile ? '0 14px' : '0 9px',
+                          borderRadius: 6, fontFamily: 'inherit', fontSize: 11,
+                          border: '1px solid var(--border)', background: 'transparent',
+                          // `kill` is the only destructive one here and wears the fault colour, so
+                          // it cannot be pressed by muscle memory for the one beside it.
+                          color: v.action === 'kill' ? 'var(--accent-red)' : 'var(--text-secondary)',
+                          cursor: v.enabled && acting === null ? 'pointer' : 'default',
+                          opacity: v.enabled && acting === null ? 1 : 0.5,
+                        }}
+                      >
+                        {acting === `${r.id}:${v.action}`
+                          ? <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} />
+                          : v.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         )}
 
-        {/* Said once, at the bottom, rather than as a disabled button per row: there is nothing to
-            press yet, and a greyed-out verb implies one is coming back. */}
+        {/* The machine's own last word on a verb. Kept until the next act rather than flashing:
+            an outcome that vanishes on the next repaint is one the user may never have read. */}
+        {outcome && (
+          <div
+            role="status"
+            style={{
+              padding: '8px 10px', borderRadius: 7, fontSize: 11.5, lineHeight: 1.5,
+              color: outcome.ok ? 'var(--accent-green)' : 'var(--anthropic-orange)',
+              background: `color-mix(in srgb, ${outcome.ok ? 'var(--accent-green)' : 'var(--anthropic-orange)'} 10%, transparent)`,
+              overflowWrap: 'anywhere',
+            }}
+          >
+            {outcome.message}
+          </div>
+        )}
+
+        {/* Said once, at the bottom. `approve` and `prompt` are ABSENT rather than greyed out: a
+            disabled button implies the thing behind it exists and is merely off, and the screen
+            genuinely does not travel. */}
         <p style={{ margin: 0, fontSize: 10.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
           {pt
-            ? 'Somente leitura. A tela e a conversa das sessões não saem da máquina.'
-            : 'Read-only. A session’s screen and conversation never leave the machine.'}
+            ? 'A tela e a conversa das sessões não saem da máquina — por isso não dá para responder a um pedido de permissão daqui.'
+            : 'A session’s screen and conversation never leave the machine — which is why a permission prompt cannot be answered from here.'}
         </p>
       </div>
+
+      {/* A verb whose meaning IS its text asks for the words first. Sent blank it would CLEAR a
+          name or a note, which is a destructive edit nobody pressed a button for. */}
+      {asking && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 10000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.55)', padding: isMobile ? 0 : 24,
+        }}>
+          <div style={{
+            width: isMobile ? '100%' : 420, maxWidth: '100%',
+            height: isMobile ? '100%' : 'auto',
+            display: 'flex', flexDirection: 'column', gap: 12, justifyContent: isMobile ? 'center' : undefined,
+            padding: 18, borderRadius: isMobile ? 0 : 10,
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+          }}>
+            <strong style={{ fontSize: 13 }}>{asking.label}</strong>
+            <span style={{ fontSize: 11.5, color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
+              {asking.row.title}
+            </span>
+            <input
+              autoFocus
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') { setAsking(null); return }
+                if (e.key === 'Enter' && draft.trim()) {
+                  const a = asking
+                  setAsking(null)
+                  void act(a.row, a.action, draft.trim())
+                }
+              }}
+              style={{
+                // 16px is not a preference: anything smaller makes iOS Safari zoom the viewport
+                // and break the sticky header behind this dialog.
+                fontSize: 16, fontFamily: 'inherit', minHeight: 44,
+                padding: '0 10px', borderRadius: 7,
+                border: '1px solid var(--border)', background: 'var(--bg-secondary)',
+                color: 'var(--text-primary)',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setAsking(null)}
+                style={{
+                  minHeight: isMobile ? 44 : 30, padding: '0 14px', borderRadius: 7,
+                  border: '1px solid var(--border)', background: 'transparent',
+                  color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 12, cursor: 'pointer',
+                }}
+              >
+                {pt ? 'Cancelar' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                disabled={!draft.trim()}
+                onClick={() => { const a = asking; setAsking(null); void act(a.row, a.action, draft.trim()) }}
+                style={{
+                  minHeight: isMobile ? 44 : 30, padding: '0 14px', borderRadius: 7,
+                  border: '1px solid var(--anthropic-orange)', background: 'transparent',
+                  color: 'var(--anthropic-orange)', fontFamily: 'inherit', fontSize: 12, fontWeight: 700,
+                  cursor: draft.trim() ? 'pointer' : 'default', opacity: draft.trim() ? 1 : 0.5,
+                }}
+              >
+                {pt ? 'Enviar' : 'Send'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Drawer>
   )
 }

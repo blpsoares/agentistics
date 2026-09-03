@@ -2121,6 +2121,65 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       })
     }
 
+    // POST /api/team/machine-fleet/act — perform ONE verb on one of that machine's sessions.
+    //
+    // Same three gates as the read plus the verb allowlist, and the machine checks all of it again:
+    // a central is the party whose behaviour a machine cannot verify, so the check here only spares
+    // a pointless round trip. Audited on the way out, and the MACHINE is told too — an action that
+    // is invisible on the machine it happened to is the failure this whole feature has to avoid.
+    if (url.pathname === '/api/team/machine-fleet/act' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const principal = await getPrincipal(req)
+      if (!principal) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const parsed = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+      if (!parsed.ok) {
+        return new Response(JSON.stringify({ error: parsed.error }), {
+          status: parsed.error === 'too_large' ? 413 : 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const b = (parsed.value ?? {}) as Record<string, unknown>
+      const machineId = typeof b.machineId === 'string' ? b.machineId : ''
+      const action = typeof b.action === 'string' ? b.action : ''
+      const sessionId = typeof b.id === 'string' ? b.id : ''
+      const [{ resolveMachineAction }, { listMachines }, agent, consent, relay] = await Promise.all([
+        import('./machine-fleet-route'),
+        import('./team-tokens'),
+        import('./team-agent'),
+        import('./machine-consent'),
+        import('./machine-fleet-relay'),
+      ])
+      const answer = await resolveMachineAction(principal, machineId, {
+        action, id: sessionId, ...(typeof b.text === 'string' ? { text: b.text } : {}),
+      }, {
+        listMachines,
+        isOnline: id => agent.hasAgentSocket(id),
+        consentOf: id => consent.effectiveConsent(id),
+        request: id => relay.requestMachineFleet(id, payload => agent.notifyMember(id, payload)),
+        act: (id, a) => relay.requestMachineAction(id, a, payload => agent.notifyMember(id, payload)),
+      })
+      // Audited whenever the verb actually REACHED the machine — a refusal decided here is not an
+      // action on anybody's session, and recording one would make the log describe things that
+      // never happened. The session id is recorded, never the text: a rename or a note is the
+      // user's own words about their own work.
+      if (answer.reply) {
+        void writeAudit({
+          action: 'machine.session_action', ip: clientIp, actorId: principal.accountId,
+          targetId: machineId, meta: { verb: action, session: sessionId, ok: answer.reply.ok },
+        })
+        // And the machine says so itself, so the person sitting at it learns that somebody acted
+        // on their session without having to read a central's audit log.
+        agent.notifyMember(machineId, { type: 'session-acted', verb: action, sessionId })
+      }
+      return new Response(JSON.stringify(answer), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     // /api/team/proposals — LOCAL, same-origin: the restriction proposals this machine has
     // received and decrypted, and the dismissal of one. Reading them changes nothing; APPLYING one
     // is the ordinary PATCH /api/team/connections/:id the user's click performs, never a server

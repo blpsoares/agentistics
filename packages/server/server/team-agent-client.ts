@@ -90,7 +90,7 @@ export function shouldTeardown(storedFingerprint: string | undefined, conn: Team
 
 export interface AgentFrameDecision {
   /** A notification to broadcast, or null for an unrecognized/malformed frame. */
-  notification: { type: 'info'; code: 'machine.renamed' | 'machine.reassigned'; meta: Record<string, unknown> } | null
+  notification: { type: 'info'; code: 'machine.renamed' | 'machine.reassigned' | 'machine.session_acted'; meta: Record<string, unknown> } | null
   /** New value to write into this connection's `user`, or null for "no change". Note that ''
    *  (empty string) IS a valid update — it means "clear it", not "no change": a reassignment to
    *  no owner does not tell us what the machine's display name falls back to, so the existing
@@ -114,7 +114,7 @@ export interface AgentFrameDecision {
 export function decodeAgentFrame(raw: string, meta: { connectionId: string; central: string }): AgentFrameDecision {
   const none: AgentFrameDecision = { notification: null, userUpdate: null, refreshDashboard: false }
   if (!raw) return none
-  let data: { type?: string; name?: string; actor?: string; account?: string | null }
+  let data: { type?: string; name?: string; actor?: string; account?: string | null; verb?: string; sessionId?: string }
   try {
     data = JSON.parse(raw) as typeof data
   } catch {
@@ -129,6 +129,20 @@ export function decodeAgentFrame(raw: string, meta: { connectionId: string; cent
       },
       userUpdate: newName || null,
       refreshDashboard: false,
+    }
+  }
+  if (data?.type === 'session-acted') {
+    // Somebody acted on one of THIS machine's sessions from a central. Announced here rather than
+    // left to the central's audit log: an action that is invisible on the machine it happened to
+    // is the failure the whole remote-session feature has to avoid, and the person sitting at this
+    // keyboard should not have to read someone else's log to learn their session was killed.
+    return {
+      notification: {
+        type: 'info', code: 'machine.session_acted',
+        meta: { verb: data.verb ?? '', sessionId: data.sessionId ?? '', ...meta },
+      },
+      userUpdate: null,
+      refreshDashboard: true,
     }
   }
   if (data?.type === 'reassigned') {
@@ -420,10 +434,34 @@ export function announceRemoteConsentNow(connId: string): void {
  */
 async function answerFleetRequest(connId: string, socket: WebSocket, raw: string): Promise<void> {
   try {
-    const msg = JSON.parse(raw) as { type?: string; rid?: unknown }
+    const msg = JSON.parse(raw) as { type?: string; rid?: unknown; op?: unknown; action?: unknown; id?: unknown; text?: unknown }
     if (msg?.type !== 'fleet-request' || typeof msg.rid !== 'string' || !msg.rid) return
     const conn = readTeamConnections(await readPreferences()).find(c => c.id === connId)
     if (!conn) return
+
+    // `op: 'act'` — perform one verb. The consent and the verb allowlist are re-checked by
+    // `performMachineAction` on THIS machine; nothing the central decided is trusted here.
+    if (msg.op === 'act') {
+      const [{ performMachineAction }, { runFleetAction }, { resolveLang }] = await Promise.all([
+        import('./sessions/machine-fleet'),
+        import('./sessions/fleet-web'),
+        import('./cli-lang'),
+      ])
+      const lang = await resolveLang()
+      const reply = await performMachineAction(conn, lang, {
+        action: typeof msg.action === 'string' ? msg.action : '',
+        id: typeof msg.id === 'string' ? msg.id : '',
+        ...(typeof msg.text === 'string' ? { text: msg.text } : {}),
+      }, {
+        // `runFleetAction` is the SAME path the machine's own web Sessions page calls, so every
+        // refusal the cockpit makes is made here too — there is no second implementation of what a
+        // row may take.
+        runAction: (l, r) => runFleetAction(l, r as never),
+      })
+      if (socket.readyState !== WebSocket.OPEN) return
+      socket.send(JSON.stringify({ type: 'fleet-reply', rid: msg.rid, reply }))
+      return
+    }
     const [{ buildMachineFleetReply }, { readFleet }, { buildApiResponse }, { resolveLang }] = await Promise.all([
       import('./sessions/machine-fleet'),
       import('./sessions/fleet-web'),
@@ -434,8 +472,17 @@ async function answerFleetRequest(connId: string, socket: WebSocket, raw: string
     const reply = await buildMachineFleetReply(conn, lang, {
       readFleet: async l => {
         const payload = await readFleet(l)
+        // The VERBS live on the presentation half (`sessions`, a FleetRow[]) and everything else on
+        // the raw half (`rows`, a ControlSession[]); they are the same rows in the same order.
+        // Merged by id rather than by position — an order that happens to match today is not a
+        // guarantee, and pairing rows by index is exactly the defect `workflow-match.ts` exists to
+        // have fixed once.
+        const verbsById = new Map(payload.sessions.map(r => [r.id, r.verbs]))
         return {
-          rows: payload.rows as unknown as Record<string, unknown>[],
+          rows: payload.rows.map(r => ({
+            ...(r as unknown as Record<string, unknown>),
+            verbs: verbsById.get(r.id) ?? [],
+          })),
           attention: payload.attention,
           ...(payload.unavailable ? { unavailable: payload.unavailable } : {}),
         }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { resolveMachineFleet, type MachineFleetRouteDeps } from './machine-fleet-route'
+import { resolveMachineFleet, resolveMachineAction, type MachineFleetRouteDeps } from './machine-fleet-route'
 
 const owner = { accountId: 'o1', role: 'owner', memberships: [] }
 const bob = { accountId: 'bob', role: 'member', memberships: [] }
@@ -82,5 +82,70 @@ describe('resolveMachineFleet', () => {
     const loose = deps({ listMachines: async () => [{ id: 'm1' }] })
     expect((await resolveMachineFleet(owner, 'm1', loose)).reason).toBe('not-owner')
     expect((await resolveMachineFleet(bob, 'm1', loose)).reason).toBe('not-owner')
+  })
+})
+
+describe('resolveMachineAction', () => {
+  const done = { ok: true, message: 'renamed' }
+  const rename = { action: 'rename', id: 's1', text: 'x' }
+  function adeps(over: Partial<MachineFleetRouteDeps & { act: unknown }> = {}) {
+    return {
+      ...deps(),
+      act: async () => done,
+      ...over,
+    } as never
+  }
+
+  it('the owning account may perform a screenless verb', async () => {
+    expect(await resolveMachineAction(bob, 'm1', rename, adeps())).toEqual({ reply: done })
+  })
+
+  it('the instance owner may not — the same refusal as the read', async () => {
+    expect((await resolveMachineAction(owner, 'm1', rename, adeps())).reason).toBe('not-owner')
+  })
+
+  it('refuses approve and prompt BEFORE the round trip', async () => {
+    // The machine refuses them too; this check only spares the member a pointless trip and gives
+    // the user an instant answer.
+    let asked = 0
+    for (const action of ['approve', 'prompt']) {
+      const r = await resolveMachineAction(bob, 'm1', { action, id: 's1' },
+        adeps({ act: async () => { asked++; return done } }))
+      expect(r.reason).toBe('refused')
+    }
+    expect(asked).toBe(0)
+  })
+
+  it('refuses an unknown verb without asking the machine', async () => {
+    let asked = 0
+    const r = await resolveMachineAction(bob, 'm1', { action: 'wipe', id: 's1' },
+      adeps({ act: async () => { asked++; return done } }))
+    expect(r.reason).toBe('refused')
+    expect(asked).toBe(0)
+  })
+
+  it('a withdrawn consent refuses, and never asks', async () => {
+    let asked = 0
+    const r = await resolveMachineAction(bob, 'm1', rename, adeps({
+      consentOf: () => ({ sessions: false, screens: false }),
+      act: async () => { asked++; return done },
+    }))
+    expect(r.reason).toBe('refused')
+    expect(asked).toBe(0)
+  })
+
+  it('an offline machine is offline, not silent', async () => {
+    expect((await resolveMachineAction(bob, 'm1', rename, adeps({ isOnline: () => false }))).reason).toBe('offline')
+  })
+
+  it('a machine that does not answer is SILENT — the verb may or may not have run', async () => {
+    expect((await resolveMachineAction(bob, 'm1', rename, adeps({ act: async () => null }))).reason).toBe('silent')
+  })
+
+  it("passes the machine's own refusal through untouched", async () => {
+    // The central composes no wording of its own: the machine owns every refusal it makes.
+    const refusal = { ok: false, message: 'esta sessão não está rodando' }
+    const r = await resolveMachineAction(bob, 'm1', rename, adeps({ act: async () => refusal }))
+    expect(r).toEqual({ reply: refusal })
   })
 })

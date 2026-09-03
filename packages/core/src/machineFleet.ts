@@ -27,7 +27,7 @@
 /** The keys a relayed row may carry. Adding one is a product decision, not a refactor. */
 export const MACHINE_FLEET_ROW_KEYS = [
   'id', 'title', 'harness', 'state', 'stateLabel', 'project', 'cwd',
-  'task', 'note', 'model', 'conversationId', 'named',
+  'task', 'note', 'model', 'conversationId', 'named', 'verbs',
 ] as const
 
 export type MachineFleetRowKey = typeof MACHINE_FLEET_ROW_KEYS[number]
@@ -49,6 +49,23 @@ export interface MachineFleetRow {
   model?: string
   conversationId?: string
   named?: boolean
+  /**
+   * What this row may take FROM A CENTRAL, already decided and worded by the machine.
+   *
+   * The same `sessionActions` decision the cockpit resolves every keypress against, narrowed to
+   * the screenless set (`machineActions.ts`). A refused verb travels DISABLED with its reason
+   * rather than being dropped: a row that silently loses half its buttons reads as a broken
+   * feature, and absence communicates nothing about why — `fleet-row.ts` records that call.
+   */
+  verbs?: MachineFleetVerb[]
+}
+
+export interface MachineFleetVerb {
+  action: string
+  /** Already localized by the machine. A central composes no wording of its own. */
+  label: string
+  enabled: boolean
+  reason?: string
 }
 
 /**
@@ -77,6 +94,20 @@ export interface MachineFleetReply {
   withheld: number
   /** The machine's OWN already-localized sentence about why its list may be incomplete. */
   unavailable?: string
+}
+
+/**
+ * The answer to one verb performed on another machine's session.
+ *
+ * `message` is ALWAYS present and is the MACHINE's own already-localized sentence — the same one
+ * `runFleetAction` gives the cockpit. A central must not compose its own: every refusal this
+ * product makes is worded by the thing that made it (`fleet-row.ts`'s `verbReason`,
+ * `renameMessage`, the approval blind sentences), and a second vocabulary on the central would
+ * drift from the first and describe refusals it does not actually make.
+ */
+export interface MachineActionReply {
+  ok: boolean
+  message: string
 }
 
 /** What the central's route answers when there is no reply to give. */
@@ -115,5 +146,20 @@ export function reduceMachineFleetRow(row: Record<string, unknown>): MachineFlee
     ...(typeof out.model === 'string' ? { model: out.model } : {}),
     ...(typeof out.conversationId === 'string' ? { conversationId: out.conversationId } : {}),
     ...(typeof out.named === 'boolean' ? { named: out.named } : {}),
+    // Each verb is rebuilt field by field for the same reason the row is: a `FleetVerb` that grew
+    // a field carrying screen text would otherwise ride along inside an object nobody re-checked.
+    ...(Array.isArray(out.verbs) ? { verbs: (out.verbs as unknown[]).map(reduceVerb).filter((v): v is MachineFleetVerb => v !== null) } : {}),
+  }
+}
+
+function reduceVerb(raw: unknown): MachineFleetVerb | null {
+  if (!raw || typeof raw !== 'object') return null
+  const v = raw as Record<string, unknown>
+  if (typeof v.action !== 'string' || !v.action) return null
+  return {
+    action: v.action,
+    label: typeof v.label === 'string' ? v.label : v.action,
+    enabled: v.enabled === true,
+    ...(typeof v.reason === 'string' && v.reason ? { reason: v.reason } : {}),
   }
 }
