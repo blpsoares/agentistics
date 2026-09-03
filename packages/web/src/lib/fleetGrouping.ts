@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react'
 /**
  * fleetGrouping.ts — PURE: how the web Sessions list is banded, and in whose words.
  *
@@ -137,4 +138,42 @@ export function readGrouping(): FleetGrouping {
 
 export function writeGrouping(id: FleetGrouping): void {
   try { localStorage.setItem(KEY, id) } catch { /* storage disabled — the choice lasts this session */ }
+}
+
+// ---------------------------------------------------------------------------
+// The shared store — one fact, two components
+// ---------------------------------------------------------------------------
+
+/**
+ * The CONTROL lives in the header's filter row and the READER is the aside, and they are siblings
+ * in different subtrees. Rather than thread the value through everything between them, this is an
+ * external store — the same shape `pinnedSessions.ts` already uses for a per-viewer preference
+ * shared across components, so there is one pattern for this in the app rather than two.
+ *
+ * Seeded lazily from storage on first read, so a page that never opens Sessions never touches
+ * localStorage.
+ */
+const subscribers = new Set<() => void>()
+let current: FleetGrouping | null = null
+
+export function getGrouping(): FleetGrouping {
+  if (current === null) current = readGrouping()
+  return current
+}
+
+export function setGroupingShared(id: FleetGrouping): void {
+  if (getGrouping() === id) return
+  current = id
+  writeGrouping(id)
+  for (const fn of subscribers) fn()
+}
+
+export function subscribeGrouping(fn: () => void): () => void {
+  subscribers.add(fn)
+  return () => { subscribers.delete(fn) }
+}
+
+/** Read the shared arrangement and re-render when it changes. */
+export function useGrouping(): FleetGrouping {
+  return useSyncExternalStore(subscribeGrouping, getGrouping, getGrouping)
 }

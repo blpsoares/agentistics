@@ -21,10 +21,7 @@ import {
   ACTIVE_STATES, DEFAULT_ORDER, filterSessions, groupSessions, sessionNotify, sortSessions,
   type ControlSession,
 } from '@agentistics/tui/control/session-fleet'
-import {
-  FLEET_GROUPINGS, fleetWordBook, groupingLabel, readGrouping, writeGrouping,
-  type FleetGrouping,
-} from '../../lib/fleetGrouping'
+import { fleetWordBook, useGrouping } from '../../lib/fleetGrouping'
 import { filterFleet } from '../../lib/fleetFilter'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { NewSessionModal } from '../sessions/NewSessionModal'
@@ -123,10 +120,11 @@ export function SessionsAside({
   // 44px is the MOBILE figure. Applying it on desktop turns a compact list into a row of buttons.
   const isMobile = useIsMobile()
   const tap = isMobile ? 44 : undefined
-  // Read once, lazily: a per-viewer view preference, like a collapsed section — not something the
-  // server needs to know, and not something worth a round trip on every mount.
-  const [grouping, setGroupingState] = useState<FleetGrouping>(() => readGrouping())
-  const setGrouping = (id: FleetGrouping) => { setGroupingState(id); writeGrouping(id) }
+  // The arrangement is CHOSEN in the header, beside the filters, and only READ here. It was a
+  // labelled row inside this column and did not belong: "how is this list arranged" is the same
+  // kind of question as "what is in it", and the answers to that already live in the filter bar —
+  // a second control surface in the aside made one page ask twice, in two places.
+  const grouping = useGrouping()
   const { sessionId } = useParams()
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
@@ -289,47 +287,6 @@ export function SessionsAside({
           </button>
         )}
       </div>
-
-      {/* The arrangement. A <select> rather than a chip row: eight options do not fit a 260px
-          aside on desktop or a 390px screen on mobile, and a horizontal scroller hides the ones
-          nobody has scrolled to. It carries a LABEL because "Projeto" alone, sitting under a
-          search field, reads as a filter rather than as how the list is banded. */}
-      <label style={{
-        display: 'flex', alignItems: 'center', gap: 8, margin: '0 2px',
-        fontSize: 11, color: 'var(--text-tertiary)',
-      }}>
-        <span style={{ flexShrink: 0 }}>{pt ? 'Agrupar por' : 'Group by'}</span>
-        <select
-          value={grouping}
-          onChange={e => setGrouping(e.target.value as FleetGrouping)}
-          style={{
-            flex: 1, minWidth: 0, minHeight: tap ?? 28,
-            padding: '0 8px', borderRadius: 8,
-            border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
-            color: 'var(--text-primary)', fontFamily: 'inherit',
-            // The global 16px guard in index.css covers the mobile zoom case for form fields; this
-            // stays the desktop figure and is not overridden inline.
-            fontSize: 12, cursor: 'pointer',
-          }}
-        >
-          {FLEET_GROUPINGS.map(id => (
-            <option key={id} value={id}>{groupingLabel(id, pt ? 'pt' : 'en')}</option>
-          ))}
-        </select>
-      </label>
-
-      {/* ABOVE the list and rendered whether or not the list is empty — that is the whole point.
-          `EmptyReason` below only speaks when there is nothing to show, and the case this exists
-          for is the opposite one: rows on screen that are no longer true. */}
-      {stale && (
-        <p role="status" style={{
-          margin: '0 4px', padding: '7px 9px', borderRadius: 7,
-          fontSize: 11, lineHeight: 1.45, color: 'var(--anthropic-orange)',
-          background: 'color-mix(in srgb, var(--anthropic-orange) 10%, transparent)',
-        }}>
-          {stale}
-        </p>
-      )}
 
       {pinNotice && (
         <p role="status" style={{

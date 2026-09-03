@@ -1511,6 +1511,65 @@ export default function AppLayout() {
       return next
     }, { replace: true })
   }, [setSessionViewParams])
+  /**
+   * The selected session's title, view tabs and actions — drawn INTO the top strip.
+   *
+   * It began inside `SessionPanel`, was lifted into the shared header as a second full-width row
+   * with its own rule, and now rides in the space the top strip has always left empty to the right
+   * of the mark. Each move removed a band of chrome; this one removes the last, because a whole
+   * row for three controls sat directly beneath a row that was already there.
+   *
+   * One line, not two: the title and its state share a row here, separated by a dot, because the
+   * strip is 44px and stacking a subtitle under the title would either overflow it or shrink both
+   * past reading. Desktop only — on mobile the strip is hidden and `SessionPanel` draws its own.
+   */
+  const sessionTopBar = (inSessionsWorkspace && !isMobile && selectedFleetSession) ? (
+    <>
+      <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'baseline', gap: 7 }}>
+        <span style={{
+          fontSize: 13.5, fontWeight: 650, color: 'var(--text-primary)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+        }}>
+          {selectedFleetSession.title}
+        </span>
+        {/* Gives up before the title does: the name is what identifies the session, and the state
+            is repeated on its own row in the aside two centimetres away. */}
+        <span style={{
+          fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 1000000,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+        }}>
+          {selectedFleetSession.stateLabel}
+          {selectedFleetSession.project ? ` · ${selectedFleetSession.project}` : ''}
+        </span>
+      </div>
+
+      {selectedFleetSession.conversationBlind === undefined && (
+        <div role="tablist" style={{
+          display: 'flex', gap: 3, padding: 2, borderRadius: 9, flexShrink: 0,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+        }}>
+          <Segment
+            on={sessionView === 'chat'} onClick={() => setSessionView('chat')}
+            icon={<MessagesSquare size={13} />} label={lang === 'pt' ? 'Conversa' : 'Chat'}
+          />
+          <Segment
+            on={sessionView === 'terminal'} onClick={() => setSessionView('terminal')}
+            icon={<TerminalSquare size={13} />} label="Terminal"
+          />
+        </div>
+      )}
+
+      {selectedSessionRow && (
+        <SessionActions
+          row={selectedSessionRow}
+          lang={lang === 'pt' ? 'pt' : 'en'}
+          act={headerFleetAct}
+          onGone={() => navigate('/sessions')}
+        />
+      )}
+    </>
+  ) : null
+
   const toggleSidebar = useCallback(() => setSidebarCollapsed(v => {
     const next = !v
     try { localStorage.setItem('agentistics-sidebar-collapsed', next ? '1' : '0') } catch { /* ignore */ }
@@ -2547,6 +2606,7 @@ export default function AppLayout() {
           {...(modeOfPath(location.pathname) === 'sessions'
             ? { onSearch: () => window.dispatchEvent(new CustomEvent('agentistics:focus-session-search')) }
             : {})}
+          {...(sessionTopBar ? { trailing: sessionTopBar } : {})}
         />
       )}
       {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
@@ -2861,70 +2921,6 @@ export default function AppLayout() {
             )}
           </div>
         )}
-
-        {/* The selected session's title/tabs/actions — lifted up from `SessionPanel`, which used
-            to draw a SECOND bordered strip directly under this one for exactly this. One shared
-            header, not two stacked ones saying overlapping things. Desktop only: on mobile the
-            whole shared header is hidden (see this header's own top-level condition) and
-            `SessionPanel` goes back to drawing its own, self-contained. */}
-        {inSessionsWorkspace && !isMobile && selectedFleetSession && (() => {
-          const chattable = selectedFleetSession.conversationBlind === undefined
-          return (
-            <div style={{
-              borderTop: '1px solid var(--border)',
-              maxWidth: 1400, margin: '0 auto', padding: '10px 32px',
-              width: '100%', boxSizing: 'border-box',
-              display: 'flex', alignItems: 'center', gap: 12,
-            }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <h1 style={{
-                  margin: 0, fontSize: 15, fontWeight: 650, color: 'var(--text-primary)',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>
-                  {selectedFleetSession.title}
-                </h1>
-                <p style={{
-                  margin: '2px 0 0', fontSize: 11.5, color: 'var(--text-tertiary)',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>
-                  {selectedFleetSession.stateLabel}
-                  {selectedFleetSession.task ? ` · ${selectedFleetSession.task}` : ''}
-                  {selectedFleetSession.project ? ` · ${selectedFleetSession.project}` : ''}
-                </p>
-              </div>
-
-              {chattable && (
-                <div role="tablist" style={{
-                  display: 'flex', gap: 3, padding: 3, borderRadius: 10, flexShrink: 0,
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                }}>
-                  <Segment
-                    on={sessionView === 'chat'} onClick={() => setSessionView('chat')}
-                    icon={<MessagesSquare size={14} />} label={lang === 'pt' ? 'Conversa' : 'Chat'}
-                  />
-                  <Segment
-                    on={sessionView === 'terminal'} onClick={() => setSessionView('terminal')}
-                    icon={<TerminalSquare size={14} />} label="Terminal"
-                  />
-                </div>
-              )}
-
-              {/* No interrupt button here any more — it duplicated the composer's own (Chat view)
-                  and the terminal pane already takes a literal Escape keystroke (Terminal view).
-                  Two stop controls on screen at once read as one broken control, not two working
-                  ones. */}
-
-              {selectedSessionRow && (
-                <SessionActions
-                  row={selectedSessionRow}
-                  lang={lang === 'pt' ? 'pt' : 'en'}
-                  act={headerFleetAct}
-                  onGone={() => navigate('/sessions')}
-                />
-              )}
-            </div>
-          )
-        })()}
 
         {/* Nav moved to the left sidebar (SideNav) on desktop; mobile uses the bottom nav. */}
 

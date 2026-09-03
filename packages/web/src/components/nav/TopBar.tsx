@@ -10,6 +10,13 @@
  *
  * There are deliberately no history arrows. They were tried, they duplicated the browser's own in
  * every context except an installed PWA, and they were removed.
+ *
+ * The SELECTED SESSION's title, view tabs and actions ride here too, in the space to the right of
+ * the mark that this strip has always left empty. They used to be a second full-width row under the
+ * filters, with its own rule across the top — a whole band of chrome for three controls, directly
+ * below a band that was already there. `trailing` is deliberately an opaque node rather than
+ * session-shaped props: this component knows about a left column and a right remainder, and nothing
+ * about sessions.
  */
 
 import { Search, PanelLeft } from 'lucide-react'
@@ -26,6 +33,11 @@ export interface TopBarProps {
    * disabled — a control that does nothing is indistinguishable from one that is broken.
    */
   onSearch?: () => void
+  /**
+   * Whatever the current screen wants in the empty half of this strip. Absent on most screens, and
+   * absent is the normal case — this is a place to put something, not a slot that must be filled.
+   */
+  trailing?: React.ReactNode
 }
 
 const iconBtn: React.CSSProperties = {
@@ -35,7 +47,7 @@ const iconBtn: React.CSSProperties = {
   transition: 'background 0.15s, color 0.15s',
 }
 
-export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, onSearch }: TopBarProps) {
+export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, onSearch, trailing }: TopBarProps) {
   const pt = lang === 'pt'
 
   const hover = (on: boolean) => (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -92,6 +104,14 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
           <PanelLeft size={16} />
         </button>
       </div>
+
+      {/* The remainder. `minWidth: 0` so a long session title truncates instead of pushing the
+          strip wider than the window — the one thing a fixed full-width bar must never do. */}
+      {trailing && (
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 4 }}>
+          {trailing}
+        </div>
+      )}
     </div>
   )
 }
