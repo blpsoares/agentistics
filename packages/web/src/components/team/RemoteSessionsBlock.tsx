@@ -16,6 +16,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { ToggleSwitch } from '../ToggleSwitch'
 import { remotePanelView, consentPatchFor } from './remoteSessionsState'
 import type { ConnectionStatusEntry } from './statusTypes'
+import { OVERLAY_TOP } from '../../lib/mobileOverlay'
 
 type Lang = 'en' | 'pt'
 
@@ -229,7 +230,7 @@ function ConfirmShare({ which, lang, isMobile, machineName, account, onCancel, o
       style={{
         position: 'fixed', inset: 0, zIndex: 10000,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(0,0,0,0.55)', padding: isMobile ? 0 : 24,
+        background: 'rgba(0,0,0,0.55)', padding: isMobile ? OVERLAY_TOP : 24,
       }}
     >
       <div

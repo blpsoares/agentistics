@@ -31,6 +31,7 @@ import { Loader2, RefreshCw } from 'lucide-react'
 import type { MachineActionReply, MachineFleetAnswer, MachineFleetRow } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { machineFleetPanelView } from './machineFleetView'
+import { OVERLAY_TOP } from '../../lib/mobileOverlay'
 
 export function MachineFleetPanel({ open, machineId, lang }: {
   /** False keeps the panel silent: the request makes the machine build a real fleet (a tmux round
@@ -263,7 +264,7 @@ export function MachineFleetPanel({ open, machineId, lang }: {
         <div style={{
           position: 'fixed', inset: 0, zIndex: 10000,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.55)', padding: isMobile ? 0 : 24,
+          background: 'rgba(0,0,0,0.55)', padding: isMobile ? OVERLAY_TOP : 24,
         }}>
           <div style={{
             width: isMobile ? '100%' : 420, maxWidth: '100%',
