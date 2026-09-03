@@ -95,7 +95,11 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
           // Names the UNIVERSE: "of 23 total" sat a few centimetres from a header reading "961
           // sessions" and invited the reader to compare two counts of different things. This one
           // is the fleet on this machine; that one is the whole metrics history.
-          note={pt ? `de ${s.total} nesta máquina` : `of ${s.total} on this machine`}
+          // "on this machine" was a claim this number cannot make: the list holds the live fleet
+          // plus a BOUNDED window of recent conversations (`DEFAULT_CLOSED_LIMIT`), not the
+          // machine's whole history — a machine with a thousand stored conversations reads 306
+          // here. It names the LIST, which is what it actually counts.
+          note={pt ? `de ${s.total} nesta lista` : `of ${s.total} in this list`}
         />
         <Stat
           icon={<Bell size={15} />} tone="var(--anthropic-orange)"
@@ -134,14 +138,22 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
         {s.harnesses.length === 1 && (
           <p style={{ margin: '0 0 10px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
             {pt
-              ? 'Só assistentes com sessão nesta máquina aparecem aqui. O histórico dos outros está no painel.'
-              : 'Only assistants with a session on this machine appear here. The others’ history is on the dashboard.'}
+              ? 'Só assistentes presentes nesta lista aparecem aqui — ela cobre o que está rodando mais as conversas recentes, não todo o histórico. O total de cada assistente está no painel e na comparação.'
+              : 'Only assistants present in this list appear here — it covers what is running plus recent conversations, not the whole history. Each assistant’s total is on the dashboard and on Compare.'}
           </p>
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {s.harnesses.map(h => {
             const color = (HARNESS_COLORS as Record<string, string>)[h.harness] ?? 'var(--text-tertiary)'
-            const label = (HARNESS_LABELS as Record<string, string>)[h.harness] ?? h.harness
+            // A session whose harness could not be NAMED still exists and is still counted — an
+            // assistant found running that no adapter recognises reports an empty harness. It used
+            // to render as a bar with a BLANK label beside it, which reads as a fault in the panel
+            // rather than a fact about the fleet. The row says what it is instead; dropping it
+            // would make the percentages beside it stop adding up.
+            const label = (HARNESS_LABELS as Record<string, string>)[h.harness]
+              ?? (h.harness.trim() === ''
+                ? (pt ? 'assistente não identificado' : 'unidentified assistant')
+                : h.harness)
             const pct = s.total === 0 ? 0 : Math.round((h.count / s.total) * 100)
             return (
               <div key={h.harness} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
