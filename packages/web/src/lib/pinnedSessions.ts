@@ -7,15 +7,15 @@
  * (localStorage + an external store), the same shape as `terminalZoom.ts`.
  *
  * The rules are deliberate and pinned by the pure `planPinToggle`:
- *  - a HARD limit of three, and the fourth is REFUSED, never a silent swap — a swap surprises, a
- *    refusal is predictable;
+ *  - a HARD limit (MAX_PINNED), and the one past it is REFUSED, never a silent swap — a swap
+ *    surprises, a refusal is predictable;
  *  - pinning/unpinning is the ONLY thing that changes the set — a filter, a grouping or a search
  *    never touches it, and a pinned session that dies stays pinned (shown as ended) until the person
  *    unpins it, so a slot is never taken away behind their back.
  */
 
 const KEY = 'agentistics-pinned-sessions'
-export const MAX_PINNED = 3
+export const MAX_PINNED = 10
 
 export interface PinToggleResult {
   next: string[]

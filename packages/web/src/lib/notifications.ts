@@ -105,6 +105,12 @@ export const NOTIFICATION_TEXT: Record<string, { pt: Localized; en: Localized }>
     pt: { title: 'Máquina reatribuída', message: 'Esta máquina agora pertence a {account} (alterado por {actor}).' },
     en: { title: 'Machine reassigned', message: 'This machine now belongs to {account} (changed by {actor}).' },
   },
+  'machine.session_acted': {
+    // Says WHICH verb: "somebody acted on a session" is unfalsifiable reassurance, while "killed"
+    // and "renamed" are things the person at this keyboard can check.
+    pt: { title: 'Sessão alterada pela central', message: 'A central executou "{verb}" numa sessão desta máquina.' },
+    en: { title: 'Session acted on from the central', message: 'The central performed "{verb}" on a session of this machine.' },
+  },
   'app.update_available': {
     pt: { title: 'Atualização disponível', message: 'Uma nova versão do agentistics ({version}) está disponível.' },
     en: { title: 'Update available', message: 'A new version of agentistics ({version}) is available.' },

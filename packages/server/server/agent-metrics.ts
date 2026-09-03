@@ -44,7 +44,7 @@ interface ToolUseResult {
  * - Correlating user messages have `toolUseResult` at the message level with usage/timing info
  * - Correlation: match by `tool_use_id` in the tool_result content array
  */
-export function extractAgentMetrics(lines: string[], modelId: string): SessionAgentMetrics {
+export function extractAgentMetrics(lines: Iterable<string>, modelId: string): SessionAgentMetrics {
   // Map of tool_use_id → ToolUseRecord for pending Agent invocations
   const pendingAgents = new Map<string, ToolUseRecord>()
   const invocations: AgentInvocation[] = []

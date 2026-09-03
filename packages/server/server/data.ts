@@ -394,7 +394,7 @@ export async function scanProjects(
   cache: ParseCache = NOOP_PARSE_CACHE,
 ): Promise<ScanResult> {
   // Separate limiter just for file reads (not project dir traversal)
-  const fileLimit = createLimiter(30)
+  const fileLimit = createLimiter(6)
 
   // Union encoded project dirs across all roots (live + archive). Each maps to
   // the list of absolute paths that contain it, in root priority order (live first).

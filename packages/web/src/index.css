@@ -94,33 +94,14 @@
 }
 
 /* Header and footer are always dark in both themes */
-[data-theme="light"] footer {
-  --bg-surface: #111118;
-  --bg-card: #16161f;
-  --bg-elevated: #1e1e2e;
-  --bg-secondary: rgba(255, 255, 255, 0.04);
-  --border: rgba(255, 255, 255, 0.06);
-  --border-subtle: rgba(255, 255, 255, 0.03);
-  --text-primary: rgba(255, 255, 255, 0.92);
-  --text-secondary: rgba(255, 255, 255, 0.5);
-  --text-tertiary: rgba(255, 255, 255, 0.28);
-  --anthropic-orange: #f59e0b;
-  --anthropic-orange-light: #fbbf24;
-  --anthropic-orange-dim: rgba(245, 158, 11, 0.15);
-}
+/* The header and the footer used to be pinned DARK in the light theme — an explicit re-declaration
+   of the dark palette scoped to those two elements, so a light page carried two dark ribbons. It
+   was a deliberate design choice and it is being removed on the owner's instruction: switching to
+   the light theme is expected to light the whole application, and two elements that ignore it read
+   as a bug rather than as a decision. They now inherit `[data-theme="light"]` like everything else.
 
-[data-theme="light"] header {
-  --bg-surface: #111118;
-  --bg-elevated: #1e1e2e;
-  --bg-secondary: rgba(255, 255, 255, 0.04);
-  --border: rgba(255, 255, 255, 0.07);
-  --text-primary: rgba(255, 255, 255, 0.92);
-  --text-secondary: rgba(255, 255, 255, 0.5);
-  --text-tertiary: rgba(255, 255, 255, 0.28);
-  --anthropic-orange: #f59e0b;
-  --anthropic-orange-light: #fbbf24;
-  --anthropic-orange-dim: rgba(245, 158, 11, 0.15);
-}
+   To bring it back, restore a block of the same shape — nothing else depends on those overrides. */
+
 
 [data-theme="light"] ::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.15);
@@ -235,6 +216,17 @@ html, body {
 :root {
   --mobile-nav-inset: env(safe-area-inset-bottom, 0px);
   --mobile-nav-h: calc(56px + var(--mobile-nav-inset));
+  /* The STATUS-BAR inset, and the twin of the one above.
+     Installed as a PWA the page owns the whole screen, so the topmost bar of every layout was
+     drawn UNDERNEATH the clock, the signal bars and the battery — ~47px on an iPhone 14 Pro. The
+     row was not merely ugly: the status bar takes the taps in that band, so the back arrow, the
+     chat/terminal tabs and the date presets could be seen and not pressed. In a browser tab the
+     inset is 0, which is why it only ever looked broken from the home screen — exactly how the
+     bottom inset hid for a release.
+     It is applied per topmost bar rather than to #root: a band on the root would push every
+     `position: sticky` offset down by the same amount and leave the bar's own background above it
+     transparent, which is the status bar showing the page's ground instead of the bar's. */
+  --safe-top: env(safe-area-inset-top, 0px);
 }
 
 .mobile-bottom-nav {
@@ -406,3 +398,176 @@ html, body {
     max-width: calc(100vw - 48px);
   }
 }
+
+/* The sidebar's resize grip. Dim until the handle around it is pointed at or focused — an edge
+   that is always lit competes with the content beside it, and one that is never lit is an
+   affordance nobody finds. */
+[role="separator"]:hover .ag-aside-grip,
+[role="separator"]:focus-visible .ag-aside-grip {
+  background: var(--anthropic-orange);
+}
+
+/* ---------------------------------------------------------------------------
+   Chat markdown.
+
+   `ReactMarkdown` emits plain semantic HTML and inherits whatever the page gives it — which in a
+   bubble is nothing, so headings, lists, code and tables all rendered as undifferentiated text.
+   These are the styles that were missing.
+
+   Everything wide is clipped and scrolled INSIDE the bubble: a code fence or a table is routinely
+   wider than the column, and letting it set the width is how a message ends up outside its card.
+   --------------------------------------------------------------------------- */
+.ag-chat-md { min-width: 0; font-size: 13.5px; line-height: 1.65; color: var(--text-primary); }
+
+.ag-chat-md > :first-child { margin-top: 0; }
+.ag-chat-md > :last-child { margin-bottom: 0; }
+
+.ag-chat-md p { margin: 0 0 10px; }
+.ag-chat-md h1, .ag-chat-md h2, .ag-chat-md h3,
+.ag-chat-md h4, .ag-chat-md h5, .ag-chat-md h6 {
+  margin: 16px 0 8px; line-height: 1.3; font-weight: 700; color: var(--text-primary);
+}
+.ag-chat-md h1 { font-size: 17px; }
+.ag-chat-md h2 { font-size: 15.5px; }
+.ag-chat-md h3 { font-size: 14px; }
+.ag-chat-md h4, .ag-chat-md h5, .ag-chat-md h6 { font-size: 13px; }
+
+.ag-chat-md ul, .ag-chat-md ol { margin: 0 0 10px; padding-left: 22px; }
+.ag-chat-md li { margin: 3px 0; }
+.ag-chat-md li > p { margin: 0; }
+.ag-chat-md li::marker { color: var(--text-tertiary); }
+
+/* A task list is a list of states, not of bullets. */
+.ag-chat-md li:has(> input[type="checkbox"]) { list-style: none; margin-left: -18px; }
+.ag-chat-md input[type="checkbox"] { margin-right: 7px; accent-color: var(--anthropic-orange); }
+
+.ag-chat-md a { color: var(--anthropic-orange); text-decoration: none; }
+.ag-chat-md a:hover { text-decoration: underline; }
+
+.ag-chat-md strong { font-weight: 700; color: var(--text-primary); }
+.ag-chat-md em { font-style: italic; }
+.ag-chat-md del { opacity: 0.6; }
+
+.ag-chat-md blockquote {
+  margin: 0 0 10px; padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--border); color: var(--text-secondary);
+}
+
+.ag-chat-md hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+
+/* Inline code sits INSIDE a sentence and must not break the line box; a fence is a block that
+   scrolls. Distinguished by the parent, because ReactMarkdown uses <code> for both. */
+.ag-chat-md code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+.ag-chat-md :not(pre) > code {
+  padding: 1.5px 5px; border-radius: 5px;
+  background: var(--bg-base); border: 1px solid var(--border-subtle);
+  color: var(--text-primary); overflow-wrap: anywhere;
+}
+.ag-chat-md pre {
+  margin: 0 0 10px; padding: 10px 12px; border-radius: 9px;
+  background: var(--bg-base); border: 1px solid var(--border-subtle);
+  max-width: 100%; overflow-x: auto; white-space: pre;
+}
+.ag-chat-md pre code {
+  padding: 0; border: none; background: transparent;
+  color: var(--text-secondary); white-space: pre; line-height: 1.55;
+}
+
+/* The table scrolls in its own box rather than widening the bubble. */
+.ag-chat-md table {
+  display: block; max-width: 100%; overflow-x: auto;
+  border-collapse: collapse; margin: 0 0 10px; font-size: 12.5px;
+}
+.ag-chat-md th, .ag-chat-md td {
+  border: 1px solid var(--border-subtle); padding: 5px 9px; text-align: left; white-space: nowrap;
+}
+.ag-chat-md th { background: var(--bg-elevated); font-weight: 700; }
+
+.ag-chat-md img { max-width: 100%; height: auto; border-radius: 8px; }
+
+/* The maximum effort level, when chosen. A brief emphatic pulse rather than a standing animation:
+   it marks the moment of the choice — the slowest and most expensive setting — and then stops. */
+@keyframes ag-effort-peak {
+  0%   { transform: scale(1);    box-shadow: 0 0 0 0 currentColor; }
+  50%  { transform: scale(1.05); box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 22%, transparent); }
+  100% { transform: scale(1);    box-shadow: 0 0 0 0 transparent; }
+}
+/* LOOPS for as long as the peak step stays selected — the point is "this is the maximum, and it is
+   doing more work for it", which a single pulse at the moment of selection does not keep saying.
+   Slower and eased both ways so a continuous loop reads as a heartbeat, not a jitter. */
+.ag-effort-peak { animation: ag-effort-peak 1400ms ease-in-out infinite; }
+
+/* Motion is decoration here; the colour and the label carry the meaning on their own. */
+@media (prefers-reduced-motion: reduce) {
+  .ag-effort-peak { animation: none; }
+}
+
+/* The working spinner. `lucide` ships a static glyph; the rotation is ours. */
+@keyframes ag-working-spin { to { transform: rotate(360deg); } }
+.ag-working-spin { animation: ag-working-spin 900ms linear infinite; }
+@media (prefers-reduced-motion: reduce) { .ag-working-spin { animation: none; } }
+
+/* The row's pin. Hidden until the row is hovered or something in it has focus — a column of pin
+   glyphs down an unpinned list is noise beside the titles they sit next to — but always visible
+   once set, and always reachable by keyboard. */
+button:hover .ag-row-pin,
+button:focus-within .ag-row-pin,
+.ag-row-pin:focus-visible { opacity: 1 !important; }
+
+/* ---------------------------------------------------------------------------
+   Elevation and scrim, per theme.
+
+   A shadow is not theme-neutral. The dark values were tuned against near-black and read as a grey
+   smear over #fafafc; the light theme needs a lighter, tighter one. Same for the modal scrim: 55%
+   black over a light page is a blackout, not a scrim.
+   --------------------------------------------------------------------------- */
+:root {
+  --ag-shadow-seg: 0 1px 3px rgba(0, 0, 0, 0.18);
+  --ag-shadow-pop: 0 6px 20px rgba(0, 0, 0, 0.32);
+  --ag-shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.4);
+  --ag-scrim: rgba(0, 0, 0, 0.55);
+}
+[data-theme="light"] {
+  --ag-shadow-seg: 0 1px 2px rgba(16, 24, 40, 0.08);
+  --ag-shadow-pop: 0 4px 14px rgba(16, 24, 40, 0.12);
+  --ag-shadow-menu: 0 10px 28px rgba(16, 24, 40, 0.16);
+  --ag-scrim: rgba(16, 24, 40, 0.38);
+}
+
+/* ---------------------------------------------------------------------------
+   Theme-flipping tints.
+
+   `rgba(255,255,255,0.05)` as a surface or a hairline is a DARK-THEME assumption: it lightens what
+   is under it, which over `#fafafc` is invisible or, at higher alphas, a white block on white.
+   Components across the app used it directly. These tokens carry the same intent — "a little
+   lighter than the ground" — and flip to "a little darker" in the light theme.
+   --------------------------------------------------------------------------- */
+:root {
+  --ag-tint-1: rgba(255, 255, 255, 0.03);
+  --ag-tint-2: rgba(255, 255, 255, 0.05);
+  --ag-tint-3: rgba(255, 255, 255, 0.07);
+  --ag-tint-4: rgba(255, 255, 255, 0.10);
+  --ag-tint-5: rgba(255, 255, 255, 0.15);
+  --ag-tint-strong: rgba(255, 255, 255, 0.30);
+  --ag-text-on-scrim: rgba(255, 255, 255, 0.92);
+  --ag-text-on-scrim-dim: rgba(255, 255, 255, 0.55);
+}
+[data-theme="light"] {
+  --ag-tint-1: rgba(16, 24, 40, 0.02);
+  --ag-tint-2: rgba(16, 24, 40, 0.04);
+  --ag-tint-3: rgba(16, 24, 40, 0.05);
+  --ag-tint-4: rgba(16, 24, 40, 0.08);
+  --ag-tint-5: rgba(16, 24, 40, 0.12);
+  --ag-tint-strong: rgba(16, 24, 40, 0.26);
+  /* Still white: these sit on the modal scrim, which is dark in BOTH themes. */
+  --ag-text-on-scrim: rgba(255, 255, 255, 0.92);
+  --ag-text-on-scrim-dim: rgba(255, 255, 255, 0.55);
+}
+
+/* The bubble's reply control. Revealed with the bubble — a column of controls down a conversation
+   competes with the words — and always reachable by keyboard. */
+.ag-bubble:hover .ag-bubble-reply,
+.ag-bubble:focus-within .ag-bubble-reply { opacity: 1; }

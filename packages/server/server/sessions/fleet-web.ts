@@ -19,7 +19,8 @@
 import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import { controlStrings } from '@agentistics/tui/control/i18n'
-import { sessionRunning } from '@agentistics/tui/control/session-dimensions'
+import type { ControlSession } from '@agentistics/tui/control/session-fleet'
+import { sessionRunning } from '@agentistics/tui/control/session-dimensions' 
 import { fleetRow, type FleetActionRequest, type FleetRow } from './fleet-row'
 import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
 import { arrangeFleet, type FleetArrangement, type FleetViewRequest } from './fleet-arrange'
@@ -35,6 +36,20 @@ export type {
 
 export interface FleetPayload {
   sessions: FleetRow[]
+  /**
+   * The SAME rows, unshaped — what the cockpit itself arranges.
+   *
+   * `FleetRow` is the presentation half: a state already turned into a word, the verbs already
+   * decided. The browser needs the other half too, because grouping, ordering, the cascade and the
+   * filters are `session-fleet.ts`'s job and it operates on `ControlSession`. Sending only
+   * `FleetRow` would have forced the browser to re-derive them, which is the one thing this whole
+   * bridge exists to prevent — the same argument `fleet-row.ts` makes about the verbs.
+   *
+   * It carries nothing `FleetRow` did not already carry, including the approval screen: this route
+   * is `localShell` in `capability-guard.ts`, refused on a central and on every exposed profile, so
+   * it is not a new class of exposure. It is the same machine reading its own terminals.
+   */
+  rows: ControlSession[]
   /** How many are waiting on a person — the same count the cockpit's header carries. */
   attention: number
   /** Already-localized reason this list may not be the whole truth. Never an empty list alone. */
@@ -75,6 +90,11 @@ const NO_TERMINAL = {
 
 const HOSTS = new Map<CliLang, StartHost>()
 
+/** Exported so sibling routes share the ONE host — building a second fires a second version check. */
+export async function hostForFleet(lang: CliLang): Promise<StartHost> {
+  return hostFor(lang)
+}
+
 async function hostFor(lang: CliLang): Promise<StartHost> {
   const cached = HOSTS.get(lang)
   if (cached) return cached
@@ -110,12 +130,13 @@ export async function readFleet(lang: CliLang, view?: FleetViewRequest): Promise
   const totalStart = performance.now()
   try {
     const host = await hostFor(lang)
-    if (!host.sessions) return { sessions: [], attention: 0, tasks: [] }
+    if (!host.sessions) return { sessions: [], rows: [], attention: 0, tasks: [] }
     const fleet = await timeFleetPhase('readFleet: host.sessions()', () => host.sessions!())
     const tasks = host.sessionTasks ? await host.sessionTasks().catch(() => []) : []
     const finishedTasks = fleet.finishedTasks ?? []
     return {
       sessions: fleet.sessions.map(row => fleetRow(row, s)),
+      rows: fleet.sessions,
       attention: fleet.attention,
       ...(fleet.unavailable ? { unavailable: fleet.unavailable } : {}),
       tasks,
@@ -131,9 +152,11 @@ export async function readFleet(lang: CliLang, view?: FleetViewRequest): Promise
   } catch (e) {
     return {
       sessions: [],
+      rows: [],
       attention: 0,
       unavailable: e instanceof Error ? e.message : String(e),
       tasks: [],
+      finishedTasks: [],
     }
   } finally {
     markFleetPhase('readFleet: total', totalStart)
@@ -175,6 +198,12 @@ export async function runFleetAction(
     case 'kill':
       if (!host.killSession) return { ok: false, message: s.sessionsNoHost }
       return await host.killSession(req.id)
+    case 'interrupt': {
+      // Only meaningful on a session that is actually doing something: pressing Escape into an idle
+      // prompt closes whatever the harness has open, which is not what "stop" means.
+      if (!host.interruptSession) return { ok: false, message: s.sessionsNoHost }
+      return await host.interruptSession(req.id)
+    }
     // Acts on the GROUP that fell together, not on a row — the caller names nothing, and the
     // cockpit's own `task-reopen` arithmetic decides which sessions were in it. A caller that could
     // pass a list could resurrect anything on this machine.

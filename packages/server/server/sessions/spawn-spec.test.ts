@@ -18,6 +18,62 @@ describe('SPAWN_SPECS', () => {
     }
   })
 
+  it('only ever suggests a model name the harness itself printed', () => {
+    // Not a taste rule: a suggestion is offered as a thing that WILL work, and the picker is a
+    // closed dropdown, so an id the CLI refuses fails at spawn with nothing on screen to explain
+    // it. Every list below was read back from that tool on 2026-09-02 (versions and the exact
+    // commands are recorded per harness in spawn-spec.ts); the EMPTY ones are the harnesses whose
+    // CLI publishes no list at all, and empty is what makes the picker absent instead of wrong.
+    expect(SPAWN_SPECS.claude?.modelSuggestions).toEqual(['fable', 'opus', 'sonnet', 'haiku'])
+    expect(SPAWN_SPECS.copilot?.modelSuggestions).toEqual(['auto'])
+    expect(SPAWN_SPECS.antigravity?.modelSuggestions).toContain('gemini-3.6-flash-high')
+    for (const id of ['codex', 'gemini', 'kimi'] as const) {
+      expect(SPAWN_SPECS[id]?.modelSuggestions).toEqual([])
+    }
+  })
+
+  it('never suggests a model id the CLI was measured to REFUSE', () => {
+    // Each of these was shipped here at some point and each was rejected when actually run:
+    // `mythos` is in claude's own tier-name regex and not in its catalog; the copilot pair (and
+    // `gpt-5.4`, copilot's own help example) come back "not available"; `gemini-2.5-pro` is "no
+    // longer available to new users"; and agy's bare `gemini-3.6-flash` is a REPORTED id, not a
+    // `--model` value. Pinned so none of them can drift back in from memory.
+    const refused = [
+      'mythos',
+      'claude-sonnet-4.6', 'gpt-5.3-codex', 'gpt-5.4',
+      'gemini-2.5-pro',
+      'gemini-3.6-flash',
+    ]
+    for (const id of HARNESS_ORDER) {
+      for (const model of SPAWN_SPECS[id]?.modelSuggestions ?? []) {
+        expect(refused).not.toContain(model)
+      }
+    }
+  })
+
+  it('suggests names verbatim — no labels, no duplicates, no padding', () => {
+    // The same string is typed at `--model` on spawn AND after `/model` mid-conversation, and both
+    // match the id exactly. A prettified "Opus 5" is not a failure the user sees: the slash command
+    // answers "not found" inside the session and the switch silently does nothing.
+    for (const id of HARNESS_ORDER) {
+      const models = SPAWN_SPECS[id]?.modelSuggestions ?? []
+      expect(new Set(models).size).toBe(models.length)
+      for (const model of models) {
+        expect(model).toBe(model.trim())
+        expect(model.length).toBeGreaterThan(0)
+        expect(model).not.toMatch(/\s/)
+      }
+    }
+  })
+
+  it('never offers a model to a harness that has no flag to pass it through', () => {
+    for (const id of HARNESS_ORDER) {
+      const spec = SPAWN_SPECS[id]
+      if (!spec || spec.modelFlag) continue
+      expect(spec.modelSuggestions).toEqual([])
+    }
+  })
+
   it('never declares an effort flag without the enum that validates it', () => {
     // The two go together or neither is trustworthy: a flag with no accepted list would pass any
     // string through to a CLI that rejects it, which fails after the session has already started.

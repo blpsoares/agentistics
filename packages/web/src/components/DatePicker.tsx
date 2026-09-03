@@ -110,7 +110,7 @@ export function DatePicker({
           background: open
             ? 'rgba(217,119,6,0.1)'
             : triggerHovered
-            ? 'rgba(255,255,255,0.05)'
+            ? 'var(--ag-tint-2)'
             : 'transparent',
           transition: 'background 0.12s ease',
         }}
@@ -143,7 +143,7 @@ export function DatePicker({
           border: '1px solid var(--border)',
           borderRadius: 14,
           padding: '14px 16px 16px',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.45), 0 6px 20px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.05)',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.45), 0 6px 20px rgba(0,0,0,0.25), inset 0 1px 0 var(--ag-tint-2)',
           width: 256,
           userSelect: 'none',
         }}>

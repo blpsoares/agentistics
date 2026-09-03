@@ -23,7 +23,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { HARNESS_ORDER, type HarnessId } from '@agentistics/core'
+import type { HarnessId } from '@agentistics/core'
 import { HOME_DIR } from './config'
 import {
   HOOK_SPECS,
@@ -135,10 +135,8 @@ async function pruneEmpty(dir: string): Promise<void> {
  * rather than writing a skill that says nothing can be started.
  */
 async function startableHarnesses(): Promise<HarnessId[]> {
-  const { SPAWN_SPECS } = await import('./sessions/spawn-spec')
-  const startable = HARNESS_ORDER.filter(h => SPAWN_SPECS[h] !== null)
-  const installed = startable.filter(h => !!Bun.which(SPAWN_SPECS[h]!.bin))
-  return installed.length > 0 ? installed : startable
+  const { availableHarnesses } = await import('./sessions/harness-available')
+  return availableHarnesses().ids
 }
 
 // ---------------------------------------------------------------------------

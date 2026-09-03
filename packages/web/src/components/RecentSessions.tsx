@@ -24,6 +24,7 @@ import { encodeProjectDir } from '../lib/sessionTranscript'
 import { resumeCommand } from '../lib/resumeCommand'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { format, parseISO } from 'date-fns'
+import { OVERLAY_TOP } from '../lib/mobileOverlay'
 import {
   ChevronLeft,
   ChevronRight,
@@ -1642,7 +1643,13 @@ const TYPING_T = {
   },
 } as const
 
-function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, authorName }: {
+/**
+ * EXPORTED so the sessions workspace's centre pane uses this very component rather than assembling
+ * a second one from `useTerminalStream` + `SessionTerminal` + a composer. Those three have to agree
+ * about reconnects, stall reporting, zoom and the consent gate on typing into a live session, and
+ * two assemblies is two chances for them not to.
+ */
+export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, authorName }: {
   id: string; theme: 'dark' | 'light'; lang: 'pt' | 'en'
   /** Fill the available height (in the modal) instead of a fixed card-sized box. */
   fill?: boolean
@@ -2148,7 +2155,7 @@ function CardModal({ statusPill, harness, title, meta, lang, onClose, children }
       onClick={onClose}
       style={{
         position: 'fixed', inset: 0, zIndex: 9998, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
-        display: 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'center', padding: isMobile ? 0 : 24,
+        display: 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'center', padding: isMobile ? OVERLAY_TOP : 24,
       }}
     >
       <div
