@@ -216,6 +216,17 @@ html, body {
 :root {
   --mobile-nav-inset: env(safe-area-inset-bottom, 0px);
   --mobile-nav-h: calc(56px + var(--mobile-nav-inset));
+  /* The STATUS-BAR inset, and the twin of the one above.
+     Installed as a PWA the page owns the whole screen, so the topmost bar of every layout was
+     drawn UNDERNEATH the clock, the signal bars and the battery — ~47px on an iPhone 14 Pro. The
+     row was not merely ugly: the status bar takes the taps in that band, so the back arrow, the
+     chat/terminal tabs and the date presets could be seen and not pressed. In a browser tab the
+     inset is 0, which is why it only ever looked broken from the home screen — exactly how the
+     bottom inset hid for a release.
+     It is applied per topmost bar rather than to #root: a band on the root would push every
+     `position: sticky` offset down by the same amount and leave the bar's own background above it
+     transparent, which is the status bar showing the page's ground instead of the bar's. */
+  --safe-top: env(safe-area-inset-top, 0px);
 }
 
 .mobile-bottom-nav {

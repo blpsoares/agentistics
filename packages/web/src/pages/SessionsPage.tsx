@@ -41,7 +41,20 @@ export default function SessionsPage() {
 
   // Never on a central: it aggregates many machines and hosts none of their sessions, so the only
   // fleet it could read is its own box's, drawn under someone else's rows.
-  const { fleet, loading, unsupported, stale, act } = useFleet(pt ? 'pt' : 'en', !isCentral)
+  const { fleet, loading, unsupported: pollUnsupported, stale, act } = useFleet(pt ? 'pt' : 'en', !isCentral)
+  /**
+   * A CENTRAL cannot list a fleet, and must SAY so.
+   *
+   * `useFleet`'s second argument only stops the polling, and its `unsupported` is reported as false
+   * whenever polling is off — so on a central the page fell through every branch to "No sessions on
+   * this machine yet.", which is false twice over: a central hosts no sessions, and the machines'
+   * sessions it CAN reach are one screen away in Settings → Machines. The one sentence that would
+   * have said the true thing was switched off by the very flag that makes it true.
+   *
+   * The same N/A-versus-a-confident-0 rule the dashboard applies to harness capabilities: an empty
+   * list may never stand in for "this install cannot answer".
+   */
+  const unsupported = pollUnsupported || isCentral
   const rowIndex = useFleetIndex(fleet.sessions)
 
   // Matched on BOTH ids for the same reason `fleetIndex` is keyed on both: a managed row is named
@@ -95,6 +108,10 @@ export default function SessionsPage() {
           <div style={{
             display: 'flex', alignItems: 'center', gap: 8,
             minHeight: 44, padding: '0 10px', flexShrink: 0,
+            // Installed as a PWA this is the topmost thing on the screen, so it carries the
+            // status-bar band itself — without it the arrow and the tabs sat under the clock and
+            // the taps went to the status bar. See `--safe-top`.
+            paddingTop: 'var(--safe-top)',
             borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
           }}>
             <button
@@ -189,7 +206,13 @@ export default function SessionsPage() {
             describe a live fleet row — `only` here matches the desktop Sessions call, minus the
             central-only dimensions (members/teams/machines/presence/tags) this workspace has never
             offered on either layout. */}
-        <div style={{ flexShrink: 0, borderBottom: '1px solid var(--border)', padding: '4px 8px' }}>
+        <div style={{
+          flexShrink: 0, borderBottom: '1px solid var(--border)', padding: '4px 8px',
+          // Same reason as the open-session bar above: the shared header is hidden on this layout,
+          // so this row IS the top of the screen and owns the status-bar band. The date presets
+          // were unpressable without it.
+          paddingTop: 'calc(4px + var(--safe-top))',
+        }}>
           <FiltersBar
             compact
             only={['harnesses', 'repos', 'projects', 'models']}
