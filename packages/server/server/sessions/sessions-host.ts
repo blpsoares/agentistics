@@ -189,18 +189,31 @@ export function createSessionsPoller(o: {
 
     try {
       const gatherStart = performance.now()
+      // Each of the five is timed SEPARATELY as well as together, because the two numbers disagreed
+      // and the disagreement is the whole question. Measured individually in a bare process, none
+      // of them exceeded 415ms; measured here inside this `Promise.all`, the group took 2961ms. A
+      // group total cannot say which member carries that, and five concurrent readers of the same
+      // disk are exactly the shape that makes a per-member number differ from a solo one — so the
+      // per-member marks are taken IN PLACE, under the concurrency they actually run under, rather
+      // than inferred from a solo timing that has already proved not to transfer.
+      const timed = <T>(label: string, p: Promise<T>): Promise<T> => {
+        const started = performance.now()
+        return p.then(v => { markFleetPhase(`poll: gather · ${label}`, started); return v })
+      }
       const [registry, backendSessions, processes, conversations, harnessSessions] = await Promise.all([
-        o.readRegistry(),
-        o.backend.list(),
-        o.scanProcesses().then(r => r.procs).catch(() => [] as HarnessProcess[]),
+        timed('readRegistry', o.readRegistry()),
+        timed('backend.list', o.backend.list()),
+        timed('scanProcesses', o.scanProcesses().then(r => r.procs).catch(() => [] as HarnessProcess[])),
         // History is an enrichment, never a prerequisite: a store that cannot be read costs the
         // closed rows, not the running ones.
-        o.loadConversations ? o.loadConversations().catch(() => [] as Conversation[]) : Promise.resolve([]),
+        timed('loadConversations',
+          o.loadConversations ? o.loadConversations().catch(() => [] as Conversation[]) : Promise.resolve([])),
         // Same rule: unreadable costs the harness's own names and its exact conversation ids, and
         // every row falls back to behaving exactly as it did before this existed.
-        o.loadHarnessSessions
-          ? o.loadHarnessSessions().catch(() => emptyHarnessSessionIndex())
-          : Promise.resolve(emptyHarnessSessionIndex()),
+        timed('loadHarnessSessions',
+          o.loadHarnessSessions
+            ? o.loadHarnessSessions().catch(() => emptyHarnessSessionIndex())
+            : Promise.resolve(emptyHarnessSessionIndex())),
       ])
       markFleetPhase('poll: gather (registry/backend.list/scanProcesses/conversations/harnessSessions)', gatherStart)
 
