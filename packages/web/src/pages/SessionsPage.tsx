@@ -108,7 +108,7 @@ export default function SessionsPage() {
         display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
         overflowY: 'auto', padding: isMobile ? '10px 12px' : '20px 24px',
       }}>
-        <CentralSessions lang={pt ? 'pt' : 'en'} />
+        <CentralSessions lang={pt ? 'pt' : 'en'} filters={filters} activeOnly={activeOnly} />
       </div>
     )
   }
