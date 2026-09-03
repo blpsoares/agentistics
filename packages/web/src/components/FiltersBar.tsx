@@ -9,7 +9,6 @@ import type { MemberPresence } from '@agentistics/core'
 import { DatePicker } from './DatePicker'
 import { format } from 'date-fns'
 import { useIsMobile } from '../hooks/useIsMobile'
-import { FLEET_GROUPINGS, groupingLabel, setGroupingShared, useGrouping, type FleetGrouping } from '../lib/fleetGrouping'
 
 interface Props {
   /**
@@ -138,8 +137,6 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
       : [{ harness: null, models }]
   const showGroupHeaders = groups.length > 1
   const isMobile = useIsMobile()
-  /** The session list's arrangement — a shared external store, because the READER is the aside. */
-  const grouping = useGrouping()
   const [showProjectsModal, setShowProjectsModal] = useState(false)
   const [repoQuery, setRepoQuery] = useState('')
   const [memberQuery, setMemberQuery] = useState('')
@@ -398,38 +395,6 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
           </button>
         )}
 
-        {/* How the session list is BANDED. Beside "Active only" and the date range, because that is
-            where this bar already answers "what is in the list" — and arranging it is the same kind
-            of question. It used to be a labelled row inside the aside, which made one page ask in
-            two places. Shown only where there IS a list to band: `onActiveOnlyChange` is the same
-            signal, since only the Sessions workspace passes it. */}
-        {onActiveOnlyChange && (
-          <label style={{ ...CTL, gap: 6, cursor: 'pointer', paddingRight: 4 }}>
-            <Layers size={12} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
-            {/* The WORD "group", always, never just the value. Showing only the current
-                arrangement put a control reading "Repository" beside "+ Filter" — and this bar's
-                filters already offer repo, project, harness and model, so it read as a duplicate
-                filter that had appeared from nowhere. It arranges the list; it narrows nothing. */}
-            <span style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>
-              {lang === 'pt' ? 'Agrupar:' : 'Group:'}
-            </span>
-            <select
-              value={grouping}
-              onChange={e => setGroupingShared(e.target.value as FleetGrouping)}
-              aria-label={lang === 'pt' ? 'Agrupar por' : 'Group by'}
-              style={{
-                border: 'none', background: 'transparent', color: 'var(--text-secondary)',
-                fontFamily: 'inherit', fontSize: 'inherit', cursor: 'pointer', outline: 'none',
-                // The global 16px guard in index.css handles the iOS zoom case for form fields.
-                padding: 0,
-              }}
-            >
-              {FLEET_GROUPINGS.map(id => (
-                <option key={id} value={id}>{groupingLabel(id, lang === 'pt' ? 'pt' : 'en')}</option>
-              ))}
-            </select>
-          </label>
-        )}
 
         {/* "Create tag with these filters" — only rendered when the caller has already decided the
             current filters map to a usable tag draft (see canCreateTagFromFilters). FiltersBar
