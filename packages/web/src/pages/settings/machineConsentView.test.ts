@@ -82,3 +82,28 @@ describe('machineConsentView', () => {
       .not.toBe(machineConsentView({ sessions: true, screens: true, atMs: 1 }, true, 'en')!.text)
   })
 })
+
+describe('the viewer who may administer but may not ask', () => {
+  // An instance OWNER manages every machine (`canManageMachine` short-circuits on the role) and
+  // owns only the ones linked to their account (`machineOwnedBy` does not) — so the server omits
+  // `remoteConsent` and the row used to draw NOTHING. A working boundary that looks like a broken
+  // feature; reported as "the sessions don't appear and I'm the owner".
+  it('says WHY instead of drawing nothing', () => {
+    const v = machineConsentView(undefined, true, 'en', false)
+    expect(v).not.toBeNull()
+    expect(v!.tone).toBe('not-owner')
+    expect(v!.text).toMatch(/only by the accounts it is linked to/)
+    // Stating a limit is not lifting it: the row's button is gated on `granted`.
+    expect(v!.screens).toBe(false)
+  })
+
+  it('is really translated', () => {
+    expect(machineConsentView(undefined, true, 'pt', false)!.text).toMatch(/só podem ser vistas/)
+  })
+
+  it('keeps drawing nothing when the caller cannot tell', () => {
+    // A caller that does not pass the flag must not assert a reason it does not know.
+    expect(machineConsentView(undefined, true, 'en')).toBeNull()
+    expect(machineConsentView(undefined, true, 'en', true)).toBeNull()
+  })
+})

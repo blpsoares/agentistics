@@ -583,8 +583,13 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
   const machineView = (m: MachineInfo) => {
     const ownerIds = m.accountIds ?? (m.accountId ? [m.accountId] : [])
     const owners = m.owners ?? []
+    // The SAME test the server runs (`machineOwnedBy`): is the viewer one of the machine's own
+    // accounts? It is deliberately narrower than `canManage` — an instance owner administers every
+    // machine and owns only the ones linked to their account — and it is what turns the absent
+    // consent field from silence into a sentence.
+    const viewerOwnsMachine = ownerIds.includes(me?.id ?? '')
     return {
-      canManage: canManageFleet || ownerIds.includes(me?.id ?? ''),
+      canManage: canManageFleet || viewerOwnsMachine,
       ownerDisplay: owners.length === 0 ? '—' : (owners[0]?.name ?? '') + (owners.length > 1 ? ` +${owners.length - 1}` : ''),
       ownerEmailDisplay: owners.length > 0 ? (owners[0]?.email ?? '') : (pt ? 'sem conta' : 'no account'),
       teamNames: machineTeamIds(m).map(id => teamNameById.get(id) ?? id),
@@ -592,7 +597,7 @@ function CentralMachinesView({ pt }: { pt: boolean }) {
       statusLabel: m.online ? 'online' : 'offline',
       // Resolved HERE so the desktop row and the mobile card cannot say different things about
       // the same machine — the same reason every other value on this object is shared.
-      consent: machineConsentView(m.remoteConsent, m.online ?? false, pt ? 'pt' : 'en'),
+      consent: machineConsentView(m.remoteConsent, m.online ?? false, pt ? 'pt' : 'en', viewerOwnsMachine),
     }
   }
 
