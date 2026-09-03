@@ -205,7 +205,16 @@ export default function SessionsPage() {
             lang={lang}
           />
         </div>
-        <div style={{ flex: 1, minHeight: 0, padding: '10px 12px' }}>
+        {/* `display: flex` again, and for the third time in this file's history the SAME rule:
+            `flex: 1` on a child means nothing until its PARENT is a flex container. This div had
+            `flex: 1, minHeight: 0` and no display, so `SessionsAside`'s own `flex: 1 1 0%` column
+            was an ordinary block that grew to its content — and with it the scrolling box inside.
+            Measured on an iPhone 12 with "Active only" off: the scroller reported
+            clientHeight 16.567px against a 664px viewport, `scrollTop` could not move, and the 306
+            inactive rows sat below the fold with no way to reach them. The band heading counted
+            them correctly the whole time, which is what made it read as "the rows are missing"
+            rather than "the list cannot scroll". */}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '10px 12px' }}>
           <SessionsAside
             lang={pt ? 'pt' : 'en'}
             rows={fleet.rows}

@@ -15,7 +15,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
-import { fleetStaleNotice } from './fleetStale'
+import { fleetSeedNotice, fleetStaleNotice } from './fleetStale'
+import { cacheIsUsable, stripVolatile } from './fleetCache'
 
 /** Mirrors `SessionAction` in `@agentistics/tui/control/sessions`, minus the verbs a page cannot do. */
 export type FleetActionId =
@@ -131,7 +132,44 @@ export interface FleetState {
  * the dashboard open and nothing watching sessions makes no fleet requests at all.
  */
 const listeners = new Set<() => void>()
-let snapshot: FleetPayload = EMPTY
+const FLEET_CACHE_KEY = 'agentistics-fleet-cache-v1'
+
+/** Read the persisted snapshot, or null. Validated and age-checked — see `fleetCache.ts`. */
+function readFleetCache(): FleetPayload | null {
+  try {
+    const raw = localStorage.getItem(FLEET_CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { at?: number; payload?: FleetPayload }
+    if (!cacheIsUsable(parsed?.at, Date.now())) return null
+    const p = parsed.payload
+    if (!p || !Array.isArray(p.rows) || !Array.isArray(p.sessions)) return null
+    cachedAt = parsed.at ?? 0
+    return p
+  } catch {
+    return null
+  }
+}
+
+function writeFleetCache(payload: FleetPayload): void {
+  try {
+    // The SCREEN is stripped before it is written, never after it is read — a payload that was
+    // never stored cannot leak from a store somebody inspects.
+    localStorage.setItem(FLEET_CACHE_KEY, JSON.stringify({ at: Date.now(), payload: stripVolatile(payload) }))
+  } catch { /* quota or disabled — the cache is an optimisation, never a requirement */ }
+}
+
+/**
+ * Seeded from the last poll of a previous visit, so leaving the page and coming back paints the
+ * list instead of the loading state for a whole poll interval. On a phone, where "leaving" is
+ * switching apps, that was most visits.
+ *
+ * `snapLoading` is still TRUE while a seed is showing: the rows are real but unconfirmed, and the
+ * first live answer is what makes them current. Nothing here claims otherwise — `cachedAt` feeds
+ * the same staleness sentence a failed poll produces, so a seeded list says how old it is until
+ * the poll lands.
+ */
+let cachedAt = 0
+let snapshot: FleetPayload = readFleetCache() ?? EMPTY
 let snapLoading = true
 let snapUnsupported = false
 /** Consecutive failed polls, and when one last answered — the two facts `fleetStale.ts` reads. */
@@ -163,6 +201,8 @@ async function pollOnce(): Promise<void> {
     snapshot = json
     snapFailures = 0
     snapLastOkMs = Date.now()
+    cachedAt = 0            // a live answer supersedes the seed; it is no longer "from before"
+    writeFleetCache(json)
   } catch {
     // Transient — keep the last known answer rather than reporting an empty fleet, and record that
     // it did not arrive.
@@ -238,8 +278,16 @@ export function useFleet(lang: 'pt' | 'en', enabled = true): FleetState {
     unsupported: enabled ? snapUnsupported : false,
     // Resolved on every render rather than stored: the sentence carries how long it has been, and
     // a stored one would freeze that age at the moment the poll failed.
+    // A SEEDED list and a STALE one are both real rows not yet confirmed, and they get DIFFERENT
+    // sentences. The seed borrowed the stale one, which opens with "no answer from this machine" —
+    // false on a normal reopen, where the machine has not been asked yet. Announcing a failure that
+    // did not happen, at the moment the page opens, is a warning that cries wolf on every visit.
+    // The seed shows immediately (it IS unconfirmed from the first paint, unlike a poll that has
+    // merely missed once) and is replaced the instant a live answer lands.
     stale: enabled
-      ? fleetStaleNotice({ failures: snapFailures, lastOkMs: snapLastOkMs }, Date.now(), lang)
+      ? (snapLastOkMs === null
+        ? fleetSeedNotice(cachedAt, Date.now(), lang)
+        : fleetStaleNotice({ failures: snapFailures, lastOkMs: snapLastOkMs }, Date.now(), lang))
       : null,
     refresh,
     act,

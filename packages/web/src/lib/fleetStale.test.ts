@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { fleetIsStale, fleetStaleNotice, STALE_AFTER_FAILURES } from './fleetStale'
+import { fleetIsStale, fleetSeedNotice, fleetStaleNotice, STALE_AFTER_FAILURES } from './fleetStale'
 
 const NOW = 1_000_000
 
@@ -54,5 +54,41 @@ describe('fleetStaleNotice', () => {
     const pt = fleetStaleNotice({ failures: 2, lastOkMs: NOW - 10_000 }, NOW, 'pt')!
     expect(pt).not.toBe(en)
     expect(pt).toMatch(/Sem resposta da máquina/)
+  })
+})
+
+describe('fleetSeedNotice', () => {
+  it('says nothing when there is no seed — that is loading, not a stale list', () => {
+    expect(fleetSeedNotice(0, NOW, 'en')).toBeNull()
+    expect(fleetSeedNotice(-1, NOW, 'en')).toBeNull()
+    expect(fleetSeedNotice(Number.NaN, NOW, 'en')).toBeNull()
+  })
+
+  it('does NOT claim the machine failed to answer', () => {
+    // The defect this function exists for: a seeded list borrowed the stale sentence, which opens
+    // with "no answer from this machine" — false on a normal reopen, where nothing has been asked
+    // yet. A warning that cries wolf on every visit is one people stop reading.
+    const en = fleetSeedNotice(NOW - 30_000, NOW, 'en')!
+    expect(en).not.toMatch(/No answer/i)
+    expect(en).toMatch(/waiting for this machine to confirm/i)
+    const pt = fleetSeedNotice(NOW - 30_000, NOW, 'pt')!
+    expect(pt).not.toMatch(/Sem resposta/i)
+    expect(pt).toMatch(/esperando esta máquina confirmar/i)
+  })
+
+  it('carries the AGE on the same scale the stale sentence uses', () => {
+    expect(fleetSeedNotice(NOW - 12_000, NOW, 'en')).toMatch(/12s/)
+    expect(fleetSeedNotice(NOW - 660_000, NOW, 'en')).toMatch(/11 min/)
+  })
+
+  it('never reports a negative age from a clock that jumped', () => {
+    expect(fleetSeedNotice(NOW + 5_000, NOW, 'en')).toMatch(/0s/)
+  })
+
+  it('is a DIFFERENT sentence from the stale one, in both languages', () => {
+    const seed = fleetSeedNotice(NOW - 10_000, NOW, 'en')
+    const staleMsg = fleetStaleNotice({ failures: 2, lastOkMs: NOW - 10_000 }, NOW, 'en')
+    expect(seed).not.toBe(staleMsg)
+    expect(fleetSeedNotice(NOW - 10_000, NOW, 'pt')).not.toBe(seed)
   })
 })

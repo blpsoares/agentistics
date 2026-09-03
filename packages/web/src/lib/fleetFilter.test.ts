@@ -166,3 +166,33 @@ describe('fleetFilterOptions', () => {
     expect(fleetFilterOptions(rows).repos).toEqual(['a/a', 'z/b'])
   })
 })
+
+describe('fleetFilterOptions — the activeOnly promise', () => {
+  const rows = [
+    repoRow('a', 'o/a', { harness: 'claude', state: 'working' }),
+    repoRow('b', 'o/b', { harness: 'codex', state: 'closed' }),
+  ]
+
+  it('offers only harnesses the CURRENT view can show', () => {
+    // With the switch on — how this workspace opens — a harness whose rows are all closed is
+    // withheld from the list, so picking it cannot empty it. Measured on a real machine: codex and
+    // copilot each had exactly one row, both closed, and both were offered.
+    expect(fleetFilterOptions(rows, true).harnesses).toEqual(['claude'])
+  })
+
+  it('brings them back when the switch is off', () => {
+    // The options are re-derived from the rows the switch stops withholding — nothing to remember.
+    expect(fleetFilterOptions(rows, false).harnesses).toEqual(['claude', 'codex'])
+    expect(fleetFilterOptions(rows).harnesses).toEqual(['claude', 'codex'])
+  })
+
+  it('withholds that harness\'s repos and models too, not just its name', () => {
+    const mixed = [
+      repoRow('a', 'o/live', { harness: 'claude', state: 'working', model: 'opus' }),
+      repoRow('b', 'o/dead', { harness: 'codex', state: 'exited', model: 'gpt' }),
+    ]
+    const o = fleetFilterOptions(mixed, true)
+    expect(o.repos).toEqual(['o/live'])
+    expect(o.models).toEqual(['opus'])
+  })
+})
