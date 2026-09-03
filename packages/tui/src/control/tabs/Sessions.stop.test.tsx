@@ -118,15 +118,21 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 const SESSIONS_DELAY_MS = 60
 
 /**
- * The DEADLINE on a test, not a wait.
+ * How long a CONDITION is given before it reports which condition it was.
  *
- * Nothing here waits out a duration — every wait is a condition (`until` / `untilTrue`), and this
- * is only how long a condition is given before it reports which one it was. It is generous because
- * a loaded runner is the case that broke these tests once already, and because the failure it
- * produces ("timed out waiting for the fleet to be drawn", with the frame attached) is worth far
- * more than bun's bare per-test timeout.
+ * Deliberately enormous next to the ~60ms these actually take. It is not a wait — every wait here
+ * ends the moment its condition holds — it is only the point at which waiting becomes a failure,
+ * and a loaded runner is precisely the case that broke these tests once already. Tuning it down to
+ * "about long enough" would rebuild the flake in a slower loop.
  */
-const DEADLINE_MS = 20_000
+const WAIT_MS = 10_000
+
+/**
+ * The DEADLINE on a whole test. Larger than the waits inside it, or the test dies before the
+ * condition it is waiting on can name itself — and "test timed out" says nothing, where
+ * "timed out waiting for the fleet to be drawn" plus the frame says everything.
+ */
+const DEADLINE_MS = 30_000
 
 /**
  * Wait for a CONDITION, never for a duration.
@@ -144,7 +150,7 @@ async function until(
   read: () => string,
   pred: (frame: string) => boolean,
   what: string,
-  timeoutMs = 4000,
+  timeoutMs = WAIT_MS,
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs
   let frame = read()
@@ -159,7 +165,7 @@ async function until(
 }
 
 /** The same, for a fact that is not on the screen — what the host was actually asked to do. */
-async function untilTrue(pred: () => boolean, what: string, timeoutMs = 4000): Promise<void> {
+async function untilTrue(pred: () => boolean, what: string, timeoutMs = WAIT_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (!pred()) {
     if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`)
