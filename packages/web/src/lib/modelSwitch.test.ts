@@ -24,6 +24,16 @@ describe('modelSwitchLine', () => {
     }
   })
 
+  it('passes the model name through VERBATIM, for every alias claude accepts', () => {
+    // These four are exactly the ids `--model` takes and exactly the ids `/model` answered to when
+    // driven against claude 2.1.259 (see the module header). The line must carry the id and nothing
+    // else — a decorated or re-cased name is `Model '…' not found` inside the session, which looks
+    // to the user like a switch that worked.
+    for (const model of ['fable', 'opus', 'sonnet', 'haiku']) {
+      expect(modelSwitchLine('claude', model)).toBe(`/model ${model}`)
+    }
+  })
+
   it('refuses an empty model rather than typing a bare slash command', () => {
     // `/model` with no argument opens the CLI's own picker inside the session, which is not what a
     // click on a value in this list asked for.

@@ -16,6 +16,19 @@
  * running CLI (claude 2.1.x, `claude -p` asked for the command's exact name) rather than assumed.
  * The others are null until somebody checks the same way — a guessed slash command does not fail
  * loudly, it types a line of nonsense into a live session.
+ *
+ * THE MODEL NAME IS PASSED VERBATIM, and the values come from the server's `modelSuggestions` for
+ * this harness (`GET /api/fleet/new`) — which is the list `--model` accepts. That those two are
+ * the same set is a FINDING, not an assumption: driven against claude 2.1.259 on 2026-09-02,
+ * `claude -p "/model <alias>"` answered `Set model to \`Fable 5.1\` | \`Opus 5\` | \`Sonnet 5\` |
+ * \`Haiku 4.5\`` for exactly the four aliases `--model` accepts, and answered `Model '<x>' not
+ * found` for `mythos` and for a nonsense id — the same two rejections `--model` gives. The CLI
+ * says so itself: its model-selection schema reads "an alias ("opus"), an Anthropic model ID, or a
+ * provider-format ID … Same values --model accepts." So one list can feed both surfaces.
+ *
+ * The corollary is the rule the list is held to: NEVER prettify a name on the way in. `/model`
+ * matches the id, so a display label ("Opus 5", "Sonnet") typed here is `Model 'Opus 5' not found`
+ * in a live session, which is a silent no-op the user reads as the switch having worked.
  */
 
 export interface ModelSwitchSpec {

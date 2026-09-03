@@ -267,8 +267,13 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
             </datalist>
           </Field>
 
-          {/* SKIPPED, not disabled, when the CLI has no such flag — see the header. */}
-          {harness?.supportsModel && (
+          {/* SKIPPED, not disabled, when the CLI has no such flag — see the header. Skipped for the
+              same reason when the harness offers NO names: `modelSuggestions` is empty exactly
+              where that CLI publishes no list of its own (see `spawn-spec.ts`), and a closed
+              dropdown whose only entry is "the assistant's default" is a control that cannot be
+              used. An absent picker says "we cannot name these for you"; a one-option one says
+              nothing at all. */}
+          {harness?.supportsModel && harness.modelSuggestions.length > 0 && (
             <Field label={pt ? 'Modelo (opcional)' : 'Model (optional)'}>
               {/* A CLOSED dropdown, never free text: `modelSuggestions` is the actual set this
                   harness offers, and a typed id it does not recognise fails at spawn with no
