@@ -216,6 +216,20 @@ html, body {
 :root {
   --mobile-nav-inset: env(safe-area-inset-bottom, 0px);
   --mobile-nav-h: calc(56px + var(--mobile-nav-inset));
+  /* How far the LAYOUT VIEWPORT falls short of the screen — 0 everywhere except an installed iOS
+     PWA, where it is set from JS (see `useViewportDrift`).
+     iOS standalone with `apple-mobile-web-app-status-bar-style: black-translucent` gives the web
+     view the whole screen and then keeps reporting `innerHeight` WITHOUT the status bar, so every
+     `position: fixed; bottom: 0` stops short of the physical bottom by exactly the status-bar
+     height. Measured on an iPhone 14 Pro Max PWA: screen 932pt, the bottom nav's own box a correct
+     90pt (56 + a 34pt home-indicator inset), and 59.0pt of page background stranded below it —
+     59pt being that device's `safe-area-inset-top` to the pixel. The nav was not mis-sized; it was
+     anchored to a viewport 59pt short.
+     It is MEASURED rather than assumed to be the top inset: the day iOS fixes this the difference
+     is 0 and every rule below becomes a no-op, instead of pushing the nav off the screen. */
+  --vp-drift: 0px;
+  /* The room a page must leave for the nav, in the page's own (short) coordinates. */
+  --mobile-nav-space: calc(var(--mobile-nav-h) - var(--vp-drift));
   /* The STATUS-BAR inset, and the twin of the one above.
      Installed as a PWA the page owns the whole screen, so the topmost bar of every layout was
      drawn UNDERNEATH the clock, the signal bars and the battery — ~47px on an iPhone 14 Pro. The
@@ -232,6 +246,10 @@ html, body {
 .mobile-bottom-nav {
   height: var(--mobile-nav-h);
   padding-bottom: var(--mobile-nav-inset);
+  /* Pushed BELOW the short viewport by exactly the shortfall, so its bottom edge lands on the
+     physical bottom of the screen. `--vp-drift` is 0 in a browser tab and in a fixed iOS, where
+     this resolves to `bottom: 0` and nothing moves. */
+  bottom: calc(-1 * var(--vp-drift));
 }
 
 /* Prevent tap highlight flicker on mobile */
