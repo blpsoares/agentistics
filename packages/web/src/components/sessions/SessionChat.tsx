@@ -277,7 +277,11 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     })
   }, [turns, echo.length])
 
-  const lastAssistant = [...turns].reverse().find(t => t.role === 'assistant' && !t.pending && t.text.trim() !== '')
+  // A finished background-task line is `role: 'assistant'` and carries no `pending` any more, so it
+  // would otherwise be taken as the assistant's last MESSAGE — and its label would be compared
+  // against the live terminal frame. It is a status line; nobody said it.
+  const lastAssistant = [...turns].reverse()
+    .find(t => t.role === 'assistant' && !t.pending && !t.task && t.text.trim() !== '')
 
   const live = useMemo(() => {
     if (!term.frame) return null

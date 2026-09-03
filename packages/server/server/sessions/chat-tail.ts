@@ -56,6 +56,14 @@ export interface ChatTurn {
    */
   pending?: boolean
   /**
+   * A background TASK this turn started, by the label the assistant gave it.
+   *
+   * Rendered as a status line and never as a message: nobody said it. `running` is true while no
+   * `<task-notification>` has come back for it yet — which is what makes a watcher visible WHILE
+   * it is the thing you are waiting on, rather than only once it is over.
+   */
+  task?: { label: string; running: boolean }
+  /**
    * This entry sat under the `user` role and NO PERSON WROTE IT — a background task reporting
    * back, an injected reminder, a `!` command's stdout. The value is a short phrase naming which,
    * never the body: a `<system-reminder>` can be the whole of CLAUDE.md.
@@ -153,6 +161,63 @@ function extractUserEntry(e: Record<string, unknown>): UserEntry | null {
   // A system entry with nothing to name is dropped outright rather than drawn as a blank note.
   if (entry.kind === 'system' && entry.note === '') return null
   return entry
+}
+
+/**
+ * A BACKGROUND TASK the assistant started, and its label.
+ *
+ * A watcher — a build being followed, a release being waited on — is the one tool call worth a line
+ * in a conversation: it is long, it is usually the thing the reader is waiting for, and its END is
+ * already reported (the `<task-notification>` that comes back as a system note). Only the start was
+ * missing, so a task appeared to finish having never begun. Reported as "não aparece aqui os
+ * watchers".
+ *
+ * ONLY background ones. Rendering every tool call would turn a conversation into a command log —
+ * which is exactly why `ChatBubble` refuses `turn.tools` — and the discriminator is the tool's own
+ * `run_in_background`, not a guess about how long something might take.
+ *
+ * The label is the call's own `description`, which is written for a person; the command is not
+ * carried, because a line in a chat is not a terminal.
+ */
+function extractBackgroundTask(e: Record<string, unknown>): { id: string; label: string } | null {
+  if (e.type !== 'assistant') return null
+  const content = (e.message as Record<string, unknown> | undefined)?.content
+  if (!Array.isArray(content)) return null
+  for (const part of content as Record<string, unknown>[]) {
+    if (part.type !== 'tool_use') continue
+    const input = part.input as Record<string, unknown> | undefined
+    if (!input || input.run_in_background !== true) continue
+    const label = typeof input.description === 'string' ? input.description.trim() : ''
+    const id = typeof part.id === 'string' ? part.id : ''
+    return { id, label: label || (typeof part.name === 'string' ? part.name : 'background task') }
+  }
+  return null
+}
+
+/**
+ * The `tool-use-id` a `<task-notification>` is reporting on, when it names one.
+ *
+ * This is the EXACT pairing between a task's start and its end — the notification carries the very
+ * id of the `tool_use` that launched it. It is read off the raw text here because
+ * `classifyUserText` deliberately discards a system entry's BODY, and rightly: a
+ * `<system-reminder>` can be the whole of CLAUDE.md. One id is not a body.
+ */
+function rawEntryText(e: Record<string, unknown>): string {
+  const c = (e.message as Record<string, unknown> | undefined)?.content
+  if (typeof c === 'string') return c
+  if (Array.isArray(c)) {
+    const t = (c as Record<string, unknown>[]).find(p => p.type === 'text' && typeof p.text === 'string')
+    if (t) return t.text as string
+  }
+  const a = e.attachment as Record<string, unknown> | undefined
+  if (a && typeof a.prompt === 'string') return a.prompt
+  return ''
+}
+
+function taskNotificationFor(text: string): string | null {
+  if (!text.includes('<task-notification>')) return null
+  const m = /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(text)
+  return m ? m[1]!.trim() : null
 }
 
 /**
@@ -349,6 +414,10 @@ async function readTurnsFromTail(
 
   const lines = content.split('\n')
   const turns: ChatTurn[] = []
+  /** Tasks started in this file, and the `tool-use-id` each completion will name. */
+  const taskTurns: Array<{ id: string; turn: ChatTurn }> = []
+  /** Ids whose `<task-notification>` has already arrived. */
+  const finishedTasks = new Set<string>()
   // Set once, on the first substantive (non-blank, parseable) line the loop inspects — which is the
   // NEWEST event in the transcript. Only there does "no text yet" mean "busy right now"; the same
   // shape earlier in the file is just an ordinary tool call whose result and follow-up text already
@@ -362,6 +431,18 @@ async function readTurnsFromTail(
     const isNewest = newest
     newest = false
 
+    const done = taskNotificationFor(rawEntryText(e))
+    if (done) finishedTasks.add(done)
+
+    const bg = extractBackgroundTask(e)
+    if (bg) {
+      // A status line, never a message — nobody said it. `running` is settled after the walk,
+      // once every completion in the file has been seen.
+      turns.push({ role: 'assistant', text: bg.label, task: { label: bg.label, running: true }, pending: true })
+      taskTurns.push({ id: bg.id, turn: turns[turns.length - 1]! })
+      continue
+    }
+
     const userEntry = extractUserEntry(e)
     if (userEntry) { turns.push(userTurn(userEntry)); continue }
     const queued = extractQueuedText(e)
@@ -373,6 +454,17 @@ async function readTurnsFromTail(
       if (tools) turns.push({ role: 'assistant', text: toolActivityLabel(tools), pending: true })
     }
   }
+  // Settled AFTER the walk: a completion always comes later in the file than its start, so this is
+  // the only point where "still running" can be answered without reading the file twice. An id
+  // that never arrives stays running — which is the truth for a task the session is still on, and
+  // for one whose session ended mid-flight there is nothing better to say.
+  for (const t of taskTurns) {
+    if (t.turn.task && finishedTasks.has(t.id)) {
+      t.turn.task.running = false
+      delete t.turn.pending
+    }
+  }
+
   turns.reverse()
 
   return { turns, atStart: tail.atStart }
@@ -397,6 +489,10 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
 
   const lines = content.split('\n')
   const turns: ChatTurn[] = []
+  /** Tasks started in this file, and the `tool-use-id` each completion will name. */
+  const taskTurns: Array<{ id: string; turn: ChatTurn }> = []
+  /** Ids whose `<task-notification>` has already arrived. */
+  const finishedTasks = new Set<string>()
   let newest = true
   for (let i = lines.length - 1; i >= 0 && turns.length < max; i--) {
     const line = (lines[i] ?? '').trim()
@@ -405,6 +501,18 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
     try { e = JSON.parse(line) } catch { continue }
     const isNewest = newest
     newest = false
+
+    const done = taskNotificationFor(rawEntryText(e))
+    if (done) finishedTasks.add(done)
+
+    const bg = extractBackgroundTask(e)
+    if (bg) {
+      // A status line, never a message — nobody said it. `running` is settled after the walk,
+      // once every completion in the file has been seen.
+      turns.push({ role: 'assistant', text: bg.label, task: { label: bg.label, running: true }, pending: true })
+      taskTurns.push({ id: bg.id, turn: turns[turns.length - 1]! })
+      continue
+    }
 
     const userEntry = extractUserEntry(e)
     if (userEntry) { turns.push(userTurn(userEntry)); continue }
@@ -429,6 +537,17 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
       })
     }
   }
+  // Settled AFTER the walk: a completion always comes later in the file than its start, so this is
+  // the only point where "still running" can be answered without reading the file twice. An id
+  // that never arrives stays running — which is the truth for a task the session is still on, and
+  // for one whose session ended mid-flight there is nothing better to say.
+  for (const t of taskTurns) {
+    if (t.turn.task && finishedTasks.has(t.id)) {
+      t.turn.task.running = false
+      delete t.turn.pending
+    }
+  }
+
   turns.reverse()
   return turns
 }
