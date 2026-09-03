@@ -25,6 +25,7 @@ import { join } from 'node:path'
 import { PROJECTS_DIR } from '../config'
 import { UUID_RE } from '../git'
 import { isHumanUserEntry } from '../jsonl'
+import { classifyUserText, type UserEntry } from './chat-envelope'
 
 export interface ChatTurn {
   role: 'user' | 'assistant'
@@ -54,6 +55,17 @@ export interface ChatTurn {
    * colours — it is not a message either side wrote.
    */
   pending?: boolean
+  /**
+   * This entry sat under the `user` role and NO PERSON WROTE IT — a background task reporting
+   * back, an injected reminder, a `!` command's stdout. The value is a short phrase naming which,
+   * never the body: a `<system-reminder>` can be the whole of CLAUDE.md.
+   *
+   * It is a turn rather than a drop so the conversation stays legible — an assistant reply with
+   * nothing above it reads as the assistant talking to itself — and it is rendered unattributed,
+   * like `pending`, because the one thing it may never do is appear over the user's avatar. See
+   * `chat-envelope.ts` for the measured list and why two of those envelopes are the person's.
+   */
+  system?: string
 }
 
 /** Resolved paths and one-time-scan misses, keyed by conversation id. Never re-scanned once known. */
@@ -121,16 +133,33 @@ export function forgetChatTailContent(): void {
   contentCache.clear()
 }
 
-function extractUserText(e: Record<string, unknown>): string | null {
+/**
+ * What a `user` entry actually is — the person, the harness, or neither.
+ *
+ * `isHumanUserEntry` only excludes a pure `tool_result`; every other envelope the harness writes
+ * under this role reached the pane as the user's own message. `chat-envelope.ts` is the split.
+ */
+function extractUserEntry(e: Record<string, unknown>): UserEntry | null {
   if (!isHumanUserEntry(e)) return null
   const msgContent = (e.message as Record<string, unknown> | undefined)?.content
-  if (typeof msgContent === 'string') return msgContent.trim() || null
-  if (Array.isArray(msgContent)) {
-    const text = (msgContent as Record<string, unknown>[])
+  let raw: string | undefined
+  if (typeof msgContent === 'string') raw = msgContent
+  else if (Array.isArray(msgContent)) {
+    raw = (msgContent as Record<string, unknown>[])
       .find(p => p.type === 'text' && typeof p.text === 'string')?.text as string | undefined
-    return text?.trim() || null
   }
-  return null
+  if (raw === undefined || raw.trim() === '') return null
+  const entry = classifyUserText(raw)
+  // A system entry with nothing to name is dropped outright rather than drawn as a blank note.
+  if (entry.kind === 'system' && entry.note === '') return null
+  return entry
+}
+
+/** The turn one classified entry becomes. */
+function userTurn(entry: UserEntry): ChatTurn {
+  return entry.kind === 'person'
+    ? { role: 'user', text: entry.text }
+    : { role: 'user', text: entry.note, system: entry.note }
 }
 
 function extractAssistantText(e: Record<string, unknown>): string | null {
@@ -306,8 +335,8 @@ async function readTurnsFromTail(
     const isNewest = newest
     newest = false
 
-    const userText = extractUserText(e)
-    if (userText) { turns.push({ role: 'user', text: userText }); continue }
+    const userEntry = extractUserEntry(e)
+    if (userEntry) { turns.push(userTurn(userEntry)); continue }
     const assistantText = extractAssistantText(e)
     if (assistantText) { turns.push({ role: 'assistant', text: assistantText }); continue }
     if (isNewest) {
@@ -348,8 +377,8 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
     const isNewest = newest
     newest = false
 
-    const userText = extractUserText(e)
-    if (userText) { turns.push({ role: 'user', text: userText }); continue }
+    const userEntry = extractUserEntry(e)
+    if (userEntry) { turns.push(userTurn(userEntry)); continue }
 
     // An assistant event can carry text, thinking and tool calls at once, and all three belong to
     // the same turn. Emitted together rather than as separate rows: they happened together, and

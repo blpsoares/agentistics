@@ -512,8 +512,18 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
             />
           ))}
 
+          {/* An echo IS an unread message by definition — it is retired the instant the transcript
+              carries the same text — so it is drawn as one: faded, with the wait said in words
+              under it. It used to be indistinguishable from a delivered message, and on a session
+              mid-turn the wait is minutes. */}
           {echo.map((text, i) => (
-            <ChatBubble key={`echo-${i}`} turn={{ role: 'user', text }} lang={lang} harness={session.harness} />
+            <ChatBubble
+              key={`echo-${i}`}
+              turn={{ role: 'user', text }}
+              lang={lang}
+              harness={session.harness}
+              awaiting
+            />
           ))}
 
           {/* `live` (the screen read off the terminal frame) is deliberately NOT rendered here any
