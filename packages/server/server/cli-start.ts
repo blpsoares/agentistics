@@ -34,7 +34,7 @@ import { writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
 import {
-  DEFAULT_TEAM, HARNESS_ORDER, repoShortName,
+  DEFAULT_TEAM, repoShortName,
   type HarnessId, type TeamConnection,
 } from '@agentistics/core'
 import type {
@@ -101,6 +101,7 @@ import { resolveLang } from './cli-lang'
 import { scanProcesses } from './live-sessions'
 import { resolveBackend } from './sessions'
 import { SPAWN_SPECS, planSpawn } from './sessions/spawn-spec'
+import { availableHarnesses } from './sessions/harness-available'
 import { planTakeover } from './sessions/takeover'
 import { findProjects } from './sessions/project-source'
 import { candidatePath } from './sessions/project-search'
@@ -2609,6 +2610,32 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
      * The same rule `agentop session kill` follows, and for the same reason: clearing the entry on an
      * unconfirmed kill turns a still-running session into one nothing can name again.
      */
+    /**
+     * Stop the current turn without ending the session.
+     *
+     * `Escape` is the key, taken from what `attention-rules.ts` already records these CLIs printing
+     * while they work — `esc to interrupt` — rather than assumed. It is REFUSED unless the session
+     * is measurably working: Escape into an idle prompt closes whatever the harness has open (a
+     * picker, a dialog, its own transcript view), which is not what "stop" means and is not undone
+     * by pressing it again.
+     */
+    async interruptSession(id: string): Promise<ActionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+
+      // Read the pane's LIVENESS the same way `answerSession` does, rather than trusting a poll
+      // snapshot: this sends a keystroke into a real terminal, and a five-second-old view of what is
+      // running is exactly what would send it into a session that has since ended.
+      const live = (await backend.list().catch(() => [])).find(b => b.id === id)
+      if (!live?.alive) return { ok: false, message: s.sessNotRunning }
+
+      return (await backend.sendKey(id, 'Escape'))
+        ? { ok: true, message: s.sessInterrupted(id) }
+        : { ok: false, message: s.sessSendFailed(id) }
+    },
+
     async killSession(id: string): Promise<ActionResult> {
       const s = S()
       const backend = await resolveBackend()
@@ -3017,7 +3044,13 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
      * rule `agentop session`'s `STARTABLE` already follows, and the reason the two can never drift.
      */
     async startableHarnesses(): Promise<SessionHarnessOption[]> {
-      return HARNESS_ORDER.flatMap(id => {
+      // Narrowed to the CLIs actually ON THIS MACHINE, through the one helper `cli-hooks.ts` also
+      // asks — a spec says how to run `codex`, not that codex exists here, and offering the other
+      // five started a tmux session that died on `command not found` behind a screen nobody was
+      // watching. `availableHarnesses` answers with ALL of them when it cannot tell, because an
+      // empty wizard is indistinguishable from a broken one.
+      const { ids } = availableHarnesses()
+      return ids.flatMap(id => {
         const spec = SPAWN_SPECS[id]
         if (!spec) return []
         return [{

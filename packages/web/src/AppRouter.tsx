@@ -56,7 +56,12 @@ export default function AppRouter() {
           <Route index element={<Suspense fallback={<PageFallback />}><HomePage /></Suspense>} />
           <Route path="costs" element={<Suspense fallback={<PageFallback />}><CostsPage /></Suspense>} />
           <Route path="top" element={<Suspense fallback={<PageFallback />}><TopUsagePage /></Suspense>} />
+          {/* The sessions WORKSPACE. `:sessionId` is optional because the workspace has a landing
+              state of its own — the active fleet's summary — rather than being blank until you pick
+              something. One route with an optional segment, not two, so the aside stays mounted and
+              the list does not flash on every selection. */}
           <Route path="sessions" element={<Suspense fallback={<PageFallback />}><SessionsPage /></Suspense>} />
+          <Route path="sessions/:sessionId" element={<Suspense fallback={<PageFallback />}><SessionsPage /></Suspense>} />
           <Route path="workflows" element={<Suspense fallback={<PageFallback />}><WorkflowsPage /></Suspense>} />
           <Route path="projects" element={<Suspense fallback={<PageFallback />}><ProjectsPage /></Suspense>} />
           <Route path="repositories" element={<Suspense fallback={<PageFallback />}><RepositoriesPage /></Suspense>} />

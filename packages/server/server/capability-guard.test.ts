@@ -90,6 +90,17 @@ describe('routeCapability', () => {
     expect(routeCapability('/api/health')).toBeNull()
   })
 
+  it('the RELAYED machine fleet is unguarded ON PURPOSE, not by omission', () => {
+    // The guard maps a path to the LOCAL capability it needs, and this one needs none: it spawns
+    // nothing, reads no transcript and touches no dotfile — the fleet comes from the machine over
+    // the reverse channel. It must not ride `localShell` like /api/fleet does, or it would be
+    // dead on every central (localShell is false on lan and public), which is every deployment
+    // where it means anything. Its own three gates are in machine-fleet-route.ts.
+    expect(routeCapability('/api/team/machine-fleet')).toBeNull()
+    // And it must not accidentally inherit /api/fleet's entry through some prefix rule.
+    expect(routeCapability('/api/fleet')).toBe('localShell')
+  })
+
   it('does not match a route that merely starts with the same characters', () => {
     expect(routeCapability('/api/execute-order-66')).toBeNull()
     expect(routeCapability('/api/claude-sessions-export')).toBeNull()

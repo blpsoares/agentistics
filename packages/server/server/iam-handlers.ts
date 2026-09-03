@@ -25,7 +25,7 @@ import { TEAM_SESSION_SECRET, TEAM_ORG } from './config'
 import { CAPS } from './exposure'
 import { generateSecret, otpauthUri, verifyTotp, generateRecoveryCodes, hashRecoveryCode, totpSkewSteps, TOTP_STEP_SECONDS } from './totp'
 import { getMfa, isMfaEnabled, enableMfa, disableMfa, consumeRecoveryCode } from './mfa-store'
-import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, authorizeAccountPatch, mfaDisableAllowed } from './iam-view'
+import { publicAccount, accountVisibleTo, canCreateAccount, canDeleteAccount, teamVisibleTo, canManageMachineTeam, canManageMachine, machineOwnedBy, authorizeAccountPatch, mfaDisableAllowed } from './iam-view'
 import type { AccountDoc, Membership, Role } from './iam-types'
 import { normalizeEmail } from './iam-types'
 import { limiter, RULES, tooManyRequests } from './rate-limit'
@@ -946,6 +946,14 @@ export async function handleMachines(req: Request, ip = 'unknown'): Promise<Resp
     // one key, which is exactly what this row-per-machine list must not do.
     const presence = await import('./team-presence').then(m => m.computeMachinePresence()).catch(() => ({} as Record<string, { online: boolean; latencyMs: number | null }>))
 
+    // What each machine has agreed this central may do with its sessions. Read only for the
+    // machine's OWN accounts (`machineOwnedBy`, deliberately narrower than the `canManageMachine`
+    // that decided visibility above): administering a machine belongs to whoever runs the
+    // instance, reaching into its live sessions belongs to its user. Every other caller — the
+    // instance owner included — sees the field absent, which is the same shape as a machine that
+    // has not spoken, so nothing downstream has to special-case being told nothing.
+    const { machineConsent } = await import('./machine-consent')
+
     const enriched = visible.map(m => {
       // Resolve every owner account the caller may actually see (no cross-scope name/email leak).
       const owners = m.accountIds
@@ -959,6 +967,10 @@ export async function handleMachines(req: Request, ip = 'unknown'): Promise<Resp
         ...(owners[0] ? { accountName: owners[0].name, accountEmail: owners[0].email } : {}),
         online: presence[m.id]?.online ?? false,
         latencyMs: presence[m.id]?.latencyMs ?? null,
+        // `null` (has not said) and `{sessions:false}` (says no) are DIFFERENT facts and both
+        // travel — one sends the owner to check whether the machine is running, the other to the
+        // switch. Absent means the caller may not ask.
+        ...(machineOwnedBy(principal, m) ? { remoteConsent: machineConsent(m.id) } : {}),
       }
     })
 

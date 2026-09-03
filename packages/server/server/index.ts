@@ -1191,6 +1191,161 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // The live terminal channel: an SSE stream of one session's screen. Read-only (Phase 1). Already
     // gated by `localShell` (capability-guard) and 404'd on a central above, so this handler only has
     // to enforce SCOPE — the session must be one this machine manages — and the stream ceiling.
+    // One attachment: written to agentop's own directory, its PATH returned for the message. A
+    // multipart body rather than JSON, so a 20 MB file is not base64-inflated by a third on the way.
+    if (url.pathname === '/api/fleet/attach' && req.method === 'POST') {
+      try {
+        const { storeAttachment, MAX_ATTACHMENT_BYTES } = await import('./sessions/attachment-web')
+        const lang = url.searchParams.get('lang') === 'pt' ? 'pt' : 'en'
+        const len = Number(req.headers.get('content-length') ?? '0')
+        // Refused on the DECLARED length before the body is read: buffering it first is the thing
+        // the limit exists to prevent.
+        if (Number.isFinite(len) && len > MAX_ATTACHMENT_BYTES * 1.1) {
+          return new Response(JSON.stringify({ ok: false, message: 'too_large' }), {
+            status: 413,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const form = await req.formData()
+        const file = form.get('file')
+        if (!(file instanceof File)) {
+          return new Response(JSON.stringify({ ok: false, message: 'bad_request' }), {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const out = await storeAttachment(lang, {
+          name: file.name,
+          bytes: new Uint8Array(await file.arrayBuffer()),
+        })
+        return new Response(JSON.stringify(out), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // Reading an attachment BACK — the chat's inline image preview. `resolveAttachmentRead` is the
+    // whole of the security model here: a message carries the attachment's path verbatim (see
+    // attachment-web.ts's header), so this route necessarily accepts a path, and that function is
+    // what stops it becoming an arbitrary local file read. A path outside the attachment directory,
+    // or one naming nothing, gets exactly the same 404 — the difference is not this reader's to say.
+    if (url.pathname === '/api/fleet/attachment' && req.method === 'GET') {
+      const { resolveAttachmentRead } = await import('./sessions/attachment-web')
+      const resolved = resolveAttachmentRead(url.searchParams.get('path') ?? '')
+      if (!resolved) {
+        return new Response(null, { status: 404, headers: CORS_HEADERS })
+      }
+      const file = Bun.file(resolved)
+      if (!(await file.exists())) {
+        return new Response(null, { status: 404, headers: CORS_HEADERS })
+      }
+      return new Response(file, {
+        headers: {
+          ...CORS_HEADERS,
+          'Content-Type': file.type || 'application/octet-stream',
+          // Never cached beyond this response: the same path can be overwritten by a later
+          // attachment of the same session, and a shared browser cache keyed on the URL would then
+          // serve the wrong image under the right name.
+          'Cache-Control': 'private, no-store',
+        },
+      })
+    }
+
+    // What this machine can start, and from where. `q` searches the LOCAL project store, so the
+    // picker works with the server's own data cold.
+    if (url.pathname === '/api/fleet/new' && req.method === 'GET') {
+      try {
+        const { webHarnesses, webProjects, webTasks } = await import('./sessions/spawn-web')
+        const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
+        const host = await hostForFleet(fleetLang(url.searchParams.get('lang')))
+        const q = url.searchParams.get('q') ?? ''
+        const [harnesses, projects, tasks] = await Promise.all([
+          webHarnesses(host),
+          webProjects(host, q),
+          webTasks(host),
+        ])
+        return new Response(JSON.stringify({ harnesses, projects, tasks }), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify(safeError(err, { verbose: PROFILE === 'local' }).body), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // Start one session, or reopen everything that fell. Both spawn real assistants.
+    if (url.pathname === '/api/fleet/spawn' && req.method === 'POST') {
+      try {
+        const { spawnFromWeb, reopenFellFromWeb } = await import('./sessions/spawn-web')
+        const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
+        const lang = fleetLang(url.searchParams.get('lang'))
+        const host = await hostForFleet(lang)
+        const body = await readJsonLimited<Record<string, unknown>>(req, LIMITS.bodyBytes)
+        if (!body.ok) {
+          return new Response(JSON.stringify({ ok: false, message: 'bad_request' }), {
+            status: 400,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const v = body.value
+        const out = v['reopenFell'] === true
+          ? await reopenFellFromWeb(host, lang)
+          : await spawnFromWeb(host, lang, {
+              harness: String(v['harness'] ?? ''),
+              cwd: String(v['cwd'] ?? ''),
+              ...(v['task'] ? { task: String(v['task']) } : {}),
+              ...(v['prompt'] ? { prompt: String(v['prompt']) } : {}),
+              ...(v['model'] ? { model: String(v['model']) } : {}),
+              ...(v['effort'] ? { effort: String(v['effort']) } : {}),
+              ...(v['label'] ? { label: String(v['label']) } : {}),
+            })
+        return new Response(JSON.stringify(out), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // One hosted session's conversation, for the workspace's chat view. Claude only in practice —
+    // the module refuses in words wherever the live-session -> conversation link is not exact.
+    if (url.pathname === '/api/fleet/chat' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      try {
+        const { readSessionChat } = await import('./sessions/chat-web')
+        const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
+        const payload = await readSessionChat(
+          await hostForFleet(fleetLang(url.searchParams.get('lang'))),
+          fleetLang(url.searchParams.get('lang')),
+          id,
+        )
+        return new Response(JSON.stringify(payload), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify(safeError(err, { verbose: PROFILE === 'local' }).body), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     if (url.pathname === '/api/fleet/stream' && req.method === 'GET') {
       const id = url.searchParams.get('id')
       if (!id) {
@@ -2114,6 +2269,102 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       const headers = new Headers(res.headers)
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v)
       return new Response(res.body, { status: res.status, headers })
+    }
+
+    // GET /api/team/machine-fleet?machineId=… — one machine's session fleet, RELAYED.
+    //
+    // Central-only, and it does no host work: the fleet comes from the machine over the reverse
+    // channel, never from this box's own tmux (which is what the TEAM_CENTRAL block on
+    // /api/fleet* exists to prevent, and that block stays). Deliberately NOT in
+    // capability-guard.ts — it spawns nothing, reads no transcript and touches no dotfile; the
+    // reasoning is written down in machine-fleet-route.ts and pinned by capability-guard.test.ts,
+    // so the absence is a decision rather than an omission.
+    if (url.pathname === '/api/team/machine-fleet' && req.method === 'GET') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const principal = await getPrincipal(req)
+      if (!principal) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const machineId = url.searchParams.get('machineId') ?? ''
+      const [{ resolveMachineFleet }, { listMachines }, agent, consent, relay] = await Promise.all([
+        import('./machine-fleet-route'),
+        import('./team-tokens'),
+        import('./team-agent'),
+        import('./machine-consent'),
+        import('./machine-fleet-relay'),
+      ])
+      const answer = await resolveMachineFleet(principal, machineId, {
+        listMachines,
+        isOnline: id => agent.hasAgentSocket(id),
+        consentOf: id => consent.effectiveConsent(id),
+        // `notifyMember` is the same send every central→member push already uses; the relay owns
+        // the correlation and the timeout.
+        request: id => relay.requestMachineFleet(id, payload => agent.notifyMember(id, payload)),
+      })
+      return new Response(JSON.stringify(answer), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // POST /api/team/machine-fleet/act — perform ONE verb on one of that machine's sessions.
+    //
+    // Same three gates as the read plus the verb allowlist, and the machine checks all of it again:
+    // a central is the party whose behaviour a machine cannot verify, so the check here only spares
+    // a pointless round trip. Audited on the way out, and the MACHINE is told too — an action that
+    // is invisible on the machine it happened to is the failure this whole feature has to avoid.
+    if (url.pathname === '/api/team/machine-fleet/act' && req.method === 'POST') {
+      if (!TEAM_CENTRAL) return new Response('Not found', { status: 404, headers: CORS_HEADERS })
+      const principal = await getPrincipal(req)
+      if (!principal) {
+        return new Response(JSON.stringify({ error: 'unauthorized' }), {
+          status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const parsed = await readJsonLimited<unknown>(req, LIMITS.bodyBytes)
+      if (!parsed.ok) {
+        return new Response(JSON.stringify({ error: parsed.error }), {
+          status: parsed.error === 'too_large' ? 413 : 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const b = (parsed.value ?? {}) as Record<string, unknown>
+      const machineId = typeof b.machineId === 'string' ? b.machineId : ''
+      const action = typeof b.action === 'string' ? b.action : ''
+      const sessionId = typeof b.id === 'string' ? b.id : ''
+      const [{ resolveMachineAction }, { listMachines }, agent, consent, relay] = await Promise.all([
+        import('./machine-fleet-route'),
+        import('./team-tokens'),
+        import('./team-agent'),
+        import('./machine-consent'),
+        import('./machine-fleet-relay'),
+      ])
+      const answer = await resolveMachineAction(principal, machineId, {
+        action, id: sessionId, ...(typeof b.text === 'string' ? { text: b.text } : {}),
+      }, {
+        listMachines,
+        isOnline: id => agent.hasAgentSocket(id),
+        consentOf: id => consent.effectiveConsent(id),
+        request: id => relay.requestMachineFleet(id, payload => agent.notifyMember(id, payload)),
+        act: (id, a) => relay.requestMachineAction(id, a, payload => agent.notifyMember(id, payload)),
+      })
+      // Audited whenever the verb actually REACHED the machine — a refusal decided here is not an
+      // action on anybody's session, and recording one would make the log describe things that
+      // never happened. The session id is recorded, never the text: a rename or a note is the
+      // user's own words about their own work.
+      if (answer.reply) {
+        void writeAudit({
+          action: 'machine.session_action', ip: clientIp, actorId: principal.accountId,
+          targetId: machineId, meta: { verb: action, session: sessionId, ok: answer.reply.ok },
+        })
+        // And the machine says so itself, so the person sitting at it learns that somebody acted
+        // on their session without having to read a central's audit log.
+        agent.notifyMember(machineId, { type: 'session-acted', verb: action, sessionId })
+      }
+      return new Response(JSON.stringify(answer), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
     }
 
     // /api/team/proposals — LOCAL, same-origin: the restriction proposals this machine has
