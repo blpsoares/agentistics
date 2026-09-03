@@ -1,51 +1,37 @@
 /**
- * CentralSessions.tsx — the SESSIONS page of a central: pick a machine you can reach, and manage
- * its sessions there.
+ * CentralSessions.tsx — on a CENTRAL, which machine the Sessions workspace is looking at.
  *
- * A central hosts no sessions of its own, so this page used to say exactly that and stop. True and
- * useless: the person came to manage the sessions of the machines they have access to, and the one
- * surface that could was a drawer behind Settings → Machines — which is not where anybody looks for
- * a session.
+ * It is a PICKER and nothing else. The list is `SessionsAside` and the overview is the centre, both
+ * exactly as they are on a machine: `useFleet` fetches the chosen machine's relayed fleet and hands
+ * back the same shape a local one does, so neither surface knows which kind of install it is.
  *
- * ONE MACHINE AT A TIME, and deliberately so. Each read makes that machine build a real fleet (a
- * tmux round trip per session), so fetching every machine on page load would tax a whole estate to
- * fill a list most of which nobody is reading. The picker is the consent for the cost.
+ * That is the second attempt. The first drew its own list in the CENTRE of the page while the real
+ * aside said "no sessions on this machine yet" — the same sessions in two shapes, in the wrong
+ * place, which is what "qual parte vc n entendeu de visualizacao identica" meant.
  *
- * The list, the verbs and every refusal are `MachineFleetPanel` — the same component the drawer
- * hosts. A second implementation would be a second set of rules about what a relayed row may show
- * and which verbs it may offer.
+ * ONE MACHINE AT A TIME, deliberately: each poll makes that machine build a real fleet (a tmux
+ * round trip per session), so fetching the whole estate would tax every machine to fill a list
+ * nobody is reading. The chip carries online/offline, because whether a machine can answer NOW is
+ * worth knowing before choosing it rather than after waiting.
  *
- * A machine that CANNOT be reached is named with its reason rather than left out: an empty picker
- * is one symptom with five causes, and the person looking at it is the one who needs to know which.
+ * A machine that cannot be reached is NAMED with its reason, never left out: an empty picker is one
+ * symptom with several causes, and the person looking at it is the one who needs to know which.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { MonitorSmartphone } from 'lucide-react'
-import type { Filters } from '@agentistics/core'
-import { MachineFleetPanel } from '../../pages/settings/MachineFleetPanel'
-import { SessionsAside } from '../nav/SessionsAside'
 import { centralMachineList, pickCentralMachine, type CentralMachine } from '../../lib/centralMachines'
-import { relayedToSessions, type RelayedRow } from '../../lib/relayedSessions'
+import {
+  centralMachineServerSnapshot, getCentralMachine, setCentralMachine, subscribeCentralMachine,
+} from '../../lib/centralMachinePick'
 
-/** Remembers the machine you were last looking at, per browser. */
-const PICK_KEY = 'agentistics-central-machine'
 
-export function CentralSessions({ lang, filters, activeOnly }: {
-  lang: 'pt' | 'en'
-  /** The SAME filters the header edits — the list narrows exactly as it does on a machine. */
-  filters: Filters
-  activeOnly: boolean
-}) {
+export function CentralSessions({ lang }: { lang: 'pt' | 'en' }) {
   const pt = lang === 'pt'
   const [machines, setMachines] = useState<CentralMachine[] | null>(null)
   const [me, setMe] = useState<string>('')
   const [failed, setFailed] = useState(false)
-  const [picked, setPicked] = useState<string | null>(null)
-  /** The chosen machine's relayed rows, for the list. `null` = not read yet. */
-  const [rows, setRows] = useState<RelayedRow[] | null>(null)
-  const [rowsFor, setRowsFor] = useState<string | null>(null)
-  /** The row whose verbs are open. One at a time — this is the list, not a control panel. */
-  const [openRow, setOpenRow] = useState<string | null>(null)
+  const picked = useSyncExternalStore(subscribeCentralMachine, getCentralMachine, centralMachineServerSnapshot)
 
   useEffect(() => {
     let live = true
@@ -74,38 +60,15 @@ export function CentralSessions({ lang, filters, activeOnly }: {
     [machines, me, pt],
   )
 
-  // Settled once, when the list first arrives, and then owned by the picker.
+  // Settled once, when the list first arrives, and then owned by the picker. A remembered machine
+  // that has since gone quiet must not leave the workspace pointed at an entry no longer offered.
   useEffect(() => {
     if (machines === null) return
-    setPicked(prev => prev ?? pickCentralMachine(list, localStorage.getItem(PICK_KEY)))
+    const next = pickCentralMachine(list, getCentralMachine())
+    if (next !== getCentralMachine()) setCentralMachine(next)
   }, [machines, list])
 
-  // The rows the LIST draws. The panel below reads the same route for the verbs — one extra call
-  // per machine change, and the alternative was threading the answer out of the panel, which would
-  // make the panel's own hosts depend on a caller that does not exist for them.
-  useEffect(() => {
-    setOpenRow(null)
-    if (!picked) { setRows(null); return }
-    let live = true
-    setRows(null); setRowsFor(picked)
-    void (async () => {
-      try {
-        const res = await fetch(`/api/team/machine-fleet?machineId=${encodeURIComponent(picked)}`)
-        const body = res.ok ? await res.json() as { reply?: { rows?: RelayedRow[] } } : null
-        if (live) setRows(body?.reply?.rows ?? [])
-      } catch {
-        if (live) setRows([])
-      }
-    })()
-    return () => { live = false }
-  }, [picked])
-
-  const sessions = useMemo(() => relayedToSessions(rows ?? []), [rows])
-
-  const choose = (id: string) => {
-    setPicked(id)
-    try { localStorage.setItem(PICK_KEY, id) } catch { /* private mode — the choice is a convenience */ }
-  }
+  const choose = (id: string) => setCentralMachine(id)
 
   if (failed) {
     return (
@@ -155,60 +118,6 @@ export function CentralSessions({ lang, filters, activeOnly }: {
           })}
         </div>
       )}
-
-      {picked
-        ? (
-          <>
-            {/* THE SAME LIST a machine draws — grouping, ordering, search, the state words and the
-                row's own shape are decided in one place for both. Its "new session" is withheld:
-                starting one spawns a process on the HOST, which a central cannot do for someone
-                else's machine. */}
-            <SessionsAside
-              lang={lang}
-              rows={sessions}
-              finishedTasks={[]}
-              loading={rows === null || rowsFor !== picked}
-              unsupported={false}
-              filters={filters}
-              activeOnly={activeOnly}
-              hideNew
-              onOpenRow={r => setOpenRow(prev => (prev === r.id ? null : r.id))}
-            />
-
-            {/* Tapping a row opens ITS verbs, and nothing else. The panel used to draw the whole
-                fleet again underneath the list — the same sessions in a second shape, which is
-                what made the page read as two different listings. */}
-            {openRow && (
-              <div style={{
-                display: 'flex', flexDirection: 'column', gap: 8,
-                padding: '10px 12px', borderRadius: 10,
-                border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-              }}>
-                <button
-                  onClick={() => setOpenRow(null)}
-                  style={{
-                    alignSelf: 'flex-start', minHeight: 32, padding: '4px 10px', borderRadius: 7,
-                    border: '1px solid var(--border-subtle)', background: 'transparent',
-                    color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 11.5,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {pt ? 'Fechar' : 'Close'}
-                </button>
-                <MachineFleetPanel open machineId={picked} lang={pt ? 'pt' : 'en'} onlyRow={openRow} hideHeader />
-              </div>
-            )}
-          </>
-        )
-        : (
-          <Note text={list.blocked.length > 0
-            ? (pt
-              ? 'Nenhuma máquina desta central está permitindo gerenciar sessões daqui agora.'
-              : 'No machine on this central is currently allowing session management from here.')
-            : (pt
-              ? 'Nenhuma máquina para gerenciar ainda.'
-              : 'No machines to manage yet.')} />
-        )}
 
       {/* The ones that cannot be reached, each with the reason — never silently absent. */}
       {list.blocked.length > 0 && (
