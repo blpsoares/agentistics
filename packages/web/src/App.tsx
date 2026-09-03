@@ -79,6 +79,8 @@ import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
 import { ToggleSwitch } from './components/ToggleSwitch'
 import { fleetFilterOptions } from './lib/fleetFilter'
+import { CentralSessions } from './components/sessions/CentralSessions'
+import { setFleetSourceCentral } from './lib/fleet'
 
 // Team session state
 interface TeamSessionState {
@@ -687,7 +689,7 @@ function MobileBottomNav({
     badge?: string
   }
   // The switch's badge, from the SHARED fleet poll (see lib/fleet.ts) — no extra request.
-  const { fleet: mobileFleet } = useFleet(lang === 'pt' ? 'pt' : 'en', !isCentral)
+  const { fleet: mobileFleet } = useFleet(lang === 'pt' ? 'pt' : 'en')
   const attention = mobileFleet.attention
 
   const navTiles: Tile[] = [
@@ -1026,7 +1028,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
   // for the moment you are looking at the dashboard and a session starts needing you. `useFleet`
   // shares one poll across every consumer, so this costs no extra request. Never on a central: it
   // aggregates many machines and hosts none of their sessions.
-  const { fleet, loading: fleetLoading, unsupported: fleetUnsupported, stale: fleetStale } = useFleet(pt ? 'pt' : 'en', !isCentral)
+  const { fleet, loading: fleetLoading, unsupported: fleetUnsupported, stale: fleetStale } = useFleet(pt ? 'pt' : 'en')
   const attention = fleet.attention
   const mode = modeOfPath(location.pathname)
   // A resize in progress. Only used to suspend the collapse animation — see the aside's `transition`.
@@ -1077,6 +1079,10 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
           is withheld: a 64px rail cannot show a session's title, and a list of unlabelled dots is a
           list nobody can read. The rail keeps the switch, which is how you get back. */}
       {mode === 'sessions' && !collapsed ? (
+        <>
+        {/* On a central the workspace is ABOUT a machine, so the choice sits above the list it
+            governs. Absent on a machine, which is its own. */}
+        {isCentral && <div style={{ padding: '0 2px 8px' }}><CentralSessions lang={pt ? 'pt' : 'en'} /></div>}
         <SessionsAside
           lang={pt ? 'pt' : 'en'}
           rows={fleet.rows}
@@ -1087,7 +1093,9 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
           activeOnly={sessionsActiveOnly}
           {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
           stale={fleetStale}
+          {...(isCentral ? { hideNew: true } : {})}
         />
+        </>
       ) : (
       <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 5, overflowY: 'auto', overflowX: 'hidden', flex: 1, paddingTop: 4 }}>
         {items.map(item => {
@@ -1492,7 +1500,10 @@ export default function AppLayout() {
    * subscription `SideNav` already holds.
    */
   const { sessionId: selectedSessionId } = useParams()
-  const { fleet: headerFleet, act: headerFleetAct } = useFleet(lang === 'pt' ? 'pt' : 'en', !isCentral)
+  // A CENTRAL's fleet is the RELAY's, for the machine the aside's picker chose. Set once, here,
+  // because the poller is module-scoped and every surface reads the same snapshot.
+  useEffect(() => { setFleetSourceCentral(isCentral) }, [isCentral])
+  const { fleet: headerFleet, act: headerFleetAct } = useFleet(lang === 'pt' ? 'pt' : 'en')
   /**
    * What the SESSIONS filter bar may offer — derived from the FLEET, never from the dashboard's
    * metrics. The two are different universes: the metrics knew six harnesses on this machine while
