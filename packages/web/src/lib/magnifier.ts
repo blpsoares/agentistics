@@ -35,9 +35,9 @@ export function pageKey(pathname: string): string {
  * What the lens actually SHOWS is its content box — `box-sizing: border-box` makes that
  * `width - 2*borderWidth` by `height - 2*borderWidth`, not the frame's own size — so that is
  * the size that gets divided by the zoom. Getting this wrong offsets the magnified image by
- * exactly `borderWidth` px (the difference between the frame's centre and its content box's
- * centre), which is always safe here (`LENS_MIN_PX` 60, `BORDER_MAX_PX` 12: the interior is
- * never zero or negative). The region stays centred on the FRAME's centre regardless.
+ * exactly `borderWidth` px (because the translation in stageTransform only lands the region
+ * at the content box when the region size is derived from the interior, not the frame).
+ * The region stays centred on the FRAME's centre regardless.
  */
 export function sourceRect(lens: LensStyle & { x: number; y: number }): Rect {
   const width = (lens.width - 2 * lens.borderWidth) / lens.zoom

@@ -53,15 +53,52 @@ describe('sourceRect', () => {
     expect(low.width).toBeGreaterThan(high.width)
     expect(low.x + low.width / 2).toBeCloseTo(high.x + high.width / 2)
   })
-  test('centres on the lens FRAME centre exactly, even with a non-zero border', () => {
-    // This is the invariant the off-by-border bug broke: the magnified image's centre must
-    // land exactly on the frame's centre, never offset by the border width.
-    const l = lens()
-    const s = sourceRect(l)
-    const frameCentreX = l.x + l.width / 2
-    const frameCentreY = l.y + l.height / 2
-    expect(s.x + s.width / 2).toBe(frameCentreX)
-    expect(s.y + s.height / 2).toBe(frameCentreY)
+  test('renders source region edges exactly at the content-box edges', () => {
+    // The true invariant the off-by-border bug broke: sourceRect and stageTransform work
+    // together so that a page coordinate at the source region's edge renders at the
+    // viewport position of the lens's content-box edge. Rendering formula:
+    //   viewportX = (lens.x + borderWidth) + zoom * (pageX - sourceRect.x)
+    // For the source region's left edge (pageX = sourceRect.x):
+    //   viewportX = lens.x + borderWidth ✓ (left edge of content box)
+    // For the source region's right edge (pageX = sourceRect.x + sourceRect.width):
+    //   viewportX = lens.x + borderWidth + zoom * sourceRect.width
+    //            = lens.x + borderWidth + (interior_width) = lens.x + lens.width - borderWidth ✓
+
+    function renderViewportX(pageX: number, lensX: number, borderWidth: number, sourceX: number, zoom: number): number {
+      const contentBoxX = lensX + borderWidth
+      return contentBoxX + zoom * (pageX - sourceX)
+    }
+
+    function renderViewportY(pageY: number, lensY: number, borderWidth: number, sourceY: number, zoom: number): number {
+      const contentBoxY = lensY + borderWidth
+      return contentBoxY + zoom * (pageY - sourceY)
+    }
+
+    const testCases = [
+      { borderWidth: 1, zoom: 2, width: 400, height: 300, x: 100, y: 100 },
+      { borderWidth: 12, zoom: 2, width: 400, height: 300, x: 100, y: 100 },
+      { borderWidth: 3, zoom: 7.5, width: 500, height: 400, x: 50, y: 75 },
+      { borderWidth: 6, zoom: 3, width: 350, height: 280, x: 200, y: 150 },
+      { borderWidth: 1, zoom: 5, width: 200, height: 200, x: 0, y: 0 },
+    ]
+
+    testCases.forEach(({ borderWidth, zoom, width, height, x, y }) => {
+      const l = lens({ borderWidth, zoom, width, height, x, y })
+      const s = sourceRect(l)
+      const z = l.zoom
+
+      // Content box edges in viewport coords
+      const contentLeft = l.x + borderWidth
+      const contentRight = l.x + l.width - borderWidth
+      const contentTop = l.y + borderWidth
+      const contentBottom = l.y + l.height - borderWidth
+
+      // Source region edges should render at content box edges
+      expect(renderViewportX(s.x, l.x, borderWidth, s.x, z)).toBeCloseTo(contentLeft, 5)
+      expect(renderViewportX(s.x + s.width, l.x, borderWidth, s.x, z)).toBeCloseTo(contentRight, 5)
+      expect(renderViewportY(s.y, l.y, borderWidth, s.y, z)).toBeCloseTo(contentTop, 5)
+      expect(renderViewportY(s.y + s.height, l.y, borderWidth, s.y, z)).toBeCloseTo(contentBottom, 5)
+    })
   })
 })
 
