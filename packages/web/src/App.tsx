@@ -37,6 +37,7 @@ import { ModelBreakdown } from './components/ModelBreakdown'
 import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
 import { NotificationToasts } from './components/NotificationToasts'
+import { MagnifierLayer } from './components/a11y/MagnifierLayer'
 import { NotificationBell } from './components/NotificationBell'
 import { HardwareModal } from './components/HardwareModal'
 import { useNotificationStream } from './hooks/useNotificationStream'
@@ -3472,6 +3473,9 @@ export default function AppLayout() {
 
       {/* Global notification toasts (auto-dismiss with an exit animation; history in the bell) */}
       <NotificationToasts lang={lang} />
+
+      {/* Accessibility magnifiers — a portal appended to document.body, outside #root. */}
+      <MagnifierLayer ctx={appCtx} />
 
       {/* Mounted once, at the ROOT: stepUpFetch opens this whenever the server demands re-auth,
           and every page can trigger that. It used to live inside SideNav — desktop-only chrome —
