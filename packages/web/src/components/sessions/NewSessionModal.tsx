@@ -99,12 +99,43 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  /**
+   * Wait for the row to exist before handing the caller its id.
+   *
+   * The spawn returns as soon as tmux has the session; the workspace learns about it from a poll
+   * that runs every five seconds. Navigating to `/sessions/<id>` in between lands on a row the page
+   * does not have, and it renders "this session is no longer in this machine's list" — a sentence
+   * about a session created one second earlier, which is exactly the "criou como inativa" report.
+   *
+   * Bounded, and it never blocks the outcome: the session IS started either way, so when the budget
+   * runs out we navigate anyway and let the next poll settle it. Failing to confirm is not a reason
+   * to withhold a session that exists.
+   */
+  async function waitForRow(id: string, budgetMs = 6000): Promise<void> {
+    const deadline = Date.now() + budgetMs
+    while (Date.now() < deadline) {
+      try {
+        const r = await fetch(`/api/fleet?lang=${lang}`)
+        if (r.ok) {
+          const f = await r.json() as { rows?: { id?: string }[] }
+          if (f.rows?.some(x => x.id === id)) return
+        }
+      } catch { /* the poll that matters is the workspace's; this one is a courtesy */ }
+      await new Promise(res => setTimeout(res, 400))
+    }
+  }
+
   async function start() {
     if (!canStart) return
     setBusy(true)
     setNotice(null)
     try {
-      const res = await fetch(`/api/fleet/spawn?lang=${lang}`, {
+      // `/api/fleet/new`, never `/api/fleet/spawn`: the same body, but read by the pure
+      // `fleet-spawn.ts`, which REFUSES rather than repairs — a relative cwd, an effort outside the
+      // CLI's own enum, a model asked of a harness with no model flag. A spawn is the most powerful
+      // thing this server does, and there is no reason for the browser to reach the unvalidated
+      // twin of a validated route.
+      const res = await fetch(`/api/fleet/new?lang=${lang}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -118,8 +149,14 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
         }),
       })
       const json = await res.json() as { ok: boolean; message: string; id?: string }
+      if (json.ok) {
+        // Still `busy` — the button keeps saying it is working, because it is.
+        if (json.id) await waitForRow(json.id)
+        setBusy(false)
+        onStarted(json.id)
+        return
+      }
       setBusy(false)
-      if (json.ok) { onStarted(json.id); return }
       setNotice(json.message)
     } catch {
       setBusy(false)

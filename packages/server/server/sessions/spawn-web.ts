@@ -93,29 +93,6 @@ export async function webTasks(host: StartHost): Promise<string[]> {
  * back as a sentence rather than as a session that starts and immediately dies with a usage error
  * on a screen nobody sees.
  */
-export async function spawnFromWeb(
-  host: StartHost,
-  lang: CliLang,
-  req: SpawnWebRequest,
-): Promise<SpawnWebResult> {
-  const s = controlStrings(lang)
-  if (!host.spawnSession) return { ok: false, message: s.sessionsNoHost }
-
-  const out = await host.spawnSession({
-    harness: req.harness,
-    cwd: req.cwd,
-    // Always detached. A browser has no terminal to hand over, and the request type carries no
-    // `attach` field precisely so this cannot be set from outside.
-    attach: false,
-    ...(req.task ? { task: req.task } : {}),
-    ...(req.prompt ? { prompt: req.prompt } : {}),
-    ...(req.model ? { model: req.model } : {}),
-    ...(req.effort ? { effort: req.effort } : {}),
-    ...(req.label ? { label: req.label } : {}),
-  })
-
-  return { ok: out.ok, message: out.message, ...(out.id ? { id: out.id } : {}) }
-}
 
 /** Reopen everything the machine took at once. Recomputed by the host, never from a snapshot. */
 export async function reopenFellFromWeb(
