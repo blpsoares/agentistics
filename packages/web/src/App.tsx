@@ -2610,8 +2610,14 @@ export default function AppLayout() {
        this sits in exactly `<main>`'s content box; without it the strip's own padding leaves the two
        a few pixels apart at every width. */
     <div style={{
-      width: '100%', maxWidth: PAGE_MAX_WIDTH, margin: '0 auto',
-      padding: `0 ${PAGE_INSET}px`, boxSizing: 'border-box',
+      // FULL WIDTH, not the body's 1400px box. Centring the strip's content in that box left ~550px
+      // of dead bar on each side of a 2500px screen, with the title adrift in the middle and the
+      // actions nowhere near the edge they belong to — reported as "should be space-between".
+      // The body keeps its box; the BAR is chrome and runs edge to edge, the way a fixed header
+      // does everywhere else. The left inset still matches `PAGE_INSET`, so the title starts on the
+      // same vertical line the content below it does — that is the alignment worth keeping, and it
+      // is the left edge, which is the one the eye follows down the page.
+      width: '100%', padding: `0 ${PAGE_INSET}px`, boxSizing: 'border-box',
       display: 'flex', alignItems: 'center', gap: 10, minWidth: 0,
     }}>
       {selectedFleetSession && (
@@ -2704,8 +2710,9 @@ export default function AppLayout() {
    */
   const dashboardTopBar = (!inSessionsWorkspace && !isMobile && !isCustomPage) ? (
     <div style={{
-      width: '100%', maxWidth: PAGE_MAX_WIDTH, margin: '0 auto',
-      padding: `0 ${PAGE_INSET}px`, boxSizing: 'border-box',
+      // Full width, for the reason the sessions strip records: a bar centred in the body's box
+      // leaves dead chrome at both ends and pulls the action cluster off the edge it belongs to.
+      width: '100%', padding: `0 ${PAGE_INSET}px`, boxSizing: 'border-box',
       display: 'flex', alignItems: 'center', gap: 14, minWidth: 0,
     }}>
       {/* THE FILTERS give up width FIRST. The cluster to their right is how you act on the page

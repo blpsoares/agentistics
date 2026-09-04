@@ -83,11 +83,13 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
           It used to be inset by 20px, which left the collapse toggle floating twenty pixels short
           of the edge it controls with nothing around it. Now it ends ON that edge. */}
       <div style={{
-        width: asideWidth, boxSizing: 'border-box', height: '100%',
-        borderRight: '1px solid var(--border)',
-        padding: collapsed ? '0 6px' : '0 12px',
-        display: 'flex', alignItems: 'center', gap: collapsed ? 2 : 6, minWidth: 0,
-        justifyContent: collapsed ? 'center' : 'flex-start',
+        width: collapsed ? 'auto' : asideWidth, boxSizing: 'border-box', height: '100%',
+        // NO RIGHT BORDER. It continued the aside's own rule upward, which made the strip read as
+        // two components stacked side by side rather than one bar — reported exactly that way.
+        // The strip is one surface; the aside's edge starts below it.
+        padding: '0 12px',
+        display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
+        justifyContent: 'flex-start',
       }}>
         {/* The mark shows in BOTH states. A collapsed sidebar is still the product's left edge, and
             an earlier pass hid it there — leaving the app with no identity anywhere on screen. */}
@@ -99,16 +101,24 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
              derived from it. Collapsed, this column is 64px wide and shared with the toggle, so the
              mark stays small there: one that fills the height and pushes the toggle out of its own
              rail has traded one misplacement for another. */
+          /* FULL HEIGHT IN BOTH STATES. Collapsed it used to shrink to 24px, because this column
+             was pinned to the rail's 64px and had to share it with the toggle — so folding the
+             sidebar cost the product its mark. The column is no longer pinned when collapsed
+             (`width: auto`), so the mark keeps its size and the toggle simply sits beside it, which
+             is where the user asked for it: to the right of the logo, still in the fixed strip. */
           style={{
-            height: collapsed ? 24 : Math.max(0, height - 8), width: 'auto',
+            height: Math.max(0, height - 8), width: 'auto',
             maxWidth: '100%', objectFit: 'contain',
-            flexShrink: 1, minWidth: 0, marginRight: collapsed ? 0 : 'auto',
+            flexShrink: 0, minWidth: 0,
           }}
         />
         {/* Collapsed, the rail holds the mark and the toggle and nothing else: three controls in
             64px is three cramped controls. Search is one keystroke away (Ctrl+K) and one click away
             once the sidebar is open. */}
-        {onSearch && !collapsed && (
+        {/* Kept in BOTH states now: the column is no longer pinned to the 64px rail, so there is
+            room for it, and hiding a control on one of two layouts is a control people stop
+            looking for. */}
+        {onSearch && (
           <button
             onClick={onSearch}
             aria-label={pt ? 'Buscar' : 'Search'}
@@ -122,7 +132,7 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
           onClick={onToggleSidebar}
           aria-label={collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}
           title={`${collapsed ? (pt ? 'Mostrar barra lateral' : 'Show sidebar') : (pt ? 'Ocultar barra lateral' : 'Hide sidebar')}  ·  Ctrl+B`}
-          style={{ ...iconBtn, width: collapsed ? 28 : 30, height: collapsed ? 28 : 30 }}
+          style={{ ...iconBtn, width: 30, height: 30 }}
           onMouseEnter={hover(true)} onMouseLeave={hover(false)}
         >
           <PanelLeft size={16} />

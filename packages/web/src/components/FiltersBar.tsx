@@ -307,7 +307,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
     <>
         {/* Handle row (shown only when ≥1 filter is active): a desktop-only collapse toggle for the
             chip rows + a "Clear all" button that removes every applied dimension filter. */}
-        {activeFilterCount > 0 && (
+        {activeFilterCount > 0 && !inline && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: compact ? '2px 12px 0' : '0' }}>
             {!compact && (
               <button
@@ -346,16 +346,26 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             row that slides in/out INDEPENDENTLY, so adding a second filter type animates the new
             line too (not just the first). Rows are always mounted; their grid-rows toggle.
             Wrapped in a grid-rows collapse driven by chipsCollapsed (desktop only). */}
-        <div style={{ display: 'grid', gridTemplateRows: (!compact && chipsCollapsed) ? '0fr' : '1fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1)' }}>
-        <div style={{ overflow: 'hidden', minHeight: 0 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', padding: compact ? '0 12px' : 0 }}>
+        {/* INLINE the three wrappers collapse into one horizontal strip. The grid-rows animation
+            they exist for animates HEIGHT, and a 44px bar has no second line to grow into — nested
+            vertical boxes there would leave the chips stacked inside a row that cannot show them.
+            It scrolls rather than wrapping, and it SHRINKS before anything else in the bar: the
+            chips are the one thing here that is fully repeated elsewhere (the + Filter badge counts
+            them, its popover lists them all), so they are what the bar can afford to lose first. */}
+        <div style={inline
+          ? { display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, flexShrink: 1, overflowX: 'auto', overflowY: 'hidden' }
+          : { display: 'grid', gridTemplateRows: (!compact && chipsCollapsed) ? '0fr' : '1fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+        <div style={inline ? { display: 'contents' } : { overflow: 'hidden', minHeight: 0 }}>
+        <div style={inline
+          ? { display: 'contents' }
+          : { display: 'flex', flexDirection: 'column', padding: compact ? '0 12px' : 0 }}>
           {/* The fleet's own dimension. It is a CHIP like every other now — Task 8 moved the
               control into the + Filter menu, so this row is how a reader sees it is on and how
               they turn it off without reopening the menu. Kept in the relocated block rather than
               at its old call site: the block moved wholesale when the bar gained its inline mode,
               and a second copy of one row is a second place for it to drift. */}
-          <AnimatedRow show={Boolean(onActiveOnlyChange && activeOnly)}>
-            <ChipRow label={lang === 'pt' ? 'Sessões' : 'Sessions'}>
+          <AnimatedRow inline={inline} show={Boolean(onActiveOnlyChange && activeOnly)}>
+            <ChipRow inline={inline} label={lang === 'pt' ? 'Sessões' : 'Sessions'}>
               <FilterChip
                 title={lang === 'pt' ? 'Só ativas' : 'Active only'}
                 onRemove={() => onActiveOnlyChange?.(false)}
@@ -368,8 +378,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               </FilterChip>
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow show={(filters.users?.length ?? 0) > 0}>
-            <ChipRow label={lang === 'pt' ? 'Membros' : 'Members'}>
+          <AnimatedRow inline={inline} show={(filters.users?.length ?? 0) > 0}>
+            <ChipRow inline={inline} label={lang === 'pt' ? 'Membros' : 'Members'}>
               {(filters.users ?? []).map(u => (
                 <FilterChip key={`u:${u}`} title={u} onRemove={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })} removeTitle={lang === 'pt' ? 'Remover membro' : 'Remove member'}>
                   <Users size={10} style={{ flexShrink: 0 }} />
@@ -378,8 +388,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               ))}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow show={(filters.teams?.length ?? 0) > 0}>
-            <ChipRow label={lang === 'pt' ? 'Times' : 'Teams'}>
+          <AnimatedRow inline={inline} show={(filters.teams?.length ?? 0) > 0}>
+            <ChipRow inline={inline} label={lang === 'pt' ? 'Times' : 'Teams'}>
               {(filters.teams ?? []).map(teamId => {
                 const team = teams?.find(t => t.id === teamId)
                 const label = team?.name ?? teamId
@@ -392,8 +402,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               })}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow show={(filters.machines?.length ?? 0) > 0}>
-            <ChipRow label={lang === 'pt' ? 'Máquinas' : 'Machines'}>
+          <AnimatedRow inline={inline} show={(filters.machines?.length ?? 0) > 0}>
+            <ChipRow inline={inline} label={lang === 'pt' ? 'Máquinas' : 'Machines'}>
               {(filters.machines ?? []).map(machineId => {
                 const machine = machines?.find(m => m.id === machineId)
                 const label = machine?.name ?? machineId
@@ -406,8 +416,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               })}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow show={hasProjects}>
-            <ChipRow label={lang === 'pt' ? 'Projetos' : 'Projects'}>
+          <AnimatedRow inline={inline} show={hasProjects}>
+            <ChipRow inline={inline} label={lang === 'pt' ? 'Projetos' : 'Projects'}>
               {filters.projects.map(path => (
                 <FilterChip key={`p:${path}`} title={path} onRemove={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })} removeTitle={lang === 'pt' ? 'Remover projeto' : 'Remove project'}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatProjectName(path)}</span>
@@ -415,8 +425,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               ))}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow show={hasRepoFilter}>
-            <ChipRow label={lang === 'pt' ? 'Repositórios' : 'Repos'}>
+          <AnimatedRow inline={inline} show={hasRepoFilter}>
+            <ChipRow inline={inline} label={lang === 'pt' ? 'Repositórios' : 'Repos'}>
               {selectedRepos.map(v => (
                 <FilterChip key={`r:${v}`} title={v || undefined} onRemove={() => onChange({ ...filters, repos: selectedRepos.filter(x => x !== v) })} removeTitle={lang === 'pt' ? 'Remover repositório' : 'Remove repository'}>
                   <GitBranch size={10} style={{ flexShrink: 0 }} />
@@ -425,8 +435,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               ))}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow show={hasTagFilter}>
-            <ChipRow label={lang === 'pt' ? 'Tags' : 'Tags'}>
+          <AnimatedRow inline={inline} show={hasTagFilter}>
+            <ChipRow inline={inline} label={lang === 'pt' ? 'Tags' : 'Tags'}>
               {selectedTags.map(id => {
                 const t = tagOptions.find(x => x._id === id)
                 const label = t?.name ?? id
@@ -439,8 +449,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               })}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow show={(filters.harnesses?.length ?? 0) > 0}>
-            <ChipRow label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}>
+          <AnimatedRow inline={inline} show={(filters.harnesses?.length ?? 0) > 0}>
+            <ChipRow inline={inline} label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}>
               {(filters.harnesses ?? []).map(h => {
                 const color = HARNESS_COLORS[h]
                 return (
@@ -461,8 +471,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               })}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow show={hasModelFilter}>
-            <ChipRow label={lang === 'pt' ? 'Modelos' : 'Models'}>
+          <AnimatedRow inline={inline} show={hasModelFilter}>
+            <ChipRow inline={inline} label={lang === 'pt' ? 'Modelos' : 'Models'}>
               {selectedModels.map(m => (
                 <FilterChip key={`m:${m}`} title={m} onRemove={() => onChange({ ...filters, models: selectedModels.filter(x => x !== m) })} removeTitle={lang === 'pt' ? 'Remover modelo' : 'Remove model'}>
                   <Cpu size={10} style={{ flexShrink: 0 }} />
@@ -471,8 +481,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               ))}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow show={filters.presence !== undefined}>
-            <ChipRow label={lang === 'pt' ? 'Presença' : 'Presence'}>
+          <AnimatedRow inline={inline} show={filters.presence !== undefined}>
+            <ChipRow inline={inline} label={lang === 'pt' ? 'Presença' : 'Presence'}>
               {filters.presence !== undefined && (() => {
                 const online = filters.presence === 'online'
                 const color = online ? '#22c55e' : '#ef4444'
@@ -634,6 +644,13 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             <span>{lang === 'pt' ? 'Criar tag' : 'Create tag'}</span>
           </button>
         )}
+
+        {/* THE ACTIVE FILTERS, in the bar. Inline there is no band beneath to hang the chip rows
+            from, so they ride here — after the button that adds them and before the controls that
+            act on the page. `flexShrink` and the strip's own `overflowX` make them the first thing
+            to give up width, which is right: the badge still counts them and the popover still
+            names every dimension, so what is lost first is the only part that is said twice. */}
+        {inline && activeFilterCount > 0 && activeFilterChips}
 
         {/* Cost basis — API ⇄ Plan.
             It sits here, with the filters, because that is where people look for "change what I am
@@ -810,13 +827,9 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
                   onClick={() => setOpenPicker('models')}
                 />
               )}
-              {/* The chip rows' inline home. There is no band under the bar to hang them from, so
-                  they hang from the button whose badge already counts them. */}
-              {inline && activeFilterCount > 0 && (
-                <div style={{ borderTop: '1px solid var(--border)', marginTop: 6, paddingTop: 6, minWidth: 240 }}>
-                  {activeFilterChips}
-                </div>
-              )}
+              {/* The popover no longer holds the chips: they are in the BAR now, beside this
+                  button, because a filter you have to open a menu to see is a filter you cannot
+                  see. What stays here is the menu of dimensions to ADD. */}
             </div>
           )}
 
@@ -1257,6 +1270,10 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
       </div>
 
       {/* Inline mode renders these inside the `+ Filtro` popover instead — see `activeFilterChips`. */}
+      {/* Below the bar when there is a band to hang them from; INSIDE the bar when there is not.
+          They were only in the + Filter popover, so a reader could see that one filter was on
+          (the badge counts) without seeing WHICH — reported as "the active filters are not shown
+          any more", and the chip rows exist precisely to answer that at a glance. */}
       {!inline && activeFilterChips}
 
 
@@ -1279,7 +1296,10 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
 
 /** A row that slides open/closed on its own (grid-rows 0fr↔1fr) so each filter category
  *  animates in/out independently. Always mounted; only its height animates. */
-function AnimatedRow({ show, children }: { show: boolean; children: React.ReactNode }) {
+function AnimatedRow({ show, children, inline = false }: { show: boolean; children: React.ReactNode; inline?: boolean }) {
+  // The grid-rows collapse animates HEIGHT, which is meaningless on a single-line strip and leaves
+  // a zero-height box in the flex row. Inline, a hidden row is simply absent.
+  if (inline) return show ? <>{children}</> : null
   return (
     <div style={{ display: 'grid', gridTemplateRows: show ? '1fr' : '0fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1)' }}>
       <div style={{ overflow: 'hidden', minHeight: 0 }}>
@@ -1290,7 +1310,13 @@ function AnimatedRow({ show, children }: { show: boolean; children: React.ReactN
 }
 
 /** One labeled row of active-filter chips (e.g. "Projetos: [a] [b]"). */
-function ChipRow({ label, children }: { label: string; children: React.ReactNode }) {
+function ChipRow({ label, children, inline = false }: { label: string; children: React.ReactNode; inline?: boolean }) {
+  // INLINE the row loses its label and stops wrapping. In a 44px strip there is no second line to
+  // wrap onto, and the dimension's name is already carried by the chip's own icon — a 62px label
+  // column per row would spend most of the width naming things the chips repeat.
+  if (inline) {
+    return <>{children}</>
+  }
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
       <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, paddingTop: 4, minWidth: 62, flexShrink: 0 }}>{label}</span>
