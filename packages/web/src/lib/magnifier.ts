@@ -61,8 +61,8 @@ export function fmtZoom(zoom: number): string {
 }
 
 /**
- * The viewport region a lens magnifies: centred on the lens, shrunk by the zoom, then clamped to
- * the viewport.
+ * The viewport region a lens magnifies: shrunk by the zoom, then PANNED — not centred — so the
+ * lens can sit anywhere on screen and still reach every part of the page.
  *
  * What the lens actually SHOWS is its content box — `box-sizing: border-box` makes that
  * `width - 2*borderWidth` by `height - 2*borderWidth`, not the frame's own size — so that is
@@ -70,29 +70,55 @@ export function fmtZoom(zoom: number): string {
  * exactly `borderWidth` px (because the translation in stageTransform only lands the region
  * at the content box when the region size is derived from the interior, not the frame).
  *
- * The region is centred on the FRAME's centre only away from the page's edges. Centring alone
- * makes the outer band of the page unreachable: a lens pinned against the left edge is centred
- * at half its own width, so nothing further left is ever inside ANY source region — reported as
- * "it cuts a lot off" at a screen corner. So a region that would run past a viewport edge is
- * SHIFTED back inside instead (never resized — resizing would change the magnification the user
- * picked), and an axis where the region is itself wider than the viewport (reachable now that
- * zoom can go below 1, down to 0.55x) is centred on that axis rather than shifted to one side.
+ * Centring the region on the lens's own centre — the old rule — makes the outer band of the
+ * page unreachable: a lens pinned against the left edge is centred at half its own width, so
+ * nothing further left is ever inside ANY source region (measured ~150px at 4x, ~95px at 1.55x
+ * on the running build). `clampLens` keeps the LENS on screen but never widens the region it can
+ * show, and the old clamp on this function only ever engaged once the region itself was wider
+ * than the viewport (zoom below 1x) — it never helped at normal zoom, which is where the bug was
+ * reported.
  *
- * Trade-off, stated plainly: near an edge the lens no longer shows exactly what is beneath it —
- * it shows the nearest region that exists. That is what makes the page's corners magnifiable at
- * all, and it is how OS-level magnifiers behave. Away from every edge nothing here changes.
+ * So each axis is now a PAN, computed independently by `panAxis`: the lens's position — clamped
+ * into `[0, viewport size - lens size]`, because the cursor-following lens is not clamped by
+ * `clampLens` and can sit partly off-screen — is read as a fraction of the room the LENS has to
+ * move in, and that same fraction is applied to the room the SOURCE REGION has to move in. A
+ * lens at the left wall (fraction 0) shows the region's own left wall; a lens at the right wall
+ * (fraction 1) shows the region's right wall; everything between is a straight line. Two cases
+ * where that ratio makes no sense are centred instead: a lens as wide as (or wider than) the
+ * viewport has no room to move in, and a region wider than the viewport — reachable now that
+ * zoom can go below 1x, down to 0.55x — has no room to sit fully inside it; resizing the region
+ * to fit would change the magnification the user picked, which this function may never do.
+ *
+ * Trade-off, stated plainly: away from the exact centre of the viewport, the lens no longer
+ * shows literally what is beneath it — it shows the region reached by panning proportionally to
+ * the lens's own position. That is what makes every corner of the page reachable, and it is how
+ * OS-level magnifiers behave. The one point where the old and new rules agree exactly is a lens
+ * centred in the viewport — the position a lens is born at (`newLens`) — which is what makes
+ * this change invisible until the lens is actually moved.
  */
 export function sourceRect(lens: LensStyle & { x: number; y: number }, vp: Viewport): Rect {
   const width = (lens.width - 2 * lens.borderWidth) / lens.zoom
   const height = (lens.height - 2 * lens.borderWidth) / lens.zoom
 
-  const centredX = lens.x + lens.width / 2 - width / 2
-  const centredY = lens.y + lens.height / 2 - height / 2
-
-  const x = width > vp.width ? (vp.width - width) / 2 : Math.min(Math.max(centredX, 0), vp.width - width)
-  const y = height > vp.height ? (vp.height - height) / 2 : Math.min(Math.max(centredY, 0), vp.height - height)
+  const x = panAxis(lens.x, lens.width, width, vp.width)
+  const y = panAxis(lens.y, lens.height, height, vp.height)
 
   return { x, y, width, height }
+}
+
+/**
+ * One axis of the pan described above. `lensSize`/`vpSize` give the room the LENS has to move
+ * in (`lensRange`); `regionSize`/`vpSize` give the room the SOURCE REGION has to move in
+ * (`srcRange`). The lens's own position, clamped into its range, is read as a fraction of that
+ * range and applied to the region's range — never the raw position, which the follow-lens case
+ * can push negative or past the viewport edge.
+ */
+function panAxis(lensPos: number, lensSize: number, regionSize: number, vpSize: number): number {
+  const lensRange = vpSize - lensSize
+  const srcRange = vpSize - regionSize
+  if (lensRange <= 0 || srcRange < 0) return (vpSize - regionSize) / 2
+  const clampedLensPos = Math.min(Math.max(lensPos, 0), lensRange)
+  return (clampedLensPos / lensRange) * srcRange
 }
 
 /**

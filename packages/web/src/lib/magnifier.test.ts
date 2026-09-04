@@ -45,17 +45,26 @@ describe('pageKey', () => {
 })
 
 describe('sourceRect', () => {
-  // lens: x:100 y:100 width:400 height:300 zoom:4 borderWidth:3
+  // A lens CENTRED in the viewport: x = (1920-400)/2 = 760, y = (1080-300)/2 = 390.
   // interior (content-box) size: 400 - 2*3 = 394 wide, 300 - 2*3 = 294 tall
   // source size: 394/4 = 98.5 wide, 294/4 = 73.5 tall
-  // frame centre: (100 + 400/2, 100 + 300/2) = (300, 250)
-  // source origin: (300 - 98.5/2, 250 - 73.5/2) = (300 - 49.25, 250 - 36.75) = (250.75, 213.25)
-  test('is the region under the lens interior, shrunk by the zoom and centred on the lens', () => {
-    expect(sourceRect(lens(), VP)).toEqual({ x: 250.75, y: 213.25, width: 98.5, height: 73.5 })
+  //
+  // Agreement with the old centred rule, derived algebraically (this is the property that makes
+  // the new pan rule invisible for a freshly-created lens, which `newLens` always centres):
+  //   old:  source.x = lens.x + lens.width/2 - width/2
+  //       = (vp.width-lens.width)/2 + lens.width/2 - width/2 = (vp.width - width)/2
+  //   new:  clampedLensX = lensRange/2 (lens.x IS lensRange/2 when centred), so
+  //       source.x = (lensRange/2 / lensRange) * srcRange = srcRange/2 = (vp.width - width)/2
+  // Both reduce to the same expression, so a centred lens produces the exact old numbers:
+  //   source origin: (1920-98.5)/2, (1080-73.5)/2) = (910.75, 503.25)
+  const CENTRED = { x: 760, y: 390 }
+
+  test('agreement: a lens centred in the viewport produces exactly the region the old centred rule produced', () => {
+    expect(sourceRect(lens(CENTRED), VP)).toEqual({ x: 910.75, y: 503.25, width: 98.5, height: 73.5 })
   })
-  test('at 1.5x it is larger than at 10x, centred on the same point', () => {
-    const low = sourceRect(lens({ zoom: 1.5 }), VP)
-    const high = sourceRect(lens({ zoom: 10 }), VP)
+  test('at 1.5x it is larger than at 10x, centred on the same point (lens itself centred)', () => {
+    const low = sourceRect(lens({ ...CENTRED, zoom: 1.5 }), VP)
+    const high = sourceRect(lens({ ...CENTRED, zoom: 10 }), VP)
     expect(low.width).toBeGreaterThan(high.width)
     expect(low.x + low.width / 2).toBeCloseTo(high.x + high.width / 2)
   })
@@ -109,74 +118,66 @@ describe('sourceRect', () => {
 })
 
 describe('stageTransform', () => {
-  // Using the same sourceRect derivation above: source origin (250.75, 213.25).
+  // Using the same sourceRect derivation above (a lens centred in the viewport):
+  // source origin (910.75, 503.25).
   test('scales by the zoom and translates the source origin to zero', () => {
-    expect(stageTransform(lens(), VP)).toEqual({ scale: 4, tx: -250.75, ty: -213.25 })
+    expect(stageTransform(lens({ x: 760, y: 390 }), VP)).toEqual({ scale: 4, tx: -910.75, ty: -503.25 })
   })
 })
 
-describe('sourceRect — clamped to the viewport near an edge', () => {
-  // A wrong implementation this would still accept: one that clamps the LENS's position (or
-  // resizes the region) instead of shifting the already-computed source rect. Both alternatives
-  // are ruled out below by asserting `width`/`height` are UNCHANGED (never resized) and by using
-  // a lens whose own x/y are far from 0, so only the SOURCE region — not the lens frame — is near
-  // the edge.
+describe('sourceRect — proportional pan, so every corner of the page is reachable', () => {
+  // A wrong implementation each test below would still accept: any that RESIZES the region
+  // (ruled out by asserting `width`/`height` stay the geometric interior/zoom value) or that
+  // still centres on the lens's own centre instead of panning by its position (ruled out because
+  // the centred formula gives a different, and in the corner cases unreachable, answer).
   const vp = { width: 1200, height: 900 }
 
-  test('a lens against the LEFT edge: the region is shifted right rather than running off the page', () => {
-    // interior = (200 - 2*5) / 0.55 = 190 / 0.55 = 345.4545...; centred x = 0 + 100 - 172.727 =
-    // -72.727 (negative — exactly the unreachable-corner bug). y is untouched: this lens is far
-    // from the top/bottom edges, so the clamp must only ever touch the axis that is actually near
-    // an edge.
-    const l = lens({ x: 0, y: 400, width: 200, height: 200, borderWidth: 5, zoom: ZOOM_MIN })
+  test('left/top edge: a lens at x=0, y=0 yields source.x === 0 and source.y === 0 — the corner is reachable', () => {
+    // This is the test that would have caught the original bug: under the old centred rule this
+    // lens's region started at a NEGATIVE x (nothing to its left was ever inside any region).
+    const l = lens({ x: 0, y: 0, width: 200, height: 200, borderWidth: 5, zoom: 2 })
     const s = sourceRect(l, vp)
-    const interior = (200 - 10) / ZOOM_MIN
     expect(s.x).toBe(0)
-    expect(s.width).toBeCloseTo(interior) // never resized to avoid the shift
-    expect(s.y).toBeCloseTo(400 + 100 - interior / 2)
-    expect(s.height).toBeCloseTo(interior)
-  })
-
-  test('a lens against the TOP edge: the region is shifted down rather than running off the page', () => {
-    const l = lens({ x: 500, y: 0, width: 200, height: 200, borderWidth: 5, zoom: ZOOM_MIN })
-    const s = sourceRect(l, vp)
-    const interior = (200 - 10) / ZOOM_MIN
     expect(s.y).toBe(0)
+    const interior = (200 - 10) / 2
+    expect(s.width).toBeCloseTo(interior) // never resized
     expect(s.height).toBeCloseTo(interior)
-    expect(s.x).toBeCloseTo(500 + 100 - interior / 2)
   })
 
-  test('a lens against the RIGHT and BOTTOM edges: the region is shifted back inside on both axes', () => {
+  test('right/bottom edge: a lens at its maximum position yields source.x/y at the viewport\'s far edge', () => {
     const width = 200
     const height = 200
     const borderWidth = 5
-    const zoom = ZOOM_MIN
+    const zoom = 2
     const l = lens({ x: vp.width - width, y: vp.height - height, width, height, borderWidth, zoom })
     const s = sourceRect(l, vp)
-    const interior = (width - 2 * borderWidth) / zoom
-    expect(s.x).toBeCloseTo(vp.width - interior)
-    expect(s.y).toBeCloseTo(vp.height - interior)
-    expect(s.width).toBeCloseTo(interior) // never resized to avoid the shift
-    expect(s.height).toBeCloseTo(interior)
+    expect(s.x).toBe(vp.width - s.width)
+    expect(s.y).toBe(vp.height - s.height)
   })
 
-  test('a region wider than the viewport (reachable below 1x) is centred on that axis, not pinned to an edge', () => {
-    // interior width = (2000 - 10) / 0.55 = 3618.18..., far bigger than the 1024px viewport —
-    // this is the "resize below 1x" case the fix has to handle without ever resizing. A plain
-    // edge-clamp (`min(max(x,0), vp.width-width)`) would give a DIFFERENT, wrong answer here:
-    // `vp.width - width` (pinned hard against one side, not centred) — this is the implementation
-    // the centred branch exists to rule out, and the two diverge by roughly half the overhang, so
-    // this assertion fails against that wrong reading.
+  test('a region wider than the viewport (reachable below 1x) is centred on that axis, not resized', () => {
+    // interior width = (2000 - 10) / 0.55 = 3618.18..., far bigger than the 1024px viewport. The
+    // lens is vertically centred so the y-axis pan reduces to the old centred formula too,
+    // keeping this test's height assertion simple and focused on the width branch under test.
     const vpNarrow = { width: 1024, height: 900 }
-    const l = lens({ x: 400, y: 400, width: 2000, height: 200, borderWidth: 5, zoom: ZOOM_MIN })
+    const height = 200
+    const l = lens({ x: 400, y: (vpNarrow.height - height) / 2, width: 2000, height, borderWidth: 5, zoom: ZOOM_MIN })
     const s = sourceRect(l, vpNarrow)
     const width = (2000 - 10) / ZOOM_MIN
     expect(width).toBeGreaterThan(vpNarrow.width)
     expect(s.x).toBeCloseTo((vpNarrow.width - width) / 2)
     expect(s.width).toBeCloseTo(width) // never resized to fit
-    // height is untouched: only the width axis is wider than its viewport dimension here.
-    const heightInterior = (200 - 10) / ZOOM_MIN
-    expect(s.y).toBeCloseTo(400 + 100 - heightInterior / 2)
+    const heightInterior = (height - 10) / ZOOM_MIN
+    expect(s.y).toBeCloseTo((vpNarrow.height - heightInterior) / 2)
+  })
+
+  test('off-screen lens position (follow-lens case): a negative x still yields a source origin of 0, not negative', () => {
+    // The cursor-following lens is not clamped by `clampLens`, so its raw x can be negative; the
+    // ratio must be computed off the CLAMPED position, or this would produce a negative origin.
+    const l = lens({ x: -50, y: 300, width: 200, height: 200, borderWidth: 5, zoom: 2 })
+    const s = sourceRect(l, vp)
+    expect(s.x).toBe(0)
+    expect(s.x).toBeGreaterThanOrEqual(0)
   })
 })
 
