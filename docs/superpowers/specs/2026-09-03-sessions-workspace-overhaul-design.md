@@ -500,7 +500,8 @@ process. This phase supplies those.
 ### 5.1 What stands in the way, and why it was built that way
 
 - `MACHINE_FLEET_ROW_KEYS` is an **allowlist** of the fields a relayed row may carry. It
-  deliberately excludes `lastLines`, `chatTurns`, `approvalLines` and `dialogOptions`. An
+  deliberately excludes `lastLines`, `chatTurns`, `approvalLines` and `dialogOptions`. Of those,
+  three become crossable behind a switch; `chatTurns` does not (see 5.3). An
   allowlist rather than a spread-and-delete, so the next field added to `ControlSession` does not
   leak silently on every machine.
 - `machineActions.ts` refuses `prompt` and `approve`, and states the reason: *the dialog being
@@ -533,10 +534,17 @@ tables exactly, so adding a verb is a product decision and not a drive-by. A ref
 
 ### 5.3 The screen crosses by its own allowlist
 
-- `MACHINE_FLEET_SCREEN_KEYS` — `lastLines`, `chatTurns`, `approvalLines`, `dialogOptions` — is a
-  second explicit allowlist, and is only populated when `allowRemoteScreens` is on for that
-  connection. `machineFleet.test.ts` gains the mirror of its existing assertion: with the switch
-  off, a row carrying every one of those fields arrives with none of them.
+- `MACHINE_FLEET_SCREEN_KEYS` — `lastLines`, `approvalLines`, `dialogOptions` — is a second
+  explicit allowlist, and is only populated when `allowRemoteScreens` is on for that connection.
+  `machineFleet.test.ts` gains the mirror of its existing assertion: with the switch off, a row
+  carrying every one of those fields arrives with none of them.
+- **`chatTurns` is deliberately NOT in it, and stays uncrossable.** On-demand chat retrieval was
+  removed from the reverse channel on purpose (`GET /api/team/session-chat` is a 410), and
+  `remoteSessions.ts` records that neither switch grants it: *"the transcript stays where the 410
+  put it."* The screen is that transcript with the formatting left on, so a central holding the
+  consent can read what a session is saying — live, for as long as it watches — without being
+  handed the stored conversation. Those are different powers and only one has been agreed to.
+  Reversing the 410 is a separate decision, to be asked for by name, and is not taken here.
 - The member applies its **sharing rules first**, as it does today: a session in a withheld
   repository never becomes a row, so it never carries a screen either.
 - The relay is a question-and-answer with a timeout, one in flight per machine per kind. A screen
