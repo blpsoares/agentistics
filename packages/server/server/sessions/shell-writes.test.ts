@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { commandSegments, hasUnreadableWrite, shellWrites } from './shell-writes'
+import { commandSegments, commandSummary, hasUnreadableWrite, shellWrites } from './shell-writes'
 
 test('a plain redirection names the file', () => {
   expect(shellWrites('cat > src/a.ts')).toEqual(['src/a.ts'])
@@ -96,4 +96,22 @@ test('an absolute write is not moved by a preceding cd', () => {
 test('a RELATIVE cd is refused — it moves from a base this module does not know', () => {
   // Resolving on a guess would name a different file, which is the failure this reader avoids.
   expect(shellWrites('cd sub && cat > x.ts')).toEqual(['x.ts'])
+})
+
+test('the summary skips the cd — it says where the work happened, never what it was', () => {
+  // A session that opens nearly every command with `cd <worktree>` otherwise shows a column of
+  // identical `cd` rows.
+  expect(commandSummary('cd /repo/wt\nbun test')).toBe('bun test')
+  expect(commandSummary('cd /repo && git status')).toBe('git status')
+  expect(commandSummary('export X=1 && bun run build')).toBe('bun run build')
+})
+
+test('a command that is ONLY a cd shows the cd — that is what it did', () => {
+  // Dropping it would leave the tool call with nothing beside it, which reads as a missing detail.
+  expect(commandSummary('cd /repo/wt')).toBe('cd /repo/wt')
+})
+
+test('the summary is one line and is capped', () => {
+  expect(commandSummary('a'.repeat(500))).toHaveLength(201)
+  expect(commandSummary('echo one\necho two')).toBe('echo one')
 })

@@ -185,9 +185,32 @@ export function ArtifactsAside({
     }
     return (
       <div ref={feedRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
-        {feed.map((e, i) => <EventRow key={i} e={e} pt={pt} now={now} />)}
+        {feed.map((e, i) => (
+          <EventRow
+            key={i} e={e} pt={pt} now={now}
+            // A WROTE row is a link to the file it names. Only when that file is actually in the
+            // Files list: the feed shows every write the transcript recorded, while Files shows the
+            // ones still readable on disk, and offering to open a deleted file would be a row whose
+            // only outcome is a refusal.
+            {...(openFromFeed(e.text) ? { onOpen: () => openFromFeed(e.text)!() } : {})}
+          />
+        ))}
       </div>
     )
+  }
+
+  /**
+   * Clicking a written path in the feed takes you to the file — the Files tab, with it open.
+   *
+   * Returns null when the path is not in the list, and the row is then plain text rather than a
+   * dead link: the feed records every write the transcript saw, while Files holds the ones still
+   * readable, and a link whose only outcome is a refusal is the control-that-reads-as-broken this
+   * codebase argues against everywhere else.
+   */
+  const openFromFeed = (path: string): (() => void) | null => {
+    const hit = artifacts.find(a => a.path === path)
+    if (!hit) return null
+    return () => { setTab('files'); setOpen(hit) }
   }
 
   const fileList = (list: readonly Artifact[], emptyText: string): React.ReactNode => {
@@ -328,7 +351,7 @@ function Row({ a, pt, onOpen }: { a: Artifact; pt: boolean; onOpen: () => void }
  * three kinds that carry a path or a command — those are read character by character — and left in
  * the reading face for the two that carry prose.
  */
-function EventRow({ e, pt, now }: { e: LiveEvent; pt: boolean; now: number }) {
+function EventRow({ e, pt, now, onOpen }: { e: LiveEvent; pt: boolean; now: number; onOpen?: () => void }) {
   const meta: Record<LiveEvent['kind'], { icon: React.ReactNode; color: string; label: string }> = {
     wrote: { icon: <FileEdit size={11} />, color: 'var(--anthropic-orange)', label: pt ? 'escreveu' : 'wrote' },
     read: { icon: <Eye size={11} />, color: 'var(--text-tertiary)', label: pt ? 'leu' : 'read' },
@@ -339,11 +362,22 @@ function EventRow({ e, pt, now }: { e: LiveEvent; pt: boolean; now: number }) {
   }
   const m = meta[e.kind]
   const mono = e.kind === 'wrote' || e.kind === 'read' || e.kind === 'ran'
+  const Tag = onOpen ? 'button' : 'div'
   return (
-    <div style={{
-      display: 'flex', alignItems: 'flex-start', gap: 7, padding: '5px 8px',
-      opacity: e.live ? 1 : 0.92,
-    }}>
+    <Tag
+      {...(onOpen ? { onClick: onOpen, title: e.text } : {})}
+      style={{
+        display: 'flex', alignItems: 'flex-start', gap: 7, padding: '5px 8px',
+        opacity: e.live ? 1 : 0.92,
+        width: '100%', textAlign: 'left', border: 'none', background: 'transparent',
+        borderRadius: 7, fontFamily: 'inherit',
+        cursor: onOpen ? 'pointer' : 'default',
+      }}
+      {...(onOpen ? {
+        onMouseEnter: (ev: React.MouseEvent<HTMLElement>) => { ev.currentTarget.style.background = 'var(--bg-elevated)' },
+        onMouseLeave: (ev: React.MouseEvent<HTMLElement>) => { ev.currentTarget.style.background = 'transparent' },
+      } : {})}
+    >
       <span style={{ color: m.color, paddingTop: 2, flexShrink: 0 }}>{m.icon}</span>
       <span style={{ minWidth: 0, flex: 1 }}>
         <span style={{
@@ -363,7 +397,7 @@ function EventRow({ e, pt, now }: { e: LiveEvent; pt: boolean; now: number }) {
           fontVariantNumeric: 'tabular-nums', paddingTop: 2,
         }}>{agoLabel(e.at, now, pt)}</span>
       )}
-    </div>
+    </Tag>
   )
 }
 

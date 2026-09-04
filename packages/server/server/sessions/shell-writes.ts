@@ -144,3 +144,24 @@ export function shellWrites(command: string): string[] {
 export function hasUnreadableWrite(command: string): boolean {
   return OPAQUE.test(command)
 }
+
+/**
+ * The ONE line of a shell command worth showing.
+ *
+ * `toolDetail` used to take the command's first LINE, and a session that starts nearly every
+ * command with `cd <worktree>` then produced a feed of identical `cd` rows — reported as "um monte
+ * de CD seguido wtf". A `cd` is preparation, not the act: it says where the work happened, never
+ * what it was.
+ *
+ * So the summary is the first segment that is NOT a bare `cd`, `set` or an empty one. When a
+ * command is ONLY a `cd`, that is what it did and it is shown — a summary that dropped it would
+ * leave a tool call with nothing beside it, which reads as a missing detail rather than a change of
+ * directory.
+ */
+export function commandSummary(command: string): string {
+  const segs = commandSegments(command)
+  const meaningful = segs.find(s => !/^(cd|set|export)\s/.test(s) && !/^(cd|set)$/.test(s))
+  const pick = (meaningful ?? segs[0] ?? command.trim()).trim()
+  const line = pick.split('\n')[0]!.trim()
+  return line.length > 200 ? `${line.slice(0, 200)}…` : line
+}

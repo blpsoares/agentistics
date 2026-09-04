@@ -25,7 +25,7 @@ import { join } from 'node:path'
 import { PROJECTS_DIR } from '../config'
 import { UUID_RE } from '../git'
 import { isHumanUserEntry } from '../jsonl'
-import { hasUnreadableWrite, shellWrites } from './shell-writes'
+import { commandSummary, hasUnreadableWrite, shellWrites } from './shell-writes'
 import { classifyUserEntry, type UserEntry } from './chat-envelope'
 
 export interface ChatTurn {
@@ -359,6 +359,10 @@ function toolDetail(input: unknown): string | null {
   for (const key of ['command', 'file_path', 'path', 'pattern', 'query', 'url', 'description']) {
     const v = o[key]
     if (typeof v === 'string' && v.trim() !== '') {
+      // A SHELL command is summarised rather than truncated to its first line: a session that opens
+      // nearly every command with `cd <worktree>` otherwise shows a column of identical `cd` rows,
+      // which says where the work happened and never what it was.
+      if (key === 'command') return commandSummary(v)
       const line = v.trim().split('\n')[0]!
       return line.length > 200 ? `${line.slice(0, 200)}…` : line
     }
