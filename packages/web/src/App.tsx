@@ -2813,14 +2813,12 @@ export default function AppLayout() {
           "Connected · last sync" in the aside. */}
       {!inSessionsWorkspace && (
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-        {/* Filtered totals, immediately left of the action icons */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-          <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
-          <span style={{ opacity: 0.35 }}>·</span>
-          <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
-          <span style={{ opacity: 0.35 }}>·</span>
-          <span title={headerTokensTitle}><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(headerTokens)}</strong> tok</span>
-        </div>
+        {/* The filtered totals used to sit here, immediately left of the action icons. They are in
+            the STATS strip now, which is where they were asked to be and where they read better:
+            that strip is already the row of facts about what is on screen, and the header is where
+            you ACT on the page. It also stopped the header carrying a "5 sessions" three
+            centimetres from the strip's own "5 sessions" — two different numbers (this one is
+            filtered, that one is all-time) whose agreement was a coincidence of this machine. */}
         {data?.healthIssues && data.healthIssues.length > 0 && (
           <HealthWarnings issues={data.healthIssues} lang={lang} />
         )}
@@ -2908,6 +2906,26 @@ export default function AppLayout() {
                     border: '1px solid var(--border)', background: 'var(--bg-surface)', boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
                     fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
                   }}>
+                    {/* WHAT IS ON SCREEN, first — the totals the filters actually produced. They
+                        lead because they are the numbers that move when you touch a filter;
+                        everything after them is the standing context of the whole machine.
+
+                        The group is NAMED. Without the word this strip would carry two counts of
+                        "sessions" — this one narrowed by the filters, the one inside `fleetSince`
+                        counting every session ever recorded — and on the machine this was reported
+                        from they happened to be the same number, which is exactly the coincidence
+                        that makes an unlabelled pair impossible to tell apart later. */}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ textTransform: 'uppercase', fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, opacity: 0.75 }}>
+                        {lang === 'pt' ? 'No filtro' : 'In view'}
+                      </span>
+                      <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? (derived.totalSessions === 1 ? 'sessão' : 'sessões') : (derived.totalSessions === 1 ? 'session' : 'sessions')}</span>
+                      <span style={{ opacity: 0.35 }}>·</span>
+                      <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
+                      <span style={{ opacity: 0.35 }}>·</span>
+                      <span title={headerTokensTitle}><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(headerTokens)}</strong> tok</span>
+                    </span>
+                    {sep}
                     <span>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{fleetUpdated}</span></span>
                     {fleetSince && (<>{sep}<span style={{ color: 'var(--text-secondary)' }}>{fleetSince}</span></>)}
                     {isCentral && (<>
@@ -3259,6 +3277,20 @@ export default function AppLayout() {
                     display: 'flex', flexWrap: 'wrap', gap: 6, padding: '2px 14px 10px',
                     fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
                   }}>
+                    {/* The same "what is on screen" group the desktop strip leads with, as one
+                        chip. Parity is the point: the totals moved OUT of the desktop header into
+                        this strip, and a phone that never got them would be the one layout where
+                        the filters produce no readable total at all. */}
+                    <span style={chip}>
+                      <span style={{ textTransform: 'uppercase', fontSize: 9, fontWeight: 700, letterSpacing: 0.4, opacity: 0.75 }}>
+                        {lang === 'pt' ? 'No filtro' : 'In view'}
+                      </span>
+                      <span style={val}>{derived.totalSessions.toLocaleString()}</span>
+                      <span style={{ opacity: 0.35 }}>·</span>
+                      <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
+                      <span style={{ opacity: 0.35 }}>·</span>
+                      <span style={val}>{fmt(headerTokens)}</span> tok
+                    </span>
                     <span style={chip}>{lang === 'pt' ? 'Atualizado' : 'Updated'} <span style={val}>{fleetUpdated}</span></span>
                     {fleetSince && <span style={chip}><span style={val}>{fleetSince}</span></span>}
                     {isCentral && (<>
