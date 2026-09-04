@@ -226,6 +226,13 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
 function FollowLens({ style, scheduler }: { style: LensStyle; scheduler: MirrorScheduler }) {
   const stageRef = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  // The scheduler asks "is this on screen?" every frame via the callback registered below, but
+  // that registration effect runs once (deps [scheduler]) — a closure over `pos` there would
+  // freeze on the initial `null` and report "off screen" forever, even once the cursor moves onto
+  // the page. Mirror `Lens.tsx`'s `lensRef` pattern: keep the live value in a ref, assigned on
+  // every render, and have the callback read the ref instead of closing over `pos` directly.
+  const posRef = useRef(pos)
+  posRef.current = pos
 
   useEffect(() => {
     const move = (e: MouseEvent) => setPos({ x: e.clientX, y: e.clientY })
@@ -242,7 +249,9 @@ function FollowLens({ style, scheduler }: { style: LensStyle; scheduler: MirrorS
     const stage = stageRef.current
     if (!stage) return
     const host = createMirrorHost(stage)
-    scheduler.register('__follow__', host, () => true)
+    // Off screen (no pointer on the page yet, or the pointer just left the window) means this
+    // mirror must not compete for a sync slot — see mirrorSchedule.ts's off-screen filter.
+    scheduler.register('__follow__', host, () => posRef.current !== null)
     host.syncNow()
     return () => { scheduler.unregister('__follow__'); host.destroy() }
   }, [scheduler])
