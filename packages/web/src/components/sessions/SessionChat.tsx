@@ -38,8 +38,10 @@ import { useTerminalStream } from '../../hooks/useTerminalStream'
 import { isImagePath } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
 import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
+import { sessionScratch, type CachedChat } from '../../lib/sessionScratch'
+import { composerMaxHeight } from '../../lib/composerHeight'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
-import { dictationLocale, dictationSupport } from '../../lib/dictation'
+import { appendDictation, dictatedText, dictationError, dictationLocale, dictationSupport, insecureAlternative } from '../../lib/dictation'
 import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
 
 interface ChatPayload {
@@ -60,8 +62,8 @@ export interface SessionChatProps {
 /** Matches the fleet poll. The transcript only changes when a turn lands, so faster buys nothing. */
 const CHAT_POLL_MS = 3000
 
-/** How tall the composer's field may grow before it scrolls internally instead. */
-const TEXTAREA_MAX_HEIGHT = 140
+// How tall the composer's field may grow is `composerHeight.ts` — a share of the viewport rather
+// than a constant, because a fixed number is most of a phone and a sliver of a desktop.
 
 /**
  * How far from the bottom still counts as "at the tail", in px.
@@ -78,8 +80,44 @@ interface Attachment { name: string; path: string }
 
 export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const pt = lang === 'pt'
-  const [payload, setPayload] = useState<ChatPayload | null>(null)
-  const [draft, setDraft] = useState('')
+  /**
+   * Both of these OUTLIVE this component, in `sessionScratch` — see that module for why they get
+   * different storage.
+   *
+   * The conversation starts from the cache so returning to a session paints immediately instead of
+   * showing an empty column while a fetch that reads a local file completes. The poll below still
+   * fires on mount and replaces it, so the cache is never the answer, only the first frame.
+   *
+   * The draft starts from the person's own words. Losing typed text to a click is the one thing
+   * here that cannot be recovered from anywhere — a conversation re-fetches, a paragraph does not.
+   */
+  const [payload, setPayload] = useState<ChatPayload | null>(() => sessionScratch.readChat(session.id) as ChatPayload | null)
+  const [draft, setDraft] = useState(() => sessionScratch.readDraft(session.id))
+
+  /**
+   * Every change to the draft, PERSISTED against the session it belongs to.
+   *
+   * A `useEffect` on `[session.id, draft]` was the obvious shape and is wrong: on a switch it runs
+   * once with the NEW id and the OLD draft still in state, which writes one session's half-written
+   * prompt into another's slot. Naming the session at the moment of the edit removes that window
+   * entirely — the id and the text are read together, so they can never disagree.
+   */
+  const editDraft = useCallback((next: string | ((prev: string) => string)) => {
+    setDraft(prev => {
+      const v = typeof next === 'function' ? next(prev) : next
+      sessionScratch.writeDraft(session.id, v)
+      return v
+    })
+  }, [session.id])
+
+
+  const shownId = useRef(session.id)
+  useEffect(() => {
+    if (shownId.current === session.id) return
+    shownId.current = session.id
+    setPayload(sessionScratch.readChat(session.id) as ChatPayload | null)
+    setDraft(sessionScratch.readDraft(session.id))
+  }, [session.id])
   const [sending, setSending] = useState(false)
   /** Dictation. `recognitionRef` holds the live recogniser so a second click stops it. */
   const [listening, setListening] = useState(false)
@@ -109,26 +147,33 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       const rec = new Ctor() as unknown as {
         lang: string; continuous: boolean; interimResults: boolean
         start: () => void; stop: () => void
-        onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
+        onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
         onend: (() => void) | null
-        onerror: (() => void) | null
+        onerror: ((e: { error?: string }) => void) | null
       }
       rec.lang = dictationLocale(pt ? 'pt' : 'en')
       rec.continuous = true
       rec.interimResults = false
-      rec.onresult = e => {
-        let text = ''
-        for (let i = 0; i < e.results.length; i++) text += e.results[i]?.[0]?.transcript ?? ''
-        if (!text.trim()) return
-        // Appended with a separating space rather than replacing: somebody may have typed half a
-        // sentence before reaching for the microphone.
-        setDraft(d => (d.trim() === '' ? text.trim() : `${d.replace(/\s+$/, '')} ${text.trim()}`))
-      }
+      // Both decisions are PURE and tested (`dictation.ts`): which results this event contributed,
+      // and where they land in what is already typed. This loop used to read `e.results` from index
+      // 0 on every event while `continuous` is true — and that list is CUMULATIVE, so every event
+      // re-emitted the whole session and the draft grew "one", "one one two", "one one two one two
+      // three". `resultIndex` is the index of the first result the event changed, which is exactly
+      // what this event contributed.
+      rec.onresult = e => { editDraft(d => appendDictation(d, dictatedText(e))) }
       // Both end the same way. A recogniser that stopped on its own (a timeout, a denied
       // permission) must not leave the button lit — a control that says it is listening when it
       // is not is worse than one that never started.
       rec.onend = () => { setListening(false); recognitionRef.current = null }
-      rec.onerror = () => { setListening(false); recognitionRef.current = null }
+      rec.onerror = e => {
+        setListening(false)
+        recognitionRef.current = null
+        // The REASON reaches the screen. This handler used to discard its event, so a refused
+        // permission, an unreachable recognition service, a missing microphone and a moment of
+        // silence all looked identical: the button lit up and went out. A button that fails
+        // silently is indistinguishable from a broken one.
+        setNotice(dictationError(e?.error ?? 'unknown', pt ? 'pt' : 'en'))
+      }
       rec.start()
       recognitionRef.current = rec
       setListening(true)
@@ -168,21 +213,78 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
    * The models this harness offers, from `/api/fleet/new` — the SAME source the New session wizard
    * reads, so the two lists cannot disagree about what a harness accepts. Fetched once when the
    * picker is first opened rather than on mount: most sessions are read, not re-modelled.
+   *
+   * The LABEL is displayed and the ID is sent. `modelSwitch.ts` records what happens if that is
+   * reversed: `/model` matches the id, so "Opus 5" typed into a live session answers
+   * `Model 'Opus 5' not found` — a silent no-op the user reads as a successful switch.
+   *
+   * TWO SHAPES, because the labelled one may not be there. A server carrying `models`
+   * (`{ id, label }`) is read as such; one that only knows `modelSuggestions` (bare ids) is read
+   * as ids labelled by themselves, which is exactly today's behaviour. The web bundle can be newer
+   * than the server it is talking to — that is the same reasoning `chatEnabled` and the BSON date
+   * readers already follow — and the wrong answer here would be an EMPTY picker on a machine whose
+   * `/model` works perfectly.
    */
-  const [modelSuggestions, setModelSuggestions] = useState<string[]>([])
+  const [models, setModels] = useState<{ id: string; label: string }[]>([])
   const modelReason = useMemo(() => modelSwitchReason(row?.harness ?? '', pt ? 'pt' : 'en'), [row, pt])
   useEffect(() => {
     if (modelReason || !row?.harness) return
     let alive = true
     fetch(`/api/fleet/new?lang=${pt ? 'pt' : 'en'}`)
       .then(r => (r.ok ? r.json() : null))
-      .then((d: { harnesses?: { id: string; modelSuggestions?: string[] }[] } | null) => {
+      .then((d: {
+        harnesses?: { id: string; models?: { id: string; label: string }[]; modelSuggestions?: string[] }[]
+      } | null) => {
         if (!alive || !d?.harnesses) return
-        setModelSuggestions(d.harnesses.find(h => h.id === row.harness)?.modelSuggestions ?? [])
+        const h = d.harnesses.find(x => x.id === row.harness)
+        setModels(h?.models ?? (h?.modelSuggestions ?? []).map(id => ({ id, label: id })))
       })
       .catch(() => { /* no list, no picker — the control simply does not appear */ })
     return () => { alive = false }
   }, [row?.harness, modelReason, pt])
+
+  /**
+   * The session's skills. Fetched when the menu is FIRST opened, not on mount: most sessions are
+   * read rather than driven, and answering this walks directories on the host.
+   *
+   * `null` means "not asked yet" and is not the same as `[]`, which is a real "this harness has
+   * none" — the same distinction the fleet's own pollers keep between a failed read and an empty
+   * one. `skillsNote` carries the server's sentence when there is one.
+   */
+  const [skills, setSkills] = useState<{ name: string; description: string }[] | null>(null)
+  const [skillsNote, setSkillsNote] = useState<string | null>(null)
+  /**
+   * Narrow the skill list.
+   *
+   * A real machine here has 49 of them, in a box 180px tall — scrolling that to find one is the
+   * same as not having the list. Matching is on the NAME and the DESCRIPTION, because half of these
+   * are named for what they are (`superpowers:brainstorming`) and half for a tool
+   * (`wrangler`), and only the description tells you which is which.
+   */
+  const [skillQuery, setSkillQuery] = useState('')
+  const shownSkills = useMemo(() => {
+    const q = skillQuery.trim().toLowerCase()
+    if (q === '' || skills === null) return skills ?? []
+    return skills.filter(sk =>
+      sk.name.toLowerCase().includes(q) || sk.description.toLowerCase().includes(q))
+  }, [skills, skillQuery])
+  useEffect(() => {
+    // `session.id`, never `row?.id`: `row` is an OPTIONAL prop and its absence silently skipped the
+    // fetch, so the menu sat on "Reading…" forever and looked like a machine with no skills
+    // installed. The route takes a session id, and `session` is the required prop — there is no
+    // reason for this to depend on the other one being present.
+    if (!moreOpen || skills !== null) return
+    let alive = true
+    fetch(`/api/fleet/skills?id=${encodeURIComponent(session.id)}&lang=${pt ? 'pt' : 'en'}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { skills?: { name: string; description: string }[]; reason?: string } | null) => {
+        if (!alive) return
+        setSkills(d?.skills ?? [])
+        setSkillsNote(d?.reason ?? null)
+      })
+      .catch(() => { if (alive) setSkills([]) })
+    return () => { alive = false }
+  }, [moreOpen, skills, session.id, pt])
 
   /** Switch the model mid-conversation by TYPING the harness's own command — see modelSwitch.ts. */
   const switchModel = useCallback(async (model: string) => {
@@ -195,7 +297,23 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const [notice, setNotice] = useState<string | null>(null)
   const [atTail, setAtTail] = useState(true)
   /** Messages sent from here and not yet seen in the transcript. See the header. */
-  const [echo, setEcho] = useState<string[]>([])
+  const [echo, setEcho] = useState<string[]>(() => sessionScratch.readEchoes(session.id))
+
+  /**
+   * Every change to the echo list, persisted against the session it belongs to.
+   *
+   * Same shape as `editDraft`, and the same reason: a message that was DELIVERED and has not
+   * reached the transcript yet has no other copy anywhere. Losing it to a navigation is losing the
+   * only record that it was sent — reported as "mandei pela interface e ele simplesmente sumiu".
+   */
+  const editEcho = useCallback((next: string[] | ((prev: string[]) => string[])) => {
+    setEcho(prev => {
+      const v = typeof next === 'function' ? next(prev) : next
+      sessionScratch.writeEchoes(session.id, v)
+      return v
+    })
+  }, [session.id])
+
   /**
    * The message being replied to.
    *
@@ -212,7 +330,20 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
    * no channel a byte array could travel down — but every one of these CLIs reads a file it is
    * pointed at. The chip says the name; the message carries the path.
    */
-  const [attached, setAttached] = useState<Attachment[]>([])
+  const [attached, setAttached] = useState<Attachment[]>(() => sessionScratch.readAttachments(session.id))
+
+  /**
+   * Every change to the attachment list, persisted against the session it belongs to — the same
+   * shape and the same reason as `editDraft`. An attachment IS part of what somebody composed:
+   * restoring the words and dropping the image is a half-restore, reported as exactly that.
+   */
+  const editAttached = useCallback((next: Attachment[] | ((prev: Attachment[]) => Attachment[])) => {
+    setAttached(prev => {
+      const v = typeof next === 'function' ? next(prev) : next
+      sessionScratch.writeAttachments(session.id, v)
+      return v
+    })
+  }, [session.id])
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -220,18 +351,42 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   /** Has this conversation been placed at its end yet? Opening mid-history is disorienting. */
   const landedRef = useRef(false)
 
-  // A different session is a different conversation: forget everything local about the last one.
+  /**
+   * A different session is a different conversation — but "different" is not "unknown".
+   *
+   * This used to blank everything, INCLUDING the payload, and it ran on mount as well as on a
+   * switch: so a cached conversation was wiped one tick after it was read, and the empty column the
+   * cache exists to remove came straight back. It restores from `sessionScratch` instead, which is
+   * the single place a switch is handled now.
+   *
+   * What is genuinely per-conversation and NOT restorable still goes: the scroll position (opening
+   * mid-history is disorienting), the reply target (it names a turn in the other conversation), and
+   * the ECHOES — a message sent to one session and not yet in its transcript, which drawn under
+   * another session's name is the phantom message this product has been chasing.
+   */
   useEffect(() => {
     landedRef.current = false
-    setPayload(null)
     setAtTail(true)
-    setEcho([])
-    setAttached([])
     setReplyTo(null)
+    setEcho(sessionScratch.readEchoes(session.id))
+    setPayload(sessionScratch.readChat(session.id) as ChatPayload | null)
+    setDraft(sessionScratch.readDraft(session.id))
+    setAttached(sessionScratch.readAttachments(session.id))
   }, [session.id])
 
+  /** The ceiling, re-measured when the window changes size. */
+  const [maxComposerH, setMaxComposerH] = useState(() => composerMaxHeight(
+    typeof window === 'undefined' ? 0 : window.innerHeight,
+  ))
+  useEffect(() => {
+    const read = () => setMaxComposerH(composerMaxHeight(window.innerHeight))
+    read()
+    window.addEventListener('resize', read)
+    return () => window.removeEventListener('resize', read)
+  }, [])
+
   /**
-   * Grow the field WITH the draft, up to `TEXTAREA_MAX_HEIGHT`, then let it scroll internally.
+   * Grow the field WITH the draft, up to the ceiling, then let it scroll internally.
    *
    * `rows={1}` plus a CSS `maxHeight` alone never grows: a textarea's own height stays fixed at
    * its `rows` unless something sets it explicitly, so a multi-line draft either scrolled inside a
@@ -243,8 +398,8 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     const el = textareaRef.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT)}px`
-  }, [draft])
+    el.style.height = `${Math.min(el.scrollHeight, maxComposerH)}px`
+  }, [draft, maxComposerH])
 
   useEffect(() => {
     let alive = true
@@ -252,7 +407,10 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       try {
         const res = await fetch(`/api/fleet/chat?id=${encodeURIComponent(session.id)}&lang=${lang}`)
         if (!res.ok || !alive) return
-        setPayload(await res.json() as ChatPayload)
+        const next = await res.json() as ChatPayload
+        setPayload(next)
+        // Write through, so the NEXT visit starts where this one ended.
+        sessionScratch.writeChat(session.id, next as unknown as CachedChat)
       } catch { /* transient — keep the last conversation rather than blanking it */ }
     }
     void poll()
@@ -271,11 +429,11 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   useEffect(() => {
     if (echo.length === 0) return
     const seen = new Set(turns.filter(t => t.role === 'user').map(t => collapse(t.text)))
-    setEcho(list => {
+    editEcho(list => {
       const kept = list.filter(text => !seen.has(collapse(text)))
       return kept.length === list.length ? list : kept
     })
-  }, [turns, echo.length])
+  }, [turns, echo.length, editEcho])
 
   // A finished background-task line is `role: 'assistant'` and carries no `pending` any more, so it
   // would otherwise be taken as the assistant's last MESSAGE — and its label would be compared
@@ -388,7 +546,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
         const res = await fetch(`/api/fleet/attach?lang=${lang}`, { method: 'POST', body })
         const json = await res.json() as { ok: boolean; path?: string; name?: string; message?: string }
         if (json.ok && json.path && json.name) {
-          setAttached(a => [...a, { name: json.name!, path: json.path! }])
+          editAttached(a => [...a, { name: json.name!, path: json.path! }])
         } else {
           setNotice(json.message ?? (pt ? 'O anexo falhou.' : 'The attachment failed.'))
         }
@@ -461,9 +619,11 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     if (out.ok) {
       // Echoed straight away. It is already in the session; the transcript catches up in a poll or
       // two, and this is what makes pressing enter visibly do something.
-      setEcho(list => [...list, full])
+      editEcho(list => [...list, full])
       setDraft('')
+      sessionScratch.clearDraft(session.id)
       setAttached([])
+      sessionScratch.writeAttachments(session.id, [])
       setReplyTo(null)
       setAtTail(true)
       toTail()
@@ -561,7 +721,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
           something further up used to mean scroll down, write, scroll back — and it is a shade
           apart from the bubbles, which are `--bg-card` on `--bg-base`: at the same value it read as
           another message rather than as the place you type. */}
-      <div style={{
+      <div className="ag-composer-ground" style={{
         // `sticky` alongside `flexShrink:0` for the same reason the header above takes both — a
         // scroll-away ancestor anywhere between here and the viewport must not carry this off with
         // it, and sticky is the guarantee that holds even then.
@@ -570,6 +730,11 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
         // across the top, which read as a region of the page rather than as a control — and the
         // thing people recognise as "where I type" is a bounded field, not a strip. The FIELD
         // below carries the border now; this element only positions it.
+        //
+        // `background: transparent` is what left the conversation CUT here rather than passing
+        // under: transparent is not a ground, it is the absence of one, so a message simply ended
+        // at this element's top edge. `.ag-composer-ground` draws the blur-and-fade behind it. The
+        // FIELD keeps its own opaque surface and border — that is deliberate and recorded above.
         padding: '10px 20px 16px',
         background: 'transparent',
       }}>
@@ -657,7 +822,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                         style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                       />
                       <button
-                        onClick={() => setAttached(list => list.filter(x => x.path !== a.path))}
+                        onClick={() => editAttached(list => list.filter(x => x.path !== a.path))}
                         aria-label={pt ? `Remover ${a.name}` : `Remove ${a.name}`}
                         style={{
                           position: 'absolute', top: 2, right: 2,
@@ -681,7 +846,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                         {a.name}
                       </span>
                       <button
-                        onClick={() => setAttached(list => list.filter(x => x.path !== a.path))}
+                        onClick={() => editAttached(list => list.filter(x => x.path !== a.path))}
                         aria-label={pt ? `Remover ${a.name}` : `Remove ${a.name}`}
                         style={{
                           display: 'flex', border: 'none', background: 'transparent', padding: 0,
@@ -777,7 +942,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                 <textarea
                   ref={textareaRef}
                   value={draft}
-                  onChange={e => setDraft(e.target.value)}
+                  onChange={e => editDraft(e.target.value)}
                   onPaste={onPaste}
                   onKeyDown={e => {
                     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() }
@@ -791,9 +956,15 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     ? (pt ? 'Escreva para esta sessão…' : 'Write to this session…')
                     : (pt ? 'Indisponível para esta sessão' : 'Not available for this session')}
                   style={{
-                    flex: 1, resize: 'none', border: 'none', outline: 'none', background: 'transparent',
+                    // NO `flex: 1`. In a COLUMN container that sets `flex-basis: 0` on the HEIGHT
+                    // axis, which beats the explicit height the auto-grow effect writes — so the
+                    // field never grew past its one row however much was typed, and a prompt could
+                    // only be read two lines at a time. It was correct while the composer was a
+                    // ROW and was left behind when it became a column.
+                    width: '100%', display: 'block', boxSizing: 'border-box',
+                    resize: 'none', border: 'none', outline: 'none', background: 'transparent',
                     color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 13.5,
-                    lineHeight: 1.5, maxHeight: TEXTAREA_MAX_HEIGHT, overflowY: 'auto', padding: '6px 6px',
+                    lineHeight: 1.5, maxHeight: maxComposerH, overflowY: 'auto', padding: '6px 6px',
                   }}
                 />
 
@@ -917,13 +1088,36 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                         </span>
                       </button>
 
+                      {/* The address that WOULD work, when there is one.
+                          `localhost` is a secure context and `http://192.168.x.y:47292` is not, so
+                          a member machine's dashboard has an exact equivalent one click away —
+                          naming it is more useful than naming the rule. Only a literal IPv4 host is
+                          rewritten (see `insecureAlternative`): sending someone from a hostname to
+                          `localhost` would be a guess about which machine they are sitting at, so
+                          where there is no answer this row is simply absent. */}
+                      {dictation.state === 'insecure' && (() => {
+                        const alt = typeof window === 'undefined' ? null : insecureAlternative(window.location.href)
+                        return alt === null ? null : (
+                          <a
+                            href={alt}
+                            style={{
+                              display: 'block', padding: '4px 8px 8px 30px', fontSize: 11,
+                              lineHeight: 1.4, color: 'var(--anthropic-orange)',
+                              overflowWrap: 'anywhere', textDecoration: 'none',
+                            }}
+                          >
+                            {pt ? `Abrir em ${alt}` : `Open at ${alt}`}
+                          </a>
+                        )
+                      })()}
+
                       {/* MODEL. Same treatment: where it cannot work, the menu says why instead of
                           offering a control that answers nothing. */}
                       {modelReason ? (
                         <p style={{ margin: 0, padding: '6px 8px', fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)' }}>
                           {modelReason}
                         </p>
-                      ) : modelSuggestions.length > 0 && (
+                      ) : models.length > 0 && (
                         <>
                           <div style={{ height: 1, background: 'var(--border)', margin: '4px 2px' }} />
                           <p style={{
@@ -932,10 +1126,13 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                           }}>
                             {pt ? 'Modelo' : 'Model'}
                           </p>
-                          {modelSuggestions.map(m => (
+                          {/* The LABEL is what you read; the ID is what gets typed into the
+                              session. Where the server has no labels the two are the same string,
+                              which is what this menu showed before. */}
+                          {models.map(m => (
                             <button
-                              key={m}
-                              onClick={() => { setMoreOpen(false); void switchModel(m) }}
+                              key={m.id}
+                              onClick={() => { setMoreOpen(false); void switchModel(m.id) }}
                               style={{
                                 display: 'block', width: '100%', textAlign: 'left',
                                 minHeight: 36, padding: '6px 8px', borderRadius: 7, border: 'none',
@@ -943,12 +1140,103 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                                 fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer',
                               }}
                             >
-                              {m}
+                              {m.label}
                             </button>
                           ))}
                           <p style={{ margin: '2px 8px 4px', fontSize: 10, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
                             {pt ? 'Envia /model para a sessão.' : 'Sends /model to the session.'}
                           </p>
+                        </>
+                      )}
+
+                      {/* SKILLS. The picker INSERTS `/<name> ` into the draft and focuses the
+                          field — it does not send. Two reasons: most skills take an argument, and
+                          the composer's whole contract is that what reaches the session is what the
+                          person chose to send.
+
+                          It inherits the `prompt` action's refusals and STATES them: the session
+                          must be running, and it is refused while a DIALOG is open, because a slash
+                          command typed into a permission prompt goes into that dialog's own filter
+                          and the submit takes the highlighted option. Same rule `promptSession` and
+                          `rename` already enforce, said here rather than discovered by doing it. */}
+                      {(skills === null || skills.length > 0 || skillsNote) && (
+                        <>
+                          <div style={{ height: 1, background: 'var(--border)', margin: '4px 2px' }} />
+                          <p style={{
+                            margin: '2px 8px 4px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+                            letterSpacing: '0.06em', color: 'var(--text-tertiary)',
+                          }}>
+                            Skills
+                          </p>
+                          {/* The PERMANENT fact first. A harness that can never do this is told so,
+                              rather than being told it is not running — which is true, irrelevant,
+                              and would change to a different refusal if it started. */}
+                          {skillsNote ? (
+                            <p style={{ margin: 0, padding: '6px 8px', fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)' }}>
+                              {skillsNote}
+                            </p>
+                          ) : !canPrompt || blocked ? (
+                            <p style={{ margin: 0, padding: '6px 8px', fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)' }}>
+                              {blocked
+                                ? (pt
+                                    ? 'Esta sessão está numa pergunta. Responda primeiro — uma barra digitada aí entra no filtro do diálogo.'
+                                    : 'This session is on a question. Answer it first — a slash typed there goes into the dialog’s own filter.')
+                                : (pt
+                                    ? 'Esta sessão não está rodando, então não dá para escrever nela.'
+                                    : 'This session is not running, so there is nothing to write to.')}
+                            </p>
+                          ) : skills === null ? (
+                            <p style={{ margin: 0, padding: '6px 8px', fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                              {pt ? 'Lendo…' : 'Reading…'}
+                            </p>
+                          ) : (
+                            <>
+                              {skills.length > 6 && (
+                                <input
+                                  value={skillQuery}
+                                  onChange={e => setSkillQuery(e.target.value)}
+                                  placeholder={pt ? `Filtrar ${skills.length} skills…` : `Filter ${skills.length} skills…`}
+                                  style={{
+                                    width: '100%', boxSizing: 'border-box', margin: '2px 0 4px',
+                                    padding: '5px 8px', borderRadius: 6, fontSize: 11.5,
+                                    border: '1px solid var(--border-subtle)', background: 'var(--bg-card)',
+                                    color: 'var(--text-primary)', fontFamily: 'inherit', outline: 'none',
+                                  }}
+                                />
+                              )}
+                              <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                                {shownSkills.length === 0 && (
+                                  <p style={{ margin: 0, padding: '6px 8px', fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                                    {pt ? 'Nenhuma skill com esse nome.' : 'No skill by that name.'}
+                                  </p>
+                                )}
+                                {shownSkills.map(sk => (
+                                  <button
+                                    key={sk.name}
+                                    title={sk.description}
+                                    onClick={() => {
+                                      setMoreOpen(false)
+                                      setSkillQuery('')
+                                      editDraft(d => (d.trim() === '' ? `/${sk.name} ` : `${d.replace(/\s+$/, '')} /${sk.name} `))
+                                      textareaRef.current?.focus()
+                                    }}
+                                    style={{
+                                      display: 'block', width: '100%', textAlign: 'left',
+                                      minHeight: 36, padding: '6px 8px', borderRadius: 7, border: 'none',
+                                      background: 'transparent', color: 'var(--text-primary)',
+                                      fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer',
+                                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    /{sk.name}
+                                  </button>
+                                ))}
+                              </div>
+                              <p style={{ margin: '2px 8px 4px', fontSize: 10, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
+                                {pt ? 'Escreve no campo; não envia.' : 'Types into the field; does not send.'}
+                              </p>
+                            </>
+                          )}
                         </>
                       )}
                     </div>

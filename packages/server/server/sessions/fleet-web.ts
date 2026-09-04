@@ -25,6 +25,9 @@ import { fleetRow, type FleetActionRequest, type FleetRow } from './fleet-row'
 import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
 import { arrangeFleet, type FleetArrangement, type FleetViewRequest } from './fleet-arrange'
 import { markFleetPhase, timeFleetPhase } from './fleet-profile'
+import { readHarnessSkills, skillsReason, type HarnessSkill } from './harness-skills'
+import { artifactPathsFromTurns } from './artifact-file'
+import type { ArtifactResponse } from './artifact-web'
 
 // The REQUEST shape lives in the leaf `fleet-row.ts` so `index.ts` can name it without naming
 // this module — see the note there.
@@ -309,6 +312,49 @@ export async function readAttachTicket(
   return { argv: [...ticket.argv], detachHint: ticket.detachHint, label: ticket.label }
 }
 
+/** What the skills picker is handed for one session. */
+export interface FleetSkills {
+  skills: HarnessSkill[]
+  /**
+   * Why the list is empty — a harness with no verified command, or a row this machine cannot name.
+   * Absent when the list is genuinely just empty, which is a different fact and reads differently.
+   */
+  reason?: string
+}
+
+/**
+ * The skills for ONE session, resolved from the row's own harness and cwd.
+ *
+ * SCOPE IS CHECKED FIRST, like `readAttachTicket`: an unknown id must not be answered with a
+ * plausible list assembled from this server's own home directory. `readHarnessSkills` is given the
+ * ROW's cwd, so a project's own `.claude/skills` is the project the session is actually in.
+ *
+ * Never throws — the picker's whole job is to save typing, and it must not be the thing that takes
+ * the composer's menu down.
+ */
+export async function readFleetSkills(lang: CliLang, id: string): Promise<FleetSkills> {
+  const s = controlStrings(lang)
+  try {
+    const host = await hostFor(lang)
+    if (!host.sessions) return { skills: [], reason: s.sessionsNoHost }
+    const fleet = await host.sessions()
+    const row = fleet.sessions.find(r => r.id === id || r.conversationId === id)
+    if (!row) {
+      return {
+        skills: [],
+        reason: lang === 'pt'
+          ? 'Esta máquina não conhece essa sessão.'
+          : 'This machine does not know that session.',
+      }
+    }
+    const reason = skillsReason(row.harness, lang === 'pt' ? 'pt' : 'en')
+    if (reason) return { skills: [], reason }
+    return { skills: await readHarnessSkills(row.harness, row.cwd) }
+  } catch (e) {
+    return { skills: [], reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
 /** The questions a start EARNS, and the places it could happen — the wizard, as data. */
 export interface FleetNewOptions {
   /**
@@ -430,4 +476,53 @@ export async function runFleetSpawn(
 
   const out = await host.spawnSession(decision.plan)
   return { ok: out.ok, message: out.message, ...(out.id ? { id: out.id } : {}) }
+}
+
+/**
+ * Read one artifact of ONE session.
+ *
+ * SCOPE IS CHECKED FIRST, exactly as `readAttachTicket` checks it: an unknown id must not be
+ * answered with a file assembled from anything this server happens to have. And the ALLOWLIST is
+ * REBUILT here from the session's own transcript — the browser's list is not sent and would not be
+ * believed if it were. A client asking for a path is asking a question; the answer comes from what
+ * the session actually did on this machine.
+ *
+ * A row with NO `cwd` is refused in its own sentence rather than passed on with an empty one. The
+ * containment gate is the whole second half of the rule, and a session whose folder was never
+ * recorded gives it nothing to contain against — handing `''` down would resolve to an
+ * `unreadable`, whose sentence ("it may have been moved or deleted") describes something else
+ * entirely.
+ */
+export async function readFleetArtifact(
+  lang: CliLang,
+  id: string,
+  path: string,
+): Promise<ArtifactResponse> {
+  const host = await hostFor(lang)
+  if (!host.sessions) return { ok: false, message: controlStrings(lang).sessionsNoHost }
+
+  const fleet = await host.sessions()
+  const row = fleet.sessions.find(r => r.id === id || r.conversationId === id)
+  if (!row) {
+    return {
+      ok: false,
+      message: lang === 'pt'
+        ? 'Essa sessão não está na lista desta máquina.'
+        : 'That session is not in this machine’s list.',
+    }
+  }
+  if (!row.cwd) {
+    return {
+      ok: false,
+      message: lang === 'pt'
+        ? 'Esta sessão não tem uma pasta registrada, então não há contra o que resolver um caminho.'
+        : 'This session has no recorded folder, so there is nothing to resolve a path against.',
+    }
+  }
+
+  const { readSessionChat } = await import('./chat-web')
+  const chat = await readSessionChat(host, lang, row.id)
+  const allowed = artifactPathsFromTurns(chat.turns)
+  const { readArtifact } = await import('./artifact-web')
+  return await readArtifact(lang, row.cwd, allowed, path)
 }
