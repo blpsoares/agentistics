@@ -253,10 +253,29 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
    */
   const [skills, setSkills] = useState<{ name: string; description: string }[] | null>(null)
   const [skillsNote, setSkillsNote] = useState<string | null>(null)
+  /**
+   * Narrow the skill list.
+   *
+   * A real machine here has 49 of them, in a box 180px tall — scrolling that to find one is the
+   * same as not having the list. Matching is on the NAME and the DESCRIPTION, because half of these
+   * are named for what they are (`superpowers:brainstorming`) and half for a tool
+   * (`wrangler`), and only the description tells you which is which.
+   */
+  const [skillQuery, setSkillQuery] = useState('')
+  const shownSkills = useMemo(() => {
+    const q = skillQuery.trim().toLowerCase()
+    if (q === '' || skills === null) return skills ?? []
+    return skills.filter(sk =>
+      sk.name.toLowerCase().includes(q) || sk.description.toLowerCase().includes(q))
+  }, [skills, skillQuery])
   useEffect(() => {
-    if (!moreOpen || skills !== null || !row?.id) return
+    // `session.id`, never `row?.id`: `row` is an OPTIONAL prop and its absence silently skipped the
+    // fetch, so the menu sat on "Reading…" forever and looked like a machine with no skills
+    // installed. The route takes a session id, and `session` is the required prop — there is no
+    // reason for this to depend on the other one being present.
+    if (!moreOpen || skills !== null) return
     let alive = true
-    fetch(`/api/fleet/skills?id=${encodeURIComponent(row.id)}&lang=${pt ? 'pt' : 'en'}`)
+    fetch(`/api/fleet/skills?id=${encodeURIComponent(session.id)}&lang=${pt ? 'pt' : 'en'}`)
       .then(r => (r.ok ? r.json() : null))
       .then((d: { skills?: { name: string; description: string }[]; reason?: string } | null) => {
         if (!alive) return
@@ -265,7 +284,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       })
       .catch(() => { if (alive) setSkills([]) })
     return () => { alive = false }
-  }, [moreOpen, skills, row?.id, pt])
+  }, [moreOpen, skills, session.id, pt])
 
   /** Switch the model mid-conversation by TYPING the harness's own command — see modelSwitch.ts. */
   const switchModel = useCallback(async (model: string) => {
@@ -1157,13 +1176,32 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                             </p>
                           ) : (
                             <>
-                              <div style={{ maxHeight: 180, overflowY: 'auto' }}>
-                                {skills.map(sk => (
+                              {skills.length > 6 && (
+                                <input
+                                  value={skillQuery}
+                                  onChange={e => setSkillQuery(e.target.value)}
+                                  placeholder={pt ? `Filtrar ${skills.length} skills…` : `Filter ${skills.length} skills…`}
+                                  style={{
+                                    width: '100%', boxSizing: 'border-box', margin: '2px 0 4px',
+                                    padding: '5px 8px', borderRadius: 6, fontSize: 11.5,
+                                    border: '1px solid var(--border-subtle)', background: 'var(--bg-card)',
+                                    color: 'var(--text-primary)', fontFamily: 'inherit', outline: 'none',
+                                  }}
+                                />
+                              )}
+                              <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                                {shownSkills.length === 0 && (
+                                  <p style={{ margin: 0, padding: '6px 8px', fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                                    {pt ? 'Nenhuma skill com esse nome.' : 'No skill by that name.'}
+                                  </p>
+                                )}
+                                {shownSkills.map(sk => (
                                   <button
                                     key={sk.name}
                                     title={sk.description}
                                     onClick={() => {
                                       setMoreOpen(false)
+                                      setSkillQuery('')
                                       editDraft(d => (d.trim() === '' ? `/${sk.name} ` : `${d.replace(/\s+$/, '')} /${sk.name} `))
                                       textareaRef.current?.focus()
                                     }}
