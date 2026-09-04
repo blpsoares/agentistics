@@ -91,6 +91,30 @@ export function stepReady(step: StepId, draft: WizardDraft, harness: WizardHarne
   }
 }
 
+/**
+ * How a chosen model is SHOWN: the name the harness's own CLI prints, and its id only when that is
+ * a different string.
+ *
+ * Two surfaces ask this — the picker and the review — and they must answer identically, or the
+ * same choice reads as two things one step apart. `opus` and `Opus 5` are one model under two
+ * names: the name is what a person recognises, the id is what the CLI reports back and what a
+ * `/model` typed into the live session has to match, so both are worth showing. Where the harness
+ * publishes no name, `harnessModels.ts` sets `label` to the id itself and the id is dropped rather
+ * than printed twice.
+ *
+ * `null` for an unset model: that is the assistant's default, which is a sentence, not a value.
+ */
+export function modelDisplay(
+  models: { id: string; label: string }[],
+  id: string,
+): { label: string; id: string | null } | null {
+  if (id === '') return null
+  // An id the list does not carry is still a legitimate choice — every one of these CLIs accepts a
+  // full model name — so it is shown as itself rather than dropped.
+  const label = models.find(m => m.id === id)?.label ?? id
+  return { label, id: label === id ? null : id }
+}
+
 export function nextStep(step: StepId): StepId {
   const i = STEP_ORDER.indexOf(step)
   return STEP_ORDER[Math.min(i + 1, STEP_ORDER.length - 1)]!

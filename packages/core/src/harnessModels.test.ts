@@ -26,10 +26,20 @@ describe('HARNESS_MODELS', () => {
     }
   })
 
+  it("prints agy's names exactly as `agy models` does, capitalised suffix included", () => {
+    // `agy models` prints `gemini-3.8-flash-high\tGemini 3.8 Flash (High)`. An earlier pass
+    // lower-cased the suffix, which is a name the harness never shows.
+    expect(modelLabel('antigravity', 'gemini-3.8-flash-high')).toBe('Gemini 3.8 Flash (High)')
+    expect(modelLabel('antigravity', 'gemini-3.1-pro-low')).toBe('Gemini 3.1 Pro (Low)')
+    expect(modelsFor('antigravity')).toHaveLength(14)
+  })
+
   it('has no entry for a harness whose CLI publishes no list', () => {
-    // Measured 2026-09-02 and recorded in spawn-spec.ts: codex and gemini name nothing.
+    // Re-measured 2026-09-04 against codex-cli 0.113.0, gemini 0.55.1 and kimi 0.38.0: none of
+    // the three names a model anywhere in its own output. See the comments beside each entry.
     expect(modelsFor('codex')).toEqual([])
     expect(modelsFor('gemini')).toEqual([])
+    expect(modelsFor('kimi')).toEqual([])
   })
 
   it('falls back to the id when a label is unknown, never to an invented name', () => {

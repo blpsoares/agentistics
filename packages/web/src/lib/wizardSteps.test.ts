@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  STEP_ORDER, clearForHarness, nextStep, prevStep, stepReady, visibleQuestions,
+  STEP_ORDER, clearForHarness, modelDisplay, nextStep, prevStep, stepReady, visibleQuestions,
   type WizardDraft,
 } from './wizardSteps'
 
@@ -69,6 +69,22 @@ describe('visibleQuestions', () => {
   })
   it('asks nothing extra when there is no harness yet', () => {
     expect(visibleQuestions(null)).toEqual({ model: false, effort: false })
+  })
+})
+
+describe('modelDisplay', () => {
+  const models = [{ id: 'opus', label: 'Opus 5' }, { id: 'auto', label: 'auto' }]
+  it('shows the name the harness prints, with the id beside it', () => {
+    expect(modelDisplay(models, 'opus')).toEqual({ label: 'Opus 5', id: 'opus' })
+  })
+  it('drops the id when the harness publishes no name for it', () => {
+    expect(modelDisplay(models, 'auto')).toEqual({ label: 'auto', id: null })
+  })
+  it('shows an unlisted id as itself, never as an invented name', () => {
+    expect(modelDisplay(models, 'claude-opus-5-20260101')).toEqual({ label: 'claude-opus-5-20260101', id: null })
+  })
+  it('says nothing at all for an unset model — that is a sentence, not a value', () => {
+    expect(modelDisplay(models, '')).toBeNull()
   })
 })
 

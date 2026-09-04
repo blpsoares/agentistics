@@ -41,49 +41,41 @@ export interface ModelOption {
  * missing, and CLAUDE.md records five surfaces that silently lost a harness exactly that way.
  */
 export const HARNESS_MODELS: Record<HarnessId, ModelOption[]> = {
-  // VERIFIED 2026-09-02 against claude 2.1.259 by driving the CLI:
-  //   `claude --model <alias> -p ok` is accepted for all four;
-  //   `claude -p "/model <alias>"` answers `Set model to \`Fable 5.1\` | \`Opus 5\` |
-  //   \`Sonnet 5\` | \`Haiku 4.5\`` for the same four.
-  // `mythos` is deliberately ABSENT: both front doors reject it on this version.
   claude: [
-    { id: 'fable', label: 'Fable 5.1', verifiedAt: '2026-09-02', source: 'claude -p "/model fable" → Set model to `Fable 5.1`' },
-    { id: 'opus', label: 'Opus 5', verifiedAt: '2026-09-02', source: 'claude -p "/model opus" → Set model to `Opus 5`' },
-    { id: 'sonnet', label: 'Sonnet 5', verifiedAt: '2026-09-02', source: 'claude -p "/model sonnet" → Set model to `Sonnet 5`' },
-    { id: 'haiku', label: 'Haiku 4.5', verifiedAt: '2026-09-02', source: 'claude -p "/model haiku" → Set model to `Haiku 4.5`' },
+    { id: 'fable', label: 'Fable 5.1', verifiedAt: '2026-09-04', source: 'claude -p "/model fable" → Set model to `Fable 5.1` (Claude Code 2.1.261)' },
+    { id: 'opus', label: 'Opus 5', verifiedAt: '2026-09-04', source: 'claude -p "/model opus" → Set model to `Opus 5` (Claude Code 2.1.261)' },
+    { id: 'sonnet', label: 'Sonnet 5', verifiedAt: '2026-09-04', source: 'claude -p "/model sonnet" → Set model to `Sonnet 5` (Claude Code 2.1.261)' },
+    { id: 'haiku', label: 'Haiku 4.5', verifiedAt: '2026-09-04', source: 'claude -p "/model haiku" → Set model to `Haiku 4.5` (Claude Code 2.1.261)' },
   ],
-  // `codex --help` prints "-m, --model <MODEL>" with no values, and no subcommand lists any.
-  // Nothing to name honestly.
+  // `codex --help` (codex-cli 0.113.0) documents `-m, --model <MODEL>` and names no value; there is
+  // no listing subcommand. Nothing to label.
   codex: [],
-  // `gemini --help` names no models; the string is forwarded verbatim to the Google API, which is
-  // what rejects an unknown one. Nothing the CLI itself names.
+  // `gemini --help` (0.55.1) prints `-m, --model  Model  [string]` and no listing subcommand exists.
   gemini: [],
-  // Measured 2026-09-02: of copilot's three shipped ids only `auto` was accepted; the other two —
-  // and copilot's OWN help example — came back `Model "…" from --model flag is not available.`
   copilot: [
-    { id: 'auto', label: 'Auto', verifiedAt: '2026-09-02', source: "copilot --help: \"use 'auto' to let Copilot pick\"; the only id accepted when driven" },
+    { id: 'auto', label: 'Auto', verifiedAt: '2026-09-04', source: "copilot --help (1.0.82): \"use 'auto' to let Copilot pick automatically\"; the only id accepted when driven" },
   ],
-  // `agy models` is the only real listing command here, and it names the effort-suffixed ids.
-  // Printed verbatim by agy 1.1.22 on 2026-09-02, in the order it gave them — the same list
-  // `spawn-spec.ts`'s `modelSuggestions` carries, which `spawn-spec.test.ts` pins against this one.
-  // Caveat kept honest: `agy models` FETCHES, so this is a snapshot of what it answered.
+  // `agy models` prints `<id>\t<display name>`, one per line, and the names below are that second
+  // column VERBATIM — including the capitalised effort suffix, which an earlier pass lower-cased.
   antigravity: [
-    { id: 'gemini-3.8-flash-high', label: 'Gemini 3.8 Flash (high)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.8-flash-medium', label: 'Gemini 3.8 Flash (medium)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.8-flash-low', label: 'Gemini 3.8 Flash (low)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.7-flash-high', label: 'Gemini 3.7 Flash (high)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.7-flash-medium', label: 'Gemini 3.7 Flash (medium)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.7-flash-low', label: 'Gemini 3.7 Flash (low)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.6-flash-high', label: 'Gemini 3.6 Flash (high)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.6-flash-medium', label: 'Gemini 3.6 Flash (medium)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.6-flash-low', label: 'Gemini 3.6 Flash (low)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.5-flash-high', label: 'Gemini 3.5 Flash (high)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.5-flash-medium', label: 'Gemini 3.5 Flash (medium)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.5-flash-low', label: 'Gemini 3.5 Flash (low)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.1-pro-low', label: 'Gemini 3.1 Pro (low)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
-    { id: 'gemini-3.1-pro-high', label: 'Gemini 3.1 Pro (high)', verifiedAt: '2026-09-02', source: 'agy models (agy 1.1.22)' },
+    { id: 'gemini-3.8-flash-high', label: 'Gemini 3.8 Flash (High)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.8-flash-medium', label: 'Gemini 3.8 Flash (Medium)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.8-flash-low', label: 'Gemini 3.8 Flash (Low)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.7-flash-high', label: 'Gemini 3.7 Flash (High)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.7-flash-medium', label: 'Gemini 3.7 Flash (Medium)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.7-flash-low', label: 'Gemini 3.7 Flash (Low)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.6-flash-high', label: 'Gemini 3.6 Flash (High)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.6-flash-medium', label: 'Gemini 3.6 Flash (Medium)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.6-flash-low', label: 'Gemini 3.6 Flash (Low)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.5-flash-high', label: 'Gemini 3.5 Flash (High)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.5-flash-medium', label: 'Gemini 3.5 Flash (Medium)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.5-flash-low', label: 'Gemini 3.5 Flash (Low)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.1-pro-low', label: 'Gemini 3.1 Pro (Low)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
+    { id: 'gemini-3.1-pro-high', label: 'Gemini 3.1 Pro (High)', verifiedAt: '2026-09-04', source: 'agy models (agy 1.1.25)' },
   ],
-  // Kimi routes per request and its CLI publishes no list of accepted `--model` values.
+  // `kimi --help` (0.38.0) documents `-m, --model <model>` as "LLM model alias … Defaults to
+  // default_model in config.toml" — the aliases are the USER'S, configured per machine, so there is
+  // no published set to label here.
   kimi: [],
 }
 

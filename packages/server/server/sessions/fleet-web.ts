@@ -26,6 +26,7 @@ import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
 import { arrangeFleet, type FleetArrangement, type FleetViewRequest } from './fleet-arrange'
 import { markFleetPhase, timeFleetPhase } from './fleet-profile'
 import { readHarnessSkills, skillsReason, type HarnessSkill } from './harness-skills'
+import { modelsFor, type ModelOption } from '@agentistics/core'
 import { artifactPathsFromTurns } from './artifact-file'
 import type { ArtifactResponse } from './artifact-web'
 
@@ -366,6 +367,15 @@ export interface FleetNewOptions {
     label: string
     /** Suggestions to OFFER, never a validation list — see `planFleetSpawn`. */
     modelSuggestions: string[]
+    /**
+     * The same ids, each with the NAME the harness itself prints — `harnessModels.ts`, which
+     * carries the command that established every pair. Empty exactly where `modelSuggestions` is.
+     *
+     * Both fields travel because they answer different questions and one of them is on the wire
+     * already: `modelSuggestions` is what a client SENDS, `models` is what a person READS. A client
+     * on an older build keeps working off the first and simply prints ids.
+     */
+    models: ModelOption[]
     supportsModel: boolean
     /** A genuine closed enum, printed by the CLI itself. Empty means it has no effort flag. */
     efforts: string[]
@@ -402,6 +412,7 @@ export async function readNewOptions(lang: CliLang, query: string): Promise<Flee
         id: h.id,
         label: h.label,
         modelSuggestions: [...h.modelSuggestions],
+        models: modelsFor(h.id),
         supportsModel: h.supportsModel,
         efforts: [...h.efforts],
       })),
