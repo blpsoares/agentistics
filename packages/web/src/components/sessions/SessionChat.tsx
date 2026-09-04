@@ -175,17 +175,31 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
    * The models this harness offers, from `/api/fleet/new` — the SAME source the New session wizard
    * reads, so the two lists cannot disagree about what a harness accepts. Fetched once when the
    * picker is first opened rather than on mount: most sessions are read, not re-modelled.
+   *
+   * The LABEL is displayed and the ID is sent. `modelSwitch.ts` records what happens if that is
+   * reversed: `/model` matches the id, so "Opus 5" typed into a live session answers
+   * `Model 'Opus 5' not found` — a silent no-op the user reads as a successful switch.
+   *
+   * TWO SHAPES, because the labelled one may not be there. A server carrying `models`
+   * (`{ id, label }`) is read as such; one that only knows `modelSuggestions` (bare ids) is read
+   * as ids labelled by themselves, which is exactly today's behaviour. The web bundle can be newer
+   * than the server it is talking to — that is the same reasoning `chatEnabled` and the BSON date
+   * readers already follow — and the wrong answer here would be an EMPTY picker on a machine whose
+   * `/model` works perfectly.
    */
-  const [modelSuggestions, setModelSuggestions] = useState<string[]>([])
+  const [models, setModels] = useState<{ id: string; label: string }[]>([])
   const modelReason = useMemo(() => modelSwitchReason(row?.harness ?? '', pt ? 'pt' : 'en'), [row, pt])
   useEffect(() => {
     if (modelReason || !row?.harness) return
     let alive = true
     fetch(`/api/fleet/new?lang=${pt ? 'pt' : 'en'}`)
       .then(r => (r.ok ? r.json() : null))
-      .then((d: { harnesses?: { id: string; modelSuggestions?: string[] }[] } | null) => {
+      .then((d: {
+        harnesses?: { id: string; models?: { id: string; label: string }[]; modelSuggestions?: string[] }[]
+      } | null) => {
         if (!alive || !d?.harnesses) return
-        setModelSuggestions(d.harnesses.find(h => h.id === row.harness)?.modelSuggestions ?? [])
+        const h = d.harnesses.find(x => x.id === row.harness)
+        setModels(h?.models ?? (h?.modelSuggestions ?? []).map(id => ({ id, label: id })))
       })
       .catch(() => { /* no list, no picker — the control simply does not appear */ })
     return () => { alive = false }
@@ -958,7 +972,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                         <p style={{ margin: 0, padding: '6px 8px', fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)' }}>
                           {modelReason}
                         </p>
-                      ) : modelSuggestions.length > 0 && (
+                      ) : models.length > 0 && (
                         <>
                           <div style={{ height: 1, background: 'var(--border)', margin: '4px 2px' }} />
                           <p style={{
@@ -967,10 +981,13 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                           }}>
                             {pt ? 'Modelo' : 'Model'}
                           </p>
-                          {modelSuggestions.map(m => (
+                          {/* The LABEL is what you read; the ID is what gets typed into the
+                              session. Where the server has no labels the two are the same string,
+                              which is what this menu showed before. */}
+                          {models.map(m => (
                             <button
-                              key={m}
-                              onClick={() => { setMoreOpen(false); void switchModel(m) }}
+                              key={m.id}
+                              onClick={() => { setMoreOpen(false); void switchModel(m.id) }}
                               style={{
                                 display: 'block', width: '100%', textAlign: 'left',
                                 minHeight: 36, padding: '6px 8px', borderRadius: 7, border: 'none',
@@ -978,7 +995,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                                 fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer',
                               }}
                             >
-                              {m}
+                              {m.label}
                             </button>
                           ))}
                           <p style={{ margin: '2px 8px 4px', fontSize: 10, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
