@@ -11,6 +11,7 @@ import type { LensStyle } from '@agentistics/core'
 import { BORDER_MAX_PX, BORDER_MIN_PX, CORNER_MAX_PX, LENS_MIN_PX, ZOOM_MAX, ZOOM_MIN } from '@agentistics/core'
 import type { AppContext } from '../../lib/app-context'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { SIZE_SLIDER_MAX_PX, ZOOM_STEP } from '../../lib/magnifier'
 import { a11yText, type A11yText } from '../../components/a11y/i18n'
 
 function StyleEditor({
@@ -49,7 +50,7 @@ function StyleEditor({
 
       <div style={row}>
         <span style={label}>{style.shape === 'circle' ? text.diameter : text.width}</span>
-        <input type="range" min={LENS_MIN_PX} max={1200} step={10} value={style.width} style={{ flex: 1 }}
+        <input type="range" min={LENS_MIN_PX} max={SIZE_SLIDER_MAX_PX} step={10} value={style.width} style={{ flex: 1 }}
           onChange={e => {
             const w = Number(e.target.value)
             onChange({ ...style, width: w, height: style.shape === 'circle' ? w : style.height })
@@ -60,7 +61,7 @@ function StyleEditor({
       {style.shape === 'rect' && (
         <div style={row}>
           <span style={label}>{text.height}</span>
-          <input type="range" min={LENS_MIN_PX} max={1200} step={10} value={style.height} style={{ flex: 1 }}
+          <input type="range" min={LENS_MIN_PX} max={SIZE_SLIDER_MAX_PX} step={10} value={style.height} style={{ flex: 1 }}
             onChange={e => onChange({ ...style, height: Number(e.target.value) })} />
           <span style={value}>{style.height}px</span>
         </div>
@@ -68,7 +69,7 @@ function StyleEditor({
 
       <div style={row}>
         <span style={label}>{text.zoom}</span>
-        <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={0.5} value={style.zoom} style={{ flex: 1 }}
+        <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_STEP} value={style.zoom} style={{ flex: 1 }}
           onChange={e => onChange({ ...style, zoom: Number(e.target.value) })} />
         <span style={value}>{style.zoom}×</span>
       </div>
@@ -217,6 +218,11 @@ export default function AccessibilitySettings() {
         <div style={h}>{text.performance}</div>
         <div style={note}>{text.canvasCaveat}</div>
         <div style={{ ...note, marginTop: 8 }}>{text.schedulerNote}</div>
+        {a11y.mirrorIntervalMs !== null && (
+          <div style={{ ...note, marginTop: 8, color: 'var(--text-primary)', fontWeight: 600 }}>
+            {text.currentInterval(a11y.mirrorIntervalMs)}
+          </div>
+        )}
       </div>
     </div>
   )

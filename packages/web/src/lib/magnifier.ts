@@ -6,7 +6,7 @@
  * transform is decided, so the renderer cannot disagree with the geometry the keyboard edits.
  */
 import type { LensStyle, MagnifierLens } from '@agentistics/core'
-import { LENS_MAX_PX, LENS_MIN_PX, ZOOM_MAX, ZOOM_MIN } from '@agentistics/core'
+import { LENS_MAX_PX, LENS_MIN_PX, mintLensId, ZOOM_MAX, ZOOM_MIN } from '@agentistics/core'
 
 export interface Rect { x: number; y: number; width: number; height: number }
 export interface Viewport { width: number; height: number }
@@ -17,6 +17,13 @@ export const MOVE_STEP_PX = 10
 export const MOVE_FINE_PX = 1
 export const RESIZE_STEP_PX = 10
 export const ZOOM_STEP = 0.5
+/**
+ * The width/height sliders' UI ceiling — deliberately far below `LENS_MAX_PX` (2000). It is a
+ * usability choice (a lens that large eats the whole screen and the live preview with it), not a
+ * data constraint, which is why it lives here beside the other UI constants rather than in
+ * `@agentistics/core` next to the stored bound it deliberately undercuts.
+ */
+export const SIZE_SLIDER_MAX_PX = 1200
 
 /**
  * A lens belongs to one EXACT pathname. Query and hash are dropped on purpose: applying a filter
@@ -167,11 +174,9 @@ export function lensControls(innerWidthPx: number, controlPx: number, labelPx: n
 
 /** A new lens, centred in the viewport, with an id no sibling holds. */
 export function newLens(style: LensStyle, vp: Viewport, taken: Set<string>): MagnifierLens {
-  let n = 1
-  while (taken.has(`lens-${n}`)) n++
   return {
     ...style,
-    id: `lens-${n}`,
+    id: mintLensId(taken),
     x: Math.round(vp.width / 2 - style.width / 2),
     y: Math.round(vp.height / 2 - style.height / 2),
     pinned: false,

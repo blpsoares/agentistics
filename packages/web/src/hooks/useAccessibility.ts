@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import type { AccessibilityPrefs, LensStyle, MagnifierLens } from '@agentistics/core'
-import { DEFAULT_ACCESSIBILITY_PREFS, sanitizeAccessibilityPrefs } from '@agentistics/core'
+import { DEFAULT_ACCESSIBILITY_PREFS, mintLensId, sanitizeAccessibilityPrefs } from '@agentistics/core'
 import { clampLens, newLens, pageKey } from '../lib/magnifier'
 
 const SAVE_DEBOUNCE_MS = 400
@@ -28,6 +28,12 @@ export interface A11yState {
   selectedId: string | null
   followOn: boolean
   announcement: string
+  /**
+   * The mirror's current re-sync interval, in ms — published by `MagnifierLayer` (which owns the
+   * scheduler) so the settings tab's performance card can show it. `null` while the feature is off
+   * or the scheduler has not reported yet; never a stale number from a previous mount.
+   */
+  mirrorIntervalMs: number | null
   setEnabled(on: boolean): void
   setFollowStyle(style: LensStyle): void
   setNewLensDefaults(style: LensStyle): void
@@ -40,6 +46,7 @@ export interface A11yState {
   select(id: string | null): void
   toggleFollow(): void
   announce(text: string): void
+  setMirrorIntervalMs(ms: number | null): void
 }
 
 function viewport() {
@@ -55,6 +62,7 @@ export function useAccessibility(identity: string | undefined): A11yState {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [followOn, setFollowOn] = useState(false)
   const [announcement, setAnnouncement] = useState('')
+  const [mirrorIntervalMs, setMirrorIntervalMs] = useState<number | null>(null)
   const [vp, setVp] = useState(viewport)
 
   // Nothing is written before the restore has happened: an early save would persist the defaults
@@ -147,9 +155,7 @@ export function useAccessibility(identity: string | undefined): A11yState {
 
   const freeId = useCallback((existing: readonly MagnifierLens[]) => {
     const taken = new Set(existing.map(l => l.id))
-    let n = 1
-    while (taken.has(`lens-${n}`)) n++
-    return `lens-${n}`
+    return mintLensId(taken)
   }, [])
 
   return {
@@ -160,6 +166,7 @@ export function useAccessibility(identity: string | undefined): A11yState {
     selectedId,
     followOn,
     announcement,
+    mirrorIntervalMs,
     setEnabled: on => commit({ ...prefsRef.current, enabled: on }),
     setFollowStyle: style => commit({ ...prefsRef.current, followLens: style }),
     setNewLensDefaults: style => commit({ ...prefsRef.current, newLensDefaults: style }),
@@ -199,5 +206,6 @@ export function useAccessibility(identity: string | undefined): A11yState {
     select: setSelectedId,
     toggleFollow: () => setFollowOn(v => !v),
     announce: setAnnouncement,
+    setMirrorIntervalMs,
   }
 }

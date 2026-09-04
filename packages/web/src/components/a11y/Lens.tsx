@@ -10,7 +10,7 @@
 import React, { useEffect, useRef } from 'react'
 import { Pin, PinOff, Move, X, Plus, Minus } from 'lucide-react'
 import type { MagnifierLens } from '@agentistics/core'
-import { stageTransform, lensControls } from '../../lib/magnifier'
+import { stageTransform, lensControls, ZOOM_STEP } from '../../lib/magnifier'
 import { createMirrorHost, type MirrorScheduler } from '../../lib/magnifierMirror'
 import type { A11yText } from './i18n'
 
@@ -159,7 +159,7 @@ export function Lens({
             {shown.has('zoomOut') && (
               <button style={btn} aria-label={text.zoomOut}
                 onPointerDown={e => e.stopPropagation()}
-                onClick={() => onChange({ zoom: lens.zoom - 0.5 })}><Minus size={14} /></button>
+                onClick={() => onChange({ zoom: lens.zoom - ZOOM_STEP })}><Minus size={14} /></button>
             )}
             {shown.has('zoomLabel') && (
               <span style={{ color: '#fff', fontSize: 11, fontWeight: 700, minWidth: ZOOM_LABEL_PX, textAlign: 'center' }}>
@@ -169,7 +169,7 @@ export function Lens({
             {shown.has('zoomIn') && (
               <button style={btn} aria-label={text.zoomIn}
                 onPointerDown={e => e.stopPropagation()}
-                onClick={() => onChange({ zoom: lens.zoom + 0.5 })}><Plus size={14} /></button>
+                onClick={() => onChange({ zoom: lens.zoom + ZOOM_STEP })}><Plus size={14} /></button>
             )}
             {shown.has('pin') && (
               <button style={btn} aria-label={lens.pinned ? text.unpin : text.pin}

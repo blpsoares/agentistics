@@ -5,6 +5,8 @@ export interface A11yText {
   enableHelp: string
   headerTitle: string
   headerHint: string
+  /** Tap-to-open hint on touch, where a tap opens the menu instead of creating a lens. */
+  headerTitleMobile: string
   newLens: string
   lensesHere: string
   noLensesHere: string
@@ -41,12 +43,13 @@ export interface A11yText {
   performance: string
   canvasCaveat: string
   schedulerNote: string
+  currentInterval(ms: number): string
   borderIsOrange: string
   keyboardTitle: string
   keyboardHelp: string[]
   removed: string
   lensReleased: string
-  announce(name: string, zoom: number, w: number, h: number, pinned: boolean): string
+  announce(name: string, zoom: number, w: number, h: number, x: number, y: number, pinned: boolean): string
 }
 
 export function a11yText(lang: 'pt' | 'en'): A11yText {
@@ -61,6 +64,7 @@ export function a11yText(lang: 'pt' | 'en'): A11yText {
     headerHint: pt
       ? 'Clique para criar uma lupa · botão direito para o menu'
       : 'Click to create a lens · right-click for the menu',
+    headerTitleMobile: pt ? 'Toque para abrir o menu de lupas' : 'Tap to open the magnifiers menu',
     newLens: pt ? 'Nova lupa' : 'New lens',
     lensesHere: pt ? 'Lupas desta página' : 'Lenses on this page',
     noLensesHere: pt ? 'Nenhuma lupa nesta página.' : 'No lenses on this page.',
@@ -100,6 +104,10 @@ export function a11yText(lang: 'pt' | 'en'): A11yText {
     schedulerNote: pt
       ? 'O espelho ressincroniza no máximo duas lupas por quadro e recua sozinho se um ciclo custar caro demais — por isso não há limite de lupas.'
       : 'The mirror re-syncs at most two lenses per frame and backs off on its own when a cycle costs too much — which is why there is no lens limit.',
+    currentInterval: ms =>
+      pt
+        ? `Intervalo atual do espelho: ${ms} ms.`
+        : `Current mirror interval: ${ms} ms.`,
     borderIsOrange: pt
       ? 'A borda é sempre o laranja do site. A espessura e o formato são seus; a cor é do produto.'
       : 'The border is always the site orange. Thickness and shape are yours; the colour is the product’s.',
@@ -125,9 +133,9 @@ export function a11yText(lang: 'pt' | 'en'): A11yText {
         ],
     removed: pt ? 'Lupa removida.' : 'Lens removed.',
     lensReleased: pt ? 'Lupa solta.' : 'Lens released.',
-    announce: (name, zoom, w, h, pinned) =>
+    announce: (name, zoom, w, h, x, y, pinned) =>
       pt
-        ? `${name}, ampliação ${zoom} vezes, ${Math.round(w)} por ${Math.round(h)}, ${pinned ? 'fixada' : 'solta'}.`
-        : `${name}, zoom ${zoom} times, ${Math.round(w)} by ${Math.round(h)}, ${pinned ? 'pinned' : 'unpinned'}.`,
+        ? `${name}, ampliação ${zoom} vezes, ${Math.round(w)} por ${Math.round(h)}, em ${Math.round(x)} por ${Math.round(y)}, ${pinned ? 'fixada' : 'solta'}.`
+        : `${name}, zoom ${zoom} times, ${Math.round(w)} by ${Math.round(h)}, at ${Math.round(x)} by ${Math.round(y)}, ${pinned ? 'pinned' : 'unpinned'}.`,
   }
 }

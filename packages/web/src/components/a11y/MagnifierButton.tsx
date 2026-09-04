@@ -1,9 +1,15 @@
 /**
  * MagnifierButton.tsx — the header icon.
  *
- * Left click makes a lens; right click opens the general menu, which is the only way a MOUSE can
- * reach a pinned lens again (a pinned lens takes no pointer events at all — that is what pinning
- * means). There is no keyboard way in yet — that is Task 10.
+ * Desktop: left click makes a lens; right click opens the general menu, which is the only way a
+ * MOUSE can reach a pinned lens again (a pinned lens takes no pointer events at all — that is what
+ * pinning means). There is no keyboard way in yet — that is Task 10.
+ *
+ * Mobile: there is no right click. A long-press MIGHT fire `contextmenu` (Android Chrome does;
+ * iOS Safari is inconsistent and may show the system callout instead), and nothing on screen
+ * advertises that gesture — `title` never surfaces on touch. So on touch a tap opens the menu
+ * directly instead of creating a lens; "New lens" is the menu's first item, so nothing is lost,
+ * and a pinned lens (which takes no pointer events) stays reachable through the menu's own list.
  */
 import React, { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -66,10 +72,10 @@ export function MagnifierButton({ ctx }: { ctx: AppContext }) {
   return (
     <div ref={wrapRef} style={{ position: 'relative' }}>
       <button
-        onClick={() => a11y.addLens()}
+        onClick={() => (isMobile ? toggleOpen() : a11y.addLens())}
         onContextMenu={e => { e.preventDefault(); toggleOpen() }}
-        title={`${text.headerTitle} — ${text.headerHint}`}
-        aria-label={text.headerTitle}
+        title={isMobile ? text.headerTitleMobile : `${text.headerTitle} — ${text.headerHint}`}
+        aria-label={isMobile ? text.headerTitleMobile : text.headerTitle}
         aria-haspopup="dialog"
         style={{
           width: isMobile ? 44 : 32, height: isMobile ? 44 : 32,

@@ -50,6 +50,13 @@ export const LENS_MAX_PX = 2000
 export const BORDER_MIN_PX = 1
 export const BORDER_MAX_PX = 12
 export const CORNER_MAX_PX = 200
+/**
+ * A sanity ceiling on a stored `x`/`y` coordinate — not the viewport clamp, which is `clampLens`'s
+ * job in the web package. This only stops a hand-edited or corrupted `preferences.json` from
+ * carrying a coordinate so large it produces a nonsensical transform before anything on screen
+ * ever gets a chance to clamp it to the viewport.
+ */
+export const COORD_MAX_PX = 100000
 
 export const DEFAULT_LENS_STYLE: LensStyle = {
   shape: 'rect',
@@ -89,8 +96,14 @@ function sanitizeStyle(input: unknown, fallback: LensStyle): LensStyle {
   }
 }
 
-/** Deterministic, so sanitising twice yields the same ids — which is what makes it idempotent. */
-function mintLensId(taken: Set<string>): string {
+/**
+ * The next free `lens-N` id given a set of ids already in use. Deterministic, so sanitising twice
+ * yields the same ids — which is what makes it idempotent. The one mint used everywhere a lens
+ * needs an id: here, `newLens` (web `lib/magnifier.ts`) and `useAccessibility`'s `duplicateLens` —
+ * three copies of this exact loop used to exist, and this is the single source of truth for all of
+ * them.
+ */
+export function mintLensId(taken: Set<string>): string {
   let n = 1
   while (taken.has(`lens-${n}`)) n++
   return `lens-${n}`
@@ -149,8 +162,8 @@ export function sanitizeAccessibilityPrefs(input: unknown): AccessibilityPrefs {
         id,
         // Position is NOT clamped here: the viewport is a browser fact and this module runs on the
         // server too. `clampLens` in the web package does that, on every render.
-        x: num(io.x, 0, -LENS_MAX_PX, 100000),
-        y: num(io.y, 0, -LENS_MAX_PX, 100000),
+        x: num(io.x, 0, -LENS_MAX_PX, COORD_MAX_PX),
+        y: num(io.y, 0, -LENS_MAX_PX, COORD_MAX_PX),
         pinned: io.pinned === true,
       })
     }

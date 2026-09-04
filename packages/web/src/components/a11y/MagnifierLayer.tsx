@@ -49,6 +49,32 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
     return () => { s.stop(); setScheduler(null) }
   }, [active])
 
+  // `a11y` is a fresh object every render (its setters close over refs), so depending on it
+  // directly below would tear the interval down and rebuild it on every unrelated re-render —
+  // a selection change, a drag frame — instead of once a second. A ref to the latest setter keeps
+  // the effect keyed on `[active, scheduler]` alone, which only ever changes when the feature
+  // toggles or the scheduler itself is (re)created.
+  const setMirrorIntervalMsRef = useRef(a11y.setMirrorIntervalMs)
+  setMirrorIntervalMsRef.current = a11y.setMirrorIntervalMs
+
+  // Publishes the scheduler's current interval so the settings tab's performance card can show
+  // it. It changes only under load, so polling faster than once a second is wasted work; polling
+  // at all (rather than reading it once) is what makes "why do my lenses feel slower" answerable
+  // while it is actually happening. `null` — never a stale number — the moment there is no
+  // scheduler to ask.
+  useEffect(() => {
+    if (!active || !scheduler) {
+      setMirrorIntervalMsRef.current(null)
+      return
+    }
+    setMirrorIntervalMsRef.current(scheduler.currentIntervalMs())
+    const id = setInterval(() => setMirrorIntervalMsRef.current(scheduler.currentIntervalMs()), 1000)
+    return () => {
+      clearInterval(id)
+      setMirrorIntervalMsRef.current(null)
+    }
+  }, [active, scheduler])
+
   // The mirror clones `#root` at stage-local (0,0); `stageTransform` treats stage-local as
   // viewport coordinates, which only holds while the clone is offset by the current scroll (see
   // magnifierMirror.ts). One window listener, coalesced with rAF so a scroll firing many times a
@@ -112,7 +138,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
         if (!first) return
         e.preventDefault()
         a11y.select(first.id)
-        a11y.announce(text.announce(text.lensLabel(ordinal(first.id)), first.zoom, first.width, first.height, first.pinned))
+        a11y.announce(text.announce(text.lensLabel(ordinal(first.id)), first.zoom, first.width, first.height, first.x, first.y, first.pinned))
         return
       }
 
@@ -129,7 +155,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
         if (!next) return
         e.preventDefault()
         a11y.select(next.id)
-        a11y.announce(text.announce(text.lensLabel(ordinal(next.id)), next.zoom, next.width, next.height, next.pinned))
+        a11y.announce(text.announce(text.lensLabel(ordinal(next.id)), next.zoom, next.width, next.height, next.x, next.y, next.pinned))
         return
       }
 
@@ -153,7 +179,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
       }
       const next = clampLens(result, { width: window.innerWidth, height: window.innerHeight })
       a11y.updateLens(lens.id, next)
-      a11y.announce(text.announce(text.lensLabel(ordinal(next.id)), next.zoom, next.width, next.height, next.pinned))
+      a11y.announce(text.announce(text.lensLabel(ordinal(next.id)), next.zoom, next.width, next.height, next.x, next.y, next.pinned))
     }
 
     window.addEventListener('keydown', onKey)

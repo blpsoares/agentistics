@@ -5,6 +5,7 @@
 import React from 'react'
 import type { MagnifierLens } from '@agentistics/core'
 import { ZOOM_MAX, ZOOM_MIN, LENS_MIN_PX, BORDER_MIN_PX, BORDER_MAX_PX } from '@agentistics/core'
+import { SIZE_SLIDER_MAX_PX, ZOOM_STEP } from '../../lib/magnifier'
 import type { A11yText } from './i18n'
 
 interface Props {
@@ -64,7 +65,7 @@ export function LensMenu({ lens, x, y, text, isMobile, onChange, onRemove, onDup
       }}>
         <div style={row}>
           <span>{text.zoom}</span>
-          <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={0.5} value={lens.zoom}
+          <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_STEP} value={lens.zoom}
             onChange={e => onChange({ zoom: Number(e.target.value) })} style={slider} />
           <strong style={{ minWidth: 36, textAlign: 'right' }}>{lens.zoom}×</strong>
         </div>
@@ -80,13 +81,13 @@ export function LensMenu({ lens, x, y, text, isMobile, onChange, onRemove, onDup
         </div>
         <div style={row}>
           <span>{lens.shape === 'circle' ? text.diameter : text.width}</span>
-          <input type="range" min={LENS_MIN_PX} max={1200} step={10} value={lens.width}
+          <input type="range" min={LENS_MIN_PX} max={SIZE_SLIDER_MAX_PX} step={10} value={lens.width}
             onChange={e => onChange({ width: Number(e.target.value) })} style={slider} />
         </div>
         {lens.shape === 'rect' && (
           <div style={row}>
             <span>{text.height}</span>
-            <input type="range" min={LENS_MIN_PX} max={1200} step={10} value={lens.height}
+            <input type="range" min={LENS_MIN_PX} max={SIZE_SLIDER_MAX_PX} step={10} value={lens.height}
               onChange={e => onChange({ height: Number(e.target.value) })} style={slider} />
           </div>
         )}
