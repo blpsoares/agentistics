@@ -53,6 +53,11 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
   useEffect(() => {
     if (!active) return
 
+    // The announcement must never say a lens's internal id ("lens-2") — a screen reader speaks it
+    // verbatim, an English token dropped into a Portuguese sentence. `lensLabel` gives the same
+    // 1-based ordinal `Lens.tsx`'s own aria-label already uses.
+    const ordinal = (id: string) => a11y.lenses.findIndex(l => l.id === id) + 1
+
     const editable = (target: EventTarget | null): boolean => {
       const node = target as HTMLElement | null
       if (!node || typeof node.tagName !== 'string') return false
@@ -80,7 +85,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
         if (!first) return
         e.preventDefault()
         a11y.select(first.id)
-        a11y.announce(text.announce(first.id, first.zoom, first.width, first.height, first.pinned))
+        a11y.announce(text.announce(text.lensLabel(ordinal(first.id)), first.zoom, first.width, first.height, first.pinned))
         return
       }
 
@@ -97,7 +102,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
         if (!next) return
         e.preventDefault()
         a11y.select(next.id)
-        a11y.announce(text.announce(next.id, next.zoom, next.width, next.height, next.pinned))
+        a11y.announce(text.announce(text.lensLabel(ordinal(next.id)), next.zoom, next.width, next.height, next.pinned))
         return
       }
 
@@ -120,7 +125,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
       }
       const next = clampLens(result, { width: window.innerWidth, height: window.innerHeight })
       a11y.updateLens(lens.id, next)
-      a11y.announce(text.announce(next.id, next.zoom, next.width, next.height, next.pinned))
+      a11y.announce(text.announce(text.lensLabel(ordinal(next.id)), next.zoom, next.width, next.height, next.pinned))
     }
 
     window.addEventListener('keydown', onKey)

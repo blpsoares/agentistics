@@ -91,6 +91,12 @@ export function useAccessibility(): A11yState {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
+  // A selection is about one page's lenses, and lens ids are minted per page (`lens-1`, `lens-2`,
+  // …) — the same id exists on many pages, so carrying a selection across a navigation lets it
+  // land on an unrelated lens on the new page (a pinned one, revealing itself with no action by
+  // the user there). Clear it on every page change.
+  useEffect(() => { setSelectedId(null) }, [page])
+
   const commit = useCallback((next: AccessibilityPrefs) => {
     prefsRef.current = next
     setPrefs(next)

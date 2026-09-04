@@ -111,10 +111,12 @@ export function MagnifierButton({ ctx }: { ctx: AppContext }) {
             {a11y.lenses.length === 0 && (
               <div style={{ fontSize: 12, color: 'var(--text-tertiary)', padding: '0 10px 8px' }}>{text.noLensesHere}</div>
             )}
-            {a11y.lenses.map(l => (
+            {a11y.lenses.map((l, i) => (
               <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 4px' }}>
                 <span style={{ flex: 1, fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {l.id} · {l.zoom}×{l.pinned ? ` · ${text.pin}` : ''}
+                  {/* The lens's own id ("lens-2") is internal and must never reach a person — the
+                     same ordinal label MagnifierLayer's announcements and Lens.tsx's aria-label use. */}
+                  {text.lensLabel(i + 1)} · {l.zoom}×{l.pinned ? ` · ${text.pin}` : ''}
                 </span>
                 <button style={{ ...item, width: 'auto', padding: '6px 8px' }}
                   onClick={() => { a11y.select(l.id); setOpen(false) }}>{text.select}</button>
