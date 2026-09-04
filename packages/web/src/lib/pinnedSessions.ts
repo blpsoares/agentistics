@@ -51,6 +51,28 @@ export function planPinMove(current: readonly string[], from: number, to: number
   return next
 }
 
+/**
+ * PURE: which of the pinned KEYS resolve to a row right now, and to which one.
+ *
+ * Deliberately takes the row list the caller passes, and does no filtering of its own — the
+ * pinned band's whole point is that a filter, a search or "active only" must never remove a row
+ * from it, so the caller must pass the UNNARROWED fleet. A pinned row that finished while the
+ * person was away is exactly the case this exists for: `activeOnly` (on by default in the
+ * Sessions workspace) used to cut `pinnedRows` from the same already-`activeOnly`-filtered list
+ * the bands read, which silently dropped a pinned session the instant it finished — "pin it,
+ * leave, come back, it's gone" needed no reload and no id change to reproduce, only the pinned
+ * session finishing before the next look.
+ */
+export function resolvePinnedRows<T>(
+  pins: readonly string[],
+  rows: readonly T[],
+  keyOf: (row: T) => string,
+): T[] {
+  return pins
+    .map(k => rows.find(r => keyOf(r) === k))
+    .filter((r): r is T => r !== undefined)
+}
+
 function readInitial(): string[] {
   try {
     const raw = localStorage.getItem(KEY)

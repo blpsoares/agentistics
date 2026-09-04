@@ -28,8 +28,8 @@ import { NewSessionModal } from '../sessions/NewSessionModal'
 import { rowMenuEntries, type RowVerb } from '../../lib/rowMenu'
 import { SessionRowMenu } from '../sessions/SessionRowMenu'
 import {
-  MAX_PINNED, getPinnedIds, movePinnedSession, pinnedServerSnapshot, subscribePinnedSessions,
-  togglePinnedSession,
+  MAX_PINNED, getPinnedIds, movePinnedSession, pinnedServerSnapshot, resolvePinnedRows,
+  subscribePinnedSessions, togglePinnedSession,
 } from '../../lib/pinnedSessions'
 
 export interface SessionsAsideProps {
@@ -230,10 +230,13 @@ export function SessionsAside({
   )
 
   /** The pinned rows, in the order they were pinned. Their own band, above everything. */
-  const pinnedRows = useMemo(
-    () => pins.map(k => matched.find(r => pinKeyOf(r) === k)).filter((r): r is ControlSession => r !== undefined),
-    [pins, matched],
-  )
+  // Resolved from the RAW `rows`, never from `matched` — a filter, a search or "active only" must
+  // never remove a row from the pinned band (see the header comment, and `resolvePinnedRows`'s
+  // own). Reading from `matched` was the bug: it is already cut by `activeOnly` (on by default
+  // here), so a pinned session that finished while the person was away vanished from the band the
+  // moment its state left `ACTIVE_STATES` — no reload needed, just the ordinary case of a pinned
+  // session finishing.
+  const pinnedRows = useMemo(() => resolvePinnedRows(pins, rows, pinKeyOf), [pins, rows])
 
   /**
    * TWO bands — Active and Inactive.
