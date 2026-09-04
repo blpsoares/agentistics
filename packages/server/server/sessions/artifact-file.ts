@@ -57,3 +57,30 @@ export function planArtifactRead({ path, cwd, allowed }: ArtifactReadRequest): A
   if (!withinDirectory(path, cwd)) return { ok: false, reason: 'outside-cwd' }
   return { ok: true, path }
 }
+
+/**
+ * The tools whose `detail` is a file path — the same set the browser selects by.
+ *
+ * Stated twice on purpose, and the two must agree: the browser's `sessionArtifacts.ts` also needs
+ * names, kinds and counts, while the ALLOWLIST needs only the paths. This is the copy that guards
+ * the disk, so it selects by the same tool NAMES and never by the shape of `detail` — `toolDetail`
+ * reads `command` first, and a `Bash` line is not a path.
+ */
+export const ARTIFACT_TOOL_NAMES = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'] as const
+
+/** PURE: just the paths, for the server's allowlist. */
+export function artifactPathsFromTurns(
+  turns: readonly { tools?: { name: string; detail?: string }[] }[],
+): string[] {
+  const out = new Set<string>()
+  for (const t of turns) {
+    for (const call of t?.tools ?? []) {
+      if (!(ARTIFACT_TOOL_NAMES as readonly string[]).includes(call.name)) continue
+      const p = call.detail?.trim()
+      // A truncated detail (`toolDetail` ellipsises past 200 chars) names no file. Admitting one
+      // would put a path into the allowlist that resolves to nothing — or, worse, to something else.
+      if (p && !p.endsWith('…')) out.add(p)
+    }
+  }
+  return [...out]
+}

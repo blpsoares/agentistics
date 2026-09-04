@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { planArtifactRead } from './artifact-file'
+import { artifactPathsFromTurns, planArtifactRead } from './artifact-file'
 
 const cwd = '/home/u/proj'
 const allowed = ['/home/u/proj/docs/spec.md', '/home/u/proj/src/a.ts']
@@ -46,5 +46,36 @@ describe('planArtifactRead', () => {
     expect(planArtifactRead({ path: '/etc/passwd', cwd, allowed }).ok).toBe(false)
     expect(planArtifactRead({ path: '/etc/passwd', cwd, allowed }))
       .toEqual({ ok: false, reason: 'not-touched' })
+  })
+})
+
+describe('artifactPathsFromTurns', () => {
+  const turn = (tools: { name: string; detail?: string }[]) => ({ tools })
+
+  it('collects the paths of the file tools, deduped', () => {
+    expect(artifactPathsFromTurns([
+      turn([{ name: 'Write', detail: '/p/a.ts' }]),
+      turn([{ name: 'Edit', detail: '/p/a.ts' }, { name: 'MultiEdit', detail: '/p/b.ts' }]),
+      turn([{ name: 'NotebookEdit', detail: '/p/n.ipynb' }]),
+    ])).toEqual(['/p/a.ts', '/p/b.ts', '/p/n.ipynb'])
+  })
+
+  it('NEVER takes a Bash command for a path — this is the copy that guards the disk', () => {
+    expect(artifactPathsFromTurns([turn([{ name: 'Bash', detail: 'rm -rf build/' }])])).toEqual([])
+  })
+
+  it('excludes Read, exactly as the browser does', () => {
+    expect(artifactPathsFromTurns([turn([{ name: 'Read', detail: '/p/secret.env' }])])).toEqual([])
+  })
+
+  it('ignores a truncated detail — an ellipsised path names no file', () => {
+    const detail = `${`/home/u/${'x'.repeat(210)}.ts`.slice(0, 200)}…`
+    expect(artifactPathsFromTurns([turn([{ name: 'Write', detail }])])).toEqual([])
+  })
+
+  it('ignores a call with no detail, and never throws on an empty conversation', () => {
+    expect(artifactPathsFromTurns([turn([{ name: 'Write' }])])).toEqual([])
+    expect(artifactPathsFromTurns([])).toEqual([])
+    expect(artifactPathsFromTurns([{} as never])).toEqual([])
   })
 })
