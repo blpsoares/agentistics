@@ -8,6 +8,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { AppContext } from '../../lib/app-context'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { applyLensKey, clampLens } from '../../lib/magnifier'
 import { startMirrorScheduler, type MirrorScheduler } from '../../lib/magnifierMirror'
 import { a11yText } from './i18n'
 import { Lens } from './Lens'
@@ -47,14 +48,93 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
     return () => { s.stop(); setScheduler(null) }
   }, [active])
 
+  // One global keydown while the feature is on. Every guard here exists so the feature cannot take
+  // the dashboard's own keyboard: a chord that is not ours falls through untouched.
+  useEffect(() => {
+    if (!active) return
+
+    const editable = (target: EventTarget | null): boolean => {
+      const node = target as HTMLElement | null
+      if (!node || typeof node.tagName !== 'string') return false
+      const tag = node.tagName.toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
+      if (node.isContentEditable) return true
+      // The session terminal takes every key it can get.
+      return typeof node.closest === 'function' && node.closest('.xterm') !== null
+    }
+
+    const onKey = (e: KeyboardEvent) => {
+      // Ctrl+Shift+Z is the browser's redo. Inside a field it stays the browser's.
+      if (e.ctrlKey && e.shiftKey && (e.key === 'Z' || e.key === 'z')) {
+        if (editable(e.target)) return
+        e.preventDefault()
+        a11y.toggleFollow()
+        return
+      }
+
+      // Ctrl+Shift+M — enter keyboard control with no mouse. Without it, "full keyboard control"
+      // would still need an opening click.
+      if (e.ctrlKey && e.shiftKey && (e.key === 'M' || e.key === 'm')) {
+        if (editable(e.target) || a11y.lenses.length === 0) return
+        const first = a11y.lenses[0]
+        if (!first) return
+        e.preventDefault()
+        a11y.select(first.id)
+        a11y.announce(text.announce(first.id, first.zoom, first.width, first.height, first.pinned))
+        return
+      }
+
+      if (!a11y.selectedId || editable(e.target)) return
+
+      // Tab is intercepted ONLY while a lens is selected; Esc gives it back. A permanently
+      // hijacked Tab would make the dashboard unusable by keyboard, which is the opposite of what
+      // this feature is for. Pinned lenses ARE included: keyboard is how they are reached.
+      if (e.key === 'Tab') {
+        const idx = a11y.lenses.findIndex(l => l.id === a11y.selectedId)
+        if (idx < 0) return
+        const n = a11y.lenses.length
+        const next = a11y.lenses[(idx + (e.shiftKey ? -1 : 1) + n) % n]
+        if (!next) return
+        e.preventDefault()
+        a11y.select(next.id)
+        a11y.announce(text.announce(next.id, next.zoom, next.width, next.height, next.pinned))
+        return
+      }
+
+      const lens = a11y.lenses.find(l => l.id === a11y.selectedId)
+      if (!lens) return
+      const result = applyLensKey(lens, e.key, {
+        shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey,
+      })
+      if (result === null) return
+      e.preventDefault()
+
+      if (result === 'remove') {
+        a11y.removeLens(lens.id)
+        a11y.announce(text.removed)
+        return
+      }
+      if (result === 'deselect') {
+        a11y.select(null)
+        return
+      }
+      const next = clampLens(result, { width: window.innerWidth, height: window.innerHeight })
+      a11y.updateLens(lens.id, next)
+      a11y.announce(text.announce(next.id, next.zoom, next.width, next.height, next.pinned))
+    }
+
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [active, a11y, text])
+
   if (!active || !container || !scheduler) return null
 
   return createPortal(
     <>
       {/*
-        Nothing calls `a11y.announce(...)` yet — this live region is wired and ready, but the
-        keyboard task (Task 10) is what will actually drive it. Read this as a prepared wire,
-        not a dropped one.
+        Driven by the keydown effect above: every keyboard edit, pin, removal and selection change
+        announces here, so a screen-reader user gets the same feedback a sighted one reads off the
+        lens frame.
       */}
       <div
         role="status"
