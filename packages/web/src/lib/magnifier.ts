@@ -8,6 +8,14 @@
 import type { LensStyle, MagnifierLens } from '@agentistics/core'
 import { LENS_MAX_PX, LENS_MIN_PX, mintLensId, ZOOM_MAX, ZOOM_MIN } from '@agentistics/core'
 
+/**
+ * The DOM id of the magnifier layer's portal container (`MagnifierLayer.tsx`), a sibling of
+ * `#root`. Lives here, not in either component file, so `Lens.tsx`'s `elementBehindLens` can name
+ * the exact container to hide hit-testing on without importing `MagnifierLayer.tsx` and creating a
+ * cycle (`MagnifierLayer` already imports `Lens`).
+ */
+export const MAGNIFIER_LAYER_ID = 'ag-magnifiers'
+
 export interface Rect { x: number; y: number; width: number; height: number }
 export interface Viewport { width: number; height: number }
 export interface KeyMods { shift: boolean; alt: boolean; ctrl: boolean; meta: boolean }

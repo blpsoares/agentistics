@@ -22,12 +22,18 @@
  * closes a worse bug than "reading only": a pinned lens used to be `pointerEvents: 'none'` on the
  * whole frame, so a click "passed through" to whatever was PHYSICALLY under the cursor — not the
  * element the user sees magnified at that spot. Forwarding by coordinate replaces that silent
- * mis-click with the correct one.
+ * mis-click with the correct one. Finding that element (`elementBehindLens`) has to look past the
+ * WHOLE magnifier layer, not just this viewport — see there for why.
+ *
+ * RIGHT CLICK is the one exception, and it is unconditional: left click, wheel and hover go to the
+ * PAGE the lens is showing, right click goes to the LENS (`onContextMenu`, wired regardless of pin
+ * state) — it is the only door left into a pinned lens's own menu, which is where Fixar/Desfixar
+ * and Remover live.
  */
 import React, { useEffect, useRef } from 'react'
 import { Pin, PinOff, Move, X, Plus, Minus, Sliders } from 'lucide-react'
 import type { MagnifierLens } from '@agentistics/core'
-import { stageTransform, lensControls, lensPointToPage, fmtZoom, ZOOM_STEP } from '../../lib/magnifier'
+import { stageTransform, lensControls, lensPointToPage, fmtZoom, ZOOM_STEP, MAGNIFIER_LAYER_ID } from '../../lib/magnifier'
 import { createMirrorHost, type MirrorScheduler } from '../../lib/magnifierMirror'
 import type { A11yText } from './i18n'
 
@@ -159,20 +165,34 @@ export function Lens({
   const endDrag = () => { drag.current = null }
 
   /**
-   * `document.elementFromPoint` returns the TOPMOST element at that point — which is this very
-   * lens frame, since the lens paints over the page it magnifies. Hiding our own frame's
-   * `pointerEvents` for the duration of the lookup reveals whatever the lens is actually showing
-   * there, then the style is restored immediately. Delete this and every forwarded interaction
-   * hits the lens's own border/background instead of the magnified element — including a lens
-   * re-entering itself.
+   * `document.elementFromPoint` returns the TOPMOST element at that point — which, without help,
+   * is some part of the magnifier layer itself, since it paints over the page it magnifies. Hiding
+   * only THIS lens's own viewport (`frameRef`) is not enough: the layer's WRAPPER (the `fixed`
+   * element `frameRef` sits inside) is `pointerEvents: 'auto'` too, and so is every other lens's
+   * wrapper — with lenses stacked, hiding just the top one hands the click to the one beneath it
+   * instead of the page. So this hides hit-testing on every element child of the layer container
+   * (`#ag-magnifiers`: the lens wrappers, the follow lens, the live region) for the duration of the
+   * lookup, then restores each one EXACTLY as it was — an element with no inline `pointerEvents`
+   * goes back to `''`, never to `'none'`. The restore runs in a `finally` so a throw mid-lookup
+   * cannot leave the whole layer permanently click-through, silently and totally. Delete this and
+   * every forwarded interaction hits the magnifier layer instead of the magnified element —
+   * including a lens re-entering itself or one lens shadowing another.
    */
   const elementBehindLens = (viewportX: number, viewportY: number): Element | null => {
-    const frame = frameRef.current
-    const prev = frame?.style.pointerEvents
-    if (frame) frame.style.pointerEvents = 'none'
-    const el = document.elementFromPoint(viewportX, viewportY)
-    if (frame) frame.style.pointerEvents = prev ?? ''
-    return el
+    const container = document.getElementById(MAGNIFIER_LAYER_ID)
+    const restore: Array<{ el: HTMLElement; prev: string }> = []
+    try {
+      if (container) {
+        for (const child of Array.from(container.children)) {
+          const el = child as HTMLElement
+          restore.push({ el, prev: el.style.pointerEvents })
+          el.style.pointerEvents = 'none'
+        }
+      }
+      return document.elementFromPoint(viewportX, viewportY)
+    } finally {
+      for (const { el, prev } of restore) el.style.pointerEvents = prev
+    }
   }
 
   const forwardPoint = (clientX: number, clientY: number) =>
@@ -225,7 +245,11 @@ export function Lens({
     <div
       role="group"
       aria-label={text.lensLabel(index)}
-      onContextMenu={interactive ? onContextMenu : undefined}
+      // Left click, wheel and hover go to the PAGE the lens is showing. Right click goes to the
+      // LENS. So this is wired unconditionally, pinned or not: a pinned lens has no strip/handle
+      // to right-click on, and it is exactly there that the menu — the only way to unpin or
+      // remove it — has to be reachable.
+      onContextMenu={onContextMenu}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}

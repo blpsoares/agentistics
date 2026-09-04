@@ -9,7 +9,7 @@ import { createPortal } from 'react-dom'
 import type { AppContext } from '../../lib/app-context'
 import type { LensStyle } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { applyLensKey, clampLens, stageTransform } from '../../lib/magnifier'
+import { applyLensKey, clampLens, MAGNIFIER_LAYER_ID, stageTransform } from '../../lib/magnifier'
 import { startMirrorScheduler, createMirrorHost, type MirrorScheduler } from '../../lib/magnifierMirror'
 import { a11yText } from './i18n'
 import { HideLensesButton } from './HideLensesButton'
@@ -17,7 +17,10 @@ import { Lens } from './Lens'
 import { LensMenu } from './LensMenu'
 import { MagnifierButton } from './MagnifierButton'
 
-const CONTAINER_ID = 'ag-magnifiers'
+/** The layer's own DOM id — a sibling of `#root` (see the file header). Lives in `lib/magnifier.ts`
+ *  as `MAGNIFIER_LAYER_ID` so `Lens.tsx`'s `elementBehindLens` can name this exact container
+ *  without importing this file back and creating a cycle. */
+const CONTAINER_ID = MAGNIFIER_LAYER_ID
 
 function useLayerContainer(active: boolean): HTMLElement | null {
   const [el, setEl] = useState<HTMLElement | null>(null)
