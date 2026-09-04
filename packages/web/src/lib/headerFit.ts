@@ -27,8 +27,14 @@ export const PRESETS_W = 191
 export const RANGE_W = 253
 /** The divider between the two, plus the 8px gap on each side of it. */
 export const DATE_GAP_W = 17
-/** The `+ Filtro` button, with room for its count badge. */
+/** The `+ Filtro` button with its word and its count badge. */
 export const ADD_FILTER_W = 95
+/** The same button reduced to its glyph and its badge. */
+export const ADD_FILTER_ICON_W = 48
+/** "See active filters", with its word, its count badge and its chevron. */
+export const ACTIVE_W = 175
+/** The same button reduced to a funnel, its badge and its chevron. */
+export const ACTIVE_ICON_W = 52
 /** One inter-group gap. */
 export const GAP_W = 8
 
@@ -37,8 +43,18 @@ export const DATE_FULL_W = PRESETS_W + DATE_GAP_W + RANGE_W
 /** The date block collapsed to one button carrying the range in force. */
 export const DATE_COMPACT_W = 96
 
-/** Everything the inline bar needs to draw the date block at full size. */
-export const FULL_BAR_W = DATE_FULL_W + GAP_W + ADD_FILTER_W
+/**
+ * The four tiers, widest first. Each is the sum of what that tier actually draws, so a tier is
+ * chosen by asking whether its own content fits — not by a number picked to feel right.
+ *
+ * Both buttons are measured at their WIDEST: the count badge is only present while a filter is on,
+ * and "see active filters" only exists then, but a tier that fits only while nothing is applied is
+ * a tier that breaks the moment somebody filters. Budget for the crowded case.
+ */
+export const FULL_BAR_W = DATE_FULL_W + GAP_W + ACTIVE_W + GAP_W + ADD_FILTER_W
+export const COMPACT_DATE_BAR_W = DATE_COMPACT_W + GAP_W + ACTIVE_W + GAP_W + ADD_FILTER_W
+export const ICON_ACTIVE_BAR_W = DATE_COMPACT_W + GAP_W + ACTIVE_ICON_W + GAP_W + ADD_FILTER_W
+export const ICON_BOTH_BAR_W = DATE_COMPACT_W + GAP_W + ACTIVE_ICON_W + GAP_W + ADD_FILTER_ICON_W
 
 export interface HeaderFit {
   /**
@@ -49,6 +65,16 @@ export interface HeaderFit {
    * the strip is the only place either lives.
    */
   date: 'full' | 'compact'
+  /**
+   * Does "see active filters" keep its words, or shrink to a funnel?
+   *
+   * It NEVER disappears, and it never loses its COUNT — the badge is the whole reason the button
+   * can afford to lose its label. A reader who cannot see that something is filtering the page is
+   * the fault this button exists to fix.
+   */
+  activeFilters: 'label' | 'icon'
+  /** The same trade for `+ Filtro`, which gives up its word last: it is the only way to ADD one. */
+  addFilter: 'label' | 'icon'
 }
 
 /**
@@ -59,6 +85,12 @@ export interface HeaderFit {
  * would collapse the control on every mount and expand it a frame later, which reads as a fault.
  */
 export function headerFit(available: number): HeaderFit {
-  if (!Number.isFinite(available) || available <= 0) return { date: 'full' }
-  return { date: available >= FULL_BAR_W ? 'full' : 'compact' }
+  const widest: HeaderFit = { date: 'full', activeFilters: 'label', addFilter: 'label' }
+  if (!Number.isFinite(available) || available <= 0) return widest
+  if (available >= FULL_BAR_W) return widest
+  if (available >= COMPACT_DATE_BAR_W) return { date: 'compact', activeFilters: 'label', addFilter: 'label' }
+  if (available >= ICON_ACTIVE_BAR_W) return { date: 'compact', activeFilters: 'icon', addFilter: 'label' }
+  // The floor. Below this the strip is narrower than a desktop ever is, and there is nothing left
+  // to give that would not remove a control outright — which this module does not do.
+  return { date: 'compact', activeFilters: 'icon', addFilter: 'icon' }
 }

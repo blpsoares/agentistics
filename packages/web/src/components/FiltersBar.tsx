@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName, repoShortName } from '@agentistics/core'
-import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users, GitBranch, Search, Plus, Blocks, Radio, Server, FolderOpen, Tag as TagIcon } from 'lucide-react'
+import { Layers, Cpu, ChevronDown, SlidersHorizontal, X, CalendarDays, Check, Users, GitBranch, Search, Plus, Blocks, Radio, Server, FolderOpen, Tag as TagIcon } from 'lucide-react'
 import type { TagDef } from '../lib/tagMatch'
 import { HARNESS_LABELS, HARNESS_COLORS } from '../lib/harness'
 import { ProjectsModal } from './ProjectsModal'
@@ -118,6 +118,15 @@ interface Props {
    * shrinks instead of clipping.
    */
   dateCompact?: boolean
+  /**
+   * Drop the WORD from "see active filters" / `+ Filtro`, keeping the glyph and the count.
+   *
+   * The count NEVER goes: it is the whole reason a label can be afforded to be lost. A reader who
+   * cannot see that something is filtering the page is the fault these buttons exist to fix.
+   * Decided by the caller from the width the bar has — see `headerFit.ts`.
+   */
+  activeFiltersIcon?: boolean
+  addFilterIcon?: boolean
 }
 
 const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [
@@ -166,7 +175,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, activeOnly, onActiveOnlyChange, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup, hideDateRange = false, inline = false, dateCompact = false }: Props) {
+export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, activeOnly, onActiveOnlyChange, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup, hideDateRange = false, inline = false, dateCompact = false, activeFiltersIcon = false, addFilterIcon = false }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -759,9 +768,13 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               color: 'var(--anthropic-orange)', fontWeight: 600,
             }}
           >
-            <span style={{ whiteSpace: 'nowrap' }}>
-              {lang === 'pt' ? 'Ver filtros ativos' : 'See active filters'}
-            </span>
+            {activeFiltersIcon
+              ? <SlidersHorizontal size={12} style={{ flexShrink: 0 }} />
+              : (
+                <span style={{ whiteSpace: 'nowrap' }}>
+                  {lang === 'pt' ? 'Ver filtros ativos' : 'See active filters'}
+                </span>
+              )}
             <span style={{
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               minWidth: 15, height: 15, borderRadius: 8, padding: '0 4px',
@@ -894,7 +907,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             }}
           >
             <Plus size={12} style={{ flexShrink: 0 }} />
-            <span>{lang === 'pt' ? 'Filtro' : 'Filter'}</span>
+            {!addFilterIcon && <span>{lang === 'pt' ? 'Filtro' : 'Filter'}</span>}
             {activeFilterCount > 0 && (
               <span style={{
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',

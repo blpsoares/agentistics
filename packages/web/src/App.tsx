@@ -2686,6 +2686,8 @@ export default function AppLayout() {
         <FiltersBar
           inline
           dateCompact={stripFit.date === 'compact'}
+          activeFiltersIcon={stripFit.activeFilters === 'icon'}
+          addFilterIcon={stripFit.addFilter === 'icon'}
           only={SESSIONS_FILTER_DIMS}
           activeOnly={activeOnly}
           onActiveOnlyChange={setActiveOnly}
@@ -2763,6 +2765,8 @@ export default function AppLayout() {
         <FiltersBar
           inline
           dateCompact={stripFit.date === 'compact'}
+          activeFiltersIcon={stripFit.activeFilters === 'icon'}
+          addFilterIcon={stripFit.addFilter === 'icon'}
           only={filterDimsForRoute}
           // THE SWITCH BELONGS ON BOTH PAGES — the user asked for exactly that, and Task 8 put it
           // inside the + Filter menu so it reads as a dimension rather than a pill beside them.
