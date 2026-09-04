@@ -135,14 +135,22 @@ describe('sanitizeAccessibilityPrefs', () => {
     const ids = lenses.map(l => l.id)
     expect(new Set(ids).size).toBe(3)
 
-    // The explicit id 'lens-2' should be preserved
-    expect(ids).toContain('lens-2')
+    // Find each lens by its position (which is preserved through sanitization)
+    const lens0 = lenses.find(l => l.x === 0 && l.y === 0)!
+    const lens1 = lenses.find(l => l.x === 1 && l.y === 1)!
+    const lens2 = lenses.find(l => l.x === 2 && l.y === 2)!
 
-    // The anonymous entries should get their own ids
-    const anonIds = ids.filter(id => id !== 'lens-2')
-    expect(anonIds.length).toBe(2)
-    expect(anonIds[0]).toBe('lens-1')
-    expect(anonIds[1]).toBe('lens-3')
+    // The explicit 'lens-2' must be assigned to the entry that declared it
+    expect(lens2.id).toBe('lens-2')
+
+    // The anonymous entries must get different ids, not 'lens-2'
+    expect(lens0.id).not.toBe('lens-2')
+    expect(lens1.id).not.toBe('lens-2')
+    expect(lens0.id).not.toBe(lens1.id)
+
+    // The anonymous ids should be from the minted sequence
+    expect(['lens-1', 'lens-3']).toContain(lens0.id)
+    expect(['lens-1', 'lens-3']).toContain(lens1.id)
   })
 
   test('idempotency still holds with explicit ids and garbage entries', () => {
