@@ -22,7 +22,7 @@ import {
   type ControlSession,
 } from '@agentistics/tui/control/session-fleet'
 import { rowSelected } from '../../lib/fleetSelection'
-import { filterFleet } from '../../lib/fleetFilter'
+import { filterFleet, ignoredDimensions } from '../../lib/fleetFilter'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { NewSessionModal } from '../sessions/NewSessionModal'
 import { rowMenuEntries, type RowVerb } from '../../lib/rowMenu'
@@ -228,6 +228,8 @@ export function SessionsAside({
     () => (activeOnly ? searched.filter(r => !active.has(r.state)).length : 0),
     [searched, activeOnly, active],
   )
+  /** Which SET filter dimensions this fleet cannot answer at all, said in one line — never silent. */
+  const ignoredNote = useMemo(() => ignoredDimensions(filters, lang), [filters, lang])
 
   /** The pinned rows, in the order they were pinned. Their own band, above everything. */
   // Resolved from the RAW `rows`, never from `matched` — a filter, a search or "active only" must
@@ -365,6 +367,20 @@ export function SessionsAside({
         }}>
           <Clock size={12} style={{ flexShrink: 0, marginTop: 1 }} />
           <span>{stale}</span>
+        </p>
+      )}
+
+      {/* A filter dimension that is SET but cannot narrow a live fleet (date range, tags, members,
+          teams, machines) is said here, above the scroller — the same placement `stale` uses, and
+          for the same reason: a caveat about every row below must be readable wherever the reader
+          has scrolled. Silence here reads as a broken filter, not an honest one. */}
+      {ignoredNote && (
+        <p role="status" style={{
+          margin: '0 2px', padding: '7px 9px', borderRadius: 8,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+          fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)',
+        }}>
+          {ignoredNote}
         </p>
       )}
 
