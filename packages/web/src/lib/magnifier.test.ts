@@ -186,6 +186,74 @@ describe('sourceRect — proportional pan, so every corner of the page is reacha
   })
 })
 
+describe('sourceRect — cursor anchor, so the follow lens shows exactly what is under it', () => {
+  // The property that matters: the follow lens is `pointerEvents: 'none'`, so a click always
+  // lands on whatever the OS cursor is physically over. Aiming only works if the lens's own
+  // CENTRE — where the cursor sits — displays the exact page point the cursor is over. Checked via
+  // `lensPointToPage` (the function `Lens.tsx` would use to translate a click) rather than reading
+  // `sourceRect` fields by hand, so this is the same round-trip the click-forwarding path relies
+  // on. A wrong implementation this would catch: one that silently keeps using the PAN rule (i.e.
+  // ignores `anchor`) — that only reproduces this exact centre for a lens already centred in the
+  // viewport, which is why the lens below is placed off-centre on purpose.
+  test('the page point at the lens centre is exactly the point under the lens centre, away from edges, at several zooms (incl. below 1x)', () => {
+    const vp = { width: 1920, height: 1080 }
+    for (const zoom of [0.6, 1, 4, 10]) {
+      const l = lens({ x: 300, y: 200, width: 400, height: 300, zoom, borderWidth: 4 })
+      const got = lensPointToPage(l, vp, l.width / 2, l.height / 2, 'cursor')
+      expect(got.x).toBeCloseTo(l.x + l.width / 2, 5)
+      expect(got.y).toBeCloseTo(l.y + l.height / 2, 5)
+    }
+  })
+
+  test('left/top edge: the region is shifted back inside, starting at 0 — never past it, never resized', () => {
+    // A wrong implementation this would catch: one that clamps the region's ORIGIN to
+    // `[0, Infinity)` only (no upper bound) — it would also read 0 here, but the sibling
+    // right/bottom test below is what that variant fails.
+    const vp = { width: 1200, height: 900 }
+    const l = lens({ x: 0, y: 0, width: 200, height: 200, borderWidth: 5, zoom: 0.5 })
+    const s = sourceRect(l, vp, 'cursor')
+    expect(s.x).toBe(0)
+    expect(s.y).toBe(0)
+    // Size asserted CONCRETELY — (200 - 2*5) / 0.5 = 380 — not as `vp.width - s.width`, which a
+    // shrink-to-fit implementation (one that resizes the region to end exactly at the edge
+    // instead of just sliding it) would satisfy trivially.
+    expect(s.width).toBe(380)
+    expect(s.height).toBe(380)
+  })
+
+  test('right/bottom edge: the region is shifted back inside, ending exactly at the viewport edge — never resized', () => {
+    const vp = { width: 1200, height: 900 }
+    const l = lens({ x: 1000, y: 700, width: 200, height: 200, borderWidth: 5, zoom: 0.5 })
+    const s = sourceRect(l, vp, 'cursor')
+    // Same concrete size as the left/top-edge case — the clamp only ever slides the region.
+    expect(s.width).toBe(380)
+    expect(s.height).toBe(380)
+    expect(s.x).toBe(vp.width - 380)
+    expect(s.y).toBe(vp.height - 380)
+  })
+
+  test('a region larger than the viewport is centred, not pinned to whichever edge the lens is nearest', () => {
+    // A wrong implementation this would catch: clamping the desired origin into
+    // `[0, vpSize - regionSize]` unconditionally, with no separate "centre it" branch — when
+    // `regionSize > vpSize` that range is inverted (its upper bound is negative), so
+    // `Math.min(Math.max(desired, 0), negative)` collapses to 0 regardless of the lens's position,
+    // which is indistinguishable from "pinned to the left/top edge". Centring instead makes the
+    // result the SAME for two very different lens positions, which a pinned-edge implementation
+    // could never produce for both.
+    const vp = { width: 1024, height: 900 }
+    const width = 2000
+    const height = 200
+    const borderWidth = 5
+    const zoom = ZOOM_MIN
+    const interior = (width - 2 * borderWidth) / zoom
+    expect(interior).toBeGreaterThan(vp.width)
+    const left = sourceRect(lens({ x: 0, y: 300, width, height, borderWidth, zoom }), vp, 'cursor')
+    const right = sourceRect(lens({ x: vp.width - 1, y: 300, width, height, borderWidth, zoom }), vp, 'cursor')
+    expect(left.x).toBeCloseTo((vp.width - interior) / 2)
+    expect(right.x).toBeCloseTo((vp.width - interior) / 2)
+  })
+})
+
 describe('clampLens', () => {
   const vp = { width: 1000, height: 800 }
   test('keeps a lens fully on screen', () => {

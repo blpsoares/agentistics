@@ -69,57 +69,72 @@ export function fmtZoom(zoom: number): string {
 }
 
 /**
- * The viewport region a lens magnifies: shrunk by the zoom, then PANNED — not centred — so the
- * lens can sit anywhere on screen and still reach every part of the page.
+ * The two ways a lens's position can be read into a source region — named explicitly because
+ * they disagree, and the disagreement is the whole fix this type documents:
+ *
+ * - `'pan'` — the lens's position is a PARKING SPOT the user chose. Panning proportionally to
+ *   that position is what makes the page's outer band reachable at all (see `panAxis`'s own
+ *   comment for the corner-unreachable bug this replaced). This is what every PLACED lens needs.
+ * - `'cursor'` — the lens's position IS the pointer: the follow lens is centred on the cursor
+ *   every frame, not parked. Panning it would show, at the lens's centre, content that is NOT
+ *   under the cursor — the user aims at what they see and the click (which passes straight
+ *   through, since the follow lens is `pointerEvents: 'none'`) lands on a different element. A
+ *   pointer must show what is physically beneath it or aiming becomes impossible, so this mode
+ *   centres the region on the lens instead (see `cursorAxis`).
+ *
+ * Defaults to `'pan'` because every placed lens (the overwhelming majority of callers) needs it;
+ * the follow lens is the one caller that must ask for `'cursor'` explicitly.
+ */
+export type SourceAnchor = 'pan' | 'cursor'
+
+/**
+ * The viewport region a lens magnifies: shrunk by the zoom, then read into position by `anchor`
+ * (see `SourceAnchor` above) — PANNED for a placed lens, CENTRED-and-clamped for the cursor-
+ * following one.
  *
  * What the lens actually SHOWS is its content box — `box-sizing: border-box` makes that
  * `width - 2*borderWidth` by `height - 2*borderWidth`, not the frame's own size — so that is
  * the size that gets divided by the zoom. Getting this wrong offsets the magnified image by
  * exactly `borderWidth` px (because the translation in stageTransform only lands the region
  * at the content box when the region size is derived from the interior, not the frame).
- *
- * Centring the region on the lens's own centre — the old rule — makes the outer band of the
- * page unreachable: a lens pinned against the left edge is centred at half its own width, so
+ */
+export function sourceRect(lens: LensStyle & { x: number; y: number }, vp: Viewport, anchor: SourceAnchor = 'pan'): Rect {
+  const width = (lens.width - 2 * lens.borderWidth) / lens.zoom
+  const height = (lens.height - 2 * lens.borderWidth) / lens.zoom
+
+  const axis = anchor === 'cursor' ? cursorAxis : panAxis
+  const x = axis(lens.x, lens.width, width, vp.width)
+  const y = axis(lens.y, lens.height, height, vp.height)
+
+  return { x, y, width, height }
+}
+
+/**
+ * One axis of the PAN anchor — for a PLACED lens, whose position is a parking spot the user
+ * chose. Centring the region on the lens's own centre — the old rule — makes the outer band of
+ * the page unreachable: a lens pinned against the left edge is centred at half its own width, so
  * nothing further left is ever inside ANY source region (measured ~150px at 4x, ~95px at 1.55x
  * on the running build). `clampLens` keeps the LENS on screen but never widens the region it can
  * show, and the old clamp on this function only ever engaged once the region itself was wider
  * than the viewport (zoom below 1x) — it never helped at normal zoom, which is where the bug was
  * reported.
  *
- * So each axis is now a PAN, computed independently by `panAxis`: the lens's position — clamped
- * into `[0, viewport size - lens size]`, because the cursor-following lens is not clamped by
- * `clampLens` and can sit partly off-screen — is read as a fraction of the room the LENS has to
- * move in, and that same fraction is applied to the room the SOURCE REGION has to move in. A
- * lens at the left wall (fraction 0) shows the region's own left wall; a lens at the right wall
- * (fraction 1) shows the region's right wall; everything between is a straight line. Two cases
- * where that ratio makes no sense are centred instead: a lens as wide as (or wider than) the
- * viewport has no room to move in, and a region wider than the viewport — reachable now that
- * zoom can go below 1x, down to 0.55x — has no room to sit fully inside it; resizing the region
- * to fit would change the magnification the user picked, which this function may never do.
+ * So each axis is a PAN: the lens's position — clamped into `[0, viewport size - lens size]`,
+ * because the cursor-following lens is not clamped by `clampLens` and can sit partly off-screen —
+ * is read as a fraction of the room the LENS has to move in (`lensRange`), and that same fraction
+ * is applied to the room the SOURCE REGION has to move in (`srcRange`). A lens at the left wall
+ * (fraction 0) shows the region's own left wall; a lens at the right wall (fraction 1) shows the
+ * region's right wall; everything between is a straight line. Two cases where that ratio makes
+ * no sense are centred instead: a lens as wide as (or wider than) the viewport has no room to
+ * move in, and a region wider than the viewport — reachable now that zoom can go below 1x, down
+ * to 0.55x — has no room to sit fully inside it; resizing the region to fit would change the
+ * magnification the user picked, which this function may never do.
  *
  * Trade-off, stated plainly: away from the exact centre of the viewport, the lens no longer
  * shows literally what is beneath it — it shows the region reached by panning proportionally to
  * the lens's own position. That is what makes every corner of the page reachable, and it is how
- * OS-level magnifiers behave. The one point where the old and new rules agree exactly is a lens
- * centred in the viewport — the position a lens is born at (`newLens`) — which is what makes
- * this change invisible until the lens is actually moved.
- */
-export function sourceRect(lens: LensStyle & { x: number; y: number }, vp: Viewport): Rect {
-  const width = (lens.width - 2 * lens.borderWidth) / lens.zoom
-  const height = (lens.height - 2 * lens.borderWidth) / lens.zoom
-
-  const x = panAxis(lens.x, lens.width, width, vp.width)
-  const y = panAxis(lens.y, lens.height, height, vp.height)
-
-  return { x, y, width, height }
-}
-
-/**
- * One axis of the pan described above. `lensSize`/`vpSize` give the room the LENS has to move
- * in (`lensRange`); `regionSize`/`vpSize` give the room the SOURCE REGION has to move in
- * (`srcRange`). The lens's own position, clamped into its range, is read as a fraction of that
- * range and applied to the region's range — never the raw position, which the follow-lens case
- * can push negative or past the viewport edge.
+ * OS-level magnifiers behave. The one point where this rule and a plain centred one agree exactly
+ * is a lens centred in the viewport — the position a lens is born at (`newLens`).
  */
 function panAxis(lensPos: number, lensSize: number, regionSize: number, vpSize: number): number {
   const lensRange = vpSize - lensSize
@@ -130,6 +145,24 @@ function panAxis(lensPos: number, lensSize: number, regionSize: number, vpSize: 
 }
 
 /**
+ * One axis of the CURSOR anchor — for the follow lens, whose position IS the pointer. The region
+ * is centred on the lens's own centre (`lensPos + lensSize/2 - regionSize/2`), which is what
+ * makes `lensPointToPage`'s inverse map the lens's visual centre back to the exact viewport point
+ * the lens sits over — the property that makes aiming through it possible at all.
+ *
+ * That centred position is then CLAMPED into `[0, vpSize - regionSize]`, shifting it back inside
+ * the viewport rather than letting it run off an edge — never by resizing the region, which would
+ * change the magnification. When the region is as large as (or larger than) the viewport itself
+ * (reachable below 1x zoom) that clamp range is empty or inverted, so the region is centred on
+ * the viewport instead — the same "nothing to clamp against" case `panAxis` handles.
+ */
+function cursorAxis(lensPos: number, lensSize: number, regionSize: number, vpSize: number): number {
+  if (regionSize >= vpSize) return (vpSize - regionSize) / 2
+  const desired = lensPos + lensSize / 2 - regionSize / 2
+  return Math.min(Math.max(desired, 0), vpSize - regionSize)
+}
+
+/**
  * What the stage's `transform` must be. The stage is an ORDINARY in-flow child of the frame, so
  * with `transform-origin: 0 0` its untransformed origin sits at the frame's CONTENT-box origin —
  * viewport `(lens.x + borderWidth, lens.y + borderWidth)` — not the viewport origin. Within the
@@ -137,9 +170,13 @@ function panAxis(lensPos: number, lensSize: number, regionSize: number, vpSize: 
  * So `scale(s) translate(tx, ty)` puts stage-local point p at viewport
  * `contentOrigin + s * (p + t)`, and putting the source region's top-left at the content-box
  * top-left means `t = -source.origin`.
+ *
+ * `anchor` is forwarded to `sourceRect` untouched — a placed lens (the default `'pan'`) and the
+ * cursor-following one (`'cursor'`) render through the exact same scale/translate shape, they
+ * just disagree on which region that shape points at.
  */
-export function stageTransform(lens: LensStyle & { x: number; y: number }, vp: Viewport): { scale: number; tx: number; ty: number } {
-  const s = sourceRect(lens, vp)
+export function stageTransform(lens: LensStyle & { x: number; y: number }, vp: Viewport, anchor: SourceAnchor = 'pan'): { scale: number; tx: number; ty: number } {
+  const s = sourceRect(lens, vp, anchor)
   return { scale: lens.zoom, tx: -s.x, ty: -s.y }
 }
 
@@ -160,14 +197,18 @@ export function stageTransform(lens: LensStyle & { x: number; y: number }, vp: V
  * and the same for `y`. This is an exact algebraic inverse, not a re-derivation — the round-trip
  * test renders a page point through the SAME terms `Lens.tsx` uses (content origin + stage
  * transform) and feeds the result back through this function.
+ *
+ * `anchor` must match whichever one rendered the lens — see `SourceAnchor` — or this inverts a
+ * region the lens never actually showed.
  */
 export function lensPointToPage(
   lens: MagnifierLens,
   viewport: Viewport,
   localX: number,
   localY: number,
+  anchor: SourceAnchor = 'pan',
 ): { x: number; y: number } {
-  const s = sourceRect(lens, viewport)
+  const s = sourceRect(lens, viewport, anchor)
   return {
     x: s.x + (localX - lens.borderWidth) / lens.zoom,
     y: s.y + (localY - lens.borderWidth) / lens.zoom,

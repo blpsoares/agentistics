@@ -351,7 +351,12 @@ function FollowLens({ style, scheduler }: { style: LensStyle; scheduler: MirrorS
   const hidden = pos === null
   const at = pos ?? { x: -9999, y: -9999 }
   const placed = { ...style, x: at.x - style.width / 2, y: at.y - style.height / 2 }
-  const t = stageTransform(placed, { width: window.innerWidth, height: window.innerHeight })
+  // 'cursor': this lens's position IS the pointer (it is always centred on it, never parked), so
+  // the region must be centred on the lens rather than panned — see `SourceAnchor` in
+  // magnifier.ts. Panning here is exactly the regression this anchor exists to prevent: it would
+  // show, at the lens's centre, content that is not under the cursor, and since this lens is
+  // `pointerEvents: 'none'` a click passes through to whatever the cursor is physically over.
+  const t = stageTransform(placed, { width: window.innerWidth, height: window.innerHeight }, 'cursor')
 
   return (
     <div aria-hidden="true" style={{
