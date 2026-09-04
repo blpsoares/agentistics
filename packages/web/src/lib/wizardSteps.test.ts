@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  STEP_ORDER, clearForHarness, nextStep, prevStep, stepReady, visibleQuestions,
-  type WizardDraft,
+  STEP_ORDER, clearForHarness, modelDisplay, nextStep, prevStep, stepReady, unsetAnswer,
+  visibleQuestions, type WizardDraft,
 } from './wizardSteps'
 
 const claude = {
@@ -24,21 +24,35 @@ describe('stepReady', () => {
   it('blocks step 1 until an assistant is chosen, and says what is missing', () => {
     const out = stepReady('assistant', empty, null)
     expect(out.ok).toBe(false)
-    expect(out.missing).not.toBe('')
+    expect(out.missing).toBe('assistant')
   })
-  it('accepts step 1 with only an assistant — model, effort and name are optional', () => {
-    expect(stepReady('assistant', { ...empty, harness: 'claude' }, claude).ok).toBe(true)
+  it('still blocks step 1 once an assistant is chosen but no title is written', () => {
+    const out = stepReady('assistant', { ...empty, harness: 'claude' }, claude)
+    expect(out.ok).toBe(false)
+    expect(out.missing).toBe('title')
+  })
+  it('accepts step 1 with an assistant and a title — model and effort stay optional', () => {
+    expect(stepReady('assistant', { ...empty, harness: 'claude', label: 'Wizard polish' }, claude).ok).toBe(true)
+  })
+  it('does not accept whitespace as a title', () => {
+    const out = stepReady('assistant', { ...empty, harness: 'claude', label: '   ' }, claude)
+    expect(out.ok).toBe(false)
+    expect(out.missing).toBe('title')
+  })
+  it('asks for the assistant BEFORE the title — one sentence at a time', () => {
+    expect(stepReady('assistant', { ...empty, label: 'Wizard polish' }, null).missing).toBe('assistant')
   })
   it('blocks step 2 until a directory is chosen', () => {
-    expect(stepReady('where', { ...empty, harness: 'claude' }, claude).ok).toBe(false)
-    expect(stepReady('where', { ...empty, harness: 'claude', cwd: '/home/u/p' }, claude).ok).toBe(true)
+    expect(stepReady('where', { ...empty, harness: 'claude', label: 'n' }, claude).ok).toBe(false)
+    expect(stepReady('where', { ...empty, harness: 'claude', label: 'n', cwd: '/home/u/p' }, claude).ok).toBe(true)
   })
   it('never blocks step 3 — the first message is optional', () => {
-    expect(stepReady('message', { ...empty, harness: 'claude', cwd: '/home/u/p' }, claude).ok).toBe(true)
+    expect(stepReady('message', { ...empty, harness: 'claude', label: 'n', cwd: '/home/u/p' }, claude).ok).toBe(true)
   })
   it('accepts review only when every earlier step does', () => {
-    expect(stepReady('review', { ...empty, harness: 'claude' }, claude).ok).toBe(false)
-    expect(stepReady('review', { ...empty, harness: 'claude', cwd: '/home/u/p' }, claude).ok).toBe(true)
+    expect(stepReady('review', { ...empty, harness: 'claude', label: 'n' }, claude).ok).toBe(false)
+    expect(stepReady('review', { ...empty, harness: 'claude', cwd: '/home/u/p' }, claude).missing).toBe('title')
+    expect(stepReady('review', { ...empty, harness: 'claude', label: 'n', cwd: '/home/u/p' }, claude).ok).toBe(true)
   })
 })
 
@@ -55,6 +69,36 @@ describe('visibleQuestions', () => {
   })
   it('asks nothing extra when there is no harness yet', () => {
     expect(visibleQuestions(null)).toEqual({ model: false, effort: false })
+  })
+})
+
+describe('modelDisplay', () => {
+  const models = [{ id: 'opus', label: 'Opus 5' }, { id: 'auto', label: 'auto' }]
+  it('shows the name the harness prints, with the id beside it', () => {
+    expect(modelDisplay(models, 'opus')).toEqual({ label: 'Opus 5', id: 'opus' })
+  })
+  it('drops the id when the harness publishes no name for it', () => {
+    expect(modelDisplay(models, 'auto')).toEqual({ label: 'auto', id: null })
+  })
+  it('shows an unlisted id as itself, never as an invented name', () => {
+    expect(modelDisplay(models, 'claude-opus-5-20260101')).toEqual({ label: 'claude-opus-5-20260101', id: null })
+  })
+  it('says nothing at all for an unset model — that is a sentence, not a value', () => {
+    expect(modelDisplay(models, '')).toBeNull()
+  })
+})
+
+describe('unsetAnswer', () => {
+  it('names the default when the CLI published one', () => {
+    expect(unsetAnswer('sonnet')).toEqual({ known: true, value: 'sonnet' })
+  })
+  it('says it cannot name one when nothing was published', () => {
+    expect(unsetAnswer(undefined)).toEqual({ known: false })
+    expect(unsetAnswer(null)).toEqual({ known: false })
+  })
+  it('treats a blank as absent — an empty field is nobody naming a default', () => {
+    expect(unsetAnswer('')).toEqual({ known: false })
+    expect(unsetAnswer('   ')).toEqual({ known: false })
   })
 })
 

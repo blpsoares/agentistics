@@ -11,7 +11,7 @@
  * check, and this one gates the most powerful act the server performs.
  *
  * It asks the FULL path the terminal wizard asks — assistant, where, task, model, effort, first
- * message, name — not a reduced form. What the web adds is that each answer is SHOWN rather than
+ * message, title — not a reduced form. What the web adds is that each answer is SHOWN rather than
  * spelled: a mark per assistant, a repository distinguished from a plain folder, and effort as a
  * coloured scale.
  *
@@ -28,19 +28,34 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronLeft, ChevronRight, Check, FolderGit2, Folder, Loader, Paperclip, Search, X } from 'lucide-react'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import { effortColor, effortSteps } from '../../lib/effortScale'
 import { HarnessMark } from './HarnessMark'
 import {
-  STEP_ORDER, clearForHarness, nextStep, prevStep, stepReady, visibleQuestions,
-  type StepId, type WizardDraft, type WizardHarness,
+  STEP_ORDER, clearForHarness, modelDisplay, nextStep, prevStep, stepReady, unsetAnswer,
+  visibleQuestions, type MissingAnswer, type StepId, type WizardDraft, type WizardHarness,
 } from '../../lib/wizardSteps'
 
 interface HarnessOption {
   id: string
   label: string
+  /** The ids `--model` accepts. What is SENT. */
   modelSuggestions: string[]
+  /**
+   * The same ids, each with the name the harness's own CLI prints — `harnessModels.ts` on the
+   * server, which carries the exact command that established every pair. Absent from an older
+   * server's answer, which is why the picker falls back to the ids rather than to nothing.
+   */
+  models?: { id: string; label: string }[]
   supportsModel: boolean
   efforts: string[]
+  /**
+   * What the CLI uses when the flag is not passed, and ONLY where the CLI publishes it — see the
+   * defaults block in `spawn-spec.ts`, which is the one place either value may be established.
+   * Absent from an older server's answer, and absent today from every harness.
+   */
+  defaultModel?: string
+  defaultEffort?: string
 }
 
 interface ProjectOption {
@@ -78,6 +93,12 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
 
   /** Which question is on screen. The ORDER and the gating are `wizardSteps.ts`'s, not this file's. */
   const [step, setStep] = useState<StepId>('assistant')
+  /**
+   * The model picker's own open state, held HERE rather than inside it, because the modal owns the
+   * keyboard: `esc` has to close the picker before it closes the wizard, and two listeners racing
+   * for one key is how a dropdown takes the whole dialog down with it.
+   */
+  const [modelOpen, setModelOpen] = useState(false)
   /**
    * Files already uploaded to this machine, as `{name, path}`.
    *
@@ -117,9 +138,13 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
   const wizardHarness: WizardHarness | null = useMemo(() => harness ? {
     id: harness.id,
     label: harness.label,
-    models: harness.modelSuggestions.map(m => ({ id: m, label: m })),
+    // The server's labelled list when it sent one; the bare ids otherwise. A missing label is
+    // rendered AS THE ID — never as an invented name, which is `modelLabel`'s own rule.
+    models: harness.models ?? harness.modelSuggestions.map(m => ({ id: m, label: m })),
     supportsModel: harness.supportsModel,
     efforts: harness.efforts,
+    ...(harness.defaultModel ? { defaultModel: harness.defaultModel } : {}),
+    ...(harness.defaultEffort ? { defaultEffort: harness.defaultEffort } : {}),
   } : null, [harness])
 
   /**
@@ -143,11 +168,36 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
   const canStart = stepReady('review', draft, wizardHarness).ok && !busy
   const stepIndex = STEP_ORDER.indexOf(step)
 
-  /** What a blocked step is waiting for, IN WORDS. A disabled button that says nothing is a bug. */
-  const blockedBecause = ready.ok ? null
-    : ready.missing === 'assistant'
-      ? (pt ? 'Escolha um assistente para continuar.' : 'Pick an assistant to continue.')
-      : (pt ? 'Escolha uma pasta para continuar.' : 'Pick a folder to continue.')
+  /**
+   * What a blocked step is waiting for, IN WORDS. A disabled button that says nothing is a bug.
+   *
+   * One sentence per `MissingAnswer`, and the mapping is exhaustive on purpose: the pure module
+   * decides WHAT is missing, this file only says it, so a new gate over there cannot land here as
+   * a silent fallback to the wrong sentence.
+   */
+  const BLOCKED_BECAUSE: Record<MissingAnswer, string> = {
+    assistant: pt ? 'Escolha um assistente para continuar.' : 'Pick an assistant to continue.',
+    title: pt ? 'Dê um título à sessão para continuar.' : 'Give the session a title to continue.',
+    cwd: pt ? 'Escolha uma pasta para continuar.' : 'Pick a folder to continue.',
+  }
+  const blockedBecause = ready.ok || !ready.missing ? null : BLOCKED_BECAUSE[ready.missing]
+
+  /**
+   * WHAT HAPPENS IF YOU LEAVE IT ALONE — named where the CLI publishes it, vague where it does not.
+   *
+   * `unsetAnswer` is the rule; this is only the wording. "Default (sonnet)" tells a reader whether
+   * skipping the question was the right call, which "the assistant's default" never could — and
+   * where no default could be read out of the CLI's own output the vague sentence is the only
+   * honest one, because a named default we cannot verify is read at a glance and believed.
+   */
+  const unsetText = (published: string | undefined): string => {
+    const answer = unsetAnswer(published)
+    return answer.known
+      ? (pt ? `Padrão (${answer.value})` : `Default (${answer.value})`)
+      : (pt ? 'Padrão do assistente' : "The assistant's default")
+  }
+  const modelUnset = unsetText(harness?.defaultModel)
+  const effortUnset = unsetText(harness?.defaultEffort)
 
   const STEP_TITLE: Record<StepId, string> = {
     assistant: pt ? 'Assistente' : 'Assistant',
@@ -157,10 +207,16 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
   }
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      // Innermost first. Closing the whole wizard because a dropdown was open loses every answer
+      // already given, over a keypress the user meant for the dropdown.
+      if (modelOpen) setModelOpen(false)
+      else onClose()
+    }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, modelOpen])
 
   /**
    * Wait for the row to exist before handing the caller its id.
@@ -238,16 +294,31 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
           </span>
         ) : null
       } />
-      {visibleQuestions(wizardHarness).model && (
-        <ReviewRow label={pt ? 'Modelo' : 'Model'} value={model || null}
-          muted={model === '' ? (pt ? 'Padrão do assistente' : "The assistant's default") : undefined} />
-      )}
+      {visibleQuestions(wizardHarness).model && (() => {
+        // The SAME pure rule the picker renders, so the review cannot name the choice differently
+        // one step after it was made.
+        const shown = modelDisplay(wizardHarness!.models, model)
+        return (
+          <ReviewRow label={pt ? 'Modelo' : 'Model'}
+            value={shown ? (
+              // Wraps: at 390px the review's value column is ~165px, and a name plus its id is
+              // wider than that on several of agy's models. Wrapping keeps the page from scrolling
+              // sideways, which is the one thing no screen here may do.
+              <span style={{ display: 'inline-flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 7 }}>
+                {shown.label}
+                {shown.id && <ModelId id={shown.id} />}
+              </span>
+            ) : null}
+            muted={modelUnset} />
+        )
+      })()}
       {visibleQuestions(wizardHarness).effort && (
-        <ReviewRow label={pt ? 'Esforço' : 'Effort'} value={effort || null}
-          muted={effort === '' ? (pt ? 'Padrão do assistente' : "The assistant's default") : undefined} />
+        <ReviewRow label={pt ? 'Esforço' : 'Effort'} value={effort || null} muted={effortUnset} />
       )}
-      <ReviewRow label={pt ? 'Nome' : 'Name'} value={label || null}
-        muted={label === '' ? (pt ? 'Derivado da sessão' : 'Derived from the session') : undefined} />
+      {/* No `muted` fallback: the title is required, so the review can never reach this row with
+          nothing in it — and offering a sentence for a state the gate forbids would describe a
+          choice nobody was allowed to make. */}
+      <ReviewRow label={pt ? 'Título' : 'Title'} value={label || null} />
       <ReviewRow label={pt ? 'Onde' : 'Where'} value={cwd || null} mono />
       <ReviewRow label={pt ? 'Tarefa' : 'Task'} value={task || null}
         muted={task === '' ? (pt ? 'Nenhuma' : 'None') : undefined} />
@@ -419,8 +490,9 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
           {/* STEP 1 — WHO. The assistant, and the two answers that only exist once one is
-              chosen: a model and an effort. The NAME is here too — it is what you will look
-              for in the list later, so it is asked while you are deciding what this IS. */}
+              chosen: a model and an effort. The TITLE is here too — it is what you will look
+              for in the list later, so it is asked while you are deciding what this IS, and it
+              is the one answer on this step that is REQUIRED. */}
           {step === 'assistant' && (<>
           <Field label={pt ? 'Assistente' : 'Assistant'}>
             {harnesses === null ? (
@@ -464,32 +536,32 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
               dropdown whose only entry is "the assistant's default" is a control that cannot be
               used. An absent picker says "we cannot name these for you"; a one-option one says
               nothing at all. */}
-          {harness?.supportsModel && harness.modelSuggestions.length > 0 && (
+          {visibleQuestions(wizardHarness).model && (
             <Field label={pt ? 'Modelo (opcional)' : 'Model (optional)'}>
-              {/* A CLOSED dropdown, never free text: `modelSuggestions` is the actual set this
-                  harness offers, and a typed id it does not recognise fails at spawn with no
-                  explanation on screen. The wizard's job is to offer only what will work. */}
-              <div style={{ position: 'relative' }}>
-                <select
-                  value={model}
-                  onChange={e => setModel(e.target.value)}
-                  style={{ ...inputStyle, paddingLeft: 12, paddingRight: 30, appearance: 'none', cursor: 'pointer' }}
-                >
-                  <option value="">{pt ? 'Padrão do assistente' : "The assistant's default"}</option>
-                  {harness.modelSuggestions.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-                <ChevronDown size={14} style={{
-                  position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
-                  color: 'var(--text-tertiary)', pointerEvents: 'none',
-                }} />
-              </div>
+              {/* A CLOSED picker, never free text: the list is the actual set this harness offers,
+                  and a typed id it does not recognise fails at spawn with no explanation on
+                  screen. The wizard's job is to offer only what will work.
+
+                  It was a bare `<select>`, which on every platform draws the OS's own menu — a
+                  control that ignores this application's palette and its 44px mobile target, and
+                  the only one in the wizard that did. `ModelSelect` is the same shape as the value
+                  pickers in `FiltersBar`: a trigger, a popover, one checked row per value. */}
+              <ModelSelect
+                lang={lang}
+                open={modelOpen}
+                onOpenChange={setModelOpen}
+                value={model}
+                onChange={setModel}
+                options={wizardHarness!.models}
+                unsetLabel={modelUnset}
+              />
             </Field>
           )}
 
           {efforts.length > 0 && (
             <Field label={pt ? 'Esforço (opcional)' : 'Effort (optional)'} hint={pt
-              ? 'Mais esforço pensa por mais tempo e custa mais. Sem escolha, usa o padrão do assistente.'
-              : 'More effort thinks for longer and costs more. Left unset, the assistant’s default applies.'}>
+              ? `Mais esforço pensa por mais tempo e custa mais. Sem escolha: ${effortUnset}.`
+              : `More effort thinks for longer and costs more. Left unset: ${effortUnset}.`}>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {efforts.map(step => {
                   const on = effort === step.value
@@ -518,13 +590,18 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
             </Field>
           )}
 
-          <Field label={pt ? 'Nome (opcional)' : 'Name (optional)'} hint={pt
-            ? 'Sem nome, a sessão usa o que o assistente chamar de si mesmo.'
-            : 'With no name, the session uses whatever the assistant calls itself.'}>
+          {/* REQUIRED, and the gate is `stepReady('assistant')`'s — see `wizardSteps.ts`. It is
+              asked here rather than at the end because a title is what this session IS, and that
+              is the thing you know while you are deciding to start it. */}
+          <Field label={pt ? 'Título' : 'Title'} hint={pt
+            ? 'É por ele que você acha esta sessão na lista depois.'
+            : 'It is how you find this session in the list later.'}>
             <input
               value={label}
               onChange={e => setLabel(e.target.value)}
-              placeholder={task || (pt ? 'Derivado' : 'Derived')}
+              placeholder={pt ? 'O que esta sessão é…' : 'What this session is…'}
+              aria-label={pt ? 'Título' : 'Title'}
+              aria-required
               style={{ ...inputStyle, paddingLeft: 12 }}
             />
           </Field>
@@ -765,6 +842,143 @@ function ReviewRow({ label, value, muted, mono }: {
         wordBreak: 'break-word', whiteSpace: 'pre-wrap',
       }}>{value ?? muted ?? '—'}</span>
     </div>
+  )
+}
+
+/**
+ * The model picker — this application's own control, not the browser's.
+ *
+ * A bare `<select>` renders the platform's menu: it ignores the dashboard's palette in both
+ * themes, it cannot show a value's id beside its name, and on a phone it is the one control in the
+ * wizard that does not meet the 44px target every other row here does. So it is built the way
+ * `FiltersBar`'s value pickers are built — a trigger, a popover, one checked row per value.
+ *
+ * WHAT A ROW SAYS: the name the harness's own CLI prints, and — only when the two differ — the id
+ * that will actually be sent, in the trailing tag. `opus`/`Opus 5` are the same model under two
+ * names, and a picker that shows only one of them leaves the reader unable to match what they
+ * chose against what the CLI reports back. Where the harness publishes no name, `label === id` and
+ * the tag is ABSENT rather than a repetition.
+ *
+ * The popover is constrained to the trigger's own width (`left: 0; right: 0`), so it cannot give
+ * the page a horizontal scrollbar at any viewport — the clamping arithmetic `FiltersBar` needs
+ * exists because its trigger is a small button in a bar, which is not the case here.
+ *
+ * `open` is the CALLER's state: the wizard owns the keyboard, and `esc` must close this before it
+ * closes the dialog.
+ */
+function ModelSelect({ lang, open, onOpenChange, value, onChange, options, unsetLabel }: {
+  lang: 'pt' | 'en'
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  /** The id, or `''` for "leave it to the assistant". */
+  value: string
+  onChange: (id: string) => void
+  options: { id: string; label: string }[]
+  /** The sentence for the unset row — what happens when nothing is picked, in words. */
+  unsetLabel: string
+}) {
+  const pt = lang === 'pt'
+  const isMobile = useIsMobile()
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) onOpenChange(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open, onOpenChange])
+
+  const chosen = modelDisplay(options, value)
+  const rowHeight = isMobile ? 44 : undefined
+
+  const row = (key: string, selected: boolean, label: string, tag: string | null, pick: () => void) => (
+    <button
+      key={key}
+      role="option"
+      aria-selected={selected}
+      onClick={() => { pick(); onOpenChange(false) }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+        padding: isMobile ? '0 10px' : '7px 10px', minHeight: rowHeight, boxSizing: 'border-box',
+        borderRadius: 6, border: 'none', cursor: 'pointer',
+        background: selected ? 'var(--anthropic-orange-dim)' : 'transparent',
+        color: selected ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+        fontSize: 12.5, fontFamily: 'inherit', textAlign: 'left',
+      }}
+      onMouseEnter={e => { if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-card-hover)' }}
+      onMouseLeave={e => { if (!selected) (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
+    >
+      <span style={{ width: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {selected && <Check size={12} strokeWidth={3} />}
+      </span>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {label}
+      </span>
+      {/* The id, and only when it is not already the label — `modelDisplay`'s rule. */}
+      {tag && <ModelId id={tag} />}
+    </button>
+  )
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => onOpenChange(!open)}
+        style={{
+          ...inputStyle,
+          display: 'flex', alignItems: 'center', gap: 8,
+          paddingLeft: 12, paddingRight: 10, minHeight: isMobile ? 44 : undefined,
+          cursor: 'pointer', textAlign: 'left',
+          borderColor: open ? 'var(--anthropic-orange)' : 'var(--border-subtle)',
+        }}
+      >
+        <span style={{
+          flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          color: chosen ? 'var(--text-primary)' : 'var(--text-tertiary)',
+        }}>
+          {chosen ? chosen.label : unsetLabel}
+        </span>
+        {chosen?.id && <ModelId id={chosen.id} />}
+        <ChevronDown size={14} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-label={pt ? 'Modelo' : 'Model'}
+          style={{
+            position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 10,
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+            borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+            maxHeight: 260, overflowY: 'auto', overflowX: 'hidden',
+            boxSizing: 'border-box', padding: 6,
+          }}
+        >
+          {/* The unset row FIRST, and named — "no model" is a decision the CLI acts on, not a
+              blank. It is also the row the wizard opens on, so it may never be hard to find. */}
+          {row('', value === '', unsetLabel, null, () => onChange(''))}
+          <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+          {options.map(o => {
+            const shown = modelDisplay(options, o.id)!
+            return row(o.id, o.id === value, shown.label, shown.id, () => onChange(o.id))
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** The id beside a model's name. Monospace and quiet: it is what is SENT, not what is read. */
+function ModelId({ id }: { id: string }) {
+  return (
+    <span style={{
+      flexShrink: 0, fontSize: 10.5, color: 'var(--text-tertiary)',
+      fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+    }}>{id}</span>
   )
 }
 

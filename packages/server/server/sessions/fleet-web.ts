@@ -26,6 +26,7 @@ import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
 import { arrangeFleet, type FleetArrangement, type FleetViewRequest } from './fleet-arrange'
 import { markFleetPhase, timeFleetPhase } from './fleet-profile'
 import { readHarnessSkills, skillsReason, type HarnessSkill } from './harness-skills'
+import { modelsFor, type ModelOption } from '@agentistics/core'
 import { artifactPathsFromTurns } from './artifact-file'
 import type { ArtifactResponse } from './artifact-web'
 
@@ -366,9 +367,27 @@ export interface FleetNewOptions {
     label: string
     /** Suggestions to OFFER, never a validation list — see `planFleetSpawn`. */
     modelSuggestions: string[]
+    /**
+     * The same ids, each with the NAME the harness itself prints — `harnessModels.ts`, which
+     * carries the command that established every pair. Empty exactly where `modelSuggestions` is.
+     *
+     * Both fields travel because they answer different questions and one of them is on the wire
+     * already: `modelSuggestions` is what a client SENDS, `models` is what a person READS. A client
+     * on an older build keeps working off the first and simply prints ids.
+     */
+    models: ModelOption[]
+    /**
+     * What this CLI uses when no `--model` is passed, and ONLY where the CLI publishes it. Absent
+     * for every harness today — see the defaults block in `spawn-spec.ts`. A client renders the
+     * name when it is here and its own "the assistant's default" when it is not; it may never
+     * invent one.
+     */
+    defaultModel?: string
     supportsModel: boolean
     /** A genuine closed enum, printed by the CLI itself. Empty means it has no effort flag. */
     efforts: string[]
+    /** The effort used when none is passed, under exactly `defaultModel`'s rule. */
+    defaultEffort?: string
   }[]
   /** Ranked places, from the LOCAL store — so the picker answers with no network and a cold cache. */
   projects: { path: string; label: string; repo?: string; detail: string; source: string }[]
@@ -402,8 +421,11 @@ export async function readNewOptions(lang: CliLang, query: string): Promise<Flee
         id: h.id,
         label: h.label,
         modelSuggestions: [...h.modelSuggestions],
+        models: modelsFor(h.id),
+        ...(h.defaultModel ? { defaultModel: h.defaultModel } : {}),
         supportsModel: h.supportsModel,
         efforts: [...h.efforts],
+        ...(h.defaultEffort ? { defaultEffort: h.defaultEffort } : {}),
       })),
       projects: projects.map(p => ({
         path: p.path,
