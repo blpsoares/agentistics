@@ -228,15 +228,38 @@ function taskNotificationFor(text: string): string | null {
  * entries, showed the assistant answering a question nobody could see it being asked. Reported
  * exactly that way: "esse ultimo prompt que te mandei n apareceu na interface de sessao".
  *
- * It is the PERSON's own words, typed by them, and it is rendered as theirs. It is read here and
- * not through `classifyUserText`'s envelope table because it is not an envelope: nothing wraps the
- * text, the entry's SHAPE is what identifies it.
+ * IT IS NOT ALWAYS THE PERSON, and that assumption is what this function used to get wrong. The
+ * note here read: "it is not an envelope: nothing wraps the text, the entry's SHAPE is what
+ * identifies it" — so the text was pushed straight into a `user` turn, and the envelope table
+ * never saw it. But the HARNESS queues through this very shape too: a `<task-notification>`
+ * reporting a background task's completion arrives as an `attachment` / `queued_command`, exactly
+ * like a message typed while the assistant was working.
+ *
+ * Measured on a live transcript: 7 of them were drawn in the reader's own bubble, and were
+ * reported the same way the injected skill body was — "essas mensagens não são minhas". The shape
+ * says WHERE the text came from; it says nothing about WHO wrote it, and only the envelope table
+ * answers the second question.
+ *
+ * So the classification happens HERE rather than at each call site. There are two of them
+ * (`readRecentChatTurns` and `readChatTurns`), both of which had the identical raw push, and a
+ * rule enforced at the call site is a rule the next call site forgets — the same argument
+ * `rowMenu.ts` and `task-reopen.ts` make about their own duplicated gestures.
  */
-function extractQueuedText(e: Record<string, unknown>): string | null {
+function extractQueuedEntry(e: Record<string, unknown>): UserEntry | null {
   if (e.type !== 'attachment') return null
   const a = e.attachment as Record<string, unknown> | undefined
   if (!a || a.type !== 'queued_command') return null
-  const prompt = a.prompt
+  const raw = queuedPromptText(a.prompt)
+  if (raw === null) return null
+  const entry = classifyUserText(raw)
+  // A system entry with nothing to name is dropped outright rather than drawn as a blank note —
+  // the same call `extractUserEntry` makes on the other path.
+  if (entry.kind === 'system' && entry.note === '') return null
+  return entry
+}
+
+/** The prompt's text, whether it was stored as a string or as content blocks. */
+function queuedPromptText(prompt: unknown): string | null {
   if (typeof prompt === 'string') return prompt.trim() || null
   if (!Array.isArray(prompt)) return null
   const text = (prompt as Record<string, unknown>[])
@@ -445,8 +468,8 @@ async function readTurnsFromTail(
 
     const userEntry = extractUserEntry(e)
     if (userEntry) { turns.push(userTurn(userEntry)); continue }
-    const queued = extractQueuedText(e)
-    if (queued) { turns.push({ role: 'user', text: queued }); continue }
+    const queued = extractQueuedEntry(e)
+    if (queued) { turns.push(userTurn(queued)); continue }
     const assistantText = extractAssistantText(e)
     if (assistantText) { turns.push({ role: 'assistant', text: assistantText }); continue }
     if (isNewest) {
@@ -516,8 +539,8 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
 
     const userEntry = extractUserEntry(e)
     if (userEntry) { turns.push(userTurn(userEntry)); continue }
-    const queued = extractQueuedText(e)
-    if (queued) { turns.push({ role: 'user', text: queued }); continue }
+    const queued = extractQueuedEntry(e)
+    if (queued) { turns.push(userTurn(queued)); continue }
 
     // An assistant event can carry text, thinking and tool calls at once, and all three belong to
     // the same turn. Emitted together rather than as separate rows: they happened together, and
