@@ -1,5 +1,14 @@
 /**
- * NewSessionModal — starting a session from the dashboard.
+ * NewSessionModal — starting a session from the dashboard, as a FOUR-STEP WIZARD.
+ *
+ * It was one long scrolling form. Four questions in a column is a form; a form that starts a real
+ * assistant, in a real directory, spending real money, is a DECISION — and a decision is walked
+ * through and then reviewed. The last step shows every answer together, because that is the only
+ * moment somebody catches "wrong folder" before it costs them a session.
+ *
+ * What may ADVANCE is not decided here: `wizardSteps.ts` owns it, so "can I continue" and "what is
+ * missing" are answerable without a DOM. A wizard whose gating lives in JSX is a wizard nothing can
+ * check, and this one gates the most powerful act the server performs.
  *
  * It asks the FULL path the terminal wizard asks — assistant, where, task, model, effort, first
  * message, name — not a reduced form. What the web adds is that each answer is SHOWN rather than
@@ -16,11 +25,15 @@
  *   harness does not accept.
  */
 
-import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, FolderGit2, Folder, Loader, Search, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronDown, ChevronLeft, ChevronRight, Check, FolderGit2, Folder, Loader, Paperclip, Search, X } from 'lucide-react'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { effortColor, effortSteps } from '../../lib/effortScale'
 import { HarnessMark } from './HarnessMark'
+import {
+  STEP_ORDER, clearForHarness, nextStep, prevStep, stepReady, visibleQuestions,
+  type StepId, type WizardDraft, type WizardHarness,
+} from '../../lib/wizardSteps'
 
 interface HarnessOption {
   id: string
@@ -63,6 +76,19 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
+  /** Which question is on screen. The ORDER and the gating are `wizardSteps.ts`'s, not this file's. */
+  const [step, setStep] = useState<StepId>('assistant')
+  /**
+   * Files already uploaded to this machine, as `{name, path}`.
+   *
+   * Same shape and same reason as the composer's: the first message is TYPED into a tmux pane, so
+   * there is no channel a byte array could travel down — but every one of these CLIs reads a file
+   * it is pointed at. The chip says the name; the message carries the path.
+   */
+  const [attachments, setAttachments] = useState<{ name: string; path: string }[]>([])
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
     let alive = true
     const load = async () => {
@@ -85,13 +111,50 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
 
   // Reset the answers a DIFFERENT assistant does not accept. Carrying `effort: 'high'` across to a
   // harness whose set does not contain it would send a flag the CLI rejects at spawn.
-  useEffect(() => {
-    setModel('')
-    setEffort('')
-  }, [harness?.id])
-
   const efforts = useMemo(() => effortSteps(harness?.efforts ?? []), [harness])
-  const canStart = harness !== null && cwd !== '' && !busy
+
+  /** The selected assistant in the pure module's shape. One mapping, read by everything below. */
+  const wizardHarness: WizardHarness | null = useMemo(() => harness ? {
+    id: harness.id,
+    label: harness.label,
+    models: harness.modelSuggestions.map(m => ({ id: m, label: m })),
+    supportsModel: harness.supportsModel,
+    efforts: harness.efforts,
+  } : null, [harness])
+
+  /**
+   * The answers so far. Rebuilt each render rather than held as state: one source for each answer,
+   * and therefore no chance of the form and the gate disagreeing about what was chosen.
+   */
+  const draft: WizardDraft = useMemo(
+    () => ({ harness: harness?.id ?? '', cwd, task, model, effort, prompt, label, attachments }),
+    [harness, cwd, task, model, effort, prompt, label, attachments],
+  )
+
+  // `clearForHarness` decides what survives a change of assistant, so the rule lives in one tested
+  // place: a model or an effort the NEW assistant also names is KEPT, and anything it cannot accept
+  // is dropped rather than sent as a flag the CLI rejects at spawn.
+  useEffect(() => {
+    setModel(m => (wizardHarness && wizardHarness.models.some(x => x.id === m)) ? m : '')
+    setEffort(e => (wizardHarness && wizardHarness.efforts.includes(e)) ? e : '')
+  }, [wizardHarness])
+
+  const ready = stepReady(step, draft, wizardHarness)
+  const canStart = stepReady('review', draft, wizardHarness).ok && !busy
+  const stepIndex = STEP_ORDER.indexOf(step)
+
+  /** What a blocked step is waiting for, IN WORDS. A disabled button that says nothing is a bug. */
+  const blockedBecause = ready.ok ? null
+    : ready.missing === 'assistant'
+      ? (pt ? 'Escolha um assistente para continuar.' : 'Pick an assistant to continue.')
+      : (pt ? 'Escolha uma pasta para continuar.' : 'Pick a folder to continue.')
+
+  const STEP_TITLE: Record<StepId, string> = {
+    assistant: pt ? 'Assistente' : 'Assistant',
+    where: pt ? 'Onde' : 'Where',
+    message: pt ? 'Mensagem' : 'Message',
+    review: pt ? 'Revisão' : 'Review',
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -125,6 +188,92 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
     }
   }
 
+  /**
+   * Upload the picked files, one request each, and keep only what actually landed.
+   *
+   * A chip is added ONLY for a file the server confirmed and named a path for. Adding it
+   * optimistically would put a path into the first message that resolves to nothing, and the
+   * assistant would be told to read a file that is not there — a failure the person cannot see and
+   * the session cannot explain.
+   */
+  async function pick(list: FileList | null): Promise<void> {
+    const files = Array.from(list ?? [])
+    if (files.length === 0) return
+    setUploading(true)
+    for (const file of files) {
+      const body = new FormData()
+      body.append('file', file)
+      try {
+        const res = await fetch(`/api/fleet/attach?lang=${lang}`, { method: 'POST', body })
+        const json = await res.json() as { ok: boolean; path?: string; name?: string; message?: string }
+        if (json.ok && json.path && json.name) {
+          setAttachments(a => [...a, { name: json.name!, path: json.path! }])
+        } else {
+          setNotice(json.message ?? (pt ? 'O anexo falhou.' : 'The attachment failed.'))
+        }
+      } catch {
+        setNotice(pt ? 'Erro de rede ao enviar o anexo.' : 'Network error uploading the attachment.')
+      }
+    }
+    setUploading(false)
+    if (fileRef.current) fileRef.current.value = ''
+  }
+
+  /**
+   * THE REVIEW — every answer in one place, and the honest word for each one left unset.
+   *
+   * "Padrão do assistente" is not the same as blank: one says a decision was deferred to the CLI,
+   * the other reads as a field somebody forgot. A question the harness never asked (a model on a
+   * harness that names none) is ABSENT here rather than shown as unset, for the same reason it was
+   * skipped in step 1 — reporting "Model: default" for a harness with no model flag describes a
+   * choice nobody was offered.
+   */
+  const reviewPane = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <ReviewRow label={pt ? 'Assistente' : 'Assistant'} value={
+        harness ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+            <HarnessMark harness={harness.id} size={16} />
+            {(HARNESS_LABELS as Record<string, string>)[harness.id] ?? harness.label}
+          </span>
+        ) : null
+      } />
+      {visibleQuestions(wizardHarness).model && (
+        <ReviewRow label={pt ? 'Modelo' : 'Model'} value={model || null}
+          muted={model === '' ? (pt ? 'Padrão do assistente' : "The assistant's default") : undefined} />
+      )}
+      {visibleQuestions(wizardHarness).effort && (
+        <ReviewRow label={pt ? 'Esforço' : 'Effort'} value={effort || null}
+          muted={effort === '' ? (pt ? 'Padrão do assistente' : "The assistant's default") : undefined} />
+      )}
+      <ReviewRow label={pt ? 'Nome' : 'Name'} value={label || null}
+        muted={label === '' ? (pt ? 'Derivado da sessão' : 'Derived from the session') : undefined} />
+      <ReviewRow label={pt ? 'Onde' : 'Where'} value={cwd || null} mono />
+      <ReviewRow label={pt ? 'Tarefa' : 'Task'} value={task || null}
+        muted={task === '' ? (pt ? 'Nenhuma' : 'None') : undefined} />
+      <ReviewRow label={pt ? 'Primeira mensagem' : 'First message'} value={prompt || null}
+        muted={prompt === '' ? (pt ? 'Nenhuma — a sessão abre esperando você' : 'None — the session opens waiting for you') : undefined} />
+      {attachments.length > 0 && (
+        <ReviewRow label={pt ? 'Anexos' : 'Attachments'} value={
+          <span style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+            {attachments.map(a => (
+              <span key={a.path} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 8px',
+                borderRadius: 6, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                fontSize: 11.5,
+              }}>
+                <Paperclip size={11} /> {a.name}
+              </span>
+            ))}
+          </span>
+        } />
+      )}
+    </div>
+  )
+
+  /** The first message as it will be TYPED: the attachment paths, then the words. */
+  const promptWithAttachments = [...attachments.map(a => a.path), prompt].filter(x => x !== '').join('\n')
+
   async function start() {
     if (!canStart) return
     setBusy(true)
@@ -144,7 +293,10 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
           ...(task ? { task } : {}),
           ...(model ? { model } : {}),
           ...(effort ? { effort } : {}),
-          ...(prompt ? { prompt } : {}),
+          // The paths go FIRST, each on its own line, then what was typed — the same order the
+          // composer uses. An assistant reads the files it is pointed at, and a path buried inside
+          // a sentence is one it can miss.
+          ...(promptWithAttachments ? { prompt: promptWithAttachments } : {}),
           ...(label ? { label } : {}),
         }),
       })
@@ -185,9 +337,47 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
           display: 'flex', alignItems: 'center', gap: 10,
           padding: '16px 20px', borderBottom: '1px solid var(--border)',
         }}>
-          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
+          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
             {pt ? 'Nova sessão' : 'New session'}
           </h2>
+          {/* WHERE YOU ARE, and how far there is to go. A step you have PASSED is clickable — going
+              back to change an answer is an ordinary thing to want, and forcing it through "Back"
+              three times is the wizard being pleased with itself. A step AHEAD is not: it may be
+              gated by an answer this one has not given yet, and `stepReady` is what decides that. */}
+          <nav aria-label={pt ? 'Etapas' : 'Steps'} style={{ display: 'flex', alignItems: 'center', gap: 5, flex: 1 }}>
+            {STEP_ORDER.map((id, i) => {
+              const done = i < stepIndex
+              const here = id === step
+              return (
+                <button
+                  key={id}
+                  onClick={() => { if (done) setStep(id) }}
+                  disabled={!done && !here}
+                  aria-current={here ? 'step' : undefined}
+                  title={STEP_TITLE[id]}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
+                    borderRadius: 999, border: '1px solid ' + (here ? 'var(--anthropic-orange)' : 'transparent'),
+                    background: here ? 'var(--anthropic-orange-dim)' : 'transparent',
+                    color: here ? 'var(--anthropic-orange)' : done ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+                    cursor: done ? 'pointer' : 'default',
+                    fontFamily: 'inherit', fontSize: 11.5, fontWeight: here ? 700 : 500,
+                  }}
+                >
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 16, height: 16, borderRadius: 999, flexShrink: 0, fontSize: 9.5, fontWeight: 700,
+                    background: done ? 'var(--anthropic-orange)' : here ? 'transparent' : 'var(--bg-elevated)',
+                    color: done ? '#fff' : 'inherit',
+                    border: here ? '1px solid currentColor' : 'none',
+                  }}>
+                    {done ? <Check size={10} /> : i + 1}
+                  </span>
+                  {STEP_TITLE[id]}
+                </button>
+              )
+            })}
+          </nav>
           <button
             onClick={onClose}
             aria-label={pt ? 'Fechar' : 'Close'}
@@ -202,6 +392,10 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
         </header>
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* STEP 1 — WHO. The assistant, and the two answers that only exist once one is
+              chosen: a model and an effort. The NAME is here too — it is what you will look
+              for in the list later, so it is asked while you are deciding what this IS. */}
+          {step === 'assistant' && (<>
           <Field label={pt ? 'Assistente' : 'Assistant'}>
             {harnesses === null ? (
               <Muted text={pt ? 'Vendo o que está instalado…' : 'Checking what is installed…'} />
@@ -238,6 +432,81 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
             )}
           </Field>
 
+          {/* SKIPPED, not disabled, when the CLI has no such flag — see the header. Skipped for the
+              same reason when the harness offers NO names: `modelSuggestions` is empty exactly
+              where that CLI publishes no list of its own (see `spawn-spec.ts`), and a closed
+              dropdown whose only entry is "the assistant's default" is a control that cannot be
+              used. An absent picker says "we cannot name these for you"; a one-option one says
+              nothing at all. */}
+          {harness?.supportsModel && harness.modelSuggestions.length > 0 && (
+            <Field label={pt ? 'Modelo (opcional)' : 'Model (optional)'}>
+              {/* A CLOSED dropdown, never free text: `modelSuggestions` is the actual set this
+                  harness offers, and a typed id it does not recognise fails at spawn with no
+                  explanation on screen. The wizard's job is to offer only what will work. */}
+              <div style={{ position: 'relative' }}>
+                <select
+                  value={model}
+                  onChange={e => setModel(e.target.value)}
+                  style={{ ...inputStyle, paddingLeft: 12, paddingRight: 30, appearance: 'none', cursor: 'pointer' }}
+                >
+                  <option value="">{pt ? 'Padrão do assistente' : "The assistant's default"}</option>
+                  {harness.modelSuggestions.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <ChevronDown size={14} style={{
+                  position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+                  color: 'var(--text-tertiary)', pointerEvents: 'none',
+                }} />
+              </div>
+            </Field>
+          )}
+
+          {efforts.length > 0 && (
+            <Field label={pt ? 'Esforço (opcional)' : 'Effort (optional)'} hint={pt
+              ? 'Mais esforço pensa por mais tempo e custa mais. Sem escolha, usa o padrão do assistente.'
+              : 'More effort thinks for longer and costs more. Left unset, the assistant’s default applies.'}>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {efforts.map(step => {
+                  const on = effort === step.value
+                  const color = effortColor(step.intensity)
+                  return (
+                    <button
+                      key={step.value}
+                      onClick={() => setEffort(on ? '' : step.value)}
+                      className={on && step.peak ? 'ag-effort-peak' : undefined}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 7,
+                        padding: '8px 13px', borderRadius: 9, cursor: 'pointer',
+                        border: `1px solid ${on ? color : 'var(--border-subtle)'}`,
+                        background: on ? `color-mix(in srgb, ${color} 16%, transparent)` : 'var(--bg-elevated)',
+                        color: on ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        fontFamily: 'inherit', fontSize: 12.5, fontWeight: on ? 650 : 500,
+                        transition: 'background 0.15s, border-color 0.15s',
+                      }}
+                    >
+                      <span style={{ width: 8, height: 8, borderRadius: 4, background: color, flexShrink: 0 }} />
+                      {step.value}
+                    </button>
+                  )
+                })}
+              </div>
+            </Field>
+          )}
+
+          <Field label={pt ? 'Nome (opcional)' : 'Name (optional)'} hint={pt
+            ? 'Sem nome, a sessão usa o que o assistente chamar de si mesmo.'
+            : 'With no name, the session uses whatever the assistant calls itself.'}>
+            <input
+              value={label}
+              onChange={e => setLabel(e.target.value)}
+              placeholder={task || (pt ? 'Derivado' : 'Derived')}
+              style={{ ...inputStyle, paddingLeft: 12 }}
+            />
+          </Field>
+          </>)}
+
+          {/* STEP 2 — WHERE. The directory, and the task that files this session with its
+              siblings. Both are about the WORK rather than about the assistant. */}
+          {step === 'where' && (<>
           <Field label={pt ? 'Onde' : 'Where'}>
             <div style={{ position: 'relative', marginBottom: 8 }}>
               <Search size={13} style={{
@@ -303,67 +572,10 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
               {tasks.map(t => <option key={t} value={t} />)}
             </datalist>
           </Field>
+          </>)}
 
-          {/* SKIPPED, not disabled, when the CLI has no such flag — see the header. Skipped for the
-              same reason when the harness offers NO names: `modelSuggestions` is empty exactly
-              where that CLI publishes no list of its own (see `spawn-spec.ts`), and a closed
-              dropdown whose only entry is "the assistant's default" is a control that cannot be
-              used. An absent picker says "we cannot name these for you"; a one-option one says
-              nothing at all. */}
-          {harness?.supportsModel && harness.modelSuggestions.length > 0 && (
-            <Field label={pt ? 'Modelo (opcional)' : 'Model (optional)'}>
-              {/* A CLOSED dropdown, never free text: `modelSuggestions` is the actual set this
-                  harness offers, and a typed id it does not recognise fails at spawn with no
-                  explanation on screen. The wizard's job is to offer only what will work. */}
-              <div style={{ position: 'relative' }}>
-                <select
-                  value={model}
-                  onChange={e => setModel(e.target.value)}
-                  style={{ ...inputStyle, paddingLeft: 12, paddingRight: 30, appearance: 'none', cursor: 'pointer' }}
-                >
-                  <option value="">{pt ? 'Padrão do assistente' : "The assistant's default"}</option>
-                  {harness.modelSuggestions.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-                <ChevronDown size={14} style={{
-                  position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
-                  color: 'var(--text-tertiary)', pointerEvents: 'none',
-                }} />
-              </div>
-            </Field>
-          )}
-
-          {efforts.length > 0 && (
-            <Field label={pt ? 'Esforço (opcional)' : 'Effort (optional)'} hint={pt
-              ? 'Mais esforço pensa por mais tempo e custa mais. Sem escolha, usa o padrão do assistente.'
-              : 'More effort thinks for longer and costs more. Left unset, the assistant’s default applies.'}>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {efforts.map(step => {
-                  const on = effort === step.value
-                  const color = effortColor(step.intensity)
-                  return (
-                    <button
-                      key={step.value}
-                      onClick={() => setEffort(on ? '' : step.value)}
-                      className={on && step.peak ? 'ag-effort-peak' : undefined}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 7,
-                        padding: '8px 13px', borderRadius: 9, cursor: 'pointer',
-                        border: `1px solid ${on ? color : 'var(--border-subtle)'}`,
-                        background: on ? `color-mix(in srgb, ${color} 16%, transparent)` : 'var(--bg-elevated)',
-                        color: on ? 'var(--text-primary)' : 'var(--text-secondary)',
-                        fontFamily: 'inherit', fontSize: 12.5, fontWeight: on ? 650 : 500,
-                        transition: 'background 0.15s, border-color 0.15s',
-                      }}
-                    >
-                      <span style={{ width: 8, height: 8, borderRadius: 4, background: color, flexShrink: 0 }} />
-                      {step.value}
-                    </button>
-                  )
-                })}
-              </div>
-            </Field>
-          )}
-
+          {/* STEP 3 — WHAT. The first message, and the files it points at. */}
+          {step === 'message' && (<>
           <Field label={pt ? 'Primeira mensagem (opcional)' : 'First message (optional)'}>
             <textarea
               value={prompt}
@@ -374,16 +586,56 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
             />
           </Field>
 
-          <Field label={pt ? 'Nome (opcional)' : 'Name (optional)'} hint={pt
-            ? 'Sem nome, a sessão usa o que o assistente chamar de si mesmo.'
-            : 'With no name, the session uses whatever the assistant calls itself.'}>
+          <Field label={pt ? 'Anexos (opcional)' : 'Attachments (optional)'} hint={pt
+            ? 'Os arquivos ficam nesta máquina; a primeira mensagem carrega o caminho de cada um.'
+            : 'The files stay on this machine; the first message carries the path of each one.'}>
             <input
-              value={label}
-              onChange={e => setLabel(e.target.value)}
-              placeholder={task || (pt ? 'Derivado' : 'Derived')}
-              style={{ ...inputStyle, paddingLeft: 12 }}
+              ref={fileRef}
+              type="file"
+              multiple
+              onChange={e => void pick(e.target.files)}
+              style={{ display: 'none' }}
             />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+              {attachments.map(a => (
+                <span key={a.path} style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 6px 4px 9px',
+                  borderRadius: 8, background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border-subtle)', fontSize: 12,
+                }}>
+                  <Paperclip size={11} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+                  <span style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                  <button
+                    onClick={() => setAttachments(list => list.filter(x => x.path !== a.path))}
+                    aria-label={pt ? `Remover ${a.name}` : `Remove ${a.name}`}
+                    style={{
+                      display: 'flex', border: 'none', background: 'transparent', cursor: 'pointer',
+                      color: 'var(--text-tertiary)', padding: 2,
+                    }}
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+              <button
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 11px',
+                  borderRadius: 8, cursor: uploading ? 'default' : 'pointer',
+                  border: '1px dashed var(--border)', background: 'transparent',
+                  color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 12,
+                }}
+              >
+                {uploading ? <Loader size={12} /> : <Paperclip size={12} />}
+                {uploading ? (pt ? 'Enviando…' : 'Uploading…') : (pt ? 'Anexar arquivo' : 'Attach file')}
+              </button>
+            </div>
           </Field>
+          </>)}
+
+          {/* STEP 4 — the REVIEW, rendered by `reviewRows` below. */}
+          {step === 'review' && reviewPane}
 
           {notice && (
             <p role="status" style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: 'var(--anthropic-orange)' }}>
@@ -396,33 +648,96 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
           display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8,
           padding: '14px 20px', borderTop: '1px solid var(--border)',
         }}>
+          {/* WHY THE STEP IS BLOCKED, beside the button that will not move. A disabled control
+              with no sentence next to it is indistinguishable from a broken one — the rule this
+              product applies to every refusal, applied to a wizard. */}
+          {blockedBecause && (
+            <span role="status" style={{ marginRight: 'auto', fontSize: 12, color: 'var(--text-tertiary)' }}>
+              {blockedBecause}
+            </span>
+          )}
           <button
-            onClick={onClose}
+            onClick={() => (stepIndex === 0 ? onClose() : setStep(prevStep(step)))}
             style={{
+              display: 'flex', alignItems: 'center', gap: 6,
               padding: '9px 14px', borderRadius: 9, cursor: 'pointer',
               border: '1px solid var(--border-subtle)', background: 'transparent',
               color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 13,
             }}
           >
-            {pt ? 'Cancelar' : 'Cancel'}
+            {stepIndex > 0 && <ChevronLeft size={14} />}
+            {stepIndex === 0 ? (pt ? 'Cancelar' : 'Cancel') : (pt ? 'Voltar' : 'Back')}
           </button>
-          <button
-            onClick={() => void start()}
-            disabled={!canStart}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 7,
-              padding: '9px 16px', borderRadius: 9, border: 'none',
-              background: canStart ? 'var(--anthropic-orange)' : 'var(--bg-elevated)',
-              color: canStart ? '#fff' : 'var(--text-tertiary)',
-              cursor: canStart ? 'pointer' : 'default',
-              fontFamily: 'inherit', fontSize: 13, fontWeight: 650,
-            }}
-          >
-            {busy && <Loader size={14} />}
-            {pt ? 'Iniciar sessão' : 'Start session'}
-          </button>
+          {step !== 'review' ? (
+            <button
+              onClick={() => { if (ready.ok) setStep(nextStep(step)) }}
+              disabled={!ready.ok}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '9px 16px', borderRadius: 9, border: 'none',
+                background: ready.ok ? 'var(--anthropic-orange)' : 'var(--bg-elevated)',
+                color: ready.ok ? '#fff' : 'var(--text-tertiary)',
+                cursor: ready.ok ? 'pointer' : 'default',
+                fontFamily: 'inherit', fontSize: 13, fontWeight: 650,
+              }}
+            >
+              {pt ? 'Continuar' : 'Continue'}
+              <ChevronRight size={14} />
+            </button>
+          ) : (
+            <button
+              onClick={() => void start()}
+              disabled={!canStart}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 7,
+                padding: '9px 16px', borderRadius: 9, border: 'none',
+                background: canStart ? 'var(--anthropic-orange)' : 'var(--bg-elevated)',
+                color: canStart ? '#fff' : 'var(--text-tertiary)',
+                cursor: canStart ? 'pointer' : 'default',
+                fontFamily: 'inherit', fontSize: 13, fontWeight: 650,
+              }}
+            >
+              {busy && <Loader size={14} />}
+              {busy
+                ? (pt ? 'Iniciando…' : 'Starting…')
+                : (pt ? 'Iniciar sessão' : 'Start session')}
+            </button>
+          )}
         </footer>
       </div>
+    </div>
+  )
+}
+
+/**
+ * One line of the review: what was asked, and what will be used.
+ *
+ * `muted` is the answer for a question left unset, and it is a SENTENCE rather than a blank — "the
+ * assistant's default" and "none" are decisions, while an empty cell reads as a field somebody
+ * forgot to fill in and sends the reader back through the steps looking for it.
+ */
+function ReviewRow({ label, value, muted, mono }: {
+  label: string
+  value: React.ReactNode | null
+  muted?: string
+  mono?: boolean
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 12,
+      padding: '9px 0', borderBottom: '1px solid var(--border-subtle)',
+    }}>
+      <span style={{
+        minWidth: 132, flexShrink: 0, fontSize: 11, fontWeight: 700, letterSpacing: 0.3,
+        textTransform: 'uppercase', color: 'var(--text-tertiary)', paddingTop: 1,
+      }}>{label}</span>
+      <span style={{
+        flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.5,
+        color: value ? 'var(--text-primary)' : 'var(--text-tertiary)',
+        fontStyle: value ? 'normal' : 'italic',
+        fontFamily: mono && value ? 'var(--font-mono, ui-monospace, monospace)' : 'inherit',
+        wordBreak: 'break-word', whiteSpace: 'pre-wrap',
+      }}>{value ?? muted ?? '—'}</span>
     </div>
   )
 }
