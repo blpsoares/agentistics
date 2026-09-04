@@ -1273,6 +1273,46 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       })
     }
 
+    // ONE stored attachment, BY NAME — the gallery's preview, and the size under it.
+    //
+    // Narrower than `/api/fleet/attachment` above in both directions, on purpose. It takes a NAME
+    // rather than a path, so `attachmentPathByName` can refuse a traversal by construction instead
+    // of resolving one; and it serves only IMAGES, so a preview route can never become a general
+    // reader of agentop's own directory. HEAD answers the SIZE without the bytes, which is what the
+    // list column is for — a size fetched by downloading the file is not a size, it is a download.
+    //
+    // Guarded by the `/api/fleet` PREFIX in `capability-guard.ts` (localShell) and 404'd on a
+    // central with the rest of `/api/fleet*`, both above — neither needs a new entry, which is the
+    // point of the prefix.
+    //
+    // A refused name, a non-image and a missing file all get the same bare 404. Which of the three
+    // it was is not this reader's to say, and the path is never echoed back.
+    if (url.pathname === '/api/fleet/attachment/by-name' && (req.method === 'GET' || req.method === 'HEAD')) {
+      const { attachmentPathByName, attachmentImageType } = await import('./sessions/attachment-web')
+      const name = url.searchParams.get('name') ?? ''
+      const resolved = attachmentPathByName(name)
+      const type = resolved === null ? null : attachmentImageType(name)
+      if (resolved === null || type === null) {
+        return new Response(null, { status: 404, headers: CORS_HEADERS })
+      }
+      const file = Bun.file(resolved)
+      if (!(await file.exists())) {
+        return new Response(null, { status: 404, headers: CORS_HEADERS })
+      }
+      // Only what this route OWNS. `nosniff` (so the browser cannot decide a type the extension
+      // did not), the CSP that keeps a directly-opened SVG's script from running, and `no-store`
+      // (a name can be reused by a later upload, and a cache keyed on the URL would then serve the
+      // wrong image under the right name) are all set by `handleRequest`'s own
+      // `securityHeaders` wrapper for every `/api/` response, and it SETS rather than appends —
+      // repeating them here would be a header that never ships, which is worse than none because
+      // it reads as a guarantee.
+      const headers = { ...CORS_HEADERS, 'Content-Type': type, 'Content-Length': String(file.size) }
+      // HEAD is the size question. It carries the same headers and no body — the whole reason it
+      // exists is that the answer must not cost the bytes.
+      if (req.method === 'HEAD') return new Response(null, { headers })
+      return new Response(file, { headers })
+    }
+
     // What this machine can start, and from where. `q` searches the LOCAL project store, so the
     // picker works with the server's own data cold.
     if (url.pathname === '/api/fleet/new' && req.method === 'GET') {

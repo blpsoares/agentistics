@@ -51,6 +51,8 @@ import {
 } from '../../lib/skillMenu'
 import { quoteLines, replyAuthor, replyPreview } from '../../lib/replyQuote'
 import { lastSentMessage, turnAnchorId } from '../../lib/lastSent'
+import { goToTurn } from '../../lib/turnScroll'
+import { attachmentName, isImageAttachment, splitMessage } from '../../lib/messageAttachments'
 import { overlayPadding } from '../../lib/mobileOverlay'
 import { HARNESS_LABELS } from '../../lib/harness'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -623,17 +625,14 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
    */
   const goToMessage = useCallback(() => {
     if (!lastSent) return
-    const el = document.getElementById(turnAnchorId(lastSent.kind, lastSent.index))
-    if (!el) {
+    setAtTail(false)
+    // `goToTurn` is the ONE implementation of this gesture — the gallery's right-click menu offers
+    // it too, and two copies would be two chances to disagree about which element they look for.
+    if (!goToTurn(lastSent.kind, lastSent.index)) {
       setNotice(pt
         ? 'Essa mensagem não está mais na conversa carregada.'
         : 'That message is no longer in the loaded conversation.')
-      return
     }
-    setAtTail(false)
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    el.classList.add('ag-turn-flash')
-    window.setTimeout(() => el.classList.remove('ag-turn-flash'), 1800)
   }, [lastSent, pt])
 
   /** ONE stable reference for every bubble's reply button — see `ChatBubble`'s memo. */
@@ -1687,7 +1686,7 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                 fontFamily: 'inherit', fontSize: 12.5, lineHeight: 1.6,
                 color: 'var(--text-primary)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
               }}>
-                {splitImageAttachments(lastSent.text).text}
+                {splitMessage(lastSent.text).text}
               </pre>
             )}
 
@@ -1696,13 +1695,17 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                 an image in it read as one that began with a filename. Split by the SAME rule the
                 chat bubbles use (`splitImageAttachments`), never a second one: the two are reading
                 the identical text, and two rules over one string is how they come to disagree. */}
-            {splitImageAttachments(lastSent.text).images.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {splitImageAttachments(lastSent.text).images.map(a => (
+            {/* THE FILES IT CARRIED, split by PROVENANCE rather than by looks: `splitMessage`
+                answers "which leading lines did the composer send", which is the question a recall
+                is asking, while `splitImageAttachments` answers "which lines can I preview". An
+                image is shown; anything else is named. */}
+            {splitMessage(lastSent.text).attachments.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                {splitMessage(lastSent.text).attachments.map(a => isImageAttachment(a) ? (
                   <img
                     key={a}
                     src={attachmentUrl(a)}
-                    alt={a.split('/').pop() ?? a}
+                    alt={attachmentName(a)}
                     title={a}
                     style={{
                       height: 72, width: 'auto', maxWidth: 160, objectFit: 'cover',
@@ -1710,6 +1713,16 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                       background: 'var(--bg-base)',
                     }}
                   />
+                ) : (
+                  <span key={a} title={a} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px',
+                    borderRadius: 8, background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border-subtle)', fontSize: 11.5,
+                    maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    <Paperclip size={11} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+                    {attachmentName(a)}
+                  </span>
                 ))}
               </div>
             )}
