@@ -84,6 +84,13 @@ export interface ChatBubbleProps {
    * if `onReply` is actually stable across a re-render caused by something unrelated, like typing.
    */
   onReply?: (turn: ChatTurn) => void
+  /**
+   * A DOM id for this bubble, so something outside the conversation can scroll to it.
+   *
+   * The id is composed by `lastSent.ts`'s `turnAnchorId` — one rule shared by whatever renders the
+   * bubble and whatever goes looking for it, so "go to message" can never hunt an id nothing wrote.
+   */
+  anchorId?: string
 }
 
 /**
@@ -120,7 +127,7 @@ const SYSTEM_NOTE_PT: Record<string, string> = {
   'injected by the assistant': 'injetado pelo assistente',
 }
 
-export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, onReply }: ChatBubbleProps) {
+export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, onReply, anchorId }: ChatBubbleProps) {
   const pt = lang === 'pt'
   const mine = turn.role === 'user'
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
@@ -215,7 +222,7 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
   const name = (HARNESS_LABELS as Record<string, string>)[harness] ?? harness
 
   return (
-    <div className="ag-bubble" style={{
+    <div className="ag-bubble" {...(anchorId ? { id: anchorId } : {})} style={{
       display: 'flex', gap: 10, minWidth: 0,
       flexDirection: mine ? 'row-reverse' : 'row',
       alignItems: 'flex-start',

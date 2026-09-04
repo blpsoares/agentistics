@@ -28,7 +28,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ChevronUp, CornerUpLeft, Loader, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
+import { ArrowDown, ChevronUp, CornerUpLeft, History, Loader, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { ApprovalCard } from './ApprovalCard'
@@ -47,6 +47,8 @@ import {
   applySkill, emptyPickerReason, filterSkills, flattenGroups, groupSkills, slashQuery, stepSkill,
 } from '../../lib/skillMenu'
 import { quoteLines, replyAuthor, replyPreview } from '../../lib/replyQuote'
+import { lastSentMessage, turnAnchorId } from '../../lib/lastSent'
+import { overlayPadding } from '../../lib/mobileOverlay'
 import { HARNESS_LABELS } from '../../lib/harness'
 import { useIsMobile } from '../../hooks/useIsMobile'
 
@@ -342,6 +344,21 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
 
   const [notice, setNotice] = useState<string | null>(null)
   const [atTail, setAtTail] = useState(true)
+  /**
+   * THE LAST MESSAGE YOU SENT — the modal, and which of its two faces is showing.
+   *
+   * `null` is closed. `'ask'` is the three options; `'text'` is the message itself, read inside the
+   * modal rather than by hunting for it in the conversation.
+   */
+  const [recall, setRecall] = useState<'ask' | 'text' | null>(null)
+  // Escape closes it. A dialog that can only be dismissed with the mouse is one a keyboard cannot
+  // leave — the same rule the composer's "more options" menu already follows.
+  useEffect(() => {
+    if (recall === null) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setRecall(null) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [recall])
   /** Messages sent from here and not yet seen in the transcript. See the header. */
   const [echo, setEcho] = useState<string[]>(() => sessionScratch.readEchoes(session.id))
 
@@ -510,6 +527,16 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
 
   const turns = useMemo(() => payload?.turns ?? [], [payload])
 
+  /**
+   * The last message the PERSON sent, echoes included. Every exclusion is in `lastSent.ts` — the
+   * transcript files things nobody typed under the user's own role, and recalling one of those as
+   * "your last message" is the defect `chat-envelope.ts` already exists to have fixed once.
+   *
+   * `null` means they have not sent one, and the control is then ABSENT rather than inert: a button
+   * whose only outcome is a modal saying "nothing" is a control that exists to refuse.
+   */
+  const lastSent = useMemo(() => lastSentMessage(turns, echo), [turns, echo])
+
   // Retire an echo the moment the transcript carries it. Compared on collapsed whitespace, because
   // the harness re-wraps what it stores and an exact match would leave the echo standing forever
   // beside its own committed copy.
@@ -543,6 +570,30 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
   }, [])
+
+  /**
+   * Take the reader to the recalled message and MARK it.
+   *
+   * A scroll on its own answers nothing on a column of similar-looking bubbles — "it moved, to
+   * which one?" — so the bubble flashes and the class is removed afterwards, leaving nothing on the
+   * page marked. If the element is not there (the transcript was re-fetched between opening the
+   * modal and pressing the button, and the turn is no longer rendered) the modal SAYS so instead of
+   * a button that silently does nothing.
+   */
+  const goToMessage = useCallback(() => {
+    if (!lastSent) return
+    const el = document.getElementById(turnAnchorId(lastSent.kind, lastSent.index))
+    if (!el) {
+      setNotice(pt
+        ? 'Essa mensagem não está mais na conversa carregada.'
+        : 'That message is no longer in the loaded conversation.')
+      return
+    }
+    setAtTail(false)
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('ag-turn-flash')
+    window.setTimeout(() => el.classList.remove('ag-turn-flash'), 1800)
+  }, [lastSent, pt])
 
   /** ONE stable reference for every bubble's reply button — see `ChatBubble`'s memo. */
   const onReplyToTurn = useCallback((t: ChatTurn) => {
@@ -768,6 +819,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
               turn={t}
               lang={lang}
               harness={session.harness}
+              anchorId={turnAnchorId('turn', i)}
               {...(canPrompt ? { onReply: onReplyToTurn } : {})}
             />
           ))}
@@ -782,6 +834,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
               turn={{ role: 'user', text }}
               lang={lang}
               harness={session.harness}
+              anchorId={turnAnchorId('echo', i)}
               awaiting
             />
           ))}
@@ -1228,6 +1281,24 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     whether or not the stop is there — a margin on send alone would push the more
                     button off to the right on its own the moment a turn ended. */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
+                {/* THE LAST MESSAGE YOU SENT. ABSENT until there is one — `lastSent` is null on a
+                    conversation nobody has written into yet, and a control whose only outcome is a
+                    modal saying "nothing" is one that exists to refuse. It sits with the acting
+                    group because it is about what you have already sent, not about composing. */}
+                {lastSent && (
+                  <button
+                    onClick={() => setRecall('ask')}
+                    aria-label={pt ? 'Sua última mensagem' : 'Your last message'}
+                    title={pt ? 'Sua última mensagem' : 'Your last message'}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      width: 34, height: 34, borderRadius: 9, border: 'none', flexShrink: 0,
+                      background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer',
+                    }}
+                  >
+                    <History size={15} />
+                  </button>
+                )}
                 {/* Working's own stop, right beside the field it does not block. Absent the moment
                     the turn ends — a stop control on an idle session would send Escape into its
                     prompt, which is exactly the row's own gate on `interrupt`. */}
@@ -1490,8 +1561,112 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
           )}
         </div>
       </div>
+
+      {/* THE RECALL MODAL. Exactly three options, because there are exactly three things somebody
+          asking "what did I send?" wants: to be taken to it, to read it here, or to have asked
+          nothing. Full-screen on a phone — a centred fixed-width dialog is pushed off-screen by
+          iOS Safari the moment the page overflows horizontally. */}
+      {recall && lastSent && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={pt ? 'Sua última mensagem' : 'Your last message'}
+          onClick={() => setRecall(null)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            // The status bar's inset on a full-screen phone dialog — see `mobileOverlay.ts`.
+            padding: overlayPadding(isMobile, 24), background: 'rgba(0,0,0,0.55)',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0,
+              width: isMobile ? '100%' : 'min(520px, 100%)',
+              height: isMobile ? '100%' : 'auto',
+              maxHeight: isMobile ? '100%' : '80vh',
+              padding: isMobile ? '18px 16px' : 20,
+              borderRadius: isMobile ? 0 : 16,
+              background: 'var(--bg-card)', border: '1px solid var(--border)',
+              boxShadow: '0 24px 60px rgba(0,0,0,0.45)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <History size={15} style={{ flexShrink: 0, color: 'var(--anthropic-orange)' }} />
+              <h3 style={{ margin: 0, flex: 1, fontSize: 14, fontWeight: 650, color: 'var(--text-primary)' }}>
+                {pt ? 'Sua última mensagem' : 'Your last message'}
+              </h3>
+              {/* Said plainly: a message this session has not read yet is a different fact from one
+                  already in its transcript, and the reader is about to be sent to a faded bubble. */}
+              {lastSent.kind === 'echo' && (
+                <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                  {pt ? 'ainda não lida' : 'not read yet'}
+                </span>
+              )}
+            </div>
+
+            {recall === 'ask' ? (
+              <p style={{
+                margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--text-tertiary)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {replyPreview(lastSent.text)}
+              </p>
+            ) : (
+              // The WHOLE message, wrapped and scrolling inside its own box: a prompt here is
+              // routinely forty lines, and a modal that grows with it would run off the screen.
+              <pre style={{
+                margin: 0, flex: isMobile ? 1 : '0 1 auto', minHeight: 0,
+                maxHeight: isMobile ? 'none' : '46vh', overflow: 'auto',
+                padding: 12, borderRadius: 10,
+                background: 'var(--bg-base)', border: '1px solid var(--border-subtle)',
+                fontFamily: 'inherit', fontSize: 12.5, lineHeight: 1.6,
+                color: 'var(--text-primary)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+              }}>
+                {lastSent.text}
+              </pre>
+            )}
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => { setRecall(null); goToMessage() }}
+                style={recallButton(isMobile, 'primary')}
+              >
+                {pt ? 'Ir para a mensagem' : 'Go to message'}
+              </button>
+              {/* Once the text is on screen, offering "view" again would be a button that does
+                  nothing — so it becomes the way back to the three options. */}
+              <button
+                onClick={() => setRecall(recall === 'text' ? 'ask' : 'text')}
+                style={recallButton(isMobile, 'plain')}
+              >
+                {recall === 'text'
+                  ? (pt ? 'Voltar' : 'Back')
+                  : (pt ? 'Ver mensagem' : 'View message')}
+              </button>
+              <button onClick={() => setRecall(null)} style={recallButton(isMobile, 'plain')}>
+                {pt ? 'Cancelar' : 'Cancel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+/** The recall modal's buttons. 44px of finger on a phone, and nowhere else. */
+function recallButton(isMobile: boolean, kind: 'primary' | 'plain'): React.CSSProperties {
+  return {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    minHeight: isMobile ? 44 : 34, padding: '0 14px', borderRadius: 9,
+    border: kind === 'primary' ? 'none' : '1px solid var(--border)',
+    background: kind === 'primary' ? 'var(--anthropic-orange)' : 'transparent',
+    color: kind === 'primary' ? '#fff' : 'var(--text-secondary)',
+    fontFamily: 'inherit', fontSize: 12.5, fontWeight: kind === 'primary' ? 650 : 500,
+    cursor: 'pointer', flexGrow: isMobile ? 1 : 0,
+  }
 }
 
 /** Whitespace-insensitive, because the harness re-wraps what it stores. */

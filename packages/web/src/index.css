@@ -573,6 +573,30 @@ button:focus-within .ag-row-pin,
   --ag-text-on-scrim-dim: rgba(255, 255, 255, 0.55);
 }
 
+/*
+ * "Go to message" landed here.
+ *
+ * A scroll on its own answers "did it move, and to what?" with nothing — on a conversation of
+ * similar-looking bubbles the reader has to guess which one was meant. The flash names it and then
+ * gets out of the way; it is removed after it runs, so nothing on the page stays marked.
+ */
+@keyframes ag-turn-flash {
+  0%, 100% { background: transparent; }
+  15%, 55% { background: color-mix(in srgb, var(--anthropic-orange) 22%, transparent); }
+}
+.ag-turn-flash {
+  animation: ag-turn-flash 1.6s ease-in-out;
+  border-radius: 14px;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No pulse, but the message is still MARKED — dropping the highlight entirely would leave the
+     control with no visible effect at all for anyone who asked for less motion. */
+  .ag-turn-flash {
+    animation: none;
+    background: color-mix(in srgb, var(--anthropic-orange) 18%, transparent);
+  }
+}
+
 /* The bubble's reply control. Revealed with the bubble — a column of controls down a conversation
    competes with the words — and always reachable by keyboard.
 
