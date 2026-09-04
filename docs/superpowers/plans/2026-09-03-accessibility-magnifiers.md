@@ -2757,9 +2757,13 @@ function FollowLens({ style, scheduler }: { style: LensStyle; scheduler: MirrorS
     return () => { scheduler.unregister('__follow__'); host.destroy() }
   }, [scheduler])
 
-  if (!pos) return null
-
-  const placed = { ...style, x: pos.x - style.width / 2, y: pos.y - style.height / 2 }
+  // NEVER `return null` here. The mirror effect above resolves `stageRef.current` once, on mount;
+  // unmounting the stage whenever the pointer is outside the window would mean the very first
+  // render (pos === null) registers nothing and the lens stays blank forever. It is HIDDEN
+  // instead, so the stage element the effect captured stays mounted for the component's life.
+  const hidden = pos === null
+  const at = pos ?? { x: -9999, y: -9999 }
+  const placed = { ...style, x: at.x - style.width / 2, y: at.y - style.height / 2 }
   const t = stageTransform(placed)
 
   return (
@@ -2770,6 +2774,7 @@ function FollowLens({ style, scheduler }: { style: LensStyle; scheduler: MirrorS
       overflow: 'hidden', background: 'var(--bg-base)',
       boxShadow: '0 6px 24px rgba(0,0,0,0.35)',
       pointerEvents: 'none', zIndex: 2147483050, boxSizing: 'border-box',
+      visibility: hidden ? 'hidden' : 'visible',
     }}>
       <div ref={stageRef} style={{
         width: '100vw', height: '100vh', transformOrigin: '0 0',
@@ -2780,12 +2785,11 @@ function FollowLens({ style, scheduler }: { style: LensStyle; scheduler: MirrorS
 }
 ```
 
-**The stage must render before `pos` is null-checked or the mirror is registered and destroyed on
-every mouse exit.** Keep the early `return null` where it is — the two effects run in the parent's
-lifetime because `FollowLens` is mounted only while `followOn` is true, and `pos === null` only
-skips the frame, not the component. If the browser check in Step 3 shows the lens is blank on
-return from outside the window, move the `null` check to render an invisible frame
-(`opacity: 0, visibility: 'hidden'`) instead of returning null, so the stage stays mounted.
+**Why it hides instead of unmounting:** `createMirrorHost(stage)` captures `stageRef.current` once,
+in an effect with `[scheduler]` as its only dependency. A `return null` while `pos` is null means
+that effect runs against a null ref on the very first render, bails out, and never runs again — so
+the follow lens would register no mirror at all and stay blank forever. Hiding keeps the stage
+mounted for the component's whole life. Do not "simplify" this back to an early return.
 
 - [ ] **Step 2: Render it**
 
@@ -2820,7 +2824,7 @@ Ask the human:
 > 4. `Ctrl+Shift+Z` again turns it off.
 > 5. After a page reload it is off again.
 
-If (3) comes back blank, apply the fallback noted in Step 1.
+If (3) comes back blank, the stage is being unmounted — re-read the note in Step 1.
 
 - [ ] **Step 5: Commit**
 
