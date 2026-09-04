@@ -50,6 +50,7 @@ import {
 } from '../../lib/skillMenu'
 import { quoteLines, replyAuthor, replyPreview } from '../../lib/replyQuote'
 import { lastSentMessage, turnAnchorId } from '../../lib/lastSent'
+import { attachmentName, splitMessage } from '../../lib/messageAttachments'
 import { overlayPadding } from '../../lib/mobileOverlay'
 import { HARNESS_LABELS } from '../../lib/harness'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -1660,8 +1661,28 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                 fontFamily: 'inherit', fontSize: 12.5, lineHeight: 1.6,
                 color: 'var(--text-primary)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
               }}>
-                {lastSent.text}
+                {splitMessage(lastSent.text).text}
               </pre>
+            )}
+
+            {/* THE FILES IT CARRIED. A sent message is paths plus words joined by newlines, and
+                showing it raw rendered the paths as the first lines of the prose — so a message
+                with an image in it read as a message that began with a filename. They are chips
+                here, named, and the modal says how many. */}
+            {splitMessage(lastSent.text).attachments.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {splitMessage(lastSent.text).attachments.map(a => (
+                  <span key={a} title={a} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 9px',
+                    borderRadius: 8, background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border-subtle)', fontSize: 11.5,
+                    maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    <Paperclip size={11} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+                    {attachmentName(a)}
+                  </span>
+                ))}
+              </div>
             )}
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' }}>
