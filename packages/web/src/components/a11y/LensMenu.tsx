@@ -5,7 +5,7 @@
 import React from 'react'
 import type { MagnifierLens } from '@agentistics/core'
 import { ZOOM_MAX, ZOOM_MIN, LENS_MIN_PX, BORDER_MIN_PX, BORDER_MAX_PX } from '@agentistics/core'
-import { SIZE_SLIDER_MAX_PX, ZOOM_STEP } from '../../lib/magnifier'
+import { SIZE_SLIDER_MAX_PX, ZOOM_SLIDER_STEP, fmtZoom } from '../../lib/magnifier'
 import type { A11yText } from './i18n'
 
 interface Props {
@@ -65,9 +65,9 @@ export function LensMenu({ lens, x, y, text, isMobile, onChange, onRemove, onDup
       }}>
         <div style={row}>
           <span>{text.zoom}</span>
-          <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_STEP} value={lens.zoom}
+          <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_SLIDER_STEP} value={lens.zoom}
             onChange={e => onChange({ zoom: Number(e.target.value) })} style={slider} />
-          <strong style={{ minWidth: 36, textAlign: 'right' }}>{lens.zoom}×</strong>
+          <strong style={{ minWidth: 36, textAlign: 'right' }}>{fmtZoom(lens.zoom)}×</strong>
         </div>
         <div style={row}>
           <span>{text.shape}</span>

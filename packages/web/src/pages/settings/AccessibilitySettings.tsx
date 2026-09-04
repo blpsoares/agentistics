@@ -11,8 +11,20 @@ import type { LensStyle } from '@agentistics/core'
 import { BORDER_MAX_PX, BORDER_MIN_PX, CORNER_MAX_PX, LENS_MIN_PX, ZOOM_MAX, ZOOM_MIN } from '@agentistics/core'
 import type { AppContext } from '../../lib/app-context'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { SIZE_SLIDER_MAX_PX, ZOOM_STEP } from '../../lib/magnifier'
+import { SIZE_SLIDER_MAX_PX, ZOOM_SLIDER_STEP, fmtZoom } from '../../lib/magnifier'
 import { a11yText, type A11yText } from '../../components/a11y/i18n'
+
+/** The preview's fixed footprint — the frame scales DOWN into this, preserving its aspect ratio,
+ *  so dragging the size slider always visibly changes the shape (see `StyleEditor`'s preview
+ *  block for why saturating at a shared cap made every lens look identical here). */
+const PREVIEW_MAX_W = 220
+const PREVIEW_MAX_H = 160
+/**
+ * The preview sample's font size at zoom 1×, BEFORE the preview's own scale is applied. It is a
+ * SAMPLE, not a measurement of anything real on the page — there is no "true" base size to derive
+ * it from — so this is picked purely to stay legible across the whole zoom range once scaled.
+ */
+const PREVIEW_SAMPLE_BASE_PX = 10
 
 function StyleEditor({
   style, onChange, text, isMobile,
@@ -33,6 +45,15 @@ function StyleEditor({
     background: on ? 'var(--anthropic-orange-dim)' : 'transparent',
     color: 'var(--text-primary)',
   })
+
+  // Scale the frame DOWN to fit the fixed preview footprint, preserving its aspect ratio — the
+  // tighter of the two ratios wins, so the frame always touches one edge of the footprint and
+  // never overflows the other. Unlike the old `Math.min(style.width, 220)`, this is never
+  // saturated: every width/height drag changes `previewScale`, and therefore the rendered shape.
+  const effectiveHeight = style.shape === 'circle' ? style.width : style.height
+  const previewScale = Math.min(PREVIEW_MAX_W / style.width, PREVIEW_MAX_H / effectiveHeight)
+  const previewWidth = style.width * previewScale
+  const previewHeight = effectiveHeight * previewScale
 
   return (
     <div>
@@ -69,9 +90,9 @@ function StyleEditor({
 
       <div style={row}>
         <span style={label}>{text.zoom}</span>
-        <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_STEP} value={style.zoom} style={{ flex: 1 }}
+        <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_SLIDER_STEP} value={style.zoom} style={{ flex: 1 }}
           onChange={e => onChange({ ...style, zoom: Number(e.target.value) })} />
-        <span style={value}>{style.zoom}×</span>
+        <span style={value}>{fmtZoom(style.zoom)}×</span>
       </div>
 
       <div style={row}>
@@ -90,21 +111,34 @@ function StyleEditor({
         </div>
       )}
 
-      {/* The preview uses the same border rule the real lens uses, so what is configured is what
-          will appear. It shows the FRAME, not a live mirror: a mirror here would magnify the
-          settings page and say nothing about the setting. */}
+      {/* The preview uses the same border rule the real lens uses (colour and thickness are
+          never scaled — only the frame's footprint and the sample text are), so what is
+          configured is what will appear, scaled down to fit. It shows the FRAME, not a live
+          mirror: a mirror here would magnify the settings page and say nothing about the
+          setting. The sample text stands in for the ZOOM setting, which a static frame cannot
+          otherwise show at all. */}
       <div style={{
         marginTop: 10, display: 'flex', justifyContent: 'center',
         padding: 12, background: 'var(--bg-base)', borderRadius: 10,
       }}>
         <div style={{
-          width: Math.min(style.width, 220),
-          height: style.shape === 'circle' ? Math.min(style.width, 220) : Math.min(style.height, 160),
+          width: previewWidth,
+          height: previewHeight,
           border: `${style.borderWidth}px solid var(--anthropic-orange)`,
-          borderRadius: style.shape === 'circle' ? '50%' : Math.min(style.cornerRadius, 40),
+          borderRadius: style.shape === 'circle' ? '50%' : style.cornerRadius * previewScale,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: 'var(--text-tertiary)', fontSize: 12, boxSizing: 'border-box',
-        }}>{style.zoom}×</div>
+          overflow: 'hidden', boxSizing: 'border-box',
+        }}>
+          {/* The sample's font size is the zoom applied to a fixed base size, THEN scaled down
+              by the SAME factor the frame itself was scaled by (`previewScale`) — matching the
+              two scales is what keeps the sample's apparent size, relative to the frame, honest
+              to what the real zoom setting would do to real page content inside a real lens of
+              this size. Using a different factor for either one would make them disagree. */}
+          <span style={{
+            color: 'var(--text-tertiary)', whiteSpace: 'nowrap', lineHeight: 1,
+            fontSize: PREVIEW_SAMPLE_BASE_PX * style.zoom * previewScale,
+          }}>{text.zoom}</span>
+        </div>
       </div>
     </div>
   )
@@ -189,7 +223,7 @@ export default function AccessibilitySettings() {
                   <tr key={page} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={{ padding: 8, color: 'var(--text-primary)', fontFamily: 'ui-monospace, monospace' }}>{page}</td>
                     <td style={{ padding: 8 }}>{lenses.length}</td>
-                    <td style={{ padding: 8 }}>{lenses.map(l => `${l.zoom}×`).join(' · ')}</td>
+                    <td style={{ padding: 8 }}>{lenses.map(l => `${fmtZoom(l.zoom)}×`).join(' · ')}</td>
                     <td style={{ padding: 8, textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button style={{ ...smallBtn, color: 'var(--text-secondary)' }} onClick={() => navigate(page)}>
                         {text.goToPage}

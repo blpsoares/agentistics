@@ -8,9 +8,9 @@
  * Pinned is glass: controls gone, `pointerEvents: none` on the whole frame, clicks pass through.
  */
 import React, { useEffect, useRef } from 'react'
-import { Pin, PinOff, Move, X, Plus, Minus } from 'lucide-react'
+import { Pin, PinOff, Move, X, Plus, Minus, Sliders } from 'lucide-react'
 import type { MagnifierLens } from '@agentistics/core'
-import { stageTransform, lensControls, ZOOM_STEP } from '../../lib/magnifier'
+import { stageTransform, lensControls, fmtZoom, ZOOM_STEP } from '../../lib/magnifier'
 import { createMirrorHost, type MirrorScheduler } from '../../lib/magnifierMirror'
 import type { A11yText } from './i18n'
 
@@ -33,10 +33,12 @@ interface Props {
   onSelect(): void
   onRemove(): void
   onContextMenu(e: React.MouseEvent): void
+  /** Opens the SAME menu `onContextMenu` opens — the visible `config` control's whole job. */
+  onOpenMenu(e: React.MouseEvent): void
 }
 
 export function Lens({
-  lens, index, selected, revealed, text, isMobile, scheduler, onChange, onSelect, onRemove, onContextMenu,
+  lens, index, selected, revealed, text, isMobile, scheduler, onChange, onSelect, onRemove, onContextMenu, onOpenMenu,
 }: Props) {
   const stageRef = useRef<HTMLDivElement | null>(null)
   const drag = useRef<{ mode: 'move' | 'resize'; px: number; py: number; from: MagnifierLens } | null>(null)
@@ -156,6 +158,11 @@ export function Lens({
           >
             <Move size={14} color="#fff" />
             <span style={{ flex: 1 }} />
+            {shown.has('config') && (
+              <button style={btn} aria-label={text.config}
+                onPointerDown={e => e.stopPropagation()}
+                onClick={onOpenMenu}><Sliders size={14} /></button>
+            )}
             {shown.has('zoomOut') && (
               <button style={btn} aria-label={text.zoomOut}
                 onPointerDown={e => e.stopPropagation()}
@@ -163,7 +170,7 @@ export function Lens({
             )}
             {shown.has('zoomLabel') && (
               <span style={{ color: '#fff', fontSize: 11, fontWeight: 700, minWidth: ZOOM_LABEL_PX, textAlign: 'center' }}>
-                {lens.zoom}×
+                {fmtZoom(lens.zoom)}×
               </span>
             )}
             {shown.has('zoomIn') && (

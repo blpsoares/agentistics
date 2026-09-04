@@ -247,6 +247,14 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
             a11y.select(lens.id)
             setMenu({ id: lens.id, x: e.clientX, y: e.clientY })
           }}
+          // The visible `config` control opens the exact same menu the right-click does, at the
+          // button's own position rather than wherever the pointer happens to be — a menu opening
+          // somewhere other than the control that was pressed reads as a different action.
+          onOpenMenu={e => {
+            e.stopPropagation()
+            a11y.select(lens.id)
+            setMenu({ id: lens.id, x: e.clientX, y: e.clientY })
+          }}
         />
       ))}
       {a11y.followOn && <FollowLens style={a11y.prefs.followLens} scheduler={scheduler} />}

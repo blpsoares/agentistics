@@ -1,3 +1,5 @@
+import { fmtZoom } from '../../lib/magnifier'
+
 /** EN/PT strings for the magnifier feature, resolved at render like the rest of the app. */
 export interface A11yText {
   tab: string
@@ -20,6 +22,8 @@ export interface A11yText {
   zoom: string
   zoomIn: string
   zoomOut: string
+  /** The lens's own visible settings-menu button — opens the same menu the right-click does. */
+  config: string
   /** A single lens's own accessible name — an ordinal, never the internal `lens-N` id. */
   lensLabel(n: number): string
   shape: string
@@ -78,6 +82,7 @@ export function a11yText(lang: 'pt' | 'en'): A11yText {
     zoom: pt ? 'Ampliação' : 'Zoom',
     zoomIn: pt ? 'Aproximar' : 'Zoom in',
     zoomOut: pt ? 'Afastar' : 'Zoom out',
+    config: pt ? 'Configurações da lupa' : 'Lens settings',
     lensLabel: n => (pt ? `Lupa ${n}` : `Lens ${n}`),
     shape: pt ? 'Formato' : 'Shape',
     circle: pt ? 'Círculo' : 'Circle',
@@ -133,9 +138,11 @@ export function a11yText(lang: 'pt' | 'en'): A11yText {
         ],
     removed: pt ? 'Lupa removida.' : 'Lens removed.',
     lensReleased: pt ? 'Lupa solta.' : 'Lens released.',
+    // `fmtZoom` rounds to 2 decimals — a screen reader is exactly where a raw binary-float zoom
+    // (0.05-stepped values can leave e.g. `0.6499999999999999`) would be read out loud verbatim.
     announce: (name, zoom, w, h, x, y, pinned) =>
       pt
-        ? `${name}, ampliação ${zoom} vezes, ${Math.round(w)} por ${Math.round(h)}, em ${Math.round(x)} por ${Math.round(y)}, ${pinned ? 'fixada' : 'solta'}.`
-        : `${name}, zoom ${zoom} times, ${Math.round(w)} by ${Math.round(h)}, at ${Math.round(x)} by ${Math.round(y)}, ${pinned ? 'pinned' : 'unpinned'}.`,
+        ? `${name}, ampliação ${fmtZoom(zoom)} vezes, ${Math.round(w)} por ${Math.round(h)}, em ${Math.round(x)} por ${Math.round(y)}, ${pinned ? 'fixada' : 'solta'}.`
+        : `${name}, zoom ${fmtZoom(zoom)} times, ${Math.round(w)} by ${Math.round(h)}, at ${Math.round(x)} by ${Math.round(y)}, ${pinned ? 'pinned' : 'unpinned'}.`,
   }
 }

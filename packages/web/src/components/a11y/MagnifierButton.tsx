@@ -18,9 +18,10 @@
  */
 import React, { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search } from 'lucide-react'
+import { ZoomIn } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { useIsMobile, useIsCoarsePointer } from '../../hooks/useIsMobile'
+import { fmtZoom } from '../../lib/magnifier'
 import { a11yText } from './i18n'
 
 /** Clearance kept from the viewport edge the dropdown opens towards. */
@@ -92,7 +93,7 @@ export function MagnifierButton({ ctx }: { ctx: AppContext }) {
           color: 'var(--anthropic-orange)', cursor: 'pointer', position: 'relative', flexShrink: 0,
         }}
       >
-        <Search size={isMobile ? 18 : 14} />
+        <ZoomIn size={isMobile ? 18 : 14} />
         {a11y.lenses.length > 0 && (
           <span style={{
             position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, padding: '0 4px',
@@ -130,7 +131,7 @@ export function MagnifierButton({ ctx }: { ctx: AppContext }) {
                 <span style={{ flex: 1, fontSize: 12, color: 'var(--text-secondary)' }}>
                   {/* The lens's own id ("lens-2") is internal and must never reach a person — the
                      same ordinal label MagnifierLayer's announcements and Lens.tsx's aria-label use. */}
-                  {text.lensLabel(i + 1)} · {l.zoom}×{l.pinned ? ` · ${text.pin}` : ''}
+                  {text.lensLabel(i + 1)} · {fmtZoom(l.zoom)}×{l.pinned ? ` · ${text.pin}` : ''}
                 </span>
                 <button style={{ ...item, width: 'auto', padding: '6px 8px' }}
                   onClick={() => { a11y.select(l.id); setOpen(false) }}>{text.select}</button>

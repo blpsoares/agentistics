@@ -11,7 +11,7 @@ import {
   Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowLeft, ArrowRight, PanelLeft,
   GitBranch, Users, LogOut, Server, KeyRound, Tag as TagIcon,
-  ShieldCheck, Cpu, MessagesSquare, TerminalSquare, Search,
+  ShieldCheck, Cpu, MessagesSquare, TerminalSquare, ZoomIn,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import { usePlanBasis } from './hooks/usePlanBasis'
@@ -713,10 +713,10 @@ function MobileBottomNav({
     { key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { closeSheet(); navigate('/compare') }, active: location.pathname.startsWith('/compare') },
     // Only while the feature is OFF: once it's on, the header magnifier button (beside the bell)
     // is the way in, and two entry points to the same screen on a phone is one too many. Same
-    // Search icon as the header button — one feature, one icon.
+    // ZoomIn icon as the header button — one feature, one icon.
     ...(a11yEnabled
       ? []
-      : [{ key: 'accessibility', label: pt ? 'Acessibilidade' : 'Accessibility', icon: Search, onClick: () => { closeSheet(); navigate('/settings/accessibility') }, active: location.pathname.startsWith('/settings/accessibility') } as Tile]),
+      : [{ key: 'accessibility', label: pt ? 'Acessibilidade' : 'Accessibility', icon: ZoomIn, onClick: () => { closeSheet(); navigate('/settings/accessibility') }, active: location.pathname.startsWith('/settings/accessibility') } as Tile]),
   ]
   const activeIssueCount = healthIssues?.length ?? 0
   const actionTiles: Tile[] = [

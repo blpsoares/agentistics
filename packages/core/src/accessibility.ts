@@ -43,7 +43,12 @@ export interface AccessibilityPrefs {
   lensesByPage: Record<string, MagnifierLens[]>
 }
 
-export const ZOOM_MIN = 1.5
+/**
+ * 0.55, not 1: a lens that REDUCES (shows more context at a glance) is as legitimate a use as one
+ * that magnifies — the geometry already supports it (`sourceRect` divides by zoom, so below 1 the
+ * source region is simply larger than the lens), this constant was the only thing refusing it.
+ */
+export const ZOOM_MIN = 0.55
 export const ZOOM_MAX = 20
 export const LENS_MIN_PX = 60
 export const LENS_MAX_PX = 2000

@@ -16,7 +16,19 @@ export type LensKeyResult = MagnifierLens | 'remove' | 'deselect' | null
 export const MOVE_STEP_PX = 10
 export const MOVE_FINE_PX = 1
 export const RESIZE_STEP_PX = 10
+/** The KEYBOARD zoom step (`+`/`-`, and the on-lens zoom-in/out buttons) — unchanged by the
+ *  ZOOM_MIN range now reaching 0.55: `clampLens` floors at `ZOOM_MIN`, so a run of `-` presses
+ *  still lands exactly on 0.55 at the bottom. */
 export const ZOOM_STEP = 0.5
+/**
+ * A zoom SLIDER's step, deliberately finer than `ZOOM_STEP`. `ZOOM_MIN`..`ZOOM_MAX` (0.55..20) is
+ * a wide range, and a slider stepping by the keyboard's 0.5 would offer exactly ONE stop below
+ * 1× (0.55, then straight to 1.05) — usable at the keyboard, where each press is a deliberate
+ * step, but a single jump is not a slider a user can drag to a felt-out value. This constant is UI
+ * only (like `SIZE_SLIDER_MAX_PX`, which is why it lives here and not beside `ZOOM_MIN` in
+ * `@agentistics/core`) and never touches `clampLens` or `applyLensKey`.
+ */
+export const ZOOM_SLIDER_STEP = 0.05
 /**
  * The width/height sliders' UI ceiling — deliberately far below `LENS_MAX_PX` (2000). It is a
  * usability choice (a lens that large eats the whole screen and the live preview with it), not a
@@ -34,6 +46,18 @@ export function pageKey(pathname: string): string {
   const p = pathname.split('?')[0]!.split('#')[0]!
   if (p === '' || p === '/') return '/'
   return p.endsWith('/') ? p.slice(0, -1) : p
+}
+
+/**
+ * A zoom value for display, everywhere one is shown — the lens's own label, its menu, the
+ * settings preview and readout, and the announcement sentence. `ZOOM_SLIDER_STEP` (0.05) and
+ * repeated `+`/`-` arithmetic on `ZOOM_STEP` (0.5) can both leave a binary-float remainder (e.g.
+ * `0.6499999999999999`), which is invisible at the old integer-only range (1.5..20) and would
+ * otherwise surface the moment the floor moved to 0.55. Rounding to two decimals is enough
+ * precision to tell 0.55 from 1.05 apart and never enough to hide an intentional step.
+ */
+export function fmtZoom(zoom: number): string {
+  return (Math.round(zoom * 100) / 100).toString()
 }
 
 /**
@@ -139,20 +163,29 @@ export function applyLensKey(lens: MagnifierLens, key: string, mods: KeyMods): L
   return null
 }
 
-export type LensControl = 'drag' | 'pin' | 'remove' | 'zoomOut' | 'zoomIn' | 'zoomLabel'
+export type LensControl = 'drag' | 'config' | 'pin' | 'remove' | 'zoomOut' | 'zoomIn' | 'zoomLabel'
 
 /**
  * Which controls fit in a lens this wide, most important first — the same problem the TUI's
  * `fitColumns` solves for a table row, applied to the lens header strip.
  *
  * `drag` is never dropped: without it the lens cannot be moved, and a clipped strip is one no
- * gesture can repair. `zoomOut`/`zoomIn` are added as a PAIR or not at all — a lone zoom button
- * would let you go one way and not the other, which is a worse control than neither.
+ * gesture can repair. `config` sits second, right after `drag`, on purpose: it opens the lens's
+ * own menu, which reaches EVERY other setting here (zoom, size, shape, border, pin, duplicate,
+ * remove) — so a lens narrow enough to show only two controls still gives the user full command
+ * of it, where dropping `config` first would leave that lens movable but unconfigurable except by
+ * a right-click nobody is told exists. `zoomOut`/`zoomIn` are added as a PAIR or not at all — a
+ * lone zoom button would let you go one way and not the other, which is a worse control than
+ * neither.
  */
 export function lensControls(innerWidthPx: number, controlPx: number, labelPx: number): LensControl[] {
   const controls: LensControl[] = ['drag']
   // The drag handle costs about one control's worth of width in the header strip.
   let used = controlPx
+
+  if (innerWidthPx - used < controlPx) return controls
+  controls.push('config')
+  used += controlPx
 
   if (innerWidthPx - used < controlPx) return controls
   controls.push('pin')
