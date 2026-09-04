@@ -2609,7 +2609,7 @@ export default function AppLayout() {
     totalInputTokens, totalOutputTokens,
     setExpandedChart, setSelectedSession, setInfoModalIndex,
     infoItems,
-    cardOrder, setCardOrder: setCardOrder as unknown as React.Dispatch<React.SetStateAction<string[]>>,
+    cardOrder, setCardOrder,
     cardPrecision, setCardPrecision,
     sessionCountByProject, models, modelGroups, modelsInProject, users: usersWithMachines,
     harnesses: data.harnesses,

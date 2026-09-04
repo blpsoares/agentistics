@@ -56,11 +56,26 @@ export function useAccessibility(): A11yState {
   const loadedRef = useRef(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // The source of truth every MUTATOR reads from. Two mutators can run in the same JS turn (a
+  // dragged lens's position update landing alongside a follow-style change, coalesced pointer
+  // events) — before React re-renders, so both would otherwise close over the same stale `prefs`
+  // and the second `setPrefs()` would clobber the first under React's batching. Reading and
+  // writing this ref inside `commit()` keeps it exactly in lockstep with committed state, so a
+  // mutator started a moment later always sees the previous mutator's result. The RENDER path
+  // (the values this hook returns) must keep coming from React state, never from this ref, or the
+  // UI stops re-rendering.
+  const prefsRef = useRef<AccessibilityPrefs>(DEFAULT_ACCESSIBILITY_PREFS)
+
   useEffect(() => {
     let cancelled = false
     fetch('/api/accessibility')
       .then(r => (r.ok ? r.json() : null))
-      .then(body => { if (!cancelled) setPrefs(sanitizeAccessibilityPrefs(body)) })
+      .then(body => {
+        if (cancelled) return
+        const sanitized = sanitizeAccessibilityPrefs(body)
+        prefsRef.current = sanitized
+        setPrefs(sanitized)
+      })
       .catch(() => { /* a failed load leaves the defaults; it must never blank the dashboard */ })
       .finally(() => {
         if (cancelled) return
@@ -77,6 +92,7 @@ export function useAccessibility(): A11yState {
   }, [])
 
   const commit = useCallback((next: AccessibilityPrefs) => {
+    prefsRef.current = next
     setPrefs(next)
     if (!loadedRef.current) return
     if (saveTimer.current) clearTimeout(saveTimer.current)
@@ -92,19 +108,23 @@ export function useAccessibility(): A11yState {
   const rawLenses = useMemo(() => prefs.lensesByPage[page] ?? [], [prefs.lensesByPage, page])
   const lenses = useMemo(() => rawLenses.map(l => clampLens(l, vp)), [rawLenses, vp])
 
-  const setPageLenses = useCallback((next: MagnifierLens[]) => {
-    const byPage = { ...prefs.lensesByPage }
-    if (next.length === 0) delete byPage[page]
-    else byPage[page] = next
-    commit({ ...prefs, lensesByPage: byPage })
-  }, [prefs, page, commit])
+  // `setPageLenses` and every mutator below read `prefsRef.current` rather than the render-closure
+  // `prefs`/`rawLenses`, so two mutations in one JS turn compose instead of the second one
+  // clobbering the first.
+  const setPageLenses = useCallback((p: string, next: MagnifierLens[]) => {
+    const current = prefsRef.current
+    const byPage = { ...current.lensesByPage }
+    if (next.length === 0) delete byPage[p]
+    else byPage[p] = next
+    commit({ ...current, lensesByPage: byPage })
+  }, [commit])
 
-  const freeId = useCallback(() => {
-    const taken = new Set(rawLenses.map(l => l.id))
+  const freeId = useCallback((existing: readonly MagnifierLens[]) => {
+    const taken = new Set(existing.map(l => l.id))
     let n = 1
     while (taken.has(`lens-${n}`)) n++
     return `lens-${n}`
-  }, [rawLenses])
+  }, [])
 
   return {
     prefs,
@@ -114,35 +134,42 @@ export function useAccessibility(): A11yState {
     selectedId,
     followOn,
     announcement,
-    setEnabled: on => commit({ ...prefs, enabled: on }),
-    setFollowStyle: style => commit({ ...prefs, followLens: style }),
-    setNewLensDefaults: style => commit({ ...prefs, newLensDefaults: style }),
+    setEnabled: on => commit({ ...prefsRef.current, enabled: on }),
+    setFollowStyle: style => commit({ ...prefsRef.current, followLens: style }),
+    setNewLensDefaults: style => commit({ ...prefsRef.current, newLensDefaults: style }),
     addLens: () => {
-      const made = newLens(prefs.newLensDefaults, viewport(), new Set(rawLenses.map(l => l.id)))
-      setPageLenses([...rawLenses, made])
+      const current = prefsRef.current.lensesByPage[page] ?? []
+      const made = newLens(prefsRef.current.newLensDefaults, viewport(), new Set(current.map(l => l.id)))
+      setPageLenses(page, [...current, made])
       setSelectedId(made.id)
     },
     updateLens: (id, patch) => {
-      setPageLenses(rawLenses.map(l => (l.id === id ? clampLens({ ...l, ...patch }, viewport()) : l)))
+      const current = prefsRef.current.lensesByPage[page] ?? []
+      setPageLenses(page, current.map(l => (l.id === id ? clampLens({ ...l, ...patch }, viewport()) : l)))
     },
     duplicateLens: id => {
-      const src = rawLenses.find(l => l.id === id)
+      const current = prefsRef.current.lensesByPage[page] ?? []
+      const src = current.find(l => l.id === id)
       if (!src) return
-      const copy = { ...src, id: freeId(), x: src.x + 24, y: src.y + 24, pinned: false }
-      setPageLenses([...rawLenses, clampLens(copy, viewport())])
+      const copy = { ...src, id: freeId(current), x: src.x + 24, y: src.y + 24, pinned: false }
+      setPageLenses(page, [...current, clampLens(copy, viewport())])
       setSelectedId(copy.id)
     },
     removeLens: id => {
-      setPageLenses(rawLenses.filter(l => l.id !== id))
+      const current = prefsRef.current.lensesByPage[page] ?? []
+      setPageLenses(page, current.filter(l => l.id !== id))
       setSelectedId(prev => (prev === id ? null : prev))
     },
     removePage: p => {
-      const byPage = { ...prefs.lensesByPage }
+      const byPage = { ...prefsRef.current.lensesByPage }
       delete byPage[p]
-      commit({ ...prefs, lensesByPage: byPage })
+      commit({ ...prefsRef.current, lensesByPage: byPage })
       if (p === page) setSelectedId(null)
     },
-    setAllPinned: pinned => setPageLenses(rawLenses.map(l => ({ ...l, pinned }))),
+    setAllPinned: pinned => {
+      const current = prefsRef.current.lensesByPage[page] ?? []
+      setPageLenses(page, current.map(l => ({ ...l, pinned })))
+    },
     select: setSelectedId,
     toggleFollow: () => setFollowOn(v => !v),
     announce: setAnnouncement,

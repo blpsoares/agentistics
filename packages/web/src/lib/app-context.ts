@@ -4,6 +4,7 @@ import type { PlanBasisView } from '../hooks/usePlanBasis'
 import type { A11yState } from '../hooks/useAccessibility'
 import type { TagDef } from './tagMatch'
 import type { ChatModelId } from './chatModels'
+import type { CardId } from './cardOrder'
 
 type DerivedStats = NonNullable<ReturnType<typeof useDerivedStats>>
 
@@ -138,8 +139,8 @@ export interface AppContext {
   infoItems: InfoItem[]
 
   // card order for home page (managed via preferences)
-  cardOrder: string[]
-  setCardOrder: React.Dispatch<React.SetStateAction<string[]>>
+  cardOrder: CardId[]
+  setCardOrder: React.Dispatch<React.SetStateAction<CardId[]>>
 
   // per-card full precision toggle
   cardPrecision: Record<string, boolean>
