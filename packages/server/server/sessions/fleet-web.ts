@@ -376,9 +376,18 @@ export interface FleetNewOptions {
      * on an older build keeps working off the first and simply prints ids.
      */
     models: ModelOption[]
+    /**
+     * What this CLI uses when no `--model` is passed, and ONLY where the CLI publishes it. Absent
+     * for every harness today — see the defaults block in `spawn-spec.ts`. A client renders the
+     * name when it is here and its own "the assistant's default" when it is not; it may never
+     * invent one.
+     */
+    defaultModel?: string
     supportsModel: boolean
     /** A genuine closed enum, printed by the CLI itself. Empty means it has no effort flag. */
     efforts: string[]
+    /** The effort used when none is passed, under exactly `defaultModel`'s rule. */
+    defaultEffort?: string
   }[]
   /** Ranked places, from the LOCAL store — so the picker answers with no network and a cold cache. */
   projects: { path: string; label: string; repo?: string; detail: string; source: string }[]
@@ -413,8 +422,10 @@ export async function readNewOptions(lang: CliLang, query: string): Promise<Flee
         label: h.label,
         modelSuggestions: [...h.modelSuggestions],
         models: modelsFor(h.id),
+        ...(h.defaultModel ? { defaultModel: h.defaultModel } : {}),
         supportsModel: h.supportsModel,
         efforts: [...h.efforts],
+        ...(h.defaultEffort ? { defaultEffort: h.defaultEffort } : {}),
       })),
       projects: projects.map(p => ({
         path: p.path,

@@ -32,8 +32,8 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { effortColor, effortSteps } from '../../lib/effortScale'
 import { HarnessMark } from './HarnessMark'
 import {
-  STEP_ORDER, clearForHarness, modelDisplay, nextStep, prevStep, stepReady, visibleQuestions,
-  type MissingAnswer, type StepId, type WizardDraft, type WizardHarness,
+  STEP_ORDER, clearForHarness, modelDisplay, nextStep, prevStep, stepReady, unsetAnswer,
+  visibleQuestions, type MissingAnswer, type StepId, type WizardDraft, type WizardHarness,
 } from '../../lib/wizardSteps'
 
 interface HarnessOption {
@@ -49,6 +49,13 @@ interface HarnessOption {
   models?: { id: string; label: string }[]
   supportsModel: boolean
   efforts: string[]
+  /**
+   * What the CLI uses when the flag is not passed, and ONLY where the CLI publishes it — see the
+   * defaults block in `spawn-spec.ts`, which is the one place either value may be established.
+   * Absent from an older server's answer, and absent today from every harness.
+   */
+  defaultModel?: string
+  defaultEffort?: string
 }
 
 interface ProjectOption {
@@ -136,6 +143,8 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
     models: harness.models ?? harness.modelSuggestions.map(m => ({ id: m, label: m })),
     supportsModel: harness.supportsModel,
     efforts: harness.efforts,
+    ...(harness.defaultModel ? { defaultModel: harness.defaultModel } : {}),
+    ...(harness.defaultEffort ? { defaultEffort: harness.defaultEffort } : {}),
   } : null, [harness])
 
   /**
@@ -172,6 +181,23 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
     cwd: pt ? 'Escolha uma pasta para continuar.' : 'Pick a folder to continue.',
   }
   const blockedBecause = ready.ok || !ready.missing ? null : BLOCKED_BECAUSE[ready.missing]
+
+  /**
+   * WHAT HAPPENS IF YOU LEAVE IT ALONE — named where the CLI publishes it, vague where it does not.
+   *
+   * `unsetAnswer` is the rule; this is only the wording. "Default (sonnet)" tells a reader whether
+   * skipping the question was the right call, which "the assistant's default" never could — and
+   * where no default could be read out of the CLI's own output the vague sentence is the only
+   * honest one, because a named default we cannot verify is read at a glance and believed.
+   */
+  const unsetText = (published: string | undefined): string => {
+    const answer = unsetAnswer(published)
+    return answer.known
+      ? (pt ? `Padrão (${answer.value})` : `Default (${answer.value})`)
+      : (pt ? 'Padrão do assistente' : "The assistant's default")
+  }
+  const modelUnset = unsetText(harness?.defaultModel)
+  const effortUnset = unsetText(harness?.defaultEffort)
 
   const STEP_TITLE: Record<StepId, string> = {
     assistant: pt ? 'Assistente' : 'Assistant',
@@ -275,17 +301,19 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
         return (
           <ReviewRow label={pt ? 'Modelo' : 'Model'}
             value={shown ? (
-              <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 7 }}>
+              // Wraps: at 390px the review's value column is ~165px, and a name plus its id is
+              // wider than that on several of agy's models. Wrapping keeps the page from scrolling
+              // sideways, which is the one thing no screen here may do.
+              <span style={{ display: 'inline-flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 7 }}>
                 {shown.label}
                 {shown.id && <ModelId id={shown.id} />}
               </span>
             ) : null}
-            muted={pt ? 'Padrão do assistente' : "The assistant's default"} />
+            muted={modelUnset} />
         )
       })()}
       {visibleQuestions(wizardHarness).effort && (
-        <ReviewRow label={pt ? 'Esforço' : 'Effort'} value={effort || null}
-          muted={effort === '' ? (pt ? 'Padrão do assistente' : "The assistant's default") : undefined} />
+        <ReviewRow label={pt ? 'Esforço' : 'Effort'} value={effort || null} muted={effortUnset} />
       )}
       {/* No `muted` fallback: the title is required, so the review can never reach this row with
           nothing in it — and offering a sentence for a state the gate forbids would describe a
@@ -525,15 +553,15 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
                 value={model}
                 onChange={setModel}
                 options={wizardHarness!.models}
-                unsetLabel={pt ? 'Padrão do assistente' : "The assistant's default"}
+                unsetLabel={modelUnset}
               />
             </Field>
           )}
 
           {efforts.length > 0 && (
             <Field label={pt ? 'Esforço (opcional)' : 'Effort (optional)'} hint={pt
-              ? 'Mais esforço pensa por mais tempo e custa mais. Sem escolha, usa o padrão do assistente.'
-              : 'More effort thinks for longer and costs more. Left unset, the assistant’s default applies.'}>
+              ? `Mais esforço pensa por mais tempo e custa mais. Sem escolha: ${effortUnset}.`
+              : `More effort thinks for longer and costs more. Left unset: ${effortUnset}.`}>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {efforts.map(step => {
                   const on = effort === step.value

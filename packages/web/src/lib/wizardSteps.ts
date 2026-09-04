@@ -32,6 +32,9 @@ export interface WizardHarness {
   models: { id: string; label: string }[]
   supportsModel: boolean
   efforts: string[]
+  /** What the CLI itself publishes as its default, where it publishes one. See `unsetAnswer`. */
+  defaultModel?: string
+  defaultEffort?: string
 }
 
 export interface WizardDraft {
@@ -113,6 +116,26 @@ export function modelDisplay(
   // full model name — so it is shown as itself rather than dropped.
   const label = models.find(m => m.id === id)?.label ?? id
   return { label, id: label === id ? null : id }
+}
+
+/**
+ * What to say for a question left UNSET.
+ *
+ * "The assistant's default" names a thing without saying what it is, which leaves the reader with
+ * no way to tell whether leaving the field alone was the right call. Where the CLI publishes the
+ * answer, the wizard says it — "Default (sonnet)". Where it does not, the vague sentence is the
+ * only honest one available, and naming a default we could not read out of the tool's own output
+ * would be the confident-wrong-answer this product refuses everywhere else.
+ *
+ * Every harness reports `known: false` today; `spawn-spec.ts` records what was checked, per CLI,
+ * and how. The blank string is treated as ABSENT rather than as a default named "": a field that
+ * arrived empty is a field nobody filled in.
+ */
+export type UnsetAnswer = { known: true; value: string } | { known: false }
+
+export function unsetAnswer(published: string | undefined | null): UnsetAnswer {
+  const value = (published ?? '').trim()
+  return value === '' ? { known: false } : { known: true, value }
 }
 
 export function nextStep(step: StepId): StepId {

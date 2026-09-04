@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  STEP_ORDER, clearForHarness, modelDisplay, nextStep, prevStep, stepReady, visibleQuestions,
-  type WizardDraft,
+  STEP_ORDER, clearForHarness, modelDisplay, nextStep, prevStep, stepReady, unsetAnswer,
+  visibleQuestions, type WizardDraft,
 } from './wizardSteps'
 
 const claude = {
@@ -85,6 +85,20 @@ describe('modelDisplay', () => {
   })
   it('says nothing at all for an unset model — that is a sentence, not a value', () => {
     expect(modelDisplay(models, '')).toBeNull()
+  })
+})
+
+describe('unsetAnswer', () => {
+  it('names the default when the CLI published one', () => {
+    expect(unsetAnswer('sonnet')).toEqual({ known: true, value: 'sonnet' })
+  })
+  it('says it cannot name one when nothing was published', () => {
+    expect(unsetAnswer(undefined)).toEqual({ known: false })
+    expect(unsetAnswer(null)).toEqual({ known: false })
+  })
+  it('treats a blank as absent — an empty field is nobody naming a default', () => {
+    expect(unsetAnswer('')).toEqual({ known: false })
+    expect(unsetAnswer('   ')).toEqual({ known: false })
   })
 })
 
