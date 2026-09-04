@@ -10,6 +10,7 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import type { MenuEntry } from '../../lib/rowMenu'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 export interface SessionRowMenuProps {
   x: number
@@ -21,6 +22,9 @@ export interface SessionRowMenuProps {
 
 export function SessionRowMenu({ x, y, entries, onPick, onClose }: SessionRowMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
+  // 44px of finger on a phone, and nowhere else. This menu is reached by a LONG PRESS on touch,
+  // so every one of its entries is a touch target by construction.
+  const isMobile = useIsMobile()
 
   useEffect(() => {
     const away = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose() }
@@ -35,9 +39,10 @@ export function SessionRowMenu({ x, y, entries, onPick, onClose }: SessionRowMen
 
   // Flipped rather than clamped: a menu pinned to the viewport edge covers the row it belongs to.
   const w = 210
+  const rowH = isMobile ? 44 : 34
   const left = x + w > window.innerWidth ? Math.max(4, x - w) : x
-  const top = y + entries.length * 34 + 12 > window.innerHeight
-    ? Math.max(4, y - (entries.length * 34 + 12))
+  const top = y + entries.length * rowH + 12 > window.innerHeight
+    ? Math.max(4, y - (entries.length * rowH + 12))
     : y
 
   return createPortal(
@@ -61,6 +66,7 @@ export function SessionRowMenu({ x, y, entries, onPick, onClose }: SessionRowMen
           onClick={() => { if (e.enabled) { onPick(e.action); onClose() } }}
           style={{
             display: 'flex', alignItems: 'center', width: '100%', gap: 8,
+            minHeight: isMobile ? 44 : 0,
             padding: '8px 10px', borderRadius: 7, border: 'none', textAlign: 'left',
             background: 'transparent', fontFamily: 'inherit', fontSize: 12.5,
             color: e.enabled ? 'var(--text-primary)' : 'var(--text-tertiary)',

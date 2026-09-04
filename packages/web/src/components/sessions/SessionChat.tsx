@@ -50,6 +50,7 @@ import {
 } from '../../lib/skillMenu'
 import { quoteLines, replyAuthor, replyPreview } from '../../lib/replyQuote'
 import { lastSentMessage, turnAnchorId } from '../../lib/lastSent'
+import { goToTurn } from '../../lib/turnScroll'
 import { attachmentName, splitMessage } from '../../lib/messageAttachments'
 import { overlayPadding } from '../../lib/mobileOverlay'
 import { HARNESS_LABELS } from '../../lib/harness'
@@ -601,17 +602,14 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
    */
   const goToMessage = useCallback(() => {
     if (!lastSent) return
-    const el = document.getElementById(turnAnchorId(lastSent.kind, lastSent.index))
-    if (!el) {
+    setAtTail(false)
+    // `goToTurn` is the ONE implementation of this gesture — the gallery's right-click menu offers
+    // it too, and two copies would be two chances to disagree about which element they look for.
+    if (!goToTurn(lastSent.kind, lastSent.index)) {
       setNotice(pt
         ? 'Essa mensagem não está mais na conversa carregada.'
         : 'That message is no longer in the loaded conversation.')
-      return
     }
-    setAtTail(false)
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    el.classList.add('ag-turn-flash')
-    window.setTimeout(() => el.classList.remove('ag-turn-flash'), 1800)
   }, [lastSent, pt])
 
   /** ONE stable reference for every bubble's reply button — see `ChatBubble`'s memo. */

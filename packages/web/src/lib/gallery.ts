@@ -104,6 +104,19 @@ export function galleryGroups(turns: readonly GalleryTurn[]): GalleryGroup[] {
 export interface GalleryImage {
   path: string
   group: GalleryGroup
+  /**
+   * WHICH file this is, not which path — `<message>:<position in that message>`.
+   *
+   * The identity has to survive the same file being sent twice: matching on the path alone made
+   * clicking the second copy open the first, because two entries legitimately share it. Built by
+   * `galleryImageKey` so the caller and this list can never disagree about the spelling.
+   */
+  key: string
+}
+
+/** The identity of one file within one message. See `GalleryImage.key`. */
+export function galleryImageKey(groupIndex: number, fileIndex: number): string {
+  return `${groupIndex}:${fileIndex}`
 }
 
 /**
@@ -120,9 +133,9 @@ export interface GalleryImage {
 export function galleryImages(groups: readonly GalleryGroup[]): GalleryImage[] {
   const out: GalleryImage[] = []
   for (const group of groups) {
-    for (const file of group.files) {
-      if (file.image) out.push({ path: file.path, group })
-    }
+    group.files.forEach((file, i) => {
+      if (file.image) out.push({ path: file.path, group, key: galleryImageKey(group.index, i) })
+    })
   }
   return out
 }
@@ -162,4 +175,27 @@ export type GalleryView = 'list' | 'grid'
  */
 export function parseGalleryView(raw: string | null): GalleryView {
   return raw === 'list' ? 'list' : 'grid'
+}
+
+/** What the right-click on an image offers. The shape `SessionRowMenu` already renders. */
+export interface GalleryMenuEntry {
+  action: 'goto' | 'view' | 'cancel'
+  label: string
+  enabled: boolean
+}
+
+/**
+ * The three options, in the composer recall modal's own order and words.
+ *
+ * EXACTLY three, and the same three, because there are exactly three things somebody pointing at a
+ * picture wants: to be taken to the message it came in, to read that message here, or to have asked
+ * nothing. A fourth would be a different feature; a different wording would be a second vocabulary
+ * for one gesture.
+ */
+export function galleryMenuEntries(pt: boolean): GalleryMenuEntry[] {
+  return [
+    { action: 'goto', label: pt ? 'Ir para a mensagem' : 'Go to message', enabled: true },
+    { action: 'view', label: pt ? 'Ver mensagem' : 'View message', enabled: true },
+    { action: 'cancel', label: pt ? 'Cancelar' : 'Cancel', enabled: true },
+  ]
 }

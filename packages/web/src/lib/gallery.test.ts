@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  fileFormat, formatBytes, galleryFileCount, galleryGroups, galleryImages, parseGalleryView,
-  type GalleryTurn,
+  fileFormat, formatBytes, galleryFileCount, galleryGroups, galleryImageKey, galleryImages,
+  galleryMenuEntries, parseGalleryView, type GalleryTurn,
 } from './gallery'
 
 const DIR = '/home/u/.agentistics/attachments'
@@ -82,6 +82,13 @@ describe('galleryImages', () => {
     expect(images[0]!.group.index).toBe(0)
     expect(images[1]!.group.index).toBe(1)
   })
+
+  it('keys each entry by its POSITION, so the same file sent twice is two distinct entries', () => {
+    const groups = galleryGroups([user(`${shot}\n${shot}\na`)])
+    const images = galleryImages(groups)
+    expect(images.map(i => i.key)).toEqual(['0:0', '0:1'])
+    expect(galleryImageKey(3, 2)).toBe('3:2')
+  })
 })
 
 describe('galleryFileCount', () => {
@@ -125,5 +132,15 @@ describe('parseGalleryView', () => {
     expect(parseGalleryView(null)).toBe('grid')
     expect(parseGalleryView('')).toBe('grid')
     expect(parseGalleryView('carousel')).toBe('grid')
+  })
+})
+
+describe('galleryMenuEntries', () => {
+  it('offers the recall modal\'s own three options, in its order', () => {
+    expect(galleryMenuEntries(false).map(e => e.action)).toEqual(['goto', 'view', 'cancel'])
+    expect(galleryMenuEntries(false).map(e => e.label))
+      .toEqual(['Go to message', 'View message', 'Cancel'])
+    expect(galleryMenuEntries(true).map(e => e.label))
+      .toEqual(['Ir para a mensagem', 'Ver mensagem', 'Cancelar'])
   })
 })
