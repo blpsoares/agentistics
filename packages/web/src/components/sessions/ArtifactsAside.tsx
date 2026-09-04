@@ -36,6 +36,14 @@ export interface ArtifactsAsideProps {
    */
   unavailable?: string
   onClose: () => void
+  /**
+   * The session wrote through commands whose paths cannot be read off the command line.
+   *
+   * Reported rather than swallowed: on a session that had produced eighty files this panel said
+   * "nothing written in this session yet", which is a confident wrong answer. "I cannot list these"
+   * and "there are none" are different facts and get different sentences.
+   */
+  unlistedWrites?: boolean
 }
 
 /** `new` and `edited` read at a glance from the glyph; the word is beside it for everyone else. */
@@ -46,7 +54,7 @@ function KindIcon({ kind }: { kind: Artifact['kind'] }) {
 }
 
 export function ArtifactsAside({
-  sessionId, lang, artifacts, loading, unavailable, onClose,
+  sessionId, lang, artifacts, loading, unavailable, unlistedWrites, onClose,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
   const [open, setOpen] = useState<Artifact | null>(null)
@@ -95,7 +103,14 @@ export function ArtifactsAside({
       )
     }
     if (artifacts.length === 0) {
-      return (
+      // The two empty answers are NOT the same. One is a fact about the session's work; the other
+      // is a limit of this reader, and saying the first when the second is true is the confident
+      // wrong answer this panel was reported for.
+      return unlistedWrites ? (
+        <Note text={pt
+          ? 'Esta sessão escreveu por comandos de shell cujos caminhos não dá para ler da linha de comando — um interpretador alimentado por heredoc, por exemplo. Os arquivos existem; esta lista não consegue nomeá-los.'
+          : 'This session wrote through shell commands whose paths cannot be read from the command line — an interpreter fed a heredoc, for instance. The files exist; this list cannot name them.'} />
+      ) : (
         <Note text={pt
           ? 'Nada escrito ainda nesta sessão. Arquivos aparecem aqui assim que a sessão escreve ou edita um.'
           : 'Nothing written in this session yet. Files appear here as soon as the session writes or edits one.'} />
@@ -112,6 +127,15 @@ export function ArtifactsAside({
           <Band label={live.length > 0 ? (pt ? 'antes' : 'earlier') : undefined}>
             {past.map(a => <Row key={a.path} a={a} pt={pt} onOpen={() => setOpen(a)} />)}
           </Band>
+        )}
+        {/* A list that is INCOMPLETE says so where it ends. Without this the reader would take
+            these rows for everything the session wrote. */}
+        {unlistedWrites && (
+          <p style={{ margin: '6px 8px 0', fontSize: 10.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+            {pt
+              ? 'A sessão também escreveu por comandos cujos caminhos não dá para ler; esses arquivos não estão nesta lista.'
+              : 'The session also wrote through commands whose paths cannot be read; those files are not in this list.'}
+          </p>
         )}
       </div>
     )

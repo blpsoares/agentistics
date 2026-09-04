@@ -1,0 +1,81 @@
+import { test, expect } from 'bun:test'
+import { commandSegments, hasUnreadableWrite, shellWrites } from './shell-writes'
+
+test('a plain redirection names the file', () => {
+  expect(shellWrites('cat > src/a.ts')).toEqual(['src/a.ts'])
+  expect(shellWrites('echo hi >> notes.md')).toEqual(['notes.md'])
+  expect(shellWrites('cmd >out.txt')).toEqual(['out.txt'])
+})
+
+test('A COMMAND LINE IS A CHAIN — the write is found past the cd that precedes it', () => {
+  // The whole reason this is segment-by-segment: a whole-line test attributes it to `cd`.
+  expect(shellWrites('cd /repo && cat > packages/web/x.ts')).toEqual(['packages/web/x.ts'])
+  expect(shellWrites('mkdir -p a; touch b; echo x > a/c.txt')).toEqual(['a/c.txt'])
+})
+
+test('several writes in one line all count, in order, without repeating', () => {
+  expect(shellWrites('echo a > one.txt && echo b > two.txt && echo c >> one.txt'))
+    .toEqual(['one.txt', 'two.txt'])
+})
+
+test('tee writes every file it is given, and its flags are not files', () => {
+  expect(shellWrites('cmd | tee -a log.txt other.txt')).toEqual(['log.txt', 'other.txt'])
+})
+
+test('cp and mv name their DESTINATION, never their source', () => {
+  expect(shellWrites('cp release/agentop ~/bin/agentop-dev')).toEqual(['~/bin/agentop-dev'])
+  expect(shellWrites('mv -f old.ts new.ts')).toEqual(['new.ts'])
+  // One argument is not a copy anybody can name a destination for.
+  expect(shellWrites('cp onlyone')).toEqual([])
+})
+
+test('devices and descriptors are not files anybody wants listed', () => {
+  expect(shellWrites('cmd > /dev/null 2>&1')).toEqual([])
+  expect(shellWrites('cmd 2>&1')).toEqual([])
+})
+
+test('quotes are stripped, so a path with a space is one path', () => {
+  expect(shellWrites('cat > "my file.md"')).toEqual(['my file.md'])
+})
+
+test('a command that writes nothing yields nothing', () => {
+  for (const c of ['git status', 'bun test', 'ls -la', 'grep -rn foo .']) {
+    expect(shellWrites(c), c).toEqual([])
+  }
+})
+
+test('an interpreter fed a heredoc is UNREADABLE, and says so rather than guessing', () => {
+  // The paths live inside the script body; reading them would be inventing paths, which is the
+  // failure this panel exists to avoid.
+  expect(hasUnreadableWrite("python3 - <<'PY'\np='x.ts'\nPY")).toBe(true)
+  expect(hasUnreadableWrite('node -e "require(\'fs\').writeFileSync(1)"')).toBe(true)
+  expect(hasUnreadableWrite('cd /repo && python3 - <<PY')).toBe(true)
+})
+
+test('an ordinary command is not reported as unreadable', () => {
+  for (const c of ['git status', 'cat > a.ts', 'bun test', 'python3 script.py']) {
+    expect(hasUnreadableWrite(c), c).toBe(false)
+  }
+})
+
+test('segments split on every separator a shell treats as one', () => {
+  expect(commandSegments('a && b || c; d\ne | f')).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
+})
+
+test('a heredoc BODY offers up junk, and shape is what rejects it', () => {
+  // The splitter cannot tell a command list from a script, so a body containing `if x > 0` yields
+  // `0` as a redirection target. Measured on a real conversation: 3 such entries out of 70.
+  expect(shellWrites("python3 - <<'PY'\nif x > 0:\n  pass\nPY")).toEqual([])
+  expect(shellWrites("s.replace(a, b > c)")).toEqual([])
+  expect(shellWrites('echo x > =')).toEqual([])
+})
+
+test('a path with a separator or an extension still passes', () => {
+  expect(shellWrites('cat > packages/web/src/x.ts')).toEqual(['packages/web/src/x.ts'])
+  expect(shellWrites('cat > notes.md')).toEqual(['notes.md'])
+  expect(shellWrites('cat > /tmp/out')).toEqual(['/tmp/out'])
+})
+
+test('a bare word with neither is refused — it names no file anybody could open', () => {
+  expect(shellWrites('cmd > outfile')).toEqual([])
+})

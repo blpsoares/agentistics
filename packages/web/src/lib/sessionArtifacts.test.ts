@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { artifactsFromTurns } from './sessionArtifacts'
+import { artifactsFromTurns, hasUnlistedWrites } from './sessionArtifacts'
 
 const turn = (tools: { name: string; detail?: string }[], pending = false) =>
   ({ role: 'assistant' as const, text: '', tools, ...(pending ? { pending: true } : {}) })
@@ -85,5 +85,32 @@ describe('artifactsFromTurns', () => {
     const long = `/home/u/${'x'.repeat(210)}.ts`
     const detail = `${long.slice(0, 200)}…`
     expect(artifactsFromTurns([turn([{ name: 'Write', detail }])])).toEqual([])
+  })
+})
+
+describe('files the SHELL wrote', () => {
+  it('counts a redirection as a file this session wrote', () => {
+    // Measured on a real conversation: 400 turns, 263 Bash calls, ZERO file-tool calls. Reading
+    // only the file tools reported "nothing written" over eighty files.
+    const a = artifactsFromTurns([
+      { tools: [{ name: 'Bash', detail: 'cd /repo', writes: ['packages/web/src/x.ts'] }] },
+    ])
+    expect(a.map(x => x.path)).toEqual(['packages/web/src/x.ts'])
+  })
+
+  it('a shell write and a file-tool write of the same path are ONE row', () => {
+    const a = artifactsFromTurns([
+      { tools: [{ name: 'Bash', detail: 'cd /r', writes: ['a.ts'] }] },
+      { tools: [{ name: 'Edit', detail: 'a.ts' }] },
+    ])
+    expect(a).toHaveLength(1)
+    expect(a[0]!.touches).toBe(2)
+  })
+
+  it('says when writes exist that it CANNOT list, so "nothing" is never claimed falsely', () => {
+    expect(hasUnlistedWrites([{ tools: [{ name: 'Bash', detail: 'cd /r', opaqueWrite: true }] }]))
+      .toBe(true)
+    expect(hasUnlistedWrites([{ tools: [{ name: 'Bash', detail: 'git status' }] }])).toBe(false)
+    expect(hasUnlistedWrites([])).toBe(false)
   })
 })

@@ -25,6 +25,7 @@ import { join } from 'node:path'
 import { PROJECTS_DIR } from '../config'
 import { UUID_RE } from '../git'
 import { isHumanUserEntry } from '../jsonl'
+import { hasUnreadableWrite, shellWrites } from './shell-writes'
 import { classifyUserEntry, type UserEntry } from './chat-envelope'
 
 export interface ChatTurn {
@@ -38,7 +39,24 @@ export interface ChatTurn {
    * the assistant talking to itself between long silences, when what happened in the silence is
    * most of the work.
    */
-  tools?: Array<{ name: string; detail?: string }>
+  tools?: Array<{
+    name: string
+    detail?: string
+    /**
+     * For a SHELL call, the paths that command writes — read by the pure `shell-writes.ts`.
+     *
+     * `detail` is only the command's first LINE, which is where the artifacts panel went blind: a
+     * session that writes through heredocs showed 263 shell calls and no files. The paths are
+     * computed here rather than by shipping whole multi-line commands to the browser, which is a
+     * chat bubble's worth of shell script per turn.
+     */
+    writes?: string[]
+    /**
+     * The command wrote through something that cannot be read off the command line — an interpreter
+     * fed a program on stdin. The panel says so rather than claiming nothing was written.
+     */
+    opaqueWrite?: boolean
+  }>
   /**
    * The assistant's extended thinking, when the transcript carries it.
    *
@@ -303,7 +321,19 @@ function extractToolCalls(e: Record<string, unknown>): Array<{ name: string; det
   const out: Array<{ name: string; detail?: string }> = []
   for (const part of msgContent as Record<string, unknown>[]) {
     if (part.type !== 'tool_use' || typeof part.name !== 'string') continue
-    out.push({ name: part.name, ...(toolDetail(part.input) ? { detail: toolDetail(part.input)! } : {}) })
+    const detail = toolDetail(part.input)
+    // The FULL command, for the write reader — `toolDetail` keeps only the first line, and the
+    // redirection is usually on a later one.
+    const cmd = typeof (part.input as Record<string, unknown> | null)?.['command'] === 'string'
+      ? (part.input as Record<string, string>)['command']!
+      : ''
+    const writes = cmd === '' ? [] : shellWrites(cmd)
+    out.push({
+      name: part.name,
+      ...(detail ? { detail } : {}),
+      ...(writes.length > 0 ? { writes } : {}),
+      ...(cmd !== '' && writes.length === 0 && hasUnreadableWrite(cmd) ? { opaqueWrite: true } : {}),
+    })
   }
   return out
 }

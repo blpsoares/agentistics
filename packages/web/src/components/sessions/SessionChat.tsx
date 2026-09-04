@@ -40,7 +40,7 @@ import { attachmentUrl } from '../../lib/attachmentUrl'
 import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
 import { sessionScratch, type CachedChat } from '../../lib/sessionScratch'
 import { composerMaxHeight } from '../../lib/composerHeight'
-import { artifactsFromTurns, type Artifact } from '../../lib/sessionArtifacts'
+import { artifactsFromTurns, hasUnlistedWrites, type Artifact } from '../../lib/sessionArtifacts'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
 import { appendDictation, dictatedText, dictationError, dictationLocale, dictationSupport, insecureAlternative } from '../../lib/dictation'
 import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
@@ -77,6 +77,8 @@ export interface SessionChatProps {
     artifacts: Artifact[]
     loading: boolean
     unavailable?: string
+    /** Writes this reader cannot name — see `hasUnlistedWrites`. */
+    unlisted: boolean
   }) => void
 }
 
@@ -647,9 +649,10 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
     onArtifacts?.({
       artifacts,
       loading,
+      unlisted: hasUnlistedWrites(turns),
       ...(payload?.unavailable ? { unavailable: payload.unavailable } : {}),
     })
-  }, [artifacts, loading, payload?.unavailable, onArtifacts])
+  }, [artifacts, loading, turns, payload?.unavailable, onArtifacts])
 
   const canPrompt = !loading && session.actionable && !blocked && payload.live !== false
   /**

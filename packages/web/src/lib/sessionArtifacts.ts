@@ -37,8 +37,21 @@ export interface Artifact {
 }
 
 interface Turnish {
-  tools?: { name: string; detail?: string }[]
+  tools?: { name: string; detail?: string; writes?: string[]; opaqueWrite?: boolean }[]
   pending?: boolean
+}
+
+/**
+ * Did this conversation write through commands whose paths cannot be read?
+ *
+ * An interpreter fed a program on stdin writes files nobody can name from the command line — the
+ * server marks those calls rather than guessing at the script's contents. The panel uses this to
+ * distinguish "this session wrote nothing" from "this session wrote things I cannot list", which
+ * on a session that had produced eighty files was the difference between an honest gap and a
+ * confident wrong answer.
+ */
+export function hasUnlistedWrites(turns: readonly Turnish[]): boolean {
+  return turns.some(t => (t?.tools ?? []).some(c => c.opaqueWrite === true))
 }
 
 export function artifactsFromTurns(turns: readonly Turnish[]): Artifact[] {
@@ -48,6 +61,14 @@ export function artifactsFromTurns(turns: readonly Turnish[]): Artifact[] {
 
   for (const t of turns) {
     for (const call of t?.tools ?? []) {
+      // A file the SHELL wrote is a file this session wrote. `writes` is computed server-side by
+      // `shell-writes.ts` because `detail` carries only the command's first line, which is almost
+      // never the one holding the redirection.
+      for (const w of call.writes ?? []) {
+        const prevW = seen.get(w)
+        if (prevW) { prevW.touches += 1; prevW.order = order++; prevW.live = t?.pending === true }
+        else seen.set(w, { first: 'Write', touches: 1, order: order++, live: t?.pending === true })
+      }
       if (!ARTIFACT_TOOLS.has(call.name)) continue
       const path = call.detail?.trim()
       if (!path) continue

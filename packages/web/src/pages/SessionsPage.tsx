@@ -116,9 +116,11 @@ export default function SessionsPage() {
   const [artifacts, setArtifacts] = useState<readonly Artifact[]>([])
   const [artifactsLoading, setArtifactsLoading] = useState(true)
   const [artifactsUnavailable, setArtifactsUnavailable] = useState<string | undefined>(undefined)
+  const [artifactsUnlisted, setArtifactsUnlisted] = useState(false)
   const art = useArtifacts()
-  const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string }) => {
+  const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; unlisted: boolean }) => {
     setArtifacts(a.artifacts)
+    setArtifactsUnlisted(a.unlisted)
     setArtifactsLoading(a.loading)
     setArtifactsUnavailable(a.unavailable)
     if (selected) setArtifactCount(selected.id, a.artifacts.length)
@@ -154,6 +156,7 @@ export default function SessionsPage() {
       artifacts={artifacts}
       loading={artifactsLoading}
       {...(artifactsUnavailable ? { unavailable: artifactsUnavailable } : {})}
+      unlistedWrites={artifactsUnlisted}
       onClose={closeArtifacts}
     />
   )
