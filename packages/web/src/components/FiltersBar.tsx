@@ -66,7 +66,7 @@ interface Props {
   /** Restrict which dimensions the "+ Filter" menu offers. Omitted = every dimension the data
    *  supports. A page whose numbers cannot react to a dimension should not offer it: a filter that
    *  visibly changes nothing reads as broken. */
-  only?: Array<'members' | 'teams' | 'machines' | 'harnesses' | 'presence' | 'repos' | 'tags' | 'projects' | 'models'>
+  only?: Array<'members' | 'teams' | 'machines' | 'harnesses' | 'presence' | 'repos' | 'tags' | 'projects' | 'models' | 'activeOnly'>
   /** Tags visible to the viewer (from GET /api/tags) — drives the `tags` dimension. Empty/omitted
    *  hides it. Selecting a tag can only NARROW the (already team-scoped) dashboard. */
   tags?: TagDef[]
@@ -144,7 +144,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
   const [machineQuery, setMachineQuery] = useState('')
   const [tagQuery, setTagQuery] = useState('')
   // "+ Filter" menu: pick a dimension → open its value picker. One open at a time.
-  type Dimension = 'members' | 'harnesses' | 'presence' | 'repos' | 'models' | 'teams' | 'machines' | 'tags'
+  type Dimension = 'members' | 'harnesses' | 'presence' | 'repos' | 'models' | 'teams' | 'machines' | 'tags' | 'activeOnly'
   const [showAddMenu, setShowAddMenu] = useState(false)
   const [openPicker, setOpenPicker] = useState<Dimension | null>(null)
   // Desktop: collapse the active-filter chip rows (mobile has its own whole-bar minimize).
@@ -226,6 +226,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
     hasModelFilter,
     (filters.teams?.length ?? 0) > 0,
     (filters.machines?.length ?? 0) > 0,
+    Boolean(onActiveOnlyChange && activeOnly),
   ].filter(Boolean).length
 
   // Outside click closes the "+ Filter" menu and any open dimension picker together.
@@ -371,31 +372,6 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
         </>
         )}
 
-        {/* Active sessions only — the fleet's own dimension, not part of `Filters`: it is a
-            statement about what a session is DOING right now, which no stored metric has (see
-            `fleetFilter.ts`'s header). Lives here, beside the date range, rather than behind
-            "+ Filter": it is on by default in the Sessions workspace and off everywhere else, so
-            burying it one click deeper would be the "hidden behind a click" complaint all over
-            again for the one control this bar exists to expose. Absent entirely when the caller has
-            nothing to run it against. */}
-        {onActiveOnlyChange && (
-          <button
-            onClick={() => onActiveOnlyChange(!activeOnly)}
-            style={{
-              ...CTL,
-              gap: 6,
-              border: activeOnly ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
-              background: activeOnly ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
-              color: activeOnly ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-              fontWeight: activeOnly ? 600 : 400,
-            }}
-          >
-            <Radio size={12} />
-            {lang === 'pt' ? 'Só ativas' : 'Active only'}
-          </button>
-        )}
-
-
         {/* "Create tag with these filters" — only rendered when the caller has already decided the
             current filters map to a usable tag draft (see canCreateTagFromFilters). FiltersBar
             itself never computes that; it just shows the button and fires the callback. */}
@@ -500,6 +476,20 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               boxShadow: '0 4px 16px rgba(0,0,0,0.25)', zIndex: 1000,
               minWidth: 190, boxSizing: 'border-box', padding: 6,
             }}>
+              {/* Active sessions only — the fleet's own dimension, not part of `Filters`: it is a
+                  statement about what a session is DOING right now, which no stored metric has
+                  (see `fleetFilter.ts`'s header). A boolean, so picking it toggles immediately
+                  rather than opening a value picker. Absent entirely when the caller has nothing
+                  to run it against — `onActiveOnlyChange` is undefined on a surface with no fleet
+                  at all, and the control is then not rendered rather than rendered inert. */}
+              {allows('activeOnly') && onActiveOnlyChange && (
+                <MenuItem
+                  icon={<Radio size={13} />}
+                  label={lang === 'pt' ? 'Só ativas' : 'Active only'}
+                  active={Boolean(activeOnly)}
+                  onClick={() => { onActiveOnlyChange(!activeOnly); setShowAddMenu(false) }}
+                />
+              )}
               {allows('members') && canFilterMembers && users.length > 0 && (
                 <MenuItem
                   icon={<Users size={13} />}
@@ -1055,6 +1045,18 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
       <div style={{ display: 'grid', gridTemplateRows: (!compact && chipsCollapsed) ? '0fr' : '1fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1)' }}>
       <div style={{ overflow: 'hidden', minHeight: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', padding: compact ? '0 12px' : 0 }}>
+        <AnimatedRow show={Boolean(onActiveOnlyChange && activeOnly)}>
+          <ChipRow label={lang === 'pt' ? 'Sessões' : 'Sessions'}>
+            <FilterChip
+              title={lang === 'pt' ? 'Só ativas' : 'Active only'}
+              onRemove={() => onActiveOnlyChange?.(false)}
+              removeTitle={lang === 'pt' ? 'Remover filtro' : 'Remove filter'}
+            >
+              <Radio size={10} style={{ flexShrink: 0 }} />
+              <span>{lang === 'pt' ? 'Só ativas' : 'Active only'}</span>
+            </FilterChip>
+          </ChipRow>
+        </AnimatedRow>
         <AnimatedRow show={(filters.users?.length ?? 0) > 0}>
           <ChipRow label={lang === 'pt' ? 'Membros' : 'Members'}>
             {(filters.users ?? []).map(u => (
