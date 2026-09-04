@@ -2705,7 +2705,12 @@ export default function AppLayout() {
           // genuinely no antigravity rows. But a filter that can only ever answer "nothing" is
           // indistinguishable from one that is failing, and it was reported as exactly that. An
           // option is a promise that something might be behind it.
-          harnesses={fleetOptions.harnesses as typeof availableHarnesses}
+          // The WHOLE fleet's assistants, not just the ones the current switches can show — see
+          // `fleetFilterOptions`. The ones being withheld are MARKED rather than dropped, because a
+          // dimension that disappears reads as "this product does not know about my other
+          // assistants", which the Compare page contradicts two clicks away.
+          harnesses={fleetOptions.harnessesAll as typeof availableHarnesses}
+          harnessesOutOfView={fleetOptions.harnessesAll.filter(h => !fleetOptions.harnesses.includes(h))}
           lang={lang}
         />
       </div>

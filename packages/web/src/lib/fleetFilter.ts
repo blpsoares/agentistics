@@ -162,16 +162,43 @@ export function fleetFilterOptions(
    */
   activeOnly = false,
 ): {
+  /** Values the CURRENT view can show — every one of them promises at least one row. */
   harnesses: string[]
   repos: string[]
   projects: string[]
   models: string[]
+  /**
+   * Every value the WHOLE fleet holds, `activeOnly` ignored.
+   *
+   * Withholding an option that promises nothing was right; letting the DIMENSION disappear with it
+   * was not, and the difference was reported. On a machine with six assistants in its history and
+   * one of them running, the harness filter vanished from the menu entirely — so the workspace
+   * looked like it had never heard of the other five, while the Compare page listed all six with
+   * real session counts two clicks away. That is the same false impression the narrowing rule
+   * exists to prevent, produced by the rule itself.
+   *
+   * So the caller offers THESE and marks the ones the current view cannot show. The reader sees
+   * their assistants exist, and the ones that would answer "nothing" say why instead of being
+   * silently absent.
+   */
+  harnessesAll: string[]
+  reposAll: string[]
+  projectsAll: string[]
+  modelsAll: string[]
 } {
   const harnesses = new Set<string>()
   const repos = new Set<string>()
   const projects = new Set<string>()
   const models = new Set<string>()
+  const harnessesAll = new Set<string>()
+  const reposAll = new Set<string>()
+  const projectsAll = new Set<string>()
+  const modelsAll = new Set<string>()
   for (const r of rows) {
+    if (r.harness) harnessesAll.add(r.harness)
+    if (r.repo) reposAll.add(r.repo)
+    if (r.project) projectsAll.add(r.project)
+    if (r.model) modelsAll.add(r.model)
     if (activeOnly && !ACTIVE.has(r.state)) continue
     if (r.harness) harnesses.add(r.harness)
     if (r.repo) repos.add(r.repo)
@@ -179,5 +206,9 @@ export function fleetFilterOptions(
     if (r.model) models.add(r.model)
   }
   const sorted = (s: Set<string>) => [...s].sort((a, b) => a.localeCompare(b))
-  return { harnesses: sorted(harnesses), repos: sorted(repos), projects: sorted(projects), models: sorted(models) }
+  return {
+    harnesses: sorted(harnesses), repos: sorted(repos), projects: sorted(projects), models: sorted(models),
+    harnessesAll: sorted(harnessesAll), reposAll: sorted(reposAll),
+    projectsAll: sorted(projectsAll), modelsAll: sorted(modelsAll),
+  }
 }

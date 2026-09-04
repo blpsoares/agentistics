@@ -127,6 +127,17 @@ interface Props {
    */
   activeFiltersIcon?: boolean
   addFilterIcon?: boolean
+  /**
+   * Harnesses that are OFFERED but that the current view cannot show — because another switch, not
+   * this filter, is withholding every one of their rows.
+   *
+   * They are listed rather than hidden. Withholding an option that promises nothing was right;
+   * letting the whole DIMENSION vanish with it was not, and it was reported: a machine with six
+   * assistants in its history and one running showed no harness filter at all, so the workspace
+   * looked like it had never heard of the other five. Marked, they say what is true — "this one is
+   * only in the history" — instead of being silently absent.
+   */
+  harnessesOutOfView?: readonly string[]
 }
 
 const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [
@@ -175,7 +186,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, activeOnly, onActiveOnlyChange, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup, hideDateRange = false, inline = false, dateCompact = false, activeFiltersIcon = false, addFilterIcon = false }: Props) {
+export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, activeOnly, onActiveOnlyChange, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup, hideDateRange = false, inline = false, dateCompact = false, activeFiltersIcon = false, addFilterIcon = false, harnessesOutOfView }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -1225,12 +1236,14 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
                   <div style={{ maxHeight: 240, overflowY: 'auto' }}>
                     {harnesses.map(h => {
                       const selected = (filters.harnesses ?? []).includes(h)
+                      const outOfView = (harnessesOutOfView ?? []).includes(h)
                       return (
                         <PickerRow
                           key={h}
                           selected={selected}
                           dotColor={HARNESS_COLORS[h]}
                           label={HARNESS_LABELS[h]}
+                          {...(outOfView ? { tag: lang === 'pt' ? 'só no histórico' : 'only in history' } : {})}
                           onClick={() => {
                             const cur = filters.harnesses ?? []
                             const next = cur.includes(h) ? cur.filter(x => x !== h) : [...cur, h]

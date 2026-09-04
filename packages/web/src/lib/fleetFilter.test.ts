@@ -162,7 +162,33 @@ describe('fleetFilterOptions', () => {
 
   it('drops empty values rather than offering a blank chip', () => {
     const o = fleetFilterOptions([repoRow('a', '', { harness: '', project: '', model: '' })])
-    expect(o).toEqual({ harnesses: [], repos: [], projects: [], models: [] })
+    expect(o).toEqual({
+      harnesses: [], repos: [], projects: [], models: [],
+      harnessesAll: [], reposAll: [], projectsAll: [], modelsAll: [],
+    })
+  })
+
+  it('the WHOLE fleet is offered even when the active-only switch hides every row of a harness', () => {
+    // The reported case: six assistants in the history, one of them running. Narrowing the OPTIONS
+    // to what is running made the harness dimension vanish, so the workspace looked like it had
+    // never heard of the other five — while Compare listed all six two clicks away.
+    const rows = [
+      repoRow('live', 'org/r', { harness: 'claude', state: 'waiting' }),
+      repoRow('old', 'org/r', { harness: 'codex', state: 'closed' }),
+      repoRow('older', 'org/r', { harness: 'kimi', state: 'exited' }),
+    ]
+    const o = fleetFilterOptions(rows, true)
+    expect(o.harnesses).toEqual(['claude'])
+    expect(o.harnessesAll).toEqual(['claude', 'codex', 'kimi'])
+  })
+
+  it('with the switch off the two agree — there is nothing being withheld to mark', () => {
+    const rows = [
+      repoRow('live', 'org/r', { harness: 'claude', state: 'waiting' }),
+      repoRow('old', 'org/r', { harness: 'codex', state: 'closed' }),
+    ]
+    const o = fleetFilterOptions(rows, false)
+    expect(o.harnesses).toEqual(o.harnessesAll)
   })
 
   it('is stable and deduped, so the chips do not shuffle between polls', () => {
