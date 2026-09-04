@@ -1,6 +1,7 @@
 import type { BillingReadiness, BillingSettings, CostBasis, MonthlyCommitment, SavedComparison, Filters, Lang, Theme, SessionMeta, AppData, StatsCache, HarnessId, Project } from '@agentistics/core'
 import type { useDerivedStats } from '../hooks/useData'
 import type { PlanBasisView } from '../hooks/usePlanBasis'
+import type { A11yState } from '../hooks/useAccessibility'
 import type { TagDef } from './tagMatch'
 import type { ChatModelId } from './chatModels'
 
@@ -182,4 +183,7 @@ export interface AppContext {
    *  never keep claiming "Hidden from N centrals" after the rule is gone. OPTIONAL for the same
    *  reason `deniedRepoLabels` is — every page consumes `AppContext`. */
   refreshDeniedRepoLabels?: () => void
+
+  /** Magnifier lenses — the accessibility feature. Always present; `prefs.enabled` is the switch. */
+  a11y: A11yState
 }

@@ -21,6 +21,7 @@ import { DEFAULT_CARD_ORDER, migrateCardOrder, type CardId } from './lib/cardOrd
 import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
+import { useAccessibility } from './hooks/useAccessibility'
 import type { TagDef } from './lib/tagMatch'
 import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
 import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, SavedComparison, TeamConfig } from '@agentistics/core'
@@ -51,7 +52,7 @@ import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { TranscriptModal } from './components/TranscriptModal'
-import type { PrefsDraft } from './lib/app-context'
+import type { PrefsDraft, AppContext } from './lib/app-context'
 import { TtyChat } from './components/TtyChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
@@ -1273,6 +1274,7 @@ export default function AppLayout() {
       Array<'members' | 'teams' | 'machines' | 'presence' | 'repos' | 'tags' | 'projects' | 'models'>
     : undefined
   const isMobile = useIsMobile()
+  const a11y = useAccessibility()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [lang, setLangState] = useState<Lang>('en')
@@ -2585,6 +2587,41 @@ export default function AppLayout() {
     )
   }
 
+  // Built once so the magnifier layer (Task 8) can be handed the exact same object the pages get
+  // via <Outlet context>; two separately-built objects would drift out of sync.
+  const appCtx: AppContext = {
+    data,
+    derived,
+    statsCache,
+    filters, setFilters, activeOnly, setActiveOnly,
+    availableProjects, availableHarnesses,
+    lang, theme, currency, setCurrency, brlRate,
+    billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
+    comparisons, saveComparisons,
+    tags: tagsList, monthCommitment,
+    chatModel, chatSoundEnabled, chatSoundId,
+    savePreferences,
+    pwaPrompt,
+    onPwaInstalled: () => { setPwaInstalled(true); setPwaPrompt(null) },
+    liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
+    riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
+    monthlyBudgetUSD, updateBudget,
+    totalInputTokens, totalOutputTokens,
+    setExpandedChart, setSelectedSession, setInfoModalIndex,
+    infoItems,
+    cardOrder, setCardOrder: setCardOrder as unknown as React.Dispatch<React.SetStateAction<string[]>>,
+    cardPrecision, setCardPrecision,
+    sessionCountByProject, models, modelGroups, modelsInProject, users: usersWithMachines,
+    harnesses: data.harnesses,
+    isCentral,
+    me: iam?.account,
+    teams: teamsList,
+    machines: machinesList,
+    deniedRepoLabels,
+    refreshDeniedRepoLabels,
+    a11y,
+  }
+
   return (
     <div style={{
       // `min-height` is NOT set in the sessions workspace, and that is the whole fix.
@@ -3113,37 +3150,7 @@ export default function AppLayout() {
               gap: isMobile ? 14 : 20,
             }
       }>
-        <Outlet context={{
-          data,
-          derived,
-          statsCache,
-          filters, setFilters, activeOnly, setActiveOnly,
-          availableProjects, availableHarnesses,
-          lang, theme, currency, setCurrency, brlRate,
-          billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
-          comparisons, saveComparisons,
-          tags: tagsList, monthCommitment,
-          chatModel, chatSoundEnabled, chatSoundId,
-          savePreferences,
-          pwaPrompt,
-          onPwaInstalled: () => { setPwaInstalled(true); setPwaPrompt(null) },
-          liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
-          riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
-          monthlyBudgetUSD, updateBudget,
-          totalInputTokens, totalOutputTokens,
-          setExpandedChart, setSelectedSession, setInfoModalIndex,
-          infoItems,
-          cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
-          cardPrecision, setCardPrecision,
-          sessionCountByProject, models, modelGroups, modelsInProject, users: usersWithMachines,
-          harnesses: data.harnesses,
-          isCentral,
-          me: iam?.account,
-          teams: teamsList,
-          machines: machinesList,
-          deniedRepoLabels,
-          refreshDeniedRepoLabels,
-        }} />
+        <Outlet context={appCtx} />
       </main>
 
       {/* Install Modal — shown once after first data load */}
