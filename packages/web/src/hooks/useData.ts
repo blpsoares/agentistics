@@ -1037,7 +1037,22 @@ export function resolvePresenceScope(
  * It reads nothing but its arguments; `useDerivedStats` below is the memoized single-scope wrapper
  * every page uses.
  */
-export function computeDerivedStats(data: AppData | null, filters: Filters, tags: TagDef[] = []) {
+export function computeDerivedStats(
+  data: AppData | null,
+  filters: Filters,
+  tags: TagDef[] = [],
+  /**
+   * The fleet's own "only what is running" switch, and — when it is on — the exact conversations
+   * it is running right now. Not part of `Filters` (see `fleetFilter.ts`'s header): it is a
+   * statement about what a session is DOING, which no stored metric has.
+   *
+   * `runningIds` is required whenever `activeOnly` is true rather than defaulted to "everything
+   * running" — a caller that cannot read the fleet must not silently report the unfiltered totals
+   * under a switch that claims to have narrowed them.
+   */
+  activeOnly = false,
+  runningIds: ReadonlySet<string> = new Set(),
+) {
   {
     if (!data) return null
 
@@ -1140,13 +1155,14 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
     const inDateRange = (s: { start_time?: string }) =>
       isDateStr(s.start_time) && inRange(parseISO(s.start_time), start, end)
 
-    // Filter sessions (date + projects + model)
+    // Filter sessions (date + projects + model + active-only)
     const filteredSessions = harnessSessions.filter(s => {
       if (!inDateRange(s)) return false
       if (projectFiltered && !projectSet.has(s.project_path)) return false
       if (repoFiltered && !repoSet.has(s.git_remote || '')) return false
       if (tagMatches && !tagMatches(s)) return false
       if (modelSet && (!s.model || !modelSet.has(s.model))) return false
+      if (activeOnly && !runningIds.has(s.session_id)) return false
       return true
     })
 
@@ -1197,6 +1213,11 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
       // member's cache may be missing from this viewer's pruned copy. Keying on `hasUserStats`
       // left that case cache-backed and reported the empty merge as a real zero.
       || (userFiltered && !userCacheUsable)
+      // A live-fleet intersection has no cache granularity of any kind: `stats-cache.json` is
+      // keyed by day and model, never by conversation. Treating it as cache-backed would report
+      // the CACHE's totals under a scope the cache cannot express — the same scope reporting a
+      // fraction of itself, which `resolveMachineCacheScope` exists to prevent for team/machine.
+      || activeOnly
 
     let allTimeTotalSessions: number
     if (nonClaudeHarness || cacheBlindScope) {
@@ -1870,6 +1891,10 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
 
     return {
       presenceScope,
+      /** True when "active only" narrowed this scope to conversations running right now — the
+       *  page must say so, exactly as every other cache-blind scope does (see `fleetFilter.ts`'s
+       *  header and `activeConversations.ts`'s). */
+      activeOnlyScoped: activeOnly,
       totalMessages,
       totalSessions,
       allTimeTotalSessions,
@@ -1927,6 +1952,15 @@ export function computeDerivedStats(data: AppData | null, filters: Filters, tags
   }
 }
 
-export function useDerivedStats(data: AppData | null, filters: Filters, tags: TagDef[] = []) {
-  return useMemo(() => computeDerivedStats(data, filters, tags), [data, filters, tags])
+export function useDerivedStats(
+  data: AppData | null,
+  filters: Filters,
+  tags: TagDef[] = [],
+  activeOnly = false,
+  runningIds: ReadonlySet<string> = new Set(),
+) {
+  return useMemo(
+    () => computeDerivedStats(data, filters, tags, activeOnly, runningIds),
+    [data, filters, tags, activeOnly, runningIds],
+  )
 }

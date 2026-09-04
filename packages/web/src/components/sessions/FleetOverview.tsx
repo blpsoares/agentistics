@@ -16,6 +16,9 @@ import { Activity, Bell, FolderGit2, Power } from 'lucide-react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { formatUptime, summarizeFleet } from '../../lib/fleetSummary'
+import { ActivityHeatmap } from '../ActivityHeatmap'
+
+export interface HeatmapDay { date: string; value: number; sessions: number; tools: number }
 
 /**
  * The container geometry the sessions workspace shares with the header's filter row.
@@ -37,9 +40,15 @@ export interface FleetOverviewProps {
   loading: boolean
   unsupported: boolean
   unavailable?: string
+  /**
+   * The combined activity calendar, already narrowed by every active filter — `derived.heatmapData`
+   * from `useDerivedStats`, never a second aggregation. `stats-cache.json` stays Claude-only here as
+   * everywhere: this is per-session sums, the same source the dashboard's own heatmap reads.
+   */
+  heatmap?: readonly HeatmapDay[]
 }
 
-export function FleetOverview({ lang, rows, loading, unsupported, unavailable }: FleetOverviewProps) {
+export function FleetOverview({ lang, rows, loading, unsupported, unavailable, heatmap }: FleetOverviewProps) {
   const pt = lang === 'pt'
   const s = useMemo(() => summarizeFleet(rows, Date.now()), [rows])
 
@@ -126,6 +135,31 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
           note={pt ? 'com sessão registrada' : 'with a session on record'}
         />
       </div>
+
+      {/* ONE calendar for every harness in view, not one strip each — the per-harness split lives
+          in the day tooltip, which is where a comparison is actually made.
+
+          It reads `derived.heatmapData`, which `useDerivedStats` has ALREADY narrowed by every
+          active filter. That is the requirement, not a convenience: a heatmap beside filtered
+          stats that is itself unfiltered puts two numbers on one screen under two different
+          rules, which is the same defect as a cache-backed total beside a session-summed one. */}
+      {heatmap && heatmap.length > 0 && (
+        <section style={{ marginBottom: 22 }}>
+          <h2 style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>
+            {pt ? 'Atividade' : 'Activity'}
+          </h2>
+          <ActivityHeatmap data={[...heatmap]} weeks={26} />
+        </section>
+      )}
+      {heatmap && heatmap.length === 0 && (
+        // Never an all-zero grid: an empty measurement and "nothing in this window" are different
+        // facts, and a grid of empty cells reads as the first while meaning the second.
+        <p style={{ margin: '0 0 22px', fontSize: 12, color: 'var(--text-tertiary)' }}>
+          {pt
+            ? 'Nenhuma atividade no período e nos filtros escolhidos.'
+            : 'No activity in the chosen window and filters.'}
+        </p>
+      )}
 
       <section>
         <h2 style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>

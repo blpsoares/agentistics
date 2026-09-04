@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { HARNESS_ORDER } from '@agentistics/core'
+import { HARNESS_ORDER, SPAWN_SPECS_MODEL_IDS } from '@agentistics/core'
 import { SPAWN_SPECS, conversationLinkable, planSpawn } from './spawn-spec'
 
 describe('SPAWN_SPECS', () => {
@@ -230,4 +230,13 @@ describe('conversationLinkable', () => {
       expect(conversationLinkable(harness)).toBe(false)
     }
   })
+})
+
+it('offers exactly the ids harnessModels names, so the picker and the flag agree', () => {
+  for (const [harness, spec] of Object.entries(SPAWN_SPECS)) {
+    if (!spec) continue
+    expect(spec.modelSuggestions ?? [], harness).toEqual(
+      SPAWN_SPECS_MODEL_IDS[harness as keyof typeof SPAWN_SPECS_MODEL_IDS] ?? [],
+    )
+  }
 })

@@ -1,12 +1,16 @@
 import { expect, it, test, describe } from 'bun:test'
 import type { Filters } from '@agentistics/core'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
-import { filterFleet, fleetFilterOptions } from './fleetFilter'
+import { filterFleet, fleetFilterOptions, ignoredDimensions } from './fleetFilter'
 
 const BASE: Filters = {
-  dateRange: '7d' as Filters['dateRange'],
+  // 'all' is the neutral default — `ignoredDimensions` reads a SET date range as one it cannot
+  // answer, so a base fixture with '7d' baked in would flag every test that does not override it.
+  dateRange: 'all' as Filters['dateRange'],
   customStart: '', customEnd: '', projects: [], models: [],
 }
+
+const f = (o: Partial<Filters>): Filters => ({ ...BASE, ...o })
 
 function row(o: Partial<ControlSession> & { id: string }): ControlSession {
   return {
@@ -164,6 +168,22 @@ describe('fleetFilterOptions', () => {
   it('is stable and deduped, so the chips do not shuffle between polls', () => {
     const rows = [repoRow('b', 'z/b'), repoRow('a', 'a/a'), repoRow('c', 'z/b')]
     expect(fleetFilterOptions(rows).repos).toEqual(['a/a', 'z/b'])
+  })
+})
+
+describe('ignoredDimensions', () => {
+  it('names a date range the fleet cannot answer', () => {
+    expect(ignoredDimensions(f({ dateRange: '7d' as Filters['dateRange'] }), 'en'))
+      .toBe('The date range does not narrow a live fleet.')
+  })
+  it('names several at once, in one sentence', () => {
+    const s = ignoredDimensions(f({ dateRange: '7d' as Filters['dateRange'], tags: ['t1'] }), 'en')!
+    expect(s).toContain('date range')
+    expect(s).toContain('tags')
+  })
+  it('is null when nothing set is ignored', () => {
+    expect(ignoredDimensions(f({ harnesses: ['claude'] }), 'en')).toBeNull()
+    expect(ignoredDimensions(f({ dateRange: 'all' as Filters['dateRange'] }), 'en')).toBeNull()
   })
 })
 

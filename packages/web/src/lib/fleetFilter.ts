@@ -102,6 +102,32 @@ function matchesProject(r: ControlSession, projects: ReadonlySet<string>): boole
 }
 
 /**
+ * The dimensions that are SET and that this fleet cannot answer, in one sentence.
+ *
+ * The module's header records why each is ignored, and none of that changes. What changes is that
+ * it is now SAID: a filter that appears to apply and does not is indistinguishable from one that
+ * is broken, and every ignored dimension here was reported as exactly that at least once.
+ *
+ * `dateRange: 'all'` is not a filter, so it raises nothing.
+ */
+export function ignoredDimensions(filters: Filters, lang: 'en' | 'pt'): string | null {
+  const pt = lang === 'pt'
+  const named: string[] = []
+  if (filters.dateRange && filters.dateRange !== 'all') named.push(pt ? 'o período' : 'the date range')
+  if ((filters.tags?.length ?? 0) > 0) named.push(pt ? 'as tags' : 'tags')
+  if ((filters.users?.length ?? 0) > 0) named.push(pt ? 'os membros' : 'members')
+  if ((filters.teams?.length ?? 0) > 0) named.push(pt ? 'os times' : 'teams')
+  if ((filters.machines?.length ?? 0) > 0) named.push(pt ? 'as máquinas' : 'machines')
+  if (named.length === 0) return null
+  const list = named.length === 1
+    ? named[0]!
+    : `${named.slice(0, -1).join(', ')} ${pt ? 'e' : 'and'} ${named[named.length - 1]}`
+  return pt
+    ? `${list.charAt(0).toUpperCase()}${list.slice(1)} não estreita uma frota viva.`
+    : `${list.charAt(0).toUpperCase()}${list.slice(1)} does not narrow a live fleet.`
+}
+
+/**
  * The values this fleet can actually be filtered BY.
  *
  * The Sessions workspace used to hand its filter bar the DASHBOARD's options — every harness, repo,
