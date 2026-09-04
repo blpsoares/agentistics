@@ -4,6 +4,12 @@
  * The lenses of the CURRENT page are exposed already clamped to the viewport, so no renderer has
  * to remember to clamp and none of them can disagree about where a lens may sit. Saves are
  * debounced: a drag is one pointermove after another and must not be one request after another.
+ *
+ * `identity` is a caller-supplied token for "whose settings these are" — `undefined`/a constant
+ * while there is nobody (yet) to load for, a distinct value once someone is. It exists because
+ * this hook is mounted above the login gate: on a central, `/api/accessibility` 401s/403s until
+ * a session is fully authorized, and the load must re-run the moment one becomes available rather
+ * than being stuck with whatever it saw on first mount.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
@@ -40,7 +46,7 @@ function viewport() {
   return { width: window.innerWidth, height: window.innerHeight }
 }
 
-export function useAccessibility(): A11yState {
+export function useAccessibility(identity: string | undefined): A11yState {
   const location = useLocation()
   const page = pageKey(location.pathname)
 
@@ -66,24 +72,38 @@ export function useAccessibility(): A11yState {
   // UI stops re-rendering.
   const prefsRef = useRef<AccessibilityPrefs>(DEFAULT_ACCESSIBILITY_PREFS)
 
+  // Re-runs whenever the signed-in identity changes (`App.tsx` passes `undefined` until a
+  // central session is fully authorized — signed in AND past MFA enrolment — and a stable
+  // constant on a non-central machine, where the route is never gated). On a central,
+  // `/api/accessibility` answers 401 before sign-in and 403 before MFA enrolment; without this
+  // dependency the hook would fetch exactly once, before either is possible, and a central user
+  // would need a full page reload after logging in to ever see their saved lenses.
   useEffect(() => {
     let cancelled = false
+    // Nothing under a NEW identity may be treated as loaded until its own fetch has actually
+    // succeeded — reset eagerly, not on settle, or an edit committed while the new identity's
+    // fetch is still in flight would save over it using the previous identity's data.
+    loadedRef.current = false
     fetch('/api/accessibility')
-      .then(r => (r.ok ? r.json() : null))
+      .then(r => {
+        if (!r.ok) throw new Error(`accessibility load failed: ${r.status}`)
+        return r.json()
+      })
       .then(body => {
         if (cancelled) return
         const sanitized = sanitizeAccessibilityPrefs(body)
         prefsRef.current = sanitized
         setPrefs(sanitized)
-      })
-      .catch(() => { /* a failed load leaves the defaults; it must never blank the dashboard */ })
-      .finally(() => {
-        if (cancelled) return
+        // Arm saving ONLY on a genuinely successful load. A 401/403/network failure must leave
+        // this false, so the next edit cannot PUT the still-default state over settings that
+        // were never actually read — `.finally()` could not tell success from failure apart,
+        // which was the whole of the bug: a failed load looked exactly like an empty one.
         loadedRef.current = true
         setLoaded(true)
       })
+      .catch(() => { /* a failed load leaves the defaults on screen and saving DISARMED */ })
     return () => { cancelled = true }
-  }, [])
+  }, [identity])
 
   useEffect(() => {
     const onResize = () => setVp(viewport())

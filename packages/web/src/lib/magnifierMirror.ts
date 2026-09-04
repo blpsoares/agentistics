@@ -28,11 +28,13 @@ export interface MirrorHost {
   /**
    * Move the existing clone to match the window's current scroll position, without re-cloning.
    * The DOM has not changed, so a full `syncNow()` would be wasted work for a pure scroll event —
-   * this rewrites exactly the two style values `syncNow()` derives from `window.scrollX/Y`.
-   * Sticky-element positions (see `reconcile`'s sticky handling) are NOT corrected here — they are
-   * only ever right as of the last full sync, same as everything else `reconcile` computes. A
-   * scroll gesture can therefore show a stale sticky position for up to one heartbeat interval,
-   * which is the same eventual-consistency the mirror already has for every other change.
+   * this rewrites the root offset `syncNow()` derives from `window.scrollX/Y`, AND every sticky
+   * copy's own offset (see `reconcile`'s sticky handling and this function's implementation in
+   * `createMirrorHost` for the derivation) — a sticky copy is otherwise left at last sync's
+   * position and drifts by the scroll delta on every frame. What is still only ever right as of
+   * the last full sync is everything else `reconcile` computes (content, form state, canvas
+   * pixels, and a sticky element's SIZE if it changed) — the same eventual-consistency the mirror
+   * already has there, bounded by the heartbeat interval.
    */
   setScroll(x: number, y: number): void
   destroy(): void
@@ -97,6 +99,16 @@ function neutralize(clone: HTMLElement, live: HTMLElement): void {
   clone.style.overflowX = liveStyle.overflowX
 }
 
+/** A sticky copy positioned during `reconcile`, kept so `setScroll` can rewrite its offset on
+ *  every scroll frame without re-measuring or re-walking the tree. `rect` is the LIVE element's
+ *  `getBoundingClientRect()` from the sync that created this entry — see the derivation on
+ *  `reconcile`'s `left`/`top` assignment and on `MirrorHost.setScroll` for why that single
+ *  measurement stays valid across an arbitrary number of later scroll positions. */
+interface StickyCopy {
+  el: HTMLElement
+  rect: DOMRect
+}
+
 /**
  * Copy what cloneNode leaves behind, walking both trees in step.
  *
@@ -111,6 +123,10 @@ function neutralize(clone: HTMLElement, live: HTMLElement): void {
  * it degrades to `relative` at its static flow position — showing whatever content sits at that Y
  * in the document, not the header. `scrollX`/`scrollY` are the values `createMirrorHost` offset the
  * clone ROOT by for this same sync; see the derivation on the `left`/`top` assignment below.
+ *
+ * Every sticky copy positioned here is also pushed onto `stickyOut`, so `createMirrorHost` can
+ * hand the list to `setScroll` — see that function for why the SAME `rect` measured here is still
+ * the right one to reposition against after the scroll position has moved on.
  */
 function reconcile(
   live: Element,
@@ -118,6 +134,7 @@ function reconcile(
   stickyEls: ReadonlySet<Element>,
   scrollX: number,
   scrollY: number,
+  stickyOut: StickyCopy[],
 ): void {
   if (live.scrollTop !== 0 || live.scrollLeft !== 0) {
     copy.scrollTop = live.scrollTop
@@ -141,6 +158,7 @@ function reconcile(
     copy.style.top = `${rect.top + scrollY}px`
     copy.style.width = `${rect.width}px`
     copy.style.height = `${rect.height}px`
+    stickyOut.push({ el: copy, rect })
   }
 
   if (live instanceof HTMLInputElement && copy instanceof HTMLInputElement) {
@@ -173,13 +191,18 @@ function reconcile(
   const copyKids = copy.children
   const n = Math.min(liveKids.length, copyKids.length)
   // `n` is bounded by both lengths, so index i < n is in range on both sides.
-  for (let i = 0; i < n; i++) reconcile(liveKids[i]!, copyKids[i]!, stickyEls, scrollX, scrollY)
+  for (let i = 0; i < n; i++) {
+    reconcile(liveKids[i]!, copyKids[i]!, stickyEls, scrollX, scrollY, stickyOut)
+  }
 }
 
 export function createMirrorHost(stage: HTMLElement): MirrorHost {
   let alive = true
   // The currently-inserted clone, kept so `setScroll` can reposition it without re-cloning.
   let clone: HTMLElement | null = null
+  // The sticky copies `reconcile` positioned on the last `syncNow()`, kept alongside their
+  // measured live rects so `setScroll` can rewrite their offsets too — see the derivation there.
+  let stickyCopies: StickyCopy[] = []
   return {
     syncNow() {
       if (!alive) return
@@ -212,17 +235,35 @@ export function createMirrorHost(stage: HTMLElement): MirrorHost {
 
       stage.replaceChildren(next)
       const stickyEls = new Set<Element>(Array.from(root.querySelectorAll('[style*="sticky"]')))
-      reconcile(root, next, stickyEls, scrollX, scrollY)
+      const nextStickyCopies: StickyCopy[] = []
+      reconcile(root, next, stickyEls, scrollX, scrollY, nextStickyCopies)
       clone = next
+      stickyCopies = nextStickyCopies
     },
     setScroll(x, y) {
       if (!alive || !clone) return
       clone.style.left = `${-x}px`
       clone.style.top = `${-y}px`
+      // Same equation `reconcile` derived, re-solved for the CURRENT scroll instead of the one at
+      // last sync: the clone root's rendered stage-local position is `-x` (the assignment just
+      // above), so an absolute child at `left: X` renders at `X - x`. It must land at `rect.left`
+      // — the live element's on-screen position, which `reconcile`'s own comment already argues
+      // equals stage-local coordinates — giving `X = rect.left + x`. `rect` is the ONE measurement
+      // taken at the last `syncNow()`; it stays the right target between syncs because a sticky
+      // element's on-screen position does not itself move while it is scrolled (that is what
+      // "sticky" means) — only the clone root's offset does, which is exactly what this call is
+      // correcting for. Without this, `left`/`top` stayed fixed at last sync's `rect.left +
+      // scrollX`, so a sticky copy drifted by the exact scroll delta on every frame until the next
+      // full re-clone.
+      for (const { el, rect } of stickyCopies) {
+        el.style.left = `${rect.left + x}px`
+        el.style.top = `${rect.top + y}px`
+      }
     },
     destroy() {
       alive = false
       clone = null
+      stickyCopies = []
       stage.replaceChildren()
     },
   }

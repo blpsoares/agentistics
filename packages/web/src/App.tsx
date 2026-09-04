@@ -1285,7 +1285,6 @@ export default function AppLayout() {
       Array<'members' | 'teams' | 'machines' | 'presence' | 'repos' | 'tags' | 'projects' | 'models'>
     : undefined
   const isMobile = useIsMobile()
-  const a11y = useAccessibility()
   const { data, loading, loadProgress, error, refetch, liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval } = useData()
   const [riskyMode, setRiskyMode] = useState(false)
   const [lang, setLangState] = useState<Lang>('en')
@@ -1308,6 +1307,21 @@ export default function AppLayout() {
 
   // IAM gate (central only)
   const [iam, setIam] = useState<IamState | undefined>(undefined)
+
+  // `useAccessibility` is mounted here — ABOVE the `if (!iam.authed) return <Login/>` gate below —
+  // so its own load effect always runs before that gate can block anything. On a central,
+  // `/api/accessibility` answers 401 before sign-in and 403 before an owner's MFA enrolment
+  // (`AUTH_PUBLIC` / `MFA_EXEMPT` in `server/index-routes.ts` name neither route), so a stable
+  // identity of `undefined` through both of those states — collapsing to the account id only once
+  // a session is fully authorized — is what lets the hook's load effect re-fire the moment one
+  // becomes available, instead of being stuck forever with whatever its first, pre-auth fetch saw.
+  // On a non-central machine the route is never gated, so a constant identity is correct: the
+  // effect runs once, exactly as it always has.
+  const a11yIdentity = !teamSession?.central
+    ? 'solo'
+    : (iam?.authed && !iam.mfaEnrollmentRequired ? (iam.account?.id ?? 'unknown-account') : undefined)
+  const a11y = useAccessibility(a11yIdentity)
+
   const reloadIam = useCallback(() => {
     Promise.all([
       fetch('/api/iam/status').then(r => r.ok ? r.json() : { needsBootstrap: false }),
