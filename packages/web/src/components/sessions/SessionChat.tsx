@@ -43,6 +43,10 @@ import { composerMaxHeight } from '../../lib/composerHeight'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
 import { appendDictation, dictatedText, dictationError, dictationLocale, dictationSupport, insecureAlternative } from '../../lib/dictation'
 import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
+import {
+  applySkill, emptyPickerReason, filterSkills, flattenGroups, groupSkills, slashQuery, stepSkill,
+} from '../../lib/skillMenu'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 interface ChatPayload {
   turns: ChatTurn[]
@@ -80,6 +84,8 @@ interface Attachment { name: string; path: string }
 
 export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const pt = lang === 'pt'
+  /** Touch targets grow on a phone and nowhere else — 44px on a desktop is a row of buttons. */
+  const isMobile = useIsMobile()
   /**
    * Both of these OUTLIVE this component, in `sessionScratch` — see that module for why they get
    * different storage.
@@ -253,6 +259,41 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
    */
   const [skills, setSkills] = useState<{ name: string; description: string }[] | null>(null)
   const [skillsNote, setSkillsNote] = useState<string | null>(null)
+
+  /**
+   * TYPING `/` OPENS THE PICKER. Every decision it can get wrong is in `skillMenu.ts` — when the
+   * trigger is live, how the list groups, how it filters, and what an insertion writes.
+   *
+   * The caret is tracked because the trigger is read from the text BEFORE it, not from the whole
+   * draft: a `/` typed into the middle of a paragraph is not an invocation, and a picker that
+   * opened there would take the arrow keys from someone writing prose.
+   */
+  const [caret, setCaret] = useState(0)
+  /**
+   * Escape closes the picker while the `/word` it was triggered by is still on screen. Reset when
+   * the trigger goes away, so the NEXT command opens it again — a picker dismissed once and
+   * permanently is a control that stops working with no way to tell why.
+   */
+  const [slashDismissed, setSlashDismissed] = useState(false)
+  const [slashIndex, setSlashIndex] = useState(0)
+  const skillPickerRef = useRef<HTMLDivElement | null>(null)
+  const slashText = useMemo(() => slashQuery(draft.slice(0, caret)), [draft, caret])
+  useEffect(() => { if (slashText === null) setSlashDismissed(false) }, [slashText])
+  // A new query is a new list; keeping the old index would leave the highlight on whichever entry
+  // happens to sit at that position now, which is not the one anybody was looking at.
+  useEffect(() => { setSlashIndex(0) }, [slashText])
+  const slashGroups = useMemo(() => {
+    if (slashText === null || skills === null) return []
+    return groupSkills(filterSkills(skills, slashText), pt ? 'pt' : 'en')
+  }, [skills, slashText, pt])
+  const slashFlat = useMemo(() => flattenGroups(slashGroups), [slashGroups])
+  // Keep the highlighted entry in view. The list scrolls internally, so a cursor stepped past the
+  // fold is invisible and still the thing enter acts on — the same defect the cockpit's own lists
+  // record. `nearest`, so it never yanks the list around for an entry already on screen.
+  useEffect(() => {
+    const el = skillPickerRef.current?.querySelector(`[data-skill-index="${slashIndex}"]`)
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [slashIndex, slashGroups])
   /**
    * Narrow the skill list.
    *
@@ -273,7 +314,9 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     // fetch, so the menu sat on "Reading…" forever and looked like a machine with no skills
     // installed. The route takes a session id, and `session` is the required prop — there is no
     // reason for this to depend on the other one being present.
-    if (!moreOpen || skills !== null) return
+    // TWO ways in now: the menu, and a `/` typed into the field. The list is the same list, so it
+    // is read once and shared — a second fetch per door would walk the host's directories twice.
+    if ((!moreOpen && slashText === null) || skills !== null) return
     let alive = true
     fetch(`/api/fleet/skills?id=${encodeURIComponent(session.id)}&lang=${pt ? 'pt' : 'en'}`)
       .then(r => (r.ok ? r.json() : null))
@@ -284,7 +327,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       })
       .catch(() => { if (alive) setSkills([]) })
     return () => { alive = false }
-  }, [moreOpen, skills, session.id, pt])
+  }, [moreOpen, slashText, skills, session.id, pt])
 
   /** Switch the model mid-conversation by TYPING the harness's own command — see modelSwitch.ts. */
   const switchModel = useCallback(async (model: string) => {
@@ -350,6 +393,27 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   /** Has this conversation been placed at its end yet? Opening mid-history is disorienting. */
   const landedRef = useRef(false)
+
+  /**
+   * Insert the picked skill into the draft. IT DOES NOT SEND — that rule already exists in the
+   * "more options" menu and does not change here: most skills take an argument, and what reaches
+   * the session is what the person chose to send.
+   *
+   * The caret is restored on the NEXT frame because React has to have written the new value into
+   * the field before a selection range inside it means anything.
+   */
+  const insertSkill = useCallback((name: string) => {
+    const at = textareaRef.current?.selectionStart ?? caret
+    const out = applySkill(draft, at, name)
+    editDraft(out.text)
+    setCaret(out.caret)
+    requestAnimationFrame(() => {
+      const node = textareaRef.current
+      if (!node) return
+      node.focus()
+      node.setSelectionRange(out.caret, out.caret)
+    })
+  }, [draft, caret, editDraft])
 
   /**
    * A different session is a different conversation — but "different" is not "unknown".
@@ -485,6 +549,15 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const blocked = (session.approvalLines?.length ?? 0) > 0
   const loading = payload === null
   const canPrompt = !loading && session.actionable && !blocked && payload.live !== false
+  /**
+   * The `/` picker is open.
+   *
+   * It inherits the `prompt` action's refusals exactly as the menu's list does — a slash typed
+   * into a session sitting on a permission prompt goes into that dialog's own filter, and the
+   * submit takes the highlighted option. Where it cannot be offered it is ABSENT: the field itself
+   * is already disabled there, so there is nothing to type a `/` into and no control left inert.
+   */
+  const skillPickerOpen = canPrompt && !blocked && !slashDismissed && slashText !== null
   /** The row's own reopen verb, if it has one. Enabled by the server, never inferred here. */
   const reopen = row?.verbs.find(v => v.action === 'resume')
   const [reopening, setReopening] = useState(false)
@@ -757,7 +830,104 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
           </button>
         )}
 
-        <div style={{ maxWidth: 820, margin: '0 auto' }}>
+        {/* `relative` so the `/` picker can float ABOVE the field instead of pushing it down —
+            growing the composer under somebody's fingers moves the field they are typing in. */}
+        <div style={{ maxWidth: 820, margin: '0 auto', position: 'relative' }}>
+          {/* THE SKILL PICKER, opened by typing `/` at the start of a line. Above the field, over
+              the conversation, listing what this session can be asked to run — GROUPED BY PACKAGE,
+              because 49 flat entries is the same as not having a list. It writes `/<name> ` into
+              the draft and does not send. */}
+          {skillPickerOpen && (
+            <div
+              ref={skillPickerRef}
+              role="listbox"
+              aria-label="Skills"
+              style={{
+                position: 'absolute', bottom: '100%', left: 0, right: 0, zIndex: 60,
+                marginBottom: 8, padding: 4, borderRadius: 12,
+                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                boxShadow: '0 10px 30px rgba(0,0,0,0.38)',
+                maxHeight: isMobile ? '50vh' : 300, overflowY: 'auto', overscrollBehavior: 'contain',
+              }}
+            >
+              {skills === null ? (
+                <p style={{ margin: 0, padding: '8px 10px', fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+                  {pt ? 'Lendo as skills…' : 'Reading the skills…'}
+                </p>
+              ) : skillsNote ? (
+                /* The PERMANENT fact, in the machine's own words: a harness that can never take a
+                   skill is told so rather than shown an empty list it will read as a broken
+                   install. */
+                <p style={{ margin: 0, padding: '8px 10px', fontSize: 11.5, lineHeight: 1.45, color: 'var(--text-tertiary)' }}>
+                  {skillsNote}
+                </p>
+              ) : slashFlat.length === 0 ? (
+                <p style={{ margin: 0, padding: '8px 10px', fontSize: 11.5, lineHeight: 1.45, color: 'var(--text-tertiary)' }}>
+                  {emptyPickerReason(skills.length, slashText ?? '', pt ? 'pt' : 'en')}
+                </p>
+              ) : (
+                <>
+                  {slashGroups.map(group => (
+                    <div key={group.label}>
+                      {/* The package's name. `pkg` is what the plugin is called; the loose group
+                          carries a SENTENCE instead, never a blank heading. */}
+                      <p style={{
+                        margin: '4px 8px 2px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+                        letterSpacing: '0.06em',
+                        color: group.pkg === null ? 'var(--text-tertiary)' : 'var(--anthropic-orange)',
+                      }}>
+                        {group.label}
+                      </p>
+                      {group.skills.map(sk => {
+                        const at = slashFlat.indexOf(sk)
+                        const active = at === Math.min(slashIndex, slashFlat.length - 1)
+                        return (
+                          <button
+                            key={sk.name}
+                            role="option"
+                            aria-selected={active}
+                            data-skill-index={at}
+                            title={sk.description}
+                            // The press must not blur the field: focus is what holds the caret the
+                            // insertion writes against.
+                            onMouseDown={e => e.preventDefault()}
+                            onMouseEnter={() => setSlashIndex(at)}
+                            onClick={() => insertSkill(sk.name)}
+                            style={{
+                              display: 'block', width: '100%', textAlign: 'left',
+                              minHeight: isMobile ? 44 : 34, padding: '6px 8px', borderRadius: 8,
+                              border: 'none', background: active ? 'var(--bg-surface)' : 'transparent',
+                              color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 12.5,
+                              cursor: 'pointer', minWidth: 0,
+                            }}
+                          >
+                            <span style={{
+                              display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            }}>
+                              /{sk.name}
+                            </span>
+                            {/* One line of what it does. The name alone does not tell you whether
+                                `wrangler` is a tool or a topic. */}
+                            <span style={{
+                              display: 'block', fontSize: 10.5, lineHeight: 1.35, color: 'var(--text-tertiary)',
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            }}>
+                              {sk.description}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  ))}
+                  <p style={{ margin: '4px 8px', fontSize: 10, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
+                    {pt
+                      ? '↑↓ escolhe · enter escreve no campo · esc fecha. Não envia.'
+                      : '↑↓ to move · enter writes it into the field · esc closes. It does not send.'}
+                  </p>
+                </>
+              )}
+            </div>
+          )}
           {/* NO COMPOSER UNTIL THE CONVERSATION IS THERE. A field offered over a conversation still
               loading invites a message into a session whose state is not yet known — including one
               sitting in a dialog, where the text would go into the dialog's own filter. */}
@@ -942,9 +1112,34 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                 <textarea
                   ref={textareaRef}
                   value={draft}
-                  onChange={e => editDraft(e.target.value)}
+                  onChange={e => { editDraft(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length) }}
+                  // Every caret move, not only every keystroke: clicking into the middle of a
+                  // written prompt changes whether the caret is inside a `/command`, and a picker
+                  // that only listened to typing would answer for wherever the caret used to be.
+                  onSelect={e => setCaret(e.currentTarget.selectionStart ?? 0)}
+                  onBlur={e => {
+                    // Leaving the field closes the picker — unless the focus went INTO it, which
+                    // is what a keyboard user tabbing onto an entry does.
+                    if (!skillPickerRef.current?.contains(e.relatedTarget as Node | null)) setSlashDismissed(true)
+                  }}
                   onPaste={onPaste}
                   onKeyDown={e => {
+                    // THE PICKER OWNS THESE KEYS WHILE IT IS OPEN, and gives them all back the
+                    // moment it closes. Enter must not send: the person is choosing a skill, and a
+                    // half-typed `/bra` reaching the session is a message nobody wrote.
+                    if (skillPickerOpen && slashFlat.length > 0) {
+                      if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIndex(i => stepSkill(i, slashFlat.length, 1)); return }
+                      if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIndex(i => stepSkill(i, slashFlat.length, -1)); return }
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        const picked = slashFlat[Math.min(slashIndex, slashFlat.length - 1)]
+                        if (picked) insertSkill(picked.name)
+                        return
+                      }
+                    }
+                    // Escape closes the picker BEFORE it reaches the stop verb: a person dismissing
+                    // a list they opened by accident must not interrupt the session's turn.
+                    if (e.key === 'Escape' && skillPickerOpen) { e.preventDefault(); setSlashDismissed(true); return }
                     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() }
                     // The composer's own "esc": stops the CURRENT turn without touching the draft
                     // or the field's own ability to keep taking text — see `stopNow`.
