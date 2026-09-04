@@ -23,7 +23,14 @@ export interface A11yState {
   prefs: AccessibilityPrefs
   loaded: boolean
   page: string
-  /** The current page's lenses, already clamped to the viewport. */
+  /**
+   * The current page's OWN lenses followed by every GLOBAL one, already clamped to the viewport.
+   * That order is deliberate and stable: a page's own lenses never reorder themselves (only an
+   * add/remove changes the array, and adds always append), and `globalLenses` is the same array
+   * on every page — so the keyboard cycle (Tab) and the header's lens list read in the same order
+   * on every visit, with the lenses that are unique to THIS page leading and the ones a person
+   * placed to follow them everywhere trailing.
+   */
   lenses: MagnifierLens[]
   selectedId: string | null
   followOn: boolean
@@ -54,6 +61,12 @@ export interface A11yState {
   duplicateLens(id: string): void
   removeLens(id: string): void
   removePage(page: string): void
+  /**
+   * Moves a lens between `lensesByPage[page]` (the CURRENT page) and `globalLenses`, preserving
+   * everything about it — position, size, zoom, shape, border, pinned state, and its id if that id
+   * is still free in the destination bucket (re-minted, deterministically, only on a collision).
+   */
+  setLensGlobal(id: string, global: boolean): void
   setAllPinned(pinned: boolean): void
   select(id: string | null): void
   toggleFollow(): void
@@ -153,11 +166,16 @@ export function useAccessibility(identity: string | undefined): A11yState {
     }, SAVE_DEBOUNCE_MS)
   }, [])
 
-  const rawLenses = useMemo(() => prefs.lensesByPage[page] ?? [], [prefs.lensesByPage, page])
-  const lenses = useMemo(() => rawLenses.map(l => clampLens(l, vp)), [rawLenses, vp])
+  const rawPageLenses = useMemo(() => prefs.lensesByPage[page] ?? [], [prefs.lensesByPage, page])
+  // Order: this page's own lenses first, the global ones after — see the `lenses` doc comment on
+  // `A11yState` above for why that is the one stable order.
+  const lenses = useMemo(
+    () => [...rawPageLenses, ...prefs.globalLenses].map(l => clampLens(l, vp)),
+    [rawPageLenses, prefs.globalLenses, vp],
+  )
 
   // `setPageLenses` and every mutator below read `prefsRef.current` rather than the render-closure
-  // `prefs`/`rawLenses`, so two mutations in one JS turn compose instead of the second one
+  // `prefs`/`rawPageLenses`, so two mutations in one JS turn compose instead of the second one
   // clobbering the first.
   const setPageLenses = useCallback((p: string, next: MagnifierLens[]) => {
     const current = prefsRef.current
@@ -167,9 +185,13 @@ export function useAccessibility(identity: string | undefined): A11yState {
     commit({ ...current, lensesByPage: byPage })
   }, [commit])
 
-  const freeId = useCallback((existing: readonly MagnifierLens[]) => {
-    const taken = new Set(existing.map(l => l.id))
-    return mintLensId(taken)
+  // The ids already in use for THIS page's rendered set — its own lenses plus every global one.
+  // Every mint or duplicate must draw from this union, or a global lens and a page lens can end
+  // up sharing an id the moment they are rendered together (see accessibility.ts's
+  // `sanitizeLensList` doc comment for the same rule applied to the stored document).
+  const idsInUse = useCallback((p: string): Set<string> => {
+    const cur = prefsRef.current
+    return new Set([...(cur.lensesByPage[p] ?? []).map(l => l.id), ...cur.globalLenses.map(l => l.id)])
   }, [])
 
   return {
@@ -187,36 +209,101 @@ export function useAccessibility(identity: string | undefined): A11yState {
     setNewLensDefaults: style => commit({ ...prefsRef.current, newLensDefaults: style }),
     addLens: () => {
       const current = prefsRef.current.lensesByPage[page] ?? []
-      const made = newLens(prefsRef.current.newLensDefaults, viewport(), new Set(current.map(l => l.id)))
+      const made = newLens(prefsRef.current.newLensDefaults, viewport(), idsInUse(page))
       setPageLenses(page, [...current, made])
       setSelectedId(made.id)
     },
+    // Finds the lens in WHICHEVER bucket it lives in. A version that only looked at the page's
+    // own array would silently no-op on a global lens — a half-working control being on screen
+    // and doing nothing is worse than not offering it.
     updateLens: (id, patch) => {
-      const current = prefsRef.current.lensesByPage[page] ?? []
-      setPageLenses(page, current.map(l => (l.id === id ? clampLens({ ...l, ...patch }, viewport()) : l)))
+      const cur = prefsRef.current
+      const current = cur.lensesByPage[page] ?? []
+      if (current.some(l => l.id === id)) {
+        setPageLenses(page, current.map(l => (l.id === id ? clampLens({ ...l, ...patch }, viewport()) : l)))
+        return
+      }
+      if (cur.globalLenses.some(l => l.id === id)) {
+        commit({
+          ...cur,
+          globalLenses: cur.globalLenses.map(l => (l.id === id ? clampLens({ ...l, ...patch }, viewport()) : l)),
+        })
+      }
     },
+    // The duplicate lands in the SAME bucket as its source: duplicating a global lens makes
+    // another lens that also follows every page, not a one-off stuck to whichever page you
+    // happened to be on when you pressed the button.
     duplicateLens: id => {
-      const current = prefsRef.current.lensesByPage[page] ?? []
-      const src = current.find(l => l.id === id)
+      const cur = prefsRef.current
+      const current = cur.lensesByPage[page] ?? []
+      const fromPage = current.find(l => l.id === id)
+      const src = fromPage ?? cur.globalLenses.find(l => l.id === id)
       if (!src) return
-      const copy = { ...src, id: freeId(current), x: src.x + 24, y: src.y + 24, pinned: false }
-      setPageLenses(page, [...current, clampLens(copy, viewport())])
-      setSelectedId(copy.id)
+      const copy = { ...src, id: mintLensId(idsInUse(page)), x: src.x + 24, y: src.y + 24, pinned: false }
+      const clamped = clampLens(copy, viewport())
+      if (fromPage) setPageLenses(page, [...current, clamped])
+      else commit({ ...cur, globalLenses: [...cur.globalLenses, clamped] })
+      setSelectedId(clamped.id)
     },
     removeLens: id => {
-      const current = prefsRef.current.lensesByPage[page] ?? []
-      setPageLenses(page, current.filter(l => l.id !== id))
+      const cur = prefsRef.current
+      const current = cur.lensesByPage[page] ?? []
+      if (current.some(l => l.id === id)) {
+        setPageLenses(page, current.filter(l => l.id !== id))
+      } else if (cur.globalLenses.some(l => l.id === id)) {
+        commit({ ...cur, globalLenses: cur.globalLenses.filter(l => l.id !== id) })
+      }
       setSelectedId(prev => (prev === id ? null : prev))
     },
     removePage: p => {
+      // Only THIS page's own lenses. `globalLenses` is a separate bucket precisely so this can
+      // never be the trap a `global` flag inside `lensesByPage` would make it.
       const byPage = { ...prefsRef.current.lensesByPage }
       delete byPage[p]
       commit({ ...prefsRef.current, lensesByPage: byPage })
       if (p === page) setSelectedId(null)
     },
+    setLensGlobal: (id, global) => {
+      const cur = prefsRef.current
+      const pageLenses = cur.lensesByPage[page] ?? []
+      if (global) {
+        const idx = pageLenses.findIndex(l => l.id === id)
+        const src = idx >= 0 ? pageLenses[idx] : undefined
+        if (!src) return
+        const remainingPage = pageLenses.filter(l => l.id !== id)
+        // The id travels with the lens unless it is already spoken for in the destination —
+        // `globalLenses` plus whatever `remainingPage` still holds (the source itself removed).
+        const taken = new Set([...remainingPage.map(l => l.id), ...cur.globalLenses.map(l => l.id)])
+        const moved = taken.has(src.id) ? { ...src, id: mintLensId(taken) } : src
+        const byPage = { ...cur.lensesByPage }
+        if (remainingPage.length === 0) delete byPage[page]
+        else byPage[page] = remainingPage
+        commit({ ...cur, lensesByPage: byPage, globalLenses: [...cur.globalLenses, moved] })
+        if (moved.id !== id) setSelectedId(prev => (prev === id ? moved.id : prev))
+      } else {
+        const idx = cur.globalLenses.findIndex(l => l.id === id)
+        const src = idx >= 0 ? cur.globalLenses[idx] : undefined
+        if (!src) return
+        const remainingGlobal = cur.globalLenses.filter(l => l.id !== id)
+        const taken = new Set([...pageLenses.map(l => l.id), ...remainingGlobal.map(l => l.id)])
+        const moved = taken.has(src.id) ? { ...src, id: mintLensId(taken) } : src
+        commit({ ...cur, lensesByPage: { ...cur.lensesByPage, [page]: [...pageLenses, moved] }, globalLenses: remainingGlobal })
+        if (moved.id !== id) setSelectedId(prev => (prev === id ? moved.id : prev))
+      }
+    },
+    // Pins/unpins every lens CURRENTLY on screen — this page's own lenses and every global one,
+    // exactly `a11y.lenses`'s own set — writing the result back into whichever bucket each lens
+    // came from. A version scoped to `lensesByPage[page]` alone would leave a global lens's pin
+    // state untouched while the button claims to have set "all" of them.
     setAllPinned: pinned => {
-      const current = prefsRef.current.lensesByPage[page] ?? []
-      setPageLenses(page, current.map(l => ({ ...l, pinned })))
+      const cur = prefsRef.current
+      const current = cur.lensesByPage[page] ?? []
+      const nextPage = current.map(l => ({ ...l, pinned }))
+      const nextGlobal = cur.globalLenses.map(l => ({ ...l, pinned }))
+      const byPage = { ...cur.lensesByPage }
+      if (nextPage.length === 0) delete byPage[page]
+      else byPage[page] = nextPage
+      commit({ ...cur, lensesByPage: byPage, globalLenses: nextGlobal })
     },
     select: setSelectedId,
     toggleFollow: () => setFollowOn(v => !v),

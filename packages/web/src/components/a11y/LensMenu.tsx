@@ -14,13 +14,16 @@ interface Props {
   y: number
   text: A11yText
   isMobile: boolean
+  /** True while `lens` lives in `globalLenses` rather than the current page's own bucket. */
+  global: boolean
   onChange(patch: Partial<MagnifierLens>): void
+  onSetGlobal(global: boolean): void
   onRemove(): void
   onDuplicate(): void
   onClose(): void
 }
 
-export function LensMenu({ lens, x, y, text, isMobile, onChange, onRemove, onDuplicate, onClose }: Props) {
+export function LensMenu({ lens, x, y, text, isMobile, global, onChange, onSetGlobal, onRemove, onDuplicate, onClose }: Props) {
   const row: React.CSSProperties = {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
     padding: isMobile ? '10px 4px' : '5px 4px', fontSize: 13, color: 'var(--text-secondary)',
@@ -113,6 +116,9 @@ export function LensMenu({ lens, x, y, text, isMobile, onChange, onRemove, onDup
             onChange={e => onChange({ borderWidth: Number(e.target.value) })} style={slider} />
         </div>
         <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
+        <button style={action} onClick={() => { onSetGlobal(!global); onClose() }}>
+          {global ? text.keepOnThisPageOnly : text.keepOnEveryPage}
+        </button>
         <button style={action} onClick={() => { onChange({ pinned: !lens.pinned }); onClose() }}>
           {lens.pinned ? text.unpin : text.pin}
         </button>

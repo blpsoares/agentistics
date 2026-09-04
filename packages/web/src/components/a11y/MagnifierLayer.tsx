@@ -45,6 +45,10 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
   const text = useMemo(() => a11yText(lang), [lang])
   const [scheduler, setScheduler] = useState<MirrorScheduler | null>(null)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  // Which of `a11y.lenses` live in `globalLenses` rather than the current page's own bucket — the
+  // one fact `Lens`/`LensMenu` need and cannot derive on their own, since a `MagnifierLens` itself
+  // carries no `global` flag (see accessibility.ts's header for why that is deliberate).
+  const globalIds = useMemo(() => new Set(a11y.prefs.globalLenses.map(l => l.id)), [a11y.prefs.globalLenses])
 
   useEffect(() => {
     if (!active) return
@@ -261,6 +265,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
           index={i + 1}
           selected={a11y.selectedId === lens.id}
           revealed={a11y.selectedId === lens.id}
+          global={globalIds.has(lens.id)}
           text={text}
           isMobile={isMobile}
           scheduler={scheduler}
@@ -291,7 +296,9 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
         return (
           <LensMenu
             lens={lens} x={menu.x} y={menu.y} text={text} isMobile={isMobile}
+            global={globalIds.has(lens.id)}
             onChange={patch => a11y.updateLens(lens.id, patch)}
+            onSetGlobal={g => a11y.setLensGlobal(lens.id, g)}
             onRemove={() => a11y.removeLens(lens.id)}
             onDuplicate={() => a11y.duplicateLens(lens.id)}
             onClose={() => setMenu(null)}

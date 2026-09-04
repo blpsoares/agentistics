@@ -41,6 +41,7 @@ test('an accessibility-only write REPLACES lensesByPage — a page can be emptie
         { id: 'b', x: 30, y: 40, shape: 'circle', width: 260, height: 260, zoom: 3, borderWidth: 3, cornerRadius: 12, pinned: true },
       ],
     },
+    globalLenses: [],
   }
 
   await writePreferencesTo(primary, null, { accessibility: withLenses })
@@ -69,6 +70,7 @@ test('an accessibility-only write leaves unrelated preference keys untouched', a
       followLens: { shape: 'circle', width: 260, height: 260, zoom: 2.5, borderWidth: 3, cornerRadius: 12 },
       newLensDefaults: { shape: 'rect', width: 360, height: 240, zoom: 2.5, borderWidth: 3, cornerRadius: 12 },
       lensesByPage: { '/costs': [{ id: 'a', x: 0, y: 0, shape: 'rect', width: 360, height: 240, zoom: 2.5, borderWidth: 3, cornerRadius: 12, pinned: false }] },
+      globalLenses: [],
     },
   }
   await writePreferencesTo(primary, null, initial)
@@ -83,6 +85,7 @@ test('an accessibility-only write leaves unrelated preference keys untouched', a
       followLens: { shape: 'circle', width: 260, height: 260, zoom: 2.5, borderWidth: 3, cornerRadius: 12 },
       newLensDefaults: { shape: 'rect', width: 360, height: 240, zoom: 2.5, borderWidth: 3, cornerRadius: 12 },
       lensesByPage: {},
+      globalLenses: [],
     },
   })
 

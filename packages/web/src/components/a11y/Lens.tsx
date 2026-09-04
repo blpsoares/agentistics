@@ -31,7 +31,7 @@
  * and Remover live.
  */
 import React, { useEffect, useRef } from 'react'
-import { Pin, PinOff, Move, X, Plus, Minus, Sliders } from 'lucide-react'
+import { Pin, PinOff, Move, X, Plus, Minus, Sliders, Globe } from 'lucide-react'
 import type { MagnifierLens } from '@agentistics/core'
 import { stageTransform, lensControls, lensPointToPage, fmtZoom, ZOOM_STEP, MAGNIFIER_LAYER_ID } from '../../lib/magnifier'
 import { createMirrorHost, type MirrorScheduler } from '../../lib/magnifierMirror'
@@ -86,6 +86,8 @@ interface Props {
   selected: boolean
   /** True while a pinned lens is temporarily revealed by keyboard selection. */
   revealed: boolean
+  /** True while `lens` lives in `globalLenses` — it follows the user across every page. */
+  global: boolean
   text: A11yText
   isMobile: boolean
   scheduler: MirrorScheduler
@@ -98,7 +100,7 @@ interface Props {
 }
 
 export function Lens({
-  lens, index, selected, revealed, text, isMobile, scheduler, onChange, onSelect, onRemove, onContextMenu, onOpenMenu,
+  lens, index, selected, revealed, global, text, isMobile, scheduler, onChange, onSelect, onRemove, onContextMenu, onOpenMenu,
 }: Props) {
   const stageRef = useRef<HTMLDivElement | null>(null)
   // The magnified area's own frame — see `elementBehindLens` below for why forwarding needs it.
@@ -244,7 +246,7 @@ export function Lens({
   return (
     <div
       role="group"
-      aria-label={text.lensLabel(index)}
+      aria-label={text.lensLabel(index, global)}
       // Left click, wheel and hover go to the PAGE the lens is showing. Right click goes to the
       // LENS. So this is wired unconditionally, pinned or not: a pinned lens has no strip/handle
       // to right-click on, and it is exactly there that the menu — the only way to unpin or
@@ -301,6 +303,24 @@ export function Lens({
           }}
         />
       </div>
+
+      {/* The global marker — a sibling of the viewport, exactly like the control strip and the
+          resize handle above, for the same reason: the viewport is the only element that clips,
+          so anything meant to stay visible regardless of shape (and regardless of pin state —
+          this renders whether or not `interactive` does) cannot live inside it. Subtle on
+          purpose: this states a fact about the lens, it is not a warning. `pointerEvents: 'none'`
+          and `aria-hidden` because the SAME fact is already in the group's own `aria-label`
+          (`text.lensLabel(index, global)`) — a screen reader would otherwise hear it twice. */}
+      {global && (
+        <div aria-hidden="true" style={{
+          position: 'absolute', top: -6, left: -6, width: isMobile ? 18 : 14, height: isMobile ? 18 : 14,
+          borderRadius: '50%', background: ORANGE, color: '#fff',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.4)', pointerEvents: 'none',
+        }}>
+          <Globe size={isMobile ? 12 : 9} />
+        </div>
+      )}
 
       {interactive && (
         <>

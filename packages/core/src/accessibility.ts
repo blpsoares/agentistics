@@ -41,6 +41,14 @@ export interface AccessibilityPrefs {
   newLensDefaults: LensStyle
   /** Keyed by EXACT pathname (query and hash ignored) — see `pageKey` in the web package. */
   lensesByPage: Record<string, MagnifierLens[]>
+  /**
+   * Lenses that follow the user across EVERY page, in their own bucket rather than a `global`
+   * flag on a lens sitting inside `lensesByPage`. A flag would leave "which page owns it" a
+   * question every reader has to answer, and would make `removePage` a trap (deleting a page
+   * could silently take its "global" lenses with it). A separate bucket says what the lens IS,
+   * and keeps `pageKey` meaning exactly what it means today.
+   */
+  globalLenses: MagnifierLens[]
 }
 
 /**
@@ -77,6 +85,7 @@ export const DEFAULT_ACCESSIBILITY_PREFS: AccessibilityPrefs = {
   followLens: { ...DEFAULT_LENS_STYLE, shape: 'circle', width: 260, height: 260 },
   newLensDefaults: { ...DEFAULT_LENS_STYLE },
   lensesByPage: {},
+  globalLenses: [],
 }
 
 function num(v: unknown, fallback: number, min: number, max: number): number {
@@ -114,10 +123,80 @@ export function mintLensId(taken: Set<string>): string {
   return `lens-${n}`
 }
 
+/**
+ * Sanitizes one raw array into a list of valid lenses: total (never throws), clamped (every
+ * number lands in range), non-object entries dropped, and ids re-minted deterministically.
+ *
+ * `preTaken` seeds the "already in use" set — the caller passes the OTHER bucket's finalized ids
+ * so a page lens and a global lens can never end up sharing an id. Without that, sanitizing each
+ * bucket in isolation would let `lensesByPage['/costs']` and `globalLenses` each mint (or keep) a
+ * `lens-1`, and since a page's rendered lenses are `pageLenses ∪ globalLenses` at runtime, the two
+ * would collide the moment that page is visited — `selectedId`, the keyboard cycle and every menu
+ * key off exactly that id.
+ */
+function sanitizeLensList(raw: unknown[], fallbackStyle: LensStyle, preTaken: ReadonlySet<string>): MagnifierLens[] {
+  const taken = new Set(preTaken)
+  const lenses: MagnifierLens[] = []
+
+  // Two-pass approach: first reserve explicit ids (Finding 2), then mint ids for entries that need one.
+  // This ensures explicit ids are not clobbered by auto-minted ones.
+
+  // Pass 1: Reserve all explicit, non-empty, non-duplicate ids — a duplicate of one already taken
+  // (by an earlier item in this same list, OR by `preTaken`) is NOT reserved, so pass 2 re-mints it.
+  const explicitIds = new Set<string>()
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const io = item as Record<string, unknown>
+    const id = typeof io.id === 'string' && io.id.trim() !== '' ? io.id.trim() : ''
+    if (id !== '' && !explicitIds.has(id) && !taken.has(id)) {
+      explicitIds.add(id)
+      taken.add(id)
+    }
+  }
+
+  // Pass 2: Process all items, skipping non-objects (Finding 1), and minting ids as needed (Finding 2).
+  for (const item of raw) {
+    // Skip items that are not non-null objects. Don't sanitize them into default lenses.
+    if (!item || typeof item !== 'object') continue
+
+    const io = item as Record<string, unknown>
+    const style = sanitizeStyle(io, fallbackStyle)
+    let id = typeof io.id === 'string' && io.id.trim() !== '' ? io.id.trim() : ''
+    // If no explicit id, or if this explicit id is a duplicate (already used in this list or the
+    // other bucket), mint a new one.
+    if (id === '' || !explicitIds.has(id)) {
+      id = mintLensId(taken)
+    }
+    // Mark this explicit id as used (prevents duplicates from using the same reserved id)
+    explicitIds.delete(id)
+    taken.add(id)
+    lenses.push({
+      ...style,
+      id,
+      // Position is NOT clamped here: the viewport is a browser fact and this module runs on the
+      // server too. `clampLens` in the web package does that, on every render.
+      x: num(io.x, 0, -LENS_MAX_PX, COORD_MAX_PX),
+      y: num(io.y, 0, -LENS_MAX_PX, COORD_MAX_PX),
+      pinned: io.pinned === true,
+    })
+  }
+  return lenses
+}
+
 export function sanitizeAccessibilityPrefs(input: unknown): AccessibilityPrefs {
   const o = input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
   const newLensDefaults = sanitizeStyle(o.newLensDefaults, DEFAULT_ACCESSIBILITY_PREFS.newLensDefaults)
   const followLens = sanitizeStyle(o.followLens, DEFAULT_ACCESSIBILITY_PREFS.followLens)
+
+  // Sanitized FIRST, with no other bucket to avoid yet: every stored document that exists today
+  // has no `globalLenses` at all, so an absent/non-array value reads as an empty list — the same
+  // rule `lensesByPage` already applies to a page key that isn't there.
+  const rawGlobal = Array.isArray(o.globalLenses) ? o.globalLenses : []
+  const globalLenses = sanitizeLensList(rawGlobal, newLensDefaults, new Set())
+  // The ids `globalLenses` settled on — every page's sanitization seeds its OWN taken-set with
+  // these, so a page lens that happens to share an id with a global one gets re-minted instead of
+  // silently colliding with it the moment the two are rendered together.
+  const globalTaken = new Set(globalLenses.map(l => l.id))
 
   const rawPages =
     o.lensesByPage && typeof o.lensesByPage === 'object'
@@ -129,53 +208,11 @@ export function sanitizeAccessibilityPrefs(input: unknown): AccessibilityPrefs {
     // A page key is a pathname. Anything else is not addressable and would strand its lenses.
     if (!page.startsWith('/')) continue
     if (!Array.isArray(raw)) continue
-    const taken = new Set<string>()
-    const lenses: MagnifierLens[] = []
-
-    // Two-pass approach: first reserve explicit ids (Finding 2), then mint ids for entries that need one.
-    // This ensures explicit ids are not clobbered by auto-minted ones.
-
-    // Pass 1: Reserve all explicit, non-empty, non-duplicate ids.
-    const explicitIds = new Set<string>()
-    for (const item of raw) {
-      if (!item || typeof item !== 'object') continue
-      const io = item as Record<string, unknown>
-      const id = typeof io.id === 'string' && io.id.trim() !== '' ? io.id.trim() : ''
-      if (id !== '' && !explicitIds.has(id)) {
-        explicitIds.add(id)
-        taken.add(id)
-      }
-    }
-
-    // Pass 2: Process all items, skipping non-objects (Finding 1), and minting ids as needed (Finding 2).
-    for (const item of raw) {
-      // Skip items that are not non-null objects. Don't sanitize them into default lenses.
-      if (!item || typeof item !== 'object') continue
-
-      const io = item as Record<string, unknown>
-      const style = sanitizeStyle(io, newLensDefaults)
-      let id = typeof io.id === 'string' && io.id.trim() !== '' ? io.id.trim() : ''
-      // If no explicit id, or if this explicit id is a duplicate (already used in this page), mint a new one.
-      if (id === '' || !explicitIds.has(id)) {
-        id = mintLensId(taken)
-      }
-      // Mark this explicit id as used (prevents duplicates from using the same reserved id)
-      explicitIds.delete(id)
-      taken.add(id)
-      lenses.push({
-        ...style,
-        id,
-        // Position is NOT clamped here: the viewport is a browser fact and this module runs on the
-        // server too. `clampLens` in the web package does that, on every render.
-        x: num(io.x, 0, -LENS_MAX_PX, COORD_MAX_PX),
-        y: num(io.y, 0, -LENS_MAX_PX, COORD_MAX_PX),
-        pinned: io.pinned === true,
-      })
-    }
+    const lenses = sanitizeLensList(raw, newLensDefaults, globalTaken)
     // An empty page is not a page. Keeping the key would grow the document forever as pages are
     // visited and cleared.
     if (lenses.length > 0) lensesByPage[page] = lenses
   }
 
-  return { enabled: o.enabled === true, followLens, newLensDefaults, lensesByPage }
+  return { enabled: o.enabled === true, followLens, newLensDefaults, lensesByPage, globalLenses }
 }

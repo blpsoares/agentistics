@@ -28,8 +28,21 @@ export interface A11yText {
   zoomOut: string
   /** The lens's own visible settings-menu button — opens the same menu the right-click does. */
   config: string
-  /** A single lens's own accessible name — an ordinal, never the internal `lens-N` id. */
-  lensLabel(n: number): string
+  /**
+   * A single lens's own accessible name — an ordinal, never the internal `lens-N` id. `global`
+   * extends it to say the lens follows every page, for a screen-reader user who cannot see the
+   * small marker on its chrome.
+   */
+  lensLabel(n: number, global?: boolean): string
+  /** The LensMenu row that moves a lens into `globalLenses` — worded as what it does. */
+  keepOnEveryPage: string
+  /** Same row, once the lens already IS global — moves it back to the current page only. */
+  keepOnThisPageOnly: string
+  /** The settings table's group label for the global bucket, in the same cell a pathname sits in
+   *  for a per-page row — it must read as "applies everywhere", never as a path. */
+  everyPage: string
+  /** The global group's own "remove all" — removes only `globalLenses`, never a page's. */
+  removeAllGlobal: string
   shape: string
   circle: string
   rect: string
@@ -89,7 +102,15 @@ export function a11yText(lang: 'pt' | 'en'): A11yText {
     zoomIn: pt ? 'Aproximar' : 'Zoom in',
     zoomOut: pt ? 'Afastar' : 'Zoom out',
     config: pt ? 'Configurações da lupa' : 'Lens settings',
-    lensLabel: n => (pt ? `Lupa ${n}` : `Lens ${n}`),
+    lensLabel: (n, global) => {
+      const base = pt ? `Lupa ${n}` : `Lens ${n}`
+      if (!global) return base
+      return pt ? `${base}, presente em todas as páginas` : `${base}, present on every page`
+    },
+    keepOnEveryPage: pt ? 'Manter esta lupa em todas as páginas' : 'Keep this lens on every page',
+    keepOnThisPageOnly: pt ? 'Manter esta lupa só nesta página' : 'Keep this lens on this page only',
+    everyPage: pt ? 'Todas as páginas' : 'Every page',
+    removeAllGlobal: pt ? 'Remover todas as lupas globais' : 'Remove all global lenses',
     shape: pt ? 'Formato' : 'Shape',
     circle: pt ? 'Círculo' : 'Circle',
     rect: pt ? 'Retângulo' : 'Rectangle',

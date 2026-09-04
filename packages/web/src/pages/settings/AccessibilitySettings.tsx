@@ -164,6 +164,8 @@ export default function AccessibilitySettings() {
   }
 
   const pages = Object.entries(a11y.prefs.lensesByPage)
+  const globalLenses = a11y.prefs.globalLenses
+  const hasGlobal = globalLenses.length > 0
 
   return (
     <div style={{ maxWidth: 760 }}>
@@ -206,8 +208,8 @@ export default function AccessibilitySettings() {
 
       <div style={card}>
         <div style={h}>{text.savedLenses}</div>
-        {pages.length === 0 && <div style={note}>{text.noLensesHere}</div>}
-        {pages.length > 0 && (
+        {pages.length === 0 && !hasGlobal && <div style={note}>{text.noLensesHere}</div>}
+        {(pages.length > 0 || hasGlobal) && (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
@@ -219,6 +221,25 @@ export default function AccessibilitySettings() {
                 </tr>
               </thead>
               <tbody>
+                {/* Its own group, labelled as applying to every page rather than to a path — never
+                    mixed into the per-page rows below, which are each about exactly one path. */}
+                {hasGlobal && (
+                  <tr style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: 8, color: 'var(--text-primary)', fontWeight: 600 }}>{text.everyPage}</td>
+                    <td style={{ padding: 8 }}>{globalLenses.length}</td>
+                    <td style={{ padding: 8 }}>{globalLenses.map(l => `${fmtZoom(l.zoom)}×`).join(' · ')}</td>
+                    <td style={{ padding: 8, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button
+                        style={{ ...smallBtn, color: 'var(--accent-red)' }}
+                        // Removes only THIS group — `removeLens` finds each one in `globalLenses`
+                        // (it is not in any page's array), so a page's own lenses are never touched.
+                        onClick={() => globalLenses.forEach(l => a11y.removeLens(l.id))}
+                      >
+                        {text.removeAllGlobal}
+                      </button>
+                    </td>
+                  </tr>
+                )}
                 {pages.map(([page, lenses]) => (
                   <tr key={page} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={{ padding: 8, color: 'var(--text-primary)', fontFamily: 'ui-monospace, monospace' }}>{page}</td>

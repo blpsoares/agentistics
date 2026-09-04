@@ -167,4 +167,87 @@ describe('sanitizeAccessibilityPrefs', () => {
     const once = sanitizeAccessibilityPrefs(messy)
     expect(sanitizeAccessibilityPrefs(once)).toEqual(once)
   })
+
+  // --- globalLenses ---------------------------------------------------------------------------
+
+  test('an absent globalLenses reads as an empty list', () => {
+    // Every stored document that exists today has no `globalLenses` key at all. A wrong
+    // implementation that defaults it to something other than `[]` (e.g. copying `lensesByPage`'s
+    // union, or leaving it `undefined`) would still pass a bare `toEqual(DEFAULT_ACCESSIBILITY_PREFS)`
+    // check alone, so this asserts the field directly and on a document that has OTHER content too
+    // (an implementation that only special-cases the fully-empty `{}` input would fail this one).
+    const out = sanitizeAccessibilityPrefs({ enabled: true, lensesByPage: { '/costs': [{ id: 'a', x: 0, y: 0 }] } })
+    expect(out.globalLenses).toEqual([])
+    expect('globalLenses' in out).toBe(true)
+  })
+
+  test('globalLenses is sanitized with the same rules as a page: clamped, non-objects dropped, ids re-minted', () => {
+    const out = sanitizeAccessibilityPrefs({
+      globalLenses: [
+        'garbage',
+        { id: 'dup', x: 0, y: 0, zoom: 999, width: 1 },
+        { id: 'dup', x: 0, y: 0 },
+        42,
+      ],
+    })
+    // A wrong implementation that just does `Array.isArray(o.globalLenses) ? o.globalLenses : []`
+    // (no sanitization at all) would keep 4 entries including the string/number junk and the
+    // out-of-range zoom/width — this fails on every count below.
+    expect(out.globalLenses.length).toBe(2)
+    const first = out.globalLenses[0]!
+    expect(first.zoom).toBe(ZOOM_MAX)
+    expect(first.width).toBe(LENS_MIN_PX)
+    const ids = out.globalLenses.map(l => l.id)
+    expect(new Set(ids).size).toBe(2)
+    expect(ids[0]).toBe('dup')
+  })
+
+  test('a global lens and a page lens sharing an explicit id do not collide — the page one is re-minted', () => {
+    // This is the property the whole feature depends on: `useAccessibility`'s `lenses` is
+    // `pageLenses ∪ globalLenses`, so if both sanitized to id 'lens-1' independently, the page
+    // that lens sits on would render two DIFFERENT lenses answering to the same id — `.find(l =>
+    // l.id === id)` would always resolve the first one, silently misdirecting every mutation and
+    // the keyboard cycle aimed at the second. A wrong implementation that sanitizes
+    // `lensesByPage` and `globalLenses` in two independent calls (each with its own empty `taken`
+    // set) would still pass every other test in this file and fail only this one.
+    const out = sanitizeAccessibilityPrefs({
+      globalLenses: [{ id: 'lens-1', x: 0, y: 0, zoom: 4 }],
+      lensesByPage: { '/costs': [{ id: 'lens-1', x: 10, y: 10, zoom: 8 }] },
+    })
+    const globalOne = out.globalLenses[0]!
+    const pageOne = out.lensesByPage['/costs']![0]!
+    // The global bucket is sanitized first and keeps its explicit id...
+    expect(globalOne.id).toBe('lens-1')
+    expect(globalOne.zoom).toBe(4)
+    // ...so the page lens, which asked for the same id, must have been re-minted to something else.
+    expect(pageOne.id).not.toBe('lens-1')
+    expect(pageOne.zoom).toBe(8)
+  })
+
+  test('two DIFFERENT pages may still share an id with each other — only the global bucket is exclusive', () => {
+    // Existing, deliberate behaviour (see useAccessibility.ts's page-change effect): a lens id is
+    // scoped to its own page, and the same 'lens-1' on two different pages is fine because they
+    // are never rendered together. Cross-bucket exclusivity must not overreach into cross-PAGE
+    // exclusivity — a wrong implementation that made ids globally unique across every page would
+    // still be "safe" but would contradict this already-documented invariant.
+    const out = sanitizeAccessibilityPrefs({
+      lensesByPage: {
+        '/a': [{ id: 'lens-1', x: 0, y: 0 }],
+        '/b': [{ id: 'lens-1', x: 0, y: 0 }],
+      },
+    })
+    expect(out.lensesByPage['/a']![0]!.id).toBe('lens-1')
+    expect(out.lensesByPage['/b']![0]!.id).toBe('lens-1')
+  })
+
+  test('idempotency holds with both buckets populated and colliding explicit ids', () => {
+    const messy = {
+      globalLenses: [{ id: 'lens-1', x: 0, y: 0 }],
+      lensesByPage: {
+        '/costs': [{ id: 'lens-1', x: 5, y: 5 }, { id: 'dup', x: 1, y: 1 }, { id: 'dup', x: 2, y: 2 }],
+      },
+    }
+    const once = sanitizeAccessibilityPrefs(messy)
+    expect(sanitizeAccessibilityPrefs(once)).toEqual(once)
+  })
 })
