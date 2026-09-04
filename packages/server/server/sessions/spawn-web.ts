@@ -19,11 +19,18 @@
 import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import { controlStrings } from '@agentistics/tui/control/i18n'
+import { modelsFor, type ModelOption } from '@agentistics/core'
 
 export interface WebHarnessOption {
   id: string
   label: string
+  /**
+   * The ids alone. KEPT for one release: the VS Code extension reads this field, and a client on
+   * an older build is exactly the one that would break silently.
+   */
   modelSuggestions: string[]
+  /** The same models, each with the NAME the harness prints. See `harnessModels.ts`. */
+  models: ModelOption[]
   supportsModel: boolean
   efforts: string[]
 }
@@ -56,7 +63,8 @@ export interface SpawnWebResult {
 /** What this machine can start, and which questions each one earns. */
 export async function webHarnesses(host: StartHost): Promise<WebHarnessOption[]> {
   if (!host.startableHarnesses) return []
-  return await host.startableHarnesses()
+  const found = await host.startableHarnesses()
+  return found.map(h => ({ ...h, models: modelsFor(h.id) }))
 }
 
 /** Directories to offer, from the LOCAL store — so the picker works with the server's data cold. */
