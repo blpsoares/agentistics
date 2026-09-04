@@ -62,6 +62,11 @@ import { Login } from './components/Login'
 import { ModeSwitch } from './components/nav/ModeSwitch'
 import { TopBar } from './components/nav/TopBar'
 import { SessionsAside } from './components/nav/SessionsAside'
+import { SessionsRail } from './components/nav/SessionsRail'
+import { getPinnedIds } from './lib/pinnedSessions'
+import {
+  DEFAULT_ORDER, sortSessions, type ControlSession,
+} from '@agentistics/tui/control/session-fleet'
 import { AsideResizer } from './components/nav/AsideResizer'
 import { modeOfPath } from './lib/workspaceMode'
 import { ASIDE_DEFAULT } from './lib/asideWidth'
@@ -78,7 +83,7 @@ import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
 import { ToggleSwitch } from './components/ToggleSwitch'
-import { fleetFilterOptions } from './lib/fleetFilter'
+import { fleetFilterOptions, filterFleet } from './lib/fleetFilter'
 import { runningConversationIds } from './lib/activeConversations'
 import { CentralSessions } from './components/sessions/CentralSessions'
 import { setFleetSourceCentral } from './lib/fleet'
@@ -988,6 +993,8 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
   sessionsActiveOnly: boolean
 }) {
   const location = useLocation()
+  // Which session is open, for the collapsed rail's selected highlight.
+  const { sessionId } = useParams()
   const pt = lang === 'pt'
   // History, for the icon row. This ships as an installed PWA, where there is no browser chrome to
   // fall back on — in a plain tab they duplicate the browser's own, which is a cost worth paying
@@ -1035,6 +1042,19 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
   // `useFleetIndex` is the SAME map the header and the panel already build from `fleet.sessions`.
   const asideRowIndex = useFleetIndex(fleet.sessions)
   const mode = modeOfPath(location.pathname)
+  // The collapsed rail's order — the SAME order the open list draws, so collapsing the aside never
+  // reshuffles the sessions. Pinned first (that is what pinning is for), then `sortSessions(…,
+  // DEFAULT_ORDER)` — the ranking the terminal cockpit breaks ties on, so "sorted by status" means
+  // one thing everywhere.
+  const railRows = useMemo(() => {
+    const kept = filterFleet({ rows: fleet.rows, filters: sessionsFilters, activeOnly: sessionsActiveOnly }).rows
+    const pinnedSet = new Set(getPinnedIds())
+    const key = (r: ControlSession) => r.conversationId ?? r.id
+    return [
+      ...kept.filter(r => pinnedSet.has(key(r))),
+      ...sortSessions(kept.filter(r => !pinnedSet.has(key(r))), DEFAULT_ORDER),
+    ]
+  }, [fleet.rows, sessionsFilters, sessionsActiveOnly])
   // A resize in progress. Only used to suspend the collapse animation — see the aside's `transition`.
   const [dragging, setDragging] = useState(false)
 
@@ -1079,10 +1099,13 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
       </div>
 
       {/* ONE aside, two bodies — never two asides. The shell above and the footer below are the
-          same in both workspaces; only what sits between them changes. Collapsed, the sessions body
-          is withheld: a 64px rail cannot show a session's title, and a list of unlabelled dots is a
-          list nobody can read. The rail keeps the switch, which is how you get back. */}
-      {mode === 'sessions' && !collapsed ? (
+          same in both workspaces; only what sits between them changes. Collapsed, the sessions
+          workspace draws the RAIL — sessions, not the dashboard's Home/Costs/Tools nav, which is
+          the one thing this workspace certainly is not. */}
+      {mode === 'sessions' ? (
+        collapsed ? (
+          <SessionsRail rows={railRows} {...(sessionId ? { selectedId: sessionId } : {})} />
+        ) : (
         <>
         {/* On a central the workspace is ABOUT a machine, so the choice sits above the list it
             governs. Absent on a machine, which is its own. */}
@@ -1102,6 +1125,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
           act={req => fleetAct({ ...req, action: req.action as FleetActionId })}
         />
         </>
+        )
       ) : (
       <nav className="ag-noscroll" style={{ display: 'flex', flexDirection: 'column', gap: 5, overflowY: 'auto', overflowX: 'hidden', flex: 1, paddingTop: 4 }}>
         {items.map(item => {
