@@ -128,15 +128,20 @@ export function MagnifierButton({ ctx }: { ctx: AppContext }) {
             )}
             {a11y.lenses.map((l, i) => (
               <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 4px' }}>
-                <span style={{ flex: 1, fontSize: 12, color: 'var(--text-secondary)' }}>
+                {/* Same overflow risk as LensMenu's rows (a flex row with one `flex: 1` child and
+                    fixed siblings): a flex item's default `min-width: auto` floors it at its own
+                    content width. This label is plain text so it can already wrap at a space
+                    before it overflows, but the PT string is longer than the EN one ("Fixar"
+                    appended), so `minWidth: 0` removes the floor rather than relying on that. */}
+                <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
                   {/* The lens's own id ("lens-2") is internal and must never reach a person — the
                      same ordinal label MagnifierLayer's announcements and Lens.tsx's aria-label use. */}
                   {text.lensLabel(i + 1)} · {fmtZoom(l.zoom)}×{l.pinned ? ` · ${text.pin}` : ''}
                 </span>
-                <button style={{ ...item, width: 'auto', padding: '6px 8px' }}
+                <button style={{ ...item, width: 'auto', padding: '6px 8px', flexShrink: 0 }}
                   onClick={() => { a11y.select(l.id); setOpen(false) }}>{text.select}</button>
                 {l.pinned && (
-                  <button style={{ ...item, width: 'auto', padding: '6px 8px' }}
+                  <button style={{ ...item, width: 'auto', padding: '6px 8px', flexShrink: 0 }}
                     onClick={() => a11y.updateLens(l.id, { pinned: false })}>{text.unpin}</button>
                 )}
               </div>

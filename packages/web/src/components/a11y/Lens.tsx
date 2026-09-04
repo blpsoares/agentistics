@@ -1,11 +1,18 @@
 /**
  * Lens.tsx — one magnifier.
  *
- * Three nested elements: the frame (fixed, orange border, clipped), a viewport-sized stage
- * carrying the transform, and the mirror clone inside it. It is rendered by MagnifierLayer's
- * portal, which lives OUTSIDE #root — see magnifierMirror.ts for why that is load-bearing.
+ * Four elements, in two layers. The OUTER wrapper is `position: fixed` at the lens's bounds and
+ * carries only position/size/pointer-events — it is deliberately NEVER clipped. Inside it, the
+ * "viewport" is the element that actually looks like a lens: the orange border, the shape
+ * (rounded corner or circle) and `overflow: hidden`, holding the mirror stage. The control strip
+ * and the resize handle are siblings of the viewport, not children of it — so no lens SHAPE can
+ * ever clip them away. That split exists because it used to be one clipped element: on a circle,
+ * a full-width strip pinned to the frame's top edge sits almost entirely in the bounding box's
+ * corners, which the circular `overflow: hidden` swallowed to an unusable sliver — the controls
+ * were never removed, they were being masked off by the lens's own shape. See where the strip is
+ * placed for a circle, below.
  *
- * Pinned is glass: controls gone, `pointerEvents: none` on the whole frame, clicks pass through.
+ * Pinned is glass: controls gone, `pointerEvents: none` on the whole wrapper, clicks pass through.
  */
 import React, { useEffect, useRef } from 'react'
 import { Pin, PinOff, Move, X, Plus, Minus, Sliders } from 'lucide-react'
@@ -63,7 +70,7 @@ export function Lens({
     }
   }, [lens.id, scheduler])
 
-  const t = stageTransform(lens)
+  const t = stageTransform(lens, { width: window.innerWidth, height: window.innerHeight })
   const interactive = !lens.pinned || revealed
   const control = isMobile ? 44 : 26
   // The header strip is `overflow: hidden` inside the frame, so on a small lens the rightmost
@@ -122,38 +129,61 @@ export function Lens({
         top: lens.y,
         width: lens.width,
         height: lens.height,
-        // The colour is the product's, in every state. Only the thickness is the user's.
-        border: `${lens.borderWidth}px solid ${ORANGE}`,
-        borderRadius: lens.shape === 'circle' ? '50%' : lens.cornerRadius,
-        overflow: 'hidden',
-        background: 'var(--bg-base)',
-        boxShadow: selected ? `0 0 0 3px ${ORANGE}55` : '0 6px 24px rgba(0,0,0,0.35)',
         // Pinned is glass. This is the whole point of pinning.
         pointerEvents: interactive ? 'auto' : 'none',
         zIndex: 2147483000,
         boxSizing: 'border-box',
       }}
     >
+      {/* The viewport: the ONLY element that clips. Its border/shape/shadow are the lens's whole
+          visible identity, and everything about defect 1 was this element clipping siblings it
+          did not yet have separated from it. */}
       <div
-        ref={stageRef}
-        aria-hidden="true"
         style={{
-          width: '100vw',
-          height: '100vh',
-          transformOrigin: '0 0',
-          transform: `scale(${t.scale}) translate(${t.tx}px, ${t.ty}px)`,
-          pointerEvents: 'none',
+          position: 'absolute',
+          inset: 0,
+          // The colour is the product's, in every state. Only the thickness is the user's.
+          border: `${lens.borderWidth}px solid ${ORANGE}`,
+          borderRadius: lens.shape === 'circle' ? '50%' : lens.cornerRadius,
+          overflow: 'hidden',
+          background: 'var(--bg-base)',
+          boxShadow: selected ? `0 0 0 3px ${ORANGE}55` : '0 6px 24px rgba(0,0,0,0.35)',
+          boxSizing: 'border-box',
         }}
-      />
+      >
+        <div
+          ref={stageRef}
+          aria-hidden="true"
+          style={{
+            width: '100vw',
+            height: '100vh',
+            transformOrigin: '0 0',
+            transform: `scale(${t.scale}) translate(${t.tx}px, ${t.ty}px)`,
+            pointerEvents: 'none',
+          }}
+        />
+      </div>
 
       {interactive && (
         <>
           <div
             onPointerDown={startDrag('move')}
             style={{
-              position: 'absolute', top: 0, left: 0, right: 0, height: control,
+              position: 'absolute',
+              // A rectangle keeps the strip exactly where the old clipped layout put it — inset
+              // by the border on all three sides, pixel-for-pixel unchanged. A circle's bounding
+              // box has empty corners the disc never reaches, so the same inset strip would sit
+              // mostly outside the circle and get clipped to a sliver by the viewport above —
+              // that was defect 1. The wrapper here is never clipped, so for a circle the strip
+              // is lifted clear ABOVE the frame's top edge instead: fully visible, fully
+              // clickable, and covering none of the magnified content (rather than overlapping
+              // the disc's own top arc, which would cost more of the image than moving the strip
+              // costs of screen space).
+              top: lens.shape === 'circle' ? -(control + 4) : lens.borderWidth,
+              left: lens.borderWidth, right: lens.borderWidth, height: control,
               display: 'flex', alignItems: 'center', gap: 2, padding: '0 4px',
               background: 'rgba(0,0,0,0.55)', cursor: 'move', touchAction: 'none',
+              borderRadius: lens.shape === 'circle' ? 6 : undefined,
             }}
           >
             <Move size={14} color="#fff" />
@@ -196,7 +226,12 @@ export function Lens({
             onPointerDown={startDrag('resize')}
             aria-hidden="true"
             style={{
-              position: 'absolute', right: 0, bottom: 0, width: control, height: control,
+              // Same reasoning as the strip: the bottom-right corner of a circle's bounding box
+              // is outside the disc, so a handle drawn INSIDE the clipped viewport was clipped
+              // there too. As a sibling of the viewport it stays visible for every shape; the
+              // `borderWidth` inset keeps a rectangle's handle exactly where it always was.
+              position: 'absolute', right: lens.borderWidth, bottom: lens.borderWidth,
+              width: control, height: control,
               background: `linear-gradient(135deg, transparent 50%, ${ORANGE} 50%)`,
               cursor: 'nwse-resize', touchAction: 'none',
             }}

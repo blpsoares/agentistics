@@ -23,6 +23,11 @@ const lens = (over: Partial<MagnifierLens> = {}): MagnifierLens => ({
 
 const NO_MODS = { shift: false, alt: false, ctrl: false, meta: false }
 
+// A generously large viewport: every pre-existing `sourceRect`/`stageTransform` case below is
+// deliberately far from any edge, so a viewport this size never triggers the new clamp — that is
+// the proof the common (away-from-edge) case did not move.
+const VP = { width: 1920, height: 1080 }
+
 describe('pageKey', () => {
   test('drops query and hash', () => {
     expect(pageKey('/costs?range=30d')).toBe('/costs')
@@ -46,11 +51,11 @@ describe('sourceRect', () => {
   // frame centre: (100 + 400/2, 100 + 300/2) = (300, 250)
   // source origin: (300 - 98.5/2, 250 - 73.5/2) = (300 - 49.25, 250 - 36.75) = (250.75, 213.25)
   test('is the region under the lens interior, shrunk by the zoom and centred on the lens', () => {
-    expect(sourceRect(lens())).toEqual({ x: 250.75, y: 213.25, width: 98.5, height: 73.5 })
+    expect(sourceRect(lens(), VP)).toEqual({ x: 250.75, y: 213.25, width: 98.5, height: 73.5 })
   })
   test('at 1.5x it is larger than at 10x, centred on the same point', () => {
-    const low = sourceRect(lens({ zoom: 1.5 }))
-    const high = sourceRect(lens({ zoom: 10 }))
+    const low = sourceRect(lens({ zoom: 1.5 }), VP)
+    const high = sourceRect(lens({ zoom: 10 }), VP)
     expect(low.width).toBeGreaterThan(high.width)
     expect(low.x + low.width / 2).toBeCloseTo(high.x + high.width / 2)
   })
@@ -85,7 +90,7 @@ describe('sourceRect', () => {
 
     testCases.forEach(({ borderWidth, zoom, width, height, x, y }) => {
       const l = lens({ borderWidth, zoom, width, height, x, y })
-      const s = sourceRect(l)
+      const s = sourceRect(l, VP)
       const z = l.zoom
 
       // Content box edges in viewport coords
@@ -106,7 +111,72 @@ describe('sourceRect', () => {
 describe('stageTransform', () => {
   // Using the same sourceRect derivation above: source origin (250.75, 213.25).
   test('scales by the zoom and translates the source origin to zero', () => {
-    expect(stageTransform(lens())).toEqual({ scale: 4, tx: -250.75, ty: -213.25 })
+    expect(stageTransform(lens(), VP)).toEqual({ scale: 4, tx: -250.75, ty: -213.25 })
+  })
+})
+
+describe('sourceRect — clamped to the viewport near an edge', () => {
+  // A wrong implementation this would still accept: one that clamps the LENS's position (or
+  // resizes the region) instead of shifting the already-computed source rect. Both alternatives
+  // are ruled out below by asserting `width`/`height` are UNCHANGED (never resized) and by using
+  // a lens whose own x/y are far from 0, so only the SOURCE region — not the lens frame — is near
+  // the edge.
+  const vp = { width: 1200, height: 900 }
+
+  test('a lens against the LEFT edge: the region is shifted right rather than running off the page', () => {
+    // interior = (200 - 2*5) / 0.55 = 190 / 0.55 = 345.4545...; centred x = 0 + 100 - 172.727 =
+    // -72.727 (negative — exactly the unreachable-corner bug). y is untouched: this lens is far
+    // from the top/bottom edges, so the clamp must only ever touch the axis that is actually near
+    // an edge.
+    const l = lens({ x: 0, y: 400, width: 200, height: 200, borderWidth: 5, zoom: ZOOM_MIN })
+    const s = sourceRect(l, vp)
+    const interior = (200 - 10) / ZOOM_MIN
+    expect(s.x).toBe(0)
+    expect(s.width).toBeCloseTo(interior) // never resized to avoid the shift
+    expect(s.y).toBeCloseTo(400 + 100 - interior / 2)
+    expect(s.height).toBeCloseTo(interior)
+  })
+
+  test('a lens against the TOP edge: the region is shifted down rather than running off the page', () => {
+    const l = lens({ x: 500, y: 0, width: 200, height: 200, borderWidth: 5, zoom: ZOOM_MIN })
+    const s = sourceRect(l, vp)
+    const interior = (200 - 10) / ZOOM_MIN
+    expect(s.y).toBe(0)
+    expect(s.height).toBeCloseTo(interior)
+    expect(s.x).toBeCloseTo(500 + 100 - interior / 2)
+  })
+
+  test('a lens against the RIGHT and BOTTOM edges: the region is shifted back inside on both axes', () => {
+    const width = 200
+    const height = 200
+    const borderWidth = 5
+    const zoom = ZOOM_MIN
+    const l = lens({ x: vp.width - width, y: vp.height - height, width, height, borderWidth, zoom })
+    const s = sourceRect(l, vp)
+    const interior = (width - 2 * borderWidth) / zoom
+    expect(s.x).toBeCloseTo(vp.width - interior)
+    expect(s.y).toBeCloseTo(vp.height - interior)
+    expect(s.width).toBeCloseTo(interior) // never resized to avoid the shift
+    expect(s.height).toBeCloseTo(interior)
+  })
+
+  test('a region wider than the viewport (reachable below 1x) is centred on that axis, not pinned to an edge', () => {
+    // interior width = (2000 - 10) / 0.55 = 3618.18..., far bigger than the 1024px viewport —
+    // this is the "resize below 1x" case the fix has to handle without ever resizing. A plain
+    // edge-clamp (`min(max(x,0), vp.width-width)`) would give a DIFFERENT, wrong answer here:
+    // `vp.width - width` (pinned hard against one side, not centred) — this is the implementation
+    // the centred branch exists to rule out, and the two diverge by roughly half the overhang, so
+    // this assertion fails against that wrong reading.
+    const vpNarrow = { width: 1024, height: 900 }
+    const l = lens({ x: 400, y: 400, width: 2000, height: 200, borderWidth: 5, zoom: ZOOM_MIN })
+    const s = sourceRect(l, vpNarrow)
+    const width = (2000 - 10) / ZOOM_MIN
+    expect(width).toBeGreaterThan(vpNarrow.width)
+    expect(s.x).toBeCloseTo((vpNarrow.width - width) / 2)
+    expect(s.width).toBeCloseTo(width) // never resized to fit
+    // height is untouched: only the width axis is wider than its viewport dimension here.
+    const heightInterior = (200 - 10) / ZOOM_MIN
+    expect(s.y).toBeCloseTo(400 + 100 - heightInterior / 2)
   })
 })
 

@@ -61,24 +61,38 @@ export function fmtZoom(zoom: number): string {
 }
 
 /**
- * The viewport region a lens magnifies: centred on the lens, shrunk by the zoom.
+ * The viewport region a lens magnifies: centred on the lens, shrunk by the zoom, then clamped to
+ * the viewport.
  *
  * What the lens actually SHOWS is its content box — `box-sizing: border-box` makes that
  * `width - 2*borderWidth` by `height - 2*borderWidth`, not the frame's own size — so that is
  * the size that gets divided by the zoom. Getting this wrong offsets the magnified image by
  * exactly `borderWidth` px (because the translation in stageTransform only lands the region
  * at the content box when the region size is derived from the interior, not the frame).
- * The region stays centred on the FRAME's centre regardless.
+ *
+ * The region is centred on the FRAME's centre only away from the page's edges. Centring alone
+ * makes the outer band of the page unreachable: a lens pinned against the left edge is centred
+ * at half its own width, so nothing further left is ever inside ANY source region — reported as
+ * "it cuts a lot off" at a screen corner. So a region that would run past a viewport edge is
+ * SHIFTED back inside instead (never resized — resizing would change the magnification the user
+ * picked), and an axis where the region is itself wider than the viewport (reachable now that
+ * zoom can go below 1, down to 0.55x) is centred on that axis rather than shifted to one side.
+ *
+ * Trade-off, stated plainly: near an edge the lens no longer shows exactly what is beneath it —
+ * it shows the nearest region that exists. That is what makes the page's corners magnifiable at
+ * all, and it is how OS-level magnifiers behave. Away from every edge nothing here changes.
  */
-export function sourceRect(lens: LensStyle & { x: number; y: number }): Rect {
+export function sourceRect(lens: LensStyle & { x: number; y: number }, vp: Viewport): Rect {
   const width = (lens.width - 2 * lens.borderWidth) / lens.zoom
   const height = (lens.height - 2 * lens.borderWidth) / lens.zoom
-  return {
-    x: lens.x + lens.width / 2 - width / 2,
-    y: lens.y + lens.height / 2 - height / 2,
-    width,
-    height,
-  }
+
+  const centredX = lens.x + lens.width / 2 - width / 2
+  const centredY = lens.y + lens.height / 2 - height / 2
+
+  const x = width > vp.width ? (vp.width - width) / 2 : Math.min(Math.max(centredX, 0), vp.width - width)
+  const y = height > vp.height ? (vp.height - height) / 2 : Math.min(Math.max(centredY, 0), vp.height - height)
+
+  return { x, y, width, height }
 }
 
 /**
@@ -90,8 +104,8 @@ export function sourceRect(lens: LensStyle & { x: number; y: number }): Rect {
  * `contentOrigin + s * (p + t)`, and putting the source region's top-left at the content-box
  * top-left means `t = -source.origin`.
  */
-export function stageTransform(lens: LensStyle & { x: number; y: number }): { scale: number; tx: number; ty: number } {
-  const s = sourceRect(lens)
+export function stageTransform(lens: LensStyle & { x: number; y: number }, vp: Viewport): { scale: number; tx: number; ty: number } {
+  const s = sourceRect(lens, vp)
   return { scale: lens.zoom, tx: -s.x, ty: -s.y }
 }
 

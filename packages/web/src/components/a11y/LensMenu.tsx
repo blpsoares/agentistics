@@ -31,18 +31,34 @@ export function LensMenu({ lens, x, y, text, isMobile, onChange, onRemove, onDup
     borderRadius: 8, border: 'none', background: 'transparent',
     color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 13, cursor: 'pointer',
   }
+  // 250px was tuned to the English labels. "Espessura da borda" (border thickness) is the widest
+  // PT row label — at that width the flex slider had nowhere left to shrink to (see `slider`
+  // below) and its readout was pushed past the panel's right edge. 280px is enough headroom for
+  // the longer language rather than the shorter one.
+  const SHELL_WIDTH = 280
   const shell: React.CSSProperties = isMobile
     ? { position: 'fixed', left: 0, right: 0, bottom: 0, borderRadius: '14px 14px 0 0' }
     : {
         position: 'fixed',
-        left: Math.max(8, Math.min(x, window.innerWidth - 268)),
+        left: Math.max(8, Math.min(x, window.innerWidth - (SHELL_WIDTH + 18))),
         top: Math.max(8, Math.min(y, window.innerHeight - 360)),
-        width: 250, borderRadius: 12,
+        width: SHELL_WIDTH, borderRadius: 12,
+        // The shell's own width must include its padding, or the padding adds on top of the
+        // declared width and the panel is wider than it claims to be.
+        boxSizing: 'border-box',
       }
 
   // Mobile only — the ≥44px touch-target rule. Desktop sizing is untouched: the track itself
   // stays thin, but the element's own box (what a touch actually hits) grows to fit.
-  const slider: React.CSSProperties = { flex: 1, height: isMobile ? 44 : undefined }
+  // `minWidth: 0` is the actual overflow fix: a flex item's default `min-width` is `auto`, which
+  // floors it at its intrinsic content size — a `<input type=range>` refuses to shrink below
+  // that floor — so with a long label eating most of the row's width the slider pushed the
+  // `readout` span past the panel's right edge instead of yielding any of its own space.
+  const slider: React.CSSProperties = { flex: 1, minWidth: 0, height: isMobile ? 44 : undefined }
+  // The readout (`2.7×`) is the other flex child in the same row — same fix, so a long label
+  // can never push IT past the edge either, only shrink the slider first (it has no `flex`, so
+  // it already yields last).
+  const readout: React.CSSProperties = { minWidth: 36, textAlign: 'right', flexShrink: 0 }
 
   const chip = (on: boolean): React.CSSProperties => ({
     padding: isMobile ? '10px 12px' : '5px 10px', minHeight: isMobile ? 44 : undefined,
@@ -67,7 +83,7 @@ export function LensMenu({ lens, x, y, text, isMobile, onChange, onRemove, onDup
           <span>{text.zoom}</span>
           <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={ZOOM_SLIDER_STEP} value={lens.zoom}
             onChange={e => onChange({ zoom: Number(e.target.value) })} style={slider} />
-          <strong style={{ minWidth: 36, textAlign: 'right' }}>{fmtZoom(lens.zoom)}×</strong>
+          <strong style={readout}>{fmtZoom(lens.zoom)}×</strong>
         </div>
         <div style={row}>
           <span>{text.shape}</span>

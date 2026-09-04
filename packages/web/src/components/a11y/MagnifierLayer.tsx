@@ -324,7 +324,7 @@ function FollowLens({ style, scheduler }: { style: LensStyle; scheduler: MirrorS
   const hidden = pos === null
   const at = pos ?? { x: -9999, y: -9999 }
   const placed = { ...style, x: at.x - style.width / 2, y: at.y - style.height / 2 }
-  const t = stageTransform(placed)
+  const t = stageTransform(placed, { width: window.innerWidth, height: window.innerHeight })
 
   return (
     <div aria-hidden="true" style={{
