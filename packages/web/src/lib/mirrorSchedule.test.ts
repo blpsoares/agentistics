@@ -5,6 +5,7 @@ import {
   MIRROR_DEFAULTS,
   MIRROR_BUDGET_MS,
   MIRROR_MAX_INTERVAL_MS,
+  MIRROR_MIN_INTERVAL_MS,
   type MirrorLensState,
 } from './mirrorSchedule'
 
@@ -13,9 +14,23 @@ const state = (over: Partial<MirrorLensState> & { id: string }): MirrorLensState
 })
 
 describe('pickLensesToSync', () => {
-  test('never picks more than maxPerFrame, so twenty lenses cost ten frames, not one', () => {
-    const many = Array.from({ length: 20 }, (_, i) => state({ id: `l${i}`, dirty: true, lastSyncMs: 0 }))
-    expect(pickLensesToSync(many, 1000, MIRROR_DEFAULTS)).toHaveLength(MIRROR_DEFAULTS.maxPerFrame)
+  test('never picks more than maxPerFrame and filters out ineligible lenses', () => {
+    // Create 20 lenses: 16 eligible (dirty, onScreen, due), 4 ineligible (off-screen or too recent)
+    const eligible = Array.from({ length: 16 }, (_, i) => state({ id: `e${i}`, dirty: true, lastSyncMs: 0, onScreen: true }))
+    const offScreen = Array.from({ length: 2 }, (_, i) => state({ id: `off${i}`, dirty: true, lastSyncMs: 0, onScreen: false }))
+    const tooRecent = Array.from({ length: 2 }, (_, i) => state({ id: `recent${i}`, dirty: true, lastSyncMs: 950, onScreen: true }))
+    const many = [...eligible, ...offScreen, ...tooRecent]
+
+    const result = pickLensesToSync(many, 1000, MIRROR_DEFAULTS)
+
+    // Should pick exactly maxPerFrame lenses
+    expect(result).toHaveLength(MIRROR_DEFAULTS.maxPerFrame)
+
+    // Should not contain any ineligible ids
+    expect(result).not.toContain('off0')
+    expect(result).not.toContain('off1')
+    expect(result).not.toContain('recent0')
+    expect(result).not.toContain('recent1')
   })
 
   test('picks the least recently synced first — that is the round robin', () => {
@@ -43,6 +58,11 @@ describe('pickLensesToSync', () => {
     expect(pickLensesToSync(lenses, MIRROR_DEFAULTS.heartbeatMs - 1, MIRROR_DEFAULTS)).toEqual([])
     expect(pickLensesToSync(lenses, MIRROR_DEFAULTS.heartbeatMs, MIRROR_DEFAULTS)).toEqual(['a'])
   })
+
+  test('a negative maxPerFrame is clamped to zero and yields an empty array', () => {
+    const lenses = [state({ id: 'a', dirty: true, lastSyncMs: 0 }), state({ id: 'b', dirty: true, lastSyncMs: 100 })]
+    expect(pickLensesToSync(lenses, 1000, { ...MIRROR_DEFAULTS, maxPerFrame: -1 })).toEqual([])
+  })
 })
 
 describe('nextMinInterval', () => {
@@ -54,6 +74,6 @@ describe('nextMinInterval', () => {
   })
   test('a cheap cycle recovers gradually, never below the floor', () => {
     expect(nextMinInterval(1, 400)).toBe(300)
-    expect(nextMinInterval(1, MIRROR_DEFAULTS.minIntervalMs)).toBe(MIRROR_DEFAULTS.minIntervalMs)
+    expect(nextMinInterval(1, MIRROR_MIN_INTERVAL_MS)).toBe(MIRROR_MIN_INTERVAL_MS)
   })
 })

@@ -25,8 +25,12 @@ export interface MirrorScheduleConfig {
   maxPerFrame: number
 }
 
+/** The floor `nextMinInterval` recovers to. Distinct from MirrorScheduleConfig.minIntervalMs,
+ *  which is the CURRENT interval and moves every cycle. */
+export const MIRROR_MIN_INTERVAL_MS = 100
+
 export const MIRROR_DEFAULTS: MirrorScheduleConfig = {
-  minIntervalMs: 100,
+  minIntervalMs: MIRROR_MIN_INTERVAL_MS,
   heartbeatMs: 500,
   maxPerFrame: 2,
 }
@@ -48,14 +52,13 @@ export function pickLensesToSync(
       const wait = l.dirty ? cfg.minIntervalMs : cfg.heartbeatMs
       return nowMs - l.lastSyncMs >= wait
     })
-    .slice()
     .sort((a, b) => a.lastSyncMs - b.lastSyncMs)
-    .slice(0, cfg.maxPerFrame)
+    .slice(0, Math.max(0, cfg.maxPerFrame))
     .map(l => l.id)
 }
 
 /** Doubling on overrun, three-quarters on recovery: fast to protect, slow to spend again. */
 export function nextMinInterval(cycleMs: number, current: number): number {
   if (cycleMs > MIRROR_BUDGET_MS) return Math.min(MIRROR_MAX_INTERVAL_MS, current * 2)
-  return Math.max(MIRROR_DEFAULTS.minIntervalMs, Math.round(current * 0.75))
+  return Math.max(MIRROR_MIN_INTERVAL_MS, Math.round(current * 0.75))
 }
