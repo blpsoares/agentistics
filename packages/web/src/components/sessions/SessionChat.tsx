@@ -205,6 +205,30 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     return () => { alive = false }
   }, [row?.harness, modelReason, pt])
 
+  /**
+   * The session's skills. Fetched when the menu is FIRST opened, not on mount: most sessions are
+   * read rather than driven, and answering this walks directories on the host.
+   *
+   * `null` means "not asked yet" and is not the same as `[]`, which is a real "this harness has
+   * none" — the same distinction the fleet's own pollers keep between a failed read and an empty
+   * one. `skillsNote` carries the server's sentence when there is one.
+   */
+  const [skills, setSkills] = useState<{ name: string; description: string }[] | null>(null)
+  const [skillsNote, setSkillsNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (!moreOpen || skills !== null || !row?.id) return
+    let alive = true
+    fetch(`/api/fleet/skills?id=${encodeURIComponent(row.id)}&lang=${pt ? 'pt' : 'en'}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { skills?: { name: string; description: string }[]; reason?: string } | null) => {
+        if (!alive) return
+        setSkills(d?.skills ?? [])
+        setSkillsNote(d?.reason ?? null)
+      })
+      .catch(() => { if (alive) setSkills([]) })
+    return () => { alive = false }
+  }, [moreOpen, skills, row?.id, pt])
+
   /** Switch the model mid-conversation by TYPING the harness's own command — see modelSwitch.ts. */
   const switchModel = useCallback(async (model: string) => {
     const line = modelSwitchLine(row?.harness ?? '', model)
@@ -1001,6 +1025,78 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                           <p style={{ margin: '2px 8px 4px', fontSize: 10, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
                             {pt ? 'Envia /model para a sessão.' : 'Sends /model to the session.'}
                           </p>
+                        </>
+                      )}
+
+                      {/* SKILLS. The picker INSERTS `/<name> ` into the draft and focuses the
+                          field — it does not send. Two reasons: most skills take an argument, and
+                          the composer's whole contract is that what reaches the session is what the
+                          person chose to send.
+
+                          It inherits the `prompt` action's refusals and STATES them: the session
+                          must be running, and it is refused while a DIALOG is open, because a slash
+                          command typed into a permission prompt goes into that dialog's own filter
+                          and the submit takes the highlighted option. Same rule `promptSession` and
+                          `rename` already enforce, said here rather than discovered by doing it. */}
+                      {(skills === null || skills.length > 0 || skillsNote) && (
+                        <>
+                          <div style={{ height: 1, background: 'var(--border)', margin: '4px 2px' }} />
+                          <p style={{
+                            margin: '2px 8px 4px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+                            letterSpacing: '0.06em', color: 'var(--text-tertiary)',
+                          }}>
+                            Skills
+                          </p>
+                          {/* The PERMANENT fact first. A harness that can never do this is told so,
+                              rather than being told it is not running — which is true, irrelevant,
+                              and would change to a different refusal if it started. */}
+                          {skillsNote ? (
+                            <p style={{ margin: 0, padding: '6px 8px', fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)' }}>
+                              {skillsNote}
+                            </p>
+                          ) : !canPrompt || blocked ? (
+                            <p style={{ margin: 0, padding: '6px 8px', fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)' }}>
+                              {blocked
+                                ? (pt
+                                    ? 'Esta sessão está numa pergunta. Responda primeiro — uma barra digitada aí entra no filtro do diálogo.'
+                                    : 'This session is on a question. Answer it first — a slash typed there goes into the dialog’s own filter.')
+                                : (pt
+                                    ? 'Esta sessão não está rodando, então não dá para escrever nela.'
+                                    : 'This session is not running, so there is nothing to write to.')}
+                            </p>
+                          ) : skills === null ? (
+                            <p style={{ margin: 0, padding: '6px 8px', fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                              {pt ? 'Lendo…' : 'Reading…'}
+                            </p>
+                          ) : (
+                            <>
+                              <div style={{ maxHeight: 180, overflowY: 'auto' }}>
+                                {skills.map(sk => (
+                                  <button
+                                    key={sk.name}
+                                    title={sk.description}
+                                    onClick={() => {
+                                      setMoreOpen(false)
+                                      setDraft(d => (d.trim() === '' ? `/${sk.name} ` : `${d.replace(/\s+$/, '')} /${sk.name} `))
+                                      textareaRef.current?.focus()
+                                    }}
+                                    style={{
+                                      display: 'block', width: '100%', textAlign: 'left',
+                                      minHeight: 36, padding: '6px 8px', borderRadius: 7, border: 'none',
+                                      background: 'transparent', color: 'var(--text-primary)',
+                                      fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer',
+                                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    /{sk.name}
+                                  </button>
+                                ))}
+                              </div>
+                              <p style={{ margin: '2px 8px 4px', fontSize: 10, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>
+                                {pt ? 'Escreve no campo; não envia.' : 'Types into the field; does not send.'}
+                              </p>
+                            </>
+                          )}
                         </>
                       )}
                     </div>
