@@ -11,6 +11,11 @@
  * no effect here that selects an artifact from incoming data: a panel that swaps the document you
  * are reading because the session wrote something else is a panel you cannot read in.
  *
+ * THE GALLERY IS THE OTHER DIRECTION. Files, Docs and Live all answer "what did this session DO";
+ * the fourth tab answers "what did I SEND it" — the attachments a person put on a message, grouped
+ * by the message that carried them. It reads the same `turns` the Live feed does, so it can never
+ * claim something the transcript does not show, and its rules live in `gallery.ts`.
+ *
  * THREE EMPTY STATES, THREE SENTENCES, and never one shared empty box. "The conversation has not
  * loaded", "this session has written nothing" and "this harness cannot be read this way" are
  * different facts, and only the second is a statement about the session's work. The third reuses
@@ -21,13 +26,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
-  BookOpen, Terminal, Brain, Send, Eye,
+  BookOpen, Terminal, Brain, Send, Eye, Image,
 } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
 import { agoLabel, isDoc, liveEvents, type LiveEvent, type LiveTurn } from '../../lib/artifactTabs'
+import {
+  galleryFileCount, galleryGroups, parseGalleryView, type GalleryTurn, type GalleryView,
+} from '../../lib/gallery'
 import { ArtifactDoc } from './ArtifactDoc'
+import { GalleryTab } from './GalleryTab'
 
-type TabId = 'files' | 'docs' | 'live'
+type TabId = 'files' | 'docs' | 'live' | 'gallery'
+
+/** Where the view toggle is remembered. One key, read and written in one place. */
+const GALLERY_VIEW_KEY = 'agentistics:gallery-view'
 
 export interface ArtifactsAsideProps {
   sessionId: string
@@ -87,6 +99,17 @@ export function ArtifactsAside({
    * inferred from a scroll position.
    */
   const feed = useMemo(() => liveEvents(turns ?? []), [turns])
+  /** What the PERSON sent, grouped by message. See `gallery.ts` — nothing here re-derives it. */
+  const gallery = useMemo(() => galleryGroups((turns ?? []) as readonly GalleryTurn[]), [turns])
+  const galleryFiles = useMemo(() => galleryFileCount(gallery), [gallery])
+  /** LIST or GRID, remembered. A private window that refuses storage simply keeps the default. */
+  const [galleryView, setGalleryView] = useState<GalleryView>(() => {
+    try { return parseGalleryView(localStorage.getItem(GALLERY_VIEW_KEY)) } catch { return 'grid' }
+  })
+  const chooseGalleryView = (v: GalleryView) => {
+    setGalleryView(v)
+    try { localStorage.setItem(GALLERY_VIEW_KEY, v) } catch { /* private mode */ }
+  }
   const feedRef = useRef<HTMLDivElement>(null)
   /** A clock, so "3m ago" ages while the panel is open rather than freezing at its first render. */
   const [now, setNow] = useState(() => Date.now())
@@ -143,6 +166,12 @@ export function ArtifactsAside({
     { id: 'files', label: pt ? 'Arquivos' : 'Files', icon: <Files size={12} />, count: artifacts.length },
     { id: 'docs', label: pt ? 'Docs' : 'Docs', icon: <BookOpen size={12} />, count: docs.length },
     { id: 'live', label: 'Live', icon: <Activity size={12} />, count: feed.length },
+    {
+      id: 'gallery',
+      label: pt ? 'Galeria' : 'Gallery',
+      icon: <Image size={12} />,
+      count: galleryFiles,
+    },
   ]
 
   const tabBar = (
@@ -240,6 +269,30 @@ export function ArtifactsAside({
     )
   }
 
+  /**
+   * The gallery, or the reason it is not showing one.
+   *
+   * "The conversation has not loaded" and "nothing was ever sent" are different facts and get
+   * different sentences — the same rule the other three tabs follow. The empty one is `GalleryTab`'s
+   * own, because it is a statement about the gallery rather than about this panel.
+   */
+  const galleryBody = (): React.ReactNode => {
+    if (loading && (turns?.length ?? 0) === 0) {
+      return (
+        <Note icon={<Loader size={13} className="ag-working-spin" />}
+          text={pt ? 'Lendo a conversa…' : 'Reading the conversation…'} />
+      )
+    }
+    return (
+      <GalleryTab
+        groups={gallery}
+        lang={lang}
+        view={galleryView}
+        onViewChange={chooseGalleryView}
+      />
+    )
+  }
+
   const body = (): React.ReactNode => {
     // The refusal outranks everything: there is no list to be empty when the conversation cannot be
     // read at all.
@@ -283,7 +336,13 @@ export function ArtifactsAside({
           {/* The tab bar is BELOW the header, so the close button keeps one place whatever tab is
               open — a control that moves with the content is one people stop finding. */}
           {!unavailable && tabBar}
-          {tab === 'live' && !unavailable ? liveBody() : body()}
+          {/* The REFUSAL outranks every tab: there is no list, feed or gallery to be empty when
+              the conversation cannot be read at all, and `body()` is where that one sentence
+              lives. */}
+          {unavailable ? body()
+            : tab === 'live' ? liveBody()
+            : tab === 'gallery' ? galleryBody()
+            : body()}
         </>
       )}
     </div>

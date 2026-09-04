@@ -147,3 +147,19 @@ export function formatBytes(bytes: number | undefined): string {
   const mb = kb / 1024
   return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`
 }
+
+/** LIST reads, GRID looks. Both show the same rows under the same message headings. */
+export type GalleryView = 'list' | 'grid'
+
+/**
+ * The remembered view, from whatever was in storage.
+ *
+ * GRID is the default because that is what a gallery is: the pictures are the content, and a panel
+ * that opens on a column of filenames makes the reader press something before they can see
+ * anything. Anything unrecognised — a value from a future version, a corrupted key, `null` from a
+ * private window — reads as the default rather than throwing, which is the same call every other
+ * remembered preference in this workspace makes.
+ */
+export function parseGalleryView(raw: string | null): GalleryView {
+  return raw === 'list' ? 'list' : 'grid'
+}

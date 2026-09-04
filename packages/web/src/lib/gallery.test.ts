@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  fileFormat, formatBytes, galleryFileCount, galleryGroups, galleryImages, type GalleryTurn,
+  fileFormat, formatBytes, galleryFileCount, galleryGroups, galleryImages, parseGalleryView,
+  type GalleryTurn,
 } from './gallery'
 
 const DIR = '/home/u/.agentistics/attachments'
@@ -112,5 +113,17 @@ describe('formatBytes', () => {
     expect(formatBytes(undefined)).toBe('')
     expect(formatBytes(Number.NaN)).toBe('')
     expect(formatBytes(-1)).toBe('')
+  })
+})
+
+describe('parseGalleryView', () => {
+  it('remembers a stored view', () => {
+    expect(parseGalleryView('list')).toBe('list')
+    expect(parseGalleryView('grid')).toBe('grid')
+  })
+  it('opens on the grid when there is nothing to remember, or nonsense to remember', () => {
+    expect(parseGalleryView(null)).toBe('grid')
+    expect(parseGalleryView('')).toBe('grid')
+    expect(parseGalleryView('carousel')).toBe('grid')
   })
 })
