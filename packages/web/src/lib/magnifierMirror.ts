@@ -33,6 +33,14 @@ export interface MirrorScheduler {
   unregister(id: string): void
   /** Something in `#root` changed. */
   markDirty(): void
+  /**
+   * Stop the `MutationObserver` and the `requestAnimationFrame` loop for good.
+   *
+   * Unregistering every lens does NOT stop them — `entries.size === 0` only short-circuits the
+   * sync work; the observer callback still fires on every mutation of a live dashboard, forever.
+   * The caller MUST call `stop()` when the last lens goes away, or this leaks for the life of the
+   * page.
+   */
   stop(): void
   currentIntervalMs(): number
 }
@@ -42,17 +50,36 @@ function sourceRoot(): HTMLElement | null {
 }
 
 /** Strip what must not be duplicated in a live document, and make the copy inert. */
-function neutralize(clone: HTMLElement): void {
+function neutralize(clone: HTMLElement, live: HTMLElement): void {
   clone.setAttribute('aria-hidden', 'true')
   clone.setAttribute('inert', '')
   clone.style.pointerEvents = 'none'
   // Duplicate ids break getElementById for anything that runs after us; duplicate names break
   // form and radio grouping. A screen reader must hear the page once, not once per lens.
+  //
+  // NOTE: stripping `id`/`name` leaves `for` / `aria-labelledby` / `headers` / SVG `<use
+  // href="#…">` references inside the clone dangling, or pointing past it at whatever element
+  // still holds that id on the LIVE page. That is harmless only because the whole clone is
+  // `aria-hidden` + `inert`: nothing here is ever focused, read by a screen reader, or clicked.
+  // If this mirror is ever made non-inert, this is the first thing that breaks.
   for (const el of Array.from(clone.querySelectorAll('[id], [name]'))) {
     el.removeAttribute('id')
     el.removeAttribute('name')
   }
   clone.removeAttribute('id')
+  clone.removeAttribute('name')
+
+  // `index.css` carries an id-scoped rule (`@media (max-width: 767px) { #root { max-width:
+  // 100vw; overflow-x: clip; } }`) that stops applying once the clone's id is stripped above.
+  // Below 767px that would let the clone overflow horizontally while the live page (which the
+  // mirror exists to reproduce truthfully) is clipped. Read these off the LIVE root's computed
+  // style — not the clone's, which is still detached from the cascade at this point and would
+  // report defaults rather than the applied values — and pin them as inline styles so the effect
+  // survives losing the id. Only these two properties: snapshotting the whole computed style
+  // would freeze hundreds of values and break inheritance inside the clone.
+  const liveStyle = getComputedStyle(live)
+  clone.style.maxWidth = liveStyle.maxWidth
+  clone.style.overflowX = liveStyle.overflowX
 }
 
 /** Copy what cloneNode leaves behind, walking both trees in step. */
@@ -63,7 +90,14 @@ function reconcile(live: Element, copy: Element): void {
   }
 
   if (live instanceof HTMLInputElement && copy instanceof HTMLInputElement) {
-    copy.value = live.value
+    // `type="file"` is the exception: assigning a non-empty string to `HTMLInputElement.value`
+    // on a file input throws `InvalidStateError` per the HTML spec (the value is a fake path the
+    // UA controls, not settable data) — stock behaviour, not a browser quirk. A file input's
+    // value renders nothing a lens needs to show anyway, so there is nothing lost by skipping it.
+    // Do not "simplify" this guard away.
+    if (live.type !== 'file') {
+      copy.value = live.value
+    }
     copy.checked = live.checked
   } else if (live instanceof HTMLTextAreaElement && copy instanceof HTMLTextAreaElement) {
     copy.value = live.value
@@ -96,7 +130,7 @@ export function createMirrorHost(stage: HTMLElement): MirrorHost {
       const root = sourceRoot()
       if (!root) return
       const clone = root.cloneNode(true) as HTMLElement
-      neutralize(clone)
+      neutralize(clone, root)
       stage.replaceChildren(clone)
       reconcile(root, clone)
     },
@@ -113,6 +147,10 @@ interface Entry {
   dirty: boolean
   lastSyncMs: number
 }
+
+// Logged at most once per page — a `console.warn` on every animation frame is its own denial of
+// service, and one warning is enough to point at the offending lens.
+let warnedSyncFailure = false
 
 export function startMirrorScheduler(): MirrorScheduler {
   const entries = new Map<string, Entry>()
@@ -145,7 +183,19 @@ export function startMirrorScheduler(): MirrorScheduler {
     for (const id of due) {
       const e = entries.get(id)
       if (!e) continue
-      e.host.syncNow()
+      // Defence in depth: `syncNow()` should never throw (the file-input guard above is what
+      // used to make it do so), but this loop has no other protection, and `pickLensesToSync`'s
+      // ascending sort by `lastSyncMs` puts a lens that never advances FIRST in every subsequent
+      // batch — one persistently-throwing lens would freeze every lens batched alongside it,
+      // forever. So `lastSyncMs`/`dirty` are always advanced, even on failure.
+      try {
+        e.host.syncNow()
+      } catch (err) {
+        if (!warnedSyncFailure) {
+          warnedSyncFailure = true
+          console.warn('[magnifierMirror] a lens failed to sync; it will keep retrying:', err)
+        }
+      }
       e.dirty = false
       e.lastSyncMs = now
     }
