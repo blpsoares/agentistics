@@ -4,12 +4,13 @@
  * Its container is appended to document.body as a SIBLING of #root. That is load-bearing: the
  * mirror clones #root, so a layer inside it would clone itself, forever. Do not move it.
  */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { AppContext } from '../../lib/app-context'
+import type { LensStyle } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { applyLensKey, clampLens } from '../../lib/magnifier'
-import { startMirrorScheduler, type MirrorScheduler } from '../../lib/magnifierMirror'
+import { applyLensKey, clampLens, stageTransform } from '../../lib/magnifier'
+import { startMirrorScheduler, createMirrorHost, type MirrorScheduler } from '../../lib/magnifierMirror'
 import { a11yText } from './i18n'
 import { Lens } from './Lens'
 import { LensMenu } from './LensMenu'
@@ -195,6 +196,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
           }}
         />
       ))}
+      {a11y.followOn && <FollowLens style={a11y.prefs.followLens} scheduler={scheduler} />}
       {menu && (() => {
         const lens = a11y.lenses.find(l => l.id === menu.id)
         if (!lens) return null
@@ -210,5 +212,64 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
       })()}
     </>,
     container,
+  )
+}
+
+/**
+ * The cursor-following lens. Deliberately NOT a `Lens`: it has no controls, no drag, no menu and
+ * no persistence, so threading four "off" flags through that component would leave every branch of
+ * it carrying a case only this one lens hits.
+ *
+ * Always pointerEvents:none — a lens sitting under the cursor that intercepted clicks would make
+ * the page unusable. Its ON/OFF state is NOT persisted: every page load starts with it off.
+ */
+function FollowLens({ style, scheduler }: { style: LensStyle; scheduler: MirrorScheduler }) {
+  const stageRef = useRef<HTMLDivElement | null>(null)
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    const move = (e: MouseEvent) => setPos({ x: e.clientX, y: e.clientY })
+    const leave = () => setPos(null)
+    window.addEventListener('mousemove', move)
+    document.addEventListener('mouseleave', leave)
+    return () => {
+      window.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseleave', leave)
+    }
+  }, [])
+
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    const host = createMirrorHost(stage)
+    scheduler.register('__follow__', host, () => true)
+    host.syncNow()
+    return () => { scheduler.unregister('__follow__'); host.destroy() }
+  }, [scheduler])
+
+  // NEVER `return null` here. The mirror effect above resolves `stageRef.current` once, on mount;
+  // unmounting the stage whenever the pointer is outside the window would mean the very first
+  // render (pos === null) registers nothing and the lens stays blank forever. It is HIDDEN
+  // instead, so the stage element the effect captured stays mounted for the component's life.
+  const hidden = pos === null
+  const at = pos ?? { x: -9999, y: -9999 }
+  const placed = { ...style, x: at.x - style.width / 2, y: at.y - style.height / 2 }
+  const t = stageTransform(placed)
+
+  return (
+    <div aria-hidden="true" style={{
+      position: 'fixed', left: placed.x, top: placed.y, width: style.width, height: style.height,
+      border: `${style.borderWidth}px solid var(--anthropic-orange)`,
+      borderRadius: style.shape === 'circle' ? '50%' : style.cornerRadius,
+      overflow: 'hidden', background: 'var(--bg-base)',
+      boxShadow: '0 6px 24px rgba(0,0,0,0.35)',
+      pointerEvents: 'none', zIndex: 2147483050, boxSizing: 'border-box',
+      visibility: hidden ? 'hidden' : 'visible',
+    }}>
+      <div ref={stageRef} style={{
+        width: '100vw', height: '100vh', transformOrigin: '0 0',
+        transform: `scale(${t.scale}) translate(${t.tx}px, ${t.ty}px)`, pointerEvents: 'none',
+      }} />
+    </div>
   )
 }
