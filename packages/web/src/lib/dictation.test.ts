@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { dictationSupport, dictationLocale } from './dictation'
+import { dictationSupport, dictationLocale, dictationError, insecureAlternative } from './dictation'
 
 describe('dictationSupport', () => {
   it('is ready when the API exists in a secure context', () => {
@@ -49,5 +49,39 @@ describe('dictationLocale', () => {
     // A Brazilian laptop is often set to English; what matters is the language being typed.
     expect(dictationLocale('pt')).toBe('pt-BR')
     expect(dictationLocale('en')).toBe('en-US')
+  })
+})
+
+describe('dictationError', () => {
+  it('names a refused permission', () => {
+    expect(dictationError('not-allowed', 'en')).toContain('permission')
+    expect(dictationError('not-allowed', 'pt')).toContain('permissão')
+  })
+  it('names the recognition service failing, which is not the same as a refusal', () => {
+    expect(dictationError('network', 'en')).not.toBe(dictationError('not-allowed', 'en'))
+  })
+  it('names silence', () => {
+    expect(dictationError('no-speech', 'en')).toContain('hear')
+  })
+  it('names a missing microphone', () => {
+    expect(dictationError('audio-capture', 'en')).toContain('microphone')
+  })
+  it('never returns an empty string for a code it has not seen', () => {
+    expect(dictationError('something-new', 'en').length).toBeGreaterThan(0)
+    expect(dictationError('something-new', 'en')).toContain('something-new')
+  })
+})
+
+describe('insecureAlternative', () => {
+  it('offers the localhost equivalent of a LAN address', () => {
+    expect(insecureAlternative('http://192.168.0.7:47292/sessions'))
+      .toBe('http://localhost:47292/sessions')
+  })
+  it('offers nothing when the page is already on localhost', () => {
+    expect(insecureAlternative('http://localhost:47292/sessions')).toBeNull()
+    expect(insecureAlternative('http://127.0.0.1:47292/')).toBeNull()
+  })
+  it('offers nothing for a name it cannot rewrite safely', () => {
+    expect(insecureAlternative('https://dash.example.com/sessions')).toBeNull()
   })
 })

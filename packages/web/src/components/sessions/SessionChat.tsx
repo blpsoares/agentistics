@@ -39,7 +39,7 @@ import { isImagePath } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
 import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
-import { dictationLocale, dictationSupport } from '../../lib/dictation'
+import { dictationError, dictationLocale, dictationSupport, insecureAlternative } from '../../lib/dictation'
 import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
 
 interface ChatPayload {
@@ -109,9 +109,9 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       const rec = new Ctor() as unknown as {
         lang: string; continuous: boolean; interimResults: boolean
         start: () => void; stop: () => void
-        onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
+        onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
         onend: (() => void) | null
-        onerror: (() => void) | null
+        onerror: ((e: { error?: string }) => void) | null
       }
       rec.lang = dictationLocale(pt ? 'pt' : 'en')
       rec.continuous = true
@@ -128,7 +128,15 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       // permission) must not leave the button lit — a control that says it is listening when it
       // is not is worse than one that never started.
       rec.onend = () => { setListening(false); recognitionRef.current = null }
-      rec.onerror = () => { setListening(false); recognitionRef.current = null }
+      rec.onerror = e => {
+        setListening(false)
+        recognitionRef.current = null
+        // The REASON reaches the screen. This handler used to discard its event, so a refused
+        // permission, an unreachable recognition service, a missing microphone and a moment of
+        // silence all looked identical: the button lit up and went out. A button that fails
+        // silently is indistinguishable from a broken one.
+        setNotice(dictationError(e?.error ?? 'unknown', pt ? 'pt' : 'en'))
+      }
       rec.start()
       recognitionRef.current = rec
       setListening(true)
@@ -921,6 +929,29 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                           )}
                         </span>
                       </button>
+
+                      {/* The address that WOULD work, when there is one.
+                          `localhost` is a secure context and `http://192.168.x.y:47292` is not, so
+                          a member machine's dashboard has an exact equivalent one click away —
+                          naming it is more useful than naming the rule. Only a literal IPv4 host is
+                          rewritten (see `insecureAlternative`): sending someone from a hostname to
+                          `localhost` would be a guess about which machine they are sitting at, so
+                          where there is no answer this row is simply absent. */}
+                      {dictation.state === 'insecure' && (() => {
+                        const alt = typeof window === 'undefined' ? null : insecureAlternative(window.location.href)
+                        return alt === null ? null : (
+                          <a
+                            href={alt}
+                            style={{
+                              display: 'block', padding: '4px 8px 8px 30px', fontSize: 11,
+                              lineHeight: 1.4, color: 'var(--anthropic-orange)',
+                              overflowWrap: 'anywhere', textDecoration: 'none',
+                            }}
+                          >
+                            {pt ? `Abrir em ${alt}` : `Open at ${alt}`}
+                          </a>
+                        )
+                      })()}
 
                       {/* MODEL. Same treatment: where it cannot work, the menu says why instead of
                           offering a control that answers nothing. */}
