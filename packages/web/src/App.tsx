@@ -38,6 +38,7 @@ import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
 import { NotificationToasts } from './components/NotificationToasts'
 import { MagnifierLayer } from './components/a11y/MagnifierLayer'
+import { MagnifierButton } from './components/a11y/MagnifierButton'
 import { NotificationBell } from './components/NotificationBell'
 import { HardwareModal } from './components/HardwareModal'
 import { useNotificationStream } from './hooks/useNotificationStream'
@@ -2759,6 +2760,7 @@ export default function AppLayout() {
           }}>
             <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 44, width: 'auto' }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <MagnifierButton ctx={appCtx} />
               {data?.healthIssues && data.healthIssues.length > 0 && (
                 <HealthWarnings issues={data.healthIssues} lang={lang} />
               )}
@@ -2979,6 +2981,7 @@ export default function AppLayout() {
                 <span style={{ opacity: 0.35 }}>·</span>
                 <span title={headerTokensTitle}><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(headerTokens)}</strong> tok</span>
               </div>
+              <MagnifierButton ctx={appCtx} />
               {data?.healthIssues && data.healthIssues.length > 0 && (
                 <HealthWarnings issues={data.healthIssues} lang={lang} />
               )}
@@ -3033,6 +3036,20 @@ export default function AppLayout() {
               </button>
             </div>
             )}
+          </div>
+        )}
+
+        {/* Fallback row for the routes whose desktop filters row (above) does not render at all:
+            /custom embeds its own filter bar, and the Sessions workspace's action cluster is
+            withheld for it (see `!inSessionsWorkspace` above). Without this, pinning a lens on
+            either page would be PERMANENT — a mouse's only way back to a pinned lens is this
+            button's right-click menu. */}
+        {data && !isMobile && (isCustomPage || inSessionsWorkspace) && a11y.prefs.enabled && (
+          <div style={{
+            maxWidth: 1400, margin: '0 auto', padding: '4px 32px', width: '100%',
+            boxSizing: 'border-box', display: 'flex', justifyContent: 'flex-end',
+          }}>
+            <MagnifierButton ctx={appCtx} />
           </div>
         )}
 

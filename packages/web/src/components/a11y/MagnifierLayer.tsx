@@ -11,6 +11,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { startMirrorScheduler, type MirrorScheduler } from '../../lib/magnifierMirror'
 import { a11yText } from './i18n'
 import { Lens } from './Lens'
+import { LensMenu } from './LensMenu'
 
 const CONTAINER_ID = 'ag-magnifiers'
 
@@ -36,6 +37,7 @@ export function MagnifierLayer({ ctx }: { ctx: AppContext }) {
   const isMobile = useIsMobile()
   const text = useMemo(() => a11yText(lang), [lang])
   const [scheduler, setScheduler] = useState<MirrorScheduler | null>(null)
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
 
   useEffect(() => {
     if (!active) return
@@ -73,9 +75,26 @@ export function MagnifierLayer({ ctx }: { ctx: AppContext }) {
           onChange={patch => a11y.updateLens(lens.id, patch)}
           onSelect={() => a11y.select(lens.id)}
           onRemove={() => a11y.removeLens(lens.id)}
-          onContextMenu={e => { e.preventDefault(); a11y.select(lens.id) }}
+          onContextMenu={e => {
+            e.preventDefault()
+            a11y.select(lens.id)
+            setMenu({ id: lens.id, x: e.clientX, y: e.clientY })
+          }}
         />
       ))}
+      {menu && (() => {
+        const lens = a11y.lenses.find(l => l.id === menu.id)
+        if (!lens) return null
+        return (
+          <LensMenu
+            lens={lens} x={menu.x} y={menu.y} text={text} isMobile={isMobile}
+            onChange={patch => a11y.updateLens(lens.id, patch)}
+            onRemove={() => a11y.removeLens(lens.id)}
+            onDuplicate={() => a11y.duplicateLens(lens.id)}
+            onClose={() => setMenu(null)}
+          />
+        )
+      })()}
     </>,
     container,
   )
