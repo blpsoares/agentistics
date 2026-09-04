@@ -1161,6 +1161,23 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       })
     }
 
+    // The skills the assistant in this session can be asked to run. Guarded by the `/api/fleet`
+    // PREFIX already registered in `capability-guard.ts` — a new fleet route is guarded by having
+    // been ADDED, never by remembering a second table.
+    if (url.pathname === '/api/fleet/skills' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { readFleetSkills, fleetLang } = await import('./sessions/fleet-web')
+      const out = await readFleetSkills(fleetLang(url.searchParams.get('lang')), id)
+      return new Response(JSON.stringify(out), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     // Start one. The most powerful thing on this route table: it spawns a billable coding assistant,
     // with a prompt, in a directory the request names — see the header of `runFleetSpawn` for why
     // this one call reads a directory from the body when `resume` refuses to, and `fleet-spawn.ts`

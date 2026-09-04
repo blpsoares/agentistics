@@ -25,7 +25,7 @@ import { join } from 'node:path'
 import { PROJECTS_DIR } from '../config'
 import { UUID_RE } from '../git'
 import { isHumanUserEntry } from '../jsonl'
-import { classifyUserText, type UserEntry } from './chat-envelope'
+import { classifyUserEntry, type UserEntry } from './chat-envelope'
 
 export interface ChatTurn {
   role: 'user' | 'assistant'
@@ -157,7 +157,10 @@ function extractUserEntry(e: Record<string, unknown>): UserEntry | null {
       .find(p => p.type === 'text' && typeof p.text === 'string')?.text as string | undefined
   }
   if (raw === undefined || raw.trim() === '') return null
-  const entry = classifyUserText(raw)
+  // `isMeta` is the harness's own flag, and it travels with the RAW entry — 148 of the 192 meta
+  // entries measured on this machine carry no envelope tag at all, so the tag table alone drew them
+  // in the person's bubble. See `chat-envelope.ts`'s header.
+  const entry = classifyUserEntry({ text: raw, isMeta: e.isMeta === true })
   // A system entry with nothing to name is dropped outright rather than drawn as a blank note.
   if (entry.kind === 'system' && entry.note === '') return null
   return entry
@@ -251,7 +254,12 @@ function extractQueuedEntry(e: Record<string, unknown>): UserEntry | null {
   if (!a || a.type !== 'queued_command') return null
   const raw = queuedPromptText(a.prompt)
   if (raw === null) return null
-  const entry = classifyUserText(raw)
+  // THE TWO HALVES OF ONE BUG MEET HERE. The queued path reaches `classifyUserEntry` — the
+  // `isMeta`-aware classifier — and not the tag-only `classifyUserText` it was written against:
+  // a queued entry can carry BOTH an envelope tag (a task notification) and the harness's own
+  // meta flag (a loaded skill body), and reading only the tag leaves the second in the user's
+  // bubble. `isMeta` is read off the attachment entry itself, which is where the harness sets it.
+  const entry = classifyUserEntry({ text: raw, isMeta: e.isMeta === true })
   // A system entry with nothing to name is dropped outright rather than drawn as a blank note —
   // the same call `extractUserEntry` makes on the other path.
   if (entry.kind === 'system' && entry.note === '') return null

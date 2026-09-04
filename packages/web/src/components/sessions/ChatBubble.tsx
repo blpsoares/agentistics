@@ -109,6 +109,15 @@ const SYSTEM_NOTE_PT: Record<string, string> = {
   'command output': 'saída de comando',
   'slash command': 'comando de barra',
   'shell command': 'comando de shell',
+  // The untagged `isMeta` entries — see `chat-envelope.ts`'s second measurement.
+  'a skill was loaded': 'uma skill foi carregada',
+  'a skill was re-invoked': 'uma skill foi reinvocada',
+  'a message from another session': 'uma mensagem de outra sessão',
+  'an image was attached': 'uma imagem foi anexada',
+  'the session was resumed': 'a sessão foi retomada',
+  'an idle notice about another session': 'aviso de ociosidade sobre outra sessão',
+  'a context-usage report': 'relatório de uso de contexto',
+  'injected by the assistant': 'injetado pelo assistente',
 }
 
 export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, onReply }: ChatBubbleProps) {

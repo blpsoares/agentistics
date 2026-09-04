@@ -25,6 +25,7 @@ import { fleetRow, type FleetActionRequest, type FleetRow } from './fleet-row'
 import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
 import { arrangeFleet, type FleetArrangement, type FleetViewRequest } from './fleet-arrange'
 import { markFleetPhase, timeFleetPhase } from './fleet-profile'
+import { readHarnessSkills, skillsReason, type HarnessSkill } from './harness-skills'
 
 // The REQUEST shape lives in the leaf `fleet-row.ts` so `index.ts` can name it without naming
 // this module — see the note there.
@@ -307,6 +308,49 @@ export async function readAttachTicket(
   const ticket = await host.attachSession(id)
   if (!ticket) return null
   return { argv: [...ticket.argv], detachHint: ticket.detachHint, label: ticket.label }
+}
+
+/** What the skills picker is handed for one session. */
+export interface FleetSkills {
+  skills: HarnessSkill[]
+  /**
+   * Why the list is empty — a harness with no verified command, or a row this machine cannot name.
+   * Absent when the list is genuinely just empty, which is a different fact and reads differently.
+   */
+  reason?: string
+}
+
+/**
+ * The skills for ONE session, resolved from the row's own harness and cwd.
+ *
+ * SCOPE IS CHECKED FIRST, like `readAttachTicket`: an unknown id must not be answered with a
+ * plausible list assembled from this server's own home directory. `readHarnessSkills` is given the
+ * ROW's cwd, so a project's own `.claude/skills` is the project the session is actually in.
+ *
+ * Never throws — the picker's whole job is to save typing, and it must not be the thing that takes
+ * the composer's menu down.
+ */
+export async function readFleetSkills(lang: CliLang, id: string): Promise<FleetSkills> {
+  const s = controlStrings(lang)
+  try {
+    const host = await hostFor(lang)
+    if (!host.sessions) return { skills: [], reason: s.sessionsNoHost }
+    const fleet = await host.sessions()
+    const row = fleet.sessions.find(r => r.id === id || r.conversationId === id)
+    if (!row) {
+      return {
+        skills: [],
+        reason: lang === 'pt'
+          ? 'Esta máquina não conhece essa sessão.'
+          : 'This machine does not know that session.',
+      }
+    }
+    const reason = skillsReason(row.harness, lang === 'pt' ? 'pt' : 'en')
+    if (reason) return { skills: [], reason }
+    return { skills: await readHarnessSkills(row.harness, row.cwd) }
+  } catch (e) {
+    return { skills: [], reason: e instanceof Error ? e.message : String(e) }
+  }
 }
 
 /** The questions a start EARNS, and the places it could happen — the wizard, as data. */
