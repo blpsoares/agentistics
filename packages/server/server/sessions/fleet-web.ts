@@ -26,6 +26,8 @@ import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
 import { arrangeFleet, type FleetArrangement, type FleetViewRequest } from './fleet-arrange'
 import { markFleetPhase, timeFleetPhase } from './fleet-profile'
 import { readHarnessSkills, skillsReason, type HarnessSkill } from './harness-skills'
+import { artifactPathsFromTurns } from './artifact-file'
+import type { ArtifactResponse } from './artifact-web'
 
 // The REQUEST shape lives in the leaf `fleet-row.ts` so `index.ts` can name it without naming
 // this module — see the note there.
@@ -474,4 +476,53 @@ export async function runFleetSpawn(
 
   const out = await host.spawnSession(decision.plan)
   return { ok: out.ok, message: out.message, ...(out.id ? { id: out.id } : {}) }
+}
+
+/**
+ * Read one artifact of ONE session.
+ *
+ * SCOPE IS CHECKED FIRST, exactly as `readAttachTicket` checks it: an unknown id must not be
+ * answered with a file assembled from anything this server happens to have. And the ALLOWLIST is
+ * REBUILT here from the session's own transcript — the browser's list is not sent and would not be
+ * believed if it were. A client asking for a path is asking a question; the answer comes from what
+ * the session actually did on this machine.
+ *
+ * A row with NO `cwd` is refused in its own sentence rather than passed on with an empty one. The
+ * containment gate is the whole second half of the rule, and a session whose folder was never
+ * recorded gives it nothing to contain against — handing `''` down would resolve to an
+ * `unreadable`, whose sentence ("it may have been moved or deleted") describes something else
+ * entirely.
+ */
+export async function readFleetArtifact(
+  lang: CliLang,
+  id: string,
+  path: string,
+): Promise<ArtifactResponse> {
+  const host = await hostFor(lang)
+  if (!host.sessions) return { ok: false, message: controlStrings(lang).sessionsNoHost }
+
+  const fleet = await host.sessions()
+  const row = fleet.sessions.find(r => r.id === id || r.conversationId === id)
+  if (!row) {
+    return {
+      ok: false,
+      message: lang === 'pt'
+        ? 'Essa sessão não está na lista desta máquina.'
+        : 'That session is not in this machine’s list.',
+    }
+  }
+  if (!row.cwd) {
+    return {
+      ok: false,
+      message: lang === 'pt'
+        ? 'Esta sessão não tem uma pasta registrada, então não há contra o que resolver um caminho.'
+        : 'This session has no recorded folder, so there is nothing to resolve a path against.',
+    }
+  }
+
+  const { readSessionChat } = await import('./chat-web')
+  const chat = await readSessionChat(host, lang, row.id)
+  const allowed = artifactPathsFromTurns(chat.turns)
+  const { readArtifact } = await import('./artifact-web')
+  return await readArtifact(lang, row.cwd, allowed, path)
 }
