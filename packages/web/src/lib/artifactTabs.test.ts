@@ -1,5 +1,5 @@
-import { test, expect } from 'bun:test'
-import { agoLabel, isDoc, liveEvents } from './artifactTabs'
+import { describe, expect, it, test } from 'bun:test'
+import { agoLabel, isDoc, liveEvents, writeStatus } from './artifactTabs'
 
 test('a document is decided by extension or by a known name', () => {
   for (const p of ['docs/spec.md', 'a/b/NOTES.txt', 'README', 'CHANGELOG.md', 'x/plan.mdx']) {
@@ -25,7 +25,7 @@ test('the feed names the KIND of each thing, in the transcript order', () => {
   ])
   // The Bash call is TWO events: it ran, and then its file appeared. Collapsing them would lose
   // either what was run or what it produced.
-  expect(out.map(e => e.kind)).toEqual(['thought', 'read', 'ran', 'wrote', 'wrote', 'delegated', 'said'])
+  expect(out.map(e => e.kind)).toEqual(['thought', 'read', 'ran', 'wrote', 'wrote', 'delegated'])
   expect(out[0]!.text).toBe('weighing two options')
 })
 
@@ -39,9 +39,17 @@ test('the pending turn is marked live, so the panel can say what is happening NO
   expect(out[0]).toMatchObject({ kind: 'ran', live: true })
 })
 
-test("the person's own messages are not the session's activity", () => {
-  const out = liveEvents([{ role: 'user', text: 'do the thing' }])
-  expect(out).toEqual([])
+test('NO PROSE, from either side — this tab is what the harness DID', () => {
+  // The assistant's own text buried the tool calls under paragraphs, and what it said is the
+  // conversation, one tab away and rendered properly there.
+  expect(liveEvents([{ role: 'user', text: 'do the thing' }])).toEqual([])
+  expect(liveEvents([{ role: 'assistant', text: 'I will now do the thing.' }])).toEqual([])
+})
+
+test('reasoning stays — it is the harness working, not a message', () => {
+  // It is the only signal for the stretch between two tool calls where nothing else happens.
+  const out = liveEvents([{ role: 'assistant', thinking: 'weighing two options', text: 'ok' }])
+  expect(out.map(e => e.kind)).toEqual(['thought'])
 })
 
 test('an empty conversation produces an empty feed rather than a placeholder row', () => {
@@ -68,4 +76,27 @@ test('the ago label is the shortest true form, and empty when there is no time',
   expect(agoLabel('2026-09-01T12:00:00Z', now, false)).toBe('3d')
   expect(agoLabel(undefined, now, false)).toBe('')
   expect(agoLabel('not a date', now, false)).toBe('')
+})
+
+describe('writeStatus', () => {
+  const disk = new Set(['/repo/a.ts'])
+
+  it('a listed file opens', () => {
+    expect(writeStatus('/repo/a.ts', disk)).toBe('open')
+  })
+
+  it('scratch is named as scratch, not as missing — the reader is told which', () => {
+    for (const p of ['/tmp/msg.txt', '/var/tmp/x.log', '/var/folders/ab/cd/T/y']) {
+      expect(writeStatus(p, disk), p).toBe('temp')
+    }
+  })
+
+  it('a project file called tmp.ts is NOT scratch', () => {
+    // A rule matching "tmp" anywhere in the path would mislabel real work.
+    expect(writeStatus('/repo/src/tmp.ts', disk)).toBe('gone')
+  })
+
+  it('anything else the server did not list is gone', () => {
+    expect(writeStatus('/repo/deleted.ts', disk)).toBe('gone')
+  })
 })

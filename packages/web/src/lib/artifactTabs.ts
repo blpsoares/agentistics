@@ -37,7 +37,7 @@ export function isDoc(path: string): boolean {
 
 /** One thing the session did, in the order it did it. */
 export interface LiveEvent {
-  kind: 'wrote' | 'read' | 'ran' | 'thought' | 'delegated' | 'said'
+  kind: 'wrote' | 'read' | 'ran' | 'thought' | 'delegated'
   /** When the turn that produced it was recorded, ISO — absent on a transcript that carries none. */
   at?: string
   /** The path, the command, or the first line of what was said — already trimmed for a row. */
@@ -69,9 +69,14 @@ function firstLine(s: string, max = 160): string {
  * The activity feed, newest LAST — the transcript's own order, which is what makes it readable as
  * a sequence rather than a set.
  *
- * An assistant's prose is included as `said` because the panel is meant to answer "what is
- * happening", and a turn that only explains what it is about to do is part of that. The USER's own
- * messages are not: this is the session's activity, and the person already has their own words.
+ * PROSE IS NOT AN ACTION. The assistant's own text was included at first, on the theory that a turn
+ * explaining what it is about to do is part of "what is happening". It is not what this tab is for
+ * — asked directly: "no live eu quero apenas as acoes do harness, mensagens nao contam" — and it
+ * made the feed unreadable by burying the tool calls under paragraphs. What the assistant SAID is
+ * the conversation, one tab away and rendered properly there; what it DID is here.
+ *
+ * Reasoning stays, because it is not a message: it is the harness working, and it is the only
+ * signal for the stretch between two tool calls where nothing else is happening.
  */
 export function liveEvents(turns: readonly LiveTurn[]): LiveEvent[] {
   const out: LiveEvent[] = []
@@ -92,9 +97,6 @@ export function liveEvents(turns: readonly LiveTurn[]): LiveEvent[] {
       // A subagent is a delegation, not a command — it is the one tool call that starts more work
       // somewhere else, and reading it as "ran" hides that.
       else if (c.name === 'Agent' || c.name === 'Task') out.push(ev('delegated', c.detail ?? c.name))
-    }
-    if (t?.role === 'assistant' && t.text && t.text.trim() !== '') {
-      out.push(ev('said', firstLine(t.text)))
     }
   }
   return out
@@ -120,4 +122,27 @@ export function agoLabel(at: string | undefined, now: number, pt: boolean): stri
   const h = Math.round(m / 60)
   if (h < 24) return `${h}h`
   return `${Math.round(h / 24)}d`
+}
+
+/**
+ * Can this written path be OPENED from the feed, and if not, why not?
+ *
+ * A `wrote` row that does nothing when clicked is the control-that-reads-as-broken this codebase
+ * argues against, and simply hiding the link leaves the reader with no idea why one path is a link
+ * and its neighbour is not. So the reason is shown ON the row.
+ *
+ * `temp` is decided by the PATH, which is the only thing that can be known here — the server lists
+ * what is readable, and a file under the system temp directory never is, because the read guard
+ * admits one root (see `artifact-list.ts` for why that was tried and reverted). `gone` is anything
+ * else the server did not list: it was written and is no longer there, or it never landed.
+ */
+export type WriteStatus = 'open' | 'temp' | 'gone'
+
+export function writeStatus(path: string, onDisk: ReadonlySet<string>): WriteStatus {
+  if (onDisk.has(path)) return 'open'
+  // `/tmp/...`, `/var/folders/...` (macOS) and a `T`/`TMPDIR`-shaped path all read as scratch. Kept
+  // to prefixes rather than a regex over the whole path: a file called `tmp.ts` in the project is
+  // not scratch, and a rule that matched it would mislabel real work.
+  if (/^\/(tmp|var\/tmp|var\/folders)\//.test(path)) return 'temp'
+  return 'gone'
 }

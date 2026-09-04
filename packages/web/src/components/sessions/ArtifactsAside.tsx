@@ -29,7 +29,7 @@ import {
   BookOpen, Terminal, Brain, Send, Eye, Image,
 } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
-import { agoLabel, isDoc, liveEvents, type LiveEvent, type LiveTurn } from '../../lib/artifactTabs'
+import { agoLabel, isDoc, liveEvents, writeStatus, type LiveEvent, type LiveTurn, type WriteStatus } from '../../lib/artifactTabs'
 import {
   galleryFileCount, galleryGroups, parseGalleryView, type GalleryTurn, type GalleryView,
 } from '../../lib/gallery'
@@ -243,6 +243,9 @@ export function ArtifactsAside({
             // ones still readable on disk, and offering to open a deleted file would be a row whose
             // only outcome is a refusal.
             {...(openFromFeed(e.text) ? { onOpen: () => openFromFeed(e.text)!() } : {})}
+            {...(e.kind === 'wrote'
+              ? { status: writeStatus(e.text, new Set(artifacts.map(a => a.path))) }
+              : {})}
           />
         ))}
       </div>
@@ -449,14 +452,15 @@ function Row({ a, pt, fact, onOpen }: {
  * three kinds that carry a path or a command — those are read character by character — and left in
  * the reading face for the two that carry prose.
  */
-function EventRow({ e, pt, now, onOpen }: { e: LiveEvent; pt: boolean; now: number; onOpen?: () => void }) {
+function EventRow({ e, pt, now, onOpen, status }: {
+  e: LiveEvent; pt: boolean; now: number; onOpen?: () => void; status?: WriteStatus
+}) {
   const meta: Record<LiveEvent['kind'], { icon: React.ReactNode; color: string; label: string }> = {
     wrote: { icon: <FileEdit size={11} />, color: 'var(--anthropic-orange)', label: pt ? 'escreveu' : 'wrote' },
     read: { icon: <Eye size={11} />, color: 'var(--text-tertiary)', label: pt ? 'leu' : 'read' },
     ran: { icon: <Terminal size={11} />, color: 'var(--text-secondary)', label: pt ? 'rodou' : 'ran' },
     thought: { icon: <Brain size={11} />, color: '#a78bfa', label: pt ? 'pensou' : 'thought' },
     delegated: { icon: <Send size={11} />, color: '#22c55e', label: pt ? 'delegou' : 'delegated' },
-    said: { icon: <FileText size={11} />, color: 'var(--text-secondary)', label: pt ? 'disse' : 'said' },
   }
   const m = meta[e.kind]
   const mono = e.kind === 'wrote' || e.kind === 'read' || e.kind === 'ran'
@@ -486,6 +490,23 @@ function EventRow({ e, pt, now, onOpen }: { e: LiveEvent; pt: boolean; now: numb
           fontSize: 11.5, color: 'var(--text-secondary)', wordBreak: 'break-word',
           fontFamily: mono ? 'var(--font-mono, ui-monospace, monospace)' : 'inherit',
         }}>{e.text}</span>
+        {/* WHY this path is not a link. Without it one row opens and its neighbour does nothing,
+            with no way to tell which is which — and "it is scratch" and "it is gone" send a reader
+            to two different conclusions about their own work. */}
+        {status === 'temp' && (
+          <span style={{
+            marginLeft: 6, padding: '0 5px', borderRadius: 4, fontSize: 9,
+            fontWeight: 700, letterSpacing: 0.3, color: 'var(--text-tertiary)',
+            background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+          }}>{pt ? 'temporário' : 'temp'}</span>
+        )}
+        {status === 'gone' && (
+          <span style={{
+            marginLeft: 6, padding: '0 5px', borderRadius: 4, fontSize: 9,
+            fontWeight: 700, letterSpacing: 0.3, color: 'var(--text-tertiary)',
+            background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+          }}>{pt ? 'não está mais lá' : 'no longer there'}</span>
+        )}
       </span>
       {/* HOW LONG AGO, right-aligned, so the column reads as a timeline down the edge. Absent when
           the transcript recorded no time — nothing here is invented. */}

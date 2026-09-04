@@ -76,3 +76,42 @@ export function shouldAutoOpen(
   if (isMobile || open || dismissed) return false
   return writing && !wasWriting
 }
+
+/**
+ * What the CLOSED panel should announce from the edge of the screen, if anything.
+ *
+ * Asked for: when the harness starts doing something, a marker on the right edge saying so, with
+ * the panel shut — "se eu quero acompanhar", and clicking it opens the live view.
+ *
+ * IT IS THE LAST ACTION, NOT A COUNT. A badge saying "12" tells somebody that things happened; the
+ * name of what is happening tells them whether they care. `null` when the panel is open (it is
+ * already saying this, in full) or when there is nothing in flight — an always-present tab on the
+ * edge becomes furniture, and furniture is not read.
+ *
+ * `live` is what makes it worth showing: an action from a turn that has FINISHED is history, and
+ * history belongs in the panel somebody chose to open, not on the edge of a screen they are
+ * reading something else in.
+ */
+export interface EdgeHint {
+  /** The verb, already localized by the caller's own table. */
+  kind: 'wrote' | 'read' | 'ran' | 'thought' | 'delegated'
+  /** The path or command it names. */
+  text: string
+}
+
+export function edgeHint(
+  { open, events, isMobile }: {
+    open: boolean
+    events: readonly { kind: EdgeHint['kind']; text: string; live?: boolean }[]
+    isMobile: boolean
+  },
+): EdgeHint | null {
+  // On a phone the panel is full-screen; a tab on the edge would be a control promising to cover
+  // the conversation somebody is reading.
+  if (open || isMobile) return null
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!
+    if (e.live) return { kind: e.kind, text: e.text }
+  }
+  return null
+}

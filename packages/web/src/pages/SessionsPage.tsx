@@ -25,10 +25,10 @@ import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { FleetOverview } from '../components/sessions/FleetOverview'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
-import { resolveArtifactLayout, shouldAutoOpen } from '../lib/artifactLayout'
+import { edgeHint, resolveArtifactLayout, shouldAutoOpen } from '../lib/artifactLayout'
 import { closeArtifacts, openArtifacts, setArtifactCount, useArtifacts } from '../lib/artifactsStore'
 import type { Artifact } from '../lib/sessionArtifacts'
-import type { LiveTurn } from '../lib/artifactTabs'
+import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
 import { FiltersBar } from '../components/FiltersBar'
 import { SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
 import { SessionsAside } from '../components/nav/SessionsAside'
@@ -210,6 +210,57 @@ export default function SessionsPage() {
     // Phase B ships without the reversal control; the split-rail default is what the plan measured.
     listExpandedByUser: false,
   })
+
+  /**
+   * THE EDGE MARKER — what the harness is doing right now, with the panel shut.
+   *
+   * Asked for directly: a session that starts working should say so from the edge of the screen,
+   * and clicking it should open the live view. `edgeHint` decides whether there is anything worth
+   * saying; this only draws it.
+   */
+  const hint = edgeHint({
+    open: art.open,
+    events: liveEvents(artifactTurns),
+    isMobile,
+  })
+  const HINT_VERB: Record<string, string> = {
+    wrote: pt ? 'escrevendo' : 'writing',
+    read: pt ? 'lendo' : 'reading',
+    ran: pt ? 'rodando' : 'running',
+    thought: pt ? 'pensando' : 'thinking',
+    delegated: pt ? 'delegando' : 'delegating',
+  }
+  const edgeMarker = hint === null || selected === undefined ? null : (
+    <button
+      onClick={openArtifacts}
+      title={`${HINT_VERB[hint.kind]} · ${hint.text}`}
+      style={{
+        position: 'absolute', top: '50%', right: 0, transform: 'translateY(-50%)',
+        zIndex: 15, display: 'flex', alignItems: 'center', gap: 7,
+        maxWidth: 260, padding: '8px 10px 8px 12px',
+        borderRadius: '10px 0 0 10px', cursor: 'pointer',
+        border: '1px solid var(--anthropic-orange)', borderRight: 'none',
+        background: 'var(--bg-surface)', color: 'var(--text-primary)',
+        fontFamily: 'inherit', fontSize: 11.5, textAlign: 'left',
+        boxShadow: '-6px 0 18px rgba(0,0,0,0.35)',
+      }}
+    >
+      <span aria-hidden style={{
+        width: 7, height: 7, borderRadius: 4, flexShrink: 0,
+        background: 'var(--anthropic-orange)',
+      }} />
+      <span style={{ minWidth: 0 }}>
+        <span style={{ display: 'block', fontWeight: 700, color: 'var(--anthropic-orange)' }}>
+          {HINT_VERB[hint.kind]}
+        </span>
+        {/* The THING, not a count: a path or a command says whether this is worth watching. */}
+        <span style={{
+          display: 'block', color: 'var(--text-tertiary)', fontSize: 10.5,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl',
+        }}>{hint.text}</span>
+      </span>
+    </button>
+  )
 
   const artifactsPane = selected === undefined ? null : (
     <ArtifactsAside
@@ -488,7 +539,16 @@ export default function SessionsPage() {
   // Desktop: the aside holds the list; this is the centre.
   // ---------------------------------------------------------------------------
   if (panel) {
-    if (artLayout.layout === 'closed' || !artifactsPane) return panel
+    if (artLayout.layout === 'closed' || !artifactsPane) {
+      // The panel is shut. The marker rides the right edge of the session, which is where the panel
+      // it opens will appear — so the control and its result are in the same place.
+      return edgeMarker === null ? panel : (
+        <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          {panel}
+          {edgeMarker}
+        </div>
+      )
+    }
     // FULLSCREEN and OVERLAY both cover the conversation; the difference is that the overlay leaves
     // the page under it visible at its edge, which is the only affordance saying what closing
     // returns you to.

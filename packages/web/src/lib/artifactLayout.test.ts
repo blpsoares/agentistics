@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { resolveArtifactLayout, shouldAutoOpen } from './artifactLayout'
+import { edgeHint, resolveArtifactLayout, shouldAutoOpen } from './artifactLayout'
 
 const at = (o: Partial<Parameters<typeof resolveArtifactLayout>[0]>) =>
   resolveArtifactLayout({ open: true, width: 1440, isMobile: false, listExpandedByUser: false, ...o })
@@ -63,5 +63,31 @@ describe('shouldAutoOpen', () => {
   it('needs a file being WRITTEN, not merely a busy session', () => {
     // Thinking, searching and running tests have nothing to show here.
     expect(auto({ writing: false })).toBe(false)
+  })
+})
+
+describe('edgeHint', () => {
+  const running = [
+    { kind: 'read' as const, text: 'a.ts', live: true },
+    { kind: 'wrote' as const, text: 'b.ts', live: true },
+  ]
+
+  it('names the LAST thing in flight — a verb tells you whether you care, a count does not', () => {
+    expect(edgeHint({ open: false, events: running, isMobile: false }))
+      .toEqual({ kind: 'wrote', text: 'b.ts' })
+  })
+
+  it('says nothing while the panel is open — it is already saying this, in full', () => {
+    expect(edgeHint({ open: true, events: running, isMobile: false })).toBeNull()
+  })
+
+  it('says nothing on a phone, where the panel would cover what is being read', () => {
+    expect(edgeHint({ open: false, events: running, isMobile: true })).toBeNull()
+  })
+
+  it('FINISHED actions are history and belong in the panel, not on the edge', () => {
+    const done = [{ kind: 'wrote' as const, text: 'b.ts' }]
+    expect(edgeHint({ open: false, events: done, isMobile: false })).toBeNull()
+    expect(edgeHint({ open: false, events: [], isMobile: false })).toBeNull()
   })
 })
