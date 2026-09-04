@@ -39,6 +39,7 @@ import { isImagePath } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
 import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
 import { sessionScratch, type CachedChat } from '../../lib/sessionScratch'
+import { composerMaxHeight } from '../../lib/composerHeight'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
 import { appendDictation, dictatedText, dictationError, dictationLocale, dictationSupport, insecureAlternative } from '../../lib/dictation'
 import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
@@ -61,8 +62,8 @@ export interface SessionChatProps {
 /** Matches the fleet poll. The transcript only changes when a turn lands, so faster buys nothing. */
 const CHAT_POLL_MS = 3000
 
-/** How tall the composer's field may grow before it scrolls internally instead. */
-const TEXTAREA_MAX_HEIGHT = 140
+// How tall the composer's field may grow is `composerHeight.ts` — a share of the viewport rather
+// than a constant, because a fixed number is most of a phone and a sliver of a desktop.
 
 /**
  * How far from the bottom still counts as "at the tail", in px.
@@ -339,8 +340,19 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     setAttached(sessionScratch.readAttachments(session.id))
   }, [session.id])
 
+  /** The ceiling, re-measured when the window changes size. */
+  const [maxComposerH, setMaxComposerH] = useState(() => composerMaxHeight(
+    typeof window === 'undefined' ? 0 : window.innerHeight,
+  ))
+  useEffect(() => {
+    const read = () => setMaxComposerH(composerMaxHeight(window.innerHeight))
+    read()
+    window.addEventListener('resize', read)
+    return () => window.removeEventListener('resize', read)
+  }, [])
+
   /**
-   * Grow the field WITH the draft, up to `TEXTAREA_MAX_HEIGHT`, then let it scroll internally.
+   * Grow the field WITH the draft, up to the ceiling, then let it scroll internally.
    *
    * `rows={1}` plus a CSS `maxHeight` alone never grows: a textarea's own height stays fixed at
    * its `rows` unless something sets it explicitly, so a multi-line draft either scrolled inside a
@@ -352,8 +364,8 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     const el = textareaRef.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, TEXTAREA_MAX_HEIGHT)}px`
-  }, [draft])
+    el.style.height = `${Math.min(el.scrollHeight, maxComposerH)}px`
+  }, [draft, maxComposerH])
 
   useEffect(() => {
     let alive = true
@@ -910,9 +922,15 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                     ? (pt ? 'Escreva para esta sessão…' : 'Write to this session…')
                     : (pt ? 'Indisponível para esta sessão' : 'Not available for this session')}
                   style={{
-                    flex: 1, resize: 'none', border: 'none', outline: 'none', background: 'transparent',
+                    // NO `flex: 1`. In a COLUMN container that sets `flex-basis: 0` on the HEIGHT
+                    // axis, which beats the explicit height the auto-grow effect writes — so the
+                    // field never grew past its one row however much was typed, and a prompt could
+                    // only be read two lines at a time. It was correct while the composer was a
+                    // ROW and was left behind when it became a column.
+                    width: '100%', display: 'block', boxSizing: 'border-box',
+                    resize: 'none', border: 'none', outline: 'none', background: 'transparent',
                     color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 13.5,
-                    lineHeight: 1.5, maxHeight: TEXTAREA_MAX_HEIGHT, overflowY: 'auto', padding: '6px 6px',
+                    lineHeight: 1.5, maxHeight: maxComposerH, overflowY: 'auto', padding: '6px 6px',
                   }}
                 />
 
