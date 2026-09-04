@@ -29,6 +29,12 @@ export interface ListedArtifact {
   /** Resolved against the session's cwd, which is what the read route will be asked for. */
   path: string
   bytes: number
+  /**
+   * Where the file lives. Only `project` is reachable today — the read guard admits one root — and
+   * the field is kept because the LIST is where a second root would first become visible, and a
+   * caller that already reads it will not need changing on the day one is justified.
+   */
+  scope: 'project' | 'temp'
 }
 
 /**
@@ -60,12 +66,16 @@ export async function listExistingArtifacts(
   for (const raw of paths) {
     const path = resolveArtifactPath(raw, cwd)
     if (!path || seen.has(path)) continue
+    // ONE ROOT: the session's own folder. Adding the system temp directory as a second was tried
+    // and reverted — it is shared, and widening the guard to all of it defeats the symlink-escape
+    // check for any session whose folder is itself under it. The list must not offer what the read
+    // route will refuse, so it applies the identical rule.
     if (!withinDirectory(path, cwd)) continue
     seen.add(path)
     try {
       const st = await stat(path)
       if (!st.isFile() || st.size === 0) continue
-      out.push({ raw, path, bytes: st.size })
+      out.push({ raw, path, bytes: st.size, scope: 'project' })
     } catch { /* gone, or unreadable — either way there is nothing to open */ }
   }
   return out

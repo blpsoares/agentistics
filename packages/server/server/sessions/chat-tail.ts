@@ -581,6 +581,13 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
     const isNewest = newest
     newest = false
 
+    // The event's own time. Stamped onto whatever this iteration pushes — the Live feed's whole
+    // promise is its ordering, and a turn with no recorded time gets none rather than an invented
+    // "now". THIS is the loop the chat view reads; an earlier one in this file builds the six-row
+    // tail and was stamped first by mistake, which is why the feed showed no times at all.
+    const at = typeof e.timestamp === 'string' ? e.timestamp : undefined
+    const add = (t: ChatTurn): void => { turns.push(at ? { ...t, at } : t) }
+
     const done = taskNotificationFor(rawEntryText(e))
     if (done) finishedTasks.add(done)
 
@@ -588,15 +595,15 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
     if (bg) {
       // A status line, never a message — nobody said it. `running` is settled after the walk,
       // once every completion in the file has been seen.
-      turns.push({ role: 'assistant', text: bg.label, task: { label: bg.label, running: true }, pending: true })
+      add({ role: 'assistant', text: bg.label, task: { label: bg.label, running: true }, pending: true })
       taskTurns.push({ id: bg.id, turn: turns[turns.length - 1]! })
       continue
     }
 
     const userEntry = extractUserEntry(e)
-    if (userEntry) { turns.push(userTurn(userEntry)); continue }
+    if (userEntry) { add(userTurn(userEntry)); continue }
     const queued = extractQueuedEntry(e)
-    if (queued) { turns.push(userTurn(queued)); continue }
+    if (queued) { add(userTurn(queued)); continue }
 
     // An assistant event can carry text, thinking and tool calls at once, and all three belong to
     // the same turn. Emitted together rather than as separate rows: they happened together, and
@@ -605,7 +612,7 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
     const calls = extractToolCalls(e)
     const thinking = extractThinking(e)
     if (assistantText || calls.length > 0 || thinking) {
-      turns.push({
+      add({
         role: 'assistant',
         text: assistantText ?? '',
         ...(calls.length > 0 ? { tools: calls } : {}),

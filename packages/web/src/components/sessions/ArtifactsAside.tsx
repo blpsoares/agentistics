@@ -58,6 +58,15 @@ export interface ArtifactsAsideProps {
    * promise is "this is what is happening".
    */
   turns?: readonly LiveTurn[]
+  /**
+   * What the SERVER knows about each listed path: how big it is, and whether it belongs to the
+   * project or is scratch under the system temp directory.
+   *
+   * The browser cannot answer either — it has the conversation, not the disk — and a size or a
+   * scope guessed from a path would be exactly the confident wrong answer this panel keeps being
+   * asked not to give.
+   */
+  facts?: ReadonlyMap<string, { bytes: number; scope: 'project' | 'temp' }>
 }
 
 /** `new` and `edited` read at a glance from the glyph; the word is beside it for everyone else. */
@@ -68,7 +77,7 @@ function KindIcon({ kind }: { kind: Artifact['kind'] }) {
 }
 
 export function ArtifactsAside({
-  sessionId, lang, artifacts, loading, unavailable, unlistedWrites, turns, onClose,
+  sessionId, lang, artifacts, loading, unavailable, unlistedWrites, turns, facts, onClose,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
   const [open, setOpen] = useState<Artifact | null>(null)
@@ -185,6 +194,18 @@ export function ArtifactsAside({
     }
     return (
       <div ref={feedRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
+        {/* THE DIRECTION, said rather than inferred. A reader arriving at a scrolled list cannot
+            tell which end is the newest, and asked exactly that. It sits at the TOP because that is
+            the end somebody scrolls away from — the bottom explains itself by being where the view
+            lands. */}
+        <p style={{
+          margin: '0 8px 6px', fontSize: 10, lineHeight: 1.5, color: 'var(--text-tertiary)',
+          borderBottom: '1px solid var(--border-subtle)', paddingBottom: 6,
+        }}>
+          {pt
+            ? 'Mais antigo em cima · o mais recente fica embaixo, e a view acompanha.'
+            : 'Oldest at the top · the newest stays at the bottom, and the view follows it.'}
+        </p>
         {feed.map((e, i) => (
           <EventRow
             key={i} e={e} pt={pt} now={now}
@@ -221,12 +242,12 @@ export function ArtifactsAside({
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
         {liveOnes.length > 0 && (
           <Band label={pt ? 'agora' : 'now'}>
-            {liveOnes.map(a => <Row key={a.path} a={a} pt={pt} onOpen={() => setOpen(a)} />)}
+            {liveOnes.map(a => <Row key={a.path} a={a} pt={pt} fact={facts?.get(a.path)} onOpen={() => setOpen(a)} />)}
           </Band>
         )}
         {pastOnes.length > 0 && (
           <Band label={liveOnes.length > 0 ? (pt ? 'antes' : 'earlier') : undefined}>
-            {pastOnes.map(a => <Row key={a.path} a={a} pt={pt} onOpen={() => setOpen(a)} />)}
+            {pastOnes.map(a => <Row key={a.path} a={a} pt={pt} fact={facts?.get(a.path)} onOpen={() => setOpen(a)} />)}
           </Band>
         )}
         {unlistedWrites && (
@@ -304,7 +325,18 @@ function Band({ label, children }: { label?: string; children: React.ReactNode }
   )
 }
 
-function Row({ a, pt, onOpen }: { a: Artifact; pt: boolean; onOpen: () => void }) {
+/** A size a person reads. Two figures is all "how big is this" needs. */
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function Row({ a, pt, fact, onOpen }: {
+  a: Artifact; pt: boolean
+  fact?: { bytes: number; scope: 'project' | 'temp' }
+  onOpen: () => void
+}) {
   return (
     <button
       onClick={onOpen}
@@ -329,15 +361,22 @@ function Row({ a, pt, onOpen }: { a: Artifact; pt: boolean; onOpen: () => void }
         }}>{a.dir}</span>
         {/* The live row says what it is DOING; the others say how much they were touched, and only
             when it was more than once — "1 edit" is noise on every row that has one. */}
-        {a.live ? (
-          <span style={{ fontSize: 10.5, color: 'var(--anthropic-orange)' }}>
-            {pt ? 'escrevendo…' : 'writing…'}
-          </span>
-        ) : a.touches > 1 ? (
-          <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
-            {a.touches} {pt ? 'edições' : 'edits'}
-          </span>
-        ) : null}
+        {/* THE FACTS, on one line: how big, how many times it was touched, and whether it is the
+            project's or scratch. The scope is said only for TEMP — everything else is the project,
+            and a badge on every row would be noise on the common case. */}
+        <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+          {a.live && (
+            <span style={{ color: 'var(--anthropic-orange)' }}>{pt ? 'escrevendo…' : 'writing…'}</span>
+          )}
+          {fact && <span style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtBytes(fact.bytes)}</span>}
+          {a.touches > 1 && <span>{a.touches} {pt ? 'edições' : 'edits'}</span>}
+          {fact?.scope === 'temp' && (
+            <span style={{
+              padding: '0 5px', borderRadius: 4, fontSize: 9.5, fontWeight: 700, letterSpacing: 0.3,
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+            }}>{pt ? 'temporário' : 'temp'}</span>
+          )}
+        </span>
       </span>
     </button>
   )

@@ -54,6 +54,12 @@ export function withinDirectory(path: string, dir: string): boolean {
 export function planArtifactRead({ path, cwd, allowed }: ArtifactReadRequest): ArtifactReadPlan {
   if (path === '' || !allowed.includes(path)) return { ok: false, reason: 'not-touched' }
   if (path === cwd) return { ok: false, reason: 'not-a-file' }
+  // THE SESSION'S FOLDER, AND NOTHING ELSE. Admitting the system temp directory as a second root
+  // was tried and reverted: it is a shared directory, and widening the guard to all of it defeats
+  // the symlink-escape check for any session whose own folder sits under it — which the probe
+  // sessions this product creates all do. `artifact-web.test.ts` catches exactly that, and the
+  // test is right. The allowlist proves the session WROTE a path; this second gate is what stops a
+  // path it wrote from resolving somewhere it should not be read from.
   if (!withinDirectory(path, cwd)) return { ok: false, reason: 'outside-cwd' }
   return { ok: true, path }
 }
