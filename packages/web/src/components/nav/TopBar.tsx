@@ -47,16 +47,6 @@ export interface TopBarProps {
    * self-centring max-width row must not have.
    */
   trailingFlush?: boolean
-  /**
-   * A full-width band drawn UNDER the control row, inside this same fixed strip.
-   *
-   * The active-filter chips live here: up to ten rows, one per dimension, which is what makes them
-   * unfittable on the 44px line and exactly why they were asked for back — "uma barrinha que cresce
-   * pra baixo e vai mostrando os filtros". So the strip's `height` stops being its height and
-   * becomes its MINIMUM: the row keeps it, the band adds whatever it needs, and the caller measures
-   * the result to offset the body. Absent and the strip is the single row it always was.
-   */
-  below?: React.ReactNode
 }
 
 const iconBtn: React.CSSProperties = {
@@ -66,7 +56,7 @@ const iconBtn: React.CSSProperties = {
   transition: 'background 0.15s, color 0.15s',
 }
 
-export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, onSearch, trailing, trailingFlush = false, below }: TopBarProps) {
+export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, onSearch, trailing, trailingFlush = false }: TopBarProps) {
   const pt = lang === 'pt'
 
   const hover = (on: boolean) => (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -78,10 +68,8 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
   return (
     <div
       style={{
-        // `minHeight`, not `height`: the strip grows downward for `below`. It stays FIXED, so the
-        // band scrolls with nothing and the body is offset by the measured total.
-        position: 'fixed', top: 0, left: 0, right: 0, minHeight: height, zIndex: 300,
-        display: 'flex', flexDirection: 'column',
+        position: 'fixed', top: 0, left: 0, right: 0, height, zIndex: 300,
+        display: 'flex', alignItems: 'center',
         // The strip itself pads NOTHING. Its two columns are the aside's column and the page's,
         // and each pads itself the way the thing beneath it does — which is what lets a row drawn
         // in the remainder line up with the body without knowing anything about this component.
@@ -89,9 +77,6 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
         background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)',
       }}
     >
-      {/* Row one — the controls. Exactly `height` tall whatever the band below does, so the mark,
-          the toggle and the session's own title never move when a filter is added. */}
-      <div style={{ display: 'flex', alignItems: 'center', height, flexShrink: 0, minWidth: 0 }}>
       {/* The ASIDE's column, continued upward: EXACTLY its width, its own horizontal padding and
           its own right border, so the strip's left cell and the sidebar below it read as one
           column — and so the remainder is exactly `<main>`'s content box.
@@ -171,11 +156,6 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
           {trailing}
         </div>
       )}
-      </div>
-
-      {/* Row two — the band. It renders even when empty: its host is measured by the caller, and a
-          node that comes and goes makes that measurement flicker instead of settling at zero. */}
-      {below}
     </div>
   )
 }

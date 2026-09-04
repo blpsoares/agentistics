@@ -1528,35 +1528,17 @@ export default function AppLayout() {
   const inSessionsWorkspace = modeOfPath(location.pathname) === 'sessions'
 
   /**
-   * THE ACTIVE-FILTER BAND — the strip's second row, and the height it costs.
+   * The fixed strip is ONE row again.
    *
-   * The chips were briefly squeezed onto the strip's own 44px line, and that was wrong twice over:
-   * they crowded the view tabs until the two overlapped, and a line has no room for the one thing
-   * chips are for — ten rows, one per dimension, saying WHICH filters are on. So they are back
-   * where they were asked to be, in a band that grows downward under the controls and collapses
-   * from its own handle, and `FiltersBar` portals them into this host (see its `chipsHost`).
-   *
-   * The band lives INSIDE the fixed strip, so everything positioned below the strip has to follow
-   * it. That travels as a CSS variable rather than a prop: `SideNav` and the page shell are
-   * separate components that read the old constant directly, and threading a measured number
-   * through each of them is three more places for the header and the body to disagree about where
-   * the header ends. The variable is set here, in the one place that measures it.
+   * The active filters were briefly a full-width band inside it, which grew the strip and made
+   * every element positioned below it depend on a measured height. They now drop from the filter
+   * region itself (see `FiltersBar`'s "see active filters" panel), so the strip is a constant again
+   * — but the variable stays, because the sidebar and the page shell read it now and one place
+   * deciding where the header ends is the point of it.
    */
-  const [chipsHostEl, setChipsHostEl] = useState<HTMLDivElement | null>(null)
-  const [chipsBandH, setChipsBandH] = useState(0)
   useEffect(() => {
-    if (!chipsHostEl) { setChipsBandH(0); return }
-    const read = () => setChipsBandH(chipsHostEl.offsetHeight)
-    read()
-    const ro = new ResizeObserver(read)
-    ro.observe(chipsHostEl)
-    return () => ro.disconnect()
-  }, [chipsHostEl])
-  /** What the fixed strip actually occupies right now: the control row plus whatever the band adds. */
-  const headerH = isMobile ? 0 : TOPBAR_H + chipsBandH
-  useEffect(() => {
-    document.documentElement.style.setProperty('--ag-topbar-h', `${headerH}px`)
-  }, [headerH])
+    document.documentElement.style.setProperty('--ag-topbar-h', `${isMobile ? 0 : TOPBAR_H}px`)
+  }, [isMobile])
 
   /**
    * How much width the filter bar actually has in the strip, and what it therefore draws.
@@ -2695,16 +2677,14 @@ export default function AppLayout() {
       {/* THE FILTERS, in the centre. They are the element that gives up width FIRST: the title
           identifies what you are looking at and the actions are how you act on it, while a narrowed
           filter bar is still a filter bar — its own `+ Filtro` popover holds everything it drops. */}
-      {/* `overflow: hidden` is the NO-OVERLAP guarantee, not a nicety. The bar's inline row is
-          `nowrap` and its controls do not shrink, so on a narrow strip it painted straight over the
-          view tabs to its right — the "Chat" label rendered on top of itself, reported from a
-          1920 screen. A flex child that overflows draws outside its box unless it is told not to;
-          told not to, the middle simply runs out of room and the cluster to its right keeps every
-          pixel it was given. */}
-      <div ref={setFilterSlotEl} style={{ flex: 1, minWidth: 90, display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
+      {/* NO `overflow: hidden` HERE. It was added as the no-overlap guarantee and it also clipped
+          the bar's own popovers — the `+ Filtro` menu opened into a hidden box, so the button read
+          as dead. A clipping ancestor cannot tell a popover from an overflowing row. The overlap is
+          prevented where it is caused instead: `headerFit` collapses the date block before the row
+          can outgrow this slot, and the bar's own root is capped at 100%. */}
+      <div ref={setFilterSlotEl} style={{ flex: 1, minWidth: 90, display: 'flex', justifyContent: 'center' }}>
         <FiltersBar
           inline
-          chipsHost={chipsHostEl}
           dateCompact={stripFit.date === 'compact'}
           only={SESSIONS_FILTER_DIMS}
           activeOnly={activeOnly}
@@ -2778,11 +2758,10 @@ export default function AppLayout() {
       {/* THE FILTERS give up width FIRST. The cluster to their right is how you act on the page
           and how you read what it currently totals; a narrowed filter bar is still a filter bar,
           because its own `+ Filtro` popover holds every row it drops. */}
-      {/* Same no-overlap guarantee as the sessions strip — see the note there. */}
-      <div ref={setFilterSlotEl} style={{ flex: 1, minWidth: 90, display: 'flex', overflow: 'hidden' }}>
+      {/* No clipping here either — see the sessions strip's note. */}
+      <div ref={setFilterSlotEl} style={{ flex: 1, minWidth: 90, display: 'flex' }}>
         <FiltersBar
           inline
-          chipsHost={chipsHostEl}
           dateCompact={stripFit.date === 'compact'}
           only={filterDimsForRoute}
           // THE SWITCH BELONGS ON BOTH PAGES — the user asked for exactly that, and Task 8 put it
@@ -3083,16 +3062,6 @@ export default function AppLayout() {
             ? { onSearch: () => window.dispatchEvent(new CustomEvent('agentistics:focus-session-search')) }
             : {})}
           {...(stripTrailing ? { trailing: stripTrailing, trailingFlush: true } : {})}
-          /* The band the chips are portalled into. Always mounted — a host that appears and
-             disappears makes the height measurement flicker instead of settling at zero — and
-             padded to match the body's own left inset so a chip row starts on the line the content
-             under it does. */
-          below={
-            <div
-              ref={setChipsHostEl}
-              style={{ width: '100%', padding: `0 ${PAGE_INSET}px`, boxSizing: 'border-box' }}
-            />
-          }
         />
       )}
       {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
