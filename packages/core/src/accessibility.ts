@@ -113,11 +113,36 @@ export function sanitizeAccessibilityPrefs(input: unknown): AccessibilityPrefs {
     if (!Array.isArray(raw)) continue
     const taken = new Set<string>()
     const lenses: MagnifierLens[] = []
+
+    // Two-pass approach: first reserve explicit ids (Finding 2), then mint ids for entries that need one.
+    // This ensures explicit ids are not clobbered by auto-minted ones.
+
+    // Pass 1: Reserve all explicit, non-empty, non-duplicate ids.
+    const explicitIds = new Set<string>()
     for (const item of raw) {
-      const io = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+      if (!item || typeof item !== 'object') continue
+      const io = item as Record<string, unknown>
+      const id = typeof io.id === 'string' && io.id.trim() !== '' ? io.id.trim() : ''
+      if (id !== '' && !explicitIds.has(id)) {
+        explicitIds.add(id)
+        taken.add(id)
+      }
+    }
+
+    // Pass 2: Process all items, skipping non-objects (Finding 1), and minting ids as needed (Finding 2).
+    for (const item of raw) {
+      // Skip items that are not non-null objects. Don't sanitize them into default lenses.
+      if (!item || typeof item !== 'object') continue
+
+      const io = item as Record<string, unknown>
       const style = sanitizeStyle(io, newLensDefaults)
       let id = typeof io.id === 'string' && io.id.trim() !== '' ? io.id.trim() : ''
-      if (id === '' || taken.has(id)) id = mintLensId(taken)
+      // If no explicit id, or if this explicit id is a duplicate (already used in this page), mint a new one.
+      if (id === '' || !explicitIds.has(id)) {
+        id = mintLensId(taken)
+      }
+      // Mark this explicit id as used (prevents duplicates from using the same reserved id)
+      explicitIds.delete(id)
       taken.add(id)
       lenses.push({
         ...style,

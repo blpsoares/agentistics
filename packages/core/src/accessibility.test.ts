@@ -90,4 +90,73 @@ describe('sanitizeAccessibilityPrefs', () => {
     const once = sanitizeAccessibilityPrefs(messy)
     expect(sanitizeAccessibilityPrefs(once)).toEqual(once)
   })
+
+  test('Finding 1: garbage array items are skipped, not turned into default lenses', () => {
+    // A page of only non-object entries should yield no page key at all
+    const out1 = sanitizeAccessibilityPrefs({
+      lensesByPage: { '/costs': ['garbage', 42, null, undefined, true] },
+    })
+    expect(out1.lensesByPage).toEqual({})
+
+    // A page mixing one real lens with garbage entries should yield exactly that one lens
+    const out2 = sanitizeAccessibilityPrefs({
+      lensesByPage: {
+        '/mixed': [
+          'garbage',
+          { id: 'lens-real', x: 10, y: 20 },
+          42,
+          null,
+          undefined,
+          true,
+        ],
+      },
+    })
+    expect(out2.lensesByPage['/mixed']).toBeDefined()
+    expect(out2.lensesByPage['/mixed']!.length).toBe(1)
+    expect(out2.lensesByPage['/mixed']![0]!.id).toBe('lens-real')
+  })
+
+  test('Finding 2: explicit ids are reserved before auto-minting new ones', () => {
+    // The case from the finding: [anonymous, anonymous, explicit 'lens-2']
+    // should keep the explicit 'lens-2' and give the anonymous entries different ids
+    const out = sanitizeAccessibilityPrefs({
+      lensesByPage: {
+        '/test': [
+          { x: 0, y: 0 }, // anonymous
+          { x: 1, y: 1 }, // anonymous
+          { id: 'lens-2', x: 2, y: 2 }, // explicit
+        ],
+      },
+    })
+    const lenses = out.lensesByPage['/test']!
+    expect(lenses.length).toBe(3)
+
+    // All three ids should be distinct
+    const ids = lenses.map(l => l.id)
+    expect(new Set(ids).size).toBe(3)
+
+    // The explicit id 'lens-2' should be preserved
+    expect(ids).toContain('lens-2')
+
+    // The anonymous entries should get their own ids
+    const anonIds = ids.filter(id => id !== 'lens-2')
+    expect(anonIds.length).toBe(2)
+    expect(anonIds[0]).toBe('lens-1')
+    expect(anonIds[1]).toBe('lens-3')
+  })
+
+  test('idempotency still holds with explicit ids and garbage entries', () => {
+    const messy = {
+      lensesByPage: {
+        '/test': [
+          'garbage',
+          { x: 0, y: 0 },
+          { id: 'custom-id', x: 1, y: 1 },
+          42,
+        ],
+      },
+    }
+    const once = sanitizeAccessibilityPrefs(messy)
+    expect(sanitizeAccessibilityPrefs(once)).toEqual(once)
+  })
 })
