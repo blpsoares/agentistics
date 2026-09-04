@@ -1,20 +1,29 @@
 /**
  * HarnessMark — the assistant's mark beside its messages.
  *
- * WHAT IS AND IS NOT A LOGO HERE. This repository ships exactly one vendor asset,
- * `public/claudeLogo.png`, and that is the one used for Claude Code. For the other five there is no
- * asset in the tree, so they get a MONOGRAM in the harness's own brand colour — a letter, plainly a
- * placeholder. That is deliberate: drawing an approximation of somebody's mark and presenting it as
- * their logo is worse than obviously not being one, because a reader has no way to tell it is wrong.
+ * These are the vendors' own marks, sourced in `public/harness/SOURCES.md` — a file with no
+ * recorded source may not be committed. A harness absent from `MARK_FILE` falls back to a MONOGRAM
+ * in the harness's own brand colour — a letter, plainly a placeholder — which STAYS as the fallback
+ * for the next harness added before its mark is found. Deleting it would render a broken image.
  *
- * To ship a real mark, drop the file in `public/` and add it to `MARK_FILE`. Nothing else changes.
+ * To ship a real mark, drop the file in `public/harness/`, record its source in `SOURCES.md`, and
+ * add it here. Nothing else changes.
  */
 
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 
-/** Vendor assets present in this repository. A harness absent here falls back to its monogram. */
+/**
+ * Vendor assets present in this repository, with their provenance in
+ * `public/harness/SOURCES.md`. A harness absent here falls back to its monogram — which STAYS,
+ * for the next harness added before its mark is found. Deleting it would render a broken image.
+ */
 const MARK_FILE: Record<string, string> = {
-  claude: '/claudeLogo.png',
+  claude: '/harness/claude.svg',
+  codex: '/harness/codex.svg',
+  gemini: '/harness/gemini.svg',
+  copilot: '/harness/copilot.svg',
+  antigravity: '/harness/antigravity.png',
+  kimi: '/harness/kimi.png',
 }
 
 /** The letter a monogram carries. First letter of the product name, which is what people say. */
