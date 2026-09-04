@@ -33,6 +33,8 @@
  * off would be a far worse bug than the one this fixes.
  */
 
+import { parseReply, type ReplyTarget } from './replyQuote'
+
 /** The shape this module keeps for a conversation. Structural, so it never imports the chat view. */
 export interface CachedChat {
   turns: unknown[]
@@ -64,6 +66,11 @@ export function draftKey(id: string): string {
 /** …and for the files attached to that unsent message. */
 export function attachKey(id: string): string {
   return `agentistics:attached:${id}`
+}
+
+/** …and for the message that unsent one is a REPLY to. */
+export function replyKey(id: string): string {
+  return `agentistics:reply:${id}`
 }
 
 /** …and for messages SENT but not yet visible in the transcript. */
@@ -158,6 +165,20 @@ export interface SessionScratch {
   clearDraft(id: string): void
   readAttachments(id: string): ScratchAttachment[]
   writeAttachments(id: string, files: readonly ScratchAttachment[]): void
+  /**
+   * The turn the unsent message is a REPLY to.
+   *
+   * Kept beside the draft, and for the draft's own reason: the reply target CHANGES WHAT IS SENT —
+   * `quoteLines` prepends it — so restoring the words without it sends a different message from
+   * the one that was composed. That is the same half-restore the attachments above exist to
+   * prevent, reported as exactly that.
+   *
+   * It is safe to keep because it is TEXT, not a pointer: the quote is a copy of what the turn
+   * said, so it does not have to resolve against a transcript that has since been re-fetched. And
+   * it is per session id, so it can never surface over another conversation.
+   */
+  readReply(id: string): ReplyTarget | null
+  writeReply(id: string, target: ReplyTarget | null): void
   readChat(id: string): CachedChat | null
   writeChat(id: string, chat: CachedChat): void
 }
@@ -171,6 +192,7 @@ export function createSessionScratch(store: ScratchStore | null): SessionScratch
   const memoryDrafts = new Map<string, string>()
   const memoryAttached = new Map<string, ScratchAttachment[]>()
   const memoryEchoes = new Map<string, string[]>()
+  const memoryReply = new Map<string, ReplyTarget>()
 
   return {
     readDraft(id) {
@@ -224,6 +246,27 @@ export function createSessionScratch(store: ScratchStore | null): SessionScratch
       memoryAttached.set(id, list)
       if (store) {
         try { store.setItem(attachKey(id), JSON.stringify(list)) } catch { /* memory still has it */ }
+      }
+    },
+    readReply(id) {
+      if (store) {
+        try {
+          const raw = store.getItem(replyKey(id))
+          if (raw !== null) return parseReply(raw)
+        } catch { /* storage blocked — fall through to memory */ }
+      }
+      return memoryReply.get(id) ?? null
+    },
+    writeReply(id, target) {
+      if (target === null) {
+        memoryReply.delete(id)
+        if (store) { try { store.removeItem(replyKey(id)) } catch { /* nothing to do */ } }
+        return
+      }
+      const value = { role: target.role, text: target.text }
+      memoryReply.set(id, value)
+      if (store) {
+        try { store.setItem(replyKey(id), JSON.stringify(value)) } catch { /* memory still has it */ }
       }
     },
     readEchoes(id) {

@@ -28,7 +28,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ChevronUp, Loader, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
+import { ArrowDown, ChevronUp, CornerUpLeft, Loader, Mic, Paperclip, RotateCcw, Send, Square, X } from 'lucide-react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import type { FleetActionId, FleetRow } from '../../lib/fleet'
 import { ApprovalCard } from './ApprovalCard'
@@ -46,6 +46,8 @@ import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
 import {
   applySkill, emptyPickerReason, filterSkills, flattenGroups, groupSkills, slashQuery, stepSkill,
 } from '../../lib/skillMenu'
+import { quoteLines, replyAuthor, replyPreview } from '../../lib/replyQuote'
+import { HARNESS_LABELS } from '../../lib/harness'
 import { useIsMobile } from '../../hooks/useIsMobile'
 
 interface ChatPayload {
@@ -123,6 +125,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     shownId.current = session.id
     setPayload(sessionScratch.readChat(session.id) as ChatPayload | null)
     setDraft(sessionScratch.readDraft(session.id))
+    setReplyTo(sessionScratch.readReply(session.id))
   }, [session.id])
   const [sending, setSending] = useState(false)
   /** Dictation. `recognitionRef` holds the live recogniser so a second click stops it. */
@@ -365,7 +368,25 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
    * sent above what you write, which is what the assistant will actually see and is the same thing
    * mail has always done. Saying it plainly beats a UI that implies threading the session cannot do.
    */
-  const [replyTo, setReplyTo] = useState<{ role: 'user' | 'assistant'; text: string } | null>(null)
+  const [replyTo, setReplyTo] = useState<{ role: 'user' | 'assistant'; text: string } | null>(
+    () => sessionScratch.readReply(session.id),
+  )
+
+  /**
+   * Every change to the reply target, PERSISTED against the session it belongs to.
+   *
+   * IT IS KEPT, and that is a decision rather than an oversight: the quote is PREPENDED at send
+   * time, so a draft restored without its target sends a different message from the one that was
+   * composed — the same half-restore the attachments already avoid. It is safe to keep because it
+   * is TEXT and not a pointer: the quote is a copy of what the turn said, so nothing has to resolve
+   * against a transcript that has since been re-fetched. Same shape as `editDraft`, and the same
+   * reason for that shape — the id and the value are read together, so a session switch can never
+   * write one conversation's reply into another's slot.
+   */
+  const editReply = useCallback((next: { role: 'user' | 'assistant'; text: string } | null) => {
+    sessionScratch.writeReply(session.id, next)
+    setReplyTo(next)
+  }, [session.id])
   /**
    * Files written to THIS MACHINE, whose paths go into the message.
    *
@@ -423,15 +444,17 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
    * cache exists to remove came straight back. It restores from `sessionScratch` instead, which is
    * the single place a switch is handled now.
    *
-   * What is genuinely per-conversation and NOT restorable still goes: the scroll position (opening
-   * mid-history is disorienting), the reply target (it names a turn in the other conversation), and
-   * the ECHOES — a message sent to one session and not yet in its transcript, which drawn under
-   * another session's name is the phantom message this product has been chasing.
+   * What is genuinely per-conversation and NOT restorable still goes: the scroll position, because
+   * opening mid-history is disorienting. Everything else is READ BACK from the other session's own
+   * slot — including the reply target, which used to be blanked here: it names a turn in the OTHER
+   * conversation, so it may never survive the switch, but each session keeps its own and gets it
+   * back. What must never happen is one session's quote appearing under another's name, and a
+   * per-id read is what rules that out.
    */
   useEffect(() => {
     landedRef.current = false
     setAtTail(true)
-    setReplyTo(null)
+    setReplyTo(sessionScratch.readReply(session.id))
     setEcho(sessionScratch.readEchoes(session.id))
     setPayload(sessionScratch.readChat(session.id) as ChatPayload | null)
     setDraft(sessionScratch.readDraft(session.id))
@@ -523,8 +546,8 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
 
   /** ONE stable reference for every bubble's reply button — see `ChatBubble`'s memo. */
   const onReplyToTurn = useCallback((t: ChatTurn) => {
-    setReplyTo({ role: t.role, text: t.text }); setAtTail(true); toTail()
-  }, [toTail])
+    editReply({ role: t.role, text: t.text }); setAtTail(true); toTail()
+  }, [toTail, editReply])
 
   /**
    * Land at the END on first paint, then follow the tail only while the reader is already there.
@@ -697,7 +720,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       sessionScratch.clearDraft(session.id)
       setAttached([])
       sessionScratch.writeAttachments(session.id, [])
-      setReplyTo(null)
+      editReply(null)
       setAtTail(true)
       toTail()
       setNotice(null)
@@ -945,7 +968,13 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                 </p>
               )}
 
-              {/* What is being replied to, above the field, with a way to drop it. */}
+              {/* WHO is being replied to, and the first line or two of what they said, with an x
+                  that drops it. The name is the whole point of this bar: "Replying to" over an
+                  excerpt leaves the reader to work out from the wording whether they are quoting
+                  themselves or the assistant, and on a short line those look identical. Both
+                  decisions — the name and how much of the message is shown — are in
+                  `replyQuote.ts`, which is also what composes the `> ` block that actually
+                  travels. */}
               {replyTo && (
                 <div style={{
                   display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 8,
@@ -953,26 +982,37 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                   background: 'var(--bg-elevated)',
                   borderLeft: '3px solid var(--anthropic-orange)',
                 }}>
+                  <CornerUpLeft size={13} style={{ flexShrink: 0, marginTop: 3, color: 'var(--anthropic-orange)' }} />
                   <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--anthropic-orange)' }}>
-                      {pt ? 'Respondendo' : 'Replying to'}
+                      {pt ? 'Respondendo a' : 'Replying to'}
+                      {' '}
+                      {replyAuthor(
+                        replyTo.role,
+                        (HARNESS_LABELS as Record<string, string>)[session.harness],
+                        pt ? 'pt' : 'en',
+                      )}
                     </span>
                     <span style={{
                       fontSize: 11.5, lineHeight: 1.45, color: 'var(--text-tertiary)',
-                      display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>
-                      {replyTo.text}
+                      {replyPreview(replyTo.text)}
                     </span>
                   </span>
                   <button
-                    onClick={() => setReplyTo(null)}
+                    onClick={() => editReply(null)}
                     aria-label={pt ? 'Cancelar resposta' : 'Cancel reply'}
+                    title={pt ? 'Cancelar resposta' : 'Cancel reply'}
                     style={{
-                      display: 'flex', border: 'none', background: 'transparent', padding: 2,
-                      color: 'var(--text-tertiary)', cursor: 'pointer', flexShrink: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      border: 'none', background: 'transparent', padding: 2, flexShrink: 0,
+                      // 44px of finger on a phone; the icon inside stays the same size.
+                      minWidth: isMobile ? 44 : 22, minHeight: isMobile ? 44 : 22,
+                      color: 'var(--text-tertiary)', cursor: 'pointer',
                     }}
                   >
-                    <X size={12} />
+                    <X size={13} />
                   </button>
                 </div>
               )}
@@ -1452,20 +1492,6 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       </div>
     </div>
   )
-}
-
-/**
- * A quoted excerpt, `> `-prefixed, bounded.
- *
- * Bounded because the quote is spent CONTEXT: a reply that echoes forty lines back at the session
- * costs it window for nothing it does not already have. Four lines names the message; an ellipsis
- * says there was more.
- */
-function quoteLines(text: string): string {
-  const lines = text.trim().split('\n')
-  const head = lines.slice(0, 4).map(l => `> ${l}`)
-  if (lines.length > 4) head.push('> …')
-  return head.join('\n')
 }
 
 /** Whitespace-insensitive, because the harness re-wraps what it stores. */

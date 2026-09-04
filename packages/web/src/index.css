@@ -574,9 +574,46 @@ button:focus-within .ag-row-pin,
 }
 
 /* The bubble's reply control. Revealed with the bubble — a column of controls down a conversation
-   competes with the words — and always reachable by keyboard. */
+   competes with the words — and always reachable by keyboard.
+
+   ITS WHOLE APPEARANCE IS HERE, not on the element. It used to carry `opacity: 0` as an inline
+   style, which beats any stylesheet rule without `!important` — so the reveal below could never
+   fire and the control was invisible on every message, at every width, while still being clickable
+   by anyone who happened to guess where it was. */
+.ag-bubble-reply {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 7px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
 .ag-bubble:hover .ag-bubble-reply,
 .ag-bubble:focus-within .ag-bubble-reply { opacity: 1; }
+
+/* A touch screen has no hover and no right-click, so on a phone this is the ONLY way to reply and
+   it is always visible. The BOX stays 24px — a 44px square parked on the corner of every message
+   would sit on top of the words — while the pseudo-element gives the finger the 44px target the
+   box does not have. */
+@media (hover: none) {
+  .ag-bubble-reply { opacity: 1; }
+  .ag-bubble-reply::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+}
 
 /*
  * The composer's ground.
