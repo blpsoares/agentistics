@@ -764,37 +764,6 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
           </button>
         )}
 
-        {/* SEE ACTIVE FILTERS — the inline bar's way into the chip rows.
-            It appears only when there is something to see, beside the button that put it there, and
-            it drops a panel from under the filter region rather than a band across the whole app.
-            The count is on it, so the button says how much it is hiding. */}
-        {inline && activeFilterCount > 0 && (
-          <button
-            onClick={() => setActiveOpen(o => !o)}
-            title={lang === 'pt' ? 'Ver filtros ativos' : 'See active filters'}
-            style={{
-              ...CTL, gap: 5, flexShrink: 0,
-              border: '1px solid rgba(217,119,6,0.45)',
-              background: activeOpen ? 'var(--anthropic-orange-dim)' : 'transparent',
-              color: 'var(--anthropic-orange)', fontWeight: 600,
-            }}
-          >
-            {activeFiltersIcon
-              ? <SlidersHorizontal size={12} style={{ flexShrink: 0 }} />
-              : (
-                <span style={{ whiteSpace: 'nowrap' }}>
-                  {lang === 'pt' ? 'Ver filtros ativos' : 'See active filters'}
-                </span>
-              )}
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              minWidth: 15, height: 15, borderRadius: 8, padding: '0 4px',
-              background: 'var(--anthropic-orange)', color: 'white',
-              fontSize: 10, fontWeight: 700, lineHeight: 1, flexShrink: 0,
-            }}>{activeFilterCount}</span>
-            <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.8, transform: activeOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
-          </button>
-        )}
 
         {/* THE PANEL. It hangs from the bottom edge of the strip, spans exactly the filter region
             (`left: 0; right: 0` against the bar's own root) and is rounded only at the bottom, so it
@@ -1400,6 +1369,38 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             </div>
           )}
         </div>
+
+        {/* SEE ACTIVE FILTERS — the inline bar's way into the chip rows.
+            It appears only when there is something to see, beside the button that put it there, and
+            it drops a panel from under the filter region rather than a band across the whole app.
+            The count is on it, so the button says how much it is hiding. */}
+        {inline && activeFilterCount > 0 && (
+          <button
+            onClick={() => setActiveOpen(o => !o)}
+            title={lang === 'pt' ? 'Ver filtros ativos' : 'See active filters'}
+            style={{
+              ...CTL, gap: 5, flexShrink: 0,
+              border: '1px solid rgba(217,119,6,0.45)',
+              background: activeOpen ? 'var(--anthropic-orange-dim)' : 'transparent',
+              color: 'var(--anthropic-orange)', fontWeight: 600,
+            }}
+          >
+            {activeFiltersIcon
+              ? <SlidersHorizontal size={12} style={{ flexShrink: 0 }} />
+              : (
+                <span style={{ whiteSpace: 'nowrap' }}>
+                  {lang === 'pt' ? 'Ver filtros ativos' : 'See active filters'}
+                </span>
+              )}
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              minWidth: 15, height: 15, borderRadius: 8, padding: '0 4px',
+              background: 'var(--anthropic-orange)', color: 'white',
+              fontSize: 10, fontWeight: 700, lineHeight: 1, flexShrink: 0,
+            }}>{activeFilterCount}</span>
+            <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.8, transform: activeOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+          </button>
+        )}
 
         {/* Live summary of the currently-filtered data — fills the right side of the bar
             (desktop only; hidden in the compact/mobile header). */}

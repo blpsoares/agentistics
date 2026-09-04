@@ -337,47 +337,9 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
           display: 'flex', alignItems: 'center', gap: 10,
           padding: '16px 20px', borderBottom: '1px solid var(--border)',
         }}>
-          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
+          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', flex: 1 }}>
             {pt ? 'Nova sessão' : 'New session'}
           </h2>
-          {/* WHERE YOU ARE, and how far there is to go. A step you have PASSED is clickable — going
-              back to change an answer is an ordinary thing to want, and forcing it through "Back"
-              three times is the wizard being pleased with itself. A step AHEAD is not: it may be
-              gated by an answer this one has not given yet, and `stepReady` is what decides that. */}
-          <nav aria-label={pt ? 'Etapas' : 'Steps'} style={{ display: 'flex', alignItems: 'center', gap: 5, flex: 1 }}>
-            {STEP_ORDER.map((id, i) => {
-              const done = i < stepIndex
-              const here = id === step
-              return (
-                <button
-                  key={id}
-                  onClick={() => { if (done) setStep(id) }}
-                  disabled={!done && !here}
-                  aria-current={here ? 'step' : undefined}
-                  title={STEP_TITLE[id]}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
-                    borderRadius: 999, border: '1px solid ' + (here ? 'var(--anthropic-orange)' : 'transparent'),
-                    background: here ? 'var(--anthropic-orange-dim)' : 'transparent',
-                    color: here ? 'var(--anthropic-orange)' : done ? 'var(--text-secondary)' : 'var(--text-tertiary)',
-                    cursor: done ? 'pointer' : 'default',
-                    fontFamily: 'inherit', fontSize: 11.5, fontWeight: here ? 700 : 500,
-                  }}
-                >
-                  <span style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    width: 16, height: 16, borderRadius: 999, flexShrink: 0, fontSize: 9.5, fontWeight: 700,
-                    background: done ? 'var(--anthropic-orange)' : here ? 'transparent' : 'var(--bg-elevated)',
-                    color: done ? '#fff' : 'inherit',
-                    border: here ? '1px solid currentColor' : 'none',
-                  }}>
-                    {done ? <Check size={10} /> : i + 1}
-                  </span>
-                  {STEP_TITLE[id]}
-                </button>
-              )
-            })}
-          </nav>
           <button
             onClick={onClose}
             aria-label={pt ? 'Fechar' : 'Close'}
@@ -390,6 +352,70 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
             <X size={16} />
           </button>
         </header>
+
+        {/* WHERE YOU ARE, in a band of its own.
+            It was a row of pills crammed beside the title, which is why it read as clutter: four
+            labelled controls competing with the heading for one line. A wizard's progress is not a
+            control group — it is a TRACK you move along, so it is drawn as one, full width, with
+            the line between two steps carrying the state of the passage between them.
+            A step already PASSED is clickable: going back to change one answer is ordinary, and
+            making it cost three presses of Back is the wizard being pleased with itself. A step
+            AHEAD is not — it may be gated by an answer this one has not given, which `stepReady`
+            decides. */}
+        <nav aria-label={pt ? 'Etapas' : 'Steps'} style={{
+          display: 'flex', alignItems: 'flex-start',
+          padding: '16px 24px 14px', borderBottom: '1px solid var(--border)',
+        }}>
+          {STEP_ORDER.map((id, i) => {
+            const done = i < stepIndex
+            const here = id === step
+            const reachable = done
+            return (
+              <div key={id} style={{ display: 'flex', alignItems: 'flex-start', flex: i === STEP_ORDER.length - 1 ? '0 0 auto' : 1, minWidth: 0 }}>
+                <button
+                  onClick={() => { if (reachable) setStep(id) }}
+                  disabled={!reachable && !here}
+                  aria-current={here ? 'step' : undefined}
+                  style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                    border: 'none', background: 'transparent', padding: 0, flexShrink: 0,
+                    cursor: reachable ? 'pointer' : 'default', fontFamily: 'inherit',
+                  }}
+                >
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 26, height: 26, borderRadius: 999, fontSize: 12, fontWeight: 700,
+                    boxSizing: 'border-box',
+                    background: done ? 'var(--anthropic-orange)'
+                      : here ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+                    border: here ? '1.5px solid var(--anthropic-orange)' : '1.5px solid transparent',
+                    color: done ? '#fff' : here ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                    transition: 'background 0.18s, color 0.18s, border-color 0.18s',
+                  }}>
+                    {done ? <Check size={13} strokeWidth={3} /> : i + 1}
+                  </span>
+                  <span style={{
+                    fontSize: 11, whiteSpace: 'nowrap',
+                    fontWeight: here ? 700 : 500,
+                    color: here ? 'var(--text-primary)' : done ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+                  }}>
+                    {STEP_TITLE[id]}
+                  </span>
+                </button>
+                {/* The line BETWEEN two steps carries the state of the passage between them: filled
+                    once you have crossed it. It sits on the dot's centre line, not the label's. */}
+                {i < STEP_ORDER.length - 1 && (
+                  <span aria-hidden style={{
+                    flex: 1, height: 2, margin: '12px 8px 0', borderRadius: 2, minWidth: 12,
+                    background: done ? 'var(--anthropic-orange)' : 'var(--border)',
+                    opacity: done ? 0.55 : 1,
+                    transition: 'background 0.18s',
+                  }} />
+                )}
+              </div>
+            )
+          })}
+        </nav>
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
           {/* STEP 1 — WHO. The assistant, and the two answers that only exist once one is

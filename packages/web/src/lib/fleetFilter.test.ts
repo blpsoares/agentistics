@@ -263,9 +263,9 @@ describe('SESSION_FILTER_DIMS', () => {
       repoRow('b', 'org/other', { harness: 'codex', project: 'q', model: 'gpt', state: 'waiting' }),
     ]
     // Each dimension must actually narrow, or it has no business being in the menu.
-    expect(filterFleet({ rows, filters: { harnesses: ['claude'] } as never }).rows).toHaveLength(1)
-    expect(filterFleet({ rows, filters: { repos: ['org/r'] } as never }).rows).toHaveLength(1)
-    expect(filterFleet({ rows, filters: { projects: ['p'] } as never }).rows).toHaveLength(1)
-    expect(filterFleet({ rows, filters: { models: ['opus'] } as never }).rows).toHaveLength(1)
+    expect(filterFleet({ rows, filters: { harnesses: ['claude'] } as never, activeOnly: false }).rows).toHaveLength(1)
+    expect(filterFleet({ rows, filters: { repos: ['org/r'] } as never, activeOnly: false }).rows).toHaveLength(1)
+    expect(filterFleet({ rows, filters: { projects: ['p'] } as never, activeOnly: false }).rows).toHaveLength(1)
+    expect(filterFleet({ rows, filters: { models: ['opus'] } as never, activeOnly: false }).rows).toHaveLength(1)
   })
 })
