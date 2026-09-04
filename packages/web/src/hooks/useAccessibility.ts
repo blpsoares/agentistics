@@ -27,6 +27,18 @@ export interface A11yState {
   lenses: MagnifierLens[]
   selectedId: string | null
   followOn: boolean
+  /**
+   * True while every PLACED lens on this page is hidden — a "let me see the page underneath for
+   * a second" toggle. It touches no lens's x/y/zoom/pinned and writes nothing to `lensesByPage`
+   * (see `toggleLensesHidden` below and `MagnifierLayer`, which simply skips rendering the placed
+   * lenses while this is true). It is NOT persisted, exactly like `followOn`: a reload always
+   * starts with lenses showing. Persisting it would mean a user who hid their lenses, closed the
+   * tab and came back later finds an apparently empty page — with real work sitting there,
+   * invisible, and no visible control hinting that anything is there to bring back. A transient
+   * "off" is safe to forget; a transient "on" (`followOn`) is safe to forget for the same reason
+   * in reverse — both default to the state that shows the least on a fresh load.
+   */
+  lensesHidden: boolean
   announcement: string
   /**
    * The mirror's current re-sync interval, in ms — published by `MagnifierLayer` (which owns the
@@ -45,6 +57,7 @@ export interface A11yState {
   setAllPinned(pinned: boolean): void
   select(id: string | null): void
   toggleFollow(): void
+  toggleLensesHidden(): void
   announce(text: string): void
   setMirrorIntervalMs(ms: number | null): void
 }
@@ -61,6 +74,7 @@ export function useAccessibility(identity: string | undefined): A11yState {
   const [loaded, setLoaded] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [followOn, setFollowOn] = useState(false)
+  const [lensesHidden, setLensesHidden] = useState(false)
   const [announcement, setAnnouncement] = useState('')
   const [mirrorIntervalMs, setMirrorIntervalMs] = useState<number | null>(null)
   const [vp, setVp] = useState(viewport)
@@ -165,6 +179,7 @@ export function useAccessibility(identity: string | undefined): A11yState {
     lenses,
     selectedId,
     followOn,
+    lensesHidden,
     announcement,
     mirrorIntervalMs,
     setEnabled: on => commit({ ...prefsRef.current, enabled: on }),
@@ -205,6 +220,9 @@ export function useAccessibility(identity: string | undefined): A11yState {
     },
     select: setSelectedId,
     toggleFollow: () => setFollowOn(v => !v),
+    // Deliberately NOT routed through `commit()` — see the `lensesHidden` doc comment above. This
+    // is UI state exactly like `followOn`, never a preference.
+    toggleLensesHidden: () => setLensesHidden(v => !v),
     announce: setAnnouncement,
     setMirrorIntervalMs,
   }

@@ -9,6 +9,10 @@ export interface A11yText {
   headerHint: string
   /** Tap-to-open hint on touch, where a tap opens the menu instead of creating a lens. */
   headerTitleMobile: string
+  /** The hide/show-all-lenses toggle, beside the header button. Differs by state so the effect is
+   *  never something you can only discover by pressing it. */
+  hideLenses: string
+  showLenses: string
   newLens: string
   lensesHere: string
   noLensesHere: string
@@ -69,6 +73,8 @@ export function a11yText(lang: 'pt' | 'en'): A11yText {
       ? 'Clique para criar uma lupa · botão direito para o menu'
       : 'Click to create a lens · right-click for the menu',
     headerTitleMobile: pt ? 'Toque para abrir o menu de lupas' : 'Tap to open the magnifiers menu',
+    hideLenses: pt ? 'Ocultar lupas desta página' : 'Hide lenses on this page',
+    showLenses: pt ? 'Mostrar lupas desta página' : 'Show lenses on this page',
     newLens: pt ? 'Nova lupa' : 'New lens',
     lensesHere: pt ? 'Lupas desta página' : 'Lenses on this page',
     noLensesHere: pt ? 'Nenhuma lupa nesta página.' : 'No lenses on this page.',

@@ -12,6 +12,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { applyLensKey, clampLens, stageTransform } from '../../lib/magnifier'
 import { startMirrorScheduler, createMirrorHost, type MirrorScheduler } from '../../lib/magnifierMirror'
 import { a11yText } from './i18n'
+import { HideLensesButton } from './HideLensesButton'
 import { Lens } from './Lens'
 import { LensMenu } from './LensMenu'
 import { MagnifierButton } from './MagnifierButton'
@@ -130,6 +131,15 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
         return
       }
 
+      // While every placed lens is hidden there is nothing on screen for the keyboard to act on:
+      // selecting one would arm Tab/arrow-key edits against a frame nobody can see, and every
+      // announcement below reads out a change with no visible effect to confirm it by. A
+      // selection made BEFORE the toggle is left exactly as it was (never cleared) — it simply
+      // goes inert until lenses are shown again, the same "paused, not lost" guarantee the rest
+      // of this feature makes. Ctrl+Shift+Z is handled above this guard on purpose: the follow
+      // lens is not one of the lenses being hidden.
+      if (a11y.lensesHidden) return
+
       // Ctrl+Shift+M — enter keyboard control with no mouse. Without it, "full keyboard control"
       // would still need an opening click.
       if (e.ctrlKey && e.shiftKey && (e.key === 'M' || e.key === 'm')) {
@@ -225,11 +235,23 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
         <div style={{
           position: 'fixed', right: 12, top: '50%', transform: 'translateY(-50%)',
           pointerEvents: 'auto', zIndex: 2147483200,
+          display: 'flex', flexDirection: 'column', gap: 8,
         }}>
           <MagnifierButton ctx={ctx} />
+          <HideLensesButton ctx={ctx} />
         </div>
       )}
-      {a11y.lenses.map((lens, i) => (
+      {/*
+        Hides, never deletes: skipping the map leaves `a11y.lenses` — and every x/y/zoom/pinned
+        value inside it — untouched. This also stops each hidden lens's mirror from doing any
+        work: `Lens.tsx`'s effect registers with the scheduler on mount and unregisters (plus
+        `host.destroy()`) on unmount, so simply not rendering it here IS the unregister — no
+        separate "pause" path was needed.
+
+        The cursor-following lens below is deliberately NOT gated by `lensesHidden` — see
+        `HideLensesButton.tsx`'s header comment for why.
+      */}
+      {!a11y.lensesHidden && a11y.lenses.map((lens, i) => (
         <Lens
           key={lens.id}
           lens={lens}
@@ -258,7 +280,9 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
         />
       ))}
       {a11y.followOn && <FollowLens style={a11y.prefs.followLens} scheduler={scheduler} />}
-      {menu && (() => {
+      {/* No lens frame is on screen while hidden, so the menu that configures one (opened before
+          the toggle was pressed) is withheld too rather than floating over nothing it points at. */}
+      {!a11y.lensesHidden && menu && (() => {
         const lens = a11y.lenses.find(l => l.id === menu.id)
         if (!lens) return null
         return (
