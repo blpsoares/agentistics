@@ -15,7 +15,9 @@ import { sanitizeAccessibilityPrefs } from '@agentistics/core'
 export type A11yStore =
   | { kind: 'machine' }
   | { kind: 'account'; accountId: string }
-  /** A central reached with a legacy password-only session: readable, not writable. */
+  /** Defensive fallback for the narrow window where a session resolves but the account does not.
+   *  This is not a login mode anyone is meant to be in — it fails safe by serving read-only
+   *  defaults and refusing writes, rather than ever touching the machine file. */
   | { kind: 'anonymous' }
 
 export function resolveA11yStore(central: boolean, accountId: string | null): A11yStore {
