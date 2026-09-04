@@ -32,7 +32,7 @@ export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
   const {
     lang, isCentral, theme, filters, setFilters, activeOnly, setActiveOnly,
-    availableProjects, sessionCountByProject, models, availableHarnesses,
+    availableProjects, sessionCountByProject, models, availableHarnesses, derived,
   } = ctx
   const pt = lang === 'pt'
   const { sessionId } = useParams()
@@ -284,6 +284,7 @@ export default function SessionsPage() {
           rows={fleet.rows}
           loading={loading}
           unsupported={unsupported}
+          heatmap={derived.heatmapData}
           {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
         />
       </div>
