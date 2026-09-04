@@ -89,11 +89,26 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable, h
       <h1 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>
         {pt ? 'Suas sessões' : 'Your sessions'}
       </h1>
-      <p style={{ margin: '0 0 22px', fontSize: 13, color: 'var(--text-tertiary)', lineHeight: 1.55 }}>
+      {/* TWO UNIVERSES ON ONE SCREEN, and the page has to say which is which.
+          The cards count the LIVE FLEET — what is running on this machine at this instant — and no
+          filter touches them: a date range cannot narrow a session that is happening now, and the
+          harness chips are read against stored metrics the fleet has not been written into yet
+          (`fleetFilter.ts` records why each dimension is or is not applied to a live row). The
+          heatmap and the per-assistant bars below count STORED METRICS and are narrowed by every
+          active filter.
+          Reported by a user who set a filter, watched the heatmap empty out, and saw the four
+          cards hold still — a reasonable reading of that is that the cards are stale. They are
+          not; they are answering a different question, and until now nothing on the screen said
+          so. Same rule as every N/A in this product: a number must say what it counts. */}
+      <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--text-tertiary)', lineHeight: 1.55 }}>
         {pt
           ? 'O que está rodando nesta máquina agora. Escolha uma sessão na lateral para abri-la.'
           : 'What is running on this machine right now. Pick a session on the left to open it.'}
       </p>
+
+      <SectionNote text={pt
+        ? 'Agora mesmo — a frota viva desta máquina. Os filtros do topo não mexem nestes quatro números.'
+        : 'Right now — this machine’s live fleet. The filters above do not change these four numbers.'} />
 
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 22,
@@ -145,9 +160,14 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable, h
           rules, which is the same defect as a cache-backed total beside a session-summed one. */}
       {heatmap && heatmap.length > 0 && (
         <section style={{ marginBottom: 22 }}>
-          <h2 style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>
             {pt ? 'Atividade' : 'Activity'}
           </h2>
+          {/* Said HERE and not only in the heading above, because the two regions are read
+              separately: somebody comparing the cards with this grid is looking at this half. */}
+          <SectionNote text={pt
+            ? 'Histórico gravado — este calendário e as barras abaixo seguem os filtros do topo.'
+            : 'Recorded history — this calendar and the bars below follow the filters above.'} />
           <ActivityHeatmap data={[...heatmap]} weeks={26} />
         </section>
       )}
@@ -219,6 +239,24 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable, h
         </div>
       </section>
     </div>
+  )
+}
+
+/**
+ * The one line that says WHICH question a block of this page answers.
+ *
+ * Deliberately not a tooltip and not an icon: the confusion it exists for is somebody comparing
+ * two regions at a glance, and a fact you have to hover for is a fact you do not have while
+ * comparing. Dim, small, and above the block it describes.
+ */
+function SectionNote({ text }: { text: string }) {
+  return (
+    <p style={{
+      margin: '0 0 10px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-tertiary)',
+      opacity: 0.85,
+    }}>
+      {text}
+    </p>
   )
 }
 
