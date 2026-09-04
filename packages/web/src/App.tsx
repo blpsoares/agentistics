@@ -79,6 +79,7 @@ import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
 import { ToggleSwitch } from './components/ToggleSwitch'
 import { fleetFilterOptions } from './lib/fleetFilter'
+import { runningConversationIds } from './lib/activeConversations'
 import { CentralSessions } from './components/sessions/CentralSessions'
 import { setFleetSourceCentral } from './lib/fleet'
 
@@ -1508,7 +1509,14 @@ export default function AppLayout() {
   // A CENTRAL's fleet is the RELAY's, for the machine the aside's picker chose. Set once, here,
   // because the poller is module-scoped and every surface reads the same snapshot.
   useEffect(() => { setFleetSourceCentral(isCentral) }, [isCentral])
-  const { fleet: headerFleet, act: headerFleetAct } = useFleet(lang === 'pt' ? 'pt' : 'en')
+  const { fleet: headerFleet, act: headerFleetAct, unsupported: headerFleetUnsupported } = useFleet(lang === 'pt' ? 'pt' : 'en')
+  /**
+   * "Active only" needs a fleet to intersect against, on EITHER page. An exposed profile with no
+   * host power, or a central with no machine chosen, both report `unsupported` here — offering the
+   * dimension there would be a filter whose only possible answer is "nothing", the confident-zero
+   * shape this whole file is written against.
+   */
+  const fleetReadable = !headerFleetUnsupported
   /**
    * What the SESSIONS filter bar may offer — derived from the FLEET, never from the dashboard's
    * metrics. The two are different universes: the metrics knew six harnesses on this machine while
@@ -1914,7 +1922,15 @@ export default function AppLayout() {
 
   // Tags visible to the viewer; back both the `tags` filter dimension and the derived stats.
   const [tagsList, setTagsList] = useState<TagDef[]>([])
-  const derived = useDerivedStats(data, filters, tagsList)
+  // "Active only" on the dashboard means "conversations running right now" — the stored session
+  // set intersected with the live fleet by conversation id (see `activeConversations.ts`'s
+  // header). `&& fleetReadable` rather than trusting `activeOnly` alone: the switch could still
+  // read true from before the fleet became unreadable (a central with no machine chosen), and an
+  // empty `runningIds` there would silently report a confident zero instead of the unfiltered
+  // totals — the exact defect `resolveMachineCacheScope` exists to prevent for team/machine scope.
+  const derivedActiveOnly = activeOnly && fleetReadable
+  const runningIds = useMemo(() => runningConversationIds(headerFleet.rows), [headerFleet.rows])
+  const derived = useDerivedStats(data, filters, tagsList, derivedActiveOnly, runningIds)
 
   // ── the plan cost basis ──────────────────────────────────────────────────────────────────
   // Computed ONCE here and passed down: two surfaces each cutting A their own way would tell two
@@ -2790,6 +2806,8 @@ export default function AppLayout() {
                   onCostBasisChange={isCentral ? undefined : setCostBasis}
                   costBasisReady={billingReady.ready && planBasis.basis !== null}
                   onCostBasisSetup={openBillingSetup}
+                  activeOnly={activeOnly}
+                  onActiveOnlyChange={fleetReadable ? setActiveOnly : undefined}
                   filters={filters}
                   onChange={setFilters}
                   projects={availableProjects}
@@ -2894,8 +2912,8 @@ export default function AppLayout() {
                   costBasisReady: billingReady.ready && planBasis.basis !== null,
                   onCostBasisSetup: openBillingSetup,
                 })}
-                activeOnly={inSessionsWorkspace ? activeOnly : undefined}
-                onActiveOnlyChange={inSessionsWorkspace ? setActiveOnly : undefined}
+                activeOnly={activeOnly}
+                onActiveOnlyChange={fleetReadable ? setActiveOnly : undefined}
                 filters={filters}
                 onChange={setFilters}
                 projects={availableProjects}
