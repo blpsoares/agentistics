@@ -39,6 +39,44 @@ export interface MachineFleetDeps {
 }
 
 /**
+ * The two verbs whose subject is the piece of WORK rather than the row: they expand to every
+ * session filed under the row's task, across the whole registry, and a task is a unit of work that
+ * routinely spans repositories. See `performMachineAction` for why a restricted connection cannot
+ * be offered them at all.
+ */
+const TASK_WIDE_ACTIONS: readonly string[] = ['openTask', 'finishTask']
+
+/**
+ * This connection's directory test, or `null` when the connection restricts NOTHING.
+ *
+ * `null` rather than a predicate that always returns true, so the callers can tell "everything is
+ * shared" from "this directory is shared" and skip building an index nobody will consult — the
+ * unrestricted case is the common one and pays nothing, exactly as `filterLiveShared`'s own
+ * shortcut does.
+ *
+ * It is ONE function because the read half and the act half must agree about a directory. They did
+ * not: the read half filtered rows through `cwdShared` while the act half had no rules check at
+ * all, so a central could drive verbs against sessions it was never shown.
+ */
+async function sharedCwd(
+  conn: Pick<TeamConnection, 'shareMode' | 'sources'>,
+  readIndexSources: MachineFleetDeps['readIndexSources'],
+): Promise<((cwd: string) => boolean) | null> {
+  const shareRules = await import('../share-rules')
+  const rules = shareRules.shareRulesOf(conn.shareMode, conn.sources)
+  // An allowlist ALWAYS restricts (an empty one shares nothing), so this cannot be gated on a
+  // non-empty source set the way an unrestricted denylist's could — same clause as the live
+  // snapshot's, and for the same reason.
+  if (rules.mode !== 'allowlist' && rules.sources.size === 0) return null
+  const src = await readIndexSources()
+  const index = shareRules.buildPathRepoIndex(src.sessions as never, src.projects)
+  // A row with NO directory cannot be judged against a rule that names directories, so it is
+  // withheld whenever any rule is in force. Sharing what cannot be checked is the fail-open
+  // direction, and this channel is the sharpest one the product has.
+  return cwd => !!cwd && shareRules.cwdShared(cwd, rules, index)
+}
+
+/**
  * Build the reply for ONE connection's request.
  *
  * Returns `null` when this machine has not agreed — the caller sends nothing at all rather than an
@@ -53,34 +91,24 @@ export async function buildMachineFleetReply(
   const consent = resolveRemoteConsent(conn.allowRemoteSessions, conn.allowRemoteScreens)
   if (!consent.sessions) return null
 
-  const shareRules = await import('../share-rules')
-  const rules = shareRules.shareRulesOf(conn.shareMode, conn.sources)
-  // An allowlist ALWAYS restricts (an empty one shares nothing), so the index cannot be gated on a
-  // non-empty source set the way an unrestricted denylist's could — same clause as the live
-  // snapshot's, and for the same reason.
-  const restricted = rules.mode === 'allowlist' || rules.sources.size > 0
-
+  const isShared = await sharedCwd(conn, deps.readIndexSources)
   const fleet = await deps.readFleet(lang)
-  let index: import('../share-rules').PathRepoIndex | undefined
-  if (restricted) {
-    const src = await deps.readIndexSources()
-    index = shareRules.buildPathRepoIndex(src.sessions as never, src.projects)
-  }
 
   const rows: MachineFleetRow[] = []
   let withheld = 0
   for (const row of fleet.rows) {
     const cwd = typeof row.cwd === 'string' ? row.cwd : ''
-    // A row with NO directory cannot be judged against a rule that names directories, so it is
-    // withheld whenever any rule is in force. Sharing what cannot be checked is the fail-open
-    // direction, and this channel is the sharpest one the product has.
-    const shared = restricted ? (!!cwd && shareRules.cwdShared(cwd, rules, index)) : true
-    if (!shared) { withheld++; continue }
+    if (isShared && !isShared(cwd)) { withheld++; continue }
     // Narrowed to what may be driven from a central BEFORE the reduction, so a verb this machine
     // will refuse never even appears on the row. Offering one and refusing it on the click is the
-    // control-that-reads-as-broken this codebase keeps arguing against.
+    // control-that-reads-as-broken this codebase keeps arguing against. The task verbs go with the
+    // rest on a RESTRICTED connection for exactly that reason — `performMachineAction` refuses
+    // them there, so offering them would be that same broken control.
     const verbs = Array.isArray(row.verbs)
-      ? (row.verbs as { action?: unknown }[]).filter(v => typeof v?.action === 'string' && remoteActionAllowed(v.action, consent))
+      ? (row.verbs as { action?: unknown }[]).filter(v =>
+        typeof v?.action === 'string'
+        && remoteActionAllowed(v.action, consent)
+        && !(isShared && TASK_WIDE_ACTIONS.includes(v.action)))
       : undefined
     rows.push(reduceMachineFleetRow({ ...row, ...(verbs ? { verbs } : {}) }))
   }
@@ -110,12 +138,21 @@ export async function buildMachineFleetReply(
  *
  * The refusal wording is this machine's, in this machine's language, because every other refusal
  * the user meets already is.
+ *
+ * **THE SHARING RULES ARE PART OF THAT AUTHORITY, and they were missing here.** The read half
+ * (`buildMachineFleetReply`) filtered rows through `cwdShared`; this half checked consent and the
+ * verb and then resolved the id against the machine's RAW fleet, so a central could `kill`,
+ * `rename`, `resume` or re-task a session in a repository the member had explicitly withheld from
+ * it. A rule that is enforced when you LOOK and not when you ACT is not a rule. So the target is
+ * resolved and judged by the same predicate the rows were, and an unresolvable row is refused
+ * rather than passed through: an id this machine cannot find is an id whose directory cannot be
+ * judged.
  */
 export async function performMachineAction(
-  conn: Pick<TeamConnection, 'allowRemoteSessions' | 'allowRemoteScreens'>,
+  conn: Pick<TeamConnection, 'allowRemoteSessions' | 'allowRemoteScreens' | 'shareMode' | 'sources'>,
   lang: CliLang,
   req: { action: string; id: string; text?: string },
-  deps: { runAction: (lang: CliLang, req: { id: string; action: string; text?: string }) => Promise<MachineActionReply> },
+  deps: MachineFleetDeps & { runAction: (lang: CliLang, req: { id: string; action: string; text?: string }) => Promise<MachineActionReply> },
 ): Promise<MachineActionReply> {
   const pt = lang === 'pt'
   const consent = resolveRemoteConsent(conn.allowRemoteSessions, conn.allowRemoteScreens)
@@ -145,5 +182,42 @@ export async function performMachineAction(
           : 'This action cannot be performed from a central.'),
     }
   }
+
+  const isShared = await sharedCwd(conn, deps.readIndexSources)
+  if (isShared) {
+    // A TASK verb expands to every session filed under the row's task, over the whole registry
+    // (`host.openTask` → `readRegistry().filter(m => m.task === task)`), and a task routinely spans
+    // repositories. Pressing it on a VISIBLE row therefore reached withheld ones — spawning real
+    // assistants in a directory the user hid, and answering with a count of them.
+    //
+    // It is refused for EVERY restricted connection rather than only when the task provably spans a
+    // withheld row, and that is deliberate: the narrower check is an ORACLE. Repeated over the rows
+    // a central can see, "does this one span something hidden?" maps which of them share work with
+    // the hidden half — the same correlation as counting a hidden project's sessions, which is the
+    // leak this whole boundary exists to prevent. The refusal discloses nothing the reply does not
+    // already carry: `withheld` is a machine-level count the central is given anyway.
+    if (TASK_WIDE_ACTIONS.includes(req.action)) {
+      return {
+        ok: false,
+        message: pt
+          ? 'Esta máquina não compartilha toda a sua frota com esta central, e uma tarefa pode abranger sessões que ela não vê. Abra ou encerre a tarefa na própria máquina.'
+          : 'This machine does not share its whole fleet with this central, and a task can span sessions this central cannot see. Open or finish the task on the machine itself.',
+      }
+    }
+    const fleet = await deps.readFleet(lang)
+    const target = fleet.rows.find(r => r.id === req.id)
+    const cwd = typeof target?.cwd === 'string' ? target.cwd : ''
+    // Fail closed on BOTH halves. A row this machine cannot find is refused for the same reason a
+    // row with no directory is: the rule names directories, and there is nothing here to judge.
+    if (!target || !isShared(cwd)) {
+      return {
+        ok: false,
+        message: pt
+          ? 'Esta sessão não é compartilhada com esta central.'
+          : 'This session is not shared with this central.',
+      }
+    }
+  }
+
   return await deps.runAction(lang, { id: req.id, action: req.action, text: req.text })
 }

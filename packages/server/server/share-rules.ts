@@ -350,9 +350,16 @@ export function filterShared<T extends Pick<SessionMeta, 'git_remote' | 'project
  *   often the repo name. Under restrictions an unrecognized directory is withheld rather than
  *   assumed innocent.
  *
- * ONE function decides the WHOLE outgoing frame. The caller must never assemble a field of that
- * message beside this result — that is exactly how the activities came to be sent unfiltered —
- * so anything added to the live message is added here, where the rule already lives.
+ * ONE function decides the whole `live-sessions` FRAME. The caller must never assemble a field of
+ * that message beside this result — that is exactly how the activities came to be sent unfiltered
+ * — so anything added to the live message is added here, where the rule already lives.
+ *
+ * **It is not, and never was, a statement about the SOCKET.** `live-sessions` was the only
+ * member→central send when this was written; the machine-fleet relay now sends three more
+ * (`sessions/machine-fleet.ts`), and they carry their own application of `cwdShared` — the read
+ * half filtering rows, the act half refusing a verb aimed at a row this connection cannot see. Both
+ * halves of that relay must keep going through `cwdShared`; the act half once did not, and a
+ * central could drive `kill` / `rename` / `resume` against a withheld session.
  *
  * With no restrictions the snapshot passes through untouched — the common case pays nothing.
  */

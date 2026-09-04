@@ -543,38 +543,19 @@ async function answerFleetRequest(connId: string, socket: WebSocket, raw: string
     const conn = readTeamConnections(await readPreferences()).find(c => c.id === connId)
     if (!conn) return
 
-    // `op: 'act'` — perform one verb. The consent and the verb allowlist are re-checked by
-    // `performMachineAction` on THIS machine; nothing the central decided is trusted here.
-    if (msg.op === 'act') {
-      const [{ performMachineAction }, { runFleetAction }, { resolveLang }] = await Promise.all([
-        import('./sessions/machine-fleet'),
-        import('./sessions/fleet-web'),
-        import('./cli-lang'),
-      ])
-      const lang = await resolveLang()
-      const reply = await performMachineAction(conn, lang, {
-        action: typeof msg.action === 'string' ? msg.action : '',
-        id: typeof msg.id === 'string' ? msg.id : '',
-        ...(typeof msg.text === 'string' ? { text: msg.text } : {}),
-      }, {
-        // `runFleetAction` is the SAME path the machine's own web Sessions page calls, so every
-        // refusal the cockpit makes is made here too — there is no second implementation of what a
-        // row may take.
-        runAction: (l, r) => runFleetAction(l, r as never),
-      })
-      if (socket.readyState !== WebSocket.OPEN) return
-      socket.send(JSON.stringify({ type: 'fleet-reply', rid: msg.rid, reply }))
-      return
-    }
-    const [{ buildMachineFleetReply }, { readFleet }, { buildApiResponse }, { resolveLang }] = await Promise.all([
+    const [{ buildMachineFleetReply, performMachineAction }, { readFleet, runFleetAction }, { buildApiResponse }, { resolveLang }] = await Promise.all([
       import('./sessions/machine-fleet'),
       import('./sessions/fleet-web'),
       import('./data'),
       import('./cli-lang'),
     ])
     const lang = await resolveLang()
-    const reply = await buildMachineFleetReply(conn, lang, {
-      readFleet: async l => {
+    // ONE set of sources for both halves. The act half needs them too — it resolves the target
+    // against the very fleet the read half filters, so that a verb can only reach a row this
+    // connection was allowed to see — and building them twice is how the two halves came to
+    // disagree about a directory in the first place.
+    const fleetDeps = {
+      readFleet: async (l: typeof lang) => {
         const payload = await readFleet(l)
         // The VERBS live on the presentation half (`sessions`, a FleetRow[]) and everything else on
         // the raw half (`rows`, a ControlSession[]); they are the same rows in the same order.
@@ -595,7 +576,29 @@ async function answerFleetRequest(connId: string, socket: WebSocket, raw: string
         const data = await buildApiResponse()
         return { sessions: data.sessions, projects: data.projects.map(p => ({ path: p.path, gitRemote: p.gitRemote })) }
       },
-    })
+    }
+
+    // `op: 'act'` — perform one verb. The consent, the verb allowlist AND this connection's
+    // sharing rules are re-checked by `performMachineAction` on THIS machine; nothing the central
+    // decided is trusted here.
+    if (msg.op === 'act') {
+      const reply = await performMachineAction(conn, lang, {
+        action: typeof msg.action === 'string' ? msg.action : '',
+        id: typeof msg.id === 'string' ? msg.id : '',
+        ...(typeof msg.text === 'string' ? { text: msg.text } : {}),
+      }, {
+        ...fleetDeps,
+        // `runFleetAction` is the SAME path the machine's own web Sessions page calls, so every
+        // refusal the cockpit makes is made here too — there is no second implementation of what a
+        // row may take.
+        runAction: (l, r) => runFleetAction(l, r as never),
+      })
+      if (socket.readyState !== WebSocket.OPEN) return
+      socket.send(JSON.stringify({ type: 'fleet-reply', rid: msg.rid, reply }))
+      return
+    }
+
+    const reply = await buildMachineFleetReply(conn, lang, fleetDeps)
     // A machine that has not agreed sends NOTHING. An empty reply would read as "no sessions",
     // which is a statement about the fleet rather than about consent.
     if (!reply) return
