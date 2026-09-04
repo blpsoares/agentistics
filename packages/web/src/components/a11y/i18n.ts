@@ -45,6 +45,7 @@ export interface A11yText {
   keyboardTitle: string
   keyboardHelp: string[]
   removed: string
+  lensReleased: string
   announce(name: string, zoom: number, w: number, h: number, pinned: boolean): string
 }
 
@@ -123,6 +124,7 @@ export function a11yText(lang: 'pt' | 'en'): A11yText {
           'Ctrl+Shift+Z — cursor-following lens',
         ],
     removed: pt ? 'Lupa removida.' : 'Lens removed.',
+    lensReleased: pt ? 'Lupa solta.' : 'Lens released.',
     announce: (name, zoom, w, h, pinned) =>
       pt
         ? `${name}, ampliação ${zoom} vezes, ${Math.round(w)} por ${Math.round(h)}, ${pinned ? 'fixada' : 'solta'}.`

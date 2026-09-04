@@ -122,6 +122,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
       }
       if (result === 'deselect') {
         a11y.select(null)
+        a11y.announce(text.lensReleased)
         return
       }
       const next = clampLens(result, { width: window.innerWidth, height: window.innerHeight })
