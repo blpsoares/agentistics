@@ -29,10 +29,19 @@ export function pageKey(pathname: string): string {
   return p.endsWith('/') ? p.slice(0, -1) : p
 }
 
-/** The viewport region a lens magnifies: centred on the lens, shrunk by the zoom. */
+/**
+ * The viewport region a lens magnifies: centred on the lens, shrunk by the zoom.
+ *
+ * What the lens actually SHOWS is its content box — `box-sizing: border-box` makes that
+ * `width - 2*borderWidth` by `height - 2*borderWidth`, not the frame's own size — so that is
+ * the size that gets divided by the zoom. Getting this wrong offsets the magnified image by
+ * exactly `borderWidth` px (the difference between the frame's centre and its content box's
+ * centre), which is always safe here (`LENS_MIN_PX` 60, `BORDER_MAX_PX` 12: the interior is
+ * never zero or negative). The region stays centred on the FRAME's centre regardless.
+ */
 export function sourceRect(lens: LensStyle & { x: number; y: number }): Rect {
-  const width = lens.width / lens.zoom
-  const height = lens.height / lens.zoom
+  const width = (lens.width - 2 * lens.borderWidth) / lens.zoom
+  const height = (lens.height - 2 * lens.borderWidth) / lens.zoom
   return {
     x: lens.x + lens.width / 2 - width / 2,
     y: lens.y + lens.height / 2 - height / 2,
@@ -42,9 +51,13 @@ export function sourceRect(lens: LensStyle & { x: number; y: number }): Rect {
 }
 
 /**
- * What the stage's `transform` must be. The stage is viewport-sized with `transform-origin: 0 0`,
- * so `scale(s) translate(tx, ty)` maps viewport point p to `s * (p + t)`; putting the source
- * origin at zero means `t = -source.origin`.
+ * What the stage's `transform` must be. The stage is an ORDINARY in-flow child of the frame, so
+ * with `transform-origin: 0 0` its untransformed origin sits at the frame's CONTENT-box origin —
+ * viewport `(lens.x + borderWidth, lens.y + borderWidth)` — not the viewport origin. Within the
+ * stage, a page coordinate P renders at stage-local coordinate P (it is a clone of the page).
+ * So `scale(s) translate(tx, ty)` puts stage-local point p at viewport
+ * `contentOrigin + s * (p + t)`, and putting the source region's top-left at the content-box
+ * top-left means `t = -source.origin`.
  */
 export function stageTransform(lens: LensStyle & { x: number; y: number }): { scale: number; tx: number; ty: number } {
   const s = sourceRect(lens)

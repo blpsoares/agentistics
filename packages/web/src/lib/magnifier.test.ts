@@ -39,8 +39,13 @@ describe('pageKey', () => {
 })
 
 describe('sourceRect', () => {
-  test('is the region under the lens, shrunk by the zoom and centred on the lens', () => {
-    expect(sourceRect(lens())).toEqual({ x: 250, y: 212.5, width: 100, height: 75 })
+  // lens: x:100 y:100 width:400 height:300 zoom:4 borderWidth:3
+  // interior (content-box) size: 400 - 2*3 = 394 wide, 300 - 2*3 = 294 tall
+  // source size: 394/4 = 98.5 wide, 294/4 = 73.5 tall
+  // frame centre: (100 + 400/2, 100 + 300/2) = (300, 250)
+  // source origin: (300 - 98.5/2, 250 - 73.5/2) = (300 - 49.25, 250 - 36.75) = (250.75, 213.25)
+  test('is the region under the lens interior, shrunk by the zoom and centred on the lens', () => {
+    expect(sourceRect(lens())).toEqual({ x: 250.75, y: 213.25, width: 98.5, height: 73.5 })
   })
   test('at 1.5x it is larger than at 10x, centred on the same point', () => {
     const low = sourceRect(lens({ zoom: 1.5 }))
@@ -48,11 +53,22 @@ describe('sourceRect', () => {
     expect(low.width).toBeGreaterThan(high.width)
     expect(low.x + low.width / 2).toBeCloseTo(high.x + high.width / 2)
   })
+  test('centres on the lens FRAME centre exactly, even with a non-zero border', () => {
+    // This is the invariant the off-by-border bug broke: the magnified image's centre must
+    // land exactly on the frame's centre, never offset by the border width.
+    const l = lens()
+    const s = sourceRect(l)
+    const frameCentreX = l.x + l.width / 2
+    const frameCentreY = l.y + l.height / 2
+    expect(s.x + s.width / 2).toBe(frameCentreX)
+    expect(s.y + s.height / 2).toBe(frameCentreY)
+  })
 })
 
 describe('stageTransform', () => {
+  // Using the same sourceRect derivation above: source origin (250.75, 213.25).
   test('scales by the zoom and translates the source origin to zero', () => {
-    expect(stageTransform(lens())).toEqual({ scale: 4, tx: -250, ty: -212.5 })
+    expect(stageTransform(lens())).toEqual({ scale: 4, tx: -250.75, ty: -213.25 })
   })
 })
 
@@ -90,14 +106,23 @@ describe('applyLensKey', () => {
       height: 300 + RESIZE_STEP_PX,
     })
   })
-  test('a circle resizes on every arrow, because it has one dimension', () => {
-    const grown = applyLensKey(lens({ shape: 'circle', height: 400 }), 'ArrowUp', { ...NO_MODS, shift: true })
-    expect(grown).toMatchObject({ width: 400 + RESIZE_STEP_PX, height: 400 + RESIZE_STEP_PX })
+  test('a circle resizes on every arrow, because it has one dimension: right/up grow, left/down shrink', () => {
+    const circle = lens({ shape: 'circle', width: 400, height: 400 })
+    const shiftMods = { ...NO_MODS, shift: true }
+    const right = applyLensKey(circle, 'ArrowRight', shiftMods)
+    expect(right).toMatchObject({ width: 400 + RESIZE_STEP_PX, height: 400 + RESIZE_STEP_PX })
+    const up = applyLensKey(circle, 'ArrowUp', shiftMods)
+    expect(up).toMatchObject({ width: 400 + RESIZE_STEP_PX, height: 400 + RESIZE_STEP_PX })
+    const left = applyLensKey(circle, 'ArrowLeft', shiftMods)
+    expect(left).toMatchObject({ width: 400 - RESIZE_STEP_PX, height: 400 - RESIZE_STEP_PX })
+    const down = applyLensKey(circle, 'ArrowDown', shiftMods)
+    expect(down).toMatchObject({ width: 400 - RESIZE_STEP_PX, height: 400 - RESIZE_STEP_PX })
   })
   test('plus and minus step the zoom', () => {
     expect(applyLensKey(lens(), '+', NO_MODS)).toMatchObject({ zoom: 4 + ZOOM_STEP })
     expect(applyLensKey(lens(), '-', NO_MODS)).toMatchObject({ zoom: 4 - ZOOM_STEP })
     expect(applyLensKey(lens(), '=', NO_MODS)).toMatchObject({ zoom: 4 + ZOOM_STEP })
+    expect(applyLensKey(lens(), '_', NO_MODS)).toMatchObject({ zoom: 4 - ZOOM_STEP })
   })
   test('P toggles pinned, in either direction', () => {
     expect(applyLensKey(lens(), 'p', NO_MODS)).toMatchObject({ pinned: true })

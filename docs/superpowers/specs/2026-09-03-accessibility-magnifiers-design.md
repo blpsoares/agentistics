@@ -71,12 +71,15 @@ lens        position:fixed, orange border, overflow:hidden
 ```
 
 The **source region** is the area of the viewport the lens magnifies: it is centred on the lens's
-own centre and measures `lens.width / zoom` by `lens.height / zoom`. A 400×300 lens at 4× shows a
-100×75 region — the region beneath itself, which is what makes it read as a physical lens laid on
+own centre and measures the lens's *interior* size — `(width - 2*borderWidth) / zoom` by
+`(height - 2*borderWidth) / zoom`, since `box-sizing: border-box` is what the lens actually shows
+through — the region beneath itself, which is what makes it read as a physical lens laid on
 the screen.
 
-The stage is exactly viewport-sized and anchored so that viewport coordinate (0,0) maps to stage
-coordinate (0,0). One consequence is deliberate and useful: because the stage carries a
+The stage is an ordinary in-flow child of the (bordered) lens frame, so its own untransformed
+origin sits at the frame's content-box origin, not the viewport origin. Within the stage, a page
+coordinate P sits at the same stage-local coordinate P, since the stage carries a clone of the
+whole page. One consequence is deliberate and useful: because the stage carries a
 `transform`, it becomes the containing block for `position: fixed` descendants of the clone, so
 the cloned sticky header and sidebar lay out against the stage — that is, in the same place they
 occupy on screen. **This is reasoned, not yet observed in a browser, and is the first thing to
