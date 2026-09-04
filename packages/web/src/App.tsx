@@ -2644,6 +2644,211 @@ export default function AppLayout() {
     </div>
   ) : null
 
+  /**
+   * The DASHBOARD's own one bar — the same move the sessions workspace just made, for the same
+   * reason: a fixed strip holding a mark and one icon, with the entire filter row as a second band
+   * directly beneath it, is two bands doing one band's work.
+   *
+   * Everything that was in that band is here, unchanged: the filters, the filtered totals, the
+   * health warnings, the hardware overlay, the bell, the Live toggle, the refresh, and the
+   * collapsible fleet-stats tab that hangs under the row. This is a RELOCATION — dropping any of
+   * them would be a regression nobody asked for.
+   *
+   * MOBILE IS UNTOUCHED. The strip is a desktop element; the phone keeps its collapsible filter
+   * band and its bottom nav, which are sized for a viewport this row would not fit in.
+   */
+  const dashboardTopBar = (!inSessionsWorkspace && !isMobile && !isCustomPage) ? (
+    <div style={{
+      width: '100%', maxWidth: PAGE_MAX_WIDTH, margin: '0 auto',
+      padding: `0 ${PAGE_INSET}px`, boxSizing: 'border-box',
+      display: 'flex', alignItems: 'center', gap: 14, minWidth: 0,
+    }}>
+      {/* THE FILTERS give up width FIRST. The cluster to their right is how you act on the page
+          and how you read what it currently totals; a narrowed filter bar is still a filter bar,
+          because its own `+ Filtro` popover holds every row it drops. */}
+      <div style={{ flex: 1, minWidth: 90, display: 'flex' }}>
+        <FiltersBar
+          inline
+          only={filterDimsForRoute}
+          costBasis={costBasis}
+          onCostBasisChange={isCentral ? undefined : setCostBasis}
+          costBasisReady={billingReady.ready && planBasis.basis !== null}
+          onCostBasisSetup={openBillingSetup}
+          filters={filters}
+          onChange={setFilters}
+          projects={availableProjects}
+          sessionCountByProject={sessionCountByProject}
+          models={models}
+          modelGroups={modelGroups}
+          modelsInProject={modelsInProject}
+          users={usersWithMachines}
+          // The METRICS' harnesses, because this bar is the dashboard's. The fleet's own
+          // narrower list belongs to the sessions strip (see `sessionTopBar`), which is where
+          // that override moved when the workspace stopped rendering this header.
+          harnesses={availableHarnesses}
+          presence={data?.presence}
+          lang={lang}
+          teams={teamsList}
+          machines={machinesList}
+          tags={tagsList}
+          canFilterMembers={canFilterMembers}
+          onCreateTagFromFilters={createTagFromFilters}
+        />
+      </div>
+
+      {/* Right column: the action cluster (alerts/live/refresh) on top, and the fleet
+          stats strip right-aligned directly beneath it — so "Updated · members · machines ·
+          projects · repos" lines up under the refresh button instead of stretching the bar.
+          Absent for Sessions: those are stored-metrics totals and a page-data "Live" refresh
+          toggle, neither of which describes a fleet that already polls and shows its own
+          "Connected · last sync" in the aside. */}
+      {!inSessionsWorkspace && (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+        {/* Filtered totals, immediately left of the action icons */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+          <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
+          <span style={{ opacity: 0.35 }}>·</span>
+          <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
+          <span style={{ opacity: 0.35 }}>·</span>
+          <span title={headerTokensTitle}><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(headerTokens)}</strong> tok</span>
+        </div>
+        {data?.healthIssues && data.healthIssues.length > 0 && (
+          <HealthWarnings issues={data.healthIssues} lang={lang} />
+        )}
+        {/* Hardware — an overlay, beside the other header actions rather than in the sidebar,
+            because it is a question about this machine and not a place to go. */}
+        <button
+          onClick={() => setHardwareOpen(true)}
+          title={lang === 'pt' ? 'Recursos de hardware' : 'Hardware resources'}
+          aria-label={lang === 'pt' ? 'Recursos de hardware' : 'Hardware resources'}
+          aria-haspopup="dialog"
+          style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', transition: 'all 0.15s' }}
+          onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-primary)'; t.style.borderColor = 'var(--text-tertiary)' }}
+          onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-tertiary)'; t.style.borderColor = 'var(--border)' }}
+        >
+          <Cpu size={14} />
+        </button>
+        <NotificationBell lang={lang} buttonStyle={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 32, height: 32, borderRadius: 8,
+          border: '1px solid var(--border)', background: 'transparent',
+          color: 'var(--text-tertiary)', cursor: 'pointer', position: 'relative',
+        }} />
+        {!isCentral && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px 0 10px', height: 32,
+            borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-secondary)',
+          }}>
+            <Activity size={12} style={{ color: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0, transition: 'color 0.2s' }} />
+            <span style={{ fontSize: 11, fontWeight: 500, color: liveUpdates ? 'var(--text-primary)' : 'var(--text-tertiary)', whiteSpace: 'nowrap', userSelect: 'none' }}>Live</span>
+            <button
+              onClick={() => setLiveUpdates(v => !v)}
+              title={liveUpdates ? 'Pause live updates' : 'Enable live updates'}
+              style={{ position: 'relative', width: 28, height: 16, borderRadius: 8, border: 'none', background: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', cursor: 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0 }}
+            >
+              <span style={{ position: 'absolute', top: 2, left: liveUpdates ? 14 : 2, width: 12, height: 12, borderRadius: '50%', background: '#fff', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+            </button>
+            {liveUpdates && (
+              <span style={{ fontSize: 10, fontWeight: 700, color: riskyMode && updateInterval < 10 ? '#ef4444' : 'var(--anthropic-orange)', userSelect: 'none' }}>
+                {riskyMode && updateInterval < 10 ? `⚡ ${updateInterval}s` : `${updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`}`}
+              </span>
+            )}
+          </div>
+        )}
+        <button
+          onClick={refetch}
+          title={lang === 'pt' ? 'Atualizar' : 'Refresh'}
+          style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', transition: 'all 0.15s' }}
+          onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-primary)'; t.style.borderColor = 'var(--text-tertiary)' }}
+          onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-tertiary)'; t.style.borderColor = 'var(--border)' }}
+        >
+          <RefreshCw size={14} />
+        </button>
+      </div>
+      )}
+      {/* The collapsible "fleet stats" tab, which hangs BELOW this row (position: absolute,
+          top: 100%) and is therefore anchored to the fixed strip now rather than to the sticky
+          header that used to hold it. Expands to updated/since + members/machines/teams/projects/
+          repos. Dashboard only — these are STORED metrics, and a live fleet already states its own
+          "Connected · last sync" in the aside. */}
+      {/* Guarded by this row's own condition — see `dashboardTopBar`. */}
+      {(() => {
+        const sep = <span style={{ color: 'var(--border)' }}>·</span>
+        const iconSt: React.CSSProperties = { color: 'var(--text-tertiary)', flexShrink: 0 }
+        return (
+          <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 300, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+            <div style={{ maxWidth: PAGE_MAX_WIDTH, width: '100%', display: 'flex', justifyContent: 'flex-end', paddingRight: PAGE_INSET, boxSizing: 'border-box', pointerEvents: 'none' }}>
+              <div style={{ pointerEvents: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                <button
+                  onClick={toggleFleet}
+                  title={fleetOpen ? (lang === 'pt' ? 'Minimizar' : 'Collapse') : (lang === 'pt' ? 'Mostrar estatísticas' : 'Show stats')}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 5, padding: '2px 10px 3px',
+                    border: '1px solid var(--border)', borderTop: 'none',
+                    borderRadius: '0 0 8px 8px', background: 'var(--bg-surface)',
+                    color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10.5,
+                  }}
+                >
+                  {lang === 'pt' ? 'Estatísticas' : 'Stats'}
+                  {fleetOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+                {fleetOpen && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '2px 9px',
+                    marginTop: 4, padding: '7px 12px', borderRadius: 8, maxWidth: '80vw',
+                    border: '1px solid var(--border)', background: 'var(--bg-surface)', boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
+                    fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    <span>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{fleetUpdated}</span></span>
+                    {fleetSince && (<>{sep}<span style={{ color: 'var(--text-secondary)' }}>{fleetSince}</span></>)}
+                    {isCentral && (<>
+                      {sep}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Users size={11} style={iconSt} />
+                        <span style={{ color: 'var(--text-secondary)' }}>{memberCount} {lang === 'pt' ? (memberCount === 1 ? 'membro' : 'membros') : (memberCount === 1 ? 'member' : 'members')}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineCount}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{offlineCount}</span>
+                      </span>
+                      {sep}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Server size={11} style={iconSt} />
+                        <span style={{ color: 'var(--text-secondary)' }}>{machineCount} {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={lang === 'pt' ? 'Máquinas online' : 'Machines online'}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{machinesOnline}</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={lang === 'pt' ? 'Máquinas offline' : 'Machines offline'}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{machinesOffline}</span>
+                      </span>
+                      {sep}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Users size={11} style={iconSt} />
+                        <span style={{ color: 'var(--text-secondary)' }}>{teamCount} {lang === 'pt' ? (teamCount === 1 ? 'time' : 'times') : (teamCount === 1 ? 'team' : 'teams')}</span>
+                      </span>
+                    </>)}
+                    {sep}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <FolderOpen size={11} style={iconSt} />
+                      <span style={{ color: 'var(--text-secondary)' }}>{projectCount} {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}</span>
+                    </span>
+                    {sep}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <GitBranch size={11} style={iconSt} />
+                      <span style={{ color: 'var(--text-secondary)' }}>{repoCount} {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}</span>
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+    </div>
+  ) : null
+
+  /**
+   * What rides in the strip. One of the two, never both — they are guarded by the same workspace
+   * test from opposite sides — and both centre themselves in the page's own max-width box, which is
+   * why the strip is asked to hand them the box the body has (`trailingFlush`).
+   */
+  const stripTrailing = sessionTopBar ?? dashboardTopBar
+
   return (
     <div style={{
       // `min-height` is NOT set in the sessions workspace, and that is the whole fix.
@@ -2722,7 +2927,7 @@ export default function AppLayout() {
           {...(modeOfPath(location.pathname) === 'sessions'
             ? { onSearch: () => window.dispatchEvent(new CustomEvent('agentistics:focus-session-search')) }
             : {})}
-          {...(sessionTopBar ? { trailing: sessionTopBar, trailingFlush: true } : {})}
+          {...(stripTrailing ? { trailing: stripTrailing, trailingFlush: true } : {})}
         />
       )}
       {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
@@ -2745,15 +2950,19 @@ export default function AppLayout() {
         sessionsActiveOnly={activeOnly}
       />}
       {/* Header */}
-      {/* Page chrome — the DASHBOARD's, and only the dashboard's.
+      {/* Page chrome — the MOBILE dashboard's, and only that.
           The sessions workspace used to render this too, on desktop, purely to carry `FiltersBar`:
           a whole sticky band with its own rule, one row of controls in it, directly beneath the
           fixed strip that was already there. The filters now ride IN that strip (see
           `sessionTopBar`), so the workspace has ONE bar and this element is not rendered in it at
           all — on mobile it never was, because `SessionsPage` draws its own bars.
           The root cause of "the pane's own header scrolled away" was never this strip's presence —
-          it was `<main>` lacking a DEFINITE height to clip to, fixed at the wrapper `<div>` above. */}
-      {!inSessionsWorkspace && (
+          it was `<main>` lacking a DEFINITE height to clip to, fixed at the wrapper `<div>` above.
+          On DESKTOP the dashboard now does the same thing, for the same reason (see
+          `dashboardTopBar`), so what is left in here is the phone's own chrome: the logo/bell row
+          and the collapsible filter band, both sized for a viewport the strip's row would not fit
+          in. Nothing about mobile changed. */}
+      {!inSessionsWorkspace && isMobile && (
       <header style={{
         background: 'var(--bg-surface)',
         position: 'sticky',
@@ -2935,187 +3144,9 @@ export default function AppLayout() {
             </div>
           </div>
         )}
-        {data && !isCustomPage && !isMobile && (
-          <div style={{
-            maxWidth: 1400, margin: '0 auto', padding: '5px 32px', width: '100%', boxSizing: 'border-box',
-            display: 'flex', alignItems: 'flex-start', gap: 14,
-          }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <FiltersBar
-                only={filterDimsForRoute}
-                costBasis={costBasis}
-                onCostBasisChange={isCentral ? undefined : setCostBasis}
-                costBasisReady={billingReady.ready && planBasis.basis !== null}
-                onCostBasisSetup={openBillingSetup}
-                filters={filters}
-                onChange={setFilters}
-                projects={availableProjects}
-                sessionCountByProject={sessionCountByProject}
-                models={models}
-                modelGroups={modelGroups}
-                modelsInProject={modelsInProject}
-                users={usersWithMachines}
-                // The METRICS' harnesses, because this bar is the dashboard's. The fleet's own
-                // narrower list belongs to the sessions strip (see `sessionTopBar`), which is where
-                // that override moved when the workspace stopped rendering this header.
-                harnesses={availableHarnesses}
-                presence={data?.presence}
-                lang={lang}
-                teams={teamsList}
-                machines={machinesList}
-                tags={tagsList}
-                canFilterMembers={canFilterMembers}
-                onCreateTagFromFilters={createTagFromFilters}
-              />
-            </div>
-
-            {/* Right column: the action cluster (alerts/live/refresh) on top, and the fleet
-                stats strip right-aligned directly beneath it — so "Updated · members · machines ·
-                projects · repos" lines up under the refresh button instead of stretching the bar.
-                Absent for Sessions: those are stored-metrics totals and a page-data "Live" refresh
-                toggle, neither of which describes a fleet that already polls and shows its own
-                "Connected · last sync" in the aside. */}
-            {!inSessionsWorkspace && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, paddingTop: 3 }}>
-              {/* Filtered totals, immediately left of the action icons */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                <span><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{derived.totalSessions.toLocaleString()}</strong> {lang === 'pt' ? 'sessões' : 'sessions'}</span>
-                <span style={{ opacity: 0.35 }}>·</span>
-                <span style={{ color: 'var(--anthropic-orange)', fontWeight: 600 }} title={headerCostTitle}>{fmtCost(headerCostUSD, currency, brlRate)}</span>
-                <span style={{ opacity: 0.35 }}>·</span>
-                <span title={headerTokensTitle}><strong style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(headerTokens)}</strong> tok</span>
-              </div>
-              {data?.healthIssues && data.healthIssues.length > 0 && (
-                <HealthWarnings issues={data.healthIssues} lang={lang} />
-              )}
-              {/* Hardware — an overlay, beside the other header actions rather than in the sidebar,
-                  because it is a question about this machine and not a place to go. */}
-              <button
-                onClick={() => setHardwareOpen(true)}
-                title={lang === 'pt' ? 'Recursos de hardware' : 'Hardware resources'}
-                aria-label={lang === 'pt' ? 'Recursos de hardware' : 'Hardware resources'}
-                aria-haspopup="dialog"
-                style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', transition: 'all 0.15s' }}
-                onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-primary)'; t.style.borderColor = 'var(--text-tertiary)' }}
-                onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-tertiary)'; t.style.borderColor = 'var(--border)' }}
-              >
-                <Cpu size={14} />
-              </button>
-              <NotificationBell lang={lang} buttonStyle={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                width: 32, height: 32, borderRadius: 8,
-                border: '1px solid var(--border)', background: 'transparent',
-                color: 'var(--text-tertiary)', cursor: 'pointer', position: 'relative',
-              }} />
-              {!isCentral && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px 0 10px', height: 32,
-                  borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-secondary)',
-                }}>
-                  <Activity size={12} style={{ color: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', flexShrink: 0, transition: 'color 0.2s' }} />
-                  <span style={{ fontSize: 11, fontWeight: 500, color: liveUpdates ? 'var(--text-primary)' : 'var(--text-tertiary)', whiteSpace: 'nowrap', userSelect: 'none' }}>Live</span>
-                  <button
-                    onClick={() => setLiveUpdates(v => !v)}
-                    title={liveUpdates ? 'Pause live updates' : 'Enable live updates'}
-                    style={{ position: 'relative', width: 28, height: 16, borderRadius: 8, border: 'none', background: liveUpdates ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', cursor: 'pointer', padding: 0, transition: 'background 0.2s', flexShrink: 0 }}
-                  >
-                    <span style={{ position: 'absolute', top: 2, left: liveUpdates ? 14 : 2, width: 12, height: 12, borderRadius: '50%', background: '#fff', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
-                  </button>
-                  {liveUpdates && (
-                    <span style={{ fontSize: 10, fontWeight: 700, color: riskyMode && updateInterval < 10 ? '#ef4444' : 'var(--anthropic-orange)', userSelect: 'none' }}>
-                      {riskyMode && updateInterval < 10 ? `⚡ ${updateInterval}s` : `${updateInterval >= 60 ? `${updateInterval / 60}m` : `${updateInterval}s`}`}
-                    </span>
-                  )}
-                </div>
-              )}
-              <button
-                onClick={refetch}
-                title={lang === 'pt' ? 'Atualizar' : 'Refresh'}
-                style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer', transition: 'all 0.15s' }}
-                onMouseEnter={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-primary)'; t.style.borderColor = 'var(--text-tertiary)' }}
-                onMouseLeave={e => { const t = e.currentTarget as HTMLButtonElement; t.style.color = 'var(--text-tertiary)'; t.style.borderColor = 'var(--border)' }}
-              >
-                <RefreshCw size={14} />
-              </button>
-            </div>
-            )}
-          </div>
-        )}
 
         {/* Nav moved to the left sidebar (SideNav) on desktop; mobile uses the bottom nav. */}
 
-      {/* Collapsible "fleet stats" tab — hangs BELOW the header (position:absolute top:100%). It
-          lives inside the sticky header so it stays pinned and scrolls down with it; high z-index
-          overlays the page. Expands to show updated/since + members/machines/teams/projects/repos.
-          Dashboard only — these are STORED metrics, and a live fleet already states its own
-          "Connected · last sync" in the aside. */}
-      {data && !isCustomPage && !isMobile && !inSessionsWorkspace && (() => {
-        const sep = <span style={{ color: 'var(--border)' }}>·</span>
-        const iconSt: React.CSSProperties = { color: 'var(--text-tertiary)', flexShrink: 0 }
-        return (
-          <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 300, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
-            <div style={{ maxWidth: 1400, width: '100%', display: 'flex', justifyContent: 'flex-end', paddingRight: 32, boxSizing: 'border-box', pointerEvents: 'none' }}>
-              <div style={{ pointerEvents: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                <button
-                  onClick={toggleFleet}
-                  title={fleetOpen ? (lang === 'pt' ? 'Minimizar' : 'Collapse') : (lang === 'pt' ? 'Mostrar estatísticas' : 'Show stats')}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 5, padding: '2px 10px 3px',
-                    border: '1px solid var(--border)', borderTop: 'none',
-                    borderRadius: '0 0 8px 8px', background: 'var(--bg-surface)',
-                    color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10.5,
-                  }}
-                >
-                  {lang === 'pt' ? 'Estatísticas' : 'Stats'}
-                  {fleetOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                </button>
-                {fleetOpen && (
-                  <div style={{
-                    display: 'flex', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '2px 9px',
-                    marginTop: 4, padding: '7px 12px', borderRadius: 8, maxWidth: '80vw',
-                    border: '1px solid var(--border)', background: 'var(--bg-surface)', boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
-                    fontSize: 11, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums',
-                  }}>
-                    <span>{lang === 'pt' ? 'Atualizado em' : 'Updated'} <span style={{ color: 'var(--text-secondary)' }}>{fleetUpdated}</span></span>
-                    {fleetSince && (<>{sep}<span style={{ color: 'var(--text-secondary)' }}>{fleetSince}</span></>)}
-                    {isCentral && (<>
-                      {sep}
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                        <Users size={11} style={iconSt} />
-                        <span style={{ color: 'var(--text-secondary)' }}>{memberCount} {lang === 'pt' ? (memberCount === 1 ? 'membro' : 'membros') : (memberCount === 1 ? 'member' : 'members')}</span>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{onlineCount}</span>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{offlineCount}</span>
-                      </span>
-                      {sep}
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                        <Server size={11} style={iconSt} />
-                        <span style={{ color: 'var(--text-secondary)' }}>{machineCount} {lang === 'pt' ? (machineCount === 1 ? 'máquina' : 'máquinas') : (machineCount === 1 ? 'machine' : 'machines')}</span>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={lang === 'pt' ? 'Máquinas online' : 'Machines online'}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />{machinesOnline}</span>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title={lang === 'pt' ? 'Máquinas offline' : 'Machines offline'}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />{machinesOffline}</span>
-                      </span>
-                      {sep}
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                        <Users size={11} style={iconSt} />
-                        <span style={{ color: 'var(--text-secondary)' }}>{teamCount} {lang === 'pt' ? (teamCount === 1 ? 'time' : 'times') : (teamCount === 1 ? 'team' : 'teams')}</span>
-                      </span>
-                    </>)}
-                    {sep}
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                      <FolderOpen size={11} style={iconSt} />
-                      <span style={{ color: 'var(--text-secondary)' }}>{projectCount} {lang === 'pt' ? (projectCount === 1 ? 'projeto' : 'projetos') : (projectCount === 1 ? 'project' : 'projects')}</span>
-                    </span>
-                    {sep}
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                      <GitBranch size={11} style={iconSt} />
-                      <span style={{ color: 'var(--text-secondary)' }}>{repoCount} {lang === 'pt' ? (repoCount === 1 ? 'repositório' : 'repositórios') : (repoCount === 1 ? 'repository' : 'repositories')}</span>
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )
-      })()}
       </header>
       )}
 

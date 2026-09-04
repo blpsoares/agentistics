@@ -42,10 +42,9 @@ export interface TopBarProps {
    * Give `trailing` exactly the box `<main>`'s content has, so a row drawn here can line up with the
    * body under it.
    *
-   * This strip pads itself and insets its left column, and the page beneath does neither — so a
-   * trailing node that centres itself in a max-width box lands a few pixels off at every width, on
-   * both edges. Setting this cancels those two paddings instead of asking the caller to subtract
-   * them: the numbers belong to this component and nothing outside it should have to know them.
+   * The left column is now exactly the aside's width and the strip pads nothing itself, so the
+   * remainder already IS that box — this only drops the 9px decorative inset a title wants and a
+   * self-centring max-width row must not have.
    */
   trailingFlush?: boolean
 }
@@ -71,17 +70,23 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
       style={{
         position: 'fixed', top: 0, left: 0, right: 0, height, zIndex: 300,
         display: 'flex', alignItems: 'center',
-        padding: collapsed ? '0 6px 0 0' : '0 10px', boxSizing: 'border-box',
+        // The strip itself pads NOTHING. Its two columns are the aside's column and the page's,
+        // and each pads itself the way the thing beneath it does — which is what lets a row drawn
+        // in the remainder line up with the body without knowing anything about this component.
+        padding: 0, boxSizing: 'border-box',
         background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)',
       }}
     >
-      {/* Over the aside's own column, so the two read as one left edge whatever the width. */}
-      {/* Sized to the aside beneath so the two read as one left edge. Collapsed it takes the whole
-          64px rather than insetting: the mark and the toggle together need 52 of it, and the inset
-          that looks right at 248px is what would push the toggle out of the rail. */}
+      {/* The ASIDE's column, continued upward: EXACTLY its width, its own horizontal padding and
+          its own right border, so the strip's left cell and the sidebar below it read as one
+          column — and so the remainder is exactly `<main>`'s content box.
+          It used to be inset by 20px, which left the collapse toggle floating twenty pixels short
+          of the edge it controls with nothing around it. Now it ends ON that edge. */}
       <div style={{
-        width: collapsed ? asideWidth : Math.max(0, asideWidth - 20),
-        display: 'flex', alignItems: 'center', gap: collapsed ? 2 : 4, minWidth: 0,
+        width: asideWidth, boxSizing: 'border-box', height: '100%',
+        borderRight: '1px solid var(--border)',
+        padding: collapsed ? '0 6px' : '0 12px',
+        display: 'flex', alignItems: 'center', gap: collapsed ? 2 : 6, minWidth: 0,
         justifyContent: collapsed ? 'center' : 'flex-start',
       }}>
         {/* The mark shows in BOTH states. A collapsed sidebar is still the product's left edge, and
@@ -89,7 +94,16 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
         <img
           src='/minimalistLogo.png'
           alt="agentistics"
-          style={{ height: collapsed ? 22 : 26, width: 'auto', flexShrink: 0, marginRight: collapsed ? 0 : 'auto' }}
+          /* The mark FILLS the band rather than sitting in the middle of it, less 8px so it keeps
+             air above and below. It never DECIDES the height — the `height` prop does, and this is
+             derived from it. Collapsed, this column is 64px wide and shared with the toggle, so the
+             mark stays small there: one that fills the height and pushes the toggle out of its own
+             rail has traded one misplacement for another. */
+          style={{
+            height: collapsed ? 24 : Math.max(0, height - 8), width: 'auto',
+            maxWidth: '100%', objectFit: 'contain',
+            flexShrink: 1, minWidth: 0, marginRight: collapsed ? 0 : 'auto',
+          }}
         />
         {/* Collapsed, the rail holds the mark and the toggle and nothing else: three controls in
             64px is three cramped controls. Search is one keystroke away (Ctrl+K) and one click away
@@ -122,15 +136,12 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
         // session below it, so the eye follows one edge down the page instead of two that are
         // nearly the same and therefore read as a misalignment.
         //
-        // FLUSH is the stronger version of that same argument: the left column is inset by 20
-        // inside a 10px root pad when expanded (and by nothing when collapsed), so adding those
-        // back puts this box's left edge exactly on the page's, and the negative right margin
-        // cancels the root's own right pad. A caller that centres itself in a max-width box then
-        // centres in the SAME box the body does.
+        // FLUSH drops even that: the left column is exactly the aside's width and the strip pads
+        // nothing, so this box IS `<main>`'s content box, and a row that centres itself in a
+        // max-width box inside it centres in the SAME box the body does.
         <div style={{
           flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10,
-          paddingLeft: trailingFlush ? (collapsed ? 0 : 10) : 9,
-          marginRight: trailingFlush ? (collapsed ? -6 : -10) : 0,
+          paddingLeft: trailingFlush ? 0 : 9,
         }}>
           {trailing}
         </div>
