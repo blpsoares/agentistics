@@ -960,6 +960,27 @@ harness working here must not break.
 - **Rules first, then reduce.** The member applies `cwdShared` BEFORE building the row, so a
   session in a withheld repository never becomes one — reducing first leaves no `cwd` to judge.
   `withheld` is a count of SESSIONS and is reported, never silently subtracted.
+- **The sharing rules bind the ACT half exactly as they bind the READ half, and for one release
+  they did not.** `buildMachineFleetReply` filtered rows through `cwdShared` from the day it
+  shipped; `performMachineAction` checked consent and the verb and then handed the id to
+  `runFleetAction`, which resolves against the machine's RAW fleet and registry — so a central
+  could `kill`, `rename`, `resume` or re-task a session in a repository the member had explicitly
+  withheld from it. **A rule enforced when you LOOK and not when you ACT is not a rule.** Both
+  halves now resolve through the one `sharedCwd` helper, and an id the machine cannot find is
+  refused for the same reason a row with no `cwd` is: the rule names directories, and an
+  unresolvable target has none to judge.
+- **The TASK verbs are refused outright on a RESTRICTED connection.** `openTask` expands to every
+  session filed under the row's task, over the whole registry, and a task routinely spans
+  repositories — so pressing it on a VISIBLE row spawned live assistants inside a withheld
+  directory and answered with a count of them. Refusing only when the task provably spans a
+  withheld row would be an ORACLE: repeated over the visible rows it maps which of them share work
+  with the hidden half, which is the same correlation as counting a hidden project's sessions. The
+  blunt refusal discloses nothing the reply does not already carry (`withheld` is a machine-level
+  count), and the verbs are dropped from the relayed row too — offering one the machine will refuse
+  is the control-that-reads-as-broken this file argues against everywhere else.
+- **Consent is ORTHOGONAL to the sharing rules, and that is the trap.** The two switches are
+  machine-wide; turning on "manage my sessions" says nothing about WHICH sessions, so without the
+  rule check above it silently re-opened the act surface over every withheld repository.
 - **`machineActions.ts` is CLOSED.** A verb it does not know is refused. A new `FleetActionId` must
   be listed there on purpose before a central can drive it. `approve`/`prompt` are excluded because
   neither can be offered without the screen — refused with a sentence naming why, never a disabled
