@@ -84,7 +84,7 @@ import { type ChatModelId } from './lib/chatModels'
 import { HARNESS_LABELS } from './lib/harness'
 import { format, parseISO, parse } from 'date-fns'
 import { ToggleSwitch } from './components/ToggleSwitch'
-import { fleetFilterOptions, filterFleet } from './lib/fleetFilter'
+import { fleetFilterOptions, filterFleet, SESSION_FILTER_DIMS } from './lib/fleetFilter'
 import { runningConversationIds } from './lib/activeConversations'
 import { CentralSessions } from './components/sessions/CentralSessions'
 // The sessions workspace's container geometry, named ONCE (see FleetOverview's header): the
@@ -100,8 +100,13 @@ import { setFleetSourceCentral } from './lib/fleet'
  * "Active only" is deliberately ABSENT: it is not a `Filters` dimension at all (see `FiltersBar`'s
  * doc comment on `onActiveOnlyChange`) and is rendered by passing that callback instead.
  */
-const SESSIONS_FILTER_DIMS: Array<'harnesses' | 'repos' | 'projects' | 'models'> =
-  ['harnesses', 'repos', 'projects', 'models']
+/**
+ * What the sessions workspace's filter bar may offer.
+ *
+ * Held in `fleetFilter.ts`, beside the function that HONOURS these dimensions, so the two can never
+ * disagree — see the note there for how they did.
+ */
+const SESSIONS_FILTER_DIMS = SESSION_FILTER_DIMS as unknown as Array<'activeOnly' | 'harnesses' | 'repos' | 'projects' | 'models'>
 
 // Team session state
 interface TeamSessionState {

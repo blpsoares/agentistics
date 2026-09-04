@@ -145,6 +145,20 @@ export function ignoredDimensions(filters: Filters, lang: 'en' | 'pt'): string |
  * shapes for the same reason `matchesRepo` accepts both: the chip the user clicks may have come
  * from either vocabulary.
  */
+/**
+ * THE DIMENSIONS THE SESSIONS WORKSPACE CAN ACT ON — the `only` list its filter bar is given.
+ *
+ * It lives here, beside `filterFleet`, because the two must agree: a dimension this module HONOURS
+ * and the menu does not OFFER is a filter nobody can reach, and a dimension the menu offers and
+ * this module ignores is a control that does nothing. `fleetFilter.test.ts` cross-checks them.
+ *
+ * `activeOnly` was missing, and the way it failed is the argument for pinning it: the switch is
+ * ALSO drawn as a chip while it is on, so it could be turned OFF from the chip's × and then never
+ * turned back on — the menu entry that would have done it was gated out by this very list. A
+ * one-way switch reads as the filter having broken.
+ */
+export const SESSION_FILTER_DIMS = ['activeOnly', 'harnesses', 'repos', 'projects', 'models'] as const
+
 export function fleetFilterOptions(
   rows: readonly ControlSession[],
   /**

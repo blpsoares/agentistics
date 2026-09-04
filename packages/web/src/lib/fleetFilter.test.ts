@@ -1,7 +1,7 @@
 import { expect, it, test, describe } from 'bun:test'
 import type { Filters } from '@agentistics/core'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
-import { filterFleet, fleetFilterOptions, ignoredDimensions } from './fleetFilter'
+import { filterFleet, fleetFilterOptions, ignoredDimensions, SESSION_FILTER_DIMS } from './fleetFilter'
 
 const BASE: Filters = {
   // 'all' is the neutral default — `ignoredDimensions` reads a SET date range as one it cannot
@@ -240,5 +240,32 @@ describe('fleetFilterOptions — the activeOnly promise', () => {
     const o = fleetFilterOptions(mixed, true)
     expect(o.repos).toEqual(['o/live'])
     expect(o.models).toEqual(['opus'])
+  })
+})
+
+describe('SESSION_FILTER_DIMS', () => {
+  it('offers every dimension filterFleet honours — a filter nobody can reach is not a filter', () => {
+    // The four `Filters` keys this module reads, plus the fleet's own switch.
+    expect([...SESSION_FILTER_DIMS].sort()).toEqual(
+      ['activeOnly', 'harnesses', 'models', 'projects', 'repos'],
+    )
+  })
+
+  it('includes activeOnly, which is ALSO a chip and was therefore a one-way switch', () => {
+    // It could be turned off from the chip's x and never back on: the menu entry that would have
+    // done it was gated out by this very list, and a one-way switch reads as a broken filter.
+    expect(SESSION_FILTER_DIMS).toContain('activeOnly')
+  })
+
+  it('offers nothing filterFleet ignores — a control that does nothing is worse than none', () => {
+    const rows = [
+      repoRow('a', 'org/r', { harness: 'claude', project: 'p', model: 'opus', state: 'waiting' }),
+      repoRow('b', 'org/other', { harness: 'codex', project: 'q', model: 'gpt', state: 'waiting' }),
+    ]
+    // Each dimension must actually narrow, or it has no business being in the menu.
+    expect(filterFleet({ rows, filters: { harnesses: ['claude'] } as never }).rows).toHaveLength(1)
+    expect(filterFleet({ rows, filters: { repos: ['org/r'] } as never }).rows).toHaveLength(1)
+    expect(filterFleet({ rows, filters: { projects: ['p'] } as never }).rows).toHaveLength(1)
+    expect(filterFleet({ rows, filters: { models: ['opus'] } as never }).rows).toHaveLength(1)
   })
 })
