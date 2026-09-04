@@ -98,6 +98,18 @@ interface Props {
    * is unaffected.
    */
   hideDateRange?: boolean
+  /**
+   * Fit on ONE 44px row, beside other things.
+   *
+   * The sessions workspace draws this bar inside the fixed top strip rather than in a band of its
+   * own, so it cannot spend vertical space: the date presets and the `+ Filtro` button stay on the
+   * line, and the selected-value chip rows — which are what makes the bar two or three rows tall —
+   * move into the `+ Filtro` popover, under the dimension they belong to.
+   *
+   * Distinct from `compact`, which tightens padding for a narrow MOBILE column and still lays out in
+   * rows. A bar can be compact without being inline.
+   */
+  inline?: boolean
 }
 
 const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [
@@ -129,7 +141,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, activeOnly, onActiveOnlyChange, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup, hideDateRange = false }: Props) {
+export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, activeOnly, onActiveOnlyChange, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup, hideDateRange = false, inline = false }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -264,20 +276,210 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
     }
   }, [openPicker])
 
+  /**
+   * The active filters, said back: the collapse handle, "clear all", and one animated row of chips
+   * per dimension.
+   *
+   * Held in a variable rather than written inline because it has TWO homes. In the ordinary bar it
+   * hangs under the controls, where it is free to be three rows tall. In `inline` mode there is no
+   * second row to hang it from, so it moves into the "+ Filter" popover — the same nodes, under the
+   * button whose badge already counts them, rather than a phone-sized reimplementation of them.
+   */
+  const activeFilterChips = (
+    <>
+        {/* Handle row (shown only when ≥1 filter is active): a desktop-only collapse toggle for the
+            chip rows + a "Clear all" button that removes every applied dimension filter. */}
+        {activeFilterCount > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: compact ? '2px 12px 0' : '0' }}>
+            {!compact && (
+              <button
+                onClick={() => setChipsCollapsed(c => !c)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)',
+                  fontSize: 11, fontWeight: 600, padding: '4px 0', fontFamily: 'inherit',
+                }}
+                title={chipsCollapsed ? (lang === 'pt' ? 'Mostrar filtros ativos' : 'Show active filters') : (lang === 'pt' ? 'Minimizar filtros ativos' : 'Minimize active filters')}
+              >
+                <ChevronDown size={13} style={{ transform: chipsCollapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.2s' }} />
+                {chipsCollapsed
+                  ? (lang === 'pt' ? `${activeFilterCount} filtro${activeFilterCount > 1 ? 's' : ''} ativo${activeFilterCount > 1 ? 's' : ''}` : `${activeFilterCount} active filter${activeFilterCount > 1 ? 's' : ''}`)
+                  : (lang === 'pt' ? 'Filtros ativos' : 'Active filters')}
+              </button>
+            )}
+            <button
+              onClick={() => onChange({ ...filters, users: [], harnesses: [], presence: undefined, repos: [], tags: [], projects: [], models: [], teams: [], machines: [] })}
+              style={{
+                marginLeft: compact ? 'auto' : 0,
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)',
+                fontSize: 11, fontWeight: 600, padding: '4px 0', fontFamily: 'inherit',
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--anthropic-orange)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)' }}
+              title={lang === 'pt' ? 'Limpar todos os filtros' : 'Clear all filters'}
+            >
+              <X size={12} /> {lang === 'pt' ? 'Limpar filtros' : 'Clear filters'}
+            </button>
+          </div>
+        )}
+
+        {/* Active-filter chips — each category (members/projects/harnesses/models) is its own
+            row that slides in/out INDEPENDENTLY, so adding a second filter type animates the new
+            line too (not just the first). Rows are always mounted; their grid-rows toggle.
+            Wrapped in a grid-rows collapse driven by chipsCollapsed (desktop only). */}
+        <div style={{ display: 'grid', gridTemplateRows: (!compact && chipsCollapsed) ? '0fr' : '1fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1)' }}>
+        <div style={{ overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', padding: compact ? '0 12px' : 0 }}>
+          <AnimatedRow show={(filters.users?.length ?? 0) > 0}>
+            <ChipRow label={lang === 'pt' ? 'Membros' : 'Members'}>
+              {(filters.users ?? []).map(u => (
+                <FilterChip key={`u:${u}`} title={u} onRemove={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })} removeTitle={lang === 'pt' ? 'Remover membro' : 'Remove member'}>
+                  <Users size={10} style={{ flexShrink: 0 }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u}</span>
+                </FilterChip>
+              ))}
+            </ChipRow>
+          </AnimatedRow>
+          <AnimatedRow show={(filters.teams?.length ?? 0) > 0}>
+            <ChipRow label={lang === 'pt' ? 'Times' : 'Teams'}>
+              {(filters.teams ?? []).map(teamId => {
+                const team = teams?.find(t => t.id === teamId)
+                const label = team?.name ?? teamId
+                return (
+                  <FilterChip key={`t:${teamId}`} title={label} onRemove={() => onChange({ ...filters, teams: filters.teams!.filter(x => x !== teamId) })} removeTitle={lang === 'pt' ? 'Remover time' : 'Remove team'}>
+                    <Users size={10} style={{ flexShrink: 0 }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+                  </FilterChip>
+                )
+              })}
+            </ChipRow>
+          </AnimatedRow>
+          <AnimatedRow show={(filters.machines?.length ?? 0) > 0}>
+            <ChipRow label={lang === 'pt' ? 'Máquinas' : 'Machines'}>
+              {(filters.machines ?? []).map(machineId => {
+                const machine = machines?.find(m => m.id === machineId)
+                const label = machine?.name ?? machineId
+                return (
+                  <FilterChip key={`m:${machineId}`} title={label} onRemove={() => onChange({ ...filters, machines: filters.machines!.filter(x => x !== machineId) })} removeTitle={lang === 'pt' ? 'Remover máquina' : 'Remove machine'}>
+                    <Cpu size={10} style={{ flexShrink: 0 }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+                  </FilterChip>
+                )
+              })}
+            </ChipRow>
+          </AnimatedRow>
+          <AnimatedRow show={hasProjects}>
+            <ChipRow label={lang === 'pt' ? 'Projetos' : 'Projects'}>
+              {filters.projects.map(path => (
+                <FilterChip key={`p:${path}`} title={path} onRemove={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })} removeTitle={lang === 'pt' ? 'Remover projeto' : 'Remove project'}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatProjectName(path)}</span>
+                </FilterChip>
+              ))}
+            </ChipRow>
+          </AnimatedRow>
+          <AnimatedRow show={hasRepoFilter}>
+            <ChipRow label={lang === 'pt' ? 'Repositórios' : 'Repos'}>
+              {selectedRepos.map(v => (
+                <FilterChip key={`r:${v}`} title={v || undefined} onRemove={() => onChange({ ...filters, repos: selectedRepos.filter(x => x !== v) })} removeTitle={lang === 'pt' ? 'Remover repositório' : 'Remove repository'}>
+                  <GitBranch size={10} style={{ flexShrink: 0 }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{v === '' ? (lang === 'pt' ? 'Sem repositório' : 'No repository') : repoShortName(v)}</span>
+                </FilterChip>
+              ))}
+            </ChipRow>
+          </AnimatedRow>
+          <AnimatedRow show={hasTagFilter}>
+            <ChipRow label={lang === 'pt' ? 'Tags' : 'Tags'}>
+              {selectedTags.map(id => {
+                const t = tagOptions.find(x => x._id === id)
+                const label = t?.name ?? id
+                return (
+                  <FilterChip key={`tag:${id}`} title={label} onRemove={() => onChange({ ...filters, tags: selectedTags.filter(x => x !== id) })} removeTitle={lang === 'pt' ? 'Remover tag' : 'Remove tag'}>
+                    <TagIcon size={10} style={{ flexShrink: 0, color: t?.color }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+                  </FilterChip>
+                )
+              })}
+            </ChipRow>
+          </AnimatedRow>
+          <AnimatedRow show={(filters.harnesses?.length ?? 0) > 0}>
+            <ChipRow label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}>
+              {(filters.harnesses ?? []).map(h => {
+                const color = HARNESS_COLORS[h]
+                return (
+                  <span key={`h:${h}`} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+                    color, background: `${color}1f`, border: `1px solid ${color}55`, borderRadius: 5,
+                    padding: '2px 6px 2px 8px', whiteSpace: 'nowrap',
+                  }}>
+                    <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                    {HARNESS_LABELS[h]}
+                    <button onClick={() => onChange({ ...filters, harnesses: filters.harnesses!.filter(x => x !== h) })}
+                      title={lang === 'pt' ? 'Remover harness' : 'Remove harness'}
+                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color, opacity: 0.7, flexShrink: 0 }}>
+                      <X size={10} strokeWidth={2.5} />
+                    </button>
+                  </span>
+                )
+              })}
+            </ChipRow>
+          </AnimatedRow>
+          <AnimatedRow show={hasModelFilter}>
+            <ChipRow label={lang === 'pt' ? 'Modelos' : 'Models'}>
+              {selectedModels.map(m => (
+                <FilterChip key={`m:${m}`} title={m} onRemove={() => onChange({ ...filters, models: selectedModels.filter(x => x !== m) })} removeTitle={lang === 'pt' ? 'Remover modelo' : 'Remove model'}>
+                  <Cpu size={10} style={{ flexShrink: 0 }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatModel(m)}</span>
+                </FilterChip>
+              ))}
+            </ChipRow>
+          </AnimatedRow>
+          <AnimatedRow show={filters.presence !== undefined}>
+            <ChipRow label={lang === 'pt' ? 'Presença' : 'Presence'}>
+              {filters.presence !== undefined && (() => {
+                const online = filters.presence === 'online'
+                const color = online ? '#22c55e' : '#ef4444'
+                return (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+                    color, background: `${color}1f`, border: `1px solid ${color}55`, borderRadius: 5,
+                    padding: '2px 6px 2px 8px', whiteSpace: 'nowrap',
+                  }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                    {online ? 'Online' : 'Offline'}
+                    <button onClick={() => onChange({ ...filters, presence: undefined })}
+                      title={lang === 'pt' ? 'Remover filtro de presença' : 'Remove presence filter'}
+                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color, opacity: 0.7, flexShrink: 0 }}>
+                      <X size={10} strokeWidth={2.5} />
+                    </button>
+                  </span>
+                )
+              })()}
+            </ChipRow>
+          </AnimatedRow>
+        </div>
+        </div>
+        </div>
+    </>
+  )
+
   return (
     <>
       <div style={{
         display: 'flex',
         gap: 8,
         alignItems: 'center',
-        flexWrap: 'wrap',
-        padding: compact ? '10px 12px' : '8px 0',
+        // Inline mode has ONE row and may not grow into a second: everything that would have
+        // wrapped is either dropped by the caller (via `only`) or lives in the `+ Filtro` popover.
+        flexWrap: inline ? 'nowrap' : 'wrap',
+        ...(inline ? { height: 34, minWidth: 0 } : {}),
+        padding: inline ? 0 : (compact ? '10px 12px' : '8px 0'),
       }}>
 
         {!hideDateRange && (
         <>
         {/* Date range presets — stretch to fill the row on mobile */}
-        <div style={{ display: 'flex', gap: 3, width: isMobile ? '100%' : undefined }}>
+        <div style={{ display: 'flex', gap: 3, flexShrink: 0, width: isMobile ? '100%' : undefined }}>
           {DATE_RANGES.map(r => {
             const active = filters.dateRange === r.key && !filters.customStart
             return (
@@ -305,7 +507,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
 
         {/* Custom date range */}
         <div style={{
-          display: 'flex', alignItems: 'center',
+          display: 'flex', alignItems: 'center', flexShrink: 0,
           flex: isMobile ? '1 1 100%' : undefined,
           background: hasCustomDates ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
           border: hasCustomDates ? '1px solid rgba(217,119,6,0.55)' : '1px solid var(--border)',
@@ -384,6 +586,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             style={{
               ...CTL,
               gap: 6,
+              flexShrink: 0,
               border: activeOnly ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
               background: activeOnly ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
               color: activeOnly ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
@@ -465,7 +668,13 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             presence/repos/projects/models). Clicking it opens a menu of the AVAILABLE
             dimensions; picking one opens that dimension's value picker. The selected
             values themselves render in the animated chip rows below, not here. */}
-        <div ref={addFilterRef} style={{ position: 'relative', flex: isMobile ? '1 1 0' : undefined }}>
+        <div ref={addFilterRef} style={{
+          position: 'relative',
+          // The one child that may narrow. Its popover holds everything it gives up, so a squeezed
+          // `+ Filtro` is still a complete filter control; a squeezed date preset is not a date.
+          ...(inline ? { minWidth: 0 } : {}),
+          flex: isMobile ? '1 1 0' : undefined,
+        }}>
           <button
             onClick={() => { setShowAddMenu(v => !v); setOpenPicker(null) }}
             title={lang === 'pt' ? 'Adicionar filtro' : 'Add filter'}
@@ -571,6 +780,13 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
                   active={hasModelFilter}
                   onClick={() => setOpenPicker('models')}
                 />
+              )}
+              {/* The chip rows' inline home. There is no band under the bar to hang them from, so
+                  they hang from the button whose badge already counts them. */}
+              {inline && activeFilterCount > 0 && (
+                <div style={{ borderTop: '1px solid var(--border)', marginTop: 6, paddingTop: 6, minWidth: 240 }}>
+                  {activeFilterChips}
+                </div>
               )}
             </div>
           )}
@@ -1011,179 +1227,9 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
         {/* Reset button removed — clear individual chips via their × instead. */}
       </div>
 
-      {/* Handle row (shown only when ≥1 filter is active): a desktop-only collapse toggle for the
-          chip rows + a "Clear all" button that removes every applied dimension filter. */}
-      {activeFilterCount > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: compact ? '2px 12px 0' : '0' }}>
-          {!compact && (
-            <button
-              onClick={() => setChipsCollapsed(c => !c)}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5,
-                background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)',
-                fontSize: 11, fontWeight: 600, padding: '4px 0', fontFamily: 'inherit',
-              }}
-              title={chipsCollapsed ? (lang === 'pt' ? 'Mostrar filtros ativos' : 'Show active filters') : (lang === 'pt' ? 'Minimizar filtros ativos' : 'Minimize active filters')}
-            >
-              <ChevronDown size={13} style={{ transform: chipsCollapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.2s' }} />
-              {chipsCollapsed
-                ? (lang === 'pt' ? `${activeFilterCount} filtro${activeFilterCount > 1 ? 's' : ''} ativo${activeFilterCount > 1 ? 's' : ''}` : `${activeFilterCount} active filter${activeFilterCount > 1 ? 's' : ''}`)
-                : (lang === 'pt' ? 'Filtros ativos' : 'Active filters')}
-            </button>
-          )}
-          <button
-            onClick={() => onChange({ ...filters, users: [], harnesses: [], presence: undefined, repos: [], tags: [], projects: [], models: [], teams: [], machines: [] })}
-            style={{
-              marginLeft: compact ? 'auto' : 0,
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-              background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)',
-              fontSize: 11, fontWeight: 600, padding: '4px 0', fontFamily: 'inherit',
-            }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--anthropic-orange)' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-tertiary)' }}
-            title={lang === 'pt' ? 'Limpar todos os filtros' : 'Clear all filters'}
-          >
-            <X size={12} /> {lang === 'pt' ? 'Limpar filtros' : 'Clear filters'}
-          </button>
-        </div>
-      )}
+      {/* Inline mode renders these inside the `+ Filtro` popover instead — see `activeFilterChips`. */}
+      {!inline && activeFilterChips}
 
-      {/* Active-filter chips — each category (members/projects/harnesses/models) is its own
-          row that slides in/out INDEPENDENTLY, so adding a second filter type animates the new
-          line too (not just the first). Rows are always mounted; their grid-rows toggle.
-          Wrapped in a grid-rows collapse driven by chipsCollapsed (desktop only). */}
-      <div style={{ display: 'grid', gridTemplateRows: (!compact && chipsCollapsed) ? '0fr' : '1fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1)' }}>
-      <div style={{ overflow: 'hidden', minHeight: 0 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', padding: compact ? '0 12px' : 0 }}>
-        <AnimatedRow show={(filters.users?.length ?? 0) > 0}>
-          <ChipRow label={lang === 'pt' ? 'Membros' : 'Members'}>
-            {(filters.users ?? []).map(u => (
-              <FilterChip key={`u:${u}`} title={u} onRemove={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })} removeTitle={lang === 'pt' ? 'Remover membro' : 'Remove member'}>
-                <Users size={10} style={{ flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{u}</span>
-              </FilterChip>
-            ))}
-          </ChipRow>
-        </AnimatedRow>
-        <AnimatedRow show={(filters.teams?.length ?? 0) > 0}>
-          <ChipRow label={lang === 'pt' ? 'Times' : 'Teams'}>
-            {(filters.teams ?? []).map(teamId => {
-              const team = teams?.find(t => t.id === teamId)
-              const label = team?.name ?? teamId
-              return (
-                <FilterChip key={`t:${teamId}`} title={label} onRemove={() => onChange({ ...filters, teams: filters.teams!.filter(x => x !== teamId) })} removeTitle={lang === 'pt' ? 'Remover time' : 'Remove team'}>
-                  <Users size={10} style={{ flexShrink: 0 }} />
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
-                </FilterChip>
-              )
-            })}
-          </ChipRow>
-        </AnimatedRow>
-        <AnimatedRow show={(filters.machines?.length ?? 0) > 0}>
-          <ChipRow label={lang === 'pt' ? 'Máquinas' : 'Machines'}>
-            {(filters.machines ?? []).map(machineId => {
-              const machine = machines?.find(m => m.id === machineId)
-              const label = machine?.name ?? machineId
-              return (
-                <FilterChip key={`m:${machineId}`} title={label} onRemove={() => onChange({ ...filters, machines: filters.machines!.filter(x => x !== machineId) })} removeTitle={lang === 'pt' ? 'Remover máquina' : 'Remove machine'}>
-                  <Cpu size={10} style={{ flexShrink: 0 }} />
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
-                </FilterChip>
-              )
-            })}
-          </ChipRow>
-        </AnimatedRow>
-        <AnimatedRow show={hasProjects}>
-          <ChipRow label={lang === 'pt' ? 'Projetos' : 'Projects'}>
-            {filters.projects.map(path => (
-              <FilterChip key={`p:${path}`} title={path} onRemove={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })} removeTitle={lang === 'pt' ? 'Remover projeto' : 'Remove project'}>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatProjectName(path)}</span>
-              </FilterChip>
-            ))}
-          </ChipRow>
-        </AnimatedRow>
-        <AnimatedRow show={hasRepoFilter}>
-          <ChipRow label={lang === 'pt' ? 'Repositórios' : 'Repos'}>
-            {selectedRepos.map(v => (
-              <FilterChip key={`r:${v}`} title={v || undefined} onRemove={() => onChange({ ...filters, repos: selectedRepos.filter(x => x !== v) })} removeTitle={lang === 'pt' ? 'Remover repositório' : 'Remove repository'}>
-                <GitBranch size={10} style={{ flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{v === '' ? (lang === 'pt' ? 'Sem repositório' : 'No repository') : repoShortName(v)}</span>
-              </FilterChip>
-            ))}
-          </ChipRow>
-        </AnimatedRow>
-        <AnimatedRow show={hasTagFilter}>
-          <ChipRow label={lang === 'pt' ? 'Tags' : 'Tags'}>
-            {selectedTags.map(id => {
-              const t = tagOptions.find(x => x._id === id)
-              const label = t?.name ?? id
-              return (
-                <FilterChip key={`tag:${id}`} title={label} onRemove={() => onChange({ ...filters, tags: selectedTags.filter(x => x !== id) })} removeTitle={lang === 'pt' ? 'Remover tag' : 'Remove tag'}>
-                  <TagIcon size={10} style={{ flexShrink: 0, color: t?.color }} />
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
-                </FilterChip>
-              )
-            })}
-          </ChipRow>
-        </AnimatedRow>
-        <AnimatedRow show={(filters.harnesses?.length ?? 0) > 0}>
-          <ChipRow label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}>
-            {(filters.harnesses ?? []).map(h => {
-              const color = HARNESS_COLORS[h]
-              return (
-                <span key={`h:${h}`} style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
-                  color, background: `${color}1f`, border: `1px solid ${color}55`, borderRadius: 5,
-                  padding: '2px 6px 2px 8px', whiteSpace: 'nowrap',
-                }}>
-                  <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
-                  {HARNESS_LABELS[h]}
-                  <button onClick={() => onChange({ ...filters, harnesses: filters.harnesses!.filter(x => x !== h) })}
-                    title={lang === 'pt' ? 'Remover harness' : 'Remove harness'}
-                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color, opacity: 0.7, flexShrink: 0 }}>
-                    <X size={10} strokeWidth={2.5} />
-                  </button>
-                </span>
-              )
-            })}
-          </ChipRow>
-        </AnimatedRow>
-        <AnimatedRow show={hasModelFilter}>
-          <ChipRow label={lang === 'pt' ? 'Modelos' : 'Models'}>
-            {selectedModels.map(m => (
-              <FilterChip key={`m:${m}`} title={m} onRemove={() => onChange({ ...filters, models: selectedModels.filter(x => x !== m) })} removeTitle={lang === 'pt' ? 'Remover modelo' : 'Remove model'}>
-                <Cpu size={10} style={{ flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatModel(m)}</span>
-              </FilterChip>
-            ))}
-          </ChipRow>
-        </AnimatedRow>
-        <AnimatedRow show={filters.presence !== undefined}>
-          <ChipRow label={lang === 'pt' ? 'Presença' : 'Presence'}>
-            {filters.presence !== undefined && (() => {
-              const online = filters.presence === 'online'
-              const color = online ? '#22c55e' : '#ef4444'
-              return (
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
-                  color, background: `${color}1f`, border: `1px solid ${color}55`, borderRadius: 5,
-                  padding: '2px 6px 2px 8px', whiteSpace: 'nowrap',
-                }}>
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
-                  {online ? 'Online' : 'Offline'}
-                  <button onClick={() => onChange({ ...filters, presence: undefined })}
-                    title={lang === 'pt' ? 'Remover filtro de presença' : 'Remove presence filter'}
-                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color, opacity: 0.7, flexShrink: 0 }}>
-                    <X size={10} strokeWidth={2.5} />
-                  </button>
-                </span>
-              )
-            })()}
-          </ChipRow>
-        </AnimatedRow>
-      </div>
-      </div>
-      </div>
 
       {showProjectsModal && (
         <ProjectsModal
