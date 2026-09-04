@@ -18,13 +18,13 @@
  * for the same refusal.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
   BookOpen, Terminal, Brain, Send, Eye,
 } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
-import { isDoc, liveEvents, type LiveEvent, type LiveTurn } from '../../lib/artifactTabs'
+import { agoLabel, isDoc, liveEvents, type LiveEvent, type LiveTurn } from '../../lib/artifactTabs'
 import { ArtifactDoc } from './ArtifactDoc'
 
 type TabId = 'files' | 'docs' | 'live'
@@ -77,9 +77,33 @@ export function ArtifactsAside({
   /** DOCS is a SUBSET of files, never a second list — a document cannot be in one and missing from
    *  the other. `isDoc` decides it by extension, which is what can be known without opening it. */
   const docs = useMemo(() => artifacts.filter(a => isDoc(a.path)), [artifacts])
-  const events = useMemo(() => liveEvents(turns ?? []), [turns])
-  /** Newest first: a feed is read backwards from what just happened. */
-  const feed = useMemo(() => [...events].reverse(), [events])
+  /**
+   * CHRONOLOGICAL, oldest first, and the view follows the tail.
+   *
+   * It was newest-first, and the ordering was unreadable because nothing on the row said which end
+   * was which — reported as exactly that. A feed of what a session is DOING reads like a terminal
+   * or a chat: the newest thing is at the BOTTOM, you arrive at it, and it stays in view while more
+   * arrives. Each row carries how long ago it happened, so the direction is stated rather than
+   * inferred from a scroll position.
+   */
+  const feed = useMemo(() => liveEvents(turns ?? []), [turns])
+  const feedRef = useRef<HTMLDivElement>(null)
+  /** A clock, so "3m ago" ages while the panel is open rather than freezing at its first render. */
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000)
+    return () => clearInterval(t)
+  }, [])
+  useEffect(() => {
+    if (tab !== 'live') return
+    const el = feedRef.current
+    if (!el) return
+    // Follow the tail only while the reader IS at the tail. Yanking the view down while somebody
+    // scrolled up to read something is the worst thing a live view does — the same rule the chat
+    // keeps.
+    const atTail = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    if (atTail || el.scrollTop === 0) el.scrollTop = el.scrollHeight
+  }, [feed.length, tab])
 
   const live = artifacts.filter(a => a.live)
   const past = artifacts.filter(a => !a.live)
@@ -160,8 +184,8 @@ export function ArtifactsAside({
         : 'Nothing has happened in this conversation yet.'} />
     }
     return (
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
-        {feed.map((e, i) => <EventRow key={i} e={e} pt={pt} />)}
+      <div ref={feedRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
+        {feed.map((e, i) => <EventRow key={i} e={e} pt={pt} now={now} />)}
       </div>
     )
   }
@@ -219,8 +243,8 @@ export function ArtifactsAside({
     }
     return tab === 'docs'
       ? fileList(docs, pt
-          ? 'Nenhuma spec ou documento escrito nesta sessão. Arquivos .md, .txt e afins aparecem aqui.'
-          : 'No spec or document written in this session. Files like .md and .txt appear here.')
+          ? 'Nenhum documento escrito nesta sessão DENTRO da pasta dela. Arquivos .md, .txt e afins aparecem aqui — mas só os que ficam na pasta da sessão: um arquivo escrito fora dela não pode ser lido daqui, e por isso não é listado.'
+          : 'No document written in this session INSIDE its folder. Files like .md and .txt appear here — but only those inside the session\'s folder: a file written outside it cannot be read from here, so it is not listed.')
       : fileList(artifacts, pt
           ? 'Nada escrito ainda nesta sessão. Arquivos aparecem aqui assim que a sessão escreve ou edita um.'
           : 'Nothing written in this session yet. Files appear here as soon as the session writes or edits one.')
@@ -304,7 +328,7 @@ function Row({ a, pt, onOpen }: { a: Artifact; pt: boolean; onOpen: () => void }
  * three kinds that carry a path or a command — those are read character by character — and left in
  * the reading face for the two that carry prose.
  */
-function EventRow({ e, pt }: { e: LiveEvent; pt: boolean }) {
+function EventRow({ e, pt, now }: { e: LiveEvent; pt: boolean; now: number }) {
   const meta: Record<LiveEvent['kind'], { icon: React.ReactNode; color: string; label: string }> = {
     wrote: { icon: <FileEdit size={11} />, color: 'var(--anthropic-orange)', label: pt ? 'escreveu' : 'wrote' },
     read: { icon: <Eye size={11} />, color: 'var(--text-tertiary)', label: pt ? 'leu' : 'read' },
@@ -331,6 +355,14 @@ function EventRow({ e, pt }: { e: LiveEvent; pt: boolean }) {
           fontFamily: mono ? 'var(--font-mono, ui-monospace, monospace)' : 'inherit',
         }}>{e.text}</span>
       </span>
+      {/* HOW LONG AGO, right-aligned, so the column reads as a timeline down the edge. Absent when
+          the transcript recorded no time — nothing here is invented. */}
+      {agoLabel(e.at, now, pt) !== '' && (
+        <span style={{
+          flexShrink: 0, fontSize: 10, color: 'var(--text-tertiary)',
+          fontVariantNumeric: 'tabular-nums', paddingTop: 2,
+        }}>{agoLabel(e.at, now, pt)}</span>
+      )}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { isDoc, liveEvents } from './artifactTabs'
+import { agoLabel, isDoc, liveEvents } from './artifactTabs'
 
 test('a document is decided by extension or by a known name', () => {
   for (const p of ['docs/spec.md', 'a/b/NOTES.txt', 'README', 'CHANGELOG.md', 'x/plan.mdx']) {
@@ -47,4 +47,25 @@ test("the person's own messages are not the session's activity", () => {
 test('an empty conversation produces an empty feed rather than a placeholder row', () => {
   expect(liveEvents([])).toEqual([])
   expect(liveEvents([{ role: 'assistant', text: '   ' }])).toEqual([])
+})
+
+test('an event carries the time of the turn that produced it', () => {
+  const out = liveEvents([{ at: '2026-09-04T12:00:00Z', tools: [{ name: 'Bash', detail: 'ls' }] }])
+  expect(out[0]!.at).toBe('2026-09-04T12:00:00Z')
+})
+
+test('a turn with NO recorded time produces events with none — nothing is invented', () => {
+  const out = liveEvents([{ tools: [{ name: 'Bash', detail: 'ls' }] }])
+  expect(out[0]!.at).toBeUndefined()
+})
+
+test('the ago label is the shortest true form, and empty when there is no time', () => {
+  const now = Date.parse('2026-09-04T12:00:00Z')
+  expect(agoLabel('2026-09-04T11:59:57Z', now, false)).toBe('now')
+  expect(agoLabel('2026-09-04T11:59:30Z', now, false)).toBe('30s')
+  expect(agoLabel('2026-09-04T11:45:00Z', now, false)).toBe('15m')
+  expect(agoLabel('2026-09-04T09:00:00Z', now, false)).toBe('3h')
+  expect(agoLabel('2026-09-01T12:00:00Z', now, false)).toBe('3d')
+  expect(agoLabel(undefined, now, false)).toBe('')
+  expect(agoLabel('not a date', now, false)).toBe('')
 })

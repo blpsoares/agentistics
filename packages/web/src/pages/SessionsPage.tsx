@@ -155,7 +155,10 @@ export default function SessionsPage() {
    */
   const [artWidth, setArtWidth] = useState<number>(() => {
     const v = Number(localStorage.getItem('agentistics:artifacts-w'))
-    return Number.isFinite(v) && v >= 280 ? Math.min(v, 900) : 440
+    // 620 by default, not 440: the panel's job is reading a FILE, and code at 440px wraps or
+    // scrolls sideways on nearly every line. A reader who wants the conversation wider can drag it
+    // back, and that choice is remembered.
+    return Number.isFinite(v) && v >= 280 ? Math.min(v, 900) : 620
   })
   const dragArt = useRef<{ x: number; w: number } | null>(null)
   useEffect(() => {

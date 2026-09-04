@@ -21,6 +21,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { highlight, languageOf, type TokenKind } from '../../lib/codeHighlight'
 import remarkGfm from 'remark-gfm'
 import { ArrowLeft, Check, Copy, FileText } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
@@ -38,6 +39,62 @@ export interface ArtifactDocProps {
   lang: 'pt' | 'en'
   /** Back to the list. Absent where there is nowhere to go back to. */
   onBack?: () => void
+}
+
+/**
+ * The file, as something to read: a gutter of line numbers beside coloured code.
+ *
+ * The colours are the application's own tokens rather than an editor theme's, so a file read here
+ * looks like the product it is read in — and they follow light and dark with it, which a fixed
+ * palette from a highlighter's stylesheet would not.
+ *
+ * A language the lexer does not know renders PLAIN and still numbered. Mis-colouring is worse than
+ * no colouring: a string drawn as code tells the reader something false about the file, and this
+ * view exists to be trusted.
+ */
+function CodeView({ text, name }: { text: string; name: string }) {
+  const lang = languageOf(name)
+  const lines = highlight(text, lang)
+  const colour: Record<TokenKind, string> = {
+    plain: 'var(--text-secondary)',
+    comment: 'var(--text-tertiary)',
+    string: 'var(--accent-green, #22c55e)',
+    number: 'var(--anthropic-orange)',
+    keyword: '#a78bfa',
+    punct: 'var(--text-tertiary)',
+  }
+  return (
+    <div style={{
+      borderRadius: 9, background: 'var(--bg-base)', border: '1px solid var(--border-subtle)',
+      maxWidth: '100%', overflowX: 'auto',
+      fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, Consolas, monospace",
+      fontSize: 12, lineHeight: 1.6,
+    }}>
+      <table style={{ borderCollapse: 'collapse', width: 'max-content', minWidth: '100%' }}>
+        <tbody>
+          {lines.map((toks, i) => (
+            <tr key={i}>
+              {/* The gutter is `user-select: none` so copying the code does not take the numbers
+                  with it — the one thing that makes a numbered view useless to copy from. */}
+              <td style={{
+                userSelect: 'none', textAlign: 'right', verticalAlign: 'top',
+                padding: '0 10px 0 12px', width: 1, whiteSpace: 'nowrap',
+                color: 'var(--text-tertiary)', opacity: 0.55, fontVariantNumeric: 'tabular-nums',
+                position: 'sticky', left: 0, background: 'var(--bg-base)',
+              }}>{i + 1}</td>
+              <td style={{ padding: '0 12px 0 0', whiteSpace: 'pre', verticalAlign: 'top' }}>
+                {toks.length === 0
+                  ? '\u00a0'
+                  : toks.map((t, j) => (
+                    <span key={j} style={{ color: colour[t.kind] }}>{t.text}</span>
+                  ))}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 /** The cap the server applies, restated in words rather than in bytes. */
@@ -195,17 +252,9 @@ export function ArtifactDoc({ sessionId, artifact, lang, onBack }: ArtifactDocPr
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{payload.text}</ReactMarkdown>
           </div>
         ) : (
-          // Wide code scrolls INSIDE this box. The page body must never scroll sideways.
-          <pre style={{
-            margin: 0, padding: '10px 12px', borderRadius: 9,
-            background: 'var(--bg-base)', border: '1px solid var(--border-subtle)',
-            color: 'var(--text-secondary)',
-            fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, Consolas, monospace",
-            fontSize: 12, lineHeight: 1.55,
-            maxWidth: '100%', overflowX: 'auto', whiteSpace: 'pre',
-          }}>
-            {payload.text}
-          </pre>
+          // A READING VIEW: numbered lines, coloured tokens, this app's own palette. Wide code
+          // scrolls INSIDE this box — the page body must never scroll sideways.
+          <CodeView text={payload.text} name={artifact.name} />
         )}
       </div>
     </div>

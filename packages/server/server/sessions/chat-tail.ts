@@ -29,6 +29,14 @@ import { hasUnreadableWrite, shellWrites } from './shell-writes'
 import { classifyUserEntry, type UserEntry } from './chat-envelope'
 
 export interface ChatTurn {
+  /**
+   * When the transcript recorded this turn, ISO.
+   *
+   * Optional because an older transcript may not carry one, and a turn with no time is shown
+   * without one rather than given a made-up "now" — a feed whose ordering is the whole point cannot
+   * afford an invented timestamp.
+   */
+  at?: string
   role: 'user' | 'assistant'
   text: string
   /**
@@ -492,6 +500,12 @@ async function readTurnsFromTail(
     const isNewest = newest
     newest = false
 
+    // The event's own time, stamped onto whatever this iteration pushes. A turn with no recorded
+    // time gets none rather than "now" — the Live feed's whole promise is its ordering, and an
+    // invented timestamp is the one thing that could quietly break it.
+    const at = typeof e.timestamp === 'string' ? e.timestamp : undefined
+    const add = (t: ChatTurn): void => { turns.push(at ? { ...t, at } : t) }
+
     const done = taskNotificationFor(rawEntryText(e))
     if (done) finishedTasks.add(done)
 
@@ -499,20 +513,20 @@ async function readTurnsFromTail(
     if (bg) {
       // A status line, never a message — nobody said it. `running` is settled after the walk,
       // once every completion in the file has been seen.
-      turns.push({ role: 'assistant', text: bg.label, task: { label: bg.label, running: true }, pending: true })
+      add({ role: 'assistant', text: bg.label, task: { label: bg.label, running: true }, pending: true })
       taskTurns.push({ id: bg.id, turn: turns[turns.length - 1]! })
       continue
     }
 
     const userEntry = extractUserEntry(e)
-    if (userEntry) { turns.push(userTurn(userEntry)); continue }
+    if (userEntry) { add(userTurn(userEntry)); continue }
     const queued = extractQueuedEntry(e)
-    if (queued) { turns.push(userTurn(queued)); continue }
+    if (queued) { add(userTurn(queued)); continue }
     const assistantText = extractAssistantText(e)
-    if (assistantText) { turns.push({ role: 'assistant', text: assistantText }); continue }
+    if (assistantText) { add({ role: 'assistant', text: assistantText }); continue }
     if (isNewest) {
       const tools = extractToolActivity(e)
-      if (tools) turns.push({ role: 'assistant', text: toolActivityLabel(tools), pending: true })
+      if (tools) add({ role: 'assistant', text: toolActivityLabel(tools), pending: true })
     }
   }
   // Settled AFTER the walk: a completion always comes later in the file than its start, so this is
