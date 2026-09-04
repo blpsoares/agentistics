@@ -2,17 +2,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { Outlet, NavLink, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { version } from '../../../package.json'
-import {
-  MessageSquare, Zap, Clock, Flame, GitCommit,
-  Wrench, RefreshCw, FileCode, TrendingUp, BarChart2,
-  Sun, Moon, Globe, AlertTriangle, Download, FileDown,
-  Maximize2, X, Trophy, Activity, Bot, Sparkles, Settings, SlidersHorizontal,
-  Calendar, Database, FileText, Shield, FolderOpen, CheckCircle,
-  Target, Home, DollarSign, Layers, Code2, GitCompare, MoreHorizontal,
-  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowLeft, ArrowRight, PanelLeft,
-  GitBranch, Users, LogOut, Server, KeyRound, Tag as TagIcon,
-  ShieldCheck, Cpu, MessagesSquare, TerminalSquare,
-} from 'lucide-react'
+import { Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart2, Bot, Calendar, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Code2, Cpu, Database, DollarSign, Download, FileCode, FileDown, FileText, Flame, FolderOpen, GitBranch, GitCommit, GitCompare, Globe, Home, KeyRound, Layers, LogOut, Maximize2, MessageSquare, MessagesSquare, Moon, MoreHorizontal, PanelLeft, PanelRight, RefreshCw, Server, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Tag as TagIcon, Target, TerminalSquare, TrendingUp, Trophy, Users, Wrench, X, Zap } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import { usePlanBasis } from './hooks/usePlanBasis'
 import { planScopeHarnesses, planScopeNote } from './lib/costBasis'
@@ -62,6 +52,7 @@ import { Login } from './components/Login'
 import { ModeSwitch } from './components/nav/ModeSwitch'
 import { TopBar } from './components/nav/TopBar'
 import { headerFit } from './lib/headerFit'
+import { toggleArtifacts, useArtifacts } from './lib/artifactsStore'
 import { SessionsAside } from './components/nav/SessionsAside'
 import { SessionsRail } from './components/nav/SessionsRail'
 import { getPinnedIds } from './lib/pinnedSessions'
@@ -1587,6 +1578,9 @@ export default function AppLayout() {
   }, [actionsEl])
 
   // The compensating padding is not space the bar may draw in, so it is taken off first.
+  /** The artifacts panel's open flag and count — see `artifactsStore` for why it is not a prop. */
+  const artifacts = useArtifacts()
+
   const stripFit = headerFit(Math.max(0, filterSlotW - actionsW))
   /**
    * Active sessions only — the fleet's own dimension (see `FiltersBar`'s doc comment on
@@ -2758,6 +2752,44 @@ export default function AppLayout() {
             icon={<TerminalSquare size={13} />} label="Terminal"
           />
         </div>
+      )}
+
+      {/* THE ARTIFACTS BUTTON, beside the view tabs — the panel is a view OF this session, so it
+          belongs with the two that already are.
+
+          ABSENT ON A CENTRAL, not disabled: the list is derived from the session's own
+          conversation, and the conversation does not leave the machine. A control that cannot work
+          is not rendered inert — the same rule the fleet's verbs keep. The sentence is on the row
+          in the panel's place, so the absence is explained where the button would have been. */}
+      {selectedFleetSession && !isCentral && (
+        <button
+          onClick={toggleArtifacts}
+          aria-pressed={artifacts.open}
+          title={lang === 'pt'
+            ? 'Arquivos que esta sessão escreveu'
+            : 'Files this session has written'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+            height: 30, padding: '0 10px', borderRadius: 9, cursor: 'pointer',
+            border: '1px solid ' + (artifacts.open ? 'var(--anthropic-orange)' : 'var(--border-subtle)'),
+            background: artifacts.open ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+            color: artifacts.open ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+            fontFamily: 'inherit', fontSize: 12,
+          }}
+        >
+          <PanelRight size={13} />
+          {/* The count is the whole reason to press it, so it rides the button. Absent at zero
+              rather than shown as 0 — "this session has written nothing" is what the panel says,
+              and a badge saying so on the header would be noise on every fresh session. */}
+          {artifacts.sessionId === selectedFleetSession.id && artifacts.count > 0 && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              minWidth: 15, height: 15, borderRadius: 8, padding: '0 4px',
+              background: 'var(--anthropic-orange)', color: 'white',
+              fontSize: 10, fontWeight: 700, lineHeight: 1,
+            }}>{artifacts.count}</span>
+          )}
+        </button>
       )}
 
       {selectedSessionRow && (

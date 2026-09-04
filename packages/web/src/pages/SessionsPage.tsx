@@ -17,13 +17,17 @@
  * a session's state by one poll interval — which is a bug people report as flicker.
  */
 
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import { ChevronLeft, MessagesSquare, SlidersHorizontal, TerminalSquare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { FleetOverview } from '../components/sessions/FleetOverview'
+import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
+import { resolveArtifactLayout, shouldAutoOpen } from '../lib/artifactLayout'
+import { closeArtifacts, openArtifacts, setArtifactCount, useArtifacts } from '../lib/artifactsStore'
+import type { Artifact } from '../lib/sessionArtifacts'
 import { FiltersBar } from '../components/FiltersBar'
 import { SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
 import { SessionsAside } from '../components/nav/SessionsAside'
@@ -101,6 +105,59 @@ export default function SessionsPage() {
     [fleet.rows, filters, activeOnly],
   )
 
+  /**
+   * THE ARTIFACTS PANEL.
+   *
+   * The list arrives from `SessionChat`, which already polls the conversation it is derived from —
+   * a second poller for the same turns would be two readers disagreeing about one session. The open
+   * flag lives in `artifactsStore` because the BUTTON is in the header, which is not an ancestor of
+   * this page.
+   */
+  const [artifacts, setArtifacts] = useState<readonly Artifact[]>([])
+  const [artifactsLoading, setArtifactsLoading] = useState(true)
+  const [artifactsUnavailable, setArtifactsUnavailable] = useState<string | undefined>(undefined)
+  const art = useArtifacts()
+  const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string }) => {
+    setArtifacts(a.artifacts)
+    setArtifactsLoading(a.loading)
+    setArtifactsUnavailable(a.unavailable)
+    if (selected) setArtifactCount(selected.id, a.artifacts.length)
+  }, [selected])
+
+  /**
+   * A file being written NOW is what opens the panel by itself — not merely a busy session, which
+   * may be thinking, searching or running tests and has nothing to show here. `shouldAutoOpen`
+   * holds the rest of the rule, including why it fires on the transition and why a panel the person
+   * closed stays closed.
+   */
+  const writing = artifacts.some(a => a.live)
+  const wasWriting = useRef(false)
+  useEffect(() => {
+    if (shouldAutoOpen({
+      writing, wasWriting: wasWriting.current, open: art.open, dismissed: art.dismissed, isMobile,
+    })) openArtifacts()
+    wasWriting.current = writing
+  }, [writing, art.open, art.dismissed, isMobile])
+
+  const artLayout = resolveArtifactLayout({
+    open: art.open && selected !== undefined,
+    width: typeof window === 'undefined' ? 1440 : window.innerWidth,
+    isMobile,
+    // Phase B ships without the reversal control; the split-rail default is what the plan measured.
+    listExpandedByUser: false,
+  })
+
+  const artifactsPane = selected === undefined ? null : (
+    <ArtifactsAside
+      sessionId={selected.id}
+      lang={pt ? 'pt' : 'en'}
+      artifacts={artifacts}
+      loading={artifactsLoading}
+      {...(artifactsUnavailable ? { unavailable: artifactsUnavailable } : {})}
+      onClose={closeArtifacts}
+    />
+  )
+
   const panel = selected === undefined ? null : (
     <SessionPanel
       session={selected}
@@ -114,6 +171,7 @@ export default function SessionsPage() {
       // button — one bar instead of two stacked ones saying overlapping things.
       view={sessionView}
       onViewChange={setSessionView}
+      onArtifacts={onArtifacts}
     />
   )
 
@@ -360,7 +418,49 @@ export default function SessionsPage() {
   // ---------------------------------------------------------------------------
   // Desktop: the aside holds the list; this is the centre.
   // ---------------------------------------------------------------------------
-  if (panel) return panel
+  if (panel) {
+    if (artLayout.layout === 'closed' || !artifactsPane) return panel
+    // FULLSCREEN and OVERLAY both cover the conversation; the difference is that the overlay leaves
+    // the page under it visible at its edge, which is the only affordance saying what closing
+    // returns you to.
+    if (artLayout.layout === 'fullscreen') {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          {artifactsPane}
+        </div>
+      )
+    }
+    if (artLayout.layout === 'overlay') {
+      return (
+        <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          {panel}
+          <div style={{
+            position: 'absolute', top: 0, right: 0, bottom: 0, width: 'min(440px, 88%)', zIndex: 20,
+            background: 'var(--bg-surface)', borderLeft: '1px solid var(--border)',
+            boxShadow: '-12px 0 32px rgba(0,0,0,0.45)',
+            display: 'flex', flexDirection: 'column', minHeight: 0,
+          }}>
+            {artifactsPane}
+          </div>
+        </div>
+      )
+    }
+    // The split. BOTH wrappers keep `display: flex; flexDirection: column` — this file has recorded
+    // the same bug twice: `flex: 1` on a child means nothing until its PARENT is a flex container.
+    return (
+      <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
+          {panel}
+        </div>
+        <div style={{
+          display: 'flex', flexDirection: 'column', width: 440, flexShrink: 0, minHeight: 0,
+          borderLeft: '1px solid var(--border)', background: 'var(--bg-surface)',
+        }}>
+          {artifactsPane}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>

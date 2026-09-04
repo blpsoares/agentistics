@@ -40,6 +40,7 @@ import { attachmentUrl } from '../../lib/attachmentUrl'
 import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
 import { sessionScratch, type CachedChat } from '../../lib/sessionScratch'
 import { composerMaxHeight } from '../../lib/composerHeight'
+import { artifactsFromTurns, type Artifact } from '../../lib/sessionArtifacts'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
 import { appendDictation, dictatedText, dictationError, dictationLocale, dictationSupport, insecureAlternative } from '../../lib/dictation'
 import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
@@ -57,6 +58,18 @@ export interface SessionChatProps {
   lang: 'pt' | 'en'
   act: (req: { id: string; action: FleetActionId; text?: string; choice?: number })
     => Promise<{ ok: boolean; message: string }>
+  /**
+   * The files this session has touched, reported up as the conversation is read.
+   *
+   * The artifacts panel is a sibling of this component, not a child, and the list is derived from
+   * the very turns this one already polls. Fetching the conversation a second time to build the
+   * same list would be two pollers disagreeing about one session — so it is handed over instead.
+   */
+  onArtifacts?: (a: {
+    artifacts: Artifact[]
+    loading: boolean
+    unavailable?: string
+  }) => void
 }
 
 /** Matches the fleet poll. The transcript only changes when a turn lands, so faster buys nothing. */
@@ -78,7 +91,7 @@ const TAIL_SLACK = 24
 
 interface Attachment { name: string; path: string }
 
-export function SessionChat({ session, row, lang, act }: SessionChatProps) {
+export function SessionChat({ session, row, lang, act, onArtifacts }: SessionChatProps) {
   const pt = lang === 'pt'
   /**
    * Both of these OUTLIVE this component, in `sessionScratch` — see that module for why they get
@@ -484,6 +497,22 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
 
   const blocked = (session.approvalLines?.length ?? 0) > 0
   const loading = payload === null
+
+  /**
+   * Hand the artifact list to whoever is drawing the panel.
+   *
+   * Derived from the same `turns` the conversation renders, so the two can never disagree about
+   * what this session wrote.
+   */
+  const artifacts = useMemo(() => artifactsFromTurns(turns), [turns])
+  useEffect(() => {
+    onArtifacts?.({
+      artifacts,
+      loading,
+      ...(payload?.unavailable ? { unavailable: payload.unavailable } : {}),
+    })
+  }, [artifacts, loading, payload?.unavailable, onArtifacts])
+
   const canPrompt = !loading && session.actionable && !blocked && payload.live !== false
   /** The row's own reopen verb, if it has one. Enabled by the server, never inferred here. */
   const reopen = row?.verbs.find(v => v.action === 'resume')
