@@ -26,7 +26,8 @@ import { filterFleet } from '../../lib/fleetFilter'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { NewSessionModal } from '../sessions/NewSessionModal'
 import {
-  MAX_PINNED, getPinnedIds, pinnedServerSnapshot, subscribePinnedSessions, togglePinnedSession,
+  MAX_PINNED, getPinnedIds, movePinnedSession, pinnedServerSnapshot, subscribePinnedSessions,
+  togglePinnedSession,
 } from '../../lib/pinnedSessions'
 
 export interface SessionsAsideProps {
@@ -161,6 +162,9 @@ export function SessionsAside({
     setPinNotice(null)
   }
   const [pinNotice, setPinNotice] = useState<string | null>(null)
+  /** Which pinned row is being dragged, and where it would land. Local: a drag is not shared state. */
+  const [dragFrom, setDragFrom] = useState<number | null>(null)
+  const [dragOver, setDragOver] = useState<number | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
   // The top bar's magnifier focuses this field. An event rather than a prop because the button and
@@ -344,16 +348,38 @@ export function SessionsAside({
               <span style={{ marginLeft: 'auto', fontWeight: 600, opacity: 0.75 }}>{pinnedRows.length}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {pinnedRows.map(s => (
-                <SessionRow
+              {pinnedRows.map((s, i) => (
+                <div
                   key={`pin-${s.id}`}
-                  session={s}
-                  selected={rowSelected(s, sessionId)}
-                  pinned
-                  {...(tap ? { tap } : {})}
-                  onPin={() => flip(s)}
-                  onOpen={() => (onOpenRow ? onOpenRow(s) : navigate(`/sessions/${s.id}`))}
-                />
+                  draggable
+                  onDragStart={e => { setDragFrom(i); e.dataTransfer.effectAllowed = 'move' }}
+                  onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(i) }}
+                  onDragEnd={() => { setDragFrom(null); setDragOver(null) }}
+                  onDrop={e => {
+                    e.preventDefault()
+                    if (dragFrom !== null) movePinnedSession(dragFrom, i)
+                    setDragFrom(null); setDragOver(null)
+                  }}
+                  style={{
+                    // The drop target is shown as an EDGE, not by moving the rows: a list that
+                    // reflows under the cursor moves the target you were aiming at.
+                    boxShadow: dragOver === i && dragFrom !== null && dragFrom !== i
+                      ? 'inset 0 2px 0 var(--anthropic-orange)'
+                      : undefined,
+                    opacity: dragFrom === i ? 0.45 : 1,
+                    ...(tap ? { touchAction: 'none' as const } : {}),
+                  }}
+                >
+                  <SessionRow
+                    session={s}
+                    selected={rowSelected(s, sessionId)}
+                    pinned
+                    {...(tap ? { tap } : {})}
+                    onPin={() => flip(s)}
+                    onOpen={() => (onOpenRow ? onOpenRow(s) : navigate(`/sessions/${s.id}`))}
+                    onMoveBy={d => movePinnedSession(i, i + d)}
+                  />
+                </div>
               ))}
             </div>
           </div>
@@ -474,13 +500,15 @@ function EmptyReason({
 }
 
 
-function SessionRow({ session, selected, pinned, tap, onPin, onOpen }: {
+function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy }: {
   session: ControlSession; selected: boolean
   /** Minimum row height on mobile — 44px, and undefined on desktop. */
   tap?: number
   pinned?: boolean
   onPin?: () => void
   onOpen: () => void
+  /** Reorder this pinned row by `delta` places. Only ever passed for a row in the Pinned band. */
+  onMoveBy?: (delta: number) => void
 }) {
   const wants = sessionNotify(session)
   const color = STATE_COLOR[session.state] ?? 'var(--text-tertiary)'
@@ -513,6 +541,14 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen }: {
       onMouseEnter={e => { if (!selected) e.currentTarget.style.background = 'var(--bg-elevated)' }}
       onMouseLeave={e => {
         if (!selected) e.currentTarget.style.background = STATE_WASH[session.state] ?? 'transparent'
+      }}
+      onKeyDown={e => {
+        // alt+arrows, so the plain arrows keep whatever the browser and the list do with them. A
+        // reorder that exists only for a mouse is a reorder half the readers do not have.
+        if (onMoveBy && e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+          e.preventDefault()
+          onMoveBy(e.key === 'ArrowUp' ? -1 : 1)
+        }
       }}
       aria-current={selected ? 'true' : undefined}
       title={session.model ? `${session.title}\n${session.model}` : session.title}
