@@ -65,7 +65,7 @@ import { SessionsAside } from './components/nav/SessionsAside'
 import { AsideResizer } from './components/nav/AsideResizer'
 import { modeOfPath } from './lib/workspaceMode'
 import { ASIDE_DEFAULT } from './lib/asideWidth'
-import { useFleet, useFleetIndex } from './lib/fleet'
+import { useFleet, useFleetIndex, type FleetActionId } from './lib/fleet'
 import { Segment } from './components/sessions/SessionPanel'
 import { SessionActions } from './components/sessions/SessionActions'
 import { MemberConnectionStatus } from './components/MemberConnectionStatus'
@@ -1028,8 +1028,11 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
   // for the moment you are looking at the dashboard and a session starts needing you. `useFleet`
   // shares one poll across every consumer, so this costs no extra request. Never on a central: it
   // aggregates many machines and hosts none of their sessions.
-  const { fleet, loading: fleetLoading, unsupported: fleetUnsupported, stale: fleetStale } = useFleet(pt ? 'pt' : 'en')
+  const { fleet, loading: fleetLoading, unsupported: fleetUnsupported, stale: fleetStale, act: fleetAct } = useFleet(pt ? 'pt' : 'en')
   const attention = fleet.attention
+  // The row's context menu (Task 6) needs the verb-carrying shape, not the arrangement-only one —
+  // `useFleetIndex` is the SAME map the header and the panel already build from `fleet.sessions`.
+  const asideRowIndex = useFleetIndex(fleet.sessions)
   const mode = modeOfPath(location.pathname)
   // A resize in progress. Only used to suspend the collapse animation — see the aside's `transition`.
   const [dragging, setDragging] = useState(false)
@@ -1094,6 +1097,8 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
           {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
           stale={fleetStale}
           {...(isCentral ? { hideNew: true } : {})}
+          rowsById={asideRowIndex}
+          act={req => fleetAct({ ...req, action: req.action as FleetActionId })}
         />
         </>
       ) : (

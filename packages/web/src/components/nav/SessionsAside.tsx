@@ -25,6 +25,8 @@ import { rowSelected } from '../../lib/fleetSelection'
 import { filterFleet } from '../../lib/fleetFilter'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { NewSessionModal } from '../sessions/NewSessionModal'
+import { rowMenuEntries, type RowVerb } from '../../lib/rowMenu'
+import { SessionRowMenu } from '../sessions/SessionRowMenu'
 import {
   MAX_PINNED, getPinnedIds, movePinnedSession, pinnedServerSnapshot, subscribePinnedSessions,
   togglePinnedSession,
@@ -77,6 +79,15 @@ export interface SessionsAsideProps {
    * is a refusal is a button that teaches the wrong thing.
    */
   hideNew?: boolean
+  /**
+   * The fleet's own verb-carrying rows, keyed by id — for the row's context menu (Task 6).
+   *
+   * Absent on a surface that cannot act (a central relaying a machine that has not granted the
+   * screen/action switches yet): the menu is then not opened at all, rather than opened inert.
+   */
+  rowsById?: Map<string, { verbs: RowVerb[] }>
+  /** Performs a verb. Absent exactly where `rowsById` is absent. */
+  act?: (req: { id: string; action: string; text?: string }) => Promise<{ ok: boolean; message: string }>
 }
 
 /** The colour a state is said in. `running` is its own token, not `success`, which reads teal. */
@@ -131,7 +142,7 @@ function pinKeyOf(row: ControlSession): string {
 
 export function SessionsAside({
   lang, rows, loading, unsupported, unavailable, filters, activeOnly, finishedTasks, stale,
-  onOpenRow, hideNew,
+  onOpenRow, hideNew, rowsById, act,
 }: SessionsAsideProps) {
   const pt = lang === 'pt'
   const navigate = useNavigate()
@@ -154,18 +165,39 @@ export function SessionsAside({
   const flip = (row: ControlSession) => {
     const out = togglePinnedSession(pinKeyOf(row))
     if (!out.ok && out.reason === 'limit') {
-      setPinNotice(pt
+      setNotice(pt
         ? `No máximo ${MAX_PINNED} conversas fixadas. Solte uma antes de fixar outra.`
         : `At most ${MAX_PINNED} pinned conversations. Unpin one first.`)
       return
     }
-    setPinNotice(null)
+    setNotice(null)
   }
-  const [pinNotice, setPinNotice] = useState<string | null>(null)
+  /** No longer only about pins — the row menu's action results land here too. */
+  const [notice, setNotice] = useState<string | null>(null)
   /** Which pinned row is being dragged, and where it would land. Local: a drag is not shared state. */
   const [dragFrom, setDragFrom] = useState<number | null>(null)
   const [dragOver, setDragOver] = useState<number | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string; state: string; verbs: RowVerb[] } | null>(null)
+  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
+
+  const openMenu = (session: ControlSession, x: number, y: number, verbs: RowVerb[]) => {
+    setMenu({ x, y, id: session.id, state: session.state, verbs })
+  }
+
+  const pickMenuAction = (action: string) => {
+    if (!menu) return
+    const { id } = menu
+    if (action === 'rename') {
+      const target = rows.find(r => r.id === id)
+      setRenaming({ id, title: target?.title ?? '' })
+      setRenameDraft(target?.title ?? '')
+      return
+    }
+    if (!act) return
+    void act({ id, action }).then(out => setNotice(out.message))
+  }
 
   // The top bar's magnifier focuses this field. An event rather than a prop because the button and
   // the field are in two different subtrees, and threading a ref through the whole shell to join
@@ -301,11 +333,11 @@ export function SessionsAside({
         )}
       </div>
 
-      {pinNotice && (
+      {notice && (
         <p role="status" style={{
           margin: '0 4px', fontSize: 11, lineHeight: 1.45, color: 'var(--anthropic-orange)',
         }}>
-          {pinNotice}
+          {notice}
         </p>
       )}
 
@@ -378,6 +410,8 @@ export function SessionsAside({
                     onPin={() => flip(s)}
                     onOpen={() => (onOpenRow ? onOpenRow(s) : navigate(`/sessions/${s.id}`))}
                     onMoveBy={d => movePinnedSession(i, i + d)}
+                    {...(rowsById?.get(s.id) ? { verbs: rowsById.get(s.id)!.verbs } : {})}
+                    onOpenMenu={(x, y, verbs) => openMenu(s, x, y, verbs)}
                   />
                 </div>
               ))}
@@ -401,18 +435,103 @@ export function SessionsAside({
                 label={b.label} rows={b.rows} pinned={pinned}
                 sessionId={sessionId} tap={tap} onPin={flip}
                 onOpen={s => (onOpenRow ? onOpenRow(s) : navigate(`/sessions/${s.id}`))}
+                {...(rowsById ? { rowsById } : {})}
+                onOpenMenu={openMenu}
               />
             ))}
           </>
         )}
       </div>
+
+      {/* The row's context menu (Task 6) — rename / stop / reopen, exactly the row's own verbs. */}
+      {menu && (
+        <SessionRowMenu
+          x={menu.x} y={menu.y}
+          entries={rowMenuEntries(menu.verbs, menu.state)}
+          onPick={pickMenuAction}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      {/* A tiny rename prompt, seeded with the row's current title — the same shape the panel's own
+          rename flow uses (`SessionActions`'s `asking` form), reachable here for a row that may not
+          be the one currently open. */}
+      {renaming && (
+        <div
+          role="dialog"
+          aria-label={pt ? 'Renomear sessão' : 'Rename session'}
+          style={{ position: 'fixed', inset: 0, zIndex: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={() => setRenaming(null)}
+            style={{ position: 'absolute', inset: 0, background: 'var(--ag-scrim, rgba(0,0,0,0.4))' }}
+          />
+          <form
+            onSubmit={e => {
+              e.preventDefault()
+              if (!act) return
+              const id = renaming.id
+              void act({ id, action: 'rename', text: renameDraft.trim() }).then(out => {
+                setNotice(out.message)
+                setRenaming(null)
+              })
+            }}
+            style={{
+              position: 'relative', zIndex: 1, minWidth: 260, maxWidth: 340,
+              background: 'var(--bg-surface)', border: '1px solid var(--border)',
+              borderRadius: 12, padding: 14, display: 'flex', flexDirection: 'column', gap: 10,
+              boxShadow: 'var(--ag-shadow-menu)',
+            }}
+          >
+            <label style={{
+              fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase',
+              letterSpacing: '0.05em', color: 'var(--text-tertiary)',
+            }}>
+              {pt ? 'Novo nome' : 'New name'}
+            </label>
+            <input
+              autoFocus
+              value={renameDraft}
+              onChange={e => setRenameDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Escape') setRenaming(null) }}
+              style={{
+                width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8,
+                border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+                color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 13, outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+              <button
+                type="button" onClick={() => setRenaming(null)}
+                style={{
+                  padding: '6px 11px', borderRadius: 8, cursor: 'pointer',
+                  border: '1px solid var(--border-subtle)', background: 'transparent',
+                  color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 12,
+                }}
+              >
+                {pt ? 'Cancelar' : 'Cancel'}
+              </button>
+              <button
+                type="submit"
+                style={{
+                  padding: '6px 12px', borderRadius: 8, cursor: 'pointer', border: 'none',
+                  background: 'var(--anthropic-orange)', color: '#fff',
+                  fontFamily: 'inherit', fontSize: 12, fontWeight: 650,
+                }}
+              >
+                {pt ? 'Salvar' : 'Save'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   )
 }
 
 /** One band of the two-way (active/inactive) split. Absent when it would be empty — an empty
  *  band with a heading and no rows under it is a label pretending to be information. */
-function SessionBand({ label, rows, pinned, sessionId, tap, onPin, onOpen }: {
+function SessionBand({ label, rows, pinned, sessionId, tap, onPin, onOpen, rowsById, onOpenMenu }: {
   label: string
   rows: readonly ControlSession[]
   pinned: ReadonlySet<string>
@@ -420,6 +539,8 @@ function SessionBand({ label, rows, pinned, sessionId, tap, onPin, onOpen }: {
   tap?: number
   onPin: (row: ControlSession) => void
   onOpen: (row: ControlSession) => void
+  rowsById?: Map<string, { verbs: RowVerb[] }>
+  onOpenMenu: (session: ControlSession, x: number, y: number, verbs: RowVerb[]) => void
 }) {
   if (rows.length === 0) return null
   return (
@@ -442,6 +563,8 @@ function SessionBand({ label, rows, pinned, sessionId, tap, onPin, onOpen }: {
             {...(tap ? { tap } : {})}
             onPin={() => onPin(s)}
             onOpen={() => onOpen(s)}
+            {...(rowsById?.get(s.id) ? { verbs: rowsById.get(s.id)!.verbs } : {})}
+            onOpenMenu={(x, y, verbs) => onOpenMenu(s, x, y, verbs)}
           />
         ))}
       </div>
@@ -500,7 +623,7 @@ function EmptyReason({
 }
 
 
-function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy }: {
+function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy, verbs, onOpenMenu }: {
   session: ControlSession; selected: boolean
   /** Minimum row height on mobile — 44px, and undefined on desktop. */
   tap?: number
@@ -509,9 +632,17 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy }:
   onOpen: () => void
   /** Reorder this pinned row by `delta` places. Only ever passed for a row in the Pinned band. */
   onMoveBy?: (delta: number) => void
+  /** This row's own verbs, for the context menu (Task 6). Absent where the caller has none to offer. */
+  verbs?: RowVerb[]
+  /** Opens the context menu at a point, carrying the verbs it was opened with. */
+  onOpenMenu?: (x: number, y: number, verbs: RowVerb[]) => void
 }) {
   const wants = sessionNotify(session)
   const color = STATE_COLOR[session.state] ?? 'var(--text-tertiary)'
+  const longPress = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clearLongPress = () => {
+    if (longPress.current !== null) { clearTimeout(longPress.current); longPress.current = null }
+  }
   return (
     <button
       onClick={onOpen}
@@ -550,6 +681,24 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy }:
           onMoveBy(e.key === 'ArrowUp' ? -1 : 1)
         }
       }}
+      onContextMenu={e => {
+        // No verbs to show is not an error — it lets the browser's own menu through rather than
+        // opening one with nothing in it.
+        if (!verbs || verbs.length === 0 || !onOpenMenu) return
+        e.preventDefault()
+        onOpenMenu(e.clientX, e.clientY, verbs)
+      }}
+      onTouchStart={e => {
+        if (!verbs || verbs.length === 0 || !onOpenMenu) return
+        const touch = e.touches[0]
+        if (!touch) return
+        const x = touch.clientX
+        const y = touch.clientY
+        longPress.current = setTimeout(() => onOpenMenu(x, y, verbs), 500)
+      }}
+      onTouchMove={clearLongPress}
+      onTouchEnd={clearLongPress}
+      onTouchCancel={clearLongPress}
       aria-current={selected ? 'true' : undefined}
       title={session.model ? `${session.title}\n${session.model}` : session.title}
     >

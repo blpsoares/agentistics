@@ -20,7 +20,7 @@
 import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import { ChevronLeft, MessagesSquare, TerminalSquare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
-import { useFleet, useFleetIndex } from '../lib/fleet'
+import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { FleetOverview } from '../components/sessions/FleetOverview'
 import { FiltersBar } from '../components/FiltersBar'
@@ -251,6 +251,8 @@ export default function SessionsPage() {
             activeOnly={activeOnly}
             {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
             stale={stale}
+            rowsById={rowIndex}
+            act={req => act({ ...req, action: req.action as FleetActionId })}
           />
         </div>
       </div>
