@@ -61,6 +61,42 @@ export function draftKey(id: string): string {
   return `agentistics:draft:${id}`
 }
 
+/** …and for the files attached to that unsent message. */
+export function attachKey(id: string): string {
+  return `agentistics:attached:${id}`
+}
+
+/**
+ * One attached file, as the composer holds it: a NAME to show and a PATH the assistant can read.
+ *
+ * The bytes are already on this machine — the upload happened when the file was dropped — so what
+ * is kept here is a reference, not a payload. That is what makes attachments cheap to persist
+ * beside the draft they belong to: two short strings, not an image.
+ */
+export interface ScratchAttachment { name: string; path: string }
+
+/**
+ * Parse a stored attachment list, keeping only entries that are actually usable.
+ *
+ * Storage is a string somebody else's code can also write, and a half-read entry here becomes a
+ * chip pointing at a path that resolves to nothing — the assistant is then told to read a file
+ * that is not there. Anything that is not a `{name, path}` pair of non-empty strings is dropped.
+ */
+export function parseAttachments(raw: string | null): ScratchAttachment[] {
+  if (!raw) return []
+  try {
+    const v: unknown = JSON.parse(raw)
+    if (!Array.isArray(v)) return []
+    return v.flatMap(x => {
+      if (typeof x !== 'object' || x === null) return []
+      const { name, path } = x as Record<string, unknown>
+      return typeof name === 'string' && name !== '' && typeof path === 'string' && path !== ''
+        ? [{ name, path }]
+        : []
+    })
+  } catch { return [] }
+}
+
 /**
  * Insert into a bounded, least-recently-USED-first map.
  *
@@ -90,6 +126,8 @@ export interface SessionScratch {
   readDraft(id: string): string
   writeDraft(id: string, text: string): void
   clearDraft(id: string): void
+  readAttachments(id: string): ScratchAttachment[]
+  writeAttachments(id: string, files: readonly ScratchAttachment[]): void
   readChat(id: string): CachedChat | null
   writeChat(id: string, chat: CachedChat): void
 }
@@ -101,6 +139,7 @@ export function createSessionScratch(store: ScratchStore | null): SessionScratch
   // (this module outlives the component), it simply does not survive a reload. Degrading to "less
   // durable" is right; degrading to "the field eats your words" is not.
   const memoryDrafts = new Map<string, string>()
+  const memoryAttached = new Map<string, ScratchAttachment[]>()
 
   return {
     readDraft(id) {
@@ -125,6 +164,35 @@ export function createSessionScratch(store: ScratchStore | null): SessionScratch
       memoryDrafts.delete(id)
       if (store) {
         try { store.removeItem(draftKey(id)) } catch { /* nothing to do about it */ }
+      }
+    },
+    /**
+     * The files attached to the unsent message. Kept with the draft and for the same reason: an
+     * attachment IS part of what somebody composed, and restoring the words while dropping the
+     * image is a half-restore that reads as a bug — reported exactly that way.
+     */
+    readAttachments(id) {
+      if (store) {
+        try {
+          // Only a PRESENT value wins. Returning `parseAttachments(null)` here would answer "no
+          // attachments" out of a store that simply never accepted the write — shadowing the memory
+          // copy that does have them, which is the failure mode a throwing `setItem` produces.
+          const raw = store.getItem(attachKey(id))
+          if (raw !== null) return parseAttachments(raw)
+        } catch { /* storage blocked — fall through to memory */ }
+      }
+      return memoryAttached.get(id) ?? []
+    },
+    writeAttachments(id, files) {
+      if (files.length === 0) {
+        memoryAttached.delete(id)
+        if (store) { try { store.removeItem(attachKey(id)) } catch { /* nothing to do */ } }
+        return
+      }
+      const list = files.map(f => ({ name: f.name, path: f.path }))
+      memoryAttached.set(id, list)
+      if (store) {
+        try { store.setItem(attachKey(id), JSON.stringify(list)) } catch { /* memory still has it */ }
       }
     },
     readChat(id) {

@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
 import {
-  capChats, createSessionScratch, draftKey, MAX_CACHED_CHATS,
+  capChats, createSessionScratch, draftKey, parseAttachments, MAX_CACHED_CHATS,
   type CachedChat, type ScratchStore,
 } from './sessionScratch'
 
@@ -88,4 +88,38 @@ test('re-writing one id replaces it rather than growing the map', () => {
   m = capChats(m, 'a', chat(9))
   expect(m.size).toBe(1)
   expect(m.get('a')?.turns).toHaveLength(9)
+})
+
+test('attachments survive with the draft — a half-restore is what was reported', () => {
+  const s = createSessionScratch(fakeStore())
+  s.writeDraft('a', 'olha essa imagem')
+  s.writeAttachments('a', [{ name: 'print.png', path: '/tmp/print.png' }])
+  expect(s.readDraft('a')).toBe('olha essa imagem')
+  expect(s.readAttachments('a')).toEqual([{ name: 'print.png', path: '/tmp/print.png' }])
+})
+
+test('attachments never leak between sessions, and an empty list is removed', () => {
+  const store = fakeStore()
+  const s = createSessionScratch(store)
+  s.writeAttachments('a', [{ name: 'x', path: '/x' }])
+  expect(s.readAttachments('b')).toEqual([])
+  s.writeAttachments('a', [])
+  expect(s.readAttachments('a')).toEqual([])
+  expect([...store.data.keys()].some(k => k.includes('attached'))).toBe(false)
+})
+
+test('a half-read stored entry is DROPPED, never offered as a path that resolves to nothing', () => {
+  expect(parseAttachments(null)).toEqual([])
+  expect(parseAttachments('not json')).toEqual([])
+  expect(parseAttachments('{"not":"an array"}')).toEqual([])
+  expect(parseAttachments('[{"name":"ok","path":"/p"},{"name":"no path"},{"path":"/q"},null,{"name":"","path":"/r"}]'))
+    .toEqual([{ name: 'ok', path: '/p' }])
+})
+
+test('storage that throws still keeps attachments across a navigation', () => {
+  for (const throwOn of ['get', 'set', 'remove'] as const) {
+    const s = createSessionScratch(fakeStore({ throwOn }))
+    s.writeAttachments('a', [{ name: 'n', path: '/p' }])
+    expect(s.readAttachments('a')).toEqual([{ name: 'n', path: '/p' }])
+  }
 })

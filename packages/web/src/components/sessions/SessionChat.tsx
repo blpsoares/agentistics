@@ -94,17 +94,12 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const [draft, setDraft] = useState(() => sessionScratch.readDraft(session.id))
 
   /**
-   * Switching sessions WITHOUT remounting: the workspace can hand this component a different row,
-   * and initial state runs once. Without this the second session would wear the first one's
-   * conversation and — far worse — the first one's half-written prompt.
-   */
-  /**
    * Every change to the draft, PERSISTED against the session it belongs to.
    *
-   * A `useEffect` on `[session.id, draft]` was the obvious shape and is wrong: on a switch the
-   * effect runs once with the NEW id and the OLD draft still in state, which writes one session's
-   * half-written prompt into another's slot. Naming the session at the moment of the edit removes
-   * that window entirely — the id and the text can never disagree, because they are read together.
+   * A `useEffect` on `[session.id, draft]` was the obvious shape and is wrong: on a switch it runs
+   * once with the NEW id and the OLD draft still in state, which writes one session's half-written
+   * prompt into another's slot. Naming the session at the moment of the edit removes that window
+   * entirely — the id and the text are read together, so they can never disagree.
    */
   const editDraft = useCallback((next: string | ((prev: string) => string)) => {
     setDraft(prev => {
@@ -113,6 +108,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       return v
     })
   }, [session.id])
+
 
   const shownId = useRef(session.id)
   useEffect(() => {
@@ -283,11 +279,6 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   /** Messages sent from here and not yet seen in the transcript. See the header. */
   const [echo, setEcho] = useState<string[]>([])
 
-  // An echo is a message sent to THIS session and not yet visible in its transcript. Carrying one
-  // across a switch would draw it in someone else's conversation, which is the phantom-message
-  // shape this product has been chasing all week — so the switch drops them. Declared here rather
-  // than in the effect above only because `echo` is declared here.
-  useEffect(() => { setEcho([]) }, [session.id])
   /**
    * The message being replied to.
    *
@@ -304,7 +295,20 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
    * no channel a byte array could travel down — but every one of these CLIs reads a file it is
    * pointed at. The chip says the name; the message carries the path.
    */
-  const [attached, setAttached] = useState<Attachment[]>([])
+  const [attached, setAttached] = useState<Attachment[]>(() => sessionScratch.readAttachments(session.id))
+
+  /**
+   * Every change to the attachment list, persisted against the session it belongs to — the same
+   * shape and the same reason as `editDraft`. An attachment IS part of what somebody composed:
+   * restoring the words and dropping the image is a half-restore, reported as exactly that.
+   */
+  const editAttached = useCallback((next: Attachment[] | ((prev: Attachment[]) => Attachment[])) => {
+    setAttached(prev => {
+      const v = typeof next === 'function' ? next(prev) : next
+      sessionScratch.writeAttachments(session.id, v)
+      return v
+    })
+  }, [session.id])
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -312,14 +316,27 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   /** Has this conversation been placed at its end yet? Opening mid-history is disorienting. */
   const landedRef = useRef(false)
 
-  // A different session is a different conversation: forget everything local about the last one.
+  /**
+   * A different session is a different conversation — but "different" is not "unknown".
+   *
+   * This used to blank everything, INCLUDING the payload, and it ran on mount as well as on a
+   * switch: so a cached conversation was wiped one tick after it was read, and the empty column the
+   * cache exists to remove came straight back. It restores from `sessionScratch` instead, which is
+   * the single place a switch is handled now.
+   *
+   * What is genuinely per-conversation and NOT restorable still goes: the scroll position (opening
+   * mid-history is disorienting), the reply target (it names a turn in the other conversation), and
+   * the ECHOES — a message sent to one session and not yet in its transcript, which drawn under
+   * another session's name is the phantom message this product has been chasing.
+   */
   useEffect(() => {
     landedRef.current = false
-    setPayload(null)
     setAtTail(true)
-    setEcho([])
-    setAttached([])
     setReplyTo(null)
+    setEcho([])
+    setPayload(sessionScratch.readChat(session.id) as ChatPayload | null)
+    setDraft(sessionScratch.readDraft(session.id))
+    setAttached(sessionScratch.readAttachments(session.id))
   }, [session.id])
 
   /**
@@ -483,7 +500,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
         const res = await fetch(`/api/fleet/attach?lang=${lang}`, { method: 'POST', body })
         const json = await res.json() as { ok: boolean; path?: string; name?: string; message?: string }
         if (json.ok && json.path && json.name) {
-          setAttached(a => [...a, { name: json.name!, path: json.path! }])
+          editAttached(a => [...a, { name: json.name!, path: json.path! }])
         } else {
           setNotice(json.message ?? (pt ? 'O anexo falhou.' : 'The attachment failed.'))
         }
@@ -560,6 +577,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       setDraft('')
       sessionScratch.clearDraft(session.id)
       setAttached([])
+      sessionScratch.writeAttachments(session.id, [])
       setReplyTo(null)
       setAtTail(true)
       toTail()
@@ -758,7 +776,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                         style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                       />
                       <button
-                        onClick={() => setAttached(list => list.filter(x => x.path !== a.path))}
+                        onClick={() => editAttached(list => list.filter(x => x.path !== a.path))}
                         aria-label={pt ? `Remover ${a.name}` : `Remove ${a.name}`}
                         style={{
                           position: 'absolute', top: 2, right: 2,
@@ -782,7 +800,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                         {a.name}
                       </span>
                       <button
-                        onClick={() => setAttached(list => list.filter(x => x.path !== a.path))}
+                        onClick={() => editAttached(list => list.filter(x => x.path !== a.path))}
                         aria-label={pt ? `Remover ${a.name}` : `Remove ${a.name}`}
                         style={{
                           display: 'flex', border: 'none', background: 'transparent', padding: 0,
