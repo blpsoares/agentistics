@@ -73,11 +73,19 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
         nothing else on either screen ever puts a fixed element. Not anchored near the top, so
         `--safe-top` does not apply here.
         `pointerEvents: 'auto'` is required: the portal container above is 'none'.
+        The z-index MUST outrank a lens frame's `2147483000` (Lens.tsx): `newLens()` centres a new
+        lens on the viewport and DEFAULT_LENS_STYLE is 360x240, so on any phone under ~472px wide
+        that span overlaps this button's — and always overlaps it vertically, since both sit on
+        the vertical centre. Lenses render AFTER this button in the JSX, so without a higher
+        z-index the lens paints on top and swallows the tap, burying the one way back to a pinned
+        lens (which itself takes no pointer events) behind the very thing that created it, on
+        every later visit to the page. `2147483200` is the same tier the menus already use, so the
+        ordering reads as one deliberate scale: page < lenses < the controls that manage them.
       */}
       {!hasHeaderSlot && (
         <div style={{
           position: 'fixed', right: 12, top: '50%', transform: 'translateY(-50%)',
-          pointerEvents: 'auto', zIndex: 2147483000,
+          pointerEvents: 'auto', zIndex: 2147483200,
         }}>
           <MagnifierButton ctx={ctx} />
         </div>

@@ -5,12 +5,23 @@
  * reach a pinned lens again (a pinned lens takes no pointer events at all — that is what pinning
  * means). There is no keyboard way in yet — that is Task 10.
  */
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { a11yText } from './i18n'
+
+/** Clearance kept from the viewport edge the dropdown opens towards. */
+const EDGE_MARGIN = 12
+/** Never let the dropdown shrink to something unusable, even wedged into a tiny gap. */
+const MIN_DROPDOWN_HEIGHT = 120
+
+interface DropdownPos {
+  /** True when there is less room below the trigger than above it. */
+  up: boolean
+  maxHeight: number
+}
 
 export function MagnifierButton({ ctx }: { ctx: AppContext }) {
   const { a11y, lang } = ctx
@@ -18,6 +29,30 @@ export function MagnifierButton({ ctx }: { ctx: AppContext }) {
   const isMobile = useIsMobile()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  // The list grows with the number of lenses on the page, and the trigger is not always near the
+  // top: the mobile floating fallback sits at the vertical centre (MagnifierLayer.tsx), which
+  // halves the room a downward-opening dropdown used to assume. Decided once, at the moment the
+  // menu opens, from the trigger's actual position — never guessed from where the button
+  // "usually" is, or a header-anchored placement (which has always opened downward, and must
+  // keep doing so while there is room) would flip for no reason.
+  const [dropdownPos, setDropdownPos] = useState<DropdownPos | null>(null)
+
+  const toggleOpen = () => {
+    setOpen(v => {
+      const next = !v
+      if (next) {
+        const rect = wrapRef.current?.getBoundingClientRect()
+        if (rect) {
+          const spaceBelow = window.innerHeight - rect.bottom - EDGE_MARGIN
+          const spaceAbove = rect.top - EDGE_MARGIN
+          const up = spaceBelow < spaceAbove
+          setDropdownPos({ up, maxHeight: Math.max(MIN_DROPDOWN_HEIGHT, up ? spaceAbove : spaceBelow) })
+        }
+      }
+      return next
+    })
+  }
 
   if (!a11y.prefs.enabled) return null
 
@@ -29,13 +64,13 @@ export function MagnifierButton({ ctx }: { ctx: AppContext }) {
   }
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div ref={wrapRef} style={{ position: 'relative' }}>
       <button
         onClick={() => a11y.addLens()}
-        onContextMenu={e => { e.preventDefault(); setOpen(v => !v) }}
+        onContextMenu={e => { e.preventDefault(); toggleOpen() }}
         title={`${text.headerTitle} — ${text.headerHint}`}
         aria-label={text.headerTitle}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         style={{
           width: isMobile ? 44 : 32, height: isMobile ? 44 : 32,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -57,7 +92,16 @@ export function MagnifierButton({ ctx }: { ctx: AppContext }) {
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 2147483100 }} />
           <div role="dialog" aria-label={text.headerTitle} style={{
-            position: 'absolute', right: 0, top: '100%', marginTop: 6, width: 290, zIndex: 2147483200,
+            position: 'absolute', right: 0, width: 290, zIndex: 2147483200,
+            // Opens downward by default (unchanged for every header-anchored placement, which
+            // always has room below). Flips upward only when `toggleOpen` measured less room
+            // below than above — the case the vertically-centred mobile fallback creates — and
+            // either way is capped to the room actually available, with its own scrollbar, so a
+            // long lens list can never run off the screen.
+            ...(dropdownPos?.up
+              ? { bottom: '100%', marginBottom: 6 }
+              : { top: '100%', marginTop: 6 }),
+            maxHeight: dropdownPos?.maxHeight, overflowY: 'auto',
             padding: 8, borderRadius: 12, background: 'var(--bg-elevated)',
             border: '1px solid var(--border)', boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
           }}>
