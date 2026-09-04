@@ -38,6 +38,16 @@ export interface TopBarProps {
    * absent is the normal case — this is a place to put something, not a slot that must be filled.
    */
   trailing?: React.ReactNode
+  /**
+   * Give `trailing` exactly the box `<main>`'s content has, so a row drawn here can line up with the
+   * body under it.
+   *
+   * This strip pads itself and insets its left column, and the page beneath does neither — so a
+   * trailing node that centres itself in a max-width box lands a few pixels off at every width, on
+   * both edges. Setting this cancels those two paddings instead of asking the caller to subtract
+   * them: the numbers belong to this component and nothing outside it should have to know them.
+   */
+  trailingFlush?: boolean
 }
 
 const iconBtn: React.CSSProperties = {
@@ -47,7 +57,7 @@ const iconBtn: React.CSSProperties = {
   transition: 'background 0.15s, color 0.15s',
 }
 
-export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, onSearch, trailing }: TopBarProps) {
+export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, onSearch, trailing, trailingFlush = false }: TopBarProps) {
   const pt = lang === 'pt'
 
   const hover = (on: boolean) => (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -111,7 +121,17 @@ export function TopBar({ lang, height, asideWidth, collapsed, onToggleSidebar, o
         // 9px, not 4: the title now starts on the same vertical line as the content inside the
         // session below it, so the eye follows one edge down the page instead of two that are
         // nearly the same and therefore read as a misalignment.
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 9 }}>
+        //
+        // FLUSH is the stronger version of that same argument: the left column is inset by 20
+        // inside a 10px root pad when expanded (and by nothing when collapsed), so adding those
+        // back puts this box's left edge exactly on the page's, and the negative right margin
+        // cancels the root's own right pad. A caller that centres itself in a max-width box then
+        // centres in the SAME box the body does.
+        <div style={{
+          flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10,
+          paddingLeft: trailingFlush ? (collapsed ? 0 : 10) : 9,
+          marginRight: trailingFlush ? (collapsed ? -6 : -10) : 0,
+        }}>
           {trailing}
         </div>
       )}

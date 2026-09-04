@@ -80,7 +80,21 @@ import { format, parseISO, parse } from 'date-fns'
 import { ToggleSwitch } from './components/ToggleSwitch'
 import { fleetFilterOptions } from './lib/fleetFilter'
 import { CentralSessions } from './components/sessions/CentralSessions'
+// The sessions workspace's container geometry, named ONCE (see FleetOverview's header): the
+// filter row in the strip and the body under it have to move together at every width.
+import { PAGE_INSET, PAGE_MAX_WIDTH } from './components/sessions/FleetOverview'
 import { setFleetSourceCentral } from './lib/fleet'
+
+/**
+ * What the SESSIONS filter bar may filter by — narrower than the dashboard's on purpose: a fleet
+ * row is a live session, so member, team, machine, presence and tag have nothing to say about one,
+ * and an option is a promise that something might be behind it.
+ *
+ * "Active only" is deliberately ABSENT: it is not a `Filters` dimension at all (see `FiltersBar`'s
+ * doc comment on `onActiveOnlyChange`) and is rendered by passing that callback instead.
+ */
+const SESSIONS_FILTER_DIMS: Array<'harnesses' | 'repos' | 'projects' | 'models'> =
+  ['harnesses', 'repos', 'projects', 'models']
 
 // Team session state
 interface TeamSessionState {
@@ -1535,64 +1549,6 @@ export default function AppLayout() {
       return next
     }, { replace: true })
   }, [setSessionViewParams])
-  /**
-   * The selected session's title, view tabs and actions — drawn INTO the top strip.
-   *
-   * It began inside `SessionPanel`, was lifted into the shared header as a second full-width row
-   * with its own rule, and now rides in the space the top strip has always left empty to the right
-   * of the mark. Each move removed a band of chrome; this one removes the last, because a whole
-   * row for three controls sat directly beneath a row that was already there.
-   *
-   * One line, not two: the title and its state share a row here, separated by a dot, because the
-   * strip is 44px and stacking a subtitle under the title would either overflow it or shrink both
-   * past reading. Desktop only — on mobile the strip is hidden and `SessionPanel` draws its own.
-   */
-  const sessionTopBar = (inSessionsWorkspace && !isMobile && selectedFleetSession) ? (
-    <>
-      <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'baseline', gap: 7 }}>
-        <span style={{
-          fontSize: 13.5, fontWeight: 650, color: 'var(--text-primary)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-        }}>
-          {selectedFleetSession.title}
-        </span>
-        {/* Gives up before the title does: the name is what identifies the session, and the state
-            is repeated on its own row in the aside two centimetres away. */}
-        <span style={{
-          fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 1000000,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-        }}>
-          {selectedFleetSession.stateLabel}
-          {selectedFleetSession.project ? ` · ${selectedFleetSession.project}` : ''}
-        </span>
-      </div>
-
-      {selectedFleetSession.conversationBlind === undefined && (
-        <div role="tablist" style={{
-          display: 'flex', gap: 3, padding: 2, borderRadius: 9, flexShrink: 0,
-          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-        }}>
-          <Segment
-            on={sessionView === 'chat'} onClick={() => setSessionView('chat')}
-            icon={<MessagesSquare size={13} />} label={lang === 'pt' ? 'Conversa' : 'Chat'}
-          />
-          <Segment
-            on={sessionView === 'terminal'} onClick={() => setSessionView('terminal')}
-            icon={<TerminalSquare size={13} />} label="Terminal"
-          />
-        </div>
-      )}
-
-      {selectedSessionRow && (
-        <SessionActions
-          row={selectedSessionRow}
-          lang={lang === 'pt' ? 'pt' : 'en'}
-          act={headerFleetAct}
-          onGone={() => navigate('/sessions')}
-        />
-      )}
-    </>
-  ) : null
 
   const toggleSidebar = useCallback(() => setSidebarCollapsed(v => {
     const next = !v
@@ -2585,6 +2541,109 @@ export default function AppLayout() {
     )
   }
 
+  /**
+   * The sessions workspace's ONE bar: the selected session's title, the filters, the view tabs and
+   * the actions — drawn INTO the fixed top strip.
+   *
+   * It began inside `SessionPanel`, was lifted into the shared header as a second full-width row
+   * with its own rule, and now rides in the space the top strip has always left empty to the right
+   * of the mark. Each move removed a band of chrome; this one removes the last, because the sticky
+   * `<header>` under this strip existed in this workspace only to carry `FiltersBar` — a whole band
+   * for one row of controls, directly beneath a band that was already there.
+   *
+   * The FILTERS are here whether or not a session is open: they narrow the LIST, which is what the
+   * workspace shows with nothing selected.
+   *
+   * One line, not two: the title and its state share a row here, separated by a dot, because the
+   * strip is 44px and stacking a subtitle under the title would either overflow it or shrink both
+   * past reading. Desktop only — on mobile the strip is hidden and `SessionsPage` draws its own.
+   */
+  const sessionTopBar = (inSessionsWorkspace && !isMobile) ? (
+    /* The body below is centred in a `PAGE_MAX_WIDTH` box inset by `PAGE_INSET`, so this row has to
+       be too — `FleetOverview`'s own header records two failed attempts at this alignment, and both
+       failed by matching one of the two numbers. `TopBar`'s `trailingFlush` is what makes the box
+       this sits in exactly `<main>`'s content box; without it the strip's own padding leaves the two
+       a few pixels apart at every width. */
+    <div style={{
+      width: '100%', maxWidth: PAGE_MAX_WIDTH, margin: '0 auto',
+      padding: `0 ${PAGE_INSET}px`, boxSizing: 'border-box',
+      display: 'flex', alignItems: 'center', gap: 10, minWidth: 0,
+    }}>
+      {selectedFleetSession && (
+        <div style={{ minWidth: 0, flexShrink: 1, display: 'flex', alignItems: 'baseline', gap: 7 }}>
+          <span style={{
+            fontSize: 13.5, fontWeight: 650, color: 'var(--text-primary)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+          }}>
+            {selectedFleetSession.title}
+          </span>
+          {/* Gives up before the title does: the name is what identifies the session, and the state
+              is repeated on its own row in the aside two centimetres away. */}
+          <span style={{
+            fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 1000000,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+          }}>
+            {selectedFleetSession.stateLabel}
+            {selectedFleetSession.project ? ` · ${selectedFleetSession.project}` : ''}
+          </span>
+        </div>
+      )}
+
+      {/* THE FILTERS, in the centre. They are the element that gives up width FIRST: the title
+          identifies what you are looking at and the actions are how you act on it, while a narrowed
+          filter bar is still a filter bar — its own `+ Filtro` popover holds everything it drops. */}
+      <div style={{ flex: 1, minWidth: 90, display: 'flex', justifyContent: 'center' }}>
+        <FiltersBar
+          inline
+          only={SESSIONS_FILTER_DIMS}
+          activeOnly={activeOnly}
+          onActiveOnlyChange={setActiveOnly}
+          filters={filters}
+          onChange={setFilters}
+          projects={availableProjects}
+          sessionCountByProject={sessionCountByProject}
+          models={models}
+          modelGroups={modelGroups}
+          modelsInProject={modelsInProject}
+          users={[]}
+          // HARNESSES come from the FLEET here and from the metrics everywhere else. The bar offered
+          // all six the metrics know while the list it filters holds whatever is running — three on
+          // this machine — so picking "antigravity" emptied the list. Nothing was broken; there were
+          // genuinely no antigravity rows. But a filter that can only ever answer "nothing" is
+          // indistinguishable from one that is failing, and it was reported as exactly that. An
+          // option is a promise that something might be behind it.
+          harnesses={fleetOptions.harnesses as typeof availableHarnesses}
+          lang={lang}
+        />
+      </div>
+
+      {selectedFleetSession && selectedFleetSession.conversationBlind === undefined && (
+        <div role="tablist" style={{
+          display: 'flex', gap: 3, padding: 2, borderRadius: 9, flexShrink: 0,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+        }}>
+          <Segment
+            on={sessionView === 'chat'} onClick={() => setSessionView('chat')}
+            icon={<MessagesSquare size={13} />} label={lang === 'pt' ? 'Conversa' : 'Chat'}
+          />
+          <Segment
+            on={sessionView === 'terminal'} onClick={() => setSessionView('terminal')}
+            icon={<TerminalSquare size={13} />} label="Terminal"
+          />
+        </div>
+      )}
+
+      {selectedSessionRow && (
+        <SessionActions
+          row={selectedSessionRow}
+          lang={lang === 'pt' ? 'pt' : 'en'}
+          act={headerFleetAct}
+          onGone={() => navigate('/sessions')}
+        />
+      )}
+    </div>
+  ) : null
+
   return (
     <div style={{
       // `min-height` is NOT set in the sessions workspace, and that is the whole fix.
@@ -2663,7 +2722,7 @@ export default function AppLayout() {
           {...(modeOfPath(location.pathname) === 'sessions'
             ? { onSearch: () => window.dispatchEvent(new CustomEvent('agentistics:focus-session-search')) }
             : {})}
-          {...(sessionTopBar ? { trailing: sessionTopBar } : {})}
+          {...(sessionTopBar ? { trailing: sessionTopBar, trailingFlush: true } : {})}
         />
       )}
       {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
@@ -2686,14 +2745,15 @@ export default function AppLayout() {
         sessionsActiveOnly={activeOnly}
       />}
       {/* Header */}
-      {/* Page chrome. The sessions workspace now shares this SAME header on desktop — it wants the
-          fleet's own harness/project/repo/model filter, and reusing the one control that already
-          does "pick a value to narrow by" beats a second implementation of it (see `FiltersBar`'s
-          `hideDateRange`/`onActiveOnlyChange`, added for exactly this). It stays hidden on MOBILE
-          sessions, whose own full-screen list/panel layout has no room for it yet. The root cause
-          of "the pane's own header scrolled away" was never this strip's presence — it was `<main>`
-          lacking a DEFINITE height to clip to, fixed at the wrapper `<div>` above. */}
-      {(!inSessionsWorkspace || !isMobile) && (
+      {/* Page chrome — the DASHBOARD's, and only the dashboard's.
+          The sessions workspace used to render this too, on desktop, purely to carry `FiltersBar`:
+          a whole sticky band with its own rule, one row of controls in it, directly beneath the
+          fixed strip that was already there. The filters now ride IN that strip (see
+          `sessionTopBar`), so the workspace has ONE bar and this element is not rendered in it at
+          all — on mobile it never was, because `SessionsPage` draws its own bars.
+          The root cause of "the pane's own header scrolled away" was never this strip's presence —
+          it was `<main>` lacking a DEFINITE height to clip to, fixed at the wrapper `<div>` above. */}
+      {!inSessionsWorkspace && (
       <header style={{
         background: 'var(--bg-surface)',
         position: 'sticky',
@@ -2883,14 +2943,10 @@ export default function AppLayout() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <FiltersBar
                 only={filterDimsForRoute}
-                {...(inSessionsWorkspace ? {} : {
-                  costBasis,
-                  onCostBasisChange: isCentral ? undefined : setCostBasis,
-                  costBasisReady: billingReady.ready && planBasis.basis !== null,
-                  onCostBasisSetup: openBillingSetup,
-                })}
-                activeOnly={inSessionsWorkspace ? activeOnly : undefined}
-                onActiveOnlyChange={inSessionsWorkspace ? setActiveOnly : undefined}
+                costBasis={costBasis}
+                onCostBasisChange={isCentral ? undefined : setCostBasis}
+                costBasisReady={billingReady.ready && planBasis.basis !== null}
+                onCostBasisSetup={openBillingSetup}
                 filters={filters}
                 onChange={setFilters}
                 projects={availableProjects}
@@ -2899,22 +2955,10 @@ export default function AppLayout() {
                 modelGroups={modelGroups}
                 modelsInProject={modelsInProject}
                 users={usersWithMachines}
-                // HARNESSES come from the FLEET here and from the metrics everywhere else. The bar
-                // offered all six the metrics know while the list it filters holds whatever is
-                // running — three on this machine — so picking "antigravity" emptied the list.
-                // Nothing was broken; there were genuinely no antigravity rows. But a filter that
-                // can only ever answer "nothing" is indistinguishable from one that is failing,
-                // and it was reported as exactly that. An option is a promise that something might
-                // be behind it.
-                //
-                // This is the SECOND FiltersBar in this file. The first one (inside the collapsible
-                // block above) is the dashboard's; an earlier attempt put the override there and
-                // changed nothing on screen, which is how a fix can be written, typechecked, tested
-                // and still be in the wrong place. Verified in a browser this time.
-                //
-                // Projects and models stay on the metrics list deliberately: `matchesProject`
-                // accepts a row's name, its group OR its path, so those chips do find fleet rows.
-                harnesses={inSessionsWorkspace ? (fleetOptions.harnesses as typeof availableHarnesses) : availableHarnesses}
+                // The METRICS' harnesses, because this bar is the dashboard's. The fleet's own
+                // narrower list belongs to the sessions strip (see `sessionTopBar`), which is where
+                // that override moved when the workspace stopped rendering this header.
+                harnesses={availableHarnesses}
                 presence={data?.presence}
                 lang={lang}
                 teams={teamsList}
