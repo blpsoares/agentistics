@@ -28,6 +28,7 @@ import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
 import { resolveArtifactLayout, shouldAutoOpen } from '../lib/artifactLayout'
 import { closeArtifacts, openArtifacts, setArtifactCount, useArtifacts } from '../lib/artifactsStore'
 import type { Artifact } from '../lib/sessionArtifacts'
+import type { LiveTurn } from '../lib/artifactTabs'
 import { FiltersBar } from '../components/FiltersBar'
 import { SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
 import { SessionsAside } from '../components/nav/SessionsAside'
@@ -117,10 +118,68 @@ export default function SessionsPage() {
   const [artifactsLoading, setArtifactsLoading] = useState(true)
   const [artifactsUnavailable, setArtifactsUnavailable] = useState<string | undefined>(undefined)
   const [artifactsUnlisted, setArtifactsUnlisted] = useState(false)
+  /** The conversation's turns, for the LIVE tab — the same ones the chat renders. */
+  const [artifactTurns, setArtifactTurns] = useState<readonly LiveTurn[]>([])
+
+  /**
+   * WHICH of the recorded paths are still readable files with content — the server's answer, because
+   * only it can look at the disk. A transcript records temporary files that were deleted, writes by
+   * commands that failed, and redirections into directories that never existed; all three read like
+   * a file somebody would want to open, and all three refuse when clicked.
+   *
+   * Keyed by the path AS RECORDED, which is the key the browser's own list is built on.
+   */
+  const [onDisk, setOnDisk] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    if (!selected) { setOnDisk(new Set()); return }
+    let alive = true
+    const read = async () => {
+      try {
+        const r = await fetch(`/api/fleet/artifacts?id=${encodeURIComponent(selected.id)}&lang=${pt ? 'pt' : 'en'}`)
+        if (!r.ok || !alive) return
+        const d = await r.json() as { files?: { raw: string }[] }
+        setOnDisk(new Set((d.files ?? []).map(f => f.raw)))
+      } catch { /* the list simply stays as it was */ }
+    }
+    void read()
+    // Slower than the conversation poll: a file's EXISTENCE changes far less often than the
+    // conversation does, and this one stats every recorded path.
+    const t = setInterval(read, 15000)
+    return () => { alive = false; clearInterval(t) }
+  }, [selected?.id, pt])
+
+  /**
+   * The panel's width, dragged and remembered — the right aside was fixed while the left one has
+   * always been resizable, and a reader comparing a file with the conversation needs to choose
+   * which of the two gets the room.
+   */
+  const [artWidth, setArtWidth] = useState<number>(() => {
+    const v = Number(localStorage.getItem('agentistics:artifacts-w'))
+    return Number.isFinite(v) && v >= 280 ? Math.min(v, 900) : 440
+  })
+  const dragArt = useRef<{ x: number; w: number } | null>(null)
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      if (!dragArt.current) return
+      // The panel grows as the pointer moves LEFT, so the delta is inverted.
+      const next = Math.max(280, Math.min(900, dragArt.current.w + (dragArt.current.x - e.clientX)))
+      setArtWidth(next)
+    }
+    const up = () => {
+      if (!dragArt.current) return
+      dragArt.current = null
+      document.body.style.userSelect = ''
+      try { localStorage.setItem('agentistics:artifacts-w', String(artWidth)) } catch { /* private mode */ }
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+  }, [artWidth])
   const art = useArtifacts()
-  const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; unlisted: boolean }) => {
+  const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; unlisted: boolean; turns: readonly LiveTurn[] }) => {
     setArtifacts(a.artifacts)
     setArtifactsUnlisted(a.unlisted)
+    setArtifactTurns(a.turns)
     setArtifactsLoading(a.loading)
     setArtifactsUnavailable(a.unavailable)
     if (selected) setArtifactCount(selected.id, a.artifacts.length)
@@ -153,10 +212,13 @@ export default function SessionsPage() {
     <ArtifactsAside
       sessionId={selected.id}
       lang={pt ? 'pt' : 'en'}
-      artifacts={artifacts}
+      // Only what the server confirmed is still a file with content. Until it has answered the
+      // list is shown as recorded, so the panel is never empty for the length of a request.
+      artifacts={onDisk.size === 0 ? artifacts : artifacts.filter(a => onDisk.has(a.path))}
       loading={artifactsLoading}
       {...(artifactsUnavailable ? { unavailable: artifactsUnavailable } : {})}
       unlistedWrites={artifactsUnlisted}
+      turns={artifactTurns}
       onClose={closeArtifacts}
     />
   )
@@ -455,9 +517,21 @@ export default function SessionsPage() {
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
           {panel}
         </div>
+        {/* The handle. Four pixels of hit area over a one-pixel rule — the rule is what you see,
+            the area is what you can grab, and matching them makes a divider people miss. */}
+        <div
+          onMouseDown={e => {
+            dragArt.current = { x: e.clientX, w: artWidth }
+            document.body.style.userSelect = 'none'
+          }}
+          style={{
+            width: 4, flexShrink: 0, cursor: 'col-resize', background: 'transparent',
+            borderLeft: '1px solid var(--border)',
+          }}
+        />
         <div style={{
-          display: 'flex', flexDirection: 'column', width: 440, flexShrink: 0, minHeight: 0,
-          borderLeft: '1px solid var(--border)', background: 'var(--bg-surface)',
+          display: 'flex', flexDirection: 'column', width: artWidth, flexShrink: 0, minHeight: 0,
+          background: 'var(--bg-surface)',
         }}>
           {artifactsPane}
         </div>

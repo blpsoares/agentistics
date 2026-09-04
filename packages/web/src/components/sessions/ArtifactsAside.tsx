@@ -18,10 +18,16 @@
  * for the same refusal.
  */
 
-import { useState } from 'react'
-import { FileEdit, FilePlus2, PanelRightClose, Loader } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import {
+  FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
+  BookOpen, Terminal, Brain, Send, Eye,
+} from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
+import { isDoc, liveEvents, type LiveEvent, type LiveTurn } from '../../lib/artifactTabs'
 import { ArtifactDoc } from './ArtifactDoc'
+
+type TabId = 'files' | 'docs' | 'live'
 
 export interface ArtifactsAsideProps {
   sessionId: string
@@ -44,6 +50,14 @@ export interface ArtifactsAsideProps {
    * and "there are none" are different facts and get different sentences.
    */
   unlistedWrites?: boolean
+  /**
+   * The conversation's turns, for the LIVE tab.
+   *
+   * The feed is derived from the same turns the chat renders, so it can never claim something the
+   * transcript does not show — which is the only guarantee that matters for a view whose whole
+   * promise is "this is what is happening".
+   */
+  turns?: readonly LiveTurn[]
 }
 
 /** `new` and `edited` read at a glance from the glyph; the word is beside it for everyone else. */
@@ -54,10 +68,18 @@ function KindIcon({ kind }: { kind: Artifact['kind'] }) {
 }
 
 export function ArtifactsAside({
-  sessionId, lang, artifacts, loading, unavailable, unlistedWrites, onClose,
+  sessionId, lang, artifacts, loading, unavailable, unlistedWrites, turns, onClose,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
   const [open, setOpen] = useState<Artifact | null>(null)
+  const [tab, setTab] = useState<TabId>('files')
+
+  /** DOCS is a SUBSET of files, never a second list — a document cannot be in one and missing from
+   *  the other. `isDoc` decides it by extension, which is what can be known without opening it. */
+  const docs = useMemo(() => artifacts.filter(a => isDoc(a.path)), [artifacts])
+  const events = useMemo(() => liveEvents(turns ?? []), [turns])
+  /** Newest first: a feed is read backwards from what just happened. */
+  const feed = useMemo(() => [...events].reverse(), [events])
 
   const live = artifacts.filter(a => a.live)
   const past = artifacts.filter(a => !a.live)
@@ -92,6 +114,85 @@ export function ArtifactsAside({
     </header>
   )
 
+  /** The three tabs. A count rides each one, so the panel says what is behind a tab unopened. */
+  const tabs: { id: TabId; label: string; icon: React.ReactNode; count: number }[] = [
+    { id: 'files', label: pt ? 'Arquivos' : 'Files', icon: <Files size={12} />, count: artifacts.length },
+    { id: 'docs', label: pt ? 'Docs' : 'Docs', icon: <BookOpen size={12} />, count: docs.length },
+    { id: 'live', label: 'Live', icon: <Activity size={12} />, count: feed.length },
+  ]
+
+  const tabBar = (
+    <div role="tablist" style={{
+      display: 'flex', gap: 2, padding: '6px 8px', flexShrink: 0,
+      borderBottom: '1px solid var(--border)',
+    }}>
+      {tabs.map(t => {
+        const on = tab === t.id
+        return (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={on}
+            onClick={() => setTab(t.id)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5, padding: '4px 9px',
+              borderRadius: 7, border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+              fontSize: 11.5, fontWeight: on ? 700 : 500,
+              background: on ? 'var(--bg-elevated)' : 'transparent',
+              color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+            }}
+          >
+            {t.icon}
+            {t.label}
+            {t.count > 0 && (
+              <span style={{ fontSize: 10, opacity: 0.7, fontVariantNumeric: 'tabular-nums' }}>{t.count}</span>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  const liveBody = (): React.ReactNode => {
+    if (feed.length === 0) {
+      return <Note text={pt
+        ? 'Nada aconteceu nesta conversa ainda.'
+        : 'Nothing has happened in this conversation yet.'} />
+    }
+    return (
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
+        {feed.map((e, i) => <EventRow key={i} e={e} pt={pt} />)}
+      </div>
+    )
+  }
+
+  const fileList = (list: readonly Artifact[], emptyText: string): React.ReactNode => {
+    if (list.length === 0) return <Note text={emptyText} />
+    const liveOnes = list.filter(a => a.live)
+    const pastOnes = list.filter(a => !a.live)
+    return (
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
+        {liveOnes.length > 0 && (
+          <Band label={pt ? 'agora' : 'now'}>
+            {liveOnes.map(a => <Row key={a.path} a={a} pt={pt} onOpen={() => setOpen(a)} />)}
+          </Band>
+        )}
+        {pastOnes.length > 0 && (
+          <Band label={liveOnes.length > 0 ? (pt ? 'antes' : 'earlier') : undefined}>
+            {pastOnes.map(a => <Row key={a.path} a={a} pt={pt} onOpen={() => setOpen(a)} />)}
+          </Band>
+        )}
+        {unlistedWrites && (
+          <p style={{ margin: '6px 8px 0', fontSize: 10.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+            {pt
+              ? 'A sessão também escreveu por comandos cujos caminhos não dá para ler; esses arquivos não estão nesta lista.'
+              : 'The session also wrote through commands whose paths cannot be read; those files are not in this list.'}
+          </p>
+        )}
+      </div>
+    )
+  }
+
   const body = (): React.ReactNode => {
     // The refusal outranks everything: there is no list to be empty when the conversation cannot be
     // read at all.
@@ -116,29 +217,13 @@ export function ArtifactsAside({
           : 'Nothing written in this session yet. Files appear here as soon as the session writes or edits one.'} />
       )
     }
-    return (
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
-        {live.length > 0 && (
-          <Band label={pt ? 'agora' : 'now'}>
-            {live.map(a => <Row key={a.path} a={a} pt={pt} onOpen={() => setOpen(a)} />)}
-          </Band>
-        )}
-        {past.length > 0 && (
-          <Band label={live.length > 0 ? (pt ? 'antes' : 'earlier') : undefined}>
-            {past.map(a => <Row key={a.path} a={a} pt={pt} onOpen={() => setOpen(a)} />)}
-          </Band>
-        )}
-        {/* A list that is INCOMPLETE says so where it ends. Without this the reader would take
-            these rows for everything the session wrote. */}
-        {unlistedWrites && (
-          <p style={{ margin: '6px 8px 0', fontSize: 10.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
-            {pt
-              ? 'A sessão também escreveu por comandos cujos caminhos não dá para ler; esses arquivos não estão nesta lista.'
-              : 'The session also wrote through commands whose paths cannot be read; those files are not in this list.'}
-          </p>
-        )}
-      </div>
-    )
+    return tab === 'docs'
+      ? fileList(docs, pt
+          ? 'Nenhuma spec ou documento escrito nesta sessão. Arquivos .md, .txt e afins aparecem aqui.'
+          : 'No spec or document written in this session. Files like .md and .txt appear here.')
+      : fileList(artifacts, pt
+          ? 'Nada escrito ainda nesta sessão. Arquivos aparecem aqui assim que a sessão escreve ou edita um.'
+          : 'Nothing written in this session yet. Files appear here as soon as the session writes or edits one.')
   }
 
   return (
@@ -148,7 +233,10 @@ export function ArtifactsAside({
       ) : (
         <>
           {header}
-          {body()}
+          {/* The tab bar is BELOW the header, so the close button keeps one place whatever tab is
+              open — a control that moves with the content is one people stop finding. */}
+          {!unavailable && tabBar}
+          {tab === 'live' && !unavailable ? liveBody() : body()}
         </>
       )}
     </div>
@@ -205,6 +293,45 @@ function Row({ a, pt, onOpen }: { a: Artifact; pt: boolean; onOpen: () => void }
         ) : null}
       </span>
     </button>
+  )
+}
+
+/**
+ * One line of the live feed.
+ *
+ * The KIND leads, as a glyph and a colour, because "read a file" and "ran a command" are different
+ * events and a grey list of strings is a log rather than a view. The text is monospaced for the
+ * three kinds that carry a path or a command — those are read character by character — and left in
+ * the reading face for the two that carry prose.
+ */
+function EventRow({ e, pt }: { e: LiveEvent; pt: boolean }) {
+  const meta: Record<LiveEvent['kind'], { icon: React.ReactNode; color: string; label: string }> = {
+    wrote: { icon: <FileEdit size={11} />, color: 'var(--anthropic-orange)', label: pt ? 'escreveu' : 'wrote' },
+    read: { icon: <Eye size={11} />, color: 'var(--text-tertiary)', label: pt ? 'leu' : 'read' },
+    ran: { icon: <Terminal size={11} />, color: 'var(--text-secondary)', label: pt ? 'rodou' : 'ran' },
+    thought: { icon: <Brain size={11} />, color: '#a78bfa', label: pt ? 'pensou' : 'thought' },
+    delegated: { icon: <Send size={11} />, color: '#22c55e', label: pt ? 'delegou' : 'delegated' },
+    said: { icon: <FileText size={11} />, color: 'var(--text-secondary)', label: pt ? 'disse' : 'said' },
+  }
+  const m = meta[e.kind]
+  const mono = e.kind === 'wrote' || e.kind === 'read' || e.kind === 'ran'
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 7, padding: '5px 8px',
+      opacity: e.live ? 1 : 0.92,
+    }}>
+      <span style={{ color: m.color, paddingTop: 2, flexShrink: 0 }}>{m.icon}</span>
+      <span style={{ minWidth: 0, flex: 1 }}>
+        <span style={{
+          fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase',
+          color: m.color, marginRight: 6,
+        }}>{m.label}</span>
+        <span style={{
+          fontSize: 11.5, color: 'var(--text-secondary)', wordBreak: 'break-word',
+          fontFamily: mono ? 'var(--font-mono, ui-monospace, monospace)' : 'inherit',
+        }}>{e.text}</span>
+      </span>
+    </div>
   )
 }
 

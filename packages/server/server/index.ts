@@ -1371,6 +1371,29 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
     // One file this session wrote. Guarded by the `/api/fleet` PREFIX already registered in
     // `capability-guard.ts` — a new fleet route is guarded by having been ADDED, never by remembering
     // a second table — and 404'd on a central with the rest of `/api/fleet*`.
+    // The panel's LIST — what this session wrote that is still a readable file with content. It
+    // rides the same `/api/fleet` prefix, so `capability-guard.ts` guards it by having been added.
+    if (url.pathname === '/api/fleet/artifacts' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ files: [] }), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      try {
+        const { listFleetArtifacts, fleetLang } = await import('./sessions/fleet-web')
+        const out = await listFleetArtifacts(fleetLang(url.searchParams.get('lang')), id)
+        return new Response(JSON.stringify(out), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ files: [], ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     if (url.pathname === '/api/fleet/file' && req.method === 'GET') {
       const id = url.searchParams.get('id')
       const path = url.searchParams.get('path')

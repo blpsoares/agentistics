@@ -70,11 +70,19 @@ export const ARTIFACT_TOOL_NAMES = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'
 
 /** PURE: just the paths, for the server's allowlist. */
 export function artifactPathsFromTurns(
-  turns: readonly { tools?: { name: string; detail?: string }[] }[],
+  turns: readonly { tools?: { name: string; detail?: string; writes?: string[] }[] }[],
 ): string[] {
   const out = new Set<string>()
   for (const t of turns) {
     for (const call of t?.tools ?? []) {
+      // A file the SHELL wrote is a file this session wrote, and the panel now LISTS those — so the
+      // allowlist has to admit them or every one of those rows refuses to open, which is a worse
+      // state than not listing them at all. `writes` is the pure `shell-writes.ts` reading of the
+      // command, computed where the whole command is still available.
+      for (const w of call.writes ?? []) {
+        const t = w.trim()
+        if (t !== '' && !t.endsWith('…')) out.add(t)
+      }
       if (!(ARTIFACT_TOOL_NAMES as readonly string[]).includes(call.name)) continue
       const p = call.detail?.trim()
       // A truncated detail (`toolDetail` ellipsises past 200 chars) names no file. Admitting one

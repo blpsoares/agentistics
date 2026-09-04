@@ -85,15 +85,36 @@ function unquote(token: string): string {
  */
 export function shellWrites(command: string): string[] {
   const out: string[] = []
+  /**
+   * The directory the command ITSELF establishes.
+   *
+   * `cd /repo/worktree && cat > packages/x.ts` writes `/repo/worktree/packages/x.ts`, and nothing
+   * outside the command needs to be guessed to know it — the line says so. Without this the path
+   * is recorded relative and later resolved against the SESSION's directory, which for a session
+   * that works in worktrees is the wrong checkout: measured here, every one of 17 real files
+   * resolved to a path that does not exist.
+   *
+   * Only an ABSOLUTE `cd` counts. A relative one moves from a base this module does not know, and
+   * a resolution built on a guess would name a different file — which is the whole failure this
+   * reader is careful about.
+   */
+  let base: string | null = null
   const add = (raw: string | undefined): void => {
     if (!raw) return
     const p = unquote(raw.trim())
     if (p === '' || NOT_A_FILE.test(p) || p.startsWith('-')) return
     if (!looksLikePath(p)) return
-    if (!out.includes(p)) out.push(p)
+    const full = base !== null && !p.startsWith('/') && !p.startsWith('~')
+      ? `${base.replace(/\/+$/, '')}/${p}`
+      : p
+    if (!out.includes(full)) out.push(full)
   }
 
   for (const seg of commandSegments(command)) {
+    // A `cd` in the chain moves everything after it. Absolute only — see `base`.
+    const cdm = /^cd\s+(["']?)(\/[^\s;|&"']*)\1\s*$/.exec(seg)
+    if (cdm) { base = cdm[2]!; continue }
+
     // Redirections: `>file`, `> file`, `>>file`, `2>file` — the descriptor prefix is not part of it.
     // A QUOTED target is one path even with a space in it, so the quoted forms are matched
     // first — an unquoted alternative that stops at whitespace would otherwise take only "my.

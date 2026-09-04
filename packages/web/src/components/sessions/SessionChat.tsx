@@ -41,6 +41,7 @@ import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
 import { sessionScratch, type CachedChat } from '../../lib/sessionScratch'
 import { composerMaxHeight } from '../../lib/composerHeight'
 import { artifactsFromTurns, hasUnlistedWrites, type Artifact } from '../../lib/sessionArtifacts'
+import type { LiveTurn } from '../../lib/artifactTabs'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
 import { appendDictation, dictatedText, dictationError, dictationLocale, dictationSupport, insecureAlternative } from '../../lib/dictation'
 import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
@@ -79,6 +80,8 @@ export interface SessionChatProps {
     unavailable?: string
     /** Writes this reader cannot name — see `hasUnlistedWrites`. */
     unlisted: boolean
+    /** The turns themselves, for the panel's LIVE tab. Handed over rather than re-fetched. */
+    turns: readonly LiveTurn[]
   }) => void
 }
 
@@ -650,6 +653,7 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
       artifacts,
       loading,
       unlisted: hasUnlistedWrites(turns),
+      turns,
       ...(payload?.unavailable ? { unavailable: payload.unavailable } : {}),
     })
   }, [artifacts, loading, turns, payload?.unavailable, onArtifacts])

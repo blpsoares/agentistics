@@ -544,7 +544,45 @@ export async function readFleetArtifact(
 
   const { readSessionChat } = await import('./chat-web')
   const chat = await readSessionChat(host, lang, row.id)
-  const allowed = artifactPathsFromTurns(chat.turns)
+  // The allowlist is resolved against the session's own directory, because a shell write is
+  // recorded AS WRITTEN and after a `cd` that is relative. Both forms are admitted: the browser
+  // asks with whichever string the transcript gave it.
+  const { resolveArtifactPath } = await import('./artifact-list')
+  const raw = artifactPathsFromTurns(chat.turns)
+  const allowed = [...new Set(raw.flatMap(p => {
+    const r = resolveArtifactPath(p, row.cwd!)
+    return r ? [p, r] : [p]
+  }))]
   const { readArtifact } = await import('./artifact-web')
-  return await readArtifact(lang, row.cwd, allowed, path)
+  const asked = resolveArtifactPath(path, row.cwd) ?? path
+  return await readArtifact(lang, row.cwd, allowed, allowed.includes(path) ? asked : path)
+}
+
+/**
+ * The panel's LIST: what this session wrote that is still a readable file with content.
+ *
+ * Answered by the server because only it can look at the disk. The browser keeps deriving the kind,
+ * the touch count and which file is being written now from the same turns it already renders — this
+ * says which of those rows can actually be opened, and the panel shows no others.
+ */
+export async function listSessionArtifacts(
+  host: StartHost, lang: CliLang, id: string,
+): Promise<{ files: { raw: string; path: string; bytes: number }[]; unavailable?: string }> {
+  if (!host.sessions) return { files: [] }
+  const fleet = await host.sessions()
+  const row = fleet.sessions.find(r => r.id === id)
+  if (!row?.cwd) return { files: [] }
+  const { readSessionChat } = await import('./chat-web')
+  const chat = await readSessionChat(host, lang, row.id)
+  if (chat.unavailable) return { files: [], unavailable: chat.unavailable }
+  const { listExistingArtifacts } = await import('./artifact-list')
+  return { files: await listExistingArtifacts(artifactPathsFromTurns(chat.turns), row.cwd) }
+}
+
+/** The route's entry point: resolve the host, then list. Mirrors `readFleetArtifact`. */
+export async function listFleetArtifacts(
+  lang: CliLang, id: string,
+): Promise<{ files: { raw: string; path: string; bytes: number }[]; unavailable?: string }> {
+  const host = await hostFor(lang)
+  return await listSessionArtifacts(host, lang, id)
 }

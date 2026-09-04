@@ -8,8 +8,9 @@ test('a plain redirection names the file', () => {
 })
 
 test('A COMMAND LINE IS A CHAIN — the write is found past the cd that precedes it', () => {
-  // The whole reason this is segment-by-segment: a whole-line test attributes it to `cd`.
-  expect(shellWrites('cd /repo && cat > packages/web/x.ts')).toEqual(['packages/web/x.ts'])
+  // The whole reason this is segment-by-segment: a whole-line test attributes it to `cd`. And the
+  // `cd` is not merely skipped — it MOVES what follows, so the path comes back rooted.
+  expect(shellWrites('cd /repo && cat > packages/web/x.ts')).toEqual(['/repo/packages/web/x.ts'])
   expect(shellWrites('mkdir -p a; touch b; echo x > a/c.txt')).toEqual(['a/c.txt'])
 })
 
@@ -78,4 +79,21 @@ test('a path with a separator or an extension still passes', () => {
 
 test('a bare word with neither is refused — it names no file anybody could open', () => {
   expect(shellWrites('cmd > outfile')).toEqual([])
+})
+
+test('a `cd` in the chain moves what follows it — the COMMAND says the directory', () => {
+  // Without this the path is recorded relative and later resolved against the session's own
+  // directory, which for a session working in worktrees is the wrong checkout. Measured: all 17
+  // real files resolved to paths that did not exist.
+  expect(shellWrites('cd /repo/wt && cat > packages/x.ts')).toEqual(['/repo/wt/packages/x.ts'])
+  expect(shellWrites('cd /a/b\ncat > c.md')).toEqual(['/a/b/c.md'])
+})
+
+test('an absolute write is not moved by a preceding cd', () => {
+  expect(shellWrites('cd /repo && cat > /tmp/out.log')).toEqual(['/tmp/out.log'])
+})
+
+test('a RELATIVE cd is refused — it moves from a base this module does not know', () => {
+  // Resolving on a guess would name a different file, which is the failure this reader avoids.
+  expect(shellWrites('cd sub && cat > x.ts')).toEqual(['x.ts'])
 })
