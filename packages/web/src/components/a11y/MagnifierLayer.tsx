@@ -49,6 +49,32 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
     return () => { s.stop(); setScheduler(null) }
   }, [active])
 
+  // The mirror clones `#root` at stage-local (0,0); `stageTransform` treats stage-local as
+  // viewport coordinates, which only holds while the clone is offset by the current scroll (see
+  // magnifierMirror.ts). One window listener, coalesced with rAF so a scroll firing many times a
+  // frame costs one style rewrite per host, not one per event. Resize is different: the clone's
+  // shape genuinely changed (a reflow, not just a viewport offset), so it needs a full re-clone —
+  // `markDirty()` schedules that at the next sync instead of trying to patch it here.
+  useEffect(() => {
+    if (!active || !scheduler) return
+    let raf = 0
+    const onScroll = () => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        scheduler.applyScroll(window.scrollX, window.scrollY)
+      })
+    }
+    const onResize = () => { scheduler.markDirty() }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onResize, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onResize)
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [active, scheduler])
+
   // One global keydown while the feature is on. Every guard here exists so the feature cannot take
   // the dashboard's own keyboard: a chord that is not ours falls through untouched.
   useEffect(() => {
