@@ -28,6 +28,7 @@ import remarkBreaks from 'remark-breaks'
 import { Check, Clock, CornerUpLeft, Loader, User } from 'lucide-react'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { splitImageAttachments } from '../../lib/attachmentPreview'
+import { echoStatus } from '../../lib/echoStatus'
 import { attachmentUrl } from '../../lib/attachmentUrl'
 import { AttachmentLightbox } from './AttachmentLightbox'
 import { HarnessMark } from './HarnessMark'
@@ -75,6 +76,10 @@ export interface ChatBubbleProps {
    * the message IS there, it is the reading that has not happened.
    */
   awaiting?: boolean
+  /** How long ago the message was handed to the session, ms. Absent when that is not known. */
+  awaitingSinceMs?: number
+  /** Whether the session is mid-turn — the reason an unread message is normal rather than stuck. */
+  awaitingWorking?: boolean
   /**
    * Quote THIS turn in the composer. Absent where the session cannot be written to — a reply
    * control on a row that will refuse the message is a control that teaches the wrong thing.
@@ -127,7 +132,7 @@ const SYSTEM_NOTE_PT: Record<string, string> = {
   'injected by the assistant': 'injetado pelo assistente',
 }
 
-export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, onReply, anchorId }: ChatBubbleProps) {
+export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, awaitingWorking, awaitingSinceMs, onReply, anchorId }: ChatBubbleProps) {
   const pt = lang === 'pt'
   const mine = turn.role === 'user'
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
@@ -361,16 +366,25 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
         {/* The label sits INSIDE the bubble, under the text: it is a fact about this message, and
             a line floating beside the bubble would read as another message. `role="status"` so a
             screen reader is told, since the fading alone says nothing to one. */}
-        {awaiting && (
-          <div role="status" style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            fontSize: 10, color: 'var(--text-tertiary)',
-            alignSelf: mine ? 'flex-end' : 'flex-start',
-          }}>
-            <Clock size={10} style={{ flexShrink: 0 }} />
-            <span>{pt ? 'aguardando a sessão ler' : 'waiting for the session to read it'}</span>
-          </div>
-        )}
+        {awaiting && (() => {
+          // The wording is `echoStatus`'s, not this file's — see it for why the sentence leads with
+          // DELIVERY rather than with waiting.
+          const st = echoStatus(awaitingSinceMs ?? null, awaitingWorking === true, pt ? 'pt' : 'en')
+          return (
+            <div role="status" style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              fontSize: 10,
+              // A wait long enough to be worth a second look is the ONLY one that changes colour.
+              // Colouring every unread message would make the ordinary case look like a fault,
+              // which is the mistake the old wording already made.
+              color: st.notable ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+              alignSelf: mine ? 'flex-end' : 'flex-start',
+            }}>
+              <Clock size={10} style={{ flexShrink: 0 }} />
+              <span>{st.text}</span>
+            </div>
+          )
+        })()}
       </div>
 
       {lightboxIndex !== null && (

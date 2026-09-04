@@ -36,6 +36,7 @@ import { ChatBubble, type ChatTurn } from './ChatBubble'
 import { WorkingNote } from './WorkingNote'
 import { useTerminalStream } from '../../hooks/useTerminalStream'
 import { isImagePath } from '../../lib/attachmentPreview'
+import { splitImageAttachments } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
 import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
 import { sessionScratch, type CachedChat } from '../../lib/sessionScratch'
@@ -50,7 +51,6 @@ import {
 } from '../../lib/skillMenu'
 import { quoteLines, replyAuthor, replyPreview } from '../../lib/replyQuote'
 import { lastSentMessage, turnAnchorId } from '../../lib/lastSent'
-import { attachmentName, splitMessage } from '../../lib/messageAttachments'
 import { overlayPadding } from '../../lib/mobileOverlay'
 import { HARNESS_LABELS } from '../../lib/harness'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -556,6 +556,28 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
    */
   const lastSent = useMemo(() => lastSentMessage(turns, echo), [turns, echo])
 
+  /**
+   * When each echo was first seen, so its bubble can say how long it has been waiting.
+   *
+   * Not persisted, and that is deliberate: an echo restored from storage after a reload has an
+   * age this tab cannot know, and `echoStatus` shows none rather than measuring from the reload —
+   * a duration that restarts when you refresh is worse than no duration at all.
+   */
+  const echoSeen = useRef(new Map<string, number>())
+  useEffect(() => {
+    const m = echoSeen.current
+    for (const t of echo) if (!m.has(t)) m.set(t, Date.now())
+    for (const t of [...m.keys()]) if (!echo.includes(t)) m.delete(t)
+  }, [echo])
+
+  /** A clock, so an ageing echo ages on screen instead of freezing at its first render. */
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (echo.length === 0) return
+    const t = setInterval(() => setNow(Date.now()), 5000)
+    return () => clearInterval(t)
+  }, [echo.length])
+
   // Retire an echo the moment the transcript carries it. Compared on collapsed whitespace, because
   // the harness re-wraps what it stores and an exact match would leave the echo standing forever
   // beside its own committed copy.
@@ -873,6 +895,10 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
               harness={session.harness}
               anchorId={turnAnchorId('echo', i)}
               awaiting
+              awaitingWorking={working}
+              {...(echoSeen.current.get(text) !== undefined
+                ? { awaitingSinceMs: now - echoSeen.current.get(text)! }
+                : {})}
             />
           ))}
 
@@ -1661,26 +1687,29 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                 fontFamily: 'inherit', fontSize: 12.5, lineHeight: 1.6,
                 color: 'var(--text-primary)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
               }}>
-                {splitMessage(lastSent.text).text}
+                {splitImageAttachments(lastSent.text).text}
               </pre>
             )}
 
-            {/* THE FILES IT CARRIED. A sent message is paths plus words joined by newlines, and
-                showing it raw rendered the paths as the first lines of the prose — so a message
-                with an image in it read as a message that began with a filename. They are chips
-                here, named, and the modal says how many. */}
-            {splitMessage(lastSent.text).attachments.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {splitMessage(lastSent.text).attachments.map(a => (
-                  <span key={a} title={a} style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 9px',
-                    borderRadius: 8, background: 'var(--bg-elevated)',
-                    border: '1px solid var(--border-subtle)', fontSize: 11.5,
-                    maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  }}>
-                    <Paperclip size={11} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
-                    {attachmentName(a)}
-                  </span>
+            {/* THE IMAGES IT CARRIED. A sent message is paths plus words joined by newlines, so
+                showing it raw rendered the paths as the first lines of the prose — a message with
+                an image in it read as one that began with a filename. Split by the SAME rule the
+                chat bubbles use (`splitImageAttachments`), never a second one: the two are reading
+                the identical text, and two rules over one string is how they come to disagree. */}
+            {splitImageAttachments(lastSent.text).images.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {splitImageAttachments(lastSent.text).images.map(a => (
+                  <img
+                    key={a}
+                    src={attachmentUrl(a)}
+                    alt={a.split('/').pop() ?? a}
+                    title={a}
+                    style={{
+                      height: 72, width: 'auto', maxWidth: 160, objectFit: 'cover',
+                      borderRadius: 8, border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-base)',
+                    }}
+                  />
                 ))}
               </div>
             )}
