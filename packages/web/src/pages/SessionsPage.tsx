@@ -17,6 +17,7 @@
  * a session's state by one poll interval — which is a bug people report as flicker.
  */
 
+import { useMemo } from 'react'
 import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import { ChevronLeft, MessagesSquare, TerminalSquare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
@@ -27,6 +28,7 @@ import { FiltersBar } from '../components/FiltersBar'
 import { SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
 import { SessionsAside } from '../components/nav/SessionsAside'
 import { SessionActions } from '../components/sessions/SessionActions'
+import { filterFleet } from '../lib/fleetFilter'
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
@@ -79,6 +81,12 @@ export default function SessionsPage() {
     else next.set('view', v)
     return next
   }, { replace: true })
+
+  /** The fleet as the aside is showing it — one narrowing, read by both. */
+  const overviewRows = useMemo(
+    () => filterFleet({ rows: fleet.rows, filters, activeOnly }).rows,
+    [fleet.rows, filters, activeOnly],
+  )
 
   const panel = selected === undefined ? null : (
     <SessionPanel
@@ -281,7 +289,19 @@ export default function SessionsPage() {
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         <FleetOverview
           lang={pt ? 'pt' : 'en'}
-          rows={fleet.rows}
+          // THE SAME ROWS THE ASIDE IS SHOWING, through the same `filterFleet`.
+          //
+          // It used to be the whole fleet, so the cards described a set the reader could not see:
+          // "5 running of 306 in this list" beside an aside listing five, and a project count of
+          // every project in the history. Two regions of one screen counting two different sets is
+          // the defect this page has now hit twice — the second time was the cards holding still
+          // while the heatmap emptied.
+          //
+          // The date range is deliberately not among the dimensions `filterFleet` applies: a live
+          // session is happening now, and "last 7 days" would hide one that started eight days ago
+          // and is still working. The note above the cards says exactly that, so the one filter
+          // that does not move them is named rather than left to be discovered.
+          rows={overviewRows}
           loading={loading}
           unsupported={unsupported}
           heatmap={derived.heatmapData}

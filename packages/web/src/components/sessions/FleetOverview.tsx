@@ -90,16 +90,17 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable, h
         {pt ? 'Suas sessões' : 'Your sessions'}
       </h1>
       {/* TWO UNIVERSES ON ONE SCREEN, and the page has to say which is which.
-          The cards count the LIVE FLEET — what is running on this machine at this instant — and no
-          filter touches them: a date range cannot narrow a session that is happening now, and the
-          harness chips are read against stored metrics the fleet has not been written into yet
-          (`fleetFilter.ts` records why each dimension is or is not applied to a live row). The
-          heatmap and the per-assistant bars below count STORED METRICS and are narrowed by every
-          active filter.
-          Reported by a user who set a filter, watched the heatmap empty out, and saw the four
-          cards hold still — a reasonable reading of that is that the cards are stale. They are
-          not; they are answering a different question, and until now nothing on the screen said
-          so. Same rule as every N/A in this product: a number must say what it counts. */}
+          The cards count the FLEET — the sessions the aside is listing, narrowed by the same
+          `filterFleet` it uses. The heatmap and the per-assistant bars below count STORED METRICS,
+          narrowed by every filter including the date range.
+          The one dimension that separates them is TIME, and it is named rather than left to be
+          discovered: `filterFleet` deliberately ignores the date range, because a live session is
+          happening now and "last 7 days" would hide one that started eight days ago and is still
+          working. Its header records that reasoning per dimension.
+          Both notes exist because a user set a filter, watched the heatmap empty out, and saw the
+          cards hold still — a reasonable reading of that is that the cards are stale. They were
+          not stale; they were counting a different set, and nothing on the screen said so. Same
+          rule as every N/A in this product: a number must say what it counts. */}
       <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--text-tertiary)', lineHeight: 1.55 }}>
         {pt
           ? 'O que está rodando nesta máquina agora. Escolha uma sessão na lateral para abri-la.'
@@ -107,8 +108,8 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable, h
       </p>
 
       <SectionNote text={pt
-        ? 'Agora mesmo — a frota viva desta máquina. Os filtros do topo não mexem nestes quatro números.'
-        : 'Right now — this machine’s live fleet. The filters above do not change these four numbers.'} />
+        ? 'A frota agora — as mesmas sessões listadas ao lado. Segue os filtros do topo, menos o período: uma sessão viva está acontecendo agora.'
+        : 'The fleet now — the same sessions listed beside it. Follows the filters above, except the date range: a live session is happening now.'} />
 
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 22,
@@ -147,7 +148,22 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable, h
         <Stat
           icon={<FolderGit2 size={15} />} tone="var(--accent-purple)"
           label={pt ? 'Projetos' : 'Projects'} value={String(s.projects)}
-          note={pt ? 'com sessão registrada' : 'with a session on record'}
+          // WHERE THE SESSIONS IN THIS LIST ARE, and how many of those places are repositories.
+          //
+          // It used to read "with a session on record" over a count of every project in the whole
+          // history — 173 beside three cards counting the fleet, four numbers side by side
+          // measuring different things. Reported as simply wrong, and it was: the card answered a
+          // question nobody had asked on a screen about what is running.
+          //
+          // The repo count is a FRACTION of the same figure, never a second total, so the two can
+          // be read together at a glance. Absent when none of them resolves to a repository —
+          // "0 are repositories" and "we could not resolve a remote for any of them" read the same
+          // and only the second is established.
+          note={s.projectRepos > 0
+            ? (pt
+                ? `${s.projectRepos} ${s.projectRepos === 1 ? 'é repositório' : 'são repositórios'}`
+                : `${s.projectRepos} ${s.projectRepos === 1 ? 'is a repository' : 'are repositories'}`)
+            : (pt ? 'nenhum com repositório resolvido' : 'none with a resolved repository')}
         />
       </div>
 
