@@ -18,7 +18,7 @@
  * than the bubble, and letting it set the width is how a message ends up outside its own card.
  */
 
-import { memo, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 // A single newline is a LINE BREAK here. Without this plugin markdown collapses it to a space, so a
@@ -84,6 +84,13 @@ export interface ChatBubbleProps {
    * if `onReply` is actually stable across a re-render caused by something unrelated, like typing.
    */
   onReply?: (turn: ChatTurn) => void
+  /**
+   * A DOM id for this bubble, so something outside the conversation can scroll to it.
+   *
+   * The id is composed by `lastSent.ts`'s `turnAnchorId` — one rule shared by whatever renders the
+   * bubble and whatever goes looking for it, so "go to message" can never hunt an id nothing wrote.
+   */
+  anchorId?: string
 }
 
 /**
@@ -120,10 +127,38 @@ const SYSTEM_NOTE_PT: Record<string, string> = {
   'injected by the assistant': 'injetado pelo assistente',
 }
 
-export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, onReply }: ChatBubbleProps) {
+export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, onReply, anchorId }: ChatBubbleProps) {
   const pt = lang === 'pt'
   const mine = turn.role === 'user'
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+  /**
+   * The RIGHT-CLICK menu, positioned where the click landed inside this bubble.
+   *
+   * The hover control is the discoverable way in and stays exactly where it was; this is the one
+   * every messaging application has taught, and it is reachable without first finding a 24px
+   * button that only appears when the pointer is over the right message.
+   *
+   * ONE ENTRY, deliberately. A context menu offered on a conversation invites "copy", "quote",
+   * "open in the terminal" and four more, and each of those is a decision about what a session can
+   * do that has not been made. Reply is the one this file already supports.
+   */
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (menuAt === null) return
+    const close = () => setMenuAt(null)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuAt(null) }
+    // `mousedown` rather than `click`, so it closes on the press; and on SCROLL too, because the
+    // menu is anchored to a bubble that moves while the conversation does.
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [menuAt])
 
   // An attachment is a PATH the composer typed into the pane (see `attachmentPreview.ts`'s header),
   // so it arrives in `turn.text` like any other line — pulled out here rather than at the source, so
@@ -187,7 +222,7 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
   const name = (HARNESS_LABELS as Record<string, string>)[harness] ?? harness
 
   return (
-    <div className="ag-bubble" style={{
+    <div className="ag-bubble" {...(anchorId ? { id: anchorId } : {})} style={{
       display: 'flex', gap: 10, minWidth: 0,
       flexDirection: mine ? 'row-reverse' : 'row',
       alignItems: 'flex-start',
@@ -210,7 +245,17 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
         </span>
       )}
 
-      <div style={{
+      <div
+        ref={bodyRef}
+        onContextMenu={e => {
+          // Only where a reply is actually possible. Swallowing the browser's own menu to offer
+          // one entry that is not there would be a control that teaches the wrong thing.
+          if (!onReply || provisional) return
+          e.preventDefault()
+          const r = bodyRef.current?.getBoundingClientRect()
+          setMenuAt(r ? { x: e.clientX - r.left, y: e.clientY - r.top } : { x: 8, y: 8 })
+        }}
+        style={{
         // `minWidth: 0` is what actually keeps wide content inside the card: without it a flex item
         // refuses to shrink below its content, and a long line pushes the bubble off the pane.
         minWidth: 0, maxWidth: mine ? '82%' : '100%',
@@ -249,16 +294,42 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
             onClick={() => onReply(turn)}
             aria-label={pt ? 'Responder' : 'Reply'}
             title={pt ? 'Responder' : 'Reply'}
-            style={{
-              position: 'absolute', top: 6, [mine ? 'left' : 'right']: 6,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              width: 24, height: 24, borderRadius: 7, cursor: 'pointer',
-              border: '1px solid var(--border-subtle)', background: 'var(--bg-surface)',
-              color: 'var(--text-tertiary)', opacity: 0, transition: 'opacity 0.15s',
-            } as React.CSSProperties}
+            // POSITION only. Everything else — the size, the surface, and the `opacity: 0` the
+            // hover reveals — lives in `.ag-bubble-reply`, because an inline style beats a
+            // stylesheet rule without `!important`: written here, the reveal could never fire and
+            // the control was invisible on every message, at every width, forever.
+            style={{ position: 'absolute', top: 6, [mine ? 'left' : 'right']: 6 } as React.CSSProperties}
           >
             <CornerUpLeft size={12} />
           </button>
+        )}
+
+        {/* The right-click menu. Anchored inside the bubble at the point that was clicked. */}
+        {menuAt && onReply && (
+          <div
+            role="menu"
+            onMouseDown={e => e.stopPropagation()}
+            style={{
+              position: 'absolute', top: menuAt.y, left: menuAt.x, zIndex: 40,
+              minWidth: 130, padding: 4, borderRadius: 9,
+              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+            }}
+          >
+            <button
+              role="menuitem"
+              onClick={() => { setMenuAt(null); onReply(turn) }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+                minHeight: 34, padding: '6px 8px', borderRadius: 6, border: 'none',
+                background: 'transparent', color: 'var(--text-primary)',
+                fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer',
+              }}
+            >
+              <CornerUpLeft size={13} style={{ flexShrink: 0 }} />
+              {pt ? 'Responder' : 'Reply'}
+            </button>
+          </div>
         )}
 
         {/* Small squares ABOVE the text — what was attached, rendered rather than left as a bare
