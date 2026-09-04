@@ -28,13 +28,13 @@ export interface MirrorHost {
   /**
    * Move the existing clone to match the window's current scroll position, without re-cloning.
    * The DOM has not changed, so a full `syncNow()` would be wasted work for a pure scroll event —
-   * this rewrites the root offset `syncNow()` derives from `window.scrollX/Y`, AND every sticky
-   * copy's own offset (see `reconcile`'s sticky handling and this function's implementation in
-   * `createMirrorHost` for the derivation) — a sticky copy is otherwise left at last sync's
-   * position and drifts by the scroll delta on every frame. What is still only ever right as of
-   * the last full sync is everything else `reconcile` computes (content, form state, canvas
-   * pixels, and a sticky element's SIZE if it changed) — the same eventual-consistency the mirror
-   * already has there, bounded by the heartbeat interval.
+   * this rewrites only the root offset `syncNow()` derives from `window.scrollX/Y`. A repositioned
+   * sticky copy needs NO correction here: it is placed with `position: fixed` (see `reconcile`'s
+   * comment on `fixedStickies`), which resolves against the STAGE's own transform regardless of
+   * the clone root's `-scroll` offset, so it never drifts in the first place. What is still only
+   * ever right as of the last full sync is everything else `reconcile` computes (content, form
+   * state, canvas pixels, and a repositioned sticky's rect if it moved or resized) — the same
+   * eventual-consistency the mirror already has there, bounded by the heartbeat interval.
    */
   setScroll(x: number, y: number): void
   destroy(): void
@@ -99,66 +99,93 @@ function neutralize(clone: HTMLElement, live: HTMLElement): void {
   clone.style.overflowX = liveStyle.overflowX
 }
 
-/** A sticky copy positioned during `reconcile`, kept so `setScroll` can rewrite its offset on
- *  every scroll frame without re-measuring or re-walking the tree. `rect` is the LIVE element's
- *  `getBoundingClientRect()` from the sync that created this entry — see the derivation on
- *  `reconcile`'s `left`/`top` assignment and on `MirrorHost.setScroll` for why that single
- *  measurement stays valid across an arbitrary number of later scroll positions. */
-interface StickyCopy {
-  el: HTMLElement
-  rect: DOMRect
+/**
+ * True when a computed style's `overflow`/`overflow-x`/`overflow-y` is `auto` or `scroll` — i.e.
+ * this box is a REAL scrolling container. `hidden` deliberately does NOT count: it clips content
+ * but a user can never scroll it, so it never becomes the box a `position: sticky` descendant
+ * sticks within — see `hasScrollingAncestor`'s own comment for what that distinction is FOR.
+ */
+function scrolls(style: CSSStyleDeclaration): boolean {
+  return style.overflow === 'auto' || style.overflow === 'scroll'
+    || style.overflowX === 'auto' || style.overflowX === 'scroll'
+    || style.overflowY === 'auto' || style.overflowY === 'scroll'
+}
+
+/**
+ * Does `el` have a scrolling ancestor, up to and including `root`?
+ *
+ * This is the whole of Finding 1's fix. The mirror used to reposition EVERY `position: sticky`
+ * element it found, on the premise that a sticky inside the transformed stage has no scrolling
+ * ancestor and would sink to its static flow position. That premise holds only for a sticky whose
+ * scroller is the WINDOW (the page header, an aside pinned down a page that scrolls past it) — a
+ * sticky inside a real `overflow: auto` box (a modal body, a popover list, a bounded pick-list)
+ * has a scrolling ancestor INSIDE THE CLONE TOO, because `cloneNode` copies that box right along
+ * with everything else, and `reconcile`'s existing `scrollTop`/`scrollLeft` copy already
+ * reproduces its scroll position faithfully. Repositioning that kind gave the copy a containing
+ * block rooted at the CLONE, not at the panel it lives in, so it rendered doubly displaced, and
+ * `setScroll` then slid it further on every scroll frame on top of that.
+ *
+ * So each sticky is classified HERE, on the LIVE tree, before anything is cloned: walk its
+ * ancestors and ask whether any of them is a real scrolling box (`scrolls()`, above — `auto` or
+ * `scroll` only; `hidden` clips but never scrolls, so it does not count). One with a scrolling
+ * ancestor is left completely alone by `reconcile` — it already renders correctly today. One
+ * without is the window-scrolled case and gets a `fixed` rect from `syncNow` — see that function's
+ * `fixedStickies` map and `reconcile`'s own comment on why `fixed`, not `absolute`.
+ */
+function hasScrollingAncestor(el: Element, root: HTMLElement): boolean {
+  let node: HTMLElement | null = el.parentElement
+  while (node) {
+    if (scrolls(getComputedStyle(node))) return true
+    if (node === root) return false
+    node = node.parentElement
+  }
+  return false
 }
 
 /**
  * Copy what cloneNode leaves behind, walking both trees in step.
  *
- * `stickyEls` is the LIVE `position: sticky` elements found by ONE `querySelectorAll` pass over
- * the live root (done once per `syncNow()`, in `createMirrorHost`) — never `getComputedStyle`
- * per node, which would force a style recalc on every element of a full dashboard tree. Membership
- * is an object-identity `Set.has`, so it costs one hash lookup per node on top of the walk this
- * function already does; the query itself is a single native DOM scan, the same order of cost as
- * the `cloneNode` this function follows.
+ * `fixedStickies` maps each LIVE window-scrolled sticky element (per `hasScrollingAncestor`,
+ * above) to the `DOMRect` `syncNow` measured for it in ONE read pass BEFORE this walk starts — see
+ * that function's own comment for why the read is hoisted out of this function entirely. This
+ * function therefore only ever WRITES for a sticky match; it never calls `getBoundingClientRect`
+ * itself, which is the whole of Finding 2's fix (one forced layout per sync, not one per sticky).
  *
- * A sticky element has no scrolling ancestor once it is inside the mirror's transformed stage, so
- * it degrades to `relative` at its static flow position — showing whatever content sits at that Y
- * in the document, not the header. `scrollX`/`scrollY` are the values `createMirrorHost` offset the
- * clone ROOT by for this same sync; see the derivation on the `left`/`top` assignment below.
+ * The repositioned copy gets `position: fixed`, never `absolute`. `absolute` resolves against the
+ * nearest POSITIONED ancestor, which for a sticky sitting behind an intervening positioned wrapper
+ * (a modal's own `position: relative` panel, say) would be that wrapper rather than the clone
+ * root — doubly displaced, exactly the bug Finding 1 is fixing. `fixed` instead resolves against
+ * the nearest ancestor with a `transform` (or `filter`/`will-change`), which is the STAGE itself —
+ * regardless of any ordinary positioned element in between — and stage-local coordinates already
+ * equal viewport coordinates once the clone root's `-scroll` offset is applied (see
+ * `stageTransform`'s derivation and `createMirrorHost`'s `left`/`top` assignment). So `left:
+ * rect.left; top: rect.top`, taken straight from the live measurement with NO scroll term, lands
+ * the copy exactly where the live element sits on screen right now — and needs no per-scroll
+ * correction either, which is why `setScroll` no longer carries a sticky loop at all.
  *
- * Every sticky copy positioned here is also pushed onto `stickyOut`, so `createMirrorHost` can
- * hand the list to `setScroll` — see that function for why the SAME `rect` measured here is still
- * the right one to reposition against after the scroll position has moved on.
+ * Caveat, stated rather than hidden: an intervening ancestor with its OWN `transform` / `filter` /
+ * `will-change` would capture a `fixed` descendant before it reaches the stage. That is far rarer
+ * than an intervening positioned ancestor, and none exists in this codebase today — the window-
+ * scrolled stickies here (the page header, the settings/custom-page asides, a panel's own pinned
+ * edge) sit in ordinary flex/flow ancestors with no such property.
  */
 function reconcile(
   live: Element,
   copy: Element,
-  stickyEls: ReadonlySet<Element>,
-  scrollX: number,
-  scrollY: number,
-  stickyOut: StickyCopy[],
+  fixedStickies: ReadonlyMap<Element, DOMRect>,
 ): void {
   if (live.scrollTop !== 0 || live.scrollLeft !== 0) {
     copy.scrollTop = live.scrollTop
     copy.scrollLeft = live.scrollLeft
   }
 
-  if (stickyEls.has(live) && copy instanceof HTMLElement) {
-    // The clone root is offset by `left: -scrollX; top: -scrollY` (see `createMirrorHost`), and it
-    // is this element's nearest positioned ancestor (it is `position: relative`, which wins the
-    // containing-block search over the stage's `transform` further up) — so an `absolute` child at
-    // `left: X` renders at stage-local `X - scrollX`. We want it to land at `rect.left` (the live
-    // element's CURRENT on-screen position, viewport px — stage-local now equals viewport, see
-    // stageTransform's derivation), so `X - scrollX = rect.left` gives `X = rect.left + scrollX`.
-    // This assumes no OTHER positioned element sits between the sticky node and the clone root;
-    // true for every sticky element in this codebase today (all are direct-ish descendants with no
-    // intervening `position:` wrapper), but a future one that adds such a wrapper would need its
-    // own offset folded in here.
-    const rect = live.getBoundingClientRect()
-    copy.style.position = 'absolute'
-    copy.style.left = `${rect.left + scrollX}px`
-    copy.style.top = `${rect.top + scrollY}px`
-    copy.style.width = `${rect.width}px`
-    copy.style.height = `${rect.height}px`
-    stickyOut.push({ el: copy, rect })
+  const stickyRect = fixedStickies.get(live)
+  if (stickyRect && copy instanceof HTMLElement) {
+    copy.style.position = 'fixed'
+    copy.style.left = `${stickyRect.left}px`
+    copy.style.top = `${stickyRect.top}px`
+    copy.style.width = `${stickyRect.width}px`
+    copy.style.height = `${stickyRect.height}px`
   }
 
   if (live instanceof HTMLInputElement && copy instanceof HTMLInputElement) {
@@ -192,7 +219,7 @@ function reconcile(
   const n = Math.min(liveKids.length, copyKids.length)
   // `n` is bounded by both lengths, so index i < n is in range on both sides.
   for (let i = 0; i < n; i++) {
-    reconcile(liveKids[i]!, copyKids[i]!, stickyEls, scrollX, scrollY, stickyOut)
+    reconcile(liveKids[i]!, copyKids[i]!, fixedStickies)
   }
 }
 
@@ -200,14 +227,25 @@ export function createMirrorHost(stage: HTMLElement): MirrorHost {
   let alive = true
   // The currently-inserted clone, kept so `setScroll` can reposition it without re-cloning.
   let clone: HTMLElement | null = null
-  // The sticky copies `reconcile` positioned on the last `syncNow()`, kept alongside their
-  // measured live rects so `setScroll` can rewrite their offsets too — see the derivation there.
-  let stickyCopies: StickyCopy[] = []
   return {
     syncNow() {
       if (!alive) return
       const root = sourceRoot()
       if (!root) return
+
+      // Finding 2's fix: ONE read pass over the live sticky set, done BEFORE anything is cloned or
+      // written — `hasScrollingAncestor` only reads computed style (no layout dependency) and
+      // `getBoundingClientRect` here is the only place this sync forces a layout for a sticky,
+      // once, for the whole set, rather than once per sticky inside `reconcile`'s read-after-write
+      // walk over a document that by then also carries a second full copy of the dashboard.
+      const stickyEls = Array.from(root.querySelectorAll('[style*="sticky"]'))
+      const fixedStickies = new Map<Element, DOMRect>()
+      for (const el of stickyEls) {
+        if (!hasScrollingAncestor(el, root)) {
+          fixedStickies.set(el, el.getBoundingClientRect())
+        }
+      }
+
       const next = root.cloneNode(true) as HTMLElement
       neutralize(next, root)
 
@@ -234,36 +272,20 @@ export function createMirrorHost(stage: HTMLElement): MirrorHost {
       next.style.top = `${-scrollY}px`
 
       stage.replaceChildren(next)
-      const stickyEls = new Set<Element>(Array.from(root.querySelectorAll('[style*="sticky"]')))
-      const nextStickyCopies: StickyCopy[] = []
-      reconcile(root, next, stickyEls, scrollX, scrollY, nextStickyCopies)
+      reconcile(root, next, fixedStickies)
       clone = next
-      stickyCopies = nextStickyCopies
     },
     setScroll(x, y) {
       if (!alive || !clone) return
       clone.style.left = `${-x}px`
       clone.style.top = `${-y}px`
-      // Same equation `reconcile` derived, re-solved for the CURRENT scroll instead of the one at
-      // last sync: the clone root's rendered stage-local position is `-x` (the assignment just
-      // above), so an absolute child at `left: X` renders at `X - x`. It must land at `rect.left`
-      // — the live element's on-screen position, which `reconcile`'s own comment already argues
-      // equals stage-local coordinates — giving `X = rect.left + x`. `rect` is the ONE measurement
-      // taken at the last `syncNow()`; it stays the right target between syncs because a sticky
-      // element's on-screen position does not itself move while it is scrolled (that is what
-      // "sticky" means) — only the clone root's offset does, which is exactly what this call is
-      // correcting for. Without this, `left`/`top` stayed fixed at last sync's `rect.left +
-      // scrollX`, so a sticky copy drifted by the exact scroll delta on every frame until the next
-      // full re-clone.
-      for (const { el, rect } of stickyCopies) {
-        el.style.left = `${rect.left + x}px`
-        el.style.top = `${rect.top + y}px`
-      }
+      // No sticky loop here any more — see `reconcile`'s comment on `fixedStickies`. A repositioned
+      // sticky copy is `position: fixed` against the STAGE's own transform, which this scroll-only
+      // offset never touches, so it stays put without any per-scroll correction.
     },
     destroy() {
       alive = false
       clone = null
-      stickyCopies = []
       stage.replaceChildren()
     },
   }

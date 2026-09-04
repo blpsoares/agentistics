@@ -5,17 +5,22 @@
  * MOUSE can reach a pinned lens again (a pinned lens takes no pointer events at all — that is what
  * pinning means). There is no keyboard way in yet — that is Task 10.
  *
- * Mobile: there is no right click. A long-press MIGHT fire `contextmenu` (Android Chrome does;
+ * Touch: there is no right click. A long-press MIGHT fire `contextmenu` (Android Chrome does;
  * iOS Safari is inconsistent and may show the system callout instead), and nothing on screen
- * advertises that gesture — `title` never surfaces on touch. So on touch a tap opens the menu
- * directly instead of creating a lens; "New lens" is the menu's first item, so nothing is lost,
- * and a pinned lens (which takes no pointer events) stays reachable through the menu's own list.
+ * advertises that gesture — `title` never surfaces on touch. So on a COARSE pointer a tap opens
+ * the menu directly instead of creating a lens; "New lens" is the menu's first item, so nothing is
+ * lost, and a pinned lens (which takes no pointer events) stays reachable through the menu's own
+ * list. This is decided by `useIsCoarsePointer()` (`(pointer: coarse)`), NOT `useIsMobile()`'s
+ * width breakpoint: a touch tablet at 1024px is not "mobile" by width but has no right click
+ * either, and would otherwise have NO WAY to reach the general menu at all — the exact hole this
+ * behaviour exists to close. `useIsMobile()` still drives sizing on this button (touch targets,
+ * icon size) — that stays a width question, and the two must not be conflated.
  */
 import React, { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search } from 'lucide-react'
 import type { AppContext } from '../../lib/app-context'
-import { useIsMobile } from '../../hooks/useIsMobile'
+import { useIsMobile, useIsCoarsePointer } from '../../hooks/useIsMobile'
 import { a11yText } from './i18n'
 
 /** Clearance kept from the viewport edge the dropdown opens towards. */
@@ -33,6 +38,9 @@ export function MagnifierButton({ ctx }: { ctx: AppContext }) {
   const { a11y, lang } = ctx
   const text = useMemo(() => a11yText(lang), [lang])
   const isMobile = useIsMobile()
+  // GESTURE, not sizing — see the module header. A tap opens the menu (never a lens) on a coarse
+  // pointer, whatever the window width; `isMobile` below stays reserved for touch-target sizing.
+  const isCoarse = useIsCoarsePointer()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
@@ -72,10 +80,10 @@ export function MagnifierButton({ ctx }: { ctx: AppContext }) {
   return (
     <div ref={wrapRef} style={{ position: 'relative' }}>
       <button
-        onClick={() => (isMobile ? toggleOpen() : a11y.addLens())}
+        onClick={() => (isCoarse ? toggleOpen() : a11y.addLens())}
         onContextMenu={e => { e.preventDefault(); toggleOpen() }}
-        title={isMobile ? text.headerTitleMobile : `${text.headerTitle} — ${text.headerHint}`}
-        aria-label={isMobile ? text.headerTitleMobile : text.headerTitle}
+        title={isCoarse ? text.headerTitleMobile : `${text.headerTitle} — ${text.headerHint}`}
+        aria-label={isCoarse ? text.headerTitleMobile : text.headerTitle}
         aria-haspopup="dialog"
         style={{
           width: isMobile ? 44 : 32, height: isMobile ? 44 : 32,
