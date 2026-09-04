@@ -136,6 +136,37 @@ export function stageTransform(lens: LensStyle & { x: number; y: number }, vp: V
 }
 
 /**
+ * The inverse of what `stageTransform` + `sourceRect` render: given a point inside the lens's own
+ * FRAME (`localX`/`localY`, relative to the frame's top-left — i.e. `clientX - lens.x`,
+ * `clientY - lens.y`), returns the viewport point the lens is showing there.
+ *
+ * Forward direction (see `stageTransform`'s own derivation): a viewport point `p` renders at
+ * viewport position `contentOrigin + zoom * (p - source.origin)`, where `contentOrigin =
+ * (lens.x + borderWidth, lens.y + borderWidth)`. A point at frame-local `(localX, localY)` sits at
+ * viewport position `(lens.x + localX, lens.y + localY)`. Setting the two equal and solving for
+ * `p`:
+ *
+ *   lens.x + localX = lens.x + borderWidth + zoom * (px - source.x)
+ *   px = source.x + (localX - borderWidth) / zoom
+ *
+ * and the same for `y`. This is an exact algebraic inverse, not a re-derivation — the round-trip
+ * test renders a page point through the SAME terms `Lens.tsx` uses (content origin + stage
+ * transform) and feeds the result back through this function.
+ */
+export function lensPointToPage(
+  lens: MagnifierLens,
+  viewport: Viewport,
+  localX: number,
+  localY: number,
+): { x: number; y: number } {
+  const s = sourceRect(lens, viewport)
+  return {
+    x: s.x + (localX - lens.borderWidth) / lens.zoom,
+    y: s.y + (localY - lens.borderWidth) / lens.zoom,
+  }
+}
+
+/**
  * Keeps a lens usable: on screen, within the size floor/ceiling, within the zoom bounds. Applied
  * after EVERY edit — drag, resize, keypress, window resize — because a lens parked outside the
  * viewport is one no gesture can reach again.

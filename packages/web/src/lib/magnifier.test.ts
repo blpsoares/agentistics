@@ -9,6 +9,7 @@ import {
   applyLensKey,
   newLens,
   lensControls,
+  lensPointToPage,
   MOVE_STEP_PX,
   MOVE_FINE_PX,
   RESIZE_STEP_PX,
@@ -317,6 +318,77 @@ describe('lensControls', () => {
     expect(result).toContain('config')
     expect(result).not.toContain('pin')
     expect(result).not.toContain('remove')
+  })
+})
+
+describe('lensPointToPage — round trip against the RENDERING geometry, not the formula', () => {
+  // Renders a page (viewport) point through the exact terms `Lens.tsx` uses — `stageTransform`'s
+  // scale/translate composed with the content-box origin — never through `lensPointToPage`'s own
+  // arithmetic. A test that re-derived the same formula would pass even if that formula disagreed
+  // with what actually paints on screen.
+  function renderInsideLens(l: MagnifierLens, vp: { width: number; height: number }, pageX: number, pageY: number) {
+    const t = stageTransform(l, vp)
+    const viewportX = l.x + l.borderWidth + t.scale * (pageX + t.tx)
+    const viewportY = l.y + l.borderWidth + t.scale * (pageY + t.ty)
+    // Convert back to frame-local coordinates — `lensPointToPage`'s own input shape.
+    return { localX: viewportX - l.x, localY: viewportY - l.y }
+  }
+
+  function roundTrip(l: MagnifierLens, vp: { width: number; height: number }, pageX: number, pageY: number) {
+    const { localX, localY } = renderInsideLens(l, vp, pageX, pageY)
+    return lensPointToPage(l, vp, localX, localY)
+  }
+
+  test('a lens centred in the viewport, zoomed in', () => {
+    const l = lens({ x: 760, y: 390, zoom: 4 })
+    const got = roundTrip(l, VP, 800, 420)
+    expect(got.x).toBeCloseTo(800, 5)
+    expect(got.y).toBeCloseTo(420, 5)
+  })
+
+  test('zoom below 1x (the region is larger than the frame, so it pans)', () => {
+    const l = lens({ x: 200, y: 150, zoom: 0.6 })
+    const got = roundTrip(l, VP, 260, 210)
+    expect(got.x).toBeCloseTo(260, 5)
+    expect(got.y).toBeCloseTo(210, 5)
+  })
+
+  test('a lens pinned against the left/top edge, where the region now pans to reach the corner', () => {
+    const l = lens({ x: 0, y: 0, zoom: 4 })
+    const got = roundTrip(l, VP, 5, 5)
+    expect(got.x).toBeCloseTo(5, 5)
+    expect(got.y).toBeCloseTo(5, 5)
+  })
+
+  test('a lens pinned against the right/bottom edge', () => {
+    const l = lens({ x: VP.width - 400, y: VP.height - 300, zoom: 4 })
+    const got = roundTrip(l, VP, VP.width - 10, VP.height - 10)
+    expect(got.x).toBeCloseTo(VP.width - 10, 5)
+    expect(got.y).toBeCloseTo(VP.height - 10, 5)
+  })
+
+  test('a bordered lens — the content box inset must be inverted exactly', () => {
+    const l = lens({ x: 300, y: 300, zoom: 3, borderWidth: 12 })
+    // A click right on the inner edge of the border.
+    const got = roundTrip(l, VP, 315, 315)
+    expect(got.x).toBeCloseTo(315, 5)
+    expect(got.y).toBeCloseTo(315, 5)
+  })
+
+  test('a circular lens', () => {
+    const l = lens({ x: 500, y: 200, shape: 'circle', width: 250, height: 250, zoom: 2.5, borderWidth: 4 })
+    const got = roundTrip(l, VP, 610, 320)
+    expect(got.x).toBeCloseTo(610, 5)
+    expect(got.y).toBeCloseTo(320, 5)
+  })
+
+  test('several page points on one lens all round-trip', () => {
+    const l = lens({ x: 640, y: 240, zoom: 6.5, borderWidth: 5 })
+    for (const [px, py] of [[650, 250], [900, 500], [700, 300], [800, 260]] as const) {
+      const got = roundTrip(l, VP, px, py)
+      expect(got.x).toBeCloseTo(px, 5)
+      expect(got.y).toBeCloseTo(py, 5)
+    }
   })
 })
 

@@ -12,12 +12,22 @@
  * were never removed, they were being masked off by the lens's own shape. See where the strip is
  * placed for a circle, below.
  *
- * Pinned is glass: controls gone, `pointerEvents: none` on the whole wrapper, clicks pass through.
+ * Pinned is glass: controls gone, but the magnified area still FORWARDS interaction (see below) —
+ * pinning removes the ability to move/alter the lens, never the ability to work through it.
+ *
+ * FORWARDING. The mirror is a picture: clicking it does nothing on its own. So the viewport div
+ * (the magnified area, never the control strip or resize handle — those are siblings, outside it)
+ * carries click/wheel/mousemove handlers that map the local point back to the page point it
+ * represents (`lensPointToPage`) and re-dispatch the interaction THERE, on the live DOM. This also
+ * closes a worse bug than "reading only": a pinned lens used to be `pointerEvents: 'none'` on the
+ * whole frame, so a click "passed through" to whatever was PHYSICALLY under the cursor — not the
+ * element the user sees magnified at that spot. Forwarding by coordinate replaces that silent
+ * mis-click with the correct one.
  */
 import React, { useEffect, useRef } from 'react'
 import { Pin, PinOff, Move, X, Plus, Minus, Sliders } from 'lucide-react'
 import type { MagnifierLens } from '@agentistics/core'
-import { stageTransform, lensControls, fmtZoom, ZOOM_STEP } from '../../lib/magnifier'
+import { stageTransform, lensControls, lensPointToPage, fmtZoom, ZOOM_STEP } from '../../lib/magnifier'
 import { createMirrorHost, type MirrorScheduler } from '../../lib/magnifierMirror'
 import type { A11yText } from './i18n'
 
@@ -25,6 +35,43 @@ const ORANGE = 'var(--anthropic-orange)'
 
 /** The zoom readout's `minWidth`, in the same unit `lensControls` measures against. */
 const ZOOM_LABEL_PX = 30
+
+/** True when `el` is a REAL scrolling container (an overflow of `auto`/`scroll` that actually
+ *  overflows) — the same test `magnifierMirror.ts`'s `scrolls()` applies, `hidden` excluded on
+ *  purpose because it clips but can never be scrolled by a wheel event. */
+function isScrollable(el: Element): boolean {
+  const style = getComputedStyle(el)
+  const y = (style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight
+  const x = (style.overflowX === 'auto' || style.overflowX === 'scroll') && el.scrollWidth > el.clientWidth
+  return y || x
+}
+
+/** The nearest scrolling ancestor of `el` (inclusive), or `null` — read by the caller as "scroll
+ *  the window instead", which is what a wheel event over ordinary in-flow content does natively. */
+function findScrollableAncestor(el: Element | null): Element | null {
+  let node: Element | null = el
+  while (node && node !== document.documentElement) {
+    if (isScrollable(node)) return node
+    node = node.parentElement
+  }
+  return null
+}
+
+/**
+ * A real click at `(x, y)` on `target`, so React's delegated handlers fire — `target.click()`
+ * carries no coordinates and skips the pointerdown/mousedown pair some controls key their press
+ * state or focus behaviour off. This mirrors the sequence a genuine mouse click actually produces:
+ * pointerdown, mousedown, pointerup, mouseup, click, each bubbling with the mapped page point as
+ * its coordinates.
+ */
+function dispatchClickAt(target: Element, x: number, y: number): void {
+  const base = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }
+  target.dispatchEvent(new PointerEvent('pointerdown', { ...base, pointerId: 1, isPrimary: true, pointerType: 'mouse' }))
+  target.dispatchEvent(new MouseEvent('mousedown', base))
+  target.dispatchEvent(new PointerEvent('pointerup', { ...base, pointerId: 1, isPrimary: true, pointerType: 'mouse' }))
+  target.dispatchEvent(new MouseEvent('mouseup', base))
+  target.dispatchEvent(new MouseEvent('click', base))
+}
 
 interface Props {
   lens: MagnifierLens
@@ -48,6 +95,8 @@ export function Lens({
   lens, index, selected, revealed, text, isMobile, scheduler, onChange, onSelect, onRemove, onContextMenu, onOpenMenu,
 }: Props) {
   const stageRef = useRef<HTMLDivElement | null>(null)
+  // The magnified area's own frame — see `elementBehindLens` below for why forwarding needs it.
+  const frameRef = useRef<HTMLDivElement | null>(null)
   const drag = useRef<{ mode: 'move' | 'resize'; px: number; py: number; from: MagnifierLens } | null>(null)
   // The scheduler asks "is this on screen?" every frame; reading the live lens through a ref
   // avoids re-registering the mirror on every pointermove.
@@ -109,6 +158,63 @@ export function Lens({
 
   const endDrag = () => { drag.current = null }
 
+  /**
+   * `document.elementFromPoint` returns the TOPMOST element at that point — which is this very
+   * lens frame, since the lens paints over the page it magnifies. Hiding our own frame's
+   * `pointerEvents` for the duration of the lookup reveals whatever the lens is actually showing
+   * there, then the style is restored immediately. Delete this and every forwarded interaction
+   * hits the lens's own border/background instead of the magnified element — including a lens
+   * re-entering itself.
+   */
+  const elementBehindLens = (viewportX: number, viewportY: number): Element | null => {
+    const frame = frameRef.current
+    const prev = frame?.style.pointerEvents
+    if (frame) frame.style.pointerEvents = 'none'
+    const el = document.elementFromPoint(viewportX, viewportY)
+    if (frame) frame.style.pointerEvents = prev ?? ''
+    return el
+  }
+
+  const forwardPoint = (clientX: number, clientY: number) =>
+    lensPointToPage(lens, { width: window.innerWidth, height: window.innerHeight }, clientX - lens.x, clientY - lens.y)
+
+  // The magnified area becomes interactive — deliberately independent of `interactive` above,
+  // which gates DRAGGING and CONFIGURING (the strip/handle, only rendered when unpinned or
+  // revealed). Forwarding must keep working on a pinned, non-revealed lens too: that is the whole
+  // fix for the pass-through bug (see this file's header comment).
+  const onMagnifiedClick = (e: React.MouseEvent) => {
+    if (drag.current) return
+    const p = forwardPoint(e.clientX, e.clientY)
+    const target = elementBehindLens(p.x, p.y)
+    if (target) dispatchClickAt(target, p.x, p.y)
+  }
+
+  const onMagnifiedWheel = (e: React.WheelEvent) => {
+    const p = forwardPoint(e.clientX, e.clientY)
+    const target = elementBehindLens(p.x, p.y)
+    // Without this, the wheel event ALSO reaches the real page underneath (the lens frame does not
+    // stop native wheel propagation to whatever is physically beneath the cursor), scrolling twice
+    // — once forwarded here, once natively — in what would usually be the same direction but by a
+    // different amount, which reads as janky double-scrolling.
+    e.preventDefault()
+    const scrollable = findScrollableAncestor(target)
+    if (scrollable) scrollable.scrollBy({ top: e.deltaY, left: e.deltaX })
+    else window.scrollBy({ top: e.deltaY, left: e.deltaX })
+  }
+
+  const onMagnifiedMove = (e: React.MouseEvent) => {
+    if (drag.current) return
+    const p = forwardPoint(e.clientX, e.clientY)
+    const target = elementBehindLens(p.x, p.y)
+    // Cheap on purpose: one hidden-frame lookup, one synthetic event, no state and no rAF
+    // batching. This lights up a JS-driven hover state (an `onMouseMove`/`onMouseEnter` listener
+    // reacting to the dispatched event exactly as it would to a native one) but CANNOT force a
+    // CSS-only `:hover` — the browser's own hit-test for that pseudo-class still finds the lens
+    // frame (aria-hidden, unstyled) sitting physically under the cursor, not the target underneath
+    // it. Stated here rather than silently half-working.
+    target?.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: p.x, clientY: p.y }))
+  }
+
   const btn: React.CSSProperties = {
     width: control, height: control, display: 'flex', alignItems: 'center',
     justifyContent: 'center', borderRadius: 6, border: 'none', background: 'transparent',
@@ -129,16 +235,23 @@ export function Lens({
         top: lens.y,
         width: lens.width,
         height: lens.height,
-        // Pinned is glass. This is the whole point of pinning.
-        pointerEvents: interactive ? 'auto' : 'none',
+        // ALWAYS 'auto', pinned or not: the magnified area must keep forwarding interaction even
+        // when pinning has removed every control. Only the strip/handle below (rendered solely
+        // when `interactive`) can ever move or resize the lens.
+        pointerEvents: 'auto',
         zIndex: 2147483000,
         boxSizing: 'border-box',
       }}
     >
       {/* The viewport: the ONLY element that clips. Its border/shape/shadow are the lens's whole
           visible identity, and everything about defect 1 was this element clipping siblings it
-          did not yet have separated from it. */}
+          did not yet have separated from it. It is also the magnified area's own hit target:
+          click/wheel/mousemove here are forwarded by coordinate, in every pin state. */}
       <div
+        ref={frameRef}
+        onClick={onMagnifiedClick}
+        onWheel={onMagnifiedWheel}
+        onMouseMove={onMagnifiedMove}
         style={{
           position: 'absolute',
           inset: 0,
@@ -149,6 +262,7 @@ export function Lens({
           background: 'var(--bg-base)',
           boxShadow: selected ? `0 0 0 3px ${ORANGE}55` : '0 6px 24px rgba(0,0,0,0.35)',
           boxSizing: 'border-box',
+          cursor: 'pointer',
         }}
       >
         <div
