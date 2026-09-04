@@ -167,36 +167,6 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable, h
         />
       </div>
 
-      {/* ONE calendar for every harness in view, not one strip each — the per-harness split lives
-          in the day tooltip, which is where a comparison is actually made.
-
-          It reads `derived.heatmapData`, which `useDerivedStats` has ALREADY narrowed by every
-          active filter. That is the requirement, not a convenience: a heatmap beside filtered
-          stats that is itself unfiltered puts two numbers on one screen under two different
-          rules, which is the same defect as a cache-backed total beside a session-summed one. */}
-      {heatmap && heatmap.length > 0 && (
-        <section style={{ marginBottom: 22 }}>
-          <h2 style={{ margin: '0 0 4px', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>
-            {pt ? 'Atividade' : 'Activity'}
-          </h2>
-          {/* Said HERE and not only in the heading above, because the two regions are read
-              separately: somebody comparing the cards with this grid is looking at this half. */}
-          <SectionNote text={pt
-            ? 'Histórico gravado — este calendário e as barras abaixo seguem os filtros do topo.'
-            : 'Recorded history — this calendar and the bars below follow the filters above.'} />
-          <ActivityHeatmap data={[...heatmap]} weeks={26} />
-        </section>
-      )}
-      {heatmap && heatmap.length === 0 && (
-        // Never an all-zero grid: an empty measurement and "nothing in this window" are different
-        // facts, and a grid of empty cells reads as the first while meaning the second.
-        <p style={{ margin: '0 0 22px', fontSize: 12, color: 'var(--text-tertiary)' }}>
-          {pt
-            ? 'Nenhuma atividade no período e nos filtros escolhidos.'
-            : 'No activity in the chosen window and filters.'}
-        </p>
-      )}
-
       <section>
         <h2 style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>
           {pt ? 'Por assistente' : 'By assistant'}
@@ -254,6 +224,45 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable, h
           })}
         </div>
       </section>
+
+      {/* ONE calendar for every harness in view, not one strip each — the per-harness split lives
+          in the day tooltip, which is where a comparison is actually made.
+
+          It reads `derived.heatmapData`, which `useDerivedStats` has ALREADY narrowed by every
+          active filter. That is the requirement, not a convenience: a heatmap beside filtered
+          stats that is itself unfiltered puts two numbers on one screen under two different
+          rules, which is the same defect as a cache-backed total beside a session-summed one. */}
+      {heatmap && heatmap.length > 0 && (
+        <section style={{ marginBottom: 22 }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>
+            {pt ? 'Atividade' : 'Activity'}
+          </h2>
+          {/* Said HERE and not only in the heading above, because the two regions are read
+              separately: somebody comparing the cards with this grid is looking at this half. */}
+          <SectionNote text={pt
+            ? 'Histórico gravado — este calendário segue os filtros do topo, como as barras acima.'
+            : 'Recorded history — this calendar follows the filters above, as the bars do.'} />
+          {/* CAPPED. The heatmap fills its container and keeps its own aspect ratio, so on this
+              full-width page it grew to roughly 500px tall — reported as "ta gigante". It is a
+              glance, not a chart you read a value off: the cells only need to be big enough to
+              tell four shades apart. The cap lives HERE rather than in the component, which is
+              also used inside a dashboard card that constrains it already, and inside an expanded
+              modal that is supposed to be large. */}
+          <div style={{ maxWidth: 620 }}>
+            <ActivityHeatmap data={[...heatmap]} weeks={26} />
+          </div>
+        </section>
+      )}
+      {heatmap && heatmap.length === 0 && (
+        // Never an all-zero grid: an empty measurement and "nothing in this window" are different
+        // facts, and a grid of empty cells reads as the first while meaning the second.
+        <p style={{ margin: '0 0 22px', fontSize: 12, color: 'var(--text-tertiary)' }}>
+          {pt
+            ? 'Nenhuma atividade no período e nos filtros escolhidos.'
+            : 'No activity in the chosen window and filters.'}
+        </p>
+      )}
+
     </div>
   )
 }
