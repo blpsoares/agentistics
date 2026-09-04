@@ -38,6 +38,7 @@ import { useTerminalStream } from '../../hooks/useTerminalStream'
 import { isImagePath } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
 import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
+import { sessionScratch, type CachedChat } from '../../lib/sessionScratch'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
 import { appendDictation, dictatedText, dictationError, dictationLocale, dictationSupport, insecureAlternative } from '../../lib/dictation'
 import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
@@ -78,8 +79,48 @@ interface Attachment { name: string; path: string }
 
 export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const pt = lang === 'pt'
-  const [payload, setPayload] = useState<ChatPayload | null>(null)
-  const [draft, setDraft] = useState('')
+  /**
+   * Both of these OUTLIVE this component, in `sessionScratch` — see that module for why they get
+   * different storage.
+   *
+   * The conversation starts from the cache so returning to a session paints immediately instead of
+   * showing an empty column while a fetch that reads a local file completes. The poll below still
+   * fires on mount and replaces it, so the cache is never the answer, only the first frame.
+   *
+   * The draft starts from the person's own words. Losing typed text to a click is the one thing
+   * here that cannot be recovered from anywhere — a conversation re-fetches, a paragraph does not.
+   */
+  const [payload, setPayload] = useState<ChatPayload | null>(() => sessionScratch.readChat(session.id) as ChatPayload | null)
+  const [draft, setDraft] = useState(() => sessionScratch.readDraft(session.id))
+
+  /**
+   * Switching sessions WITHOUT remounting: the workspace can hand this component a different row,
+   * and initial state runs once. Without this the second session would wear the first one's
+   * conversation and — far worse — the first one's half-written prompt.
+   */
+  /**
+   * Every change to the draft, PERSISTED against the session it belongs to.
+   *
+   * A `useEffect` on `[session.id, draft]` was the obvious shape and is wrong: on a switch the
+   * effect runs once with the NEW id and the OLD draft still in state, which writes one session's
+   * half-written prompt into another's slot. Naming the session at the moment of the edit removes
+   * that window entirely — the id and the text can never disagree, because they are read together.
+   */
+  const editDraft = useCallback((next: string | ((prev: string) => string)) => {
+    setDraft(prev => {
+      const v = typeof next === 'function' ? next(prev) : next
+      sessionScratch.writeDraft(session.id, v)
+      return v
+    })
+  }, [session.id])
+
+  const shownId = useRef(session.id)
+  useEffect(() => {
+    if (shownId.current === session.id) return
+    shownId.current = session.id
+    setPayload(sessionScratch.readChat(session.id) as ChatPayload | null)
+    setDraft(sessionScratch.readDraft(session.id))
+  }, [session.id])
   const [sending, setSending] = useState(false)
   /** Dictation. `recognitionRef` holds the live recogniser so a second click stops it. */
   const [listening, setListening] = useState(false)
@@ -122,7 +163,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       // re-emitted the whole session and the draft grew "one", "one one two", "one one two one two
       // three". `resultIndex` is the index of the first result the event changed, which is exactly
       // what this event contributed.
-      rec.onresult = e => { setDraft(d => appendDictation(d, dictatedText(e))) }
+      rec.onresult = e => { editDraft(d => appendDictation(d, dictatedText(e))) }
       // Both end the same way. A recogniser that stopped on its own (a timeout, a denied
       // permission) must not leave the button lit — a control that says it is listening when it
       // is not is worse than one that never started.
@@ -241,6 +282,12 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const [atTail, setAtTail] = useState(true)
   /** Messages sent from here and not yet seen in the transcript. See the header. */
   const [echo, setEcho] = useState<string[]>([])
+
+  // An echo is a message sent to THIS session and not yet visible in its transcript. Carrying one
+  // across a switch would draw it in someone else's conversation, which is the phantom-message
+  // shape this product has been chasing all week — so the switch drops them. Declared here rather
+  // than in the effect above only because `echo` is declared here.
+  useEffect(() => { setEcho([]) }, [session.id])
   /**
    * The message being replied to.
    *
@@ -297,7 +344,10 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       try {
         const res = await fetch(`/api/fleet/chat?id=${encodeURIComponent(session.id)}&lang=${lang}`)
         if (!res.ok || !alive) return
-        setPayload(await res.json() as ChatPayload)
+        const next = await res.json() as ChatPayload
+        setPayload(next)
+        // Write through, so the NEXT visit starts where this one ended.
+        sessionScratch.writeChat(session.id, next as unknown as CachedChat)
       } catch { /* transient — keep the last conversation rather than blanking it */ }
     }
     void poll()
@@ -508,6 +558,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       // two, and this is what makes pressing enter visibly do something.
       setEcho(list => [...list, full])
       setDraft('')
+      sessionScratch.clearDraft(session.id)
       setAttached([])
       setReplyTo(null)
       setAtTail(true)
@@ -827,7 +878,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                 <textarea
                   ref={textareaRef}
                   value={draft}
-                  onChange={e => setDraft(e.target.value)}
+                  onChange={e => editDraft(e.target.value)}
                   onPaste={onPaste}
                   onKeyDown={e => {
                     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() }
@@ -1077,7 +1128,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
                                     title={sk.description}
                                     onClick={() => {
                                       setMoreOpen(false)
-                                      setDraft(d => (d.trim() === '' ? `/${sk.name} ` : `${d.replace(/\s+$/, '')} /${sk.name} `))
+                                      editDraft(d => (d.trim() === '' ? `/${sk.name} ` : `${d.replace(/\s+$/, '')} /${sk.name} `))
                                       textareaRef.current?.focus()
                                     }}
                                     style={{
