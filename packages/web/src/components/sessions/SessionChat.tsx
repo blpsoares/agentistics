@@ -561,7 +561,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
           something further up used to mean scroll down, write, scroll back — and it is a shade
           apart from the bubbles, which are `--bg-card` on `--bg-base`: at the same value it read as
           another message rather than as the place you type. */}
-      <div style={{
+      <div className="ag-composer-ground" style={{
         // `sticky` alongside `flexShrink:0` for the same reason the header above takes both — a
         // scroll-away ancestor anywhere between here and the viewport must not carry this off with
         // it, and sticky is the guarantee that holds even then.
@@ -570,6 +570,11 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
         // across the top, which read as a region of the page rather than as a control — and the
         // thing people recognise as "where I type" is a bounded field, not a strip. The FIELD
         // below carries the border now; this element only positions it.
+        //
+        // `background: transparent` is what left the conversation CUT here rather than passing
+        // under: transparent is not a ground, it is the absence of one, so a message simply ended
+        // at this element's top edge. `.ag-composer-ground` draws the blur-and-fade behind it. The
+        // FIELD keeps its own opaque surface and border — that is deliberate and recorded above.
         padding: '10px 20px 16px',
         background: 'transparent',
       }}>
