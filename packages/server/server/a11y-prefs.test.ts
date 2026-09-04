@@ -17,10 +17,18 @@ describe('resolveA11yStore', () => {
     expect(resolveA11yStore(true, null)).toEqual({ kind: 'anonymous' })
     expect(resolveA11yStore(true, '')).toEqual({ kind: 'anonymous' })
   })
+
+  test('a whitespace-only accountId is treated as absent, resolving to anonymous', () => {
+    expect(resolveA11yStore(true, ' ')).toEqual({ kind: 'anonymous' })
+    expect(resolveA11yStore(true, '  \t\n')).toEqual({ kind: 'anonymous' })
+  })
 })
 
 describe('applyA11yPut', () => {
-  test('it REPLACES rather than merges, so the last lens of a page can be deleted', () => {
+  test('an explicitly emptied lensesByPage comes back empty — no defaults are injected', () => {
+    // The real replace-vs-merge guarantee lives in the route handler: it must write
+    // applyA11yPut(body) as the whole stored document, never spread it over the document
+    // it just read. That property has to be verified against the handler's own code.
     const emptied = applyA11yPut({ enabled: true, lensesByPage: {} })
     expect(emptied.lensesByPage).toEqual({})
   })

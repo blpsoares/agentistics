@@ -20,7 +20,7 @@ export type A11yStore =
 
 export function resolveA11yStore(central: boolean, accountId: string | null): A11yStore {
   if (!central) return { kind: 'machine' }
-  if (accountId) return { kind: 'account', accountId }
+  if (accountId && accountId.trim()) return { kind: 'account', accountId }
   // Deliberately NOT the machine file. Falling back to it on a central is exactly the bug this
   // module exists to prevent, and it would stay invisible until two people compared screens.
   return { kind: 'anonymous' }
@@ -29,6 +29,10 @@ export function resolveA11yStore(central: boolean, accountId: string | null): A1
 /**
  * A PUT carries the whole object and REPLACES what is stored. It must not deep-merge per page:
  * treating an absent key as "unchanged" would make deleting the last lens of a page impossible.
+ *
+ * The replace-vs-merge guarantee itself lives in the route handler: it must write
+ * applyA11yPut(body) as the whole stored document, never spread it over the document
+ * it just read.
  */
 export function applyA11yPut(incoming: unknown): AccessibilityPrefs {
   return sanitizeAccessibilityPrefs(incoming)
