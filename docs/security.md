@@ -474,10 +474,30 @@ can offer five answers that do different work, and a keystroke that answers cann
 option it is taking. A button over a dialog nobody can read is the accident `parseDialogOptions`
 exists to prevent.
 
-**The machine is the authority, not the central.** Consent and the verb allowlist are re-read on
-the member on every request. The central's copy of those checks exists only to spare a round trip
-and answer the user instantly; a check that runs only on the party whose behaviour cannot be
-verified is not a check.
+**The machine is the authority, not the central.** Consent, the verb allowlist **and this
+connection's sharing rules** are re-read on the member on every request. The central's copy of
+those checks exists only to spare a round trip and answer the user instantly; a check that runs
+only on the party whose behaviour cannot be verified is not a check.
+
+**A withheld session cannot be acted on, and for one release it could be.** The two consent
+switches are machine-wide: they say whether sessions may be managed at all, and nothing about
+WHICH. The rules in §8 say which. Both must hold, and only the first one did — the read half
+filtered rows through `cwdShared` while the act half resolved the id against the machine's raw
+fleet, so a central could `kill`, `rename`, `resume` or re-task a session in a repository its
+member had explicitly withheld from it. A rule enforced when you look and not when you act is not
+a rule. `performMachineAction` now resolves the target through the same predicate the rows went
+through, and refuses an id it cannot resolve — an unresolvable target has no directory to judge,
+and passing it through would leave every verb reachable by naming an id the fleet does not list.
+
+**The task verbs are refused entirely while anything is withheld.** `openTask` acts on the piece of
+WORK a row is filed under, expanding across the whole registry, and a task routinely spans
+repositories — so on a restricted connection it reached sessions the central was never shown,
+started assistants in their directories and reported how many. Refusing only when a task provably
+spans a withheld row would answer, one visible row at a time, "does this one share work with the
+hidden half" — an oracle, and the same correlation §8 exists to deny. So the verbs are refused for
+every restricted connection and are absent from the relayed rows; the refusal names no repository
+and no count, disclosing nothing beyond the machine-level `withheld` figure the reply already
+carries. Open or finish the task on the machine itself.
 
 **The stated non-guarantee.** Whoever runs the central administers machines and can re-assign one
 to another account. This switch is what stops session access being on without its owner choosing
