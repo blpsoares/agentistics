@@ -61,6 +61,7 @@ import { TeamLogin } from './components/TeamLogin'
 import { Login } from './components/Login'
 import { ModeSwitch } from './components/nav/ModeSwitch'
 import { TopBar } from './components/nav/TopBar'
+import { headerFit } from './lib/headerFit'
 import { SessionsAside } from './components/nav/SessionsAside'
 import { SessionsRail } from './components/nav/SessionsRail'
 import { getPinnedIds } from './lib/pinnedSessions'
@@ -1093,7 +1094,7 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
   }
   return (
     <aside style={{
-      position: 'fixed', top: TOPBAR_H, left: 0, bottom: 0,
+      position: 'fixed', top: 'var(--ag-topbar-h)', left: 0, bottom: 0,
       width: collapsed ? SIDEBAR_W_COLLAPSED : width, zIndex: 200,
       background: 'var(--bg-surface)', borderRight: '1px solid var(--border)',
       display: 'flex', flexDirection: 'column', padding: collapsed ? '12px 8px' : '14px 12px', boxSizing: 'border-box',
@@ -1525,6 +1526,57 @@ export default function AppLayout() {
   // Only the sessions workspace offers the handle, but whatever it is dragged to applies to both.
   const liveAsideWidth = asideWidth
   const inSessionsWorkspace = modeOfPath(location.pathname) === 'sessions'
+
+  /**
+   * THE ACTIVE-FILTER BAND — the strip's second row, and the height it costs.
+   *
+   * The chips were briefly squeezed onto the strip's own 44px line, and that was wrong twice over:
+   * they crowded the view tabs until the two overlapped, and a line has no room for the one thing
+   * chips are for — ten rows, one per dimension, saying WHICH filters are on. So they are back
+   * where they were asked to be, in a band that grows downward under the controls and collapses
+   * from its own handle, and `FiltersBar` portals them into this host (see its `chipsHost`).
+   *
+   * The band lives INSIDE the fixed strip, so everything positioned below the strip has to follow
+   * it. That travels as a CSS variable rather than a prop: `SideNav` and the page shell are
+   * separate components that read the old constant directly, and threading a measured number
+   * through each of them is three more places for the header and the body to disagree about where
+   * the header ends. The variable is set here, in the one place that measures it.
+   */
+  const [chipsHostEl, setChipsHostEl] = useState<HTMLDivElement | null>(null)
+  const [chipsBandH, setChipsBandH] = useState(0)
+  useEffect(() => {
+    if (!chipsHostEl) { setChipsBandH(0); return }
+    const read = () => setChipsBandH(chipsHostEl.offsetHeight)
+    read()
+    const ro = new ResizeObserver(read)
+    ro.observe(chipsHostEl)
+    return () => ro.disconnect()
+  }, [chipsHostEl])
+  /** What the fixed strip actually occupies right now: the control row plus whatever the band adds. */
+  const headerH = isMobile ? 0 : TOPBAR_H + chipsBandH
+  useEffect(() => {
+    document.documentElement.style.setProperty('--ag-topbar-h', `${headerH}px`)
+  }, [headerH])
+
+  /**
+   * How much width the filter bar actually has in the strip, and what it therefore draws.
+   *
+   * The strip's middle is `overflow: hidden` so it can never paint over the view tabs again — but a
+   * clipped control is unreachable with nothing on screen saying so, which is worse. So the bar is
+   * TOLD how much room it has and gives the date block up first (`headerFit.ts` owns that order and
+   * its thresholds). Only one of the two strips is mounted at a time, so one ref serves both.
+   */
+  const [filterSlotEl, setFilterSlotEl] = useState<HTMLDivElement | null>(null)
+  const [filterSlotW, setFilterSlotW] = useState(0)
+  useEffect(() => {
+    if (!filterSlotEl) { setFilterSlotW(0); return }
+    const read = () => setFilterSlotW(filterSlotEl.clientWidth)
+    read()
+    const ro = new ResizeObserver(read)
+    ro.observe(filterSlotEl)
+    return () => ro.disconnect()
+  }, [filterSlotEl])
+  const stripFit = headerFit(filterSlotW)
   /**
    * Active sessions only — the fleet's own dimension (see `FiltersBar`'s doc comment on
    * `onActiveOnlyChange`), not part of `Filters`. Defaults to ON the moment you land in the
@@ -2643,9 +2695,17 @@ export default function AppLayout() {
       {/* THE FILTERS, in the centre. They are the element that gives up width FIRST: the title
           identifies what you are looking at and the actions are how you act on it, while a narrowed
           filter bar is still a filter bar — its own `+ Filtro` popover holds everything it drops. */}
-      <div style={{ flex: 1, minWidth: 90, display: 'flex', justifyContent: 'center' }}>
+      {/* `overflow: hidden` is the NO-OVERLAP guarantee, not a nicety. The bar's inline row is
+          `nowrap` and its controls do not shrink, so on a narrow strip it painted straight over the
+          view tabs to its right — the "Chat" label rendered on top of itself, reported from a
+          1920 screen. A flex child that overflows draws outside its box unless it is told not to;
+          told not to, the middle simply runs out of room and the cluster to its right keeps every
+          pixel it was given. */}
+      <div ref={setFilterSlotEl} style={{ flex: 1, minWidth: 90, display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
         <FiltersBar
           inline
+          chipsHost={chipsHostEl}
+          dateCompact={stripFit.date === 'compact'}
           only={SESSIONS_FILTER_DIMS}
           activeOnly={activeOnly}
           onActiveOnlyChange={setActiveOnly}
@@ -2718,9 +2778,12 @@ export default function AppLayout() {
       {/* THE FILTERS give up width FIRST. The cluster to their right is how you act on the page
           and how you read what it currently totals; a narrowed filter bar is still a filter bar,
           because its own `+ Filtro` popover holds every row it drops. */}
-      <div style={{ flex: 1, minWidth: 90, display: 'flex' }}>
+      {/* Same no-overlap guarantee as the sessions strip — see the note there. */}
+      <div ref={setFilterSlotEl} style={{ flex: 1, minWidth: 90, display: 'flex', overflow: 'hidden' }}>
         <FiltersBar
           inline
+          chipsHost={chipsHostEl}
+          dateCompact={stripFit.date === 'compact'}
           only={filterDimsForRoute}
           // THE SWITCH BELONGS ON BOTH PAGES — the user asked for exactly that, and Task 8 put it
           // inside the + Filter menu so it reads as a dimension rather than a pill beside them.
@@ -2989,7 +3052,7 @@ export default function AppLayout() {
         : {}),
       background: 'var(--bg-base)', display: 'flex', flexDirection: 'column',
       paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth),
-      paddingTop: isMobile ? 0 : TOPBAR_H,
+      paddingTop: isMobile ? 0 : 'var(--ag-topbar-h)',
       boxSizing: 'border-box',
       transition: 'padding-left 0.22s cubic-bezier(0.22, 1, 0.36, 1)',
     }}>
@@ -3020,6 +3083,16 @@ export default function AppLayout() {
             ? { onSearch: () => window.dispatchEvent(new CustomEvent('agentistics:focus-session-search')) }
             : {})}
           {...(stripTrailing ? { trailing: stripTrailing, trailingFlush: true } : {})}
+          /* The band the chips are portalled into. Always mounted — a host that appears and
+             disappears makes the height measurement flicker instead of settling at zero — and
+             padded to match the body's own left inset so a chip row starts on the line the content
+             under it does. */
+          below={
+            <div
+              ref={setChipsHostEl}
+              style={{ width: '100%', padding: `0 ${PAGE_INSET}px`, boxSizing: 'border-box' }}
+            />
+          }
         />
       )}
       {/* Left sidebar nav — desktop only (mobile uses the bottom nav) */}
@@ -3060,7 +3133,7 @@ export default function AppLayout() {
         position: 'sticky',
         // Beneath the fixed strip, never at the viewport top: one is window chrome and the other is
         // page chrome, and neither may slide under the other.
-        top: isMobile ? 0 : TOPBAR_H,
+        top: isMobile ? 0 : 'var(--ag-topbar-h)',
         // The status-bar band belongs to the BAR, not to the page under it: the header's own
         // background and blur run up behind the clock, and its content starts below. Zero in a
         // browser tab — see `--safe-top`.
@@ -3261,7 +3334,7 @@ export default function AppLayout() {
               // On MOBILE this fills the parent, which already subtracts the fixed nav (see the
               // root's own note) — repeating the arithmetic here is what let the two disagree.
               // Desktop still subtracts its own fixed top strip, which the root does not know about.
-              height: isMobile ? undefined : `calc(100vh - ${TOPBAR_H}px)`,
+              height: isMobile ? undefined : 'calc(100vh - var(--ag-topbar-h))',
               minHeight: 0,
               display: 'flex', flexDirection: 'column', overflow: 'hidden',
             }

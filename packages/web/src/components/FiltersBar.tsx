@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import type { Filters, DateRange, Project, Lang, HarnessId } from '@agentistics/core'
 import { formatModel, formatProjectName, repoShortName } from '@agentistics/core'
 import { Layers, Cpu, ChevronDown, X, CalendarDays, Check, Users, GitBranch, Search, Plus, Blocks, Radio, Server, FolderOpen, Tag as TagIcon } from 'lucide-react'
@@ -110,6 +111,30 @@ interface Props {
    * rows. A bar can be compact without being inline.
    */
   inline?: boolean
+  /**
+   * Where the ACTIVE-FILTER CHIPS are drawn when the bar is `inline`.
+   *
+   * The chips are the one part of this bar that cannot live on a 44px line: there are up to ten
+   * rows of them, one per dimension, and they are what makes the bar two or three rows tall. They
+   * were briefly folded into the `+ Filtro` popover and then onto the line itself, and both were
+   * wrong for the same reason — a reader could see THAT a filter was on (the badge counts) without
+   * seeing WHICH, which is the entire job of a chip.
+   *
+   * So inline mode keeps its one row of CONTROLS and hands the chips to a host node the caller
+   * puts wherever they belong — for the unified header, a full-width band directly under the strip
+   * that grows and collapses. Rendered through a portal so this component keeps owning every chip
+   * row and the collapse handle; lifting that state to the caller would be a second implementation
+   * of it. Absent (or null) and the chips stay in the bar, which is what a non-inline bar does.
+   */
+  chipsHost?: HTMLElement | null
+  /**
+   * Collapse the date block to ONE button that opens the presets and the from/to range.
+   *
+   * Decided by the caller from the width the bar actually has (`headerFit.ts`), never guessed here:
+   * this component does not know what else shares its strip. See that module for why the strip
+   * shrinks instead of clipping.
+   */
+  dateCompact?: boolean
 }
 
 const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [
@@ -158,7 +183,7 @@ const SEARCH_INPUT: React.CSSProperties = {
   borderRadius: 6, padding: '6px 8px 6px 26px', outline: 'none',
 }
 
-export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, activeOnly, onActiveOnlyChange, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup, hideDateRange = false, inline = false }: Props) {
+export function FiltersBar({ only, filters, onChange, projects, sessionCountByProject, models, modelGroups, modelsInProject, users, harnesses, presence, lang, compact, summary, teams, machines, tags, canFilterMembers = true, onCreateTagFromFilters, activeOnly, onActiveOnlyChange, costBasis = "api", onCostBasisChange, costBasisReady = false, onCostBasisSetup, hideDateRange = false, inline = false, chipsHost = null, dateCompact = false }: Props) {
   // Fall back to a single unlabeled group when modelGroups isn't provided.
   const groups: { harness: HarnessId | null; models: string[] }[] =
     modelGroups && modelGroups.length > 0
@@ -295,19 +320,28 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
   }, [openPicker])
 
   /**
+   * Are the chips being squeezed onto the bar's own line?
+   *
+   * Only when the caller asked for an inline bar and gave it nowhere else to put them. With a
+   * `chipsHost` they go there instead, in their FULL row-per-dimension form — which is the form
+   * that actually says which filters are on.
+   */
+  const chipsInline = inline && !chipsHost
+
+  /**
    * The active filters, said back: the collapse handle, "clear all", and one animated row of chips
    * per dimension.
    *
-   * Held in a variable rather than written inline because it has TWO homes. In the ordinary bar it
-   * hangs under the controls, where it is free to be three rows tall. In `inline` mode there is no
-   * second row to hang it from, so it moves into the "+ Filter" popover — the same nodes, under the
-   * button whose badge already counts them, rather than a phone-sized reimplementation of them.
+   * Held in a variable rather than written inline because it has THREE homes. In the ordinary bar
+   * it hangs under the controls, free to be three rows tall. Inline with a `chipsHost` it is
+   * portalled into that host — the same nodes, the same collapse handle, in a band the caller
+   * placed. Inline with nowhere to go it rides the line itself and gives up width first.
    */
   const activeFilterChips = (
     <>
         {/* Handle row (shown only when ≥1 filter is active): a desktop-only collapse toggle for the
             chip rows + a "Clear all" button that removes every applied dimension filter. */}
-        {activeFilterCount > 0 && !inline && (
+        {activeFilterCount > 0 && !chipsInline && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: compact ? '2px 12px 0' : '0' }}>
             {!compact && (
               <button
@@ -352,11 +386,11 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             It scrolls rather than wrapping, and it SHRINKS before anything else in the bar: the
             chips are the one thing here that is fully repeated elsewhere (the + Filter badge counts
             them, its popover lists them all), so they are what the bar can afford to lose first. */}
-        <div style={inline
+        <div style={chipsInline
           ? { display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, flexShrink: 1, overflowX: 'auto', overflowY: 'hidden' }
           : { display: 'grid', gridTemplateRows: (!compact && chipsCollapsed) ? '0fr' : '1fr', transition: 'grid-template-rows 0.25s cubic-bezier(0.22, 1, 0.36, 1)' }}>
-        <div style={inline ? { display: 'contents' } : { overflow: 'hidden', minHeight: 0 }}>
-        <div style={inline
+        <div style={chipsInline ? { display: 'contents' } : { overflow: 'hidden', minHeight: 0 }}>
+        <div style={chipsInline
           ? { display: 'contents' }
           : { display: 'flex', flexDirection: 'column', padding: compact ? '0 12px' : 0 }}>
           {/* The fleet's own dimension. It is a CHIP like every other now — Task 8 moved the
@@ -364,8 +398,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               they turn it off without reopening the menu. Kept in the relocated block rather than
               at its old call site: the block moved wholesale when the bar gained its inline mode,
               and a second copy of one row is a second place for it to drift. */}
-          <AnimatedRow inline={inline} show={Boolean(onActiveOnlyChange && activeOnly)}>
-            <ChipRow inline={inline} label={lang === 'pt' ? 'Sessões' : 'Sessions'}>
+          <AnimatedRow inline={chipsInline} show={Boolean(onActiveOnlyChange && activeOnly)}>
+            <ChipRow inline={chipsInline} label={lang === 'pt' ? 'Sessões' : 'Sessions'}>
               <FilterChip
                 title={lang === 'pt' ? 'Só ativas' : 'Active only'}
                 onRemove={() => onActiveOnlyChange?.(false)}
@@ -378,8 +412,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               </FilterChip>
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow inline={inline} show={(filters.users?.length ?? 0) > 0}>
-            <ChipRow inline={inline} label={lang === 'pt' ? 'Membros' : 'Members'}>
+          <AnimatedRow inline={chipsInline} show={(filters.users?.length ?? 0) > 0}>
+            <ChipRow inline={chipsInline} label={lang === 'pt' ? 'Membros' : 'Members'}>
               {(filters.users ?? []).map(u => (
                 <FilterChip key={`u:${u}`} title={u} onRemove={() => onChange({ ...filters, users: filters.users!.filter(x => x !== u) })} removeTitle={lang === 'pt' ? 'Remover membro' : 'Remove member'}>
                   <Users size={10} style={{ flexShrink: 0 }} />
@@ -388,8 +422,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               ))}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow inline={inline} show={(filters.teams?.length ?? 0) > 0}>
-            <ChipRow inline={inline} label={lang === 'pt' ? 'Times' : 'Teams'}>
+          <AnimatedRow inline={chipsInline} show={(filters.teams?.length ?? 0) > 0}>
+            <ChipRow inline={chipsInline} label={lang === 'pt' ? 'Times' : 'Teams'}>
               {(filters.teams ?? []).map(teamId => {
                 const team = teams?.find(t => t.id === teamId)
                 const label = team?.name ?? teamId
@@ -402,8 +436,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               })}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow inline={inline} show={(filters.machines?.length ?? 0) > 0}>
-            <ChipRow inline={inline} label={lang === 'pt' ? 'Máquinas' : 'Machines'}>
+          <AnimatedRow inline={chipsInline} show={(filters.machines?.length ?? 0) > 0}>
+            <ChipRow inline={chipsInline} label={lang === 'pt' ? 'Máquinas' : 'Machines'}>
               {(filters.machines ?? []).map(machineId => {
                 const machine = machines?.find(m => m.id === machineId)
                 const label = machine?.name ?? machineId
@@ -416,8 +450,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               })}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow inline={inline} show={hasProjects}>
-            <ChipRow inline={inline} label={lang === 'pt' ? 'Projetos' : 'Projects'}>
+          <AnimatedRow inline={chipsInline} show={hasProjects}>
+            <ChipRow inline={chipsInline} label={lang === 'pt' ? 'Projetos' : 'Projects'}>
               {filters.projects.map(path => (
                 <FilterChip key={`p:${path}`} title={path} onRemove={() => onChange({ ...filters, projects: filters.projects.filter(p => p !== path), models: [] })} removeTitle={lang === 'pt' ? 'Remover projeto' : 'Remove project'}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatProjectName(path)}</span>
@@ -425,8 +459,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               ))}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow inline={inline} show={hasRepoFilter}>
-            <ChipRow inline={inline} label={lang === 'pt' ? 'Repositórios' : 'Repos'}>
+          <AnimatedRow inline={chipsInline} show={hasRepoFilter}>
+            <ChipRow inline={chipsInline} label={lang === 'pt' ? 'Repositórios' : 'Repos'}>
               {selectedRepos.map(v => (
                 <FilterChip key={`r:${v}`} title={v || undefined} onRemove={() => onChange({ ...filters, repos: selectedRepos.filter(x => x !== v) })} removeTitle={lang === 'pt' ? 'Remover repositório' : 'Remove repository'}>
                   <GitBranch size={10} style={{ flexShrink: 0 }} />
@@ -435,8 +469,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               ))}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow inline={inline} show={hasTagFilter}>
-            <ChipRow inline={inline} label={lang === 'pt' ? 'Tags' : 'Tags'}>
+          <AnimatedRow inline={chipsInline} show={hasTagFilter}>
+            <ChipRow inline={chipsInline} label={lang === 'pt' ? 'Tags' : 'Tags'}>
               {selectedTags.map(id => {
                 const t = tagOptions.find(x => x._id === id)
                 const label = t?.name ?? id
@@ -449,8 +483,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               })}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow inline={inline} show={(filters.harnesses?.length ?? 0) > 0}>
-            <ChipRow inline={inline} label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}>
+          <AnimatedRow inline={chipsInline} show={(filters.harnesses?.length ?? 0) > 0}>
+            <ChipRow inline={chipsInline} label={lang === 'pt' ? 'Harnesses' : 'Harnesses'}>
               {(filters.harnesses ?? []).map(h => {
                 const color = HARNESS_COLORS[h]
                 return (
@@ -471,8 +505,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               })}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow inline={inline} show={hasModelFilter}>
-            <ChipRow inline={inline} label={lang === 'pt' ? 'Modelos' : 'Models'}>
+          <AnimatedRow inline={chipsInline} show={hasModelFilter}>
+            <ChipRow inline={chipsInline} label={lang === 'pt' ? 'Modelos' : 'Models'}>
               {selectedModels.map(m => (
                 <FilterChip key={`m:${m}`} title={m} onRemove={() => onChange({ ...filters, models: selectedModels.filter(x => x !== m) })} removeTitle={lang === 'pt' ? 'Remover modelo' : 'Remove model'}>
                   <Cpu size={10} style={{ flexShrink: 0 }} />
@@ -481,8 +515,8 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               ))}
             </ChipRow>
           </AnimatedRow>
-          <AnimatedRow inline={inline} show={filters.presence !== undefined}>
-            <ChipRow inline={inline} label={lang === 'pt' ? 'Presença' : 'Presence'}>
+          <AnimatedRow inline={chipsInline} show={filters.presence !== undefined}>
+            <ChipRow inline={chipsInline} label={lang === 'pt' ? 'Presença' : 'Presence'}>
               {filters.presence !== undefined && (() => {
                 const online = filters.presence === 'online'
                 const color = online ? '#22c55e' : '#ef4444'
@@ -510,21 +544,13 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
     </>
   )
 
-  return (
+  /**
+   * The date controls, held in a variable because they have TWO homes: on the line, and inside the
+   * popover the compact button opens. The SAME nodes either way — a second, smaller date picker
+   * would be a second set of range rules.
+   */
+  const dateBlock = (
     <>
-      <div style={{
-        display: 'flex',
-        gap: 8,
-        alignItems: 'center',
-        // Inline mode has ONE row and may not grow into a second: everything that would have
-        // wrapped is either dropped by the caller (via `only`) or lives in the `+ Filtro` popover.
-        flexWrap: inline ? 'nowrap' : 'wrap',
-        ...(inline ? { height: 34, minWidth: 0 } : {}),
-        padding: inline ? 0 : (compact ? '10px 12px' : '8px 0'),
-      }}>
-
-        {!hideDateRange && (
-        <>
         {/* Date range presets — stretch to fill the row on mobile */}
         <div style={{ display: 'flex', gap: 3, flexShrink: 0, width: isMobile ? '100%' : undefined }}>
           {DATE_RANGES.map(r => {
@@ -618,8 +644,84 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             </button>
           )}
         </div>
-        </>
-        )}
+    </>
+  )
+
+  /** Open state of the compact date popover. Only ever reachable while `dateCompact`. */
+  const [dateOpen, setDateOpen] = useState(false)
+  const dateWrapRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!dateOpen) return
+    const away = (e: MouseEvent) => {
+      if (!dateWrapRef.current?.contains(e.target as Node)) setDateOpen(false)
+    }
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setDateOpen(false) }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', esc)
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc) }
+  }, [dateOpen])
+  // A control that hides itself must not stay open across the change, or the popover is left
+  // floating with nothing under it.
+  useEffect(() => { if (!dateCompact) setDateOpen(false) }, [dateCompact])
+
+  /**
+   * What the collapsed button SAYS: the range in force, never a bare calendar glyph.
+   *
+   * A date filter that is on and unreadable is the same fault as a chip row that was hidden — the
+   * reader can see that something narrows the page without seeing what. Custom dates win over the
+   * preset because they are what is actually applied.
+   */
+  const dateLabel = hasCustomDates
+    ? `${filters.customStart ? format(new Date(`${filters.customStart}T00:00:00`), 'dd/MM') : '…'} – ${filters.customEnd ? format(new Date(`${filters.customEnd}T00:00:00`), 'dd/MM') : '…'}`
+    : (() => {
+        const r = DATE_RANGES.find(x => x.key === filters.dateRange) ?? DATE_RANGES[3]!
+        return lang === 'pt' ? r.labelPt : r.labelEn
+      })()
+
+  /** The date block, collapsed to one button. Same nodes inside, one click further away. */
+  const compactDate = (
+    <div ref={dateWrapRef} style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        onClick={() => setDateOpen(o => !o)}
+        title={lang === 'pt' ? 'Período' : 'Date range'}
+        style={{
+          ...CTL, gap: 5,
+          border: hasCustomDates ? '1px solid rgba(217,119,6,0.55)' : '1px solid var(--border)',
+          background: hasCustomDates ? 'var(--anthropic-orange-dim)' : 'var(--bg-elevated)',
+          color: hasCustomDates ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+        }}
+      >
+        <CalendarDays size={12} style={{ flexShrink: 0, opacity: 0.8 }} />
+        <span style={{ whiteSpace: 'nowrap' }}>{dateLabel}</span>
+        <ChevronDown size={11} style={{ flexShrink: 0, opacity: 0.7, transform: dateOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+      </button>
+      {dateOpen && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 400,
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 9,
+          padding: 10, boxShadow: '0 10px 30px rgba(0,0,0,0.45)',
+        }}>
+          {dateBlock}
+        </div>
+      )}
+    </div>
+  )
+
+  return (
+    <>
+      <div style={{
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        // Inline mode has ONE row and may not grow into a second: everything that would have
+        // wrapped is either dropped by the caller (via `only`) or lives in the `+ Filtro` popover.
+        flexWrap: inline ? 'nowrap' : 'wrap',
+        ...(inline ? { height: 34, minWidth: 0 } : {}),
+        padding: inline ? 0 : (compact ? '10px 12px' : '8px 0'),
+      }}>
+
+        {!hideDateRange && (dateCompact ? compactDate : dateBlock)}
 
         {/* "Create tag with these filters" — only rendered when the caller has already decided the
             current filters map to a usable tag draft (see canCreateTagFromFilters). FiltersBar
@@ -650,7 +752,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             act on the page. `flexShrink` and the strip's own `overflowX` make them the first thing
             to give up width, which is right: the badge still counts them and the popover still
             names every dimension, so what is lost first is the only part that is said twice. */}
-        {inline && activeFilterCount > 0 && activeFilterChips}
+        {chipsInline && activeFilterCount > 0 && activeFilterChips}
 
         {/* Cost basis — API ⇄ Plan.
             It sits here, with the filters, because that is where people look for "change what I am
@@ -1269,12 +1371,14 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
         {/* Reset button removed — clear individual chips via their × instead. */}
       </div>
 
-      {/* Inline mode renders these inside the `+ Filtro` popover instead — see `activeFilterChips`. */}
-      {/* Below the bar when there is a band to hang them from; INSIDE the bar when there is not.
-          They were only in the + Filter popover, so a reader could see that one filter was on
-          (the badge counts) without seeing WHICH — reported as "the active filters are not shown
-          any more", and the chip rows exist precisely to answer that at a glance. */}
+      {/* An ORDINARY bar hangs the chips under its own controls, where they are free to be
+          several rows tall — one row per dimension, each sliding in and out on its own. */}
       {!inline && activeFilterChips}
+
+      {/* An INLINE bar with a host portals them into the caller's band instead, in that SAME full
+          form. The band is rendered even with nothing active, so a caller measuring its height
+          settles at zero rather than flickering as filters come and go. */}
+      {inline && chipsHost && createPortal(activeFilterChips, chipsHost)}
 
 
       {showProjectsModal && (

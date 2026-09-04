@@ -14,6 +14,12 @@
 }
 
 :root {
+  /* How much the fixed top strip occupies RIGHT NOW — the control row plus the active-filter band
+     under it, measured in App.tsx and written here. Everything positioned below the strip reads
+     this instead of a constant, so the header growing can never leave the body sliding under it.
+     The 44px here is the control row alone: the value a first paint uses before the measurement. */
+  --ag-topbar-h: 44px;
+
   --bg-base: #0a0a0f;
   --bg-surface: #111118;
   --bg-card: #16161f;
