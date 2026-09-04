@@ -297,7 +297,22 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   const [notice, setNotice] = useState<string | null>(null)
   const [atTail, setAtTail] = useState(true)
   /** Messages sent from here and not yet seen in the transcript. See the header. */
-  const [echo, setEcho] = useState<string[]>([])
+  const [echo, setEcho] = useState<string[]>(() => sessionScratch.readEchoes(session.id))
+
+  /**
+   * Every change to the echo list, persisted against the session it belongs to.
+   *
+   * Same shape as `editDraft`, and the same reason: a message that was DELIVERED and has not
+   * reached the transcript yet has no other copy anywhere. Losing it to a navigation is losing the
+   * only record that it was sent — reported as "mandei pela interface e ele simplesmente sumiu".
+   */
+  const editEcho = useCallback((next: string[] | ((prev: string[]) => string[])) => {
+    setEcho(prev => {
+      const v = typeof next === 'function' ? next(prev) : next
+      sessionScratch.writeEchoes(session.id, v)
+      return v
+    })
+  }, [session.id])
 
   /**
    * The message being replied to.
@@ -353,7 +368,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     landedRef.current = false
     setAtTail(true)
     setReplyTo(null)
-    setEcho([])
+    setEcho(sessionScratch.readEchoes(session.id))
     setPayload(sessionScratch.readChat(session.id) as ChatPayload | null)
     setDraft(sessionScratch.readDraft(session.id))
     setAttached(sessionScratch.readAttachments(session.id))
@@ -414,11 +429,11 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
   useEffect(() => {
     if (echo.length === 0) return
     const seen = new Set(turns.filter(t => t.role === 'user').map(t => collapse(t.text)))
-    setEcho(list => {
+    editEcho(list => {
       const kept = list.filter(text => !seen.has(collapse(text)))
       return kept.length === list.length ? list : kept
     })
-  }, [turns, echo.length])
+  }, [turns, echo.length, editEcho])
 
   // A finished background-task line is `role: 'assistant'` and carries no `pending` any more, so it
   // would otherwise be taken as the assistant's last MESSAGE — and its label would be compared
@@ -604,7 +619,7 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
     if (out.ok) {
       // Echoed straight away. It is already in the session; the transcript catches up in a poll or
       // two, and this is what makes pressing enter visibly do something.
-      setEcho(list => [...list, full])
+      editEcho(list => [...list, full])
       setDraft('')
       sessionScratch.clearDraft(session.id)
       setAttached([])

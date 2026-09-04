@@ -66,6 +66,11 @@ export function attachKey(id: string): string {
   return `agentistics:attached:${id}`
 }
 
+/** …and for messages SENT but not yet visible in the transcript. */
+export function echoKey(id: string): string {
+  return `agentistics:echo:${id}`
+}
+
 /**
  * One attached file, as the composer holds it: a NAME to show and a PATH the assistant can read.
  *
@@ -74,6 +79,16 @@ export function attachKey(id: string): string {
  * beside the draft they belong to: two short strings, not an image.
  */
 export interface ScratchAttachment { name: string; path: string }
+
+/** Parse a stored echo list, keeping only non-empty strings. Same reasoning as `parseAttachments`. */
+export function parseEchoes(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const v: unknown = JSON.parse(raw)
+    if (!Array.isArray(v)) return []
+    return v.filter((x): x is string => typeof x === 'string' && x !== '')
+  } catch { return [] }
+}
 
 /**
  * Parse a stored attachment list, keeping only entries that are actually usable.
@@ -123,6 +138,21 @@ export function capChats(
 }
 
 export interface SessionScratch {
+  /**
+   * Messages that were DELIVERED and have not appeared in the transcript yet.
+   *
+   * The chat draws them faded, and retires each one the moment the transcript carries the same
+   * text. They were component state, so leaving the page threw them away — and a long message sent
+   * to a busy session can sit unretired for minutes, which made it look like the message had
+   * vanished. It had not; the only record of it had.
+   *
+   * This is the one piece of scratch that is neither a draft nor a cache: the text is no longer
+   * the person's to edit, and it is not something the server will hand back on request — until the
+   * harness writes it down, this is the ONLY copy. So it is kept like a draft, in storage, and
+   * dropped only by the transcript catching up.
+   */
+  readEchoes(id: string): string[]
+  writeEchoes(id: string, texts: readonly string[]): void
   readDraft(id: string): string
   writeDraft(id: string, text: string): void
   clearDraft(id: string): void
@@ -140,6 +170,7 @@ export function createSessionScratch(store: ScratchStore | null): SessionScratch
   // durable" is right; degrading to "the field eats your words" is not.
   const memoryDrafts = new Map<string, string>()
   const memoryAttached = new Map<string, ScratchAttachment[]>()
+  const memoryEchoes = new Map<string, string[]>()
 
   return {
     readDraft(id) {
@@ -193,6 +224,27 @@ export function createSessionScratch(store: ScratchStore | null): SessionScratch
       memoryAttached.set(id, list)
       if (store) {
         try { store.setItem(attachKey(id), JSON.stringify(list)) } catch { /* memory still has it */ }
+      }
+    },
+    readEchoes(id) {
+      if (store) {
+        try {
+          const raw = store.getItem(echoKey(id))
+          if (raw !== null) return parseEchoes(raw)
+        } catch { /* storage blocked — fall through to memory */ }
+      }
+      return memoryEchoes.get(id) ?? []
+    },
+    writeEchoes(id, texts) {
+      if (texts.length === 0) {
+        memoryEchoes.delete(id)
+        if (store) { try { store.removeItem(echoKey(id)) } catch { /* nothing to do */ } }
+        return
+      }
+      const list = [...texts]
+      memoryEchoes.set(id, list)
+      if (store) {
+        try { store.setItem(echoKey(id), JSON.stringify(list)) } catch { /* memory still has it */ }
       }
     },
     readChat(id) {

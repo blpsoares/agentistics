@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
 import {
-  capChats, createSessionScratch, draftKey, parseAttachments, MAX_CACHED_CHATS,
+  capChats, createSessionScratch, draftKey, parseAttachments, parseEchoes, MAX_CACHED_CHATS,
   type CachedChat, type ScratchStore,
 } from './sessionScratch'
 
@@ -121,5 +121,35 @@ test('storage that throws still keeps attachments across a navigation', () => {
     const s = createSessionScratch(fakeStore({ throwOn }))
     s.writeAttachments('a', [{ name: 'n', path: '/p' }])
     expect(s.readAttachments('a')).toEqual([{ name: 'n', path: '/p' }])
+  }
+})
+
+test('a DELIVERED message survives leaving the page — it is the only copy there is', () => {
+  const s = createSessionScratch(fakeStore())
+  s.writeEchoes('a', ['prompt gigantesco'])
+  expect(s.readEchoes('a')).toEqual(['prompt gigantesco'])
+  expect(s.readEchoes('b')).toEqual([])
+})
+
+test('the transcript catching up clears them, and an empty list is removed', () => {
+  const store = fakeStore()
+  const s = createSessionScratch(store)
+  s.writeEchoes('a', ['x'])
+  s.writeEchoes('a', [])
+  expect(s.readEchoes('a')).toEqual([])
+  expect([...store.data.keys()].some(k => k.includes('echo'))).toBe(false)
+})
+
+test('a half-read echo list drops the junk rather than drawing a blank bubble', () => {
+  expect(parseEchoes(null)).toEqual([])
+  expect(parseEchoes('nope')).toEqual([])
+  expect(parseEchoes('[1, "ok", null, "", "two"]')).toEqual(['ok', 'two'])
+})
+
+test('storage that throws still keeps echoes across a navigation', () => {
+  for (const throwOn of ['get', 'set', 'remove'] as const) {
+    const s = createSessionScratch(fakeStore({ throwOn }))
+    s.writeEchoes('a', ['enviado'])
+    expect(s.readEchoes('a')).toEqual(['enviado'])
   }
 })
