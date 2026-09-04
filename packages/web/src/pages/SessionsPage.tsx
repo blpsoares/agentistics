@@ -17,8 +17,9 @@
  * a session's state by one poll interval — which is a bug people report as flicker.
  */
 
+import { useState } from 'react'
 import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
-import { ChevronLeft, MessagesSquare, TerminalSquare } from 'lucide-react'
+import { ChevronLeft, MessagesSquare, SlidersHorizontal, TerminalSquare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -27,6 +28,11 @@ import { FiltersBar } from '../components/FiltersBar'
 import { SessionPanel, type SessionView } from '../components/sessions/SessionPanel'
 import { SessionsAside } from '../components/nav/SessionsAside'
 import { SessionActions } from '../components/sessions/SessionActions'
+import { FiltersSheet } from '../components/sessions/FiltersSheet'
+
+/** The dimensions a live fleet row can be narrowed by — the same set on both layouts. */
+const FLEET_FILTER_DIMS: Array<'harnesses' | 'repos' | 'projects' | 'models'> =
+  ['harnesses', 'repos', 'projects', 'models']
 
 export default function SessionsPage() {
   const ctx = useOutletContext<AppContext>()
@@ -38,6 +44,14 @@ export default function SessionsPage() {
   const { sessionId } = useParams()
   const navigate = useNavigate()
   const isMobile = useIsMobile()
+  /**
+   * The mobile filters live in a SHEET, and this is whether it is open.
+   *
+   * Both mobile bars — the list's and the open session's — raise the same one: which filters are on
+   * is a property of the workspace, not of the screen you happen to be on, and two sheets would be
+   * two states to keep in step.
+   */
+  const [sheetOpen, setSheetOpen] = useState(false)
 
   // Never on a central: it aggregates many machines and hosts none of their sessions, so the only
   // fleet it could read is its own box's, drawn under someone else's rows.
@@ -96,6 +110,87 @@ export default function SessionsPage() {
     />
   )
 
+  /**
+   * How many dimensions are narrowing the list — the badge on the filter icon.
+   *
+   * `activeOnly` counts. It is not a `Filters` dimension (see `FiltersBar`'s doc comment on
+   * `onActiveOnlyChange`) but it is the one that removes the most rows, and a badge that ignored it
+   * would read `0` on the arrangement the workspace SHIPS with, which is the arrangement people
+   * would be trying to explain to themselves.
+   */
+  const filterCount =
+    (activeOnly ? 1 : 0) +
+    [
+      (filters.harnesses?.length ?? 0) > 0,
+      (filters.repos?.length ?? 0) > 0,
+      filters.projects.length > 0,
+      (filters.models?.length ?? 0) > 0,
+    ].filter(Boolean).length
+
+  /** The filter icon both mobile bars carry. Same sheet, same count, same target size. */
+  const filterButton = (
+    <button
+      onClick={() => setSheetOpen(true)}
+      aria-label={pt ? 'Filtros' : 'Filters'}
+      aria-haspopup="dialog"
+      style={{
+        position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 44, height: 44, flexShrink: 0, border: 'none', background: 'transparent',
+        color: filterCount > 0 ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+        cursor: 'pointer',
+      }}
+    >
+      <SlidersHorizontal size={18} />
+      {filterCount > 0 && (
+        <span style={{
+          position: 'absolute', top: 5, right: 2,
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8,
+          background: 'var(--anthropic-orange)', color: '#fff', fontSize: 10, fontWeight: 700,
+        }}>{filterCount}</span>
+      )}
+    </button>
+  )
+
+  /**
+   * The sheet itself — rendered by BOTH mobile branches, built once here.
+   *
+   * The bar inside is the ordinary `compact` `FiltersBar`, unchanged, on the same shared state the
+   * desktop strip edits. `Clear` is offered only when there is something set, and it clears the
+   * fleet's own dimension too: leaving "active only" on after a "clear" that says nothing about it
+   * is a filter still narrowing the list under a control that claims to have stopped.
+   */
+  const filtersSheet = (
+    <FiltersSheet
+      open={sheetOpen}
+      onClose={() => setSheetOpen(false)}
+      {...(filterCount > 0
+        ? {
+            onClear: () => {
+              setActiveOnly(false)
+              setFilters({ ...filters, harnesses: [], repos: [], projects: [], models: [] })
+            },
+          }
+        : {})}
+      lang={pt ? 'pt' : 'en'}
+    >
+      <FiltersBar
+        compact
+        only={FLEET_FILTER_DIMS}
+        activeOnly={activeOnly}
+        onActiveOnlyChange={setActiveOnly}
+        filters={filters}
+        onChange={setFilters}
+        projects={availableProjects}
+        sessionCountByProject={sessionCountByProject}
+        models={models}
+        harnesses={availableHarnesses}
+        users={[]}
+        lang={lang}
+      />
+    </FiltersSheet>
+  )
+
   // ---------------------------------------------------------------------------
   // Mobile: one column at a time.
   // ---------------------------------------------------------------------------
@@ -149,6 +244,11 @@ export default function SessionsPage() {
               </span>
             </div>
 
+            {/* The same filter icon the list carries. This bar is the whole of this screen's
+                chrome, so the filters have to be reachable from it too — the list you go back to
+                is the thing they narrow. */}
+            {filterButton}
+
             {/* Icons only — the words "Chat" and "Terminal" beside a title on a 390px screen push
                 the title to about six characters. The `aria-label` carries the name. */}
             {selected.conversationBlind === undefined && (
@@ -198,38 +298,28 @@ export default function SessionsPage() {
               because the box that was supposed to scroll had no bounded height to scroll within.
               `flex: 1` on a child means nothing until its PARENT is a flex container. */}
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{panel}</div>
+          {filtersSheet}
         </div>
       )
     }
     return (
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-        {/* The mobile FiltersBar — its OWN "+ Filtro" compact shape, not a shrunk copy of the
-            desktop bar. Same `filters`/`activeOnly` state the desktop shared header edits (both
-            come from `AppContext`, computed once in App.tsx), scoped to the four dimensions that
-            describe a live fleet row — `only` here matches the desktop Sessions call, minus the
-            central-only dimensions (members/teams/machines/presence/tags) this workspace has never
-            offered on either layout. */}
+        {/* ONE bar, matching the open-session one above it. The filters used to be a fixed band
+            here — two or three rows of controls that are consulted occasionally and read never,
+            out of a 664px viewport — so they moved into a sheet that costs nothing until it is
+            asked for and has the whole screen once it is. */}
         <div style={{
-          flexShrink: 0, borderBottom: '1px solid var(--border)', padding: '4px 8px',
-          // Same reason as the open-session bar above: the shared header is hidden on this layout,
-          // so this row IS the top of the screen and owns the status-bar band. The date presets
-          // were unpressable without it.
-          paddingTop: 'calc(4px + var(--safe-top))',
+          display: 'flex', alignItems: 'center', gap: 8,
+          minHeight: 44, padding: '0 10px', flexShrink: 0,
+          // Same reason as the open-session bar: the shared header is hidden on this layout, so
+          // this row IS the top of the screen and owns the status-bar band.
+          paddingTop: 'var(--safe-top)',
+          borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
         }}>
-          <FiltersBar
-            compact
-            only={['harnesses', 'repos', 'projects', 'models']}
-            activeOnly={activeOnly}
-            onActiveOnlyChange={setActiveOnly}
-            filters={filters}
-            onChange={setFilters}
-            projects={availableProjects}
-            sessionCountByProject={sessionCountByProject}
-            models={models}
-            harnesses={availableHarnesses}
-            users={[]}
-            lang={lang}
-          />
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 650, color: 'var(--text-primary)' }}>
+            {pt ? 'Sessões' : 'Sessions'}
+          </span>
+          {filterButton}
         </div>
         {/* `display: flex` again, and for the third time in this file's history the SAME rule:
             `flex: 1` on a child means nothing until its PARENT is a flex container. This div had
@@ -253,6 +343,7 @@ export default function SessionsPage() {
             stale={stale}
           />
         </div>
+        {filtersSheet}
       </div>
     )
   }

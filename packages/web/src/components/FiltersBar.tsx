@@ -119,6 +119,10 @@ const DATE_RANGES: { key: DateRange; labelPt: string; labelEn: string }[] = [
   { key: 'all', labelPt: 'Tudo',     labelEn: 'All'     },
 ]
 
+/**
+ * Every control in this bar. `height: 30` is the DESKTOP figure — see `mobileTarget` below for the
+ * phone's, which is a rule rather than a preference.
+ */
 const CTL: React.CSSProperties = {
   background: 'var(--bg-elevated)',
   border: '1px solid var(--border)',
@@ -133,6 +137,19 @@ const CTL: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
 }
+
+/**
+ * The mobile touch target, spread after `CTL`.
+ *
+ * 44px is the mobile figure and 30px is not: these controls now live in a bottom SHEET on a phone,
+ * where they are the whole content of the screen, and a 30px date preset between two others is a
+ * row of near-misses. `height` is cleared rather than raised because `CTL` sets it — a `minHeight`
+ * alone would be beaten by nothing, but leaving both reads as two answers to one question.
+ *
+ * Desktop keeps 30: applying the mobile number there turns a compact filter row into a row of
+ * buttons, which is the mistake this repository's own mobile rules call out by name.
+ */
+const mobileTarget: React.CSSProperties = { height: 'auto', minHeight: 44 }
 
 /** Search input used inside the value pickers (members / repositories). */
 const SEARCH_INPUT: React.CSSProperties = {
@@ -488,6 +505,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
                 onClick={() => onChange({ ...filters, dateRange: r.key, customStart: '', customEnd: '' })}
                 style={{
                   ...CTL,
+                  ...(isMobile ? mobileTarget : {}),
                   flex: isMobile ? 1 : undefined,
                   justifyContent: 'center',
                   border: active ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
@@ -585,6 +603,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             onClick={() => onActiveOnlyChange(!activeOnly)}
             style={{
               ...CTL,
+              ...(isMobile ? mobileTarget : {}),
               gap: 6,
               flexShrink: 0,
               border: activeOnly ? '1px solid rgba(217,119,6,0.5)' : '1px solid var(--border)',
@@ -608,6 +627,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             title={lang === 'pt' ? 'Criar tag com esses filtros' : 'Create tag with these filters'}
             style={{
               ...CTL,
+              ...(isMobile ? mobileTarget : {}),
               gap: 5,
               width: isMobile ? '100%' : undefined,
               justifyContent: isMobile ? 'center' : undefined,
@@ -648,6 +668,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
                     : undefined}
                   style={{
                     ...CTL,
+                    ...(isMobile ? mobileTarget : {}),
                     flex: isMobile ? 1 : undefined,
                     justifyContent: 'center',
                     border: 'none', borderRadius: 0,
@@ -680,6 +701,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
             title={lang === 'pt' ? 'Adicionar filtro' : 'Add filter'}
             style={{
               ...CTL,
+              ...(isMobile ? mobileTarget : {}),
               gap: 5,
               width: isMobile ? '100%' : undefined,
               justifyContent: isMobile ? 'center' : undefined,
@@ -1290,11 +1312,15 @@ function FilterChip({ title, onRemove, removeTitle, children }: { title?: string
 
 /** A row in the "+ Filter" dimension menu — icon + label + a subtle dot marker when active. */
 function MenuItem({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+  const isMobile = useIsMobile()
   return (
     <button
       onClick={onClick}
       style={{
         display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+        // A dimension row is a touch target like any other. 44 on a phone, where these rows are the
+        // whole content of the filters sheet; the desktop menu keeps its compact 8px padding.
+        ...(isMobile ? { minHeight: 44 } : {}),
         padding: '8px 10px', borderRadius: 6, border: 'none',
         background: 'transparent', cursor: 'pointer', color: 'var(--text-primary)',
         fontSize: 12, fontFamily: 'inherit', textAlign: 'left',
