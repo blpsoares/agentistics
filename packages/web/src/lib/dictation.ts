@@ -126,3 +126,41 @@ export function insecureAlternative(href: string): string | null {
   url.hostname = 'localhost'
   return url.toString()
 }
+
+/**
+ * PURE: the text ONE `onresult` event contributes.
+ *
+ * `SpeechRecognitionEvent.results` is CUMULATIVE — in `continuous` mode it holds every result of
+ * the session so far — and `resultIndex` is the index of the first result this event changed. The
+ * handler read it from index 0 on every event, so it re-emitted the whole transcript each time:
+ * event 1 contributes "A", event 2's list is [A, B] and contributed "AB", event 3's contributed
+ * "ABC", and the draft grew "A AB ABC". That is a defect readable from the code and the API's own
+ * contract, not an observation — see the header of the test for what has and has not been measured.
+ *
+ * Extracted from the handler precisely so it CAN be exercised: the recogniser itself needs a
+ * browser, and a rule nothing checks is a rule that comes back.
+ */
+export function dictatedText(e: {
+  resultIndex?: number
+  results: ArrayLike<ArrayLike<{ transcript: string }> | undefined>
+}): string {
+  // An absent `resultIndex` reads as 0 — an implementation that does not provide it has no growing
+  // list to skip either, so reading from the start is the correct behaviour there.
+  const from = typeof e.resultIndex === 'number' ? e.resultIndex : 0
+  let text = ''
+  for (let i = from; i < e.results.length; i++) text += e.results[i]?.[0]?.transcript ?? ''
+  return text
+}
+
+/**
+ * PURE: where the dictated text lands in what is already typed.
+ *
+ * Appended with a separating space rather than replacing: somebody may have typed half a sentence
+ * before reaching for the microphone. Empty input leaves the draft exactly as it was — a recogniser
+ * that heard nothing must not add whitespace to a field somebody is in the middle of.
+ */
+export function appendDictation(draft: string, text: string): string {
+  const add = text.trim()
+  if (add === '') return draft
+  return draft.trim() === '' ? add : `${draft.replace(/\s+$/, '')} ${add}`
+}

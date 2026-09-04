@@ -39,7 +39,7 @@ import { isImagePath } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
 import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
 import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
-import { dictationError, dictationLocale, dictationSupport, insecureAlternative } from '../../lib/dictation'
+import { appendDictation, dictatedText, dictationError, dictationLocale, dictationSupport, insecureAlternative } from '../../lib/dictation'
 import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
 
 interface ChatPayload {
@@ -116,14 +116,13 @@ export function SessionChat({ session, row, lang, act }: SessionChatProps) {
       rec.lang = dictationLocale(pt ? 'pt' : 'en')
       rec.continuous = true
       rec.interimResults = false
-      rec.onresult = e => {
-        let text = ''
-        for (let i = 0; i < e.results.length; i++) text += e.results[i]?.[0]?.transcript ?? ''
-        if (!text.trim()) return
-        // Appended with a separating space rather than replacing: somebody may have typed half a
-        // sentence before reaching for the microphone.
-        setDraft(d => (d.trim() === '' ? text.trim() : `${d.replace(/\s+$/, '')} ${text.trim()}`))
-      }
+      // Both decisions are PURE and tested (`dictation.ts`): which results this event contributed,
+      // and where they land in what is already typed. This loop used to read `e.results` from index
+      // 0 on every event while `continuous` is true — and that list is CUMULATIVE, so every event
+      // re-emitted the whole session and the draft grew "one", "one one two", "one one two one two
+      // three". `resultIndex` is the index of the first result the event changed, which is exactly
+      // what this event contributed.
+      rec.onresult = e => { setDraft(d => appendDictation(d, dictatedText(e))) }
       // Both end the same way. A recogniser that stopped on its own (a timeout, a denied
       // permission) must not leave the button lit — a control that says it is listening when it
       // is not is worse than one that never started.

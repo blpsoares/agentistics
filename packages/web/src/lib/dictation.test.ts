@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { dictationSupport, dictationLocale, dictationError, insecureAlternative } from './dictation'
+import { dictationSupport, dictationLocale, dictationError, insecureAlternative, dictatedText, appendDictation } from './dictation'
 
 describe('dictationSupport', () => {
   it('is ready when the API exists in a secure context', () => {
@@ -83,5 +83,49 @@ describe('insecureAlternative', () => {
   })
   it('offers nothing for a name it cannot rewrite safely', () => {
     expect(insecureAlternative('https://dash.example.com/sessions')).toBeNull()
+  })
+})
+
+/**
+ * What the localhost failure IS has NOT been established — that needs a browser, and none was
+ * reachable when this was written. What IS established is the arithmetic below, from the code and
+ * the Web Speech API's own contract: `results` is cumulative in `continuous` mode and `resultIndex`
+ * names the first result an event changed.
+ */
+describe('dictatedText', () => {
+  const ev = (resultIndex: number, ...phrases: string[]) =>
+    ({ resultIndex, results: phrases.map(p => [{ transcript: p }]) })
+
+  it('takes only what THIS event contributed, not the whole session so far', () => {
+    expect(dictatedText(ev(0, 'one'))).toBe('one')
+    expect(dictatedText(ev(1, 'one', ' two'))).toBe(' two')
+    expect(dictatedText(ev(2, 'one', ' two', ' three'))).toBe(' three')
+  })
+
+  it('reads from the start when the implementation gives no resultIndex', () => {
+    expect(dictatedText({ results: [[{ transcript: 'a' }], [{ transcript: 'b' }]] })).toBe('ab')
+  })
+
+  it('never throws on a hole in the list', () => {
+    expect(dictatedText({ resultIndex: 0, results: [undefined, [{ transcript: 'x' }]] })).toBe('x')
+  })
+
+  it('a whole continuous session accumulates each phrase exactly once', () => {
+    let draft = ''
+    for (const [i, p] of ['one', 'two', 'three'].entries()) {
+      draft = appendDictation(draft, dictatedText(ev(i, ...['one', 'two', 'three'].slice(0, i + 1))))
+    }
+    expect(draft).toBe('one two three')
+  })
+})
+
+describe('appendDictation', () => {
+  it('appends to what was already typed, with one separating space', () => {
+    expect(appendDictation('half a ', 'sentence')).toBe('half a sentence')
+    expect(appendDictation('', ' hello ')).toBe('hello')
+  })
+  it('leaves the draft untouched when nothing was heard', () => {
+    expect(appendDictation('half a ', '   ')).toBe('half a ')
+    expect(appendDictation('', '')).toBe('')
   })
 })
