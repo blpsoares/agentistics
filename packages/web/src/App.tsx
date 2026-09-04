@@ -1563,7 +1563,31 @@ export default function AppLayout() {
     ro.observe(filterSlotEl)
     return () => ro.disconnect()
   }, [filterSlotEl])
-  const stripFit = headerFit(filterSlotW)
+  /**
+   * The dashboard strip's right-hand cluster, measured.
+   *
+   * The filters must read as centred IN THE HEADER, not merely centred in the box left over beside
+   * the actions — those are different points, and the second one is visibly off. Centring inside a
+   * `flex: 1` slot puts the middle at `(W - actions) / 2`; padding that slot by the cluster's own
+   * width moves it back to `W / 2`.
+   *
+   * Measured rather than guessed because the cluster grows and shrinks with what it holds: the
+   * health warnings appear only when there are issues, the update dot comes and goes, and the
+   * central pill is absent on a solo machine. A constant would be right on one machine.
+   */
+  const [actionsEl, setActionsEl] = useState<HTMLDivElement | null>(null)
+  const [actionsW, setActionsW] = useState(0)
+  useEffect(() => {
+    if (!actionsEl) { setActionsW(0); return }
+    const read = () => setActionsW(actionsEl.offsetWidth)
+    read()
+    const ro = new ResizeObserver(read)
+    ro.observe(actionsEl)
+    return () => ro.disconnect()
+  }, [actionsEl])
+
+  // The compensating padding is not space the bar may draw in, so it is taken off first.
+  const stripFit = headerFit(Math.max(0, filterSlotW - actionsW))
   /**
    * Active sessions only — the fleet's own dimension (see `FiltersBar`'s doc comment on
    * `onActiveOnlyChange`), not part of `Filters`. Defaults to ON the moment you land in the
@@ -2770,8 +2794,13 @@ export default function AppLayout() {
       {/* THE FILTERS give up width FIRST. The cluster to their right is how you act on the page
           and how you read what it currently totals; a narrowed filter bar is still a filter bar,
           because its own `+ Filtro` popover holds every row it drops. */}
-      {/* No clipping here either — see the sessions strip's note. */}
-      <div ref={setFilterSlotEl} style={{ flex: 1, minWidth: 90, display: 'flex' }}>
+      {/* No clipping here either — see the sessions strip's note.
+          `paddingLeft` is the action cluster's own width, mirrored on this side so the filters land
+          on the STRIP's centre line rather than the centre of what is left beside them. */}
+      <div ref={setFilterSlotEl} style={{
+        flex: 1, minWidth: 90, display: 'flex', justifyContent: 'center',
+        paddingLeft: actionsW, boxSizing: 'border-box',
+      }}>
         <FiltersBar
           inline
           dateCompact={stripFit.date === 'compact'}
@@ -2822,7 +2851,7 @@ export default function AppLayout() {
           toggle, neither of which describes a fleet that already polls and shows its own
           "Connected · last sync" in the aside. */}
       {!inSessionsWorkspace && (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+      <div ref={setActionsEl} style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
         {/* The filtered totals used to sit here, immediately left of the action icons. They are in
             the STATS strip now, which is where they were asked to be and where they read better:
             that strip is already the row of facts about what is on screen, and the header is where
