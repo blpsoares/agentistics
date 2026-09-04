@@ -8,6 +8,7 @@ import {
   clampLens,
   applyLensKey,
   newLens,
+  lensControls,
   MOVE_STEP_PX,
   MOVE_FINE_PX,
   RESIZE_STEP_PX,
@@ -177,6 +178,60 @@ describe('applyLensKey', () => {
   test('a ctrl or meta chord is never ours — the app keeps its own shortcuts', () => {
     expect(applyLensKey(lens(), 'ArrowRight', { ...NO_MODS, ctrl: true })).toBeNull()
     expect(applyLensKey(lens(), 'p', { ...NO_MODS, meta: true })).toBeNull()
+  })
+})
+
+describe('lensControls', () => {
+  test('a 60px lens with 44px mobile controls yields only the drag handle', () => {
+    expect(lensControls(60, 44, 30)).toEqual(['drag'])
+  })
+
+  test('a wide desktop lens yields every control', () => {
+    // A default 360px lens with a 3px border and 26px desktop controls: 360 - 2*3 = 354px inner.
+    expect(lensControls(354, 26, 30)).toEqual(['drag', 'pin', 'remove', 'zoomOut', 'zoomIn', 'zoomLabel'])
+  })
+
+  test('width enough for drag+pin+remove but not the zoom pair yields exactly those three', () => {
+    // 3 controls (78px) fit; a 4th (104px) would not, so the pair (which needs 2 more) is refused
+    // as a pair rather than one of the two slipping in alone.
+    expect(lensControls(100, 26, 30)).toEqual(['drag', 'pin', 'remove'])
+  })
+
+  test('drag survives at every width, including absurd ones', () => {
+    expect(lensControls(0, 26, 30)).toEqual(['drag'])
+    expect(lensControls(-50, 26, 30)).toEqual(['drag'])
+    expect(lensControls(1, 44, 30)).toEqual(['drag'])
+  })
+
+  test('pin only joins once its own width is spared beyond the drag handle', () => {
+    // Exactly two controls' worth of room: drag + pin fit exactly, nothing is wasted.
+    expect(lensControls(52, 26, 30)).toEqual(['drag', 'pin'])
+    // One pixel short: pin cannot be drawn intact, so it is withheld rather than clipped.
+    expect(lensControls(51, 26, 30)).toEqual(['drag'])
+  })
+
+  test('the zoom pair needs its own two full widths beyond drag+pin+remove, not merely nonzero room', () => {
+    // 78px used by drag+pin+remove; 129px total leaves 51px, one short of the 52px the pair costs.
+    expect(lensControls(129, 26, 30)).toEqual(['drag', 'pin', 'remove'])
+    // 130px leaves exactly 52px: the pair fits whole.
+    expect(lensControls(130, 26, 30)).toEqual(['drag', 'pin', 'remove', 'zoomOut', 'zoomIn'])
+  })
+
+  test('the zoom label is gated by its OWN width, not the control width', () => {
+    // Room for drag+pin+remove+pair (130px) plus 20px more — enough for a narrow label (18px)
+    // but not a wide one (25px). This would pass even a buggy implementation that reused
+    // `controlPx` for the label gate only if the two happened to be numerically close, so the
+    // two branches below use label widths that straddle a value controlPx could never produce.
+    expect(lensControls(150, 26, 18)).toEqual(['drag', 'pin', 'remove', 'zoomOut', 'zoomIn', 'zoomLabel'])
+    expect(lensControls(150, 26, 25)).toEqual(['drag', 'pin', 'remove', 'zoomOut', 'zoomIn'])
+  })
+
+  test('remove only joins once pin already fit — the priority order is enforced, not just the count', () => {
+    // Enough total width for two controls (drag + one more) is ambiguous only if priority order
+    // is ignored; this pins that the second control admitted is pin, never remove.
+    const result = lensControls(52, 26, 30)
+    expect(result).toContain('pin')
+    expect(result).not.toContain('remove')
   })
 })
 

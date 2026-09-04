@@ -16,6 +16,10 @@ export interface A11yText {
   followOff: string
   openSettings: string
   zoom: string
+  zoomIn: string
+  zoomOut: string
+  /** A single lens's own accessible name — an ordinal, never the internal `lens-N` id. */
+  lensLabel(n: number): string
   shape: string
   circle: string
   rect: string
@@ -67,6 +71,9 @@ export function a11yText(lang: 'pt' | 'en'): A11yText {
     followOff: pt ? 'Desligar (Ctrl+Shift+Z)' : 'Turn off (Ctrl+Shift+Z)',
     openSettings: pt ? 'Configurações de acessibilidade' : 'Accessibility settings',
     zoom: pt ? 'Ampliação' : 'Zoom',
+    zoomIn: pt ? 'Aproximar' : 'Zoom in',
+    zoomOut: pt ? 'Afastar' : 'Zoom out',
+    lensLabel: n => (pt ? `Lupa ${n}` : `Lens ${n}`),
     shape: pt ? 'Formato' : 'Shape',
     circle: pt ? 'Círculo' : 'Circle',
     rect: pt ? 'Retângulo' : 'Rectangle',

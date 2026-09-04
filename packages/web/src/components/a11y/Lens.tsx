@@ -10,14 +10,19 @@
 import React, { useEffect, useRef } from 'react'
 import { Pin, PinOff, Move, X, Plus, Minus } from 'lucide-react'
 import type { MagnifierLens } from '@agentistics/core'
-import { stageTransform } from '../../lib/magnifier'
+import { stageTransform, lensControls } from '../../lib/magnifier'
 import { createMirrorHost, type MirrorScheduler } from '../../lib/magnifierMirror'
 import type { A11yText } from './i18n'
 
 const ORANGE = 'var(--anthropic-orange)'
 
+/** The zoom readout's `minWidth`, in the same unit `lensControls` measures against. */
+const ZOOM_LABEL_PX = 30
+
 interface Props {
   lens: MagnifierLens
+  /** 1-based position among this page's lenses — what a listener hears, never the internal id. */
+  index: number
   selected: boolean
   /** True while a pinned lens is temporarily revealed by keyboard selection. */
   revealed: boolean
@@ -31,7 +36,7 @@ interface Props {
 }
 
 export function Lens({
-  lens, selected, revealed, text, isMobile, scheduler, onChange, onSelect, onRemove, onContextMenu,
+  lens, index, selected, revealed, text, isMobile, scheduler, onChange, onSelect, onRemove, onContextMenu,
 }: Props) {
   const stageRef = useRef<HTMLDivElement | null>(null)
   const drag = useRef<{ mode: 'move' | 'resize'; px: number; py: number; from: MagnifierLens } | null>(null)
@@ -59,6 +64,12 @@ export function Lens({
   const t = stageTransform(lens)
   const interactive = !lens.pinned || revealed
   const control = isMobile ? 44 : 26
+  // The header strip is `overflow: hidden` inside the frame, so on a small lens the rightmost
+  // controls (pin, remove) would otherwise be clipped away — invisible and unreachable, not
+  // merely cramped. `lensControls` decides what fits, most-important-first; we only decide the
+  // left-to-right order below.
+  const innerWidth = lens.width - 2 * lens.borderWidth
+  const shown = new Set(lensControls(innerWidth, control, ZOOM_LABEL_PX))
 
   const startDrag = (mode: 'move' | 'resize') => (e: React.PointerEvent) => {
     if (!interactive) return
@@ -72,6 +83,14 @@ export function Lens({
   const onPointerMove = (e: React.PointerEvent) => {
     const d = drag.current
     if (!d) return
+    // Self-heal a dropped pointer stream: if the browser loses both `pointerup` and
+    // `pointercancel` for a captured pointer — an OS focus steal (alt-tab, a system dialog) while
+    // the button is physically down — `drag.current` would otherwise stay set forever, and the
+    // next `pointermove` over the frame would resume dragging with no button held, teleporting
+    // the lens to wherever the cursor happens to be. `e.buttons === 0` is true for a released
+    // mouse button; a touch contact reports a non-zero `buttons` while it is down, so this never
+    // fires mid-drag on touch — only once the drag should already have ended.
+    if (e.buttons === 0) { endDrag(); return }
     const dx = e.clientX - d.px
     const dy = e.clientY - d.py
     if (d.mode === 'move') onChange({ x: d.from.x + dx, y: d.from.y + dy })
@@ -90,7 +109,7 @@ export function Lens({
   return (
     <div
       role="group"
-      aria-label={`${text.headerTitle} ${lens.id}`}
+      aria-label={text.lensLabel(index)}
       onContextMenu={interactive ? onContextMenu : undefined}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
@@ -137,23 +156,33 @@ export function Lens({
           >
             <Move size={14} color="#fff" />
             <span style={{ flex: 1 }} />
-            <button style={btn} aria-label={`${text.zoom} −`}
-              onPointerDown={e => e.stopPropagation()}
-              onClick={() => onChange({ zoom: lens.zoom - 0.5 })}><Minus size={14} /></button>
-            <span style={{ color: '#fff', fontSize: 11, fontWeight: 700, minWidth: 30, textAlign: 'center' }}>
-              {lens.zoom}×
-            </span>
-            <button style={btn} aria-label={`${text.zoom} +`}
-              onPointerDown={e => e.stopPropagation()}
-              onClick={() => onChange({ zoom: lens.zoom + 0.5 })}><Plus size={14} /></button>
-            <button style={btn} aria-label={lens.pinned ? text.unpin : text.pin}
-              onPointerDown={e => e.stopPropagation()}
-              onClick={() => onChange({ pinned: !lens.pinned })}>
-              {lens.pinned ? <PinOff size={14} /> : <Pin size={14} />}
-            </button>
-            <button style={btn} aria-label={text.remove}
-              onPointerDown={e => e.stopPropagation()}
-              onClick={onRemove}><X size={14} /></button>
+            {shown.has('zoomOut') && (
+              <button style={btn} aria-label={text.zoomOut}
+                onPointerDown={e => e.stopPropagation()}
+                onClick={() => onChange({ zoom: lens.zoom - 0.5 })}><Minus size={14} /></button>
+            )}
+            {shown.has('zoomLabel') && (
+              <span style={{ color: '#fff', fontSize: 11, fontWeight: 700, minWidth: ZOOM_LABEL_PX, textAlign: 'center' }}>
+                {lens.zoom}×
+              </span>
+            )}
+            {shown.has('zoomIn') && (
+              <button style={btn} aria-label={text.zoomIn}
+                onPointerDown={e => e.stopPropagation()}
+                onClick={() => onChange({ zoom: lens.zoom + 0.5 })}><Plus size={14} /></button>
+            )}
+            {shown.has('pin') && (
+              <button style={btn} aria-label={lens.pinned ? text.unpin : text.pin}
+                onPointerDown={e => e.stopPropagation()}
+                onClick={() => onChange({ pinned: !lens.pinned })}>
+                {lens.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+              </button>
+            )}
+            {shown.has('remove') && (
+              <button style={btn} aria-label={text.remove}
+                onPointerDown={e => e.stopPropagation()}
+                onClick={onRemove}><X size={14} /></button>
+            )}
           </div>
 
           <div

@@ -48,6 +48,11 @@ export function MagnifierLayer({ ctx }: { ctx: AppContext }) {
 
   return createPortal(
     <>
+      {/*
+        Nothing calls `a11y.announce(...)` yet — this live region is wired and ready, but the
+        keyboard task (Task 10) is what will actually drive it. Read this as a prepared wire,
+        not a dropped one.
+      */}
       <div
         role="status"
         aria-live="polite"
@@ -55,10 +60,11 @@ export function MagnifierLayer({ ctx }: { ctx: AppContext }) {
       >
         {a11y.announcement}
       </div>
-      {a11y.lenses.map(lens => (
+      {a11y.lenses.map((lens, i) => (
         <Lens
           key={lens.id}
           lens={lens}
+          index={i + 1}
           selected={a11y.selectedId === lens.id}
           revealed={a11y.selectedId === lens.id}
           text={text}

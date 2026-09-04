@@ -132,6 +132,39 @@ export function applyLensKey(lens: MagnifierLens, key: string, mods: KeyMods): L
   return null
 }
 
+export type LensControl = 'drag' | 'pin' | 'remove' | 'zoomOut' | 'zoomIn' | 'zoomLabel'
+
+/**
+ * Which controls fit in a lens this wide, most important first — the same problem the TUI's
+ * `fitColumns` solves for a table row, applied to the lens header strip.
+ *
+ * `drag` is never dropped: without it the lens cannot be moved, and a clipped strip is one no
+ * gesture can repair. `zoomOut`/`zoomIn` are added as a PAIR or not at all — a lone zoom button
+ * would let you go one way and not the other, which is a worse control than neither.
+ */
+export function lensControls(innerWidthPx: number, controlPx: number, labelPx: number): LensControl[] {
+  const controls: LensControl[] = ['drag']
+  // The drag handle costs about one control's worth of width in the header strip.
+  let used = controlPx
+
+  if (innerWidthPx - used < controlPx) return controls
+  controls.push('pin')
+  used += controlPx
+
+  if (innerWidthPx - used < controlPx) return controls
+  controls.push('remove')
+  used += controlPx
+
+  if (innerWidthPx - used < controlPx * 2) return controls
+  controls.push('zoomOut', 'zoomIn')
+  used += controlPx * 2
+
+  if (innerWidthPx - used < labelPx) return controls
+  controls.push('zoomLabel')
+
+  return controls
+}
+
 /** A new lens, centred in the viewport, with an id no sibling holds. */
 export function newLens(style: LensStyle, vp: Viewport, taken: Set<string>): MagnifierLens {
   let n = 1

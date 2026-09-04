@@ -38,8 +38,10 @@ export interface MirrorScheduler {
    *
    * Unregistering every lens does NOT stop them — `entries.size === 0` only short-circuits the
    * sync work; the observer callback still fires on every mutation of a live dashboard, forever.
-   * The caller MUST call `stop()` when the last lens goes away, or this leaks for the life of the
-   * page.
+   * That callback is a cheap empty-map no-op per mutation, so nothing breaks if the last lens
+   * going away and this call drift apart for a while — but the caller SHOULD call `stop()` when
+   * the layer tears down or the feature is switched off, rather than leaving the observer running
+   * for a page that no longer has anywhere to draw a lens.
    */
   stop(): void
   currentIntervalMs(): number
