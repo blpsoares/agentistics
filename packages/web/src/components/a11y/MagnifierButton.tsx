@@ -3,7 +3,7 @@
  *
  * Left click makes a lens; right click opens the general menu, which is the only way a MOUSE can
  * reach a pinned lens again (a pinned lens takes no pointer events at all — that is what pinning
- * means). By keyboard there is a second way in; see MagnifierLayer's key handler.
+ * means). There is no keyboard way in yet — that is Task 10.
  */
 import React, { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -56,7 +56,7 @@ export function MagnifierButton({ ctx }: { ctx: AppContext }) {
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 2147483100 }} />
-          <div role="menu" style={{
+          <div role="dialog" aria-label={text.headerTitle} style={{
             position: 'absolute', right: 0, top: '100%', marginTop: 6, width: 290, zIndex: 2147483200,
             padding: 8, borderRadius: 12, background: 'var(--bg-elevated)',
             border: '1px solid var(--border)', boxShadow: '0 12px 40px rgba(0,0,0,0.45)',

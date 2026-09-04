@@ -39,6 +39,10 @@ export function LensMenu({ lens, x, y, text, isMobile, onChange, onRemove, onDup
         width: 250, borderRadius: 12,
       }
 
+  // Mobile only — the ≥44px touch-target rule. Desktop sizing is untouched: the track itself
+  // stays thin, but the element's own box (what a touch actually hits) grows to fit.
+  const slider: React.CSSProperties = { flex: 1, height: isMobile ? 44 : undefined }
+
   const chip = (on: boolean): React.CSSProperties => ({
     padding: isMobile ? '10px 12px' : '5px 10px', minHeight: isMobile ? 44 : undefined,
     borderRadius: 7, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
@@ -53,7 +57,7 @@ export function LensMenu({ lens, x, y, text, isMobile, onChange, onRemove, onDup
         position: 'fixed', inset: 0, zIndex: 2147483100, pointerEvents: 'auto',
         background: isMobile ? 'rgba(0,0,0,0.4)' : 'transparent',
       }} />
-      <div role="menu" aria-label={text.headerTitle} style={{
+      <div role="dialog" aria-label={text.headerTitle} style={{
         ...shell, zIndex: 2147483200, padding: 10, pointerEvents: 'auto',
         background: 'var(--bg-elevated)', border: '1px solid var(--border)',
         boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
@@ -61,7 +65,7 @@ export function LensMenu({ lens, x, y, text, isMobile, onChange, onRemove, onDup
         <div style={row}>
           <span>{text.zoom}</span>
           <input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={0.5} value={lens.zoom}
-            onChange={e => onChange({ zoom: Number(e.target.value) })} style={{ flex: 1 }} />
+            onChange={e => onChange({ zoom: Number(e.target.value) })} style={slider} />
           <strong style={{ minWidth: 36, textAlign: 'right' }}>{lens.zoom}×</strong>
         </div>
         <div style={row}>
@@ -77,19 +81,19 @@ export function LensMenu({ lens, x, y, text, isMobile, onChange, onRemove, onDup
         <div style={row}>
           <span>{lens.shape === 'circle' ? text.diameter : text.width}</span>
           <input type="range" min={LENS_MIN_PX} max={1200} step={10} value={lens.width}
-            onChange={e => onChange({ width: Number(e.target.value) })} style={{ flex: 1 }} />
+            onChange={e => onChange({ width: Number(e.target.value) })} style={slider} />
         </div>
         {lens.shape === 'rect' && (
           <div style={row}>
             <span>{text.height}</span>
             <input type="range" min={LENS_MIN_PX} max={1200} step={10} value={lens.height}
-              onChange={e => onChange({ height: Number(e.target.value) })} style={{ flex: 1 }} />
+              onChange={e => onChange({ height: Number(e.target.value) })} style={slider} />
           </div>
         )}
         <div style={row}>
           <span>{text.borderWidth}</span>
           <input type="range" min={BORDER_MIN_PX} max={BORDER_MAX_PX} step={1} value={lens.borderWidth}
-            onChange={e => onChange({ borderWidth: Number(e.target.value) })} style={{ flex: 1 }} />
+            onChange={e => onChange({ borderWidth: Number(e.target.value) })} style={slider} />
         </div>
         <div style={{ height: 1, background: 'var(--border)', margin: '6px 0' }} />
         <button style={action} onClick={() => { onChange({ pinned: !lens.pinned }); onClose() }}>

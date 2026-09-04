@@ -12,6 +12,7 @@ import { startMirrorScheduler, type MirrorScheduler } from '../../lib/magnifierM
 import { a11yText } from './i18n'
 import { Lens } from './Lens'
 import { LensMenu } from './LensMenu'
+import { MagnifierButton } from './MagnifierButton'
 
 const CONTAINER_ID = 'ag-magnifiers'
 
@@ -30,7 +31,7 @@ function useLayerContainer(active: boolean): HTMLElement | null {
   return el
 }
 
-export function MagnifierLayer({ ctx }: { ctx: AppContext }) {
+export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHeaderSlot: boolean }) {
   const { a11y, lang } = ctx
   const active = a11y.prefs.enabled
   const container = useLayerContainer(active)
@@ -62,6 +63,25 @@ export function MagnifierLayer({ ctx }: { ctx: AppContext }) {
       >
         {a11y.announcement}
       </div>
+      {/*
+        No header slot exists to host the button (mobile inside the Sessions workspace — see
+        App.tsx's `headerHostsMagnifier`). Without this, a pinned lens (pointerEvents: 'none' on
+        the whole frame) is unreachable and the user is stuck, not merely inconvenienced. Anchored
+        mid-right, vertically centered — clear of the workspace's own top bar (back button / tabs /
+        session actions, or the filters row), its bottom nav / chat composer, and any bottom
+        sheet. It floats over scrollable content rather than a control, which is the one place
+        nothing else on either screen ever puts a fixed element. Not anchored near the top, so
+        `--safe-top` does not apply here.
+        `pointerEvents: 'auto'` is required: the portal container above is 'none'.
+      */}
+      {!hasHeaderSlot && (
+        <div style={{
+          position: 'fixed', right: 12, top: '50%', transform: 'translateY(-50%)',
+          pointerEvents: 'auto', zIndex: 2147483000,
+        }}>
+          <MagnifierButton ctx={ctx} />
+        </div>
+      )}
       {a11y.lenses.map((lens, i) => (
         <Lens
           key={lens.id}

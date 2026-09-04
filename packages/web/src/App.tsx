@@ -2624,6 +2624,11 @@ export default function AppLayout() {
     a11y,
   }
 
+  // Whether the sticky <header> below renders at all — mirrored here (never re-hardcoded) so
+  // MagnifierLayer knows when NO header slot exists and must draw its own floating button.
+  // Mobile inside the Sessions workspace is the one case where the header is entirely absent.
+  const headerHostsMagnifier = !inSessionsWorkspace || !isMobile
+
   return (
     <div style={{
       // `min-height` is NOT set in the sessions workspace, and that is the whole fix.
@@ -2732,7 +2737,7 @@ export default function AppLayout() {
           sessions, whose own full-screen list/panel layout has no room for it yet. The root cause
           of "the pane's own header scrolled away" was never this strip's presence — it was `<main>`
           lacking a DEFINITE height to clip to, fixed at the wrapper `<div>` above. */}
-      {(!inSessionsWorkspace || !isMobile) && (
+      {headerHostsMagnifier && (
       <header style={{
         background: 'var(--bg-surface)',
         position: 'sticky',
@@ -3492,7 +3497,7 @@ export default function AppLayout() {
       <NotificationToasts lang={lang} />
 
       {/* Accessibility magnifiers — a portal appended to document.body, outside #root. */}
-      <MagnifierLayer ctx={appCtx} />
+      <MagnifierLayer ctx={appCtx} hasHeaderSlot={headerHostsMagnifier} />
 
       {/* Mounted once, at the ROOT: stepUpFetch opens this whenever the server demands re-auth,
           and every page can trigger that. It used to live inside SideNav — desktop-only chrome —
