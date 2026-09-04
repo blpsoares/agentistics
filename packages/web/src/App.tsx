@@ -2673,9 +2673,38 @@ export default function AppLayout() {
       // not rendered (see its own note below), so still subtracting it would leave a 56px band of
       // nothing under the composer — the same class of mismatch as the `min-height` that used to
       // beat this line, seen from the other side.
-      height: inSessionsWorkspace
-        ? (isMobile ? (sessionOpen ? '100dvh' : 'calc(100dvh - var(--mobile-nav-h))') : '100vh')
-        : undefined,
+      //
+      // THE NAV'S ROOM IS PADDING, NOT A SHORTER BOX — and that distinction is the whole of the
+      // floating-nav bug. `calc(100dvh - var(--mobile-nav-h))` ended this div one nav-height above
+      // the bottom of the screen, and `MobileBottomNav` is rendered INSIDE it.
+      //
+      // A `position: fixed` descendant is supposed to ignore its ancestors and answer to the
+      // viewport. It stops doing that when an ancestor clips: `index.css` gives `#root`
+      // `overflow-x: clip` on mobile — deliberately, because `hidden` would compute `overflow-y`
+      // to `auto` and break every `position: sticky` header (its own note records that) — and a
+      // lone `clip` on one axis computes the other axis to `clip` as well. WebKit then clips and
+      // anchors fixed descendants to that box rather than to the window. So `bottom: 0` resolved
+      // against THIS div's bottom edge, and the bar hovered exactly one nav-height off the floor
+      // with the page's ground showing beneath it.
+      //
+      // The dashboard was correct on the same screen at the same moment, which is what names the
+      // cause: there this height is `undefined`, the div reaches the bottom, and anchoring to it
+      // or to the viewport gives the same answer. The sessions list was the only page where the
+      // two differed — by exactly the height of the thing that moved.
+      //
+      // `height: 100dvh` + `padding-bottom: var(--mobile-nav-h)` gives the flex algorithm the very
+      // same definite CONTENT height it had before — `box-sizing: border-box` is global, so the
+      // children see `100dvh - nav` either way, and every measurement in the notes above still
+      // holds. What changes is that this div's border box now reaches the real bottom of the
+      // screen, so a fixed descendant has nothing left to resolve against wrongly. The nav then
+      // overlays its own padding, which is what the padding is for.
+      height: inSessionsWorkspace ? (isMobile ? '100dvh' : '100vh') : undefined,
+      // Only on the LIST. With a session open the bar is not rendered at all (see its own note),
+      // so reserving its band would leave a strip of nothing under the composer — the same
+      // mismatch the old subtraction made, seen from the other side.
+      ...(inSessionsWorkspace && isMobile && !sessionOpen
+        ? { paddingBottom: 'var(--mobile-nav-h)' }
+        : {}),
       background: 'var(--bg-base)', display: 'flex', flexDirection: 'column',
       paddingLeft: isMobile ? 0 : (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : liveAsideWidth),
       paddingTop: isMobile ? 0 : TOPBAR_H,
