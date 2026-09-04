@@ -151,8 +151,12 @@ describe('sourceRect — proportional pan, so every corner of the page is reacha
     const zoom = 2
     const l = lens({ x: vp.width - width, y: vp.height - height, width, height, borderWidth, zoom })
     const s = sourceRect(l, vp)
-    expect(s.x).toBe(vp.width - s.width)
-    expect(s.y).toBe(vp.height - s.height)
+    // The size is asserted CONCRETELY, not as `vp.width - s.width`: that form is self-referential
+    // and an implementation that shrank the region to fit the edge would satisfy it. (200 - 2*5)/2.
+    expect(s.width).toBe(95)
+    expect(s.height).toBe(95)
+    expect(s.x).toBe(vp.width - 95)
+    expect(s.y).toBe(vp.height - 95)
   })
 
   test('a region wider than the viewport (reachable below 1x) is centred on that axis, not resized', () => {
