@@ -11,7 +11,7 @@
  * check, and this one gates the most powerful act the server performs.
  *
  * It asks the FULL path the terminal wizard asks — assistant, where, task, model, effort, first
- * message, name — not a reduced form. What the web adds is that each answer is SHOWN rather than
+ * message, title — not a reduced form. What the web adds is that each answer is SHOWN rather than
  * spelled: a mark per assistant, a repository distinguished from a plain folder, and effort as a
  * coloured scale.
  *
@@ -32,7 +32,7 @@ import { effortColor, effortSteps } from '../../lib/effortScale'
 import { HarnessMark } from './HarnessMark'
 import {
   STEP_ORDER, clearForHarness, nextStep, prevStep, stepReady, visibleQuestions,
-  type StepId, type WizardDraft, type WizardHarness,
+  type MissingAnswer, type StepId, type WizardDraft, type WizardHarness,
 } from '../../lib/wizardSteps'
 
 interface HarnessOption {
@@ -143,11 +143,19 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
   const canStart = stepReady('review', draft, wizardHarness).ok && !busy
   const stepIndex = STEP_ORDER.indexOf(step)
 
-  /** What a blocked step is waiting for, IN WORDS. A disabled button that says nothing is a bug. */
-  const blockedBecause = ready.ok ? null
-    : ready.missing === 'assistant'
-      ? (pt ? 'Escolha um assistente para continuar.' : 'Pick an assistant to continue.')
-      : (pt ? 'Escolha uma pasta para continuar.' : 'Pick a folder to continue.')
+  /**
+   * What a blocked step is waiting for, IN WORDS. A disabled button that says nothing is a bug.
+   *
+   * One sentence per `MissingAnswer`, and the mapping is exhaustive on purpose: the pure module
+   * decides WHAT is missing, this file only says it, so a new gate over there cannot land here as
+   * a silent fallback to the wrong sentence.
+   */
+  const BLOCKED_BECAUSE: Record<MissingAnswer, string> = {
+    assistant: pt ? 'Escolha um assistente para continuar.' : 'Pick an assistant to continue.',
+    title: pt ? 'Dê um título à sessão para continuar.' : 'Give the session a title to continue.',
+    cwd: pt ? 'Escolha uma pasta para continuar.' : 'Pick a folder to continue.',
+  }
+  const blockedBecause = ready.ok || !ready.missing ? null : BLOCKED_BECAUSE[ready.missing]
 
   const STEP_TITLE: Record<StepId, string> = {
     assistant: pt ? 'Assistente' : 'Assistant',
@@ -246,8 +254,10 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
         <ReviewRow label={pt ? 'Esforço' : 'Effort'} value={effort || null}
           muted={effort === '' ? (pt ? 'Padrão do assistente' : "The assistant's default") : undefined} />
       )}
-      <ReviewRow label={pt ? 'Nome' : 'Name'} value={label || null}
-        muted={label === '' ? (pt ? 'Derivado da sessão' : 'Derived from the session') : undefined} />
+      {/* No `muted` fallback: the title is required, so the review can never reach this row with
+          nothing in it — and offering a sentence for a state the gate forbids would describe a
+          choice nobody was allowed to make. */}
+      <ReviewRow label={pt ? 'Título' : 'Title'} value={label || null} />
       <ReviewRow label={pt ? 'Onde' : 'Where'} value={cwd || null} mono />
       <ReviewRow label={pt ? 'Tarefa' : 'Task'} value={task || null}
         muted={task === '' ? (pt ? 'Nenhuma' : 'None') : undefined} />
@@ -419,8 +429,9 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 20 }}>
           {/* STEP 1 — WHO. The assistant, and the two answers that only exist once one is
-              chosen: a model and an effort. The NAME is here too — it is what you will look
-              for in the list later, so it is asked while you are deciding what this IS. */}
+              chosen: a model and an effort. The TITLE is here too — it is what you will look
+              for in the list later, so it is asked while you are deciding what this IS, and it
+              is the one answer on this step that is REQUIRED. */}
           {step === 'assistant' && (<>
           <Field label={pt ? 'Assistente' : 'Assistant'}>
             {harnesses === null ? (
@@ -518,13 +529,18 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
             </Field>
           )}
 
-          <Field label={pt ? 'Nome (opcional)' : 'Name (optional)'} hint={pt
-            ? 'Sem nome, a sessão usa o que o assistente chamar de si mesmo.'
-            : 'With no name, the session uses whatever the assistant calls itself.'}>
+          {/* REQUIRED, and the gate is `stepReady('assistant')`'s — see `wizardSteps.ts`. It is
+              asked here rather than at the end because a title is what this session IS, and that
+              is the thing you know while you are deciding to start it. */}
+          <Field label={pt ? 'Título' : 'Title'} hint={pt
+            ? 'É por ele que você acha esta sessão na lista depois.'
+            : 'It is how you find this session in the list later.'}>
             <input
               value={label}
               onChange={e => setLabel(e.target.value)}
-              placeholder={task || (pt ? 'Derivado' : 'Derived')}
+              placeholder={pt ? 'O que esta sessão é…' : 'What this session is…'}
+              aria-label={pt ? 'Título' : 'Title'}
+              aria-required
               style={{ ...inputStyle, paddingLeft: 12 }}
             />
           </Field>

@@ -24,21 +24,35 @@ describe('stepReady', () => {
   it('blocks step 1 until an assistant is chosen, and says what is missing', () => {
     const out = stepReady('assistant', empty, null)
     expect(out.ok).toBe(false)
-    expect(out.missing).not.toBe('')
+    expect(out.missing).toBe('assistant')
   })
-  it('accepts step 1 with only an assistant — model, effort and name are optional', () => {
-    expect(stepReady('assistant', { ...empty, harness: 'claude' }, claude).ok).toBe(true)
+  it('still blocks step 1 once an assistant is chosen but no title is written', () => {
+    const out = stepReady('assistant', { ...empty, harness: 'claude' }, claude)
+    expect(out.ok).toBe(false)
+    expect(out.missing).toBe('title')
+  })
+  it('accepts step 1 with an assistant and a title — model and effort stay optional', () => {
+    expect(stepReady('assistant', { ...empty, harness: 'claude', label: 'Wizard polish' }, claude).ok).toBe(true)
+  })
+  it('does not accept whitespace as a title', () => {
+    const out = stepReady('assistant', { ...empty, harness: 'claude', label: '   ' }, claude)
+    expect(out.ok).toBe(false)
+    expect(out.missing).toBe('title')
+  })
+  it('asks for the assistant BEFORE the title — one sentence at a time', () => {
+    expect(stepReady('assistant', { ...empty, label: 'Wizard polish' }, null).missing).toBe('assistant')
   })
   it('blocks step 2 until a directory is chosen', () => {
-    expect(stepReady('where', { ...empty, harness: 'claude' }, claude).ok).toBe(false)
-    expect(stepReady('where', { ...empty, harness: 'claude', cwd: '/home/u/p' }, claude).ok).toBe(true)
+    expect(stepReady('where', { ...empty, harness: 'claude', label: 'n' }, claude).ok).toBe(false)
+    expect(stepReady('where', { ...empty, harness: 'claude', label: 'n', cwd: '/home/u/p' }, claude).ok).toBe(true)
   })
   it('never blocks step 3 — the first message is optional', () => {
-    expect(stepReady('message', { ...empty, harness: 'claude', cwd: '/home/u/p' }, claude).ok).toBe(true)
+    expect(stepReady('message', { ...empty, harness: 'claude', label: 'n', cwd: '/home/u/p' }, claude).ok).toBe(true)
   })
   it('accepts review only when every earlier step does', () => {
-    expect(stepReady('review', { ...empty, harness: 'claude' }, claude).ok).toBe(false)
-    expect(stepReady('review', { ...empty, harness: 'claude', cwd: '/home/u/p' }, claude).ok).toBe(true)
+    expect(stepReady('review', { ...empty, harness: 'claude', label: 'n' }, claude).ok).toBe(false)
+    expect(stepReady('review', { ...empty, harness: 'claude', cwd: '/home/u/p' }, claude).missing).toBe('title')
+    expect(stepReady('review', { ...empty, harness: 'claude', label: 'n', cwd: '/home/u/p' }, claude).ok).toBe(true)
   })
 })
 

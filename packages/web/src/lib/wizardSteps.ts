@@ -14,6 +14,12 @@
  *   the harness NAMES no models, even if it accepts `--model`: a dropdown whose only entry is "the
  *   assistant's default" is a control that cannot be used, while an absent one says "we cannot name
  *   these for you".
+ *
+ * THE TITLE IS REQUIRED, and it is the one answer of step 1 that is. A session is found again by
+ * what it is CALLED — in the fleet list, in the search field, in `agentop session ls` — and the
+ * harness-derived fallback names the conversation rather than the work ("Fixing the build" against
+ * whatever Claude decided to call itself). Everything else on that step has a defensible unset
+ * state the CLI resolves; a session nobody can pick out of a list of forty does not.
  */
 
 export type StepId = 'assistant' | 'where' | 'message' | 'review'
@@ -35,15 +41,25 @@ export interface WizardDraft {
   model: string
   effort: string
   prompt: string
+  /**
+   * The session's TITLE, and REQUIRED — see the header.
+   *
+   * The field keeps the server's own name for it: `ManagedSession.label` is what
+   * `POST /api/fleet/new` takes and what every verb renames. "Title" is what a person reads; a
+   * second name for one value on the wire is how the two drift.
+   */
   label: string
   /** Paths already stored on the machine by `POST /api/fleet/attach`. */
   attachments: { name: string; path: string }[]
 }
 
+/** What a blocked step is waiting for. A closed set: the footer owns a sentence for each. */
+export type MissingAnswer = 'assistant' | 'title' | 'cwd'
+
 export interface StepState {
   ok: boolean
-  /** What is missing, when it is not. Never an empty string when `ok` is false. */
-  missing?: string
+  /** What is missing, when it is not. Never absent when `ok` is false. */
+  missing?: MissingAnswer
 }
 
 export function visibleQuestions(harness: WizardHarness | null): { model: boolean; effort: boolean } {
@@ -57,9 +73,10 @@ export function visibleQuestions(harness: WizardHarness | null): { model: boolea
 export function stepReady(step: StepId, draft: WizardDraft, harness: WizardHarness | null): StepState {
   switch (step) {
     case 'assistant':
-      return harness && draft.harness !== ''
-        ? { ok: true }
-        : { ok: false, missing: 'assistant' }
+      if (!harness || draft.harness === '') return { ok: false, missing: 'assistant' }
+      // Trimmed: a title of spaces is a title nobody can search for, and it would pass a bare
+      // emptiness test while reading as blank everywhere it is drawn.
+      return draft.label.trim() !== '' ? { ok: true } : { ok: false, missing: 'title' }
     case 'where':
       return draft.cwd !== '' ? { ok: true } : { ok: false, missing: 'cwd' }
     // The first message is optional: a session started with none is a session waiting for you,
@@ -88,7 +105,7 @@ export function prevStep(step: StepId): StepId {
  * Drop only the answers the NEW assistant cannot accept.
  *
  * Carrying `effort: 'high'` across to a harness whose set does not contain it would send a flag
- * the CLI rejects at spawn. Everything else — the directory, the task, the message, the name —
+ * the CLI rejects at spawn. Everything else — the directory, the task, the message, the title —
  * belongs to any assistant and going back a step must not silently discard it.
  */
 export function clearForHarness(draft: WizardDraft, harness: WizardHarness | null): WizardDraft {
