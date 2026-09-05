@@ -2819,6 +2819,29 @@ export default function AppLayout() {
         <HideLensesButton ctx={appCtx} />
       </div>
 
+      {/* HARDWARE, on this route too. The whole action cluster is hidden in the sessions workspace
+          — correctly, for the totals and the page-data Live toggle, neither of which describes a
+          fleet that polls itself — and this button went with it. It answers "what is this machine
+          doing right now", which is MORE relevant here than anywhere else: this is the screen where
+          you watch that machine run several assistants at once. Reported as missing.
+          It sits on the LIST side of the rule below, because it is about the machine and not about
+          the session you have open. */}
+      {!isCentral && (
+        <button
+          onClick={() => setHardwareOpen(true)}
+          title={lang === 'pt' ? 'Recursos de hardware' : 'Hardware resources'}
+          aria-label={lang === 'pt' ? 'Recursos de hardware' : 'Hardware resources'}
+          aria-haspopup="dialog"
+          style={{
+            width: 30, height: 30, flexShrink: 0, display: 'flex', alignItems: 'center',
+            justifyContent: 'center', borderRadius: 8, border: '1px solid var(--border)',
+            background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer',
+          }}
+        >
+          <Cpu size={14} />
+        </button>
+      )}
+
       {/* A RULE, not more gap. Everything to the left narrows the LIST; everything to the right is
           about the session you have open — two different questions that were sitting in one
           undifferentiated row of controls, which is what "entulhado" describes. A one-pixel line

@@ -272,6 +272,26 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
    *  which is what every page but Top usage wants. */
   const allows = (dim: NonNullable<typeof only>[number]): boolean => !only || only.includes(dim)
 
+  /**
+   * CLEARING IS THE COUNT'S EXACT INVERSE, and it was not.
+   *
+   * The badge counts `activeOnly` (the sessions workspace's own switch) among the dimensions, and
+   * the clear button did not turn it off — so on a fleet narrowed by nothing else, pressing "clear
+   * filters" removed nothing, left the badge at 1, and read as a dead control. Reported as exactly
+   * that.
+   *
+   * One function, called by both clear buttons, sitting next to the count so the two are read
+   * together. Anything added to the list below has to be answered here.
+   */
+  const clearAllFilters = () => {
+    onChange({
+      ...filters,
+      users: [], harnesses: [], presence: undefined, repos: [], tags: [],
+      projects: [], models: [], teams: [], machines: [],
+    })
+    onActiveOnlyChange?.(false)
+  }
+
   // Number of dimensions currently active — shown as the badge on the "+ Filter" button.
   const activeFilterCount = [
     (filters.users?.length ?? 0) > 0,
@@ -509,7 +529,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
               </button>
             )}
             <button
-              onClick={() => onChange({ ...filters, users: [], harnesses: [], presence: undefined, repos: [], tags: [], projects: [], models: [], teams: [], machines: [] })}
+              onClick={clearAllFilters}
               style={{
                 marginLeft: compact ? 'auto' : 0,
                 display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -800,7 +820,7 @@ export function FiltersBar({ only, filters, onChange, projects, sessionCountByPr
                 {lang === 'pt' ? 'Filtros ativos' : 'Active filters'}
               </span>
               <button
-                onClick={() => onChange({ ...filters, users: [], harnesses: [], presence: undefined, repos: [], tags: [], projects: [], models: [], teams: [], machines: [] })}
+                onClick={clearAllFilters}
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 4,
                   background: 'transparent', border: 'none', cursor: 'pointer',
