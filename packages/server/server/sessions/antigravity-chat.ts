@@ -113,12 +113,17 @@ function toolDetail(args: unknown): string | null {
 }
 
 /**
- * The tools one planner step asked for, under the SHARED vocabulary.
+ * The tools one planner step asked for — under AGY'S OWN NAMES, with the shared one beside them.
  *
- * `canonicalTool` maps agy's names onto Claude's (`write_to_file` → `Write`, `run_command` →
- * `Bash`), which is what makes the artifacts panel work for an agy session without knowing agy
- * exists: `sessionArtifacts.ts` selects by tool NAME, and its set is Claude's names. An unmapped
- * name passes through as itself.
+ * The first version of this reader emitted only `canonicalTool`'s answer, so an Antigravity
+ * conversation rendered its actions as `Bash`, `Read`, `Grep`, `Edit` and `Write` — Claude Code's
+ * tool names, in a session that ran none of them. It was reported the moment it reached the screen,
+ * and the result gave itself away: those five stood beside `manage_task` and `schedule`, which are
+ * agy's own and which nothing maps, so the same list spoke two vocabularies at once.
+ *
+ * `name` is therefore what agy called it and `canonical` is the shared reading, carried separately
+ * and only when the two differ — `sessionArtifacts.ts` still finds the writes (its set is Claude's
+ * names) without the bubble claiming agy ran a tool it does not have. See `ChatTurn.tools`.
  */
 function toolsOf(step: AgyStep, harness: HarnessId): ChatTurn['tools'] {
   if (!Array.isArray(step.tool_calls)) return undefined
@@ -128,7 +133,12 @@ function toolsOf(step: AgyStep, harness: HarnessId): ChatTurn['tools'] {
     const call = raw as Record<string, unknown>
     if (typeof call.name !== 'string' || call.name === '') continue
     const detail = toolDetail(call.args)
-    out.push({ name: canonicalTool(harness, call.name), ...(detail ? { detail } : {}) })
+    const canonical = canonicalTool(harness, call.name)
+    out.push({
+      name: call.name,
+      ...(canonical !== call.name ? { canonical } : {}),
+      ...(detail ? { detail } : {}),
+    })
   }
   return out.length > 0 ? out : undefined
 }

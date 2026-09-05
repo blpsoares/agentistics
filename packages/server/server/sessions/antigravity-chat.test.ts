@@ -55,7 +55,7 @@ describe('parseAntigravityChat', () => {
     expect(turn).toMatchObject({ role: 'assistant', text: 'ok', thinking: 'Executing Session Kill' })
   })
 
-  it('maps a tool call onto the shared vocabulary and shows its argument, not its label', () => {
+  it('keeps AGY\'s own tool name for display, with the shared one carried beside it', () => {
     const [turn] = parseAntigravityChat([planner(0, {
       tool_calls: [{
         name: 'run_command',
@@ -66,9 +66,12 @@ describe('parseAntigravityChat', () => {
         },
       }],
     })])
-    // `run_command` → `Bash`, so `sessionArtifacts.ts` and `ChatBubble` — both written against
-    // Claude's names — read an agy session with no knowledge that agy exists.
-    expect(turn!.tools).toEqual([{ name: 'Bash', detail: 'agentop session kill 29bce' }])
+    // The first version emitted `name: 'Bash'` and nothing else, so an Antigravity conversation
+    // rendered Claude Code's tool names for actions agy never took. `name` is what agy called it;
+    // `canonical` is what `sessionArtifacts.ts` selects on.
+    expect(turn!.tools).toEqual([{
+      name: 'run_command', canonical: 'Bash', detail: 'agentop session kill 29bce',
+    }])
   })
 
   it('names a write by its file, never by the file contents it carries', () => {
@@ -78,7 +81,25 @@ describe('parseAntigravityChat', () => {
         args: { TargetFile: '/repo/src/a.ts', CodeContent: 'x'.repeat(5000), toolSummary: 'Create a file' },
       }],
     })])
-    expect(turn!.tools).toEqual([{ name: 'Write', detail: '/repo/src/a.ts' }])
+    expect(turn!.tools).toEqual([{
+      name: 'write_to_file', canonical: 'Write', detail: '/repo/src/a.ts',
+    }])
+  })
+
+  it('NO tool is renamed on the way to the screen — the whole list speaks one vocabulary', () => {
+    // The tell that exposed the bug: five mapped names rendered as Claude's beside `manage_task`
+    // and `schedule`, which nothing maps, so one list spoke two vocabularies at once.
+    const [turn] = parseAntigravityChat([planner(0, {
+      tool_calls: [
+        { name: 'run_command', args: { CommandLine: 'ls' } },
+        { name: 'view_file', args: { AbsolutePath: '/a' } },
+        { name: 'grep_search', args: { Query: 'x' } },
+        { name: 'manage_task', args: { Action: 'complete' } },
+        { name: 'schedule', args: { Prompt: 'later' } },
+      ],
+    })])
+    expect(turn!.tools!.map(t => t.name))
+      .toEqual(['run_command', 'view_file', 'grep_search', 'manage_task', 'schedule'])
   })
 
   it('truncates a detail longer than 200 characters rather than shipping it whole', () => {
@@ -89,11 +110,12 @@ describe('parseAntigravityChat', () => {
     expect(turn!.tools![0]!.detail!.endsWith('…')).toBe(true)
   })
 
-  it('an unmapped tool name passes through as itself', () => {
+  it('an unmapped tool carries NO canonical field — there is no second reading to state', () => {
     const [turn] = parseAntigravityChat([planner(0, {
       tool_calls: [{ name: 'manage_task', args: { Action: 'complete', TaskId: 't-1' } }],
     })])
     expect(turn!.tools![0]!.name).toBe('manage_task')
+    expect(turn!.tools![0]!.canonical).toBeUndefined()
   })
 
   it('drops the EXECUTION steps — the request above them already said what ran', () => {
@@ -106,7 +128,7 @@ describe('parseAntigravityChat', () => {
       line({ step_index: 3, source: 'MODEL', type: 'CODE_ACTION', status: 'DONE', content: '[diff_block_start]…' }),
     ])
     expect(turns).toHaveLength(1)
-    expect(turns[0]!.tools).toEqual([{ name: 'Bash', detail: 'ls' }])
+    expect(turns[0]!.tools).toEqual([{ name: 'run_command', canonical: 'Bash', detail: 'ls' }])
   })
 
   it('skips CONVERSATION_HISTORY — it is a replay of turns already in the file', () => {

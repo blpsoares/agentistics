@@ -31,7 +31,31 @@ export interface ChatTurn {
    * most of the work.
    */
   tools?: Array<{
+    /**
+     * The tool's name AS THE HARNESS CALLED IT — `run_command`, not `Bash`.
+     *
+     * A conversation is a record of what happened, and agy did not run a tool called `Bash`.
+     * Rendering the shared vocabulary here put Claude Code's tool names in an Antigravity session's
+     * bubbles, which is a false statement about what that session did — reported exactly that way,
+     * and visible in the result itself: `Bash`, `Read` and `Grep` stood next to `manage_task` and
+     * `schedule`, agy's own names, which nothing maps. Half a translation reads as a bug even when
+     * the reader does not know which half is wrong.
+     */
     name: string
+    /**
+     * The same tool under the SHARED vocabulary (`canonicalTool`), present only where it differs.
+     *
+     * `harness-activity.ts` maps every harness's names onto Claude's because that is what every
+     * chart and filter is written against — a METRIC has to compare harnesses, so it cannot have
+     * one of them calling it `Bash` and another `run_command`. Selection is that same question:
+     * `sessionArtifacts.ts` picks the file-writing tools out of a turn, and its set is Claude's
+     * names.
+     *
+     * So the two readings are carried apart rather than one being made to serve both. DISPLAY reads
+     * `name`; anything SELECTING or COUNTING reads `canonical ?? name`. Absent on every Claude turn,
+     * where the harness's own name already is the shared one.
+     */
+    canonical?: string
     detail?: string
     /**
      * For a SHELL call, the paths that command writes — read by the pure `shell-writes.ts`.
