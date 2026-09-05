@@ -38,6 +38,7 @@ import { SessionsAside } from '../components/nav/SessionsAside'
 import { SessionActions } from '../components/sessions/SessionActions'
 import { filterFleet } from '../lib/fleetFilter'
 import { FiltersSheet } from '../components/sessions/FiltersSheet'
+import { sessionPath } from '../lib/sessionRoute'
 
 /** The dimensions a live fleet row can be narrowed by — the same set on both layouts. */
 const FLEET_FILTER_DIMS: Array<'harnesses' | 'repos' | 'projects' | 'models'> =
@@ -557,7 +558,7 @@ export default function SessionsPage() {
                 lang={pt ? 'pt' : 'en'}
                 act={act}
                 onGone={() => navigate('/sessions')}
-                onOpened={id => navigate(`/sessions/${id}`)}
+                onOpened={id => navigate(sessionPath(id))}
               />
             )}
           </div>

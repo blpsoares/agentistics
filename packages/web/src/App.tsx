@@ -97,6 +97,7 @@ import { CentralSessions } from './components/sessions/CentralSessions'
 // filter row in the strip and the body under it have to move together at every width.
 import { PAGE_INSET, PAGE_MAX_WIDTH } from './components/sessions/FleetOverview'
 import { setFleetSourceCentral } from './lib/fleet'
+import { sessionPath } from './lib/sessionRoute'
 
 /**
  * What the SESSIONS filter bar may filter by — narrower than the dashboard's on purpose: a fleet
@@ -2913,7 +2914,7 @@ export default function AppLayout() {
           act={headerFleetAct}
           onGone={() => navigate('/sessions')}
           // A reopen mints a NEW session; going to it is what makes the verb visibly do something.
-          onOpened={id => navigate(`/sessions/${id}`)}
+          onOpened={id => navigate(sessionPath(id))}
         />
       )}
     </div>
