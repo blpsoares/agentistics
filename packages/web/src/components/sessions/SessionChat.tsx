@@ -1345,8 +1345,11 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                 {/* The controls, on their own line under the text. ATTACH opens the row on the
                     left and the acting group closes it on the right — the two halves are what the
                     control does: attach only prepares a message, the group at the other end sends
-                    it, stops the turn, or opens what is used rarely. */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    it, stops the turn, or opens what is used rarely.
+                    The gap is 6 rather than 4, and the two halves are separated by the whole
+                    remaining width: asked for a row where the controls "nao fiquem entulhados". A
+                    row of touching 34px squares reads as one object with lines in it. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <button
                   onClick={() => fileRef.current?.click()}
                   disabled={!canPrompt || uploading}
@@ -1362,11 +1365,41 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                   {uploading ? <Loader size={15} className="ag-working-spin" /> : <Paperclip size={15} />}
                 </button>
 
+                {/* DICTATION, beside attach — the pair that PREPARES a message, which is what the
+                    left of this row is. It was reachable only through the "more" menu; on a desktop
+                    there is room for it and two clicks for a control used mid-sentence is one too
+                    many.
+                    ONLY WHEN IT CAN WORK, and only off a phone. Its refusal needs a LINE, not a
+                    `title` — the Web Speech API needs a secure context, so a dashboard opened over
+                    plain HTTP on a LAN has no microphone at all — and that line only fits in the
+                    menu, where the row stays. A control that is present and silently does nothing
+                    is the thing this codebase refuses everywhere else. */}
+                {!isMobile && dictation.state === 'ready' && (
+                  <button
+                    onClick={toggleDictation}
+                    disabled={!canPrompt}
+                    aria-pressed={listening}
+                    aria-label={listening ? (pt ? 'Parar de ouvir' : 'Stop listening') : (pt ? 'Ditar' : 'Dictate')}
+                    title={listening ? (pt ? 'Parar de ouvir' : 'Stop listening') : (pt ? 'Ditar' : 'Dictate')}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      width: 34, height: 34, borderRadius: 9, border: 'none', flexShrink: 0,
+                      background: listening
+                        ? 'color-mix(in srgb, var(--accent-red) 14%, transparent)'
+                        : 'transparent',
+                      color: listening ? 'var(--accent-red)' : 'var(--text-tertiary)',
+                      cursor: canPrompt ? 'pointer' : 'default',
+                    }}
+                  >
+                    <Mic size={15} />
+                  </button>
+                )}
+
                 {/* Stop · Send · More, held together at the far end. `marginLeft: auto` on the
                     GROUP rather than on send, so the three keep their order and their spacing
                     whether or not the stop is there — a margin on send alone would push the more
                     button off to the right on its own the moment a turn ended. */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
                 {/* THE LAST MESSAGE YOU SENT. ABSENT until there is one — `lastSent` is null on a
                     conversation nobody has written into yet, and a control whose only outcome is a
                     modal saying "nothing" is one that exists to refuse. It sits with the acting
@@ -1456,9 +1489,14 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                           secure context, so a dashboard reached over plain HTTP on a LAN never has
                           a microphone. A control that silently does nothing there is one people
                           report as broken, which is what happened. */}
+                      {/* Hidden exactly where the standalone button above is shown, so dictation is
+                          in ONE place at a time — two controls for one act is two states to keep in
+                          agreement. Where it cannot work it lives here, because only here can it
+                          say why. */}
                       <button
                         onClick={() => { if (dictation.state === 'ready') { setMoreOpen(false); toggleDictation() } }}
                         disabled={dictation.state !== 'ready'}
+                        hidden={!isMobile && dictation.state === 'ready'}
                         style={{
                           display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
                           minHeight: 40, padding: '6px 8px', borderRadius: 7, border: 'none',
