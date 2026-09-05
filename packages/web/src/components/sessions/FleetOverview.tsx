@@ -16,6 +16,9 @@ import { Activity, Bell, FolderGit2, Power } from 'lucide-react'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { formatUptime, summarizeFleet } from '../../lib/fleetSummary'
+import { ActivityHeatmap } from '../ActivityHeatmap'
+
+export interface HeatmapDay { date: string; value: number; sessions: number; tools: number }
 
 /**
  * The container geometry the sessions workspace shares with the header's filter row.
@@ -37,9 +40,15 @@ export interface FleetOverviewProps {
   loading: boolean
   unsupported: boolean
   unavailable?: string
+  /**
+   * The combined activity calendar, already narrowed by every active filter — `derived.heatmapData`
+   * from `useDerivedStats`, never a second aggregation. `stats-cache.json` stays Claude-only here as
+   * everywhere: this is per-session sums, the same source the dashboard's own heatmap reads.
+   */
+  heatmap?: readonly HeatmapDay[]
 }
 
-export function FleetOverview({ lang, rows, loading, unsupported, unavailable }: FleetOverviewProps) {
+export function FleetOverview({ lang, rows, loading, unsupported, unavailable, heatmap }: FleetOverviewProps) {
   const pt = lang === 'pt'
   const s = useMemo(() => summarizeFleet(rows, Date.now()), [rows])
 
@@ -80,11 +89,27 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
       <h1 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>
         {pt ? 'Suas sessões' : 'Your sessions'}
       </h1>
-      <p style={{ margin: '0 0 22px', fontSize: 13, color: 'var(--text-tertiary)', lineHeight: 1.55 }}>
+      {/* TWO UNIVERSES ON ONE SCREEN, and the page has to say which is which.
+          The cards count the FLEET — the sessions the aside is listing, narrowed by the same
+          `filterFleet` it uses. The heatmap and the per-assistant bars below count STORED METRICS,
+          narrowed by every filter including the date range.
+          The one dimension that separates them is TIME, and it is named rather than left to be
+          discovered: `filterFleet` deliberately ignores the date range, because a live session is
+          happening now and "last 7 days" would hide one that started eight days ago and is still
+          working. Its header records that reasoning per dimension.
+          Both notes exist because a user set a filter, watched the heatmap empty out, and saw the
+          cards hold still — a reasonable reading of that is that the cards are stale. They were
+          not stale; they were counting a different set, and nothing on the screen said so. Same
+          rule as every N/A in this product: a number must say what it counts. */}
+      <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--text-tertiary)', lineHeight: 1.55 }}>
         {pt
           ? 'O que está rodando nesta máquina agora. Escolha uma sessão na lateral para abri-la.'
           : 'What is running on this machine right now. Pick a session on the left to open it.'}
       </p>
+
+      <SectionNote text={pt
+        ? 'A frota agora — as mesmas sessões listadas ao lado. Segue os filtros do topo, menos o período: uma sessão viva está acontecendo agora.'
+        : 'The fleet now — the same sessions listed beside it. Follows the filters above, except the date range: a live session is happening now.'} />
 
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 22,
@@ -123,7 +148,22 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
         <Stat
           icon={<FolderGit2 size={15} />} tone="var(--accent-purple)"
           label={pt ? 'Projetos' : 'Projects'} value={String(s.projects)}
-          note={pt ? 'com sessão registrada' : 'with a session on record'}
+          // WHERE THE SESSIONS IN THIS LIST ARE, and how many of those places are repositories.
+          //
+          // It used to read "with a session on record" over a count of every project in the whole
+          // history — 173 beside three cards counting the fleet, four numbers side by side
+          // measuring different things. Reported as simply wrong, and it was: the card answered a
+          // question nobody had asked on a screen about what is running.
+          //
+          // The repo count is a FRACTION of the same figure, never a second total, so the two can
+          // be read together at a glance. Absent when none of them resolves to a repository —
+          // "0 are repositories" and "we could not resolve a remote for any of them" read the same
+          // and only the second is established.
+          note={s.projectRepos > 0
+            ? (pt
+                ? `${s.projectRepos} ${s.projectRepos === 1 ? 'é repositório' : 'são repositórios'}`
+                : `${s.projectRepos} ${s.projectRepos === 1 ? 'is a repository' : 'are repositories'}`)
+            : (pt ? 'nenhum com repositório resolvido' : 'none with a resolved repository')}
         />
       </div>
 
@@ -184,7 +224,64 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable }:
           })}
         </div>
       </section>
+
+      {/* ONE calendar for every harness in view, not one strip each — the per-harness split lives
+          in the day tooltip, which is where a comparison is actually made.
+
+          It reads `derived.heatmapData`, which `useDerivedStats` has ALREADY narrowed by every
+          active filter. That is the requirement, not a convenience: a heatmap beside filtered
+          stats that is itself unfiltered puts two numbers on one screen under two different
+          rules, which is the same defect as a cache-backed total beside a session-summed one. */}
+      {heatmap && heatmap.length > 0 && (
+        <section style={{ marginBottom: 22 }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)' }}>
+            {pt ? 'Atividade' : 'Activity'}
+          </h2>
+          {/* Said HERE and not only in the heading above, because the two regions are read
+              separately: somebody comparing the cards with this grid is looking at this half. */}
+          <SectionNote text={pt
+            ? 'Histórico gravado — este calendário segue os filtros do topo, como as barras acima.'
+            : 'Recorded history — this calendar follows the filters above, as the bars do.'} />
+          {/* CAPPED. The heatmap fills its container and keeps its own aspect ratio, so on this
+              full-width page it grew to roughly 500px tall — reported as "ta gigante". It is a
+              glance, not a chart you read a value off: the cells only need to be big enough to
+              tell four shades apart. The cap lives HERE rather than in the component, which is
+              also used inside a dashboard card that constrains it already, and inside an expanded
+              modal that is supposed to be large. */}
+          <div style={{ maxWidth: 620 }}>
+            <ActivityHeatmap data={[...heatmap]} weeks={26} />
+          </div>
+        </section>
+      )}
+      {heatmap && heatmap.length === 0 && (
+        // Never an all-zero grid: an empty measurement and "nothing in this window" are different
+        // facts, and a grid of empty cells reads as the first while meaning the second.
+        <p style={{ margin: '0 0 22px', fontSize: 12, color: 'var(--text-tertiary)' }}>
+          {pt
+            ? 'Nenhuma atividade no período e nos filtros escolhidos.'
+            : 'No activity in the chosen window and filters.'}
+        </p>
+      )}
+
     </div>
+  )
+}
+
+/**
+ * The one line that says WHICH question a block of this page answers.
+ *
+ * Deliberately not a tooltip and not an icon: the confusion it exists for is somebody comparing
+ * two regions at a glance, and a fact you have to hover for is a fact you do not have while
+ * comparing. Dim, small, and above the block it describes.
+ */
+function SectionNote({ text }: { text: string }) {
+  return (
+    <p style={{
+      margin: '0 0 10px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-tertiary)',
+      opacity: 0.85,
+    }}>
+      {text}
+    </p>
   )
 }
 

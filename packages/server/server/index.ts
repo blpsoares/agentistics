@@ -1166,6 +1166,23 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       })
     }
 
+    // The skills the assistant in this session can be asked to run. Guarded by the `/api/fleet`
+    // PREFIX already registered in `capability-guard.ts` — a new fleet route is guarded by having
+    // been ADDED, never by remembering a second table.
+    if (url.pathname === '/api/fleet/skills' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { readFleetSkills, fleetLang } = await import('./sessions/fleet-web')
+      const out = await readFleetSkills(fleetLang(url.searchParams.get('lang')), id)
+      return new Response(JSON.stringify(out), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     // Start one. The most powerful thing on this route table: it spawns a billable coding assistant,
     // with a prompt, in a directory the request names — see the header of `runFleetSpawn` for why
     // this one call reads a directory from the body when `resume` refuses to, and `fleet-spawn.ts`
@@ -1285,10 +1302,14 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
-    // Start one session, or reopen everything that fell. Both spawn real assistants.
+    // REOPEN everything that fell. Starting ONE session is `/api/fleet/new`, and this route no
+    // longer does it: two spawn paths for one act meant the browser could reach an unvalidated
+    // reading of a body that starts a real assistant, beside a validated one that refuses a
+    // relative cwd, an unknown effort and a model a harness has no flag for. The route survives for
+    // the reopen, which takes no body fields at all.
     if (url.pathname === '/api/fleet/spawn' && req.method === 'POST') {
       try {
-        const { spawnFromWeb, reopenFellFromWeb } = await import('./sessions/spawn-web')
+        const { reopenFellFromWeb } = await import('./sessions/spawn-web')
         const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
         const lang = fleetLang(url.searchParams.get('lang'))
         const host = await hostForFleet(lang)
@@ -1300,17 +1321,18 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           })
         }
         const v = body.value
-        const out = v['reopenFell'] === true
-          ? await reopenFellFromWeb(host, lang)
-          : await spawnFromWeb(host, lang, {
-              harness: String(v['harness'] ?? ''),
-              cwd: String(v['cwd'] ?? ''),
-              ...(v['task'] ? { task: String(v['task']) } : {}),
-              ...(v['prompt'] ? { prompt: String(v['prompt']) } : {}),
-              ...(v['model'] ? { model: String(v['model']) } : {}),
-              ...(v['effort'] ? { effort: String(v['effort']) } : {}),
-              ...(v['label'] ? { label: String(v['label']) } : {}),
-            })
+        // Anything but the reopen is REFUSED here rather than quietly handled, and the refusal
+        // NAMES the route that does the job — a caller left with "bad request" would reasonably
+        // conclude its body was wrong when the route simply is not this one any more.
+        if (v['reopenFell'] !== true) {
+          return new Response(JSON.stringify({
+            ok: false,
+            message: lang === 'pt'
+              ? 'Esta rota só reabre o que caiu. Para iniciar uma sessão, use POST /api/fleet/new.'
+              : 'This route only reopens what fell. To start a session, use POST /api/fleet/new.',
+          }), { status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } })
+        }
+        const out = await reopenFellFromWeb(host, lang)
         return new Response(JSON.stringify(out), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1345,6 +1367,32 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         })
       } catch (err) {
         return new Response(JSON.stringify(safeError(err, { verbose: PROFILE === 'local' }).body), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    // One file this session wrote. Guarded by the `/api/fleet` PREFIX already registered in
+    // `capability-guard.ts` — a new fleet route is guarded by having been ADDED, never by remembering
+    // a second table — and 404'd on a central with the rest of `/api/fleet*`.
+    if (url.pathname === '/api/fleet/file' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      const path = url.searchParams.get('path')
+      if (!id || !path) {
+        return new Response(JSON.stringify({ ok: false, message: 'bad_request' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      try {
+        const { readFleetArtifact, fleetLang } = await import('./sessions/fleet-web')
+        const out = await readFleetArtifact(fleetLang(url.searchParams.get('lang')), id, path)
+        return new Response(JSON.stringify(out), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
           status: 500,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
