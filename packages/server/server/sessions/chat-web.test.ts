@@ -60,17 +60,20 @@ test('an unknown id still reports that the session left this machine, never an e
  * pane with no sentence on it. The link was never the problem; there was no reader.
  */
 test('a harness nobody has written a reader for is refused in words, and NAMED', async () => {
-  const out = await readSessionChat(hostWith('waiting', 'codex'), 'en', 'sess1')
+  const out = await readSessionChat(hostWith('waiting', 'kimi'), 'en', 'sess1')
   expect(out.turns).toEqual([])
-  expect(out.unavailable).toContain('codex')
+  expect(out.unavailable).toContain('kimi')
 })
 
 test('a harness that HAS a reader falls through to the transcript rules, not to that refusal', async () => {
-  // antigravity resolves against `brain/<conversation-id>/…`, which does not exist for this id —
-  // so it must land on the live/not-yet branch, exactly as claude does, and NOT on "no reader".
-  const out = await readSessionChat(hostWith('waiting', 'antigravity'), 'en', 'sess1')
-  expect(out.unavailable).toBeUndefined()
-  expect(out.live).toBe(true)
+  // Each of these resolves against its own store, where this id does not exist — so it must land
+  // on the live/not-yet branch, exactly as claude does, and NOT on "no reader". This test is what
+  // failed when codex gained a reader, which is the point: adding one is visible here.
+  for (const harness of ['antigravity', 'codex'] as const) {
+    const out = await readSessionChat(hostWith('waiting', harness), 'en', 'sess1')
+    expect(out.unavailable).toBeUndefined()
+    expect(out.live).toBe(true)
+  }
 })
 
 test('a row whose harness the registry has forgotten says THAT, not "we cannot read \'\'"', async () => {

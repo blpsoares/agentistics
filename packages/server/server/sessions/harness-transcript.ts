@@ -22,12 +22,13 @@
  * header for the measurement.
  */
 
-import { readFile, stat } from 'node:fs/promises'
+import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { HarnessId } from '@agentistics/core'
-import { ANTIGRAVITY_BRAIN_DIR } from '../config'
+import { ANTIGRAVITY_BRAIN_DIR, CODEX_SESSIONS_DIR } from '../config'
 import { UUID_RE } from '../git'
 import { parseAntigravityChat } from './antigravity-chat'
+import { parseCodexChat } from './codex-chat'
 import type { ChatTurn } from './chat-turn'
 import { readChatTurns, readRecentChatTurns, resolveChatTranscriptPath } from './chat-tail'
 import { readTailWindow } from './transcript-window'
@@ -91,6 +92,76 @@ const ANTIGRAVITY: HarnessTranscript = {
   },
 }
 
+
+/**
+ * Codex files its rollouts by DAY — `sessions/YYYY/MM/DD/rollout-<time>-<conversation-id>.jsonl` —
+ * and the conversation id is both the filename suffix and `session_meta.id` inside (verified: the
+ * file `rollout-2026-07-07T19-02-05-019f3e9a-…` carries `id: 019f3e9a-…`). It is the id
+ * `codex-parse.ts` keys a session by, so it is the id the registry recorded and the one
+ * `codex resume <id>` takes.
+ *
+ * The scan is three shallow `readdir`s rather than one deep walk, and both the hit and the MISS are
+ * memoized — a machine keeps a directory per day forever, so an unresolvable id must cost one scan
+ * and not one per poll. Same rule, same reason, as `resolveChatTranscriptPath`'s own cache.
+ */
+const codexPathCache = new Map<string, string | null>()
+
+/** Reset the memo. Tests only. */
+export function forgetCodexTranscriptPaths(): void {
+  codexPathCache.clear()
+}
+
+async function subdirs(dir: string): Promise<string[]> {
+  try {
+    return (await readdir(dir, { withFileTypes: true }))
+      .filter(d => d.isDirectory())
+      .map(d => d.name)
+  } catch { return [] }
+}
+
+async function scanCodexRollout(id: string, root: string): Promise<string | null> {
+  const suffix = `-${id}.jsonl`
+  for (const year of await subdirs(root)) {
+    for (const month of await subdirs(join(root, year))) {
+      for (const day of await subdirs(join(root, year, month))) {
+        const dir = join(root, year, month, day)
+        let names: string[]
+        try { names = await readdir(dir) } catch { continue }
+        const hit = names.find(n => n.startsWith('rollout-') && n.endsWith(suffix))
+        if (hit) return join(dir, hit)
+      }
+    }
+  }
+  return null
+}
+
+export async function resolveCodexTranscript(
+  ref: TranscriptRef,
+  // Overridable for tests only — see `resolveAntigravityTranscript`'s note.
+  sessionsDir: string = CODEX_SESSIONS_DIR,
+): Promise<string | null> {
+  // Codex's ids are UUIDv7; `UUID_RE` is version-agnostic, so this rejects a path fragment without
+  // rejecting the real thing.
+  if (!UUID_RE.test(ref.conversationId)) return null
+  const cached = codexPathCache.get(ref.conversationId)
+  if (cached !== undefined) return cached
+  const found = await scanCodexRollout(ref.conversationId, sessionsDir)
+  codexPathCache.set(ref.conversationId, found)
+  return found
+}
+
+const CODEX: HarnessTranscript = {
+  resolve: ref => resolveCodexTranscript(ref),
+  async read(path, max) {
+    let content: string
+    try { content = await readFile(path, 'utf-8') } catch { return [] }
+    return parseCodexChat(content.split('\n'), 'codex', max)
+  },
+  async readRecent(path, max) {
+    return readTailWindow(path, max, lines => parseCodexChat(lines, 'codex', max))
+  },
+}
+
 const CLAUDE: HarnessTranscript = {
   resolve: ref => (ref.cwd === undefined
     ? Promise.resolve(null)
@@ -102,15 +173,15 @@ const CLAUDE: HarnessTranscript = {
 /**
  * The reader for each harness, or `null` where nobody has written one.
  *
- * `null` is a statement about THIS PRODUCT, not about the harness — codex, kimi, copilot and gemini
- * all keep a readable transcript on disk (`adapters/*-parse.ts` already read every one of them for
+ * `null` is a statement about THIS PRODUCT, not about the harness — kimi, copilot and gemini all
+ * keep a readable transcript on disk (`adapters/*-parse.ts` already read every one of them for
  * metrics) and each is a reader waiting to be written. It is spelled out here rather than left to
  * a lookup miss so that adding one is a line in this table, and so the caller has something to say.
  */
 export const HARNESS_TRANSCRIPTS: Record<HarnessId, HarnessTranscript | null> = {
   claude: CLAUDE,
   antigravity: ANTIGRAVITY,
-  codex: null,
+  codex: CODEX,
   gemini: null,
   copilot: null,
   kimi: null,
