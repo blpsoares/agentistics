@@ -43,8 +43,10 @@ const DELIVER_CAPTURE_LINES = 40
  * The wait is what makes the CHECK possible at all: a pane captured the instant after `Enter` has
  * not repainted yet, so it always looks unchanged and every send would retry.
  */
-const SUBMIT_SETTLE_MS = 200
+const SUBMIT_SETTLE_MS = 120
+/** How long to keep looking for the submit to show, and how often to look. */
 const SUBMIT_SHOW_MS = 600
+const SUBMIT_POLL_MS = 60
 
 /** True when this host has the named terminfo entry (`infocmp` exits 0). Never throws. */
 async function terminfoHas(name: string): Promise<boolean> {
@@ -116,14 +118,27 @@ async function sendTextTo(id: string, text: string): Promise<boolean> {
   await sleep(SUBMIT_SETTLE_MS)
   const typedFrame = await captureFrame(id)
   if ((await tmux(sendKeysNamedArgs(id, 'Enter'))).code !== 0) return false
-  await sleep(SUBMIT_SHOW_MS)
-  if (!frameChanged(typedFrame, await captureFrame(id))) {
+  // POLLED, not slept. A fixed wait spends its whole budget on every message — measured at ~820ms
+  // per send, which a person feels on every keystroke of a conversation ("DEMORA MUITO pra enviar
+  // as mensagens"). The pane usually moves within one or two frames, so the common case now costs
+  // one poll and the budget is only spent when the submit genuinely did not show.
+  if (!(await paneMoved(id, typedFrame))) {
     // The pane did not move. That is NOT proof the submit was swallowed — measured: a screen that
     // redraws identically looks the same either way — so it buys one more return rather than a
     // verdict. An extra return on an emptied input does nothing.
     await tmux(sendKeysNamedArgs(id, 'Enter'))
   }
   return true
+}
+
+/** Did the pane change within the budget? Returns as soon as it did. */
+async function paneMoved(id: string, before: readonly string[]): Promise<boolean> {
+  const deadline = Date.now() + SUBMIT_SHOW_MS
+  for (;;) {
+    await sleep(SUBMIT_POLL_MS)
+    if (frameChanged(before, await captureFrame(id))) return true
+    if (Date.now() >= deadline) return false
+  }
 }
 
 async function captureFrame(id: string): Promise<string[]> {
