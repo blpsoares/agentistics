@@ -24,6 +24,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { asideCache, asideKey } from '../../lib/asideCache'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
   BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles, ChevronLeft, ChevronDown, ChevronRight,
@@ -57,6 +58,7 @@ import {
   galleryFileCount, galleryGroups, parseGalleryScope, parseGalleryView, producedGroups,
   type GalleryScope, type GalleryTurn, type GalleryView,
 } from '../../lib/gallery'
+import { prCaption } from '../../lib/prCaption'
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
 
@@ -141,10 +143,20 @@ export function ArtifactsAside({
   const [open, setOpen] = useState<Artifact | null>(null)
   const [tab, setTab] = useState<TabId>('files')
   /** The SUBAGENTS tab's own state — declared here because the tab BAR reads its count. */
-  const [agentsState, setAgentsState] = useState<SubagentsState | null>(null)
+  /**
+   * Seeded from `asideCache` for the same reason the Skills and PRs tabs are: closing the panel and
+   * coming back is not a reason to re-read anything. What a session's subagents DID is a fact about
+   * the session, not about this mount — and this is the most expensive tab of the lot, since the
+   * list costs a full read of the parent transcript.
+   */
+  const [agentsState, setAgentsState] = useState<SubagentsState | null>(
+    () => asideCache.read<SubagentsState>(asideKey(sessionId, 'subagents')).value ?? null,
+  )
   const [openAgent, setOpenAgent] = useState<SubagentRow | null>(null)
   /** The MCP tab's own state — declared here because the tab BAR reads its count. */
-  const [mcp, setMcp] = useState<McpListPayload | null>(null)
+  const [mcp, setMcp] = useState<McpListPayload | null>(
+    () => asideCache.read<McpListPayload>(asideKey(sessionId, 'mcps', cwd ?? '')).value ?? null,
+  )
   const [mcpError, setMcpError] = useState<string | null>(null)
   const [mcpNonce, setMcpNonce] = useState(0)
 
@@ -216,8 +228,15 @@ export function ArtifactsAside({
    * `null` is "not read yet" and `[]` is "none", which are different sentences on screen — the same
    * distinction the rest of this panel keeps.
    */
-  const [skills, setSkills] = useState<SkillEntry[] | null>(null)
-  const [skillsNote, setSkillsNote] = useState<string | null>(null)
+  // Seeded from the cache so a panel reopened on this session DRAWS its list immediately. `null`
+  // still means "not read yet" and is the only thing that makes a tab wait — see `asideCache.ts`.
+  type SkillsAnswer = { skills: SkillEntry[]; note: string | null }
+  const [skills, setSkills] = useState<SkillEntry[] | null>(
+    () => asideCache.read<SkillsAnswer>(asideKey(sessionId, 'skills')).value?.skills ?? null,
+  )
+  const [skillsNote, setSkillsNote] = useState<string | null>(
+    () => asideCache.read<SkillsAnswer>(asideKey(sessionId, 'skills')).value?.note ?? null,
+  )
   const [skillQuery, setSkillQuery] = useState('')
   /** The skill being READ, and its file. `null` is the list; a name is the detail view. */
   const [openSkill, setOpenSkill] = useState<string | null>(null)
@@ -235,14 +254,21 @@ export function ArtifactsAside({
   useEffect(() => {
     if (openSkill === null) { setSkillBody(null); return }
     let alive = true
-    setSkillBody(null)
+    // A skill's own file does not change while the panel is open, and reopening the same one used
+    // to re-read it from disk every time. Keyed by the skill NAME as well as the session.
+    const key = asideKey(sessionId, 'skill', openSkill)
+    const hit = asideCache.read<typeof skillBody>(key)
+    setSkillBody(hit.value ?? null)
+    if (hit.value && !hit.stale) return
     fetch(`/api/fleet/skill?id=${encodeURIComponent(sessionId)}&name=${encodeURIComponent(openSkill)}&lang=${pt ? 'pt' : 'en'}`)
       .then(r => r.json())
       .then((d: { ok?: boolean; text?: string; truncated?: boolean; message?: string }) => {
+        const answer = d?.ok
+          ? { ok: true as const, text: d.text ?? '', truncated: d.truncated === true }
+          : { ok: false as const, message: d?.message ?? (pt ? 'Não foi possível ler.' : 'Could not read it.') }
+        asideCache.write(key, answer)
         if (!alive) return
-        setSkillBody(d?.ok
-          ? { ok: true, text: d.text ?? '', truncated: d.truncated === true }
-          : { ok: false, message: d?.message ?? (pt ? 'Não foi possível ler.' : 'Could not read it.') })
+        setSkillBody(answer)
       })
       .catch(() => {
         if (alive) setSkillBody({ ok: false, message: pt ? 'Não foi possível ler.' : 'Could not read it.' })
@@ -254,32 +280,45 @@ export function ArtifactsAside({
     [skills, skillQuery, pt],
   )
   useEffect(() => {
-    if (tab !== 'skills' || skills !== null) return
+    if (tab !== 'skills') return
+    // The cached list is already on screen; this refreshes BEHIND it and only when it has aged out.
+    // A fetch on every mount is the reload being fixed; never fetching would pin the list forever.
+    const key = asideKey(sessionId, 'skills')
+    const hit = asideCache.read<SkillsAnswer>(key)
+    if (hit.value && !hit.stale) return
     let alive = true
     fetch(`/api/fleet/skills?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
       .then(r => (r.ok ? r.json() : null))
       .then((d: { skills?: SkillEntry[]; reason?: string } | null) => {
+        const answer: SkillsAnswer = { skills: d?.skills ?? [], note: d?.reason ?? null }
+        asideCache.write(key, answer)
         if (!alive) return
-        setSkills(d?.skills ?? [])
-        setSkillsNote(d?.reason ?? null)
+        setSkills(answer.skills)
+        setSkillsNote(answer.note)
       })
-      .catch(() => { if (alive) setSkills([]) })
+      .catch(() => { if (alive) setSkills(s => s ?? []) })
     return () => { alive = false }
   }, [tab, skills, sessionId, pt])
 
-  /** The repository's pull requests, read once when the tab is opened. See `github-prs.ts`. */
-  const [prs, setPrs] = useState<{
+  /** The repository's pull requests. Read when the tab opens, then cached — see `github-prs.ts`. */
+  type PrAnswer = {
     pulls: { number: number; title: string; url: string; state: string; draft: boolean; review?: string; branch: string }[]
     unavailable?: string
     detail?: string
-  } | null>(null)
+    /** The cap the server read with — see `github-prs.ts`'s `PR_LIMIT`. Never restated here. */
+    limit?: number
+  }
+  const [prs, setPrs] = useState<PrAnswer | null>(() => asideCache.read<PrAnswer>(asideKey(sessionId, 'prs')).value ?? null)
   useEffect(() => {
-    if (tab !== 'prs' || prs !== null) return
+    if (tab !== 'prs') return
+    const key = asideKey(sessionId, 'prs')
+    const hit = asideCache.read<PrAnswer>(key)
+    if (hit.value && !hit.stale) return
     let alive = true
     fetch(`/api/fleet/prs?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
       .then(r => r.json())
-      .then(d => { if (alive) setPrs(d) })
-      .catch(() => { if (alive) setPrs({ pulls: [], unavailable: 'failed' }) })
+      .then((d: PrAnswer) => { asideCache.write(key, d); if (alive) setPrs(d) })
+      .catch(() => { if (alive) setPrs(p => p ?? { pulls: [], unavailable: 'failed' }) })
     return () => { alive = false }
   }, [tab, prs, sessionId, pt])
 
@@ -423,33 +462,51 @@ export function ArtifactsAside({
   useEffect(() => {
     // The tab is what asks. Nothing is fetched for a panel nobody opened onto it.
     if (tab !== 'agents') return
+    const key = asideKey(sessionId, 'subagents')
+    const hit = asideCache.read<SubagentsState>(key)
+    // A fresh answer with nothing RUNNING behind it cannot change; anything else is refreshed, and
+    // a stale answer stays on screen while it is (`AsideRead.stale`).
+    if (hit.value && !hit.stale && subagentsPollMs(hit.value) === null) return
     let alive = true
     let timer: ReturnType<typeof setTimeout> | undefined
-    let first = true
+    // Only a tab with NOTHING to draw waits. With a cached answer on screen the refresh happens
+    // behind it — a spinner over an answer we already have is the reload the cache exists to remove.
+    let first = hit.value === undefined
     const read = async () => {
       if (first) setAgentsState({ phase: 'loading' })
       try {
         const res = await fetch(`/api/fleet/subagents?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
         if (!alive) return
         if (!res.ok) {
-          setAgentsState({ phase: 'failed', message: pt ? 'Não foi possível ler os subagentes.' : 'The subagents could not be read.' })
+          setAgentsState(prev => prev ?? { phase: 'failed', message: pt ? 'Não foi possível ler os subagentes.' : 'The subagents could not be read.' })
           return
         }
         const next = subagentsStateOf(await res.json() as SubagentsPayload)
+        asideCache.write(key, next)
         if (!alive) return
         setAgentsState(next)
         const wait = subagentsPollMs(next)
         if (wait !== null) timer = setTimeout(read, wait)
       } catch {
-        if (alive) setAgentsState({ phase: 'failed', message: pt ? 'Não foi possível ler os subagentes.' : 'The subagents could not be read.' })
+        if (alive) setAgentsState(prev => prev ?? { phase: 'failed', message: pt ? 'Não foi possível ler os subagentes.' : 'The subagents could not be read.' })
       } finally { first = false }
     }
     void read()
     return () => { alive = false; if (timer) clearTimeout(timer) }
   }, [tab, sessionId, pt])
 
-  /** A different session is a different fleet of subagents; nothing carries over. */
-  useEffect(() => { setAgentsState(null); setOpenAgent(null) }, [sessionId])
+  /**
+   * A different session is a different fleet of subagents — but it may be one this panel already
+   * read. Re-SEED from the cache rather than blanking: a hit here is the difference between coming
+   * back to an answer and coming back to a spinner, which is the whole point of `asideCache`.
+   */
+  useEffect(() => {
+    setAgentsState(asideCache.read<SubagentsState>(asideKey(sessionId, 'subagents')).value ?? null)
+    setOpenAgent(null)
+    setMcp(asideCache.read<McpListPayload>(asideKey(sessionId, 'mcps', cwd ?? '')).value ?? null)
+    setMcpError(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, cwd])
 
   const agentsBody = (): React.ReactNode => {
     // One open agent replaces the list, exactly as an open FILE does — 440px cannot hold a list and
@@ -492,6 +549,13 @@ export function ArtifactsAside({
    */
   useEffect(() => {
     if (tab !== 'mcps') return
+    // The DIRECTORY is part of the key: the `local` and `project` scopes are read against it, so
+    // two sessions in different repositories have genuinely different answers.
+    const key = asideKey(sessionId, 'mcps', cwd ?? '')
+    const hit = asideCache.read<McpListPayload>(key)
+    // Never skipped on a fresh hit alone: a running MCP server can stop between two openings, and
+    // `mcpNonce` — bumped by a write — must always re-read. The TTL is what bounds it.
+    if (hit.value && !hit.stale && mcpNonce === 0) return
     let alive = true
     const read = async () => {
       try {
@@ -508,14 +572,16 @@ export function ArtifactsAside({
           return
         }
         setMcpError(null)
-        setMcp(await res.json() as McpListPayload)
+        const payload = await res.json() as McpListPayload
+        asideCache.write(key, payload)
+        if (alive) setMcp(payload)
       } catch {
         if (alive) setMcpError(pt ? 'Não foi possível ler os MCPs.' : 'The MCP servers could not be read.')
       }
     }
     void read()
     return () => { alive = false }
-  }, [tab, cwd, pt, mcpNonce])
+  }, [tab, sessionId, cwd, pt, mcpNonce])
 
   const mcpBody = (): React.ReactNode => (
     <McpTab
@@ -862,7 +928,11 @@ export function ArtifactsAside({
       ) : prs.pulls.length === 0 ? (
         <Note text={pt ? 'Nenhum pull request neste repositório.' : 'No pull requests in this repository.'} />
       ) : (
-        prs.pulls.map(pr => (
+        <>
+          <p style={{
+            margin: '0 0 8px', fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)',
+          }}>{prCaption({ shown: prs.pulls.length, limit: prs.limit, lang: pt ? 'pt' : 'en' })}</p>
+          {prs.pulls.map(pr => (
           <a
             key={pr.number}
             href={pr.url}
@@ -893,7 +963,8 @@ export function ArtifactsAside({
               }}>{pr.branch}</span>
             )}
           </a>
-        ))
+          ))}
+        </>
       )}
     </div>
   )

@@ -60,6 +60,8 @@ export interface FleetRow {
   task?: string
   note?: string
   model?: string
+  /** The reasoning effort this session was started with. Absent = the harness's own default. */
+  effort?: string
   conversationId?: string
   approvalLines?: string[]
   dialogOptions?: { number: number; label: string; selected?: boolean }[]

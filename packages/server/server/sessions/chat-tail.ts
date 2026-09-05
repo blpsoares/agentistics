@@ -577,6 +577,28 @@ async function readTurnsFromTail(
  * on mtime would be a cache that misses every time by construction while holding whole transcripts
  * in memory.
  */
+/**
+ * How many times this conversation has been COMPACTED.
+ *
+ * The harness DECLARES it (`isCompactSummary: true` on the entry it writes), so this is a count of
+ * something stated rather than a heuristic — the same field `classifyUserEntry` uses to keep a
+ * compaction summary out of the chat as a message nobody sent.
+ *
+ * Over the WHOLE file, never the chat window: it answers "how much of this conversation has already
+ * been thrown away", and counting only the part still on screen would answer it with the one number
+ * that is always too low. Measured on a real 39 MB transcript: 70 ms.
+ *
+ * A file that cannot be read yields `null`, never `0` — "no compactions" and "we could not look"
+ * are different facts, and a confident zero here would read as a fresh conversation.
+ */
+export async function countCompactions(path: string): Promise<number | null> {
+  let content: string
+  try { content = await readFile(path, 'utf-8') } catch { return null }
+  let n = 0
+  for (const line of content.split('\n')) if (line.includes('"isCompactSummary":true')) n++
+  return n
+}
+
 export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]> {
   return (await readChatWindow(path, max)).turns
 }

@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { asideCache, asideKey } from '../../lib/asideCache'
 import { BarChart3, X } from 'lucide-react'
 import { fmt, fmtCost, type HarnessId, type SessionMeta } from '@agentistics/core'
 import { HARNESS_LABELS } from '../../lib/harness'
@@ -28,13 +29,47 @@ export interface SessionStatsMenuProps {
   lang: 'pt' | 'en'
   currency: 'USD' | 'BRL'
   brlRate: number
+  /**
+   * The model and effort this session was STARTED with, off the fleet row.
+   *
+   * Deliberately separate from `SessionStats.model`, which is what the STORE observed the
+   * conversation using. They usually agree and are not the same claim: one is what agentop asked
+   * for, the other what the transcript recorded. Absent means no flag was passed and the harness's
+   * own default is in force, which the card says in words.
+   */
+  startedModel?: string
+  startedEffort?: string
 }
 
 export function SessionStatsMenu({
-  harness, sessionId, meta, lang, currency, brlRate,
+  harness, sessionId, meta, lang, currency, brlRate, startedModel, startedEffort,
 }: SessionStatsMenuProps) {
   const pt = lang === 'pt'
   const [open, setOpen] = useState(false)
+
+  /**
+   * How many times this conversation has been COMPACTED — read only when the card is opened, and
+   * cached, because it is a scan of the whole transcript (70 ms on a real 39 MB one).
+   *
+   * It belongs beside the context gauge: the gauge says how full THIS window is, the count says how
+   * many windows came before it. Absent, never zero, whenever it could not be established.
+   */
+  type Facts = { compactions?: number; unavailable?: string }
+  const factsKey = asideKey(sessionId, 'conversation')
+  const [facts, setFacts] = useState<Facts | null>(
+    () => asideCache.read<Facts>(factsKey).value ?? null,
+  )
+  useEffect(() => {
+    if (!open) return
+    const hit = asideCache.read<Facts>(factsKey)
+    if (hit.value && !hit.stale) { setFacts(hit.value); return }
+    let alive = true
+    fetch(`/api/fleet/conversation?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
+      .then(r => r.json())
+      .then((d: Facts) => { asideCache.write(factsKey, d); if (alive) setFacts(d) })
+      .catch(() => { if (alive) setFacts(f => f ?? { unavailable: pt ? 'Não foi possível ler.' : 'Could not read it.' }) })
+    return () => { alive = false }
+  }, [open, factsKey, sessionId, pt])
   const boxRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -107,6 +142,31 @@ export function SessionStatsMenu({
               }}
             ><X size={13} /></button>
           </div>
+
+          {/* HOW THIS SESSION IS RUNNING — before the numbers, because it is what the numbers are
+              OF. `model` has two sources and they are not the same claim: what agentop was asked to
+              start (the row) and what the transcript recorded (the store). The row wins when it has
+              one, and an absent flag is said in words — a blank cell would read as "none". */}
+          <Block title={pt ? 'Como está rodando' : 'How it is running'}>
+            <Line
+              k={pt ? 'Modelo' : 'Model'}
+              v={startedModel ?? s.model ?? (pt ? 'padrão do harness' : 'the harness default')}
+            />
+            <Line
+              k={pt ? 'Esforço' : 'Effort'}
+              v={startedEffort ?? (pt ? 'padrão do harness' : 'the harness default')}
+            />
+            {/* A count of what has already been thrown away, beside the gauge of what is left. */}
+            <Line
+              k={pt ? 'Compactações' : 'Compactions'}
+              v={facts?.compactions !== undefined
+                ? fmt(facts.compactions)
+                : facts === null ? '…' : '—'}
+            />
+            {facts?.compactions === undefined && facts?.unavailable && (
+              <Absent text={facts.unavailable} />
+            )}
+          </Block>
 
           {/* CONTEXT — a bar, and the bar SATURATES while the label keeps counting. A session can
               genuinely exceed the documented window, and a clamped label would hide exactly that. */}

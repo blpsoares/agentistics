@@ -673,6 +673,14 @@ export interface ControlSession {
    */
   background?: boolean
   /**
+   * The reasoning effort this session was STARTED with, when one was asked for.
+   *
+   * Recorded at spawn, like `model` beside it — it is what agentop passed, not something read back
+   * off the running CLI, and absent means no flag was passed and the harness's own default is in
+   * force. A blank would read as "none", which is a different claim.
+   */
+  effort?: string
+  /**
    * Whether this row can be acted on at all.
    *
    * False for an external session, which is listed because "the fleet in one place" is the point,
