@@ -79,6 +79,16 @@ export interface FleetActionResponse {
   ok: boolean
   /** Already localized, and always present: a refusal that says nothing is a broken control. */
   message: string
+  /**
+   * The id of the session an action CREATED, when it created one.
+   *
+   * `resume` is the only one today. A reopen mints a new managed row and retires the row it was
+   * asked about, so a caller that stays where it was is looking at a dead session — which is
+   * exactly how "the reopen did nothing" was reported, about an action the server had performed
+   * correctly. The spawn is the only place that knows the id; asking the registry afterwards would
+   * be a guess between two rows of the same conversation.
+   */
+  id?: string
 }
 
 /**
@@ -258,7 +268,10 @@ export async function runFleetAction(
         ...(row.actionable ? { replaces: row.id } : {}),
         attach: false,
       })
-      return { ok: out.ok, message: out.message }
+      // THE NEW ID TRAVELS. A reopen mints a new managed row and retires the old one, so a caller
+      // that stays on the id it asked about is looking at a dead session — which is exactly how
+      // "reopen does nothing" was reported, on an action the server had performed correctly.
+      return { ok: out.ok, message: out.message, ...(out.id ? { id: out.id } : {}) }
     }
   }
 }

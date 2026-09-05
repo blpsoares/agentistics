@@ -470,6 +470,7 @@ export default function SessionsPage() {
                 lang={pt ? 'pt' : 'en'}
                 act={act}
                 onGone={() => navigate('/sessions')}
+                onOpened={id => navigate(`/sessions/${id}`)}
               />
             )}
           </div>

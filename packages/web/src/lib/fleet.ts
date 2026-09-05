@@ -117,7 +117,7 @@ export interface FleetState {
     action: FleetActionId
     text?: string
     choice?: number
-  }) => Promise<{ ok: boolean; message: string }>
+  }) => Promise<{ ok: boolean; message: string; id?: string }>
 }
 
 /**

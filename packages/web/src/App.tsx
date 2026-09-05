@@ -2798,6 +2798,8 @@ export default function AppLayout() {
           lang={lang === 'pt' ? 'pt' : 'en'}
           act={headerFleetAct}
           onGone={() => navigate('/sessions')}
+          // A reopen mints a NEW session; going to it is what makes the verb visibly do something.
+          onOpened={id => navigate(`/sessions/${id}`)}
         />
       )}
     </div>

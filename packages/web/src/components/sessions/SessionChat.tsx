@@ -69,7 +69,7 @@ export interface SessionChatProps {
   row?: FleetRow
   lang: 'pt' | 'en'
   act: (req: { id: string; action: FleetActionId; text?: string; choice?: number })
-    => Promise<{ ok: boolean; message: string }>
+    => Promise<{ ok: boolean; message: string; id?: string }>
   /**
    * The files this session has touched, reported up as the conversation is read.
    *

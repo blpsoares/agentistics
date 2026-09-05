@@ -38,7 +38,7 @@ export interface SessionPanelProps {
   lang: 'pt' | 'en'
   theme: 'dark' | 'light'
   act: (req: { id: string; action: FleetActionId; text?: string; choice?: number })
-    => Promise<{ ok: boolean; message: string }>
+    => Promise<{ ok: boolean; message: string; id?: string }>
   authorName?: string
   /** Called after a verb that removes the row — the panel has nothing left to show. */
   onGone?: () => void

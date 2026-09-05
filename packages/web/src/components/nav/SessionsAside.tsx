@@ -87,7 +87,7 @@ export interface SessionsAsideProps {
    */
   rowsById?: Map<string, { verbs: RowVerb[] }>
   /** Performs a verb. Absent exactly where `rowsById` is absent. */
-  act?: (req: { id: string; action: string; text?: string }) => Promise<{ ok: boolean; message: string }>
+  act?: (req: { id: string; action: string; text?: string }) => Promise<{ ok: boolean; message: string; id?: string }>
 }
 
 /** The colour a state is said in. `running` is its own token, not `success`, which reads teal. */
