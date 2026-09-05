@@ -26,7 +26,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
-  BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles, ChevronLeft,
+  BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles, ChevronLeft, ChevronDown, ChevronRight,
+  ExternalLink,
 } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
 import {
@@ -38,6 +39,10 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { agoLabel, isDoc, liveEvents, writeStatus, type LiveEvent, type LiveTurn, type WriteStatus } from '../../lib/artifactTabs'
+import {
+  stepNotice, stepOpenable, stepPollMs, stepUrl,
+  type StepPayload, type StepState,
+} from '../../lib/stepDetail'
 import {
   galleryFileCount, galleryGroups, parseGalleryScope, parseGalleryView, producedGroups,
   type GalleryScope, type GalleryTurn, type GalleryView,
@@ -355,7 +360,7 @@ export function ArtifactsAside({
         </p>
         {feed.map((e, i) => (
           <EventRow
-            key={i} e={e} pt={pt} now={now}
+            key={i} e={e} pt={pt} now={now} sessionId={sessionId}
             // A WROTE row is a link to the file it names. Only when that file is actually in the
             // Files list: the feed shows every write the transcript recorded, while Files shows the
             // ones still readable on disk, and offering to open a deleted file would be a row whose
@@ -788,9 +793,82 @@ function Row({ a, pt, fact, onOpen }: {
  * three kinds that carry a path or a command — those are read character by character — and left in
  * the reading face for the two that carry prose.
  */
-function EventRow({ e, pt, now, onOpen, status }: {
-  e: LiveEvent; pt: boolean; now: number; onOpen?: () => void; status?: WriteStatus
+/**
+ * ONE STEP, opened.
+ *
+ * `local` needs nothing (the text is already in the payload — `stepOpenable`'s rule 2); `remote`
+ * asks `/api/fleet/step`, and asks AGAIN only while the server says the step is still running,
+ * which is the whole of "expanding in real time". Every rule here is in `lib/stepDetail.ts`.
+ */
+function useStepDetail(sessionId: string, e: LiveEvent, open: boolean, pt: boolean): StepState | null {
+  const kind = stepOpenable(e)
+  const [state, setState] = useState<StepState | null>(null)
+
+  useEffect(() => {
+    if (!open || kind === null) { setState(null); return }
+    if (kind === 'local') { setState({ phase: 'local', text: e.full ?? '' }); return }
+
+    let alive = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // The FIRST read shows a spinner; every later one replaces the content in place, so a running
+    // step's pane does not blink back to "loading" twice a second while somebody is reading it.
+    let first = true
+
+    const read = async () => {
+      if (first) setState({ phase: 'loading' })
+      try {
+        const res = await fetch(stepUrl(sessionId, e.ref!, pt ? 'pt' : 'en'))
+        if (!alive) return
+        if (!res.ok) {
+          setState({ phase: 'failed', message: pt ? 'Não foi possível abrir este passo.' : 'This step could not be opened.' })
+          return
+        }
+        const body = await res.json() as StepPayload
+        if (!alive) return
+        const next: StepState = body.ok ? { phase: 'ready', step: body } : { phase: 'failed', message: body.message }
+        setState(next)
+        const wait = stepPollMs(next)
+        if (wait !== null) timer = setTimeout(read, wait)
+      } catch {
+        if (alive) setState({ phase: 'failed', message: pt ? 'Não foi possível abrir este passo.' : 'This step could not be opened.' })
+      } finally {
+        first = false
+      }
+    }
+    void read()
+    return () => { alive = false; if (timer) clearTimeout(timer) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, kind, sessionId, e.ref, e.full, pt])
+
+  return state
+}
+
+/** A block of the session's own bytes — a command, its output, a written file. Scrolls itself. */
+function StepBlock({ label, text, tone }: { label: string; text: string; tone?: 'error' }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{
+        fontSize: 9, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase',
+        color: tone === 'error' ? '#ef4444' : 'var(--text-tertiary)', marginBottom: 3,
+      }}>{label}</div>
+      {/* Wide output scrolls INSIDE its own box; the panel body must never scroll sideways. */}
+      <pre style={{
+        margin: 0, padding: '6px 8px', borderRadius: 6, maxHeight: 260, overflow: 'auto',
+        background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+        fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 10.5, lineHeight: 1.5,
+        color: 'var(--text-secondary)', whiteSpace: 'pre', tabSize: 2,
+      }}>{text}</pre>
+    </div>
+  )
+}
+
+function EventRow({ e, pt, now, onOpen, status, sessionId }: {
+  e: LiveEvent; pt: boolean; now: number; onOpen?: () => void; status?: WriteStatus; sessionId: string
 }) {
+  const [open, setOpen] = useState(false)
+  const openable = stepOpenable(e)
+  const detail = useStepDetail(sessionId, e, open, pt)
+  const notice = detail ? stepNotice(detail, pt) : null
   const meta: Record<LiveEvent['kind'], { icon: React.ReactNode; color: string; label: string }> = {
     wrote: { icon: <FileEdit size={11} />, color: 'var(--anthropic-orange)', label: pt ? 'escreveu' : 'wrote' },
     read: { icon: <Eye size={11} />, color: 'var(--text-tertiary)', label: pt ? 'leu' : 'read' },
@@ -800,22 +878,41 @@ function EventRow({ e, pt, now, onOpen, status }: {
   }
   const m = meta[e.kind]
   const mono = e.kind === 'wrote' || e.kind === 'read' || e.kind === 'ran'
-  const Tag = onOpen ? 'button' : 'div'
+  /**
+   * THE ROW'S OWN CLICK EXPANDS IT; opening the FILE is a separate control on the right.
+   *
+   * The row used to be a link to the file, and expanding is now what people actually asked the feed
+   * for ("as linhas de execução devem ser clicáveis e EXPANDIR abaixo delas, em tempo real"). Both
+   * are kept, and they are two controls rather than one that guesses: on a `wrote` row of a shell
+   * command, "show me what ran" and "take me to the file" are different questions and the row
+   * cannot know which one was meant.
+   */
+  const Tag = openable ? 'button' : 'div'
   return (
+    <div style={{ borderRadius: 7, background: open ? 'var(--bg-elevated)' : 'transparent' }}>
+    <div style={{ display: 'flex', alignItems: 'flex-start' }}>
     <Tag
-      {...(onOpen ? { onClick: onOpen, title: e.text } : {})}
+      {...(openable ? {
+        onClick: () => setOpen(v => !v),
+        title: e.text,
+        'aria-expanded': open,
+      } : {})}
       style={{
         display: 'flex', alignItems: 'flex-start', gap: 7, padding: '5px 8px',
         opacity: e.live ? 1 : 0.92,
         width: '100%', textAlign: 'left', border: 'none', background: 'transparent',
-        borderRadius: 7, fontFamily: 'inherit',
-        cursor: onOpen ? 'pointer' : 'default',
+        borderRadius: 7, fontFamily: 'inherit', minWidth: 0,
+        cursor: openable ? 'pointer' : 'default',
       }}
-      {...(onOpen ? {
+      {...(openable ? {
         onMouseEnter: (ev: React.MouseEvent<HTMLElement>) => { ev.currentTarget.style.background = 'var(--bg-elevated)' },
         onMouseLeave: (ev: React.MouseEvent<HTMLElement>) => { ev.currentTarget.style.background = 'transparent' },
       } : {})}
     >
+      {/* The chevron is drawn ONLY where the row opens — rule 1 of `stepDetail.ts`. */}
+      <span style={{ color: 'var(--text-tertiary)', paddingTop: 2, flexShrink: 0, width: 11 }}>
+        {openable ? (open ? <ChevronDown size={11} /> : <ChevronRight size={11} />) : null}
+      </span>
       <span style={{ color: m.color, paddingTop: 2, flexShrink: 0 }}>{m.icon}</span>
       <span style={{ minWidth: 0, flex: 1 }}>
         <span style={{
@@ -853,6 +950,63 @@ function EventRow({ e, pt, now, onOpen, status }: {
         }}>{agoLabel(e.at, now, pt)}</span>
       )}
     </Tag>
+    {/* Take me to the FILE — the other question this row can answer, and only where the file is
+        actually in the Files list. */}
+    {onOpen && (
+      <button
+        onClick={onOpen}
+        title={pt ? 'Abrir o arquivo' : 'Open the file'}
+        aria-label={pt ? 'Abrir o arquivo' : 'Open the file'}
+        style={{
+          flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 24, height: 24, margin: '4px 4px 0 0', borderRadius: 6, padding: 0,
+          border: '1px solid var(--border-subtle)', background: 'transparent',
+          color: 'var(--text-tertiary)', cursor: 'pointer',
+        }}
+      >
+        <ExternalLink size={11} />
+      </button>
+    )}
+    </div>
+    {open && (
+      <div style={{ padding: '0 8px 8px 26px', display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+        {detail === null || detail.phase === 'loading' ? (
+          <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+            {pt ? 'Abrindo o passo…' : 'Opening the step…'}
+          </span>
+        ) : detail.phase === 'failed' ? (
+          // The server's OWN sentence, verbatim: "I cannot open this one" and "there is nothing
+          // here" are different facts and this panel does not reword either.
+          <span role="status" style={{ fontSize: 10.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+            {detail.message}
+          </span>
+        ) : detail.phase === 'local' ? (
+          <StepBlock label={pt ? 'raciocínio' : 'reasoning'} text={detail.text} />
+        ) : (
+          <>
+            <StepBlock label={detail.step.name} text={detail.step.input} />
+            {detail.step.output !== null && detail.step.output !== '' && (
+              <StepBlock
+                label={detail.step.isError ? (pt ? 'erro' : 'error') : (pt ? 'saída' : 'output')}
+                text={detail.step.output}
+                {...(detail.step.isError ? { tone: 'error' as const } : {})}
+              />
+            )}
+            {/* A step that produced nothing SAYS so — an empty pane and "it printed nothing" are
+                different facts, and only one of them is about the command. */}
+            {!detail.step.running && (detail.step.output === null || detail.step.output === '') && (
+              <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                {pt ? 'Este passo não imprimiu nada.' : 'This step printed nothing.'}
+              </span>
+            )}
+          </>
+        )}
+        {notice && (
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{notice}</span>
+        )}
+      </div>
+    )}
+    </div>
   )
 }
 

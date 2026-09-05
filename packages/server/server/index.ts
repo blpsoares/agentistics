@@ -1401,6 +1401,35 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
+    // ONE STEP of that conversation, opened up — the Live feed's rows expand into the command that
+    // ran and what it printed, WHILE it runs. Guarded by the `/api/fleet` PREFIX in
+    // `capability-guard.ts` (localShell) and 404'd on a central with the rest of `/api/fleet*`, both
+    // above: it needs no new entry, which is the point of the prefix.
+    if (url.pathname === '/api/fleet/step' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      const ref = url.searchParams.get('ref')
+      if (!id || !ref) {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      try {
+        const { readSessionStep } = await import('./sessions/step-web')
+        const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
+        const lang = fleetLang(url.searchParams.get('lang'))
+        const payload = await readSessionStep(await hostForFleet(lang), lang, id, ref)
+        return new Response(JSON.stringify(payload), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify(safeError(err, { verbose: PROFILE === 'local' }).body), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     // One hosted session's conversation, for the workspace's chat view. Claude only in practice —
     // the module refuses in words wherever the live-session -> conversation link is not exact.
     if (url.pathname === '/api/fleet/chat' && req.method === 'GET') {
