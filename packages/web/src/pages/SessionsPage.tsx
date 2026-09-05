@@ -121,6 +121,8 @@ export default function SessionsPage() {
   const [artifacts, setArtifacts] = useState<readonly Artifact[]>([])
   const [artifactsLoading, setArtifactsLoading] = useState(true)
   const [artifactsUnavailable, setArtifactsUnavailable] = useState<string | undefined>(undefined)
+  /** The conversation behind these lists is the END of a longer one — see `chat-web.ts`'s `older`. */
+  const [artifactsOlder, setArtifactsOlder] = useState<string | undefined>(undefined)
   const [artifactsUnlisted, setArtifactsUnlisted] = useState(false)
   /** The conversation's turns, for the LIVE tab — the same ones the chat renders. */
   const [artifactTurns, setArtifactTurns] = useState<readonly LiveTurn[]>([])
@@ -186,12 +188,13 @@ export default function SessionsPage() {
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [artWidth])
   const art = useArtifacts()
-  const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; unlisted: boolean; turns: readonly LiveTurn[] }) => {
+  const onArtifacts = useCallback((a: { artifacts: Artifact[]; loading: boolean; unavailable?: string; older?: string; unlisted: boolean; turns: readonly LiveTurn[] }) => {
     setArtifacts(a.artifacts)
     setArtifactsUnlisted(a.unlisted)
     setArtifactTurns(a.turns)
     setArtifactsLoading(a.loading)
     setArtifactsUnavailable(a.unavailable)
+    setArtifactsOlder(a.older)
     if (selected) setArtifactCount(selected.id, a.artifacts.length)
   }, [selected])
 
@@ -359,6 +362,7 @@ export default function SessionsPage() {
       facts={onDisk}
       loading={artifactsLoading}
       {...(artifactsUnavailable ? { unavailable: artifactsUnavailable } : {})}
+      {...(artifactsOlder ? { older: artifactsOlder } : {})}
       unlistedWrites={artifactsUnlisted}
       turns={artifactTurns}
       tabRequest={art.tabRequest}

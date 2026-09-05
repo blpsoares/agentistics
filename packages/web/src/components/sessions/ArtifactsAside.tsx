@@ -27,7 +27,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
   BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles, ChevronLeft, ChevronDown, ChevronRight,
-  ExternalLink, Bot, Plug, Plus, Trash2,
+  ExternalLink, Bot, Plug, Plus, Trash2, GitPullRequest,
 } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
 import {
@@ -60,7 +60,7 @@ import {
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
 
-type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills' | 'agents' | 'mcps'
+type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills' | 'agents' | 'mcps' | 'prs'
 
 /** Where the view toggle is remembered. One key, read and written in one place. */
 const GALLERY_VIEW_KEY = 'agentistics:gallery-view'
@@ -95,6 +95,8 @@ export interface ArtifactsAsideProps {
    * the server; shown verbatim so this panel and the chat give one answer.
    */
   unavailable?: string
+  /** Already-localized: the conversation behind these lists is a WINDOW onto a longer one. */
+  older?: string
   onClose: () => void
   /**
    * The session wrote through commands whose paths cannot be read off the command line.
@@ -131,7 +133,7 @@ function KindIcon({ kind }: { kind: Artifact['kind'] }) {
 }
 
 export function ArtifactsAside({
-  sessionId, cwd, lang, artifacts, loading, unavailable, unlistedWrites, turns, facts, onClose,
+  sessionId, cwd, lang, artifacts, loading, unavailable, older, unlistedWrites, turns, facts, onClose,
   tabRequest,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
@@ -158,7 +160,8 @@ export function ArtifactsAside({
   const askedAt = tabRequest?.at
   useEffect(() => {
     const t = tabRequest?.tab
-    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills' || t === 'agents' || t === 'mcps') setTab(t)
+    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills'
+      || t === 'agents' || t === 'mcps' || t === 'prs') setTab(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askedAt])
 
@@ -264,6 +267,22 @@ export function ArtifactsAside({
     return () => { alive = false }
   }, [tab, skills, sessionId, pt])
 
+  /** The repository's pull requests, read once when the tab is opened. See `github-prs.ts`. */
+  const [prs, setPrs] = useState<{
+    pulls: { number: number; title: string; url: string; state: string; draft: boolean; review?: string; branch: string }[]
+    unavailable?: string
+    detail?: string
+  } | null>(null)
+  useEffect(() => {
+    if (tab !== 'prs' || prs !== null) return
+    let alive = true
+    fetch(`/api/fleet/prs?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
+      .then(r => r.json())
+      .then(d => { if (alive) setPrs(d) })
+      .catch(() => { if (alive) setPrs({ pulls: [], unavailable: 'failed' }) })
+    return () => { alive = false }
+  }, [tab, prs, sessionId, pt])
+
   const feedRef = useRef<HTMLDivElement>(null)
   /** A clock, so "3m ago" ages while the panel is open rather than freezing at its first render. */
   const [now, setNow] = useState(() => Date.now())
@@ -339,6 +358,7 @@ export function ArtifactsAside({
       count: subagentCount(agentsState),
     },
     { id: 'mcps', label: 'MCPs', icon: <Plug size={12} />, count: mcp?.servers.length ?? null },
+    { id: 'prs', label: 'PRs', icon: <GitPullRequest size={12} />, count: prs?.pulls.length ?? 0 },
   ]
 
   const tabBar = (
@@ -800,6 +820,85 @@ export function ArtifactsAside({
   }
 
   /**
+   * The repository's pull requests.
+   *
+   * A READ, and it says so by having no verb: this product runs assistants that open and merge PRs
+   * when a person asks them to, and a merge button here would be a different feature with a
+   * different consent question. Every row is a link out.
+   *
+   * The four absences are four sentences — `gh` missing, `gh` not logged in, no GitHub repository
+   * here, and it ran and failed. A single "no pull requests" would send a reader to fix the wrong
+   * thing, and three of them are not about pull requests at all.
+   */
+  const PR_ABSENT: Record<string, { pt: string; en: string }> = {
+    'no-gh': {
+      pt: 'O GitHub CLI (gh) não está instalado nesta máquina — é ele que lê os PRs.',
+      en: 'The GitHub CLI (gh) is not installed on this machine — it is what reads the PRs.',
+    },
+    'no-auth': {
+      pt: 'O gh está instalado e não autenticado. Rode `gh auth login` no terminal.',
+      en: 'gh is installed and not authenticated. Run `gh auth login` in a terminal.',
+    },
+    'no-repo': {
+      pt: 'A pasta desta sessão não é um repositório do GitHub.',
+      en: 'This session’s folder is not a GitHub repository.',
+    },
+    failed: {
+      pt: 'O gh respondeu com erro.',
+      en: 'gh answered with an error.',
+    },
+  }
+
+  const prsBody = () => (
+    <div style={{ padding: '10px 12px', overflowY: 'auto', minHeight: 0, flex: 1 }}>
+      {prs === null ? (
+        <Note icon={<Loader size={13} className="ag-working-spin" />}
+          text={pt ? 'Lendo os pull requests…' : 'Reading the pull requests…'} />
+      ) : prs.unavailable ? (
+        <Note text={[
+          (PR_ABSENT[prs.unavailable] ?? PR_ABSENT.failed!)[pt ? 'pt' : 'en'],
+          prs.detail ?? '',
+        ].filter(Boolean).join(' ')} />
+      ) : prs.pulls.length === 0 ? (
+        <Note text={pt ? 'Nenhum pull request neste repositório.' : 'No pull requests in this repository.'} />
+      ) : (
+        prs.pulls.map(pr => (
+          <a
+            key={pr.number}
+            href={pr.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            style={{
+              display: 'block', padding: '8px 10px', marginBottom: 6, borderRadius: 9,
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+              textDecoration: 'none', color: 'inherit',
+            }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+              <PrState state={pr.state} draft={pr.draft} pt={pt} />
+              {pr.review && <PrReview review={pr.review} pt={pt} />}
+              <span style={{ marginLeft: 'auto', fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                #{pr.number}
+              </span>
+              <ExternalLink size={11} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+            </span>
+            <span style={{
+              display: 'block', fontSize: 12, lineHeight: 1.45, color: 'var(--text-primary)',
+            }}>{pr.title}</span>
+            {pr.branch && (
+              <span style={{
+                display: 'block', marginTop: 3, fontSize: 10.5, color: 'var(--text-tertiary)',
+                fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{pr.branch}</span>
+            )}
+          </a>
+        ))
+      )}
+    </div>
+  )
+
+  /**
    * The gallery, or the reason it is not showing one.
    *
    * "The conversation has not loaded" and "nothing was ever sent" are different facts and get
@@ -822,6 +921,7 @@ export function ArtifactsAside({
         onViewChange={chooseGalleryView}
         scope={galleryScope}
         onScopeChange={chooseGalleryScope}
+        {...(older ? { older } : {})}
       />
     )
   }
@@ -878,6 +978,7 @@ export function ArtifactsAside({
             : tab === 'skills' ? skillsBody()
             : tab === 'agents' ? agentsBody()
             : tab === 'mcps' ? mcpBody()
+            : tab === 'prs' ? prsBody()
             : body()}
         </>
       )}
@@ -1284,6 +1385,8 @@ function SubagentActivity({ sessionId, row, pt, now, onBack }: {
   sessionId: string; row: SubagentRow; pt: boolean; now: number; onBack: () => void
 }) {
   const [turns, setTurns] = useState<readonly LiveTurn[] | null>(null)
+  /** The read stopped on its cap — this feed is a window, and says so. */
+  const [older, setOlder] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
   const tailRef = useRef<HTMLDivElement | null>(null)
 
@@ -1296,11 +1399,12 @@ function SubagentActivity({ sessionId, row, pt, now, onBack }: {
           `/api/fleet/subagents?id=${encodeURIComponent(sessionId)}&agent=${encodeURIComponent(row.agentId)}&lang=${pt ? 'pt' : 'en'}`,
         )
         if (!alive) return
-        const body = await res.json() as { ok: boolean; turns?: LiveTurn[]; message?: string }
+        const body = await res.json() as { ok: boolean; turns?: LiveTurn[]; older?: boolean; message?: string }
         if (!alive) return
         if (!body.ok) { setFailed(body.message ?? (pt ? 'Não foi possível ler este subagente.' : 'This subagent could not be read.')); return }
         setFailed(null)
         setTurns(body.turns ?? [])
+        setOlder(body.older === true)
         // A RUNNING agent is still writing; a finished one cannot change, so it is read once.
         if (row.status === 'running') timer = setTimeout(read, 3000)
       } catch {
@@ -1351,6 +1455,17 @@ function SubagentActivity({ sessionId, row, pt, now, onBack }: {
           : (pt ? 'Este subagente não registrou nenhuma ação.' : 'This subagent recorded no actions.')} />
       ) : (
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
+          {/* A feed that silently starts in the middle reads as an agent that began there. */}
+          {older && (
+            <p style={{
+              margin: '0 8px 6px', fontSize: 10, lineHeight: 1.5, color: 'var(--text-tertiary)',
+              borderBottom: '1px solid var(--border-subtle)', paddingBottom: 6,
+            }}>
+              {pt
+                ? 'Este subagente fez mais do que cabe aqui — isto é o final do que ele fez, não tudo.'
+                : 'This subagent did more than fits here — this is the end of what it did, not all of it.'}
+            </p>
+          )}
           {feed.map((e, i) => (
             <EventRow key={i} e={e} pt={pt} now={now} sessionId={sessionId} agentId={row.agentId} />
           ))}
@@ -1665,5 +1780,37 @@ function Note({ text, icon }: { text: string; icon?: React.ReactNode }) {
         {text}
       </p>
     </div>
+  )
+}
+
+
+/** OPEN / MERGED / CLOSED, in the colours GitHub itself uses, so the state is read before the word. */
+function PrState({ state, draft, pt }: { state: string; draft: boolean; pt: boolean }) {
+  const s = draft ? 'DRAFT' : state.toUpperCase()
+  const colour = s === 'MERGED' ? '#a371f7' : s === 'CLOSED' ? 'var(--accent-red)'
+    : s === 'DRAFT' ? 'var(--text-tertiary)' : '#3fb950'
+  const label = pt
+    ? ({ OPEN: 'aberto', MERGED: 'merged', CLOSED: 'fechado', DRAFT: 'rascunho' } as Record<string, string>)[s] ?? s.toLowerCase()
+    : s.toLowerCase()
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', borderRadius: 999,
+      fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+      color: colour, border: `1px solid ${colour}`,
+    }}>{label}</span>
+  )
+}
+
+/** The review decision, and ONLY when GitHub actually stated one — see `parsePrList`. */
+function PrReview({ review, pt }: { review: string; pt: boolean }) {
+  const map: Record<string, { pt: string; en: string; colour: string }> = {
+    APPROVED: { pt: 'aprovado', en: 'approved', colour: '#3fb950' },
+    CHANGES_REQUESTED: { pt: 'mudanças pedidas', en: 'changes requested', colour: 'var(--anthropic-orange)' },
+    REVIEW_REQUIRED: { pt: 'aguarda review', en: 'review required', colour: 'var(--text-tertiary)' },
+  }
+  const e = map[review]
+  if (!e) return null
+  return (
+    <span style={{ fontSize: 10, fontWeight: 650, color: e.colour }}>{pt ? e.pt : e.en}</span>
   )
 }

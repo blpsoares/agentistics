@@ -33,6 +33,7 @@ import type { ManagedSession, SessionActivity, SessionBackend } from './types'
 import { calculateProcCpu, type ProcStatSample } from '../hardware-pure'
 import { readProcRss, readProcStat } from '../hardware-probe'
 import { procAvailable } from './proc-liveness'
+import { backgroundWork } from './attention'
 
 /** How often the cockpit refreshes. Five seconds is the interval the feature was specified at. */
 export const SESSION_POLL_MS = Number(process.env.AGENTISTICS_SESSION_POLL_MS) > 0
@@ -242,6 +243,10 @@ export function createSessionsPoller(o: {
 
       const nextDigest = new Map<string, string>()
       const activity = new Map<string, SessionActivity>()
+      /** Rows whose reading is backed by more than movement — see `confirmActivities`. */
+      const corroborated = new Set<string>()
+      /** Rows with work running that is not their own turn — see `backgroundWork`. */
+      const background = new Set<string>()
       const tails = new Map<string, string[]>()
       const approvals = new Map<string, string[]>()
       const dialogOptions = new Map<string, DialogOption[]>()
@@ -274,7 +279,16 @@ export function createSessionsPoller(o: {
         }
 
         const rules = harness ? rulesFor(harness) : undefined
+        // CORROBORATED: the harness said so itself. A `working` read from MOVEMENT ALONE, on a
+        // harness that does print a working marker, is most likely a repaint — and that is what
+        // made a row alternate between `working` and `needs you` continuously, with a notification
+        // each time. A harness with NO marker has nothing better than movement, so its reading
+        // stands. See `confirmActivities`.
+        if (!rules?.working?.length || rules.working.some(re => re.test(frame.join('\n')))) {
+          corroborated.add(r.id)
+        }
         const before = prevDigest.get(r.id)
+        if (backgroundWork({ frame, ...(rules ? { rules } : {}) })) background.add(r.id)
         const state = attentionOf({
           alive: true,
           lastActivityMs: b.lastActivityMs,
@@ -382,13 +396,14 @@ export function createSessionsPoller(o: {
       // believed immediately (see `attention-confirm.ts`). The dialog/approval frames captured above
       // are keyed to the RAW `waiting-approval` reading and only reach a row once its CONFIRMED state
       // is `waiting-approval` too — `buildSessionViews` gates them on `activity`.
-      const confirm = confirmActivities(confirmMemory, activity)
+      const confirm = confirmActivities(confirmMemory, activity, corroborated)
       confirmMemory = confirm.memory
       const confirmedActivity = confirm.activities
 
       const sessions = buildSessionViews({
         reconciled,
         activity: confirmedActivity,
+        background,
         tails,
         chatTails,
         approvals,

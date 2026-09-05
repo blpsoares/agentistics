@@ -418,6 +418,38 @@ export async function readFleetSkillBody(
   }
 }
 
+/**
+ * The pull requests of the repository a session is working in.
+ *
+ * Resolved against the SESSION's directory, never the server's: a machine running agentop for
+ * something else would otherwise be asked about agentop.
+ */
+export async function readFleetPullRequests(
+  lang: CliLang, id: string,
+): Promise<{ pulls: unknown[]; unavailable?: string; detail?: string }> {
+  const pt = lang === 'pt'
+  const host = await hostFor(lang)
+  if (!host.sessions) return { pulls: [], unavailable: 'no-repo' }
+  const fleet = await host.sessions()
+  const row = fleet.sessions.find(r => r.id === id || r.conversationId === id)
+  if (!row?.cwd) {
+    return {
+      pulls: [],
+      unavailable: 'no-repo',
+      detail: pt
+        ? 'Esta sessão não tem uma pasta registrada.'
+        : 'This session has no recorded folder.',
+    }
+  }
+  const { readPullRequests } = await import('./github-prs')
+  const out = await readPullRequests(row.cwd)
+  return {
+    pulls: out.pulls,
+    ...(out.unavailable ? { unavailable: out.unavailable } : {}),
+    ...(out.detail ? { detail: out.detail } : {}),
+  }
+}
+
 /** The questions a start EARNS, and the places it could happen — the wizard, as data. */
 export interface FleetNewOptions {
   /**

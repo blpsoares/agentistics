@@ -1211,6 +1211,22 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       })
     }
 
+    // The repository's pull requests, read through `gh` in the SESSION's directory. A READ: no
+    // route here opens, merges or comments on anything.
+    if (url.pathname === '/api/fleet/prs' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ pulls: [], unavailable: 'no-repo' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { readFleetPullRequests, fleetLang } = await import('./sessions/fleet-web')
+      const out = await readFleetPullRequests(fleetLang(url.searchParams.get('lang')), id)
+      return new Response(JSON.stringify(out), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     // ONE skill's own text. The request names a SKILL, never a path — see `readFleetSkillBody`.
     if (url.pathname === '/api/fleet/skill' && req.method === 'GET') {
       const id = url.searchParams.get('id')

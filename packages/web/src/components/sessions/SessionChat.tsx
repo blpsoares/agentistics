@@ -67,6 +67,8 @@ interface ChatPayload {
   turns: ChatTurn[]
   unavailable?: string
   live: boolean
+  /** Already-localized: these turns are the END of a longer conversation. See `chat-web.ts`. */
+  older?: string
 }
 
 export interface SessionChatProps {
@@ -87,6 +89,14 @@ export interface SessionChatProps {
     artifacts: Artifact[]
     loading: boolean
     unavailable?: string
+    /**
+     * Already-localized: the conversation is a WINDOW onto a longer one.
+     *
+     * Handed over for the same reason the turns are: every list the panel builds is built from
+     * these turns and inherits their cap, so the panel has to be able to say so instead of showing
+     * an empty gallery that reads as "there was never anything here".
+     */
+    older?: string
     /** Writes this reader cannot name — see `hasUnlistedWrites`. */
     unlisted: boolean
     /** The turns themselves, for the panel's LIVE tab. Handed over rather than re-fetched. */
@@ -750,8 +760,9 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
       unlisted: hasUnlistedWrites(turns),
       turns,
       ...(payload?.unavailable ? { unavailable: payload.unavailable } : {}),
+      ...(payload?.older ? { older: payload.older } : {}),
     })
-  }, [artifacts, loading, turns, payload?.unavailable, onArtifacts])
+  }, [artifacts, loading, turns, payload?.unavailable, payload?.older, onArtifacts])
 
   const canPrompt = !loading && session.actionable && !blocked && payload.live !== false
   /**
@@ -943,6 +954,16 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
           ) : turns.length === 0 && live === null && echo.length === 0 ? (
             <Muted text={pt ? 'Esta conversa ainda não tem mensagens.' : 'This conversation has no messages yet.'} />
           ) : null}
+
+          {/* Where the window BEGINS, said at the top of the scroll — the one place a reader looks
+              when they wonder where the rest went. Everything derived from these turns (the
+              gallery, Files, Live) inherits the same cap and says so in its own panel. */}
+          {!loading && payload?.older && (
+            <p style={{
+              margin: 0, textAlign: 'center', fontSize: 11, lineHeight: 1.5,
+              color: 'var(--text-tertiary)',
+            }}>{payload.older}</p>
+          )}
 
           {turns.map((t, i) => (
             <ChatBubble

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { QUIET_MS, approvalTail, attentionOf, digestFrame, frameTail } from './attention'
+import { QUIET_MS, approvalTail, attentionOf, digestFrame, frameTail, backgroundWork } from './attention'
 import type { AttentionRules } from './types'
 
 const NOW = 1_786_600_000_000
@@ -304,5 +304,44 @@ describe('a footer is the BOTTOM of the screen, not any line on it', () => {
       '   2. No',
       ' Esc to cancel · Tab to amend',
     ])).toBe('waiting-approval')
+  })
+})
+
+describe('background work', () => {
+  const rules = { approval: [], working: [/esc to interrupt/], mainWorking: [/\(\d+[hms][^)]*·\s*↓/], probed: 'test' }
+
+  it('a session that ANSWERED and has subagents running needs a person', () => {
+    // Measured on a live claude: `esc to interrupt` is printed whenever anything is interruptible,
+    // background subagents included. Reading that as `working` told a person nothing was needed
+    // from them when something was.
+    const frame = ['❯ ', '  ⏵⏵ auto mode on · esc to interrupt · ← 6 agents']
+    // Quiet for longer than `QUIET_MS`: a session that JUST moved reads as working whatever the
+    // markers say, which is a separate and correct rule.
+    expect(attentionOf({
+      alive: true, lastActivityMs: 0, nowMs: QUIET_MS + 1000, frame,
+      frameDigest: 'd', prevDigest: 'd', rules,
+    })).toBe('waiting')
+    expect(backgroundWork({ frame, rules })).toBe(true)
+  })
+
+  it('the main agent producing is WORKING, and is not background', () => {
+    const frame = ['· Jitterbugging… (37s · ↓ 1.7k tokens)', '  ⏵⏵ esc to interrupt']
+    expect(attentionOf({
+      alive: true, lastActivityMs: 0, nowMs: 1000, frame,
+      frameDigest: 'd', prevDigest: 'd', rules,
+    })).toBe('working')
+    expect(backgroundWork({ frame, rules })).toBe(false)
+  })
+
+  it('a harness with no main marker is not given a guess', () => {
+    // Without a way to tell the main turn apart, every interruptible frame would be reported as
+    // background work — a confident claim made out of an absence.
+    const bare = { approval: [], working: [/esc to interrupt/], probed: 'test' }
+    const frame = ['❯ ', 'esc to interrupt']
+    expect(backgroundWork({ frame, rules: bare })).toBe(false)
+    expect(attentionOf({
+      alive: true, lastActivityMs: 0, nowMs: 1000, frame,
+      frameDigest: 'd', prevDigest: 'd', rules: bare,
+    })).toBe('working')
   })
 })

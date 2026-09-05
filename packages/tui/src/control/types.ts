@@ -663,6 +663,16 @@ export interface ControlSession {
   /** Already-localized state word, e.g. "needs approval". */
   stateLabel: string
   /**
+   * Something this session STARTED is still running, while the session itself needs a person.
+   *
+   * claude prints `esc to interrupt` whenever anything is interruptible — a background subagent
+   * included — so a session that had finished its own turn and was waiting for you to type still
+   * carried the marker and read as `working`. The state is now decided by the MAIN agent's own
+   * spinner; this says why the screen still looks busy. Absent on an ordinary row: its presence is
+   * the statement.
+   */
+  background?: boolean
+  /**
    * Whether this row can be acted on at all.
    *
    * False for an external session, which is listed because "the fleet in one place" is the point,

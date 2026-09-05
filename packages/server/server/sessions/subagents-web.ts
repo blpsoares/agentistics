@@ -20,7 +20,7 @@ import { readFile, readdir, stat } from 'node:fs/promises'
 import { HARNESS_CAPABILITIES, totalTokens, type HarnessId, type TokenBreakdown } from '@agentistics/core'
 import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
-import { readChatTurns, resolveChatTranscriptPath, type ChatTurn } from './chat-tail'
+import { readChatWindow, resolveChatTranscriptPath, type ChatTurn } from './chat-tail'
 import { conversationOfRow } from './row-conversation'
 import {
   agentIdFromFile, parseSubagentMeta, parseTaskOutcomes, subagentCost, subagentStatus,
@@ -200,7 +200,20 @@ export async function readSessionSubagents(
 }
 
 export type SubagentActivityPayload =
-  | { ok: true; turns: ChatTurn[]; status: SubagentStatus }
+  | {
+      ok: true
+      turns: ChatTurn[]
+      status: SubagentStatus
+      /**
+       * The read stopped ON its cap with more conversation above it.
+       *
+       * A window that hides things has to say it is a window — the rule `readChatWindow` exists
+       * for, applied to the surface that inherits the same cap. A subagent that ran for hours is
+       * exactly the one whose feed gets cut, and a feed that silently starts in the middle reads
+       * as an agent that began there.
+       */
+      older: boolean
+    }
   | { ok: false; message: string }
 
 /**
@@ -223,14 +236,19 @@ export async function readSubagentActivity(
 
   const path = `${subagentsDirFor(r.transcript)}/agent-${agentId}.jsonl`
   let turns: ChatTurn[]
-  try { turns = await readChatTurns(path) } catch { turns = [] }
+  let older = false
+  try {
+    const read = await readChatWindow(path)
+    turns = read.turns
+    older = read.older
+  } catch { turns = [] }
   if (turns.length === 0) {
     // Launched and silent so far, or a transcript that is gone. Both are said rather than drawn as
     // an empty pane, which reads as "it did nothing".
     const outcomes = await readFile(r.transcript, 'utf-8').then(parseTaskOutcomes).catch(() => new Map<string, string>())
     const status = subagentStatus(outcomes.get(agentId), r.live)
     return status === 'running'
-      ? { ok: true, turns: [], status }
+      ? { ok: true, turns: [], status, older: false }
       : {
         ok: false,
         message: pt
@@ -239,5 +257,5 @@ export async function readSubagentActivity(
       }
   }
   const outcomes = await readFile(r.transcript, 'utf-8').then(parseTaskOutcomes).catch(() => new Map<string, string>())
-  return { ok: true, turns, status: subagentStatus(outcomes.get(agentId), r.live) }
+  return { ok: true, turns, status: subagentStatus(outcomes.get(agentId), r.live), older }
 }
