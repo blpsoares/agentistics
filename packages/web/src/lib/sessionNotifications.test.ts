@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import type { SessionMeta } from '@agentistics/core'
 import {
   DEFAULT_NOTIFICATION_SETTINGS, handleSessionStateTransitions, notifyFleetTransitions,
-  type SessionActivity,
+  resetNotificationMemory, type SessionActivity,
 } from './sessionNotifications'
 
 /**
@@ -52,7 +52,7 @@ const session = (id: string): SessionMeta => ({
 
 let captured: Array<{ title: string; body: string }>
 
-beforeEach(() => { captured = installBrowser().notifications })
+beforeEach(() => { captured = installBrowser().notifications; resetNotificationMemory() })
 afterEach(() => {
   const g = globalThis as Record<string, unknown>
   delete g.Notification
@@ -111,13 +111,31 @@ describe('the caller that was missing — the live fleet', () => {
     expect(captured).toHaveLength(0)
   })
 
-  it('rings on a transition and stays quiet on the level', () => {
+  it('rings on a CONFIRMED transition and stays quiet on the level', () => {
     const first = notifyFleetTransitions(null, [{ id: 'a', state: 'working' }], 'en')
     expect(captured).toHaveLength(0)
+    // First sighting of `waiting` — held back until it is seen again.
     const second = notifyFleetTransitions(first, [{ id: 'a', state: 'waiting' }], 'en')
+    expect(captured).toHaveLength(0)
+    const third = notifyFleetTransitions(second, [{ id: 'a', state: 'waiting' }], 'en')
     expect(captured).toHaveLength(1)
-    notifyFleetTransitions(second, [{ id: 'a', state: 'waiting' }], 'en')
+    notifyFleetTransitions(third, [{ id: 'a', state: 'waiting' }], 'en')
     expect(captured).toHaveLength(1)
+  })
+
+  it('a state that FLICKERS for one poll is never announced', () => {
+    // The reported storm: a pane repaints, the row reads `working` for a single poll and goes back.
+    let snap = notifyFleetTransitions(null, [{ id: 'a', state: 'waiting' }], 'en')
+    for (let i = 0; i < 6; i++) {
+      snap = notifyFleetTransitions(snap, [{ id: 'a', state: i % 2 === 0 ? 'working' : 'waiting' }], 'en')
+    }
+    expect(captured).toHaveLength(0)
+  })
+
+  it('a row that leaves the fleet is forgotten, so its return is news again', () => {
+    let snap = notifyFleetTransitions(null, [{ id: 'a', state: 'working' }], 'en')
+    snap = notifyFleetTransitions(snap, [], 'en')
+    expect(snap).toEqual({})
   })
 
   it('has no words for what a row IS, so those are not events', () => {
@@ -128,12 +146,12 @@ describe('the caller that was missing — the live fleet', () => {
   })
 
   it('names the session from the fleet ROW — it is not a transcript', () => {
-    const first = notifyFleetTransitions(null, [
-      { id: 'a', state: 'working', title: 'the migration one', cwd: '/home/padawan/agentistics', harness: 'claude' },
-    ], 'en')
-    notifyFleetTransitions(first, [
-      { id: 'a', state: 'waiting', title: 'the migration one', cwd: '/home/padawan/agentistics', harness: 'claude' },
-    ], 'en')
+    const row = (state: string) =>
+      [{ id: 'a', state, title: 'the migration one', cwd: '/home/padawan/agentistics', harness: 'claude' }]
+    let snap = notifyFleetTransitions(null, row('working'), 'en')
+    // Two polls, because a state is only announced once it has been confirmed.
+    snap = notifyFleetTransitions(snap, row('waiting'), 'en')
+    notifyFleetTransitions(snap, row('waiting'), 'en')
     expect(captured[0]?.title).toContain('the migration one')
     expect(captured[0]?.body).toContain('agentistics')
   })

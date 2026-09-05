@@ -375,15 +375,54 @@ export function fleetActivityStates(
   return out
 }
 
+/**
+ * The states seen on the PREVIOUS poll but not yet announced — see `notifyFleetTransitions`.
+ *
+ * Module-level and not a parameter, because the caller already threads one snapshot and adding a
+ * second would let the two drift apart. It is reset by a `null` snapshot, which is what a fresh
+ * page is.
+ */
+let unconfirmed: Record<string, SessionActivity> = {}
+
 export function notifyFleetTransitions(
   prev: Record<string, SessionActivity> | null,
   rows: readonly { id: string; state: string; title?: string; cwd?: string; harness?: string }[],
   lang: 'pt' | 'en',
 ): Record<string, SessionActivity> {
-  const next = fleetActivityStates(rows)
+  const seen = fleetActivityStates(rows)
   // `null` is the first snapshot — see the rule above. It is deliberately distinct from `{}`, which
   // is a machine that genuinely had no sessions a moment ago and now has one.
-  if (prev === null) return next
+  if (prev === null) { unconfirmed = seen; return seen }
+
+  /*
+   * A STATE COUNTS ONLY ONCE IT HAS BEEN SEEN TWICE IN A ROW.
+   *
+   * `attention.ts` decides `working` from whether the pane MOVED, and a pane moves for reasons that
+   * are not a turn: a repaint, an advisory line, a plugin notice. One of those flips a session to
+   * `working` for a single poll and back, and every flip was an announcement — reported as "tem
+   * sessao que fica alternando o status de needs you pra working e fica disparando notificacao
+   * adoidado".
+   *
+   * This is not a new idea in this codebase: `event-plan.ts` holds the same rule, for the same
+   * signal, and says a time window does NOT work — the next flicker lands outside it. The web
+   * notifier simply never applied it.
+   *
+   * The cost is stated: a state that lasts less than one poll interval is never announced. That is
+   * the right trade for a channel whose whole job is to interrupt a person.
+   */
+  const next: Record<string, SessionActivity> = { ...prev }
+  const announce: Record<string, SessionActivity> = {}
+  for (const [id, state] of Object.entries(seen)) {
+    if (prev[id] === state) continue          // already announced, nothing new
+    if (unconfirmed[id] !== state) continue   // first sighting — wait for the next poll
+    next[id] = state
+    announce[id] = state
+  }
+  // A row that vanished from the fleet stops being tracked, or its last state would be re-announced
+  // if it came back to the same one.
+  for (const id of Object.keys(next)) if (!(id in seen)) delete next[id]
+  unconfirmed = seen
+  if (Object.keys(announce).length === 0) return next
   const map = new Map<string, NotifiableSession>()
   for (const r of rows) {
     map.set(r.id, {
@@ -392,6 +431,13 @@ export function notifyFleetTransitions(
       ...(r.harness ? { harness: r.harness } : {}),
     })
   }
-  handleSessionStateTransitions(prev, next, map, lang)
+  // Only what was CONFIRMED this poll — `prev` is passed as the baseline so the handler's own
+  // "has it changed" check still holds for each of them.
+  handleSessionStateTransitions(prev, announce, map, lang)
   return next
+}
+
+/** Test seam: the confirmation memory is module state, and a test must be able to clear it. */
+export function resetNotificationMemory(): void {
+  unconfirmed = {}
 }
