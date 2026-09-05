@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { Outlet, NavLink, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { version } from '../../../package.json'
-import { Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart2, Bot, Calendar, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Code2, Cpu, Database, DollarSign, Download, FileCode, FileDown, FileText, Files, Flame, FolderOpen, GitBranch, GitCommit, GitCompare, Globe, Home, KeyRound, Layers, LogOut, Maximize2, MessageSquare, MessagesSquare, Moon, MoreHorizontal, PanelLeft, RefreshCw, Server, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Tag as TagIcon, Target, TerminalSquare, TrendingUp, Trophy, Users, Wrench, X, Zap } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart2, Bot, Calendar, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Code2, Cpu, Database, DollarSign, Download, FileCode, FileDown, FileText, Flame, FolderOpen, GitBranch, GitCommit, GitCompare, Globe, Home, KeyRound, Layers, LogOut, Maximize2, MessageSquare, MessagesSquare, Moon, MoreHorizontal, PanelLeft, PanelRight, RefreshCw, Server, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Tag as TagIcon, Target, TerminalSquare, TrendingUp, Trophy, Users, Wrench, X, Zap } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import { usePlanBasis } from './hooks/usePlanBasis'
 import { planScopeHarnesses, planScopeNote } from './lib/costBasis'
@@ -2777,17 +2777,18 @@ export default function AppLayout() {
             fontFamily: 'inherit', fontSize: 12,
           }}
         >
-          {/* THE ICON SAYS WHAT IS BEHIND IT, and there is no number.
-              It carried the file count, on the argument that the count is the reason to press it.
-              Asked to remove it, and the ask is right: the figure is the total of everything the
-              session ever touched, which climbs past fifty on an ordinary afternoon and then means
-              nothing — a badge reading 57 is not a signal, it is furniture with a number on it.
-              What actually deserves attention is a file being written NOW, and that already has its
-              own announcement on the edge of the screen (`edgeHint`), which names the action rather
-              than counting it.
-              `Files` rather than `PanelRight`: the panel is not the point, the files are. A generic
-              panel glyph says "something opens here" and leaves the reader to find out what. */}
-          <Files size={14} />
+          <PanelRight size={13} />
+          {/* The count is the whole reason to press it, so it rides the button. Absent at zero
+              rather than shown as 0 — "this session has written nothing" is what the panel says,
+              and a badge saying so on the header would be noise on every fresh session. */}
+          {artifacts.sessionId === selectedFleetSession.id && artifacts.count > 0 && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              minWidth: 15, height: 15, borderRadius: 8, padding: '0 4px',
+              background: 'var(--anthropic-orange)', color: 'white',
+              fontSize: 10, fontWeight: 700, lineHeight: 1,
+            }}>{artifacts.count}</span>
+          )}
         </button>
       )}
 
