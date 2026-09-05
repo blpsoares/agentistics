@@ -267,7 +267,7 @@ export default function HomePage() {
           middle of the grid. The row is user-reorderable, so that arrangement is reachable.
           `dense` backfills the gap with the next card that fits. */}
       <div className="ag-grid cols-5 ag-dense">
-        {(cardOrder as CardId[]).map(id => renderCard(id))}
+        {cardOrder.map(id => renderCard(id))}
       </div>
 
       {/* Highlights */}

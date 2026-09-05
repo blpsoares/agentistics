@@ -1772,6 +1772,61 @@ interchangeable.
 The FLEET is what all four show: the live sessions plus the conversations that can be reopened. A
 "session" is one conversation; the "fleet" is the set.
 
+## Accessibility magnifiers (`packages/web/src/components/a11y/`)
+
+Lenses a low-vision user places over the dashboard. Full write-up in
+[docs/accessibility-magnifiers.md](docs/accessibility-magnifiers.md); these are the invariants a
+harness must not break.
+
+- **The lens layer is a SIBLING of `#root`.** Each lens mirrors `#root`, so a layer inside it would
+  clone itself forever. The recursion is structurally impossible, not guarded against — never move
+  the container into the React tree.
+- **The mirror is a PICTURE**: a `cloneNode` of `#root`, `inert` + `aria-hidden` +
+  `pointer-events: none`, ids and names stripped. A live second copy would duplicate ids, focus and
+  side effects, and a screen reader would hear the page twice. `cloneNode` drops scroll positions,
+  form state and canvas pixels, so `reconcile` walks both trees in step and copies them. **A canvas
+  that cannot be copied is CLEARED, never left stale** — an empty region the settings screen warned
+  about is recoverable, a stale one that looks live is not.
+- **The clone is offset by `-scroll` and stays `position: relative`.** The offset makes stage-local
+  coordinates equal viewport coordinates, which all the geometry assumes; `relative` is the one
+  position value that does NOT become a containing block for `position: fixed` descendants, so the
+  cloned sidebar and modals still resolve against the stage.
+- **`position: sticky` is moved with `transform`, NEVER with `position`.** Sticky is IN FLOW;
+  changing it to `fixed`/`absolute` removes it and everything around it collapses. That shipped
+  once and corrupted the mirror on every page, because this app's header is sticky everywhere. A
+  transform is paint-only and cannot affect layout. Only WINDOW-scrolled stickies are moved at all —
+  one inside an `overflow: auto` panel already reproduces correctly and is left alone.
+- **Left click, wheel and hover go to the PAGE; right click goes to the LENS.** That is why a pinned
+  lens is still reachable: right click opens its menu in every pin state, which is where unpin and
+  remove live. Pinned means immovable, not unreachable.
+- **Interaction is forwarded by COORDINATE** (`lensPointToPage`, the exact inverse of the rendering
+  geometry), never by making the clone live. The probe that finds the target must make the WHOLE
+  magnifier layer transparent to hit-testing first — with two lenses stacked, hiding only the top
+  one hands the click to the one beneath it.
+- **`sourceRect` has two anchors and they are not interchangeable.** `'pan'` for a PLACED lens: the
+  region pans proportionally to the lens's position, which is what makes the page's outer band
+  reachable (a centred region plus an on-screen-clamped lens leaves a ~150px dead band at 4×); it
+  agrees exactly with the old centred rule at the viewport's centre. `'cursor'` for the FOLLOW lens:
+  centred and clamped, because its position IS the pointer and a pointer must show what is under it
+  or aiming becomes impossible.
+- **There is no cap on the number of lenses** — the cost is bounded by `mirrorSchedule.ts` instead:
+  two re-clones per frame, least-recently-synced first, off-screen never, with a backoff when a
+  measured cycle overruns. Twenty lenses cost ten frames, not one frame of twenty clones.
+- **`/api/preferences` could NOT be reused for these settings**: it is per MACHINE, and on a central
+  that file is shared by every signed-in user, so one person's lenses would appear on everyone's
+  screen. `a11y-prefs.ts` is the single place that picks the machine file or the per-account
+  `userPrefs` document; a central session with no account reads defaults and is refused on write,
+  and must NEVER fall back to the machine file.
+- **A PUT replaces the whole `accessibility` value** so the last lens of a page can be deleted, and
+  that rests on `writePreferences` staying a shallow merge across preference KEYS. Pinned by
+  `a11y-persistence.test.ts`.
+- **Saving is armed only by a genuinely successful load.** A central answers 401 until login and the
+  hook mounts before it; treating that 401 as an empty document once armed a save that replaced the
+  account's stored lenses with defaults.
+- The border is always `var(--anthropic-orange)`, in every state and both themes. There is no colour
+  option, and the settings screen says so rather than leaving a missing picker to read as an
+  oversight.
+
 ## Important rules
 
 - **Anything agentop writes OUTSIDE its own directories is an explicit act of the user, and is
