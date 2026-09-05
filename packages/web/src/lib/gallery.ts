@@ -302,6 +302,26 @@ export function gallerySides(groups: readonly GalleryGroup[]): { user: number; l
 }
 
 /**
+ * The scope that is actually APPLIED, given what each side holds.
+ *
+ * A stored scope outlives the files it was chosen for. `llm` was picked while the session had
+ * produced something; the files were later removed, the switch stopped being drawn — it is only
+ * drawn when BOTH sides have something — and the gallery showed `11` on its tab and `0 messages`
+ * in its body, with no control on screen to get back. Reported as exactly that.
+ *
+ * So a scope whose side is EMPTY falls back to `all`. The rule to hold onto: a filter whose control
+ * is not on screen must never be able to hide everything. The stored value is left alone — the side
+ * may come back, and the choice was real.
+ */
+export function effectiveScope(
+  scope: GalleryScope, sides: { user: number; llm: number },
+): GalleryScope {
+  if (scope === 'llm' && sides.llm === 0) return 'all'
+  if (scope === 'user' && sides.user === 0) return 'all'
+  return scope
+}
+
+/**
  * The groups a scope shows.
  *
  * Filtered per FILE and not per group, because nothing stops a future group from holding both —

@@ -38,7 +38,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FileQuestion, Grid2x2, Images, List, Paperclip } from 'lucide-react'
 import { agoLabel } from '../../lib/artifactTabs'
 import {
-  filterGallery, formatBytes, galleryImageKey, galleryImages, galleryMenuEntries,
+  effectiveScope, filterGallery, formatBytes, galleryImageKey, galleryImages,
+  galleryMenuEntries,
   gallerySides, type GalleryFile, type GalleryScope,
   type GalleryGroup, type GalleryView,
 } from '../../lib/gallery'
@@ -81,7 +82,10 @@ export function GalleryTab({
    * yet" sentence, which would be false.
    */
   const sides = useMemo(() => gallerySides(allGroups), [allGroups])
-  const groups = useMemo(() => filterGallery(allGroups, scope), [allGroups, scope])
+  // What is actually applied — see `effectiveScope`. A stored side that no longer has files falls
+  // back to everything rather than emptying a gallery whose switch is not even drawn.
+  const shown = effectiveScope(scope, sides)
+  const groups = useMemo(() => filterGallery(allGroups, shown), [allGroups, shown])
 
   /** The flat run the lightbox steps through — the WHOLE gallery, see `galleryImages`. */
   const images = useMemo(() => galleryImages(groups), [groups])
@@ -170,15 +174,15 @@ export function GalleryTab({
               <button
                 key={id}
                 role="tab"
-                aria-selected={scope === id}
+                aria-selected={shown === id}
                 onClick={() => onScopeChange(id)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 4,
                   minHeight: isMobile ? 44 : 24, padding: '0 8px', borderRadius: 6,
                   border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
-                  background: scope === id ? 'var(--bg-elevated)' : 'transparent',
-                  color: scope === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-                  fontWeight: scope === id ? 650 : 400,
+                  background: shown === id ? 'var(--bg-elevated)' : 'transparent',
+                  color: shown === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                  fontWeight: shown === id ? 650 : 400,
                 }}
               >
                 {label}<span style={{ opacity: 0.7 }}>{n}</span>

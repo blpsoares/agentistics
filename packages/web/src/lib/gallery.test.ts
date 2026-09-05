@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   fileFormat, formatBytes, galleryFileCount, galleryGroups, galleryImageKey, galleryImages,
-  galleryMenuEntries, parseGalleryView, type GalleryTurn, producedGroups, gallerySides, filterGallery, parseGalleryScope } from './gallery'
+  galleryMenuEntries, parseGalleryView, type GalleryTurn, producedGroups, gallerySides, filterGallery, parseGalleryScope, effectiveScope } from './gallery'
 
 const DIR = '/home/u/.agentistics/attachments'
 const shot = `${DIR}/724e7aa8-image.png`
@@ -199,5 +199,21 @@ describe('the two sides of the gallery', () => {
     expect(parseGalleryScope('llm')).toBe('llm')
     expect(parseGalleryScope('nonsense')).toBe('all')
     expect(parseGalleryScope(null)).toBe('all')
+  })
+})
+
+describe('a filter whose control is not on screen', () => {
+  it('falls back to everything when its side is empty', () => {
+    // The reported state: `llm` chosen while the session had produced files, the files removed,
+    // the switch no longer drawn (it needs BOTH sides), and the gallery showing 11 on its tab with
+    // nothing in its body and no way back.
+    expect(effectiveScope('llm', { user: 11, llm: 0 })).toBe('all')
+    expect(effectiveScope('user', { user: 0, llm: 4 })).toBe('all')
+  })
+
+  it('leaves a scope alone while its side still holds something', () => {
+    expect(effectiveScope('llm', { user: 11, llm: 2 })).toBe('llm')
+    expect(effectiveScope('user', { user: 11, llm: 2 })).toBe('user')
+    expect(effectiveScope('all', { user: 0, llm: 0 })).toBe('all')
   })
 })
