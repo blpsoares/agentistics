@@ -21,6 +21,7 @@ import {
   type MirrorLensState,
   type MirrorScheduleConfig,
 } from './mirrorSchedule'
+import { stickyOffset } from './magnifier'
 
 export interface MirrorHost {
   /** Re-clone and reconcile now. */
@@ -28,15 +29,21 @@ export interface MirrorHost {
   /**
    * Move the existing clone to match the window's current scroll position, without re-cloning.
    * The DOM has not changed, so a full `syncNow()` would be wasted work for a pure scroll event —
-   * this rewrites the root offset `syncNow()` derives from `window.scrollX/Y`, AND extends every
-   * window-scrolled sticky copy's own correction by the same scroll delta — see this function's
-   * body for the derivation of why the sticky term needs it (the `position: fixed` predecessor of
-   * this fix did not, which is exactly what changed). What is still only ever right as of the last
-   * full sync is everything else `reconcile` computes (content, form state, canvas pixels, and a
-   * sticky's correction if the element itself moved or resized) — the same eventual-consistency
-   * the mirror already has there, bounded by the heartbeat interval.
+   * this rewrites the root offset `syncNow()` derives from `window.scrollX/Y`, and recomputes every
+   * window-scrolled sticky copy's correction from a FRESH measurement of the live element it
+   * mirrors (`stickyOffset`; see this function's body for why a scroll delta cannot stand in for
+   * that measurement). What is still only ever right as of the last full sync is everything else
+   * `reconcile` computes — content, form state, canvas pixels, and a sticky's own FLOW position if
+   * the element moved or resized — the same eventual-consistency the mirror already has there,
+   * bounded by the heartbeat interval.
+   *
+   * `liveRects` is a per-scroll-event measurement cache SHARED by every lens, since they all mirror
+   * the same `#root` and therefore the same live sticky elements. Without it, N lenses cost N
+   * forced layouts per scroll event (each one's write to its own clone invalidates layout before
+   * the next one reads); with it, the first lens measures and the rest hit the map. Omit it and one
+   * is created for this call alone — correct, just not shared.
    */
-  setScroll(x: number, y: number): void
+  setScroll(x: number, y: number, liveRects?: Map<Element, DOMRect | null>): void
   destroy(): void
 }
 
@@ -221,13 +228,12 @@ export function createMirrorHost(stage: HTMLElement): MirrorHost {
   let alive = true
   // The currently-inserted clone, kept so `setScroll` can reposition it without re-cloning.
   let clone: HTMLElement | null = null
-  // Every window-scrolled sticky copy's correction as of the LAST full sync — a stage-local
-  // (dx, dy) transform, plus the scroll position it was computed against. `setScroll` extends
-  // each one by how far the scroll has moved since, so a stuck copy stays anchored between syncs
-  // without a re-clone. See `setScroll`'s own comment for the derivation.
-  let stickyBases: Map<HTMLElement, { dx: number; dy: number }> = new Map()
-  let baseScrollX = 0
-  let baseScrollY = 0
+  // Every window-scrolled sticky, linked to its copy in the current clone, with the copy's UNSTUCK
+  // FLOW position in DOCUMENT coordinates as measured by the last full sync. `setScroll` re-derives
+  // each correction from that flow position plus a fresh reading of where the LIVE element sits
+  // right now — see `stickyOffset` for why the live side has to be measured rather than
+  // extrapolated. Only `flow` is a snapshot, and only layout can invalidate it.
+  let stickyLinks: { live: Element; copy: HTMLElement; flow: { x: number; y: number } }[] = []
   return {
     syncNow() {
       if (!alive) return
@@ -297,6 +303,7 @@ export function createMirrorHost(stage: HTMLElement): MirrorHost {
       // whatever the stage's transform is at paint time, without needing to be recomputed.
       const stageRect = stage.getBoundingClientRect()
       const scale = stage.offsetWidth > 0 ? stageRect.width / stage.offsetWidth : 1
+      const links: { live: Element; copy: HTMLElement; flow: { x: number; y: number } }[] = []
       const corrections: { copy: HTMLElement; dx: number; dy: number }[] = []
       for (const [live, copyEl] of stickyCopies) {
         const liveRect = windowStickies.get(live)
@@ -304,50 +311,67 @@ export function createMirrorHost(stage: HTMLElement): MirrorHost {
         const copyRect = copyEl.getBoundingClientRect()
         const copyLocalX = (copyRect.left - stageRect.left) / scale
         const copyLocalY = (copyRect.top - stageRect.top) / scale
-        corrections.push({ copy: copyEl, dx: liveRect.left - copyLocalX, dy: liveRect.top - copyLocalY })
+        // Stage-local IS the viewport frame (the clone root carries the `-scroll` offset), so the
+        // copy's own DOCUMENT flow position is simply its stage-local position plus the scroll it
+        // was measured at. That is the one term `setScroll` cannot re-derive without a re-clone,
+        // so it is the one term recorded here.
+        const flow = { x: copyLocalX + scrollX, y: copyLocalY + scrollY }
+        links.push({ live, copy: copyEl, flow })
+        const { dx, dy } = stickyOffset(flow, liveRect, { x: scrollX, y: scrollY })
+        corrections.push({ copy: copyEl, dx, dy })
       }
-      const newBases = new Map<HTMLElement, { dx: number; dy: number }>()
       for (const { copy, dx, dy } of corrections) {
         copy.style.transform = `translate(${dx}px, ${dy}px)`
-        newBases.set(copy, { dx, dy })
       }
       // Caveat, stated rather than hidden: a `transform` on a sticky copy makes THAT copy a
       // containing block for any `position: fixed` descendant of its own — same family of caveat
       // as the previous fix's, just moved from the stage to the sticky itself. None of the
       // window-scrolled stickies in this codebase today (the page header, the settings/custom-page
       // asides, a panel's own pinned edge) contain a `position: fixed` descendant.
-      stickyBases = newBases
-      baseScrollX = scrollX
-      baseScrollY = scrollY
+      stickyLinks = links
 
       clone = next
     },
-    setScroll(x, y) {
+    setScroll(x, y, liveRects) {
       if (!alive || !clone) return
       clone.style.left = `${-x}px`
       clone.style.top = `${-y}px`
 
-      // Derivation: a window-scrolled sticky copy is an ORDINARY in-flow descendant of the clone
-      // root (unlike the old `position: fixed` fix, `position: sticky` never escapes flow for
-      // containing-block purposes) — so when the root's `left`/`top` above move by
-      // `-(x - baseScrollX), -(y - baseScrollY)`, the copy's own underlying flow position shifts by
-      // that exact same amount, same as any other normally-flowing descendant. Left uncorrected,
-      // the copy would scroll away with the content instead of staying put, unlike the LIVE element
-      // it mirrors (which is genuinely stuck to the viewport while scrolling). So each sticky's
-      // transform is extended by `(x - baseScrollX, y - baseScrollY)` — the scroll delta since the
-      // sync that computed its base correction — which cancels the root's shift term-for-term and
-      // keeps the copy's FINAL painted position exactly where the last full sync put it, matching
-      // how "stuck" content actually behaves between syncs.
-      const dxScroll = x - baseScrollX
-      const dyScroll = y - baseScrollY
-      for (const [copy, base] of stickyBases) {
-        copy.style.transform = `translate(${base.dx + dxScroll}px, ${base.dy + dyScroll}px)`
+      if (stickyLinks.length === 0) return
+
+      // A window-scrolled sticky copy is an ORDINARY in-flow descendant of the clone root (unlike
+      // the `position: fixed` predecessor of this fix, `position: sticky` never escapes flow), so
+      // the root's `left`/`top` above just moved it along with everything else — it now paints at
+      // stage-local `flow - scroll`. Where it BELONGS is wherever the browser is painting the live
+      // element right now, and that is the term this used to guess: it took the offset from the
+      // last full sync and added the scroll delta, which holds the copy still on screen. Right
+      // while the element is stuck, wrong the whole time it is not — an unstuck sticky flows with
+      // the page, so its copy has to flow too, and instead it froze where the last sync left it
+      // until the next one landed. This dashboard's header is sticky on every page.
+      //
+      // So MEASURE. `stickyOffset` does the arithmetic; all this does is keep the reads and the
+      // writes in two batches, and share the reads with every other lens through `liveRects` —
+      // otherwise each lens's write to its own clone invalidates layout before the next one reads,
+      // and a scroll event costs one forced layout per lens instead of one in total.
+      const rects = liveRects ?? new Map<Element, DOMRect | null>()
+      for (const { live } of stickyLinks) {
+        if (rects.has(live)) continue
+        // A live element that has left the document measures as all zeros, which would slam its
+        // copy to the stage's origin. It cannot be corrected at all until the next full sync
+        // re-links the tree, so it is skipped and its copy keeps the transform it has.
+        rects.set(live, live.isConnected ? live.getBoundingClientRect() : null)
+      }
+      for (const { live, copy, flow } of stickyLinks) {
+        const liveRect = rects.get(live)
+        if (!liveRect) continue
+        const { dx, dy } = stickyOffset(flow, liveRect, { x, y })
+        copy.style.transform = `translate(${dx}px, ${dy}px)`
       }
     },
     destroy() {
       alive = false
       clone = null
-      stickyBases = new Map()
+      stickyLinks = []
       stage.replaceChildren()
     },
   }
@@ -426,7 +450,11 @@ export function startMirrorScheduler(): MirrorScheduler {
       for (const e of entries.values()) e.dirty = true
     },
     applyScroll(x, y) {
-      for (const e of entries.values()) e.host.setScroll(x, y)
+      // ONE measurement cache for the whole event: every lens mirrors the same `#root`, so they
+      // ask about the same live sticky elements. The first lens measures, the rest read the map —
+      // which is what keeps a scroll event at one forced layout however many lenses are open.
+      const liveRects = new Map<Element, DOMRect | null>()
+      for (const e of entries.values()) e.host.setScroll(x, y, liveRects)
     },
     stop() {
       stopped = true

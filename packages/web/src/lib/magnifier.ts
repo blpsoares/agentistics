@@ -364,3 +364,40 @@ export function newLens(style: LensStyle, vp: Viewport, taken: Set<string>): Mag
     pinned: false,
   }
 }
+
+/**
+ * Where a WINDOW-scrolled `position: sticky` copy must be painted inside the stage, as a
+ * stage-local translate.
+ *
+ * A sticky copy inside the clone has no scrolling ancestor, so it never engages: it paints at its
+ * ordinary FLOW position, which — the clone root being offset by `-scroll` — lands at stage-local
+ * `flow - scroll`, where `flow` is the element's position in DOCUMENT coordinates. The LIVE element
+ * is wherever the browser is actually painting it right now, in VIEWPORT coordinates, which is the
+ * same frame stage-local coordinates live in. So the correction is simply the gap between the two:
+ *
+ *     offset = live − (flow − scroll)
+ *
+ * **The live position must be MEASURED, never extrapolated from a scroll delta.** The previous rule
+ * took the offset computed at the last full sync and added however far the page had scrolled since,
+ * which holds the copy still on screen — exactly right while the element is STUCK (its viewport
+ * position genuinely does not change as you scroll) and exactly wrong while it is not. In its
+ * UNSTUCK phase a sticky element flows with the page like any other, so `live = flow − scroll` and
+ * the offset is ZERO; the delta rule instead returned the scroll distance, freezing the copy where
+ * the last sync left it while the real element scrolled away. The header of this dashboard is
+ * sticky on every page, so that is a lens showing a header nailed to the wrong place, and it
+ * stayed wrong until the next full sync happened to land.
+ *
+ * Both phases, and the crossing between them, come out right here for the same reason: nothing is
+ * assumed about which phase the element is in. That is what makes the sticky term correct on the
+ * frame it changes rather than a heartbeat later.
+ */
+export function stickyOffset(
+  flow: { x: number; y: number },
+  live: { left: number; top: number },
+  scroll: { x: number; y: number },
+): { dx: number; dy: number } {
+  return {
+    dx: live.left - (flow.x - scroll.x),
+    dy: live.top - (flow.y - scroll.y),
+  }
+}
