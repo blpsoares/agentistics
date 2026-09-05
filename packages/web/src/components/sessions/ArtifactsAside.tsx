@@ -44,6 +44,7 @@ import {
   galleryFileCount, galleryGroups, parseGalleryScope, parseGalleryView, producedGroups,
   type GalleryScope, type GalleryTurn, type GalleryView,
 } from '../../lib/gallery'
+import { prCaption } from '../../lib/prCaption'
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
 
@@ -263,12 +264,10 @@ export function ArtifactsAside({
     pulls: { number: number; title: string; url: string; state: string; draft: boolean; review?: string; branch: string }[]
     unavailable?: string
     detail?: string
+    /** The cap the server read with — see `github-prs.ts`'s `PR_LIMIT`. Never restated here. */
+    limit?: number
   }
-  const [prs, setPrs] = useState<{
-    pulls: { number: number; title: string; url: string; state: string; draft: boolean; review?: string; branch: string }[]
-    unavailable?: string
-    detail?: string
-  } | null>(() => asideCache.read<PrAnswer>(asideKey(sessionId, 'prs')).value ?? null)
+  const [prs, setPrs] = useState<PrAnswer | null>(() => asideCache.read<PrAnswer>(asideKey(sessionId, 'prs')).value ?? null)
   useEffect(() => {
     if (tab !== 'prs') return
     const key = asideKey(sessionId, 'prs')
@@ -718,7 +717,11 @@ export function ArtifactsAside({
       ) : prs.pulls.length === 0 ? (
         <Note text={pt ? 'Nenhum pull request neste repositório.' : 'No pull requests in this repository.'} />
       ) : (
-        prs.pulls.map(pr => (
+        <>
+          <p style={{
+            margin: '0 0 8px', fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)',
+          }}>{prCaption({ shown: prs.pulls.length, limit: prs.limit, lang: pt ? 'pt' : 'en' })}</p>
+          {prs.pulls.map(pr => (
           <a
             key={pr.number}
             href={pr.url}
@@ -749,7 +752,8 @@ export function ArtifactsAside({
               }}>{pr.branch}</span>
             )}
           </a>
-        ))
+          ))}
+        </>
       )}
     </div>
   )

@@ -35,6 +35,21 @@
  * there is no prose (a message that was only files), by the COUNT: a stored turn that is nothing
  * but markers, as many as the echo carried paths. That second rule is narrow on purpose — it never
  * fires on a turn that has words in it.
+ *
+ * THE THIRD SHAPE — A SHORT MESSAGE WITH NO WAY OUT, and this one had no expiry at all. Every rule
+ * above is a comparison, so a message the comparisons cannot recognise waits FOREVER. Under
+ * `SAFE_CONTAINS_LEN` only equality is allowed — deliberately, a two-letter echo appears inside
+ * unrelated turns by coincidence — and the queue-joining shape above is exactly what makes equality
+ * fail. Reported with a three-letter message: "executei o btw no claude e n apareceu nada na
+ * sessão, na real tá enfileirado eternamente." It had been read and answered.
+ *
+ * The way out is not a timeout — a session really can sit on its queue for an hour, and a timer
+ * that retires an unread message is the one error worse than this one. It is ORDER. Delivery is
+ * FIFO: the write channel is FIFO by construction, `editEcho` APPENDS, and a harness commits its
+ * input queue in the order it arrived. So a LATER echo appearing in the transcript is proof that
+ * every earlier one was read — it could not have been overtaken. `landedIndex` is that rule, and it
+ * costs nothing in confidence: the later echo was recognised by the very comparisons above, and the
+ * earlier ones are then a deduction from ordering rather than a guess about their text.
  */
 
 /** Whitespace is collapsed on both sides: the harness re-wraps what it stores, and adds `\r`. */
@@ -89,23 +104,39 @@ export function pendingEchoes(
   userTurns: readonly string[],
 ): string[] {
   const seen = userTurns.map(collapseEcho).filter(t => t !== '')
-  const landed = (c: string): boolean =>
-    seen.includes(c) || (c.length >= SAFE_CONTAINS_LEN && seen.some(t => t.includes(c)))
-  return echoes.filter(text => {
-    const c = collapseEcho(text)
-    if (c === '') return false
-    if (landed(c)) return false
-    const { prose, paths } = echoProse(text)
-    if (paths === 0) return true
-    // The prose against the stored turn with its leading markers removed. EXACT equality is enough
-    // here and is what makes it safe for a two-word message: the markers stand exactly where the
-    // paths stood, so what remains on both sides is the same typed sentence — no coincidence to
-    // guard against, and none of the length rule's caution is needed.
-    const stripped = userTurns.map(withoutLeadingMarkers).filter(t => t !== '')
-    if (prose !== '' && (stripped.includes(prose)
-      || (prose.length >= SAFE_CONTAINS_LEN && stripped.some(t => t.includes(prose))))) return false
-    // Only files and no words: match a turn that is only markers, as many as there were paths.
-    if (prose === '' && userTurns.some(t => markerOnlyCount(t) === paths)) return false
-    return true
-  })
+  const stripped = userTurns.map(withoutLeadingMarkers).filter(t => t !== '')
+  const inTranscript = echoes.map(text => carriedByTranscript(text, userTurns, seen, stripped))
+  // The LAST echo the comparisons recognised. Delivery is FIFO, so everything before it went into
+  // the same pane earlier and was read no later — see the header's third shape.
+  const lastLanded = inTranscript.lastIndexOf(true)
+  return echoes.filter((_text, i) => i > lastLanded && !inTranscript[i])
+}
+
+/**
+ * Whether the transcript carries this one echo, judged on TEXT alone.
+ *
+ * Split out because `pendingEchoes` now needs the answer for every echo, not just the one it is
+ * deciding: the ordering rule above reads the whole vector.
+ */
+function carriedByTranscript(
+  text: string,
+  userTurns: readonly string[],
+  seen: readonly string[],
+  stripped: readonly string[],
+): boolean {
+  const c = collapseEcho(text)
+  // An empty echo is nothing to wait for; treated as carried so it is dropped either way.
+  if (c === '') return true
+  if (seen.includes(c) || (c.length >= SAFE_CONTAINS_LEN && seen.some(t => t.includes(c)))) return true
+  const { prose, paths } = echoProse(text)
+  if (paths === 0) return false
+  // The prose against the stored turn with its leading markers removed. EXACT equality is enough
+  // here and is what makes it safe for a two-word message: the markers stand exactly where the
+  // paths stood, so what remains on both sides is the same typed sentence — no coincidence to
+  // guard against, and none of the length rule's caution is needed.
+  if (prose !== '' && (stripped.includes(prose)
+    || (prose.length >= SAFE_CONTAINS_LEN && stripped.some(t => t.includes(prose))))) return true
+  // Only files and no words: match a turn that is only markers, as many as there were paths.
+  if (prose === '' && userTurns.some(t => markerOnlyCount(t) === paths)) return true
+  return false
 }
