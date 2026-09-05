@@ -20,6 +20,7 @@ import { cacheIsUsable, stripVolatile } from './fleetCache'
 import { getCentralMachine } from './centralMachinePick'
 import { relayedToSessions, type RelayedRow } from './relayedSessions'
 import { notifyFleetTransitions, type SessionActivity } from './sessionNotifications'
+import { parseActResult } from './fleetAct'
 
 /** Mirrors `SessionAction` in `@agentistics/tui/control/sessions`, minus the verbs a page cannot do. */
 export type FleetActionId =
@@ -331,12 +332,11 @@ export function useFleet(lang: 'pt' | 'en', enabled = true): FleetState {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
       })
-      const json = await res.json().catch(() => null) as { ok?: boolean; message?: string } | null
-      const out = {
-        ok: Boolean(json?.ok),
-        message: json?.message
-          ?? (lang === 'pt' ? 'A ação não pôde ser executada.' : 'The action could not be run.'),
-      }
+      // Read through `parseActResult`, which is where "every field the answer carries is carried
+      // on" is written down and tested. This was an object literal building `{ ok, message }` while
+      // the declared return type promised `id?: string` — so a reopen spawned its session and the
+      // UI stood still on the dead row, because the id it needed to follow had been dropped.
+      const out = parseActResult(await res.json().catch(() => null), lang)
       // Re-read immediately: the verb changed the machine, and waiting up to five seconds to show
       // it is how a control that worked looks like one that did nothing.
       await pollOnce()
