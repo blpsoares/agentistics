@@ -129,3 +129,38 @@ export function edgeHint(
   }
   return null
 }
+
+
+/**
+ * The conversation's floor.
+ *
+ * A chat narrower than this is not a squeezed chat, it is a column of two-word lines with a
+ * composer that cannot hold a sentence — at which point the panel has taken the screen and the
+ * thing it was opened BESIDE is gone. Reported exactly that way: "ele ta simplesmente pegando TUDO
+ * do espaco, o chat nao fica aberto mais."
+ */
+export const CHAT_MIN_WIDTH = 420
+
+/** Below this the panel is not a panel either — a file view this narrow wraps every line. */
+export const PANEL_MIN_WIDTH = 280
+
+/**
+ * How wide the panel may actually be, given the room there is.
+ *
+ * THE STORED WIDTH IS A WISH, NOT A MEASUREMENT. It is remembered from whatever window it was
+ * dragged in — 900px on a wide monitor, restored on a laptop where 900 is the whole content area —
+ * and `flexShrink: 0` on the panel with `flex: 1` on the conversation means the conversation is the
+ * one that gives, all the way to zero. So the request is CLAMPED here rather than trusted, and the
+ * clamp is re-applied on every resize: a window narrowed after the fact is the same situation as a
+ * window that was always narrow.
+ *
+ * The conversation's floor wins over the panel's preference, and the panel's own floor wins over
+ * both — when even `PANEL_MIN_WIDTH` cannot be given without going under the chat's floor there is
+ * no split to be had, which is what `resolveArtifactLayout` already answers with `overlay`.
+ */
+export function panelWidth(available: number, requested: number): number {
+  if (!Number.isFinite(available) || available <= 0) return requested
+  const room = available - CHAT_MIN_WIDTH
+  if (room < PANEL_MIN_WIDTH) return Math.min(requested, Math.max(PANEL_MIN_WIDTH, room))
+  return Math.min(requested, room)
+}

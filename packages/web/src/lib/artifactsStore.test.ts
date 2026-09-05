@@ -6,7 +6,7 @@ import {
 beforeEach(() => resetArtifacts())
 
 test('it starts knowing nothing — no session, no count, shut', () => {
-  expect(getArtifacts()).toEqual({ sessionId: null, open: false, count: 0, dismissed: false })
+  expect(getArtifacts()).toEqual({ sessionId: null, open: false, count: 0, dismissed: false, tabRequest: null })
 })
 
 test('a count is recorded against the session it belongs to', () => {
@@ -22,14 +22,14 @@ test('switching sessions resets the panel AND the dismissal', () => {
   setArtifactCount('b', 1)
   // A decision about one conversation says nothing about the next, and a count on the header of a
   // different session would be a confident wrong answer.
-  expect(getArtifacts()).toEqual({ sessionId: 'b', count: 1, open: false, dismissed: false })
+  expect(getArtifacts()).toEqual({ sessionId: 'b', count: 1, open: false, dismissed: false, tabRequest: null })
 })
 
 test('a new count for the SAME session keeps the panel as it was', () => {
   setArtifactCount('a', 1)
   openArtifacts()
   setArtifactCount('a', 4)
-  expect(getArtifacts()).toEqual({ sessionId: 'a', count: 4, open: true, dismissed: false })
+  expect(getArtifacts()).toEqual({ sessionId: 'a', count: 4, open: true, dismissed: false, tabRequest: null })
 })
 
 test('closing is also a decision not to be reopened automatically', () => {
@@ -64,4 +64,25 @@ test('an unchanged write keeps the SAME object, so no consumer re-renders', () =
   const before = getArtifacts()
   setArtifactCount('a', 1)
   expect(getArtifacts()).toBe(before)
+})
+
+test('an opener may ask for a tab, and asking twice is two requests', () => {
+  setArtifactCount('t', 0)
+  openArtifacts('live')
+  const first = getArtifacts().tabRequest
+  expect(first?.tab).toBe('live')
+  closeArtifacts()
+  openArtifacts('live')
+  const second = getArtifacts().tabRequest
+  // The STAMP is what makes the panel obey a second time — the reader may have moved to Files in
+  // between, and a prop that never changes could never bring them back.
+  expect(second).not.toBe(first)
+})
+
+test('opening without naming a tab leaves the reader where they were', () => {
+  setArtifactCount('u', 0)
+  openArtifacts('live')
+  const asked = getArtifacts().tabRequest
+  openArtifacts()
+  expect(getArtifacts().tabRequest).toBe(asked)
 })

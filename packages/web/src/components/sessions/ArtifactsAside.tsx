@@ -42,6 +42,14 @@ type TabId = 'files' | 'docs' | 'live' | 'gallery'
 const GALLERY_VIEW_KEY = 'agentistics:gallery-view'
 
 export interface ArtifactsAsideProps {
+  /**
+   * A tab an OPENER asked for, with the stamp that makes it a request rather than a setting.
+   *
+   * The reader's own choice is what normally decides the tab; this exists because the edge marker's
+   * whole sentence is "the harness is running something", and pressing it to land on the file list
+   * answers a question nobody asked. See `artifactsStore.ts`.
+   */
+  tabRequest?: { tab: string; at: number } | null
   sessionId: string
   lang: 'pt' | 'en'
   /** Every file this session touched, newest first. */
@@ -90,10 +98,26 @@ function KindIcon({ kind }: { kind: Artifact['kind'] }) {
 
 export function ArtifactsAside({
   sessionId, lang, artifacts, loading, unavailable, unlistedWrites, turns, facts, onClose,
+  tabRequest,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
   const [open, setOpen] = useState<Artifact | null>(null)
   const [tab, setTab] = useState<TabId>('files')
+  /**
+   * Honour a requested tab, once per request.
+   *
+   * Keyed on the STAMP and not on the value: the reader must stay free to move afterwards, which a
+   * `[tabRequest.tab]` dependency would take away — they click Files, the prop still reads `live`,
+   * and nothing changes so nothing re-runs, but the next unrelated render restores it.
+   * An unknown tab is IGNORED rather than defaulted: whoever wrote it meant something this panel
+   * does not have, and dropping them on Files would look like the request was honoured.
+   */
+  const askedAt = tabRequest?.at
+  useEffect(() => {
+    const t = tabRequest?.tab
+    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery') setTab(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askedAt])
 
   /** DOCS is a SUBSET of files, never a second list — a document cannot be in one and missing from
    *  the other. `isDoc` decides it by extension, which is what can be known without opening it. */

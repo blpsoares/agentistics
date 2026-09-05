@@ -33,9 +33,25 @@ export interface ArtifactsState {
    * conversation says nothing about the next.
    */
   dismissed: boolean
+  /**
+   * WHICH TAB an opener asked for, and when it asked.
+   *
+   * The panel remembers the tab the reader last chose, which is right for the header's button —
+   * you press it to go back to what you were looking at. It is wrong for the edge marker, whose
+   * whole sentence is "the harness is running something": pressing that and landing on the file
+   * list is an answer to a question nobody asked.
+   *
+   * The `at` stamp is what makes it a REQUEST rather than a setting. Without it the panel could
+   * never leave the requested tab — the reader clicks Files, the prop still says `live`, and the
+   * next render puts them back. Asking twice for the same tab is two requests, so the stamp changes
+   * even when the tab does not.
+   */
+  tabRequest: { tab: string; at: number } | null
 }
 
-const EMPTY: ArtifactsState = { sessionId: null, open: false, count: 0, dismissed: false }
+const EMPTY: ArtifactsState = {
+  sessionId: null, open: false, count: 0, dismissed: false, tabRequest: null,
+}
 
 let state: ArtifactsState = EMPTY
 const listeners = new Set<() => void>()
@@ -45,7 +61,8 @@ function emit(next: ArtifactsState): void {
   // same object or every poll re-renders both consumers.
   if (
     next.sessionId === state.sessionId && next.open === state.open &&
-    next.count === state.count && next.dismissed === state.dismissed
+    next.count === state.count && next.dismissed === state.dismissed &&
+    next.tabRequest === state.tabRequest
   ) return
   state = next
   for (const l of listeners) l()
@@ -69,11 +86,14 @@ export function setArtifactCount(sessionId: string, count: number): void {
   emit(state.sessionId === sessionId
     ? { ...state, count }
     // A different session: the count is its own, and so is the decision to have closed the panel.
-    : { sessionId, count, open: false, dismissed: false })
+    : { sessionId, count, open: false, dismissed: false, tabRequest: null })
 }
 
-export function openArtifacts(): void {
-  emit({ ...state, open: true })
+export function openArtifacts(tab?: string): void {
+  emit({
+    ...state, open: true,
+    ...(tab === undefined ? {} : { tabRequest: { tab, at: Date.now() } }),
+  })
 }
 
 /** Closing is also a DECISION not to be reopened automatically — see `ArtifactsState.dismissed`. */

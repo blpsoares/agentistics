@@ -514,6 +514,12 @@ html, body {
 /* The working spinner. `lucide` ships a static glyph; the rotation is ours. */
 @keyframes ag-working-spin { to { transform: rotate(360deg); } }
 .ag-working-spin { animation: ag-working-spin 900ms linear infinite; }
+
+/* The live marker's dot. It reports something happening NOW, and a static dot beside a static
+   line is a label. Opacity only — a scaling dot moves the text beside it. */
+@keyframes ag-hint-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.ag-hint-pulse { animation: ag-hint-pulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .ag-hint-pulse { animation: none; } }
 @media (prefers-reduced-motion: reduce) { .ag-working-spin { animation: none; } }
 
 /* The row's pin. Hidden until the row is hovered or something in it has focus — a column of pin

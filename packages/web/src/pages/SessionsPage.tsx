@@ -26,7 +26,7 @@ import { useIsMobile } from '../hooks/useIsMobile'
 import { FleetOverview } from '../components/sessions/FleetOverview'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
 import {
-  ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, resolveArtifactLayout, shouldAutoOpen,
+  ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, panelWidth, resolveArtifactLayout, shouldAutoOpen,
   type ArtifactLayout,
 } from '../lib/artifactLayout'
 import { closeArtifacts, openArtifacts, setArtifactCount, useArtifacts } from '../lib/artifactsStore'
@@ -257,6 +257,28 @@ export default function SessionsPage() {
   if (asideShown) closingAs.current = artLayout.layout
   /** The width the split animates between. Zero while closing; the drag suspends the tween. */
   const asideMotion = artDragging ? 'none' : `width ${ASIDE_ANIM_MS}ms ${ASIDE_EASE}`
+  /**
+   * The room the split actually has, MEASURED — not `window.innerWidth` minus a guess at the nav.
+   *
+   * It is what `panelWidth` clamps the stored width against, and it has to be observed rather than
+   * computed once: the nav collapses, the fleet list becomes a rail when the panel opens, and the
+   * window is resized. Each of those changes the room without changing anything this component
+   * renders, so a value read at mount would be wrong by the second frame.
+   */
+  const splitRef = useRef<HTMLDivElement | null>(null)
+  const [splitRoom, setSplitRoom] = useState(0)
+  useEffect(() => {
+    const el = splitRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width
+      if (typeof w === 'number') setSplitRoom(w)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  })
+  /** What the panel may take here, as opposed to what it remembers wanting. See `panelWidth`. */
+  const shownArtWidth = panelWidth(splitRoom, artWidth)
 
   /**
    * THE EDGE MARKER — what the harness is doing right now, with the panel shut.
@@ -279,20 +301,30 @@ export default function SessionsPage() {
   }
   const edgeMarker = hint === null || selected === undefined ? null : (
     <button
-      onClick={openArtifacts}
+      // LIVE, not wherever the panel was last left: this control says the harness is running
+      // something, so the answer to pressing it is the feed of what it is doing.
+      onClick={() => openArtifacts('live')}
       title={`${HINT_VERB[hint.kind]} · ${hint.text}`}
       style={{
-        position: 'absolute', top: '50%', right: 0, transform: 'translateY(-50%)',
-        zIndex: 15, display: 'flex', alignItems: 'center', gap: 7,
-        maxWidth: 260, padding: '8px 10px 8px 12px',
-        borderRadius: '10px 0 0 10px', cursor: 'pointer',
-        border: '1px solid var(--anthropic-orange)', borderRight: 'none',
+        // ABOVE THE COMPOSER, not glued to the middle of the right edge.
+        // It was a tab hanging off the side at half height: it covered the conversation's text,
+        // sat where nothing else on the screen is, and read as a torn-off piece of the panel it
+        // opens. Here it is where a status line belongs — at the bottom, over the gap between the
+        // last message and the box you type in, which is the one part of a chat that is reliably
+        // empty and the part your eye is already on while you wait for the session.
+        position: 'absolute', bottom: 14, right: 18,
+        zIndex: 15, display: 'flex', alignItems: 'center', gap: 8,
+        maxWidth: 340, padding: '8px 12px',
+        borderRadius: 999, cursor: 'pointer',
+        border: '1px solid var(--anthropic-orange)',
         background: 'var(--bg-surface)', color: 'var(--text-primary)',
         fontFamily: 'inherit', fontSize: 11.5, textAlign: 'left',
-        boxShadow: '-6px 0 18px rgba(0,0,0,0.35)',
+        boxShadow: '0 10px 26px rgba(0,0,0,0.45)',
       }}
     >
-      <span aria-hidden style={{
+      {/* It PULSES, because the fact it reports is that something is happening right now — a
+          static dot beside a static line is indistinguishable from a label. */}
+      <span aria-hidden className="ag-hint-pulse" style={{
         width: 7, height: 7, borderRadius: 4, flexShrink: 0,
         background: 'var(--anthropic-orange)',
       }} />
@@ -321,6 +353,7 @@ export default function SessionsPage() {
       {...(artifactsUnavailable ? { unavailable: artifactsUnavailable } : {})}
       unlistedWrites={artifactsUnlisted}
       turns={artifactTurns}
+      tabRequest={art.tabRequest}
       onClose={closeArtifacts}
     />
   )
@@ -640,7 +673,7 @@ export default function SessionsPage() {
     // The split. BOTH wrappers keep `display: flex; flexDirection: column` — this file has recorded
     // the same bug twice: `flex: 1` on a child means nothing until its PARENT is a flex container.
     return (
-      <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
+      <div ref={splitRef} style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
           {panel}
         </div>
@@ -650,7 +683,9 @@ export default function SessionsPage() {
             a control that resizes nothing. */}
         {asideIn && <div
           onMouseDown={e => {
-            dragArt.current = { x: e.clientX, w: artWidth }
+            // From the width on screen, not the remembered one: a clamped panel would otherwise
+            // jump to its stored width the moment the handle is touched.
+            dragArt.current = { x: e.clientX, w: shownArtWidth }
             setArtDragging(true)
             document.body.style.userSelect = 'none'
           }}
@@ -660,7 +695,7 @@ export default function SessionsPage() {
           }}
         />}
         <div style={{
-          display: 'flex', flexDirection: 'column', width: asideIn ? artWidth : 0,
+          display: 'flex', flexDirection: 'column', width: asideIn ? shownArtWidth : 0,
           flexShrink: 0, minHeight: 0, background: 'var(--bg-surface)',
           // The contents keep their full width while the box shrinks, so the panel slides out of
           // view instead of reflowing itself smaller on the way — text rewrapping mid-animation is
@@ -669,7 +704,7 @@ export default function SessionsPage() {
           transition: asideMotion,
         }}>
           <div style={{
-            display: 'flex', flexDirection: 'column', width: artWidth, flexShrink: 0,
+            display: 'flex', flexDirection: 'column', width: shownArtWidth, flexShrink: 0,
             height: '100%', minHeight: 0,
           }}>
             {artifactsPane}
