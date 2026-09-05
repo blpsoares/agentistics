@@ -342,9 +342,13 @@ export function ArtifactsAside({
   ]
 
   const tabBar = (
+    // SEVEN tabs do not fit a 390px phone, and the panel body must never make the PAGE scroll
+    // sideways. So the bar scrolls inside itself — the same rule this codebase applies to a wide
+    // table — and each cell keeps a 44px touch target on mobile.
     <div role="tablist" style={{
       display: 'flex', gap: 2, padding: '6px 8px', flexShrink: 0,
       borderBottom: '1px solid var(--border)',
+      overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'thin',
     }}>
       {tabs.map(t => {
         const on = tab === t.id
@@ -360,6 +364,9 @@ export function ArtifactsAside({
               fontSize: 11.5, fontWeight: on ? 700 : 500,
               background: on ? 'var(--bg-elevated)' : 'transparent',
               color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+              // 44px is the MOBILE number; applying it on desktop turns the bar into a row of
+              // buttons. A tab must also not shrink, or the scroll it lives in cannot work.
+              minHeight: isMobile ? 44 : undefined, flexShrink: 0, whiteSpace: 'nowrap',
             }}
           >
             {t.icon}
@@ -1034,6 +1041,7 @@ function EventRow({ e, pt, now, onOpen, status, sessionId, agentId }: {
   /** Set inside a SUBAGENT's activity: its refs live in its own transcript, not the parent's. */
   agentId?: string
 }) {
+  const isMobile = useIsMobile()
   const [open, setOpen] = useState(false)
   const openable = stepOpenable(e)
   const detail = useStepDetail(sessionId, e, open, pt, agentId)
@@ -1067,7 +1075,8 @@ function EventRow({ e, pt, now, onOpen, status, sessionId, agentId }: {
         'aria-expanded': open,
       } : {})}
       style={{
-        display: 'flex', alignItems: 'flex-start', gap: 7, padding: '5px 8px',
+        display: 'flex', alignItems: 'flex-start', gap: 7,
+        padding: isMobile ? '10px 8px' : '5px 8px', minHeight: isMobile && openable ? 44 : undefined,
         opacity: e.live ? 1 : 0.92,
         width: '100%', textAlign: 'left', border: 'none', background: 'transparent',
         borderRadius: 7, fontFamily: 'inherit', minWidth: 0,
@@ -1128,7 +1137,8 @@ function EventRow({ e, pt, now, onOpen, status, sessionId, agentId }: {
         aria-label={pt ? 'Abrir o arquivo' : 'Open the file'}
         style={{
           flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          width: 24, height: 24, margin: '4px 4px 0 0', borderRadius: 6, padding: 0,
+          width: isMobile ? 44 : 24, height: isMobile ? 44 : 24, margin: '4px 4px 0 0',
+          borderRadius: 6, padding: 0,
           border: '1px solid var(--border-subtle)', background: 'transparent',
           color: 'var(--text-tertiary)', cursor: 'pointer',
         }}
@@ -1191,6 +1201,7 @@ function EventRow({ e, pt, now, onOpen, status, sessionId, agentId }: {
 function SubagentCard({ row, pt, now, onOpen }: {
   row: SubagentRow; pt: boolean; now: number; onOpen: () => void
 }) {
+  const isMobile = useIsMobile()
   const st = subagentStatusText(row.status, pt)
   const unmeasured = unmeasuredText(row, pt)
   const unpriced = unpricedText(row, pt)
@@ -1200,8 +1211,9 @@ function SubagentCard({ row, pt, now, onOpen }: {
       onClick={onOpen}
       style={{
         display: 'block', width: '100%', textAlign: 'left', border: '1px solid var(--border-subtle)',
-        background: 'transparent', borderRadius: 8, padding: '7px 9px', marginBottom: 6,
-        cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
+        background: 'transparent', borderRadius: 8, padding: isMobile ? '10px 10px' : '7px 9px',
+        marginBottom: 6, cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
+        minHeight: isMobile ? 44 : undefined,
       }}
       onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-elevated)' }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
@@ -1314,7 +1326,8 @@ function SubagentActivity({ sessionId, row, pt, now, onBack }: {
           onClick={onBack}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 3, border: 'none', background: 'transparent',
-            color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, padding: 0,
+            color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
+            padding: 0, minHeight: 44, flexShrink: 0,
           }}
         >
           <ChevronLeft size={13} /> {pt ? 'Subagentes' : 'Subagents'}
@@ -1365,6 +1378,7 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
   onChanged: () => void
 }) {
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
   const [adding, setAdding] = useState(false)
   const [paste, setPaste] = useState('')
   const [name, setName] = useState('')
@@ -1429,7 +1443,8 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
           onClick={() => { setAdding(true); setSaid(null) }}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6,
-            padding: '5px 10px', borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit',
+            minHeight: isMobile ? 44 : undefined,
+            padding: isMobile ? '0 14px' : '5px 10px', borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit',
             fontSize: 11.5, fontWeight: 600, border: '1px dashed var(--border)',
             background: 'transparent', color: 'var(--text-secondary)',
           }}
@@ -1482,7 +1497,8 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
                 <label
                   key={sc}
                   style={{
-                    display: 'flex', alignItems: 'flex-start', gap: 7, padding: '5px 7px', borderRadius: 6,
+                    display: 'flex', alignItems: 'flex-start', gap: 7, borderRadius: 6,
+                    minHeight: isMobile ? 44 : undefined, padding: isMobile ? '9px 8px' : '5px 7px',
                     cursor: 'pointer', border: `1px solid ${on ? 'var(--anthropic-orange)' : 'var(--border-subtle)'}`,
                   }}
                 >
@@ -1510,7 +1526,8 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
               type="submit"
               disabled={busy || paste.trim() === ''}
               style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 7,
+                display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 7,
+                minHeight: isMobile ? 44 : undefined, padding: isMobile ? '0 14px' : '5px 11px',
                 fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
                 cursor: busy || paste.trim() === '' ? 'default' : 'pointer',
                 opacity: busy || paste.trim() === '' ? 0.5 : 1,
@@ -1523,7 +1540,8 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
               type="button"
               onClick={() => { setAdding(false); setSaid(null) }}
               style={{
-                padding: '5px 11px', borderRadius: 7, fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+                minHeight: isMobile ? 44 : undefined, padding: isMobile ? '0 14px' : '5px 11px',
+                borderRadius: 7, fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
                 cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg-card)',
                 color: 'var(--text-secondary)',
               }}
@@ -1550,6 +1568,7 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
 function McpRow({ entry, pt, canWrite, busy, onRemove }: {
   entry: McpEntry; pt: boolean; canWrite: boolean; busy: boolean; onRemove: () => void
 }) {
+  const isMobile = useIsMobile()
   const [confirm, setConfirm] = useState(false)
   const run = runText(entry.run, pt)
   const sc = scopeText(entry.scope, pt)
@@ -1576,7 +1595,8 @@ function McpRow({ entry, pt, canWrite, busy, onRemove }: {
             aria-label={pt ? 'Remover' : 'Remove'}
             style={{
               flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: 22, height: 22, borderRadius: 6, padding: 0, cursor: busy ? 'default' : 'pointer',
+              width: isMobile ? 44 : 22, height: isMobile ? 44 : 22, borderRadius: 6, padding: 0,
+              cursor: busy ? 'default' : 'pointer',
               border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-tertiary)',
             }}
           >
@@ -1611,14 +1631,16 @@ function McpRow({ entry, pt, canWrite, busy, onRemove }: {
           <button
             onClick={() => { setConfirm(false); onRemove() }}
             style={{
-              padding: '3px 10px', borderRadius: 6, fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
+              minHeight: isMobile ? 44 : undefined, padding: isMobile ? '0 14px' : '3px 10px',
+              borderRadius: 6, fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
               cursor: 'pointer', border: '1px solid #ef4444', background: 'transparent', color: '#ef4444',
             }}
           >{pt ? 'Remover' : 'Remove'}</button>
           <button
             onClick={() => setConfirm(false)}
             style={{
-              padding: '3px 10px', borderRadius: 6, fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
+              minHeight: isMobile ? 44 : undefined, padding: isMobile ? '0 14px' : '3px 10px',
+              borderRadius: 6, fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
               cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg-card)',
               color: 'var(--text-secondary)',
             }}
