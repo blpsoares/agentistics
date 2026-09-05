@@ -16,6 +16,7 @@
  * host per request would fire one per poll.
  */
 
+import type { HarnessId } from '@agentistics/core'
 import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import { controlStrings } from '@agentistics/tui/control/i18n'
@@ -424,6 +425,50 @@ export async function readFleetSkillBody(
  * Resolved against the SESSION's directory, never the server's: a machine running agentop for
  * something else would otherwise be asked about agentop.
  */
+/**
+ * Facts about the CONVERSATION behind a row that only its transcript can answer.
+ *
+ * Today: how many times it has been compacted. Asked for on the session's stats card, beside the
+ * context gauge, because they answer the same question from two sides — the gauge says how full
+ * this window is, the count says how many windows came before it.
+ *
+ * `compactions` is ABSENT rather than zero whenever it could not be established: a row with no
+ * linked conversation, a transcript not on this machine, a file that would not read. The card says
+ * which; a confident `0` would read as a conversation that has never been compacted.
+ */
+export async function readConversationFacts(
+  lang: CliLang, id: string,
+): Promise<{ compactions?: number; unavailable?: string }> {
+  const pt = lang === 'pt'
+  const host = await hostFor(lang)
+  if (!host.sessions) return { unavailable: controlStrings(lang).sessionsNoHost }
+  const fleet = await host.sessions()
+  const row = fleet.sessions.find(r => r.id === id || r.conversationId === id)
+  if (!row?.conversationId) {
+    return {
+      unavailable: row?.conversationBlind ?? (pt
+        ? 'Esta sessão ainda não tem uma conversa vinculada.'
+        : 'This session has no linked conversation yet.'),
+    }
+  }
+  const { countCompactions, resolveChatTranscriptPath } = await import('./chat-tail')
+  const path = await resolveChatTranscriptPath(row.cwd, row.conversationId).catch(() => null)
+  if (!path) {
+    return {
+      unavailable: pt
+        ? 'A transcrição desta conversa não foi encontrada nesta máquina.'
+        : 'This conversation’s transcript was not found on this machine.',
+    }
+  }
+  const n = await countCompactions(path)
+  if (n === null) {
+    return {
+      unavailable: pt ? 'Não foi possível ler a transcrição.' : 'The transcript could not be read.',
+    }
+  }
+  return { compactions: n }
+}
+
 export async function readFleetPullRequests(
   lang: CliLang, id: string,
 ): Promise<{ pulls: unknown[]; unavailable?: string; detail?: string }> {
@@ -505,22 +550,39 @@ export async function readNewOptions(lang: CliLang, query: string): Promise<Flee
     if (!host.startableHarnesses || !host.spawnSession) {
       return { harnesses: [], projects: [], tasks: [], unavailable: s.sessionsNoHost }
     }
+    const { readHarnessDefaults } = await import('./harness-defaults')
+    type Defaults = Awaited<ReturnType<typeof readHarnessDefaults>>
     const [harnesses, projects, tasks] = await Promise.all([
       host.startableHarnesses(),
       host.searchProjects ? host.searchProjects(query).catch(() => []) : Promise.resolve([]),
       host.sessionTasks ? host.sessionTasks().catch(() => []) : Promise.resolve([]),
     ])
+    // What each CLI will actually do here with no flags, read from THIS MACHINE's own settings
+    // files. `spawn-spec.ts` publishes none — no CLI prints its default in `--help` — but the
+    // picker offering "Default" without naming it is naming a thing without naming it, which is
+    // what was reported. Never a guess: an unreadable file or a missing key yields nothing and the
+    // picker keeps its plain "Default". See `harness-defaults.ts`.
+    const configured = new Map(await Promise.all(harnesses.map(async h =>
+      [h.id, await readHarnessDefaults(h.id as HarnessId).catch(() => ({} as Defaults))] as const,
+    )))
     return {
-      harnesses: harnesses.map(h => ({
-        id: h.id,
-        label: h.label,
-        modelSuggestions: [...h.modelSuggestions],
-        models: modelsFor(h.id),
-        ...(h.defaultModel ? { defaultModel: h.defaultModel } : {}),
-        supportsModel: h.supportsModel,
-        efforts: [...h.efforts],
-        ...(h.defaultEffort ? { defaultEffort: h.defaultEffort } : {}),
-      })),
+      harnesses: harnesses.map(h => {
+        const here = configured.get(h.id) ?? {}
+        // The tool's own published default outranks the machine's, on the rare day one publishes
+        // one: it is a fact about every machine, where this is a fact about ours.
+        const defaultModel = h.defaultModel ?? here.model
+        const defaultEffort = h.defaultEffort ?? here.effort
+        return {
+          id: h.id,
+          label: h.label,
+          modelSuggestions: [...h.modelSuggestions],
+          models: modelsFor(h.id),
+          ...(defaultModel ? { defaultModel } : {}),
+          supportsModel: h.supportsModel,
+          efforts: [...h.efforts],
+          ...(defaultEffort ? { defaultEffort } : {}),
+        }
+      }),
       projects: projects.map(p => ({
         path: p.path,
         label: p.label,
