@@ -325,7 +325,42 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          guessed directory, and a `derived` name is never adopted as a label. The
   │                          takeover additionally READS ITS WRITE BACK and retries once, saying so
   │                          when the record still cannot be kept — the loss is otherwise invisible
-  │                          at the moment it happens. See docs/session-manager.md
+  │                          at the moment it happens.
+  │                          **WHOSE CONVERSATION CAN BE READ** is `harness-transcript.ts`, a
+  │                          `Record<HarnessId, HarnessTranscript | null>` behind the workspace's
+  │                          chat view and the fleet poll's six-row tail. There are TWO limits and
+  │                          they were one thing for as long as Claude was the only readable
+  │                          harness: the LINK (is this row's `conversationId` exact?) and the
+  │                          FORMAT (has anybody written a reader?). Collapsing them cost the
+  │                          feature its honesty — measured 2026-09-05 on a live antigravity session
+  │                          whose `/proc/<pid>/cmdline` was `agy --conversation 01d0814f-…` for the
+  │                          very id the registry held, `GET /api/fleet/chat` ran into the
+  │                          CLAUDE-only path resolver, found nothing, took the live branch and
+  │                          answered `{turns: [], live: true}`: a blank pane with no sentence on
+  │                          it, because `SessionChat.tsx` draws "no messages yet" only when
+  │                          `live === null`. A `null` reader is now REFUSED IN WORDS and NAMES the
+  │                          harness. The link rule is untouched: only `ManagedSession.conversationId`
+  │                          reaches a reader, never the harness-and-directory guess, or some other
+  │                          conversation from the same folder appears under this session's name.
+  │                          `antigravity-chat.ts` is the first non-Claude reader and is PURE. agy
+  │                          writes the REQUEST and the EXECUTION as two steps — a `PLANNER_RESPONSE`
+  │                          carrying prose, `thinking` and `tool_calls`, then a `RUN_COMMAND` /
+  │                          `VIEW_FILE` / … step whose `content` is the result (1094 against 909 on
+  │                          the measured file; the executions carry no `tool_calls` at all). The
+  │                          chat keeps the REQUESTS and drops the executions, which is the INVERSE
+  │                          of `harness-activity.ts`'s choice for the same transcript and for the
+  │                          same reason — counting both is counting twice; a count wants the thing
+  │                          that happened, a bubble wants the one with the command in it. Tool names
+  │                          go through `canonicalTool`, so `sessionArtifacts.ts` — which selects by
+  │                          Claude's names — works on an agy session without knowing agy exists.
+  │                          `CONVERSATION_HISTORY` is a replay and is skipped; `SYSTEM_MESSAGE`,
+  │                          `CHECKPOINT` and `ERROR_MESSAGE` become unattributed notes that NAME the
+  │                          kind and never carry the body (agy's checkpoint is the whole truncated
+  │                          conversation, and its error paragraph runs 206–633 characters across all
+  │                          77 measured) — the same rule `chat-envelope.ts` applies to Claude's
+  │                          injected entries. `transcript-window.ts` is the shared byte-tail reader
+  │                          both harnesses poll through: a poll that reads whole transcripts is what
+  │                          made `/api/fleet` answer in 36 s cold. See docs/session-manager.md
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
