@@ -25,10 +25,12 @@
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { HarnessId } from '@agentistics/core'
-import { ANTIGRAVITY_BRAIN_DIR, CODEX_SESSIONS_DIR } from '../config'
+import { ANTIGRAVITY_BRAIN_DIR, CODEX_SESSIONS_DIR, COPILOT_DIR, KIMI_DIR } from '../config'
 import { UUID_RE } from '../git'
 import { parseAntigravityChat } from './antigravity-chat'
 import { parseCodexChat } from './codex-chat'
+import { parseCopilotChat } from './copilot-chat'
+import { parseKimiChat } from './kimi-chat'
 import type { ChatTurn } from './chat-turn'
 import { readChatTurns, readRecentChatTurns, resolveChatTranscriptPath } from './chat-tail'
 import { readTailWindow } from './transcript-window'
@@ -162,6 +164,92 @@ const CODEX: HarnessTranscript = {
   },
 }
 
+
+/**
+ * Copilot names the session's DIRECTORY with its own id — verified: the folder
+ * `dbd94500-8d79-4c7c-8c69-a2cd0c044201` holds an `events.jsonl` whose `session.start` carries
+ * exactly that `sessionId`. It is also the id `copilot --session-id <uuid>` assigns, which
+ * `spawn-spec.ts` records as VERIFIED, so a copilot session agentop STARTED is linked from its
+ * first turn rather than only after a reopen. No scan is needed.
+ */
+export async function resolveCopilotTranscript(
+  ref: TranscriptRef,
+  stateDir: string = join(COPILOT_DIR, 'session-state'),
+): Promise<string | null> {
+  if (!UUID_RE.test(ref.conversationId)) return null
+  const p = join(stateDir, ref.conversationId, 'events.jsonl')
+  return (await exists(p)) ? p : null
+}
+
+const COPILOT: HarnessTranscript = {
+  resolve: ref => resolveCopilotTranscript(ref),
+  async read(path, max) {
+    let content: string
+    try { content = await readFile(path, 'utf-8') } catch { return [] }
+    return parseCopilotChat(content.split('\n'), 'copilot', max)
+  },
+  async readRecent(path, max) {
+    return readTailWindow(path, max, lines => parseCopilotChat(lines, 'copilot', max))
+  },
+}
+
+/**
+ * Kimi files a session under its WORKSPACE — `sessions/<workspaceId>/session_<uuid>/` — so the
+ * conversation id alone does not name a path and the workspace directories have to be listed. One
+ * shallow `readdir` plus a `stat` per workspace, memoized like codex's for the same reason.
+ *
+ * ONLY THE `main` AGENT IS READ. A kimi session can hold several agents and `kimi-parse.ts` folds
+ * every one of them into its metrics, which is right for a COUNT — the work happened. A CHAT is a
+ * different question: `main` is the conversation the person had, and a subagent's wire is the
+ * assistant's own working notes, so splicing them together would interleave two dialogues under one
+ * heading. Measured: every one of the 14 sessions on this machine has exactly one agent, `main`. The
+ * fallback to the first agent directory costs nothing and covers a session that somehow has none.
+ */
+const kimiPathCache = new Map<string, string | null>()
+
+/** Reset the memo. Tests only. */
+export function forgetKimiTranscriptPaths(): void {
+  kimiPathCache.clear()
+}
+
+async function findKimiWire(id: string, root: string): Promise<string | null> {
+  for (const ws of await subdirs(root)) {
+    const agents = join(root, ws, `session_${id}`, 'agents')
+    const main = join(agents, 'main', 'wire.jsonl')
+    if (await exists(main)) return main
+    const others = await subdirs(agents)
+    for (const a of others) {
+      const p = join(agents, a, 'wire.jsonl')
+      if (await exists(p)) return p
+    }
+  }
+  return null
+}
+
+export async function resolveKimiTranscript(
+  ref: TranscriptRef,
+  sessionsDir: string = join(KIMI_DIR, 'sessions'),
+): Promise<string | null> {
+  if (!UUID_RE.test(ref.conversationId)) return null
+  const cached = kimiPathCache.get(ref.conversationId)
+  if (cached !== undefined) return cached
+  const found = await findKimiWire(ref.conversationId, sessionsDir)
+  kimiPathCache.set(ref.conversationId, found)
+  return found
+}
+
+const KIMI: HarnessTranscript = {
+  resolve: ref => resolveKimiTranscript(ref),
+  async read(path, max) {
+    let content: string
+    try { content = await readFile(path, 'utf-8') } catch { return [] }
+    return parseKimiChat(content.split('\n'), 'kimi', max)
+  },
+  async readRecent(path, max) {
+    return readTailWindow(path, max, lines => parseKimiChat(lines, 'kimi', max))
+  },
+}
+
 const CLAUDE: HarnessTranscript = {
   resolve: ref => (ref.cwd === undefined
     ? Promise.resolve(null)
@@ -171,20 +259,34 @@ const CLAUDE: HarnessTranscript = {
 }
 
 /**
- * The reader for each harness, or `null` where nobody has written one.
+ * The reader for each harness, and the one `null` that is not a gap.
  *
- * `null` is a statement about THIS PRODUCT, not about the harness — kimi, copilot and gemini all
- * keep a readable transcript on disk (`adapters/*-parse.ts` already read every one of them for
- * metrics) and each is a reader waiting to be written. It is spelled out here rather than left to
- * a lookup miss so that adding one is a line in this table, and so the caller has something to say.
+ * GEMINI CAN NEVER BE READ HERE, and that is a fact about the LINK rather than about the format.
+ * A reader is only ever offered a `conversationId`, and `ManagedSession.conversationId` exists only
+ * where agentop handed the id to the CLI. Measured against `spawn-spec.ts`: claude and copilot have
+ * `assignId`, and codex, kimi and antigravity have `resume` — so every one of those five can carry
+ * an exact id. **Gemini has neither** (`-r, --resume` takes "latest" or an index, not an id, and
+ * `--session-id` is deliberately excluded because gemini's id in this product is synthetic —
+ * `${dir}/${file}` — so a recorded UUID would resolve to nothing while LOOKING exact). A gemini row
+ * therefore never has a conversation id at all, `conversationBlind` already says so in words, and
+ * `SessionsPage` hides the chat tab on such a row.
+ *
+ * So a gemini entry here would be code nothing can reach, plus a claim the product cannot honour.
+ * Its chat file WAS read and understood — it is a patch log, not one message per line: a header,
+ * then `{"$set":{messages:[…]}}` seeding the list once (measured: 1 seed, always at line 1, in 4 of
+ * 12 files) and bare message objects appended after it, with types `user` / `gemini` / `info` /
+ * `error` and a `<session_context>` bootstrap block the harness writes under the user role. That
+ * note is here so the next reader of this file does not spend the measurement again, and so the
+ * absence reads as a finding rather than as a to-do. It becomes writable the day gemini accepts an
+ * id agentop can hand it — not before.
  */
 export const HARNESS_TRANSCRIPTS: Record<HarnessId, HarnessTranscript | null> = {
   claude: CLAUDE,
   antigravity: ANTIGRAVITY,
   codex: CODEX,
+  copilot: COPILOT,
+  kimi: KIMI,
   gemini: null,
-  copilot: null,
-  kimi: null,
 }
 
 /**

@@ -3,8 +3,9 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
-  HARNESS_TRANSCRIPTS, forgetCodexTranscriptPaths, resolveAntigravityTranscript,
-  resolveCodexTranscript, transcriptReaderFor,
+  HARNESS_TRANSCRIPTS, forgetCodexTranscriptPaths, forgetKimiTranscriptPaths,
+  resolveAntigravityTranscript, resolveCodexTranscript, resolveCopilotTranscript,
+  resolveKimiTranscript, transcriptReaderFor,
 } from './harness-transcript'
 
 const CONV = '01d0814f-ef39-4838-8461-c50e540e552a'
@@ -20,10 +21,19 @@ describe('the reader registry', () => {
       .toEqual(['antigravity', 'claude', 'codex', 'copilot', 'gemini', 'kimi'])
   })
 
-  it('a harness with no reader is ABSENT — the caller turns that into a sentence', () => {
-    expect(transcriptReaderFor('kimi')).toBeNull()
-    expect(transcriptReaderFor('copilot')).toBeNull()
+  it('GEMINI is the one null, and it is a LINK fact rather than a missing reader', () => {
+    // A reader is only ever offered a conversationId, and gemini has neither `assignId` nor a
+    // `resume` that takes one — so a gemini row can never carry one and an entry here would be
+    // unreachable code. `conversationBlind` already says so on the row.
     expect(transcriptReaderFor('gemini')).toBeNull()
+  })
+
+  it('every harness that CAN carry an exact conversation id has a reader', () => {
+    // The five with `assignId` or `resume` in `spawn-spec.ts`. If one of these goes null, a row
+    // that knows exactly which conversation it is in stops being readable.
+    for (const h of ['claude', 'codex', 'copilot', 'kimi', 'antigravity'] as const) {
+      expect(transcriptReaderFor(h)).not.toBeNull()
+    }
   })
 
   it("a row whose harness the registry forgot ('') resolves to nothing rather than throwing", () => {
@@ -153,5 +163,78 @@ describe('the codex reader', () => {
       { role: 'user', text: 'Salve', at: '2026-07-07T22:02:40Z' },
     ])
     expect(await HARNESS_TRANSCRIPTS.codex!.readRecent(path, 6)).toEqual(turns)
+  })
+})
+
+describe('the copilot reader', () => {
+  const ID = 'dbd94500-8d79-4c7c-8c69-a2cd0c044201'
+  let root: string
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'copilot-state-'))
+    await mkdir(join(root, ID), { recursive: true })
+    await writeFile(join(root, ID, 'events.jsonl'), [
+      JSON.stringify({ type: 'session.start', data: { sessionId: ID }, timestamp: '2026-06-30T14:53:06Z' }),
+      JSON.stringify({
+        type: 'user.message', timestamp: '2026-06-30T14:53:11Z',
+        data: { content: 'salve mano', transformedContent: '<current_datetime>x</current_datetime>\n\nsalve mano' },
+      }),
+    ].join('\n'))
+  })
+  afterAll(async () => { await rm(root, { recursive: true, force: true }) })
+
+  it('the session DIRECTORY is named with the conversation id, so no scan is needed', async () => {
+    expect(await resolveCopilotTranscript({ conversationId: ID }, root))
+      .toBe(join(root, ID, 'events.jsonl'))
+  })
+
+  it('an id that is not a UUID resolves to nothing and reaches no filesystem', async () => {
+    expect(await resolveCopilotTranscript({ conversationId: '../../etc' }, root)).toBeNull()
+  })
+
+  it('reads the person’s own text, not the transformed copy', async () => {
+    const path = join(root, ID, 'events.jsonl')
+    const turns = await HARNESS_TRANSCRIPTS.copilot!.read(path, 400)
+    expect(turns).toEqual([{ role: 'user', text: 'salve mano', at: '2026-06-30T14:53:11Z' }])
+    expect(await HARNESS_TRANSCRIPTS.copilot!.readRecent(path, 6)).toEqual(turns)
+  })
+})
+
+describe('the kimi reader', () => {
+  const ID = 'f8f1e9b0-235e-44c3-8d66-7a5cd6b54009'
+  let root: string
+  let wire: string
+
+  beforeAll(async () => {
+    forgetKimiTranscriptPaths()
+    root = await mkdtemp(join(tmpdir(), 'kimi-sessions-'))
+    wire = join(root, 'wd_scratchpad_a2dd52466aab', `session_${ID}`, 'agents', 'main', 'wire.jsonl')
+    await mkdir(join(root, 'wd_scratchpad_a2dd52466aab', `session_${ID}`, 'agents', 'main'), { recursive: true })
+    await writeFile(wire, [
+      JSON.stringify({
+        type: 'context.append_message', time: 1785943919760,
+        message: { role: 'user', content: [{ type: 'text', text: 'salve' }], origin: { kind: 'user' } },
+      }),
+      // The duplicate copy, which must not be read.
+      JSON.stringify({ type: 'turn.prompt', time: 1785943919757, input: [{ type: 'text', text: 'salve' }] }),
+    ].join('\n'))
+  })
+  afterAll(async () => { await rm(root, { recursive: true, force: true }) })
+
+  it('finds the MAIN agent’s wire under whichever workspace holds the session', async () => {
+    expect(await resolveKimiTranscript({ conversationId: ID }, root)).toBe(wire)
+  })
+
+  it('an unknown conversation resolves to nothing — and the MISS is memoized', async () => {
+    const other = '11111111-2222-4333-8444-555555555555'
+    expect(await resolveKimiTranscript({ conversationId: other }, root)).toBeNull()
+    expect(await resolveKimiTranscript({ conversationId: other }, root)).toBeNull()
+  })
+
+  it('reads the conversation, taking exactly one copy of the duplicated prompt', async () => {
+    const turns = await HARNESS_TRANSCRIPTS.kimi!.read(wire, 400)
+    expect(turns).toHaveLength(1)
+    expect(turns[0]).toMatchObject({ role: 'user', text: 'salve' })
+    expect(await HARNESS_TRANSCRIPTS.kimi!.readRecent(wire, 6)).toEqual(turns)
   })
 })
