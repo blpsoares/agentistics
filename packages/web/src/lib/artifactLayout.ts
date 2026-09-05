@@ -21,6 +21,20 @@ export type ArtifactLayout = 'closed' | 'split' | 'split-rail' | 'overlay' | 'fu
 /** Below this there is no room for list, conversation and panel at once. */
 export const SPLIT_MIN_WIDTH = 1100
 
+/**
+ * How long the panel takes to open and to close, and on what curve.
+ *
+ * THE SAME MOTION AS THE LEFT ASIDE, deliberately: two panels on one screen that slide at different
+ * speeds read as two different applications. The numbers are the nav's own (`0.22s`, the same
+ * ease-out curve), stated here so the pair can only ever be changed together.
+ *
+ * The duration is also the UNMOUNT delay — the panel has to still be on screen while it is
+ * shrinking, so whatever reads this for the transition reads it for the timeout too. Two constants
+ * would be two chances for the content to vanish before its box does.
+ */
+export const ASIDE_ANIM_MS = 220
+export const ASIDE_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
+
 export interface ArtifactLayoutInput {
   open: boolean
   width: number

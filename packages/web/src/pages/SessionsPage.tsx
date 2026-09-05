@@ -25,7 +25,10 @@ import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { FleetOverview } from '../components/sessions/FleetOverview'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
-import { edgeHint, resolveArtifactLayout, shouldAutoOpen } from '../lib/artifactLayout'
+import {
+  ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, resolveArtifactLayout, shouldAutoOpen,
+  type ArtifactLayout,
+} from '../lib/artifactLayout'
 import { closeArtifacts, openArtifacts, setArtifactCount, useArtifacts } from '../lib/artifactsStore'
 import type { Artifact } from '../lib/sessionArtifacts'
 import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
@@ -161,6 +164,8 @@ export default function SessionsPage() {
     return Number.isFinite(v) && v >= 280 ? Math.min(v, 900) : 620
   })
   const dragArt = useRef<{ x: number; w: number } | null>(null)
+  /** A resize in progress. Only used to suspend the open/close animation — see `asideMotion`. */
+  const [artDragging, setArtDragging] = useState(false)
   useEffect(() => {
     const move = (e: MouseEvent) => {
       if (!dragArt.current) return
@@ -171,6 +176,7 @@ export default function SessionsPage() {
     const up = () => {
       if (!dragArt.current) return
       dragArt.current = null
+      setArtDragging(false)
       document.body.style.userSelect = ''
       try { localStorage.setItem('agentistics:artifacts-w', String(artWidth)) } catch { /* private mode */ }
     }
@@ -210,6 +216,47 @@ export default function SessionsPage() {
     // Phase B ships without the reversal control; the split-rail default is what the plan measured.
     listExpandedByUser: false,
   })
+
+  /**
+   * THE PANEL SLIDES, and it slides like the nav does.
+   *
+   * Two things are needed for a width to animate, and the panel had neither: the element must be
+   * MOUNTED while it shrinks (a closed panel was returning a different tree entirely, so closing
+   * was an unmount and nothing could tween), and it must OPEN from a width it was rendered at
+   * (mounting straight at 620px is a jump, not a transition).
+   *
+   * So `asideAlive` keeps it on screen for the length of the animation after it is closed, and
+   * `asideIn` is flipped a frame LATER, which is what gives the browser a from-value. Two frames,
+   * not one: React can commit the mount and the flag in the same paint, and then there is nothing
+   * to interpolate between.
+   *
+   * `ASIDE_ANIM_MS` is read for BOTH the transition and the unmount delay — a second constant is a
+   * second chance for the content to vanish while its box is still shrinking.
+   */
+  const asideShown = artLayout.layout !== 'closed'
+  const [asideAlive, setAsideAlive] = useState(asideShown)
+  const [asideIn, setAsideIn] = useState(asideShown)
+  useEffect(() => {
+    if (asideShown) {
+      setAsideAlive(true)
+      let inner = 0
+      const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setAsideIn(true)) })
+      return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner) }
+    }
+    setAsideIn(false)
+    const t = setTimeout(() => setAsideAlive(false), ASIDE_ANIM_MS)
+    return () => clearTimeout(t)
+  }, [asideShown])
+  /**
+   * WHICH exit to play. A layout is decided by the window width, so a panel closed after the window
+   * narrowed must not slide out as the layout it is no longer in — the split shrinks its width and
+   * the overlay slides off the right edge, and playing the wrong one leaves the panel jumping to
+   * full width before it goes. Held in a ref, so remembering it never costs a render.
+   */
+  const closingAs = useRef<ArtifactLayout>('split')
+  if (asideShown) closingAs.current = artLayout.layout
+  /** The width the split animates between. Zero while closing; the drag suspends the tween. */
+  const asideMotion = artDragging ? 'none' : `width ${ASIDE_ANIM_MS}ms ${ASIDE_EASE}`
 
   /**
    * THE EDGE MARKER — what the harness is doing right now, with the panel shut.
@@ -540,7 +587,11 @@ export default function SessionsPage() {
   // Desktop: the aside holds the list; this is the centre.
   // ---------------------------------------------------------------------------
   if (panel) {
-    if (artLayout.layout === 'closed' || !artifactsPane) {
+    // A panel that is closing is still a panel: while `asideAlive` holds it, the branch below keeps
+    // drawing it so the width can run down to zero. The edge marker waits for it to finish — the
+    // control and the thing it opens live in the same place, and both being there at once reads as
+    // two panels.
+    if ((artLayout.layout === 'closed' && !asideAlive) || !artifactsPane) {
       // The panel is shut. The marker rides the right edge of the session, which is where the panel
       // it opens will appear — so the control and its result are in the same place.
       return edgeMarker === null ? panel : (
@@ -553,14 +604,19 @@ export default function SessionsPage() {
     // FULLSCREEN and OVERLAY both cover the conversation; the difference is that the overlay leaves
     // the page under it visible at its edge, which is the only affordance saying what closing
     // returns you to.
-    if (artLayout.layout === 'fullscreen') {
+    const exiting = artLayout.layout === 'closed'
+    const shape = exiting ? closingAs.current : artLayout.layout
+    // `split-rail` is a SPLIT — it differs only in the fleet list collapsing to a rail — so it
+    // falls through to the resizable branch below, which is the one that animates. Routing it here
+    // made the panel appear full-bleed with no tween, which is how this was caught.
+    if (shape === 'fullscreen') {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           {artifactsPane}
         </div>
       )
     }
-    if (artLayout.layout === 'overlay') {
+    if (shape === 'overlay') {
       return (
         <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           {panel}
@@ -569,6 +625,12 @@ export default function SessionsPage() {
             background: 'var(--bg-surface)', borderLeft: '1px solid var(--border)',
             boxShadow: '-12px 0 32px rgba(0,0,0,0.45)',
             display: 'flex', flexDirection: 'column', minHeight: 0,
+            // It covers the page, so it slides ACROSS rather than growing: `transform` is the one
+            // property that animates without laying the page out again on every frame, which is
+            // what a width tween on a floating panel costs.
+            transform: asideIn ? 'translateX(0)' : 'translateX(100%)',
+            transition: `transform ${ASIDE_ANIM_MS}ms ${ASIDE_EASE}`,
+            willChange: 'transform',
           }}>
             {artifactsPane}
           </div>
@@ -583,22 +645,35 @@ export default function SessionsPage() {
           {panel}
         </div>
         {/* The handle. Four pixels of hit area over a one-pixel rule — the rule is what you see,
-            the area is what you can grab, and matching them makes a divider people miss. */}
-        <div
+            the area is what you can grab, and matching them makes a divider people miss.
+            It goes with the panel: a grab handle for something that is halfway out of the room is
+            a control that resizes nothing. */}
+        {asideIn && <div
           onMouseDown={e => {
             dragArt.current = { x: e.clientX, w: artWidth }
+            setArtDragging(true)
             document.body.style.userSelect = 'none'
           }}
           style={{
             width: 4, flexShrink: 0, cursor: 'col-resize', background: 'transparent',
             borderLeft: '1px solid var(--border)',
           }}
-        />
+        />}
         <div style={{
-          display: 'flex', flexDirection: 'column', width: artWidth, flexShrink: 0, minHeight: 0,
-          background: 'var(--bg-surface)',
+          display: 'flex', flexDirection: 'column', width: asideIn ? artWidth : 0,
+          flexShrink: 0, minHeight: 0, background: 'var(--bg-surface)',
+          // The contents keep their full width while the box shrinks, so the panel slides out of
+          // view instead of reflowing itself smaller on the way — text rewrapping mid-animation is
+          // what makes a collapse look like a stutter.
+          overflow: 'hidden',
+          transition: asideMotion,
         }}>
-          {artifactsPane}
+          <div style={{
+            display: 'flex', flexDirection: 'column', width: artWidth, flexShrink: 0,
+            height: '100%', minHeight: 0,
+          }}>
+            {artifactsPane}
+          </div>
         </div>
       </div>
     )
