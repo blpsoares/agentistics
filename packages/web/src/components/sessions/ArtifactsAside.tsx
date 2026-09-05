@@ -24,6 +24,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { asideCache, asideKey } from '../../lib/asideCache'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
   BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles, ChevronLeft, GitPullRequest,
@@ -185,8 +186,15 @@ export function ArtifactsAside({
    * `null` is "not read yet" and `[]` is "none", which are different sentences on screen — the same
    * distinction the rest of this panel keeps.
    */
-  const [skills, setSkills] = useState<SkillEntry[] | null>(null)
-  const [skillsNote, setSkillsNote] = useState<string | null>(null)
+  // Seeded from the cache so a panel reopened on this session DRAWS its list immediately. `null`
+  // still means "not read yet" and is the only thing that makes a tab wait — see `asideCache.ts`.
+  type SkillsAnswer = { skills: SkillEntry[]; note: string | null }
+  const [skills, setSkills] = useState<SkillEntry[] | null>(
+    () => asideCache.read<SkillsAnswer>(asideKey(sessionId, 'skills')).value?.skills ?? null,
+  )
+  const [skillsNote, setSkillsNote] = useState<string | null>(
+    () => asideCache.read<SkillsAnswer>(asideKey(sessionId, 'skills')).value?.note ?? null,
+  )
   const [skillQuery, setSkillQuery] = useState('')
   /** The skill being READ, and its file. `null` is the list; a name is the detail view. */
   const [openSkill, setOpenSkill] = useState<string | null>(null)
@@ -204,14 +212,21 @@ export function ArtifactsAside({
   useEffect(() => {
     if (openSkill === null) { setSkillBody(null); return }
     let alive = true
-    setSkillBody(null)
+    // A skill's own file does not change while the panel is open, and reopening the same one used
+    // to re-read it from disk every time. Keyed by the skill NAME as well as the session.
+    const key = asideKey(sessionId, 'skill', openSkill)
+    const hit = asideCache.read<typeof skillBody>(key)
+    setSkillBody(hit.value ?? null)
+    if (hit.value && !hit.stale) return
     fetch(`/api/fleet/skill?id=${encodeURIComponent(sessionId)}&name=${encodeURIComponent(openSkill)}&lang=${pt ? 'pt' : 'en'}`)
       .then(r => r.json())
       .then((d: { ok?: boolean; text?: string; truncated?: boolean; message?: string }) => {
+        const answer = d?.ok
+          ? { ok: true as const, text: d.text ?? '', truncated: d.truncated === true }
+          : { ok: false as const, message: d?.message ?? (pt ? 'Não foi possível ler.' : 'Could not read it.') }
+        asideCache.write(key, answer)
         if (!alive) return
-        setSkillBody(d?.ok
-          ? { ok: true, text: d.text ?? '', truncated: d.truncated === true }
-          : { ok: false, message: d?.message ?? (pt ? 'Não foi possível ler.' : 'Could not read it.') })
+        setSkillBody(answer)
       })
       .catch(() => {
         if (alive) setSkillBody({ ok: false, message: pt ? 'Não foi possível ler.' : 'Could not read it.' })
@@ -223,32 +238,47 @@ export function ArtifactsAside({
     [skills, skillQuery, pt],
   )
   useEffect(() => {
-    if (tab !== 'skills' || skills !== null) return
+    if (tab !== 'skills') return
+    // The cached list is already on screen; this refreshes BEHIND it and only when it has aged out.
+    // A fetch on every mount is the reload being fixed; never fetching would pin the list forever.
+    const key = asideKey(sessionId, 'skills')
+    const hit = asideCache.read<SkillsAnswer>(key)
+    if (hit.value && !hit.stale) return
     let alive = true
     fetch(`/api/fleet/skills?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
       .then(r => (r.ok ? r.json() : null))
       .then((d: { skills?: SkillEntry[]; reason?: string } | null) => {
+        const answer: SkillsAnswer = { skills: d?.skills ?? [], note: d?.reason ?? null }
+        asideCache.write(key, answer)
         if (!alive) return
-        setSkills(d?.skills ?? [])
-        setSkillsNote(d?.reason ?? null)
+        setSkills(answer.skills)
+        setSkillsNote(answer.note)
       })
-      .catch(() => { if (alive) setSkills([]) })
+      .catch(() => { if (alive) setSkills(s => s ?? []) })
     return () => { alive = false }
   }, [tab, skills, sessionId, pt])
 
-  /** The repository's pull requests, read once when the tab is opened. See `github-prs.ts`. */
+  /** The repository's pull requests. Read when the tab opens, then cached — see `github-prs.ts`. */
+  type PrAnswer = {
+    pulls: { number: number; title: string; url: string; state: string; draft: boolean; review?: string; branch: string }[]
+    unavailable?: string
+    detail?: string
+  }
   const [prs, setPrs] = useState<{
     pulls: { number: number; title: string; url: string; state: string; draft: boolean; review?: string; branch: string }[]
     unavailable?: string
     detail?: string
-  } | null>(null)
+  } | null>(() => asideCache.read<PrAnswer>(asideKey(sessionId, 'prs')).value ?? null)
   useEffect(() => {
-    if (tab !== 'prs' || prs !== null) return
+    if (tab !== 'prs') return
+    const key = asideKey(sessionId, 'prs')
+    const hit = asideCache.read<PrAnswer>(key)
+    if (hit.value && !hit.stale) return
     let alive = true
     fetch(`/api/fleet/prs?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
       .then(r => r.json())
-      .then(d => { if (alive) setPrs(d) })
-      .catch(() => { if (alive) setPrs({ pulls: [], unavailable: 'failed' }) })
+      .then((d: PrAnswer) => { asideCache.write(key, d); if (alive) setPrs(d) })
+      .catch(() => { if (alive) setPrs(p => p ?? { pulls: [], unavailable: 'failed' }) })
     return () => { alive = false }
   }, [tab, prs, sessionId, pt])
 
