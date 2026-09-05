@@ -567,8 +567,25 @@ async function readTurnsFromTail(
  * in memory.
  */
 export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]> {
+  return (await readChatWindow(path, max)).turns
+}
+
+/**
+ * The same read, plus whether the window CUT the conversation short.
+ *
+ * The cap is a fact about the READ, not about the conversation, and every surface built on top of
+ * these turns inherits it silently: the gallery lists the files of the turns it was given, so on a
+ * long transcript it emptied itself with nothing on screen saying why — reported exactly that way,
+ * as "everything in the gallery disappeared and there is no warning about it". A window that hides
+ * things has to say it is a window. `older` is true only when the walk stopped ON the cap with
+ * substantive lines still above it; a conversation shorter than `max` reports nothing.
+ */
+export async function readChatWindow(
+  path: string,
+  max = 400,
+): Promise<{ turns: ChatTurn[]; older: boolean }> {
   let content: string
-  try { content = await readFile(path, 'utf-8') } catch { return [] }
+  try { content = await readFile(path, 'utf-8') } catch { return { turns: [], older: false } }
 
   const lines = content.split('\n')
   const turns: ChatTurn[] = []
@@ -577,7 +594,9 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
   /** Ids whose `<task-notification>` has already arrived. */
   const finishedTasks = new Set<string>()
   let newest = true
-  for (let i = lines.length - 1; i >= 0 && turns.length < max; i--) {
+  // Hoisted so the walk can report WHERE it stopped — see `older` at the return.
+  let i = lines.length - 1
+  for (; i >= 0 && turns.length < max; i--) {
     const line = (lines[i] ?? '').trim()
     if (!line) continue
     let e: Record<string, unknown>
@@ -639,5 +658,10 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
   }
 
   turns.reverse()
-  return turns
+  // The walk stopped on the cap with content still above it: this is a WINDOW onto a longer
+  // conversation, and every surface reading these turns has to be able to say so. A blank tail is
+  // not content — a transcript ends with one, and reporting that as "there is more" would put the
+  // notice on every conversation.
+  const older = i >= 0 && lines.slice(0, i + 1).some(l => l.trim() !== '')
+  return { turns, older }
 }

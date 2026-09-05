@@ -73,6 +73,8 @@ export interface ArtifactsAsideProps {
    * the server; shown verbatim so this panel and the chat give one answer.
    */
   unavailable?: string
+  /** Already-localized: the conversation behind these lists is a WINDOW onto a longer one. */
+  older?: string
   onClose: () => void
   /**
    * The session wrote through commands whose paths cannot be read off the command line.
@@ -109,7 +111,7 @@ function KindIcon({ kind }: { kind: Artifact['kind'] }) {
 }
 
 export function ArtifactsAside({
-  sessionId, lang, artifacts, loading, unavailable, unlistedWrites, turns, facts, onClose,
+  sessionId, lang, artifacts, loading, unavailable, older, unlistedWrites, turns, facts, onClose,
   tabRequest,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
@@ -745,6 +747,7 @@ export function ArtifactsAside({
         onViewChange={chooseGalleryView}
         scope={galleryScope}
         onScopeChange={chooseGalleryScope}
+        {...(older ? { older } : {})}
       />
     )
   }
