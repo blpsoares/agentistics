@@ -51,6 +51,7 @@ import {
 } from '../../lib/skillMenu'
 import { markExcerpt, quoteFor, replyAuthor, replyPreview, type ReplyTarget } from '../../lib/replyQuote'
 import { pendingEchoes } from '../../lib/echoMatch'
+import { applyDraftRequest, useDraftRequest } from '../../lib/composerStore'
 import { lastSentMessage, turnAnchorId } from '../../lib/lastSent'
 import { goToTurn } from '../../lib/turnScroll'
 import { attachmentName, isImageAttachment, splitMessage } from '../../lib/messageAttachments'
@@ -635,6 +636,22 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
         : 'That message is no longer in the loaded conversation.')
     }
   }, [lastSent, pt])
+
+  /**
+   * A line the PANEL asked this composer to hold — the skills tab's "use this skill".
+   *
+   * Keyed on the STAMP, so asking twice for the same skill works; scoped to the session it named,
+   * so a request can never land in another conversation's box. It APPENDS and never sends: what
+   * reaches a session is what the person pressed enter on.
+   */
+  const draftReq = useDraftRequest()
+  const draftReqAt = draftReq?.sessionId === session.id ? draftReq.at : undefined
+  useEffect(() => {
+    if (draftReqAt === undefined || !draftReq) return
+    editDraft(d => applyDraftRequest(d, draftReq.text))
+    textareaRef.current?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftReqAt])
 
   /** ONE stable reference for every bubble's reply button — see `ChatBubble`'s memo. */
   const onReplyToTurn = useCallback((t: ChatTurn) => {

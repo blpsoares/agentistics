@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   fileFormat, formatBytes, galleryFileCount, galleryGroups, galleryImageKey, galleryImages,
-  galleryMenuEntries, parseGalleryView, type GalleryTurn, producedGroups } from './gallery'
+  galleryMenuEntries, parseGalleryView, type GalleryTurn, producedGroups, gallerySides, filterGallery, parseGalleryScope } from './gallery'
 
 const DIR = '/home/u/.agentistics/attachments'
 const shot = `${DIR}/724e7aa8-image.png`
@@ -169,5 +169,35 @@ describe('what the SESSION produced', () => {
   it('a session that produced no media produces no block', () => {
     expect(producedGroups([{ path: '/w/index.ts', name: 'index.ts' }])).toEqual([])
     expect(producedGroups([])).toEqual([])
+  })
+})
+
+describe('the two sides of the gallery', () => {
+  const sent = { path: '/a/x.png', name: 'x.png', image: true, format: 'PNG', origin: 'sent' as const }
+  const made = { path: '/b/y.png', name: 'y.png', image: true, format: 'PNG', origin: 'produced' as const }
+  const groups = [
+    { index: 0, text: 'veja', files: [sent] },
+    { index: -1, text: '', files: [made] },
+  ]
+
+  it('counts each side', () => {
+    expect(gallerySides(groups)).toEqual({ user: 1, llm: 1 })
+  })
+
+  it('a file with no origin is the person’s — every group written before this existed', () => {
+    expect(gallerySides([{ index: 0, text: '', files: [{ ...sent, origin: undefined }] }]))
+      .toEqual({ user: 1, llm: 0 })
+  })
+
+  it('filters per FILE, and drops a group left with nothing', () => {
+    expect(filterGallery(groups, 'llm').map(g => g.index)).toEqual([-1])
+    expect(filterGallery(groups, 'user').map(g => g.index)).toEqual([0])
+    expect(filterGallery(groups, 'all')).toHaveLength(2)
+  })
+
+  it('a stored scope this code did not write reads as all', () => {
+    expect(parseGalleryScope('llm')).toBe('llm')
+    expect(parseGalleryScope('nonsense')).toBe('all')
+    expect(parseGalleryScope(null)).toBe('all')
   })
 })

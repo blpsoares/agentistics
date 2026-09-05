@@ -1178,6 +1178,23 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       })
     }
 
+    // ONE skill's own text. The request names a SKILL, never a path — see `readFleetSkillBody`.
+    if (url.pathname === '/api/fleet/skill' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      const name = url.searchParams.get('name')
+      if (!id || !name) {
+        return new Response(JSON.stringify({ ok: false, message: 'bad_request' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { readFleetSkillBody, fleetLang } = await import('./sessions/fleet-web')
+      const out = await readFleetSkillBody(fleetLang(url.searchParams.get('lang')), id, name)
+      return new Response(JSON.stringify(out), {
+        status: out.ok ? 200 : 404,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     // Start one. The most powerful thing on this route table: it spawns a billable coding assistant,
     // with a prompt, in a directory the request names — see the header of `runFleetSpawn` for why
     // this one call reads a directory from the body when `resume` refuses to, and `fleet-spawn.ts`

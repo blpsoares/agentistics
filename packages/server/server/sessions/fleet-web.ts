@@ -369,6 +369,55 @@ export async function readFleetSkills(lang: CliLang, id: string): Promise<FleetS
   }
 }
 
+/**
+ * ONE skill, with its own text.
+ *
+ * The panel lists skills and can now OPEN one, which means showing the `SKILL.md` behind it. The
+ * request names the SKILL, never a path: the name is resolved back through the very list the panel
+ * was given, so the only files this can ever open are ones `readHarnessSkills` already found. A
+ * path from a client is not narrowed here, it is never accepted.
+ */
+export async function readFleetSkillBody(
+  lang: CliLang, id: string, name: string,
+): Promise<
+  | { ok: true; name: string; description: string; scope: string; text: string; truncated: boolean }
+  | { ok: false; message: string }
+> {
+  const pt = lang === 'pt'
+  const list = await readFleetSkills(lang, id)
+  if (list.reason && list.skills.length === 0) return { ok: false, message: list.reason }
+  const skill = list.skills.find(sk => sk.name === name)
+  if (!skill) {
+    return {
+      ok: false,
+      message: pt
+        ? 'Essa skill não está entre as que esta sessão pode invocar.'
+        : 'That skill is not among the ones this session can invoke.',
+    }
+  }
+  const MAX = 64 * 1024
+  try {
+    const { readFile } = await import('node:fs/promises')
+    const raw = await readFile(skill.path, 'utf8')
+    const truncated = raw.length > MAX
+    return {
+      ok: true,
+      name: skill.name,
+      description: skill.description,
+      scope: skill.scope,
+      text: truncated ? raw.slice(0, MAX) : raw,
+      truncated,
+    }
+  } catch {
+    return {
+      ok: false,
+      message: pt
+        ? 'O arquivo dessa skill não pôde ser lido.'
+        : 'That skill’s file could not be read.',
+    }
+  }
+}
+
 /** The questions a start EARNS, and the places it could happen — the wizard, as data. */
 export interface FleetNewOptions {
   /**

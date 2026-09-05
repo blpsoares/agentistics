@@ -41,6 +41,15 @@ export interface HarnessSkill {
   name: string
   description: string
   scope: 'user' | 'plugin' | 'project'
+  /**
+   * The `SKILL.md` this was read from.
+   *
+   * Carried so the panel can SHOW a skill rather than only name it — and it is the server that
+   * holds it, never the browser: the detail route takes a skill NAME and resolves it back through
+   * this same list, so no path a client sent is ever opened. That is the whole reason this field
+   * exists here instead of on the wire.
+   */
+  path: string
 }
 
 export interface SkillSource {
@@ -131,7 +140,11 @@ export async function readHarnessSkills(harness: string, cwd: string): Promise<H
         const name = `${prefix}${fm.name ?? entry}`
         // First writer wins: a project skill and a user skill of the same name are one command, and
         // listing it twice would offer a choice the CLI does not have.
-        if (!found.has(name)) found.set(name, { name, description: fm.description ?? '', scope })
+        if (!found.has(name)) {
+          found.set(name, {
+            name, description: fm.description ?? '', scope, path: join(root, entry, 'SKILL.md'),
+          })
+        }
       } catch { /* not a skill directory, or unreadable */ }
     }
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { edgeHint, resolveArtifactLayout, shouldAutoOpen } from './artifactLayout'
+import { edgeHint, resolveArtifactLayout } from './artifactLayout'
 
 const at = (o: Partial<Parameters<typeof resolveArtifactLayout>[0]>) =>
   resolveArtifactLayout({ open: true, width: 1440, isMobile: false, listExpandedByUser: false, ...o })
@@ -35,36 +35,6 @@ describe('resolveArtifactLayout', () => {
   })
 })
 
-describe('shouldAutoOpen', () => {
-  const auto = (o: Partial<Parameters<typeof shouldAutoOpen>[0]> = {}) => shouldAutoOpen({
-    writing: true, wasWriting: false, open: false, dismissed: false, isMobile: false, ...o,
-  })
-
-  it('opens when the session STARTS writing a file', () => {
-    expect(auto()).toBe(true)
-  })
-
-  it('fires on the transition, never on the level — or it could not be closed', () => {
-    expect(auto({ wasWriting: true })).toBe(false)
-  })
-
-  it('stays shut once the person closed it — an automatic open is a suggestion', () => {
-    expect(auto({ dismissed: true })).toBe(false)
-  })
-
-  it('does nothing when it is already open', () => {
-    expect(auto({ open: true })).toBe(false)
-  })
-
-  it('never opens itself on a phone, where it would cover the conversation', () => {
-    expect(auto({ isMobile: true })).toBe(false)
-  })
-
-  it('needs a file being WRITTEN, not merely a busy session', () => {
-    // Thinking, searching and running tests have nothing to show here.
-    expect(auto({ writing: false })).toBe(false)
-  })
-})
 
 describe('edgeHint', () => {
   const running = [

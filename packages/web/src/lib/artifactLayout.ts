@@ -56,40 +56,23 @@ export function resolveArtifactLayout(
     : { layout: 'split-rail', collapseList: true }
 }
 
-/**
- * Should the panel OPEN ITSELF right now?
+/*
+ * `shouldAutoOpen` LIVED HERE AND IS GONE.
  *
- * Asked for directly: "o modelo ta executando algo — automaticamente a barra deveria aparecer e
- * mostrar isso." A panel that appears while the session is writing is the difference between
- * watching work happen and going to look for it afterwards.
+ * The panel opened itself the moment a file started being written. That was asked for — "o modelo
+ * ta executando algo, automaticamente a barra deveria aparecer" — and then asked to stop, in the
+ * same words that explain why: "a barra de contents ta abrindo sozinha as vezes, nao quero que isso
+ * aconteça… se for pra indicar que tem algo acontecendo quero que apenas apareça um
+ * componentenzinho".
  *
- * THREE RULES, and the second is the one that makes it tolerable:
+ * Both asks want the same thing. Knowing that something is happening is worth a lot; being pushed
+ * out of the conversation you are reading, by a panel that takes half the width, costs more than it
+ * is worth — and it happens over and over, because a session writes files all day.
  *
- * 1. It fires on the TRANSITION into writing, never on the level — the same rule the fleet's bell
- *    keeps. On the level it would re-open on every poll for as long as the session was busy, which
- *    is a panel that cannot be closed.
- * 2. A panel the person CLOSED stays closed for that session. An automatic open is a suggestion,
- *    and a suggestion that overrides the answer it was given is not one. `dismissed` is what the
- *    caller sets when they close it, and only selecting a different session clears it.
- * 3. Never on a phone. There the panel is full-screen, so opening it by itself would cover the
- *    conversation somebody is reading, to show them a file they did not ask for.
- *
- * `writing` is the session actually touching a file — a `live` artifact — rather than merely being
- * `working`. A session thinking, searching or running tests has nothing to show here, and a panel
- * that opens on an empty list is worse than one that stays shut.
+ * So the announcement is the strip at the top of the conversation (`edgeHint` below), which says
+ * what is being written or run and opens the panel on the LIVE feed when pressed. The rule is not
+ * kept "just in case": an uncalled rule is one somebody calls again.
  */
-export function shouldAutoOpen(
-  { writing, wasWriting, open, dismissed, isMobile }: {
-    writing: boolean
-    wasWriting: boolean
-    open: boolean
-    dismissed: boolean
-    isMobile: boolean
-  },
-): boolean {
-  if (isMobile || open || dismissed) return false
-  return writing && !wasWriting
-}
 
 /**
  * What the CLOSED panel should announce from the edge of the screen, if anything.

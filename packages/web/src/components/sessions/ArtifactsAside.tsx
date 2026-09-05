@@ -26,13 +26,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
-  BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles,
+  BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles, ChevronLeft,
 } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
+import {
+  countSkills, groupSkills, shortName, skillInvocation, type SkillEntry,
+} from '../../lib/skillGroups'
+import { requestDraft } from '../../lib/composerStore'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import { agoLabel, isDoc, liveEvents, writeStatus, type LiveEvent, type LiveTurn, type WriteStatus } from '../../lib/artifactTabs'
 import {
-  galleryFileCount, galleryGroups, parseGalleryView, producedGroups,
-  type GalleryTurn, type GalleryView,
+  galleryFileCount, galleryGroups, parseGalleryScope, parseGalleryView, producedGroups,
+  type GalleryScope, type GalleryTurn, type GalleryView,
 } from '../../lib/gallery'
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
@@ -41,6 +46,7 @@ type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills'
 
 /** Where the view toggle is remembered. One key, read and written in one place. */
 const GALLERY_VIEW_KEY = 'agentistics:gallery-view'
+const GALLERY_SCOPE_KEY = 'agentistics:gallery-scope'
 
 export interface ArtifactsAsideProps {
   /**
@@ -102,6 +108,7 @@ export function ArtifactsAside({
   tabRequest,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
+  const isMobile = useIsMobile()
   const [open, setOpen] = useState<Artifact | null>(null)
   const [tab, setTab] = useState<TabId>('files')
   /**
@@ -149,6 +156,14 @@ export function ArtifactsAside({
   const [galleryView, setGalleryView] = useState<GalleryView>(() => {
     try { return parseGalleryView(localStorage.getItem(GALLERY_VIEW_KEY)) } catch { return 'grid' }
   })
+  /** WHOSE files — remembered like the view is. A private window that refuses storage keeps `all`. */
+  const [galleryScope, setGalleryScope] = useState<GalleryScope>(() => {
+    try { return parseGalleryScope(localStorage.getItem(GALLERY_SCOPE_KEY)) } catch { return 'all' }
+  })
+  const chooseGalleryScope = (v: GalleryScope) => {
+    setGalleryScope(v)
+    try { localStorage.setItem(GALLERY_SCOPE_KEY, v) } catch { /* private mode */ }
+  }
   const chooseGalleryView = (v: GalleryView) => {
     setGalleryView(v)
     try { localStorage.setItem(GALLERY_VIEW_KEY, v) } catch { /* private mode */ }
@@ -163,14 +178,41 @@ export function ArtifactsAside({
    * `null` is "not read yet" and `[]` is "none", which are different sentences on screen — the same
    * distinction the rest of this panel keeps.
    */
-  const [skills, setSkills] = useState<{ name: string; description: string }[] | null>(null)
+  const [skills, setSkills] = useState<SkillEntry[] | null>(null)
   const [skillsNote, setSkillsNote] = useState<string | null>(null)
+  const [skillQuery, setSkillQuery] = useState('')
+  /** The skill being READ, and its file. `null` is the list; a name is the detail view. */
+  const [openSkill, setOpenSkill] = useState<string | null>(null)
+  const [skillBody, setSkillBody] = useState<
+    { ok: true; text: string; truncated: boolean } | { ok: false; message: string } | null
+  >(null)
+  useEffect(() => {
+    if (openSkill === null) { setSkillBody(null); return }
+    let alive = true
+    setSkillBody(null)
+    fetch(`/api/fleet/skill?id=${encodeURIComponent(sessionId)}&name=${encodeURIComponent(openSkill)}&lang=${pt ? 'pt' : 'en'}`)
+      .then(r => r.json())
+      .then((d: { ok?: boolean; text?: string; truncated?: boolean; message?: string }) => {
+        if (!alive) return
+        setSkillBody(d?.ok
+          ? { ok: true, text: d.text ?? '', truncated: d.truncated === true }
+          : { ok: false, message: d?.message ?? (pt ? 'Não foi possível ler.' : 'Could not read it.') })
+      })
+      .catch(() => {
+        if (alive) setSkillBody({ ok: false, message: pt ? 'Não foi possível ler.' : 'Could not read it.' })
+      })
+    return () => { alive = false }
+  }, [openSkill, sessionId, pt])
+  const skillGroups = useMemo(
+    () => groupSkills(skills ?? [], skillQuery, pt ? 'pt' : 'en'),
+    [skills, skillQuery, pt],
+  )
   useEffect(() => {
     if (tab !== 'skills' || skills !== null) return
     let alive = true
     fetch(`/api/fleet/skills?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
       .then(r => (r.ok ? r.json() : null))
-      .then((d: { skills?: { name: string; description: string }[]; reason?: string } | null) => {
+      .then((d: { skills?: SkillEntry[]; reason?: string } | null) => {
         if (!alive) return
         setSkills(d?.skills ?? [])
         setSkillsNote(d?.reason ?? null)
@@ -368,46 +410,156 @@ export function ArtifactsAside({
    * THREE STATES, three sentences: not read yet, none installed, and the host's own reason when it
    * has one (a harness that has no skills at all says so through the route).
    */
-  const skillsBody = () => (
-    <div style={{ padding: '10px 12px', overflowY: 'auto', minHeight: 0, flex: 1 }}>
-      {skills === null ? (
-        <Note text={pt ? "Lendo as skills desta sessão…" : "Reading this session’s skills…"} />
-      ) : skills.length === 0 ? (
-        <Note text={skillsNote ?? (pt
-          ? 'Nenhuma skill instalada para esta sessão.'
-          : 'No skills installed for this session.')} />
-      ) : (
-        <>
-          {skillsNote && (
-            <p style={{ margin: '0 0 10px', fontSize: 11, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
-              {skillsNote}
-            </p>
-          )}
-          <p style={{ margin: '0 0 10px', fontSize: 11, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
-            {pt
-              ? 'Digite / na caixa de mensagem para invocar uma delas.'
-              : 'Type / in the message box to invoke one of these.'}
-          </p>
-          {skills.map(sk => (
-            <div key={sk.name} style={{
-              padding: '8px 10px', marginBottom: 6, borderRadius: 9,
-              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-            }}>
-              <p style={{
-                margin: 0, fontSize: 12, fontWeight: 650, color: 'var(--text-primary)',
-                fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-              }}>/{sk.name}</p>
-              {sk.description && (
-                <p style={{
-                  margin: '3px 0 0', fontSize: 11, lineHeight: 1.5, color: 'var(--text-tertiary)',
-                }}>{sk.description}</p>
+  const skillsBody = () => {
+    // THE DETAIL IS A SCREEN, not a modal: the panel is already a narrow column, and a dialog over
+    // a column that width covers the thing it is about. `esc` and a back row return to the list.
+    if (openSkill !== null) {
+      const sk = (skills ?? []).find(x => x.name === openSkill)
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
+            padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)',
+          }}>
+            <button
+              onClick={() => setOpenSkill(null)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 5, minHeight: 28, padding: '0 8px',
+                borderRadius: 7, border: '1px solid var(--border-subtle)', background: 'transparent',
+                color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 11.5, cursor: 'pointer',
+              }}
+            >
+              <ChevronLeft size={13} />{pt ? 'Skills' : 'Skills'}
+            </button>
+            <span style={{
+              minWidth: 0, flex: 1, fontSize: 12, fontWeight: 650, color: 'var(--text-primary)',
+              fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>/{openSkill}</span>
+            {/* INVOKE puts the line in the composer; it never sends. What reaches a session is
+                what the person pressed enter on — see `composerStore.ts`. */}
+            <button
+              onClick={() => requestDraft(sessionId, skillInvocation({ name: openSkill, description: '' }))}
+              title={pt ? 'Coloca /nome na caixa de mensagem' : 'Puts /name in the message box'}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
+                minHeight: 28, padding: '0 10px', borderRadius: 7, cursor: 'pointer',
+                border: '1px solid var(--anthropic-orange)',
+                background: 'var(--anthropic-orange-dim)', color: 'var(--anthropic-orange)',
+                fontFamily: 'inherit', fontSize: 11.5, fontWeight: 650,
+              }}
+            >
+              <Sparkles size={12} />{pt ? 'Usar esta skill' : 'Use this skill'}
+            </button>
+          </div>
+          <div style={{ padding: '10px 12px', overflowY: 'auto', minHeight: 0, flex: 1 }}>
+            {sk?.description && (
+              <p style={{ margin: '0 0 10px', fontSize: 11.5, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+                {sk.description}
+              </p>
+            )}
+            {skillBody === null ? (
+              <Note icon={<Loader size={13} className="ag-working-spin" />}
+                text={pt ? 'Lendo a skill…' : 'Reading the skill…'} />
+            ) : !skillBody.ok ? (
+              <Note text={skillBody.message} />
+            ) : (
+              <>
+                {/* The SKILL ITSELF, as written. Monospace and pre-wrapped: it is a document with
+                    structure, and reflowing it would lose the very layout it was written in. */}
+                <pre style={{
+                  margin: 0, padding: '10px 12px', borderRadius: 9, overflowX: 'auto',
+                  background: 'var(--bg-base)', border: '1px solid var(--border-subtle)',
+                  fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+                  fontSize: 11, lineHeight: 1.6, color: 'var(--text-secondary)',
+                  whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+                }}>{skillBody.text}</pre>
+                {skillBody.truncated && (
+                  <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                    {pt
+                      ? 'Mostrando só o começo — o arquivo é grande.'
+                      : 'Showing the beginning only — the file is large.'}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )
+    }
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
+        {skills !== null && skills.length > 0 && (
+          <div style={{ padding: '8px 12px', flexShrink: 0 }}>
+            <input
+              value={skillQuery}
+              onChange={e => setSkillQuery(e.target.value)}
+              placeholder={pt ? 'Buscar skill…' : 'Search skills…'}
+              aria-label={pt ? 'Buscar skill' : 'Search skills'}
+              style={{
+                width: '100%', boxSizing: 'border-box', minHeight: 30, padding: '0 10px',
+                borderRadius: 8, border: '1px solid var(--border-subtle)',
+                background: 'var(--bg-base)', color: 'var(--text-primary)',
+                fontFamily: 'inherit',
+                // 16px on a phone or iOS Safari zooms the viewport — the repo's own rule.
+                fontSize: isMobile ? 16 : 12,
+              }}
+            />
+          </div>
+        )}
+        <div style={{ padding: '0 12px 10px', overflowY: 'auto', minHeight: 0, flex: 1 }}>
+          {skills === null ? (
+            <Note text={pt ? 'Lendo as skills desta sessão…' : 'Reading this session’s skills…'} />
+          ) : skills.length === 0 ? (
+            <Note text={skillsNote ?? (pt
+              ? 'Nenhuma skill instalada para esta sessão.'
+              : 'No skills installed for this session.')} />
+          ) : countSkills(skillGroups) === 0 ? (
+            // The list is not empty — the SEARCH emptied it, and those are different sentences.
+            <Note text={pt
+              ? `Nenhuma skill encontrada para “${skillQuery.trim()}”.`
+              : `No skill matches “${skillQuery.trim()}”.`} />
+          ) : (
+            <>
+              {skillsNote && (
+                <p style={{ margin: '0 0 8px', fontSize: 11, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+                  {skillsNote}
+                </p>
               )}
-            </div>
-          ))}
-        </>
-      )}
-    </div>
-  )
+              {skillGroups.map(group => (
+                <Band key={group.key || '_own'} label={`${group.label} · ${group.skills.length}`}>
+                  {group.skills.map(sk => (
+                    <button
+                      key={sk.name}
+                      onClick={() => setOpenSkill(sk.name)}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left',
+                        padding: '8px 10px', marginBottom: 6, borderRadius: 9, cursor: 'pointer',
+                        background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      <span style={{
+                        display: 'block', fontSize: 12, fontWeight: 650, color: 'var(--text-primary)',
+                        fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+                      }}>/{shortName(sk)}</span>
+                      {sk.description && (
+                        <span style={{
+                          display: 'block', marginTop: 3, fontSize: 11, lineHeight: 1.5,
+                          color: 'var(--text-tertiary)',
+                        }}>{sk.description}</span>
+                      )}
+                    </button>
+                  ))}
+                </Band>
+              ))}
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   /**
    * The gallery, or the reason it is not showing one.
@@ -430,6 +582,8 @@ export function ArtifactsAside({
         lang={lang}
         view={galleryView}
         onViewChange={chooseGalleryView}
+        scope={galleryScope}
+        onScopeChange={chooseGalleryScope}
       />
     )
   }

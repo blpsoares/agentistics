@@ -26,7 +26,7 @@ import { useIsMobile } from '../hooks/useIsMobile'
 import { FleetOverview } from '../components/sessions/FleetOverview'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
 import {
-  ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, panelWidth, resolveArtifactLayout, shouldAutoOpen,
+  ASIDE_ANIM_MS, ASIDE_EASE, edgeHint, panelWidth, resolveArtifactLayout,
   type ArtifactLayout,
 } from '../lib/artifactLayout'
 import { closeArtifacts, openArtifacts, setArtifactCount, useArtifacts } from '../lib/artifactsStore'
@@ -195,19 +195,21 @@ export default function SessionsPage() {
   }, [selected])
 
   /**
-   * A file being written NOW is what opens the panel by itself — not merely a busy session, which
-   * may be thinking, searching or running tests and has nothing to show here. `shouldAutoOpen`
-   * holds the rest of the rule, including why it fires on the transition and why a panel the person
-   * closed stays closed.
+   * NOTHING OPENS THIS PANEL BUT A PERSON.
+   *
+   * It used to open itself when a file started being written — asked for, in those words, and then
+   * asked to stop: "a barra de contents ta abrindo sozinha as vezes, nao quero que isso aconteça".
+   * Both asks are the same underlying want, and the second one names the part that matters: what a
+   * reader wants is to KNOW something is happening, not to have the conversation they are reading
+   * shoved aside by a panel taking half the screen.
+   *
+   * The strip carries that now. It appears while the session is writing or running, says what and
+   * where, and opens the panel on the live feed when it is pressed — an announcement, and then a
+   * choice, instead of an interruption. `shouldAutoOpen` is gone rather than left unused: a rule
+   * nothing calls is a rule that gets called again by somebody who finds it. The strip's own
+   * condition is `edgeHint` further down, over the live EVENTS — a broader signal than "a file is
+   * being written", which is what makes it able to announce a command and its output too.
    */
-  const writing = artifacts.some(a => a.live)
-  const wasWriting = useRef(false)
-  useEffect(() => {
-    if (shouldAutoOpen({
-      writing, wasWriting: wasWriting.current, open: art.open, dismissed: art.dismissed, isMobile,
-    })) openArtifacts()
-    wasWriting.current = writing
-  }, [writing, art.open, art.dismissed, isMobile])
 
   const artLayout = resolveArtifactLayout({
     open: art.open && selected !== undefined,

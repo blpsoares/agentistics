@@ -272,3 +272,47 @@ export function producedGroups(
   // message" verb must be absent rather than scrolling to whatever turn -1 resolves to.
   return files.length === 0 ? [] : [{ index: -1, text: '', files }]
 }
+
+
+/** Which half of the gallery is being shown. */
+export type GalleryScope = 'all' | 'user' | 'llm'
+
+/** A stored scope, or `all` for anything this code did not write. */
+export function parseGalleryScope(raw: string | null): GalleryScope {
+  return raw === 'user' || raw === 'llm' ? raw : 'all'
+}
+
+/**
+ * How many files each side holds — what decides whether the switch is even drawn.
+ *
+ * A three-way control where two of the options are empty is a control that mostly refuses. It is
+ * shown only when BOTH sides have something, which is the same rule the Chat/Terminal toggle keeps:
+ * a segmented control with one real option is a label pretending to be a control.
+ */
+export function gallerySides(groups: readonly GalleryGroup[]): { user: number; llm: number } {
+  let user = 0
+  let llm = 0
+  for (const g of groups) {
+    for (const f of g.files) {
+      if (f.origin === 'produced') llm += 1
+      else user += 1
+    }
+  }
+  return { user, llm }
+}
+
+/**
+ * The groups a scope shows.
+ *
+ * Filtered per FILE and not per group, because nothing stops a future group from holding both —
+ * and a group left with no files is dropped rather than rendered as a heading over nothing.
+ */
+export function filterGallery(
+  groups: readonly GalleryGroup[], scope: GalleryScope,
+): GalleryGroup[] {
+  if (scope === 'all') return [...groups]
+  const want = scope === 'llm' ? 'produced' : 'sent'
+  return groups
+    .map(g => ({ ...g, files: g.files.filter(f => (f.origin ?? 'sent') === want) }))
+    .filter(g => g.files.length > 0)
+}

@@ -27,6 +27,7 @@ import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import { Check, Clock, CornerUpLeft, Loader, User } from 'lucide-react'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
+import { splitSlashLine } from '../../lib/slashLine'
 import { splitImageAttachments } from '../../lib/attachmentPreview'
 import { echoStatus } from '../../lib/echoStatus'
 import { attachmentUrl } from '../../lib/attachmentUrl'
@@ -357,9 +358,20 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
         {onReply && !provisional && (
           <button
             className="ag-bubble-reply"
-            onClick={() => onReply(turn)}
+            // THE SELECTION WINS. Reported: three words selected, reply pressed, and the whole
+            // message was quoted — because this button and the excerpt pill were two controls and
+            // the reader used the one that was already there. A selection inside this bubble is a
+            // more specific statement of what is being answered than "this message", so it is what
+            // gets quoted; with nothing selected the button means what it always meant.
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => {
+              if (excerpt && onReplyExcerpt) { const t = excerpt.text; setExcerpt(null); onReplyExcerpt(turn, t); return }
+              onReply(turn)
+            }}
             aria-label={pt ? 'Responder' : 'Reply'}
-            title={pt ? 'Responder' : 'Reply'}
+            title={excerpt
+              ? (pt ? 'Responder ao trecho selecionado' : 'Reply to the selected excerpt')
+              : (pt ? 'Responder' : 'Reply')}
             // POSITION only. Everything else — the size, the surface, and the `opacity: 0` the
             // hover reveals — lives in `.ag-bubble-reply`, because an inline style beats a
             // stylesheet rule without `!important`: written here, the reveal could never fire and
@@ -384,7 +396,12 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
           >
             <button
               role="menuitem"
-              onClick={() => { setMenuAt(null); onReply(turn) }}
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => {
+                setMenuAt(null)
+                if (excerpt && onReplyExcerpt) { const t = excerpt.text; setExcerpt(null); onReplyExcerpt(turn, t); return }
+                onReply(turn)
+              }}
               style={{
                 display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
                 minHeight: 34, padding: '6px 8px', borderRadius: 6, border: 'none',
@@ -393,7 +410,9 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
               }}
             >
               <CornerUpLeft size={13} style={{ flexShrink: 0 }} />
-              {pt ? 'Responder' : 'Reply'}
+              {excerpt
+                ? (pt ? 'Responder ao trecho' : 'Reply to excerpt')
+                : (pt ? 'Responder' : 'Reply')}
             </button>
           </div>
         )}
@@ -446,7 +465,28 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
               fontSize: 13.5, lineHeight: 1.65, color: 'var(--text-primary)',
             }}
           >
-            <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{text}</ReactMarkdown>
+            {/* AN INVOCATION IS NOT PROSE. A message that opens with `/name` is a command to the
+                harness, and in a column of prose it reads as prose. It is split off and drawn in
+                the accent — the same colour the panel's "use this skill" button wears, so the
+                thing you pressed and the thing that appears are visibly the same act. The rule is
+                `slashLine.ts` and it is anchored: a `/home/...` path is not a command. */}
+            {(() => {
+              const { command, rest } = splitSlashLine(text)
+              if (command === '') {
+                return <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{text}</ReactMarkdown>
+              }
+              return (
+                <>
+                  <span style={{
+                    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+                    fontWeight: 650, color: 'var(--anthropic-orange)',
+                  }}>{command}</span>
+                  {rest.trim() !== '' && (
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{rest}</ReactMarkdown>
+                  )}
+                </>
+              )
+            })()}
           </div>
         )}
 

@@ -38,7 +38,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FileQuestion, Grid2x2, Images, List, Paperclip } from 'lucide-react'
 import { agoLabel } from '../../lib/artifactTabs'
 import {
-  formatBytes, galleryImageKey, galleryImages, galleryMenuEntries, type GalleryFile,
+  filterGallery, formatBytes, galleryImageKey, galleryImages, galleryMenuEntries,
+  gallerySides, type GalleryFile, type GalleryScope,
   type GalleryGroup, type GalleryView,
 } from '../../lib/gallery'
 import { galleryFileUrl } from '../../lib/attachmentUrl'
@@ -56,14 +57,31 @@ export interface GalleryTabProps {
   lang: 'pt' | 'en'
   view: GalleryView
   onViewChange: (view: GalleryView) => void
+  /** Which side is shown — see `GalleryScope`. */
+  scope: GalleryScope
+  onScopeChange: (scope: GalleryScope) => void
 }
 
 /** How long a touch has to hold to mean "right-click". The same 500ms the session rows use. */
 const LONG_PRESS_MS = 500
 
-export function GalleryTab({ sessionId, groups, lang, view, onViewChange }: GalleryTabProps) {
+export function GalleryTab({
+  sessionId, groups: allGroups, lang, view, onViewChange, scope, onScopeChange,
+}: GalleryTabProps) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
+
+  /**
+   * WHO PUT IT THERE. Asked for: what the assistant produced must be separable from what a person
+   * sent — the two are different kinds of thing sharing one grid.
+   *
+   * The switch is drawn only when BOTH sides have something: a three-way control where two options
+   * are empty is a control that mostly refuses, which is the same rule the Chat/Terminal toggle
+   * keeps. And an empty SIDE says so in its own words rather than falling back to the "nothing sent
+   * yet" sentence, which would be false.
+   */
+  const sides = useMemo(() => gallerySides(allGroups), [allGroups])
+  const groups = useMemo(() => filterGallery(allGroups, scope), [allGroups, scope])
 
   /** The flat run the lightbox steps through — the WHOLE gallery, see `galleryImages`. */
   const images = useMemo(() => galleryImages(groups), [groups])
@@ -125,7 +143,7 @@ export function GalleryTab({ sessionId, groups, lang, view, onViewChange }: Gall
     }
   }, [pt])
 
-  if (groups.length === 0) {
+  if (allGroups.length === 0) {
     return (
       <Empty text={pt
         ? 'Nada enviado nesta conversa ainda. Imagens e arquivos que você anexar a uma mensagem aparecem aqui, agrupados pela mensagem que os levou.'
@@ -139,11 +157,41 @@ export function GalleryTab({ sessionId, groups, lang, view, onViewChange }: Gall
         display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
         padding: '6px 8px', borderBottom: '1px solid var(--border-subtle)',
       }}>
-        <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', marginRight: 'auto' }}>
-          {groups.length} {pt
-            ? (groups.length === 1 ? 'mensagem' : 'mensagens')
-            : (groups.length === 1 ? 'message' : 'messages')}
-        </span>
+        {sides.user > 0 && sides.llm > 0 ? (
+          <div role="tablist" style={{
+            display: 'flex', gap: 2, padding: 2, borderRadius: 8, marginRight: 'auto',
+            background: 'var(--bg-base)', border: '1px solid var(--border-subtle)',
+          }}>
+            {([
+              ['all', pt ? 'Tudo' : 'All', sides.user + sides.llm],
+              ['user', pt ? 'Você' : 'You', sides.user],
+              ['llm', pt ? 'Assistente' : 'Assistant', sides.llm],
+            ] as const).map(([id, label, n]) => (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={scope === id}
+                onClick={() => onScopeChange(id)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  minHeight: isMobile ? 44 : 24, padding: '0 8px', borderRadius: 6,
+                  border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
+                  background: scope === id ? 'var(--bg-elevated)' : 'transparent',
+                  color: scope === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                  fontWeight: scope === id ? 650 : 400,
+                }}
+              >
+                {label}<span style={{ opacity: 0.7 }}>{n}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)', marginRight: 'auto' }}>
+            {groups.length} {pt
+              ? (groups.length === 1 ? 'mensagem' : 'mensagens')
+              : (groups.length === 1 ? 'message' : 'messages')}
+          </span>
+        )}
         <ViewButton
           on={view === 'list'} isMobile={isMobile}
           label={pt ? 'Lista' : 'List'} icon={<List size={13} />}
