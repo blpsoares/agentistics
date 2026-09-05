@@ -196,3 +196,24 @@ export function emptyPickerReason(installed: number, query: string, lang: 'pt' |
     ? `Nenhuma das ${installed} skills tem “${query}” no nome ou na descrição.`
     : `None of the ${installed} skills has “${query}” in its name or description.`
 }
+
+
+/**
+ * Was a `/` just typed somewhere a command CANNOT be?
+ *
+ * Reported as "nem sempre ele ta identificando", with `asdasd /` in the field and nothing
+ * happening. Nothing happening is correct — a slash in the middle of a line is a slash, and the
+ * harness runs a command only when the line begins with one — but SILENCE is what makes a correct
+ * refusal look like a broken feature. The picker opens for the same `/` one column earlier, so from
+ * the outside it reads as unreliable rather than as a rule.
+ *
+ * So this is the sentence's condition, and nothing more: the caret sits immediately after a `/`
+ * that is not at the start of its line. It is deliberately narrow — it does not fire while somebody
+ * types a path or a date, only in the instant the slash itself was typed, which is the moment the
+ * expectation was formed.
+ */
+export function slashMisplaced(before: string): boolean {
+  if (!before.endsWith('/')) return false
+  const line = before.slice(before.lastIndexOf('\n') + 1)
+  return line.length > 1
+}

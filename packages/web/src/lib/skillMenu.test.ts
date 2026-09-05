@@ -8,8 +8,7 @@ import {
   looseGroupLabel,
   skillPackage,
   slashQuery,
-  stepSkill,
-} from './skillMenu'
+  stepSkill, slashMisplaced } from './skillMenu'
 
 const sk = (name: string, description = '') => ({ name, description })
 
@@ -136,4 +135,15 @@ test('"none installed" and "none by that name" are different sentences', () => {
   expect(emptyPickerReason(49, 'zzz', 'en')).toContain('49')
   expect(emptyPickerReason(49, 'zzz', 'en')).toContain('zzz')
   expect(emptyPickerReason(0, '', 'pt')).toBe('Nenhuma skill instalada para esta sessão.')
+})
+
+test('a slash where a command cannot be is EXPLAINED, not silently ignored', () => {
+  expect(slashMisplaced('asdasd /')).toBe(true)
+  // At the start of a line it is a real command — the picker is already open, nothing to say.
+  expect(slashMisplaced('/')).toBe(false)
+  expect(slashMisplaced('linha um\n/')).toBe(false)
+  // Only in the instant the slash was typed: a path or a date must not raise it.
+  expect(slashMisplaced('veja /home/u/x.png')).toBe(false)
+  expect(slashMisplaced('asdasd / mais texto')).toBe(false)
+  expect(slashMisplaced('')).toBe(false)
 })

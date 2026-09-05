@@ -47,7 +47,8 @@ import { MAX_ATTACHMENTS, attachmentRoom, planPaste } from '../../lib/pastePlan'
 import { appendDictation, dictatedText, dictationError, dictationLocale, dictationSupport, insecureAlternative } from '../../lib/dictation'
 import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
 import {
-  applySkill, emptyPickerReason, filterSkills, flattenGroups, groupSkills, slashQuery, stepSkill,
+  applySkill, emptyPickerReason, filterSkills, flattenGroups, groupSkills, slashMisplaced,
+  slashQuery, stepSkill,
 } from '../../lib/skillMenu'
 import { markExcerpt, quoteFor, replyAuthor, replyPreview, type ReplyTarget } from '../../lib/replyQuote'
 import { pendingEchoes } from '../../lib/echoMatch'
@@ -647,6 +648,14 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
    */
   /** The leading `/skill` of what is typed, for the field's own marker. See `slashLine.ts`. */
   const slashDraft = useMemo(() => splitSlashLine(draft), [draft])
+  /**
+   * A `/` typed where a command cannot be — see `slashMisplaced`.
+   *
+   * The picker not opening there is CORRECT; the silence is what made it read as unreliable
+   * ("nem sempre ele ta identificando"). One line, only while the slash is the last thing typed,
+   * and it disappears the moment anything else is.
+   */
+  const slashHint = useMemo(() => slashMisplaced(draft.slice(0, caret)), [draft, caret])
   const underlayRef = useRef<HTMLDivElement | null>(null)
 
   const draftReq = useDraftRequest()
@@ -1400,6 +1409,17 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                   }}
                 />
                 </div>
+
+                {slashHint && (
+                  <p role="status" style={{
+                    margin: '2px 6px 0', fontSize: 10.5, lineHeight: 1.5,
+                    color: 'var(--text-tertiary)',
+                  }}>
+                    {pt
+                      ? 'Uma skill só vale no começo da linha — apague o que está antes, ou quebre a linha.'
+                      : 'A skill only counts at the start of a line — clear what is before it, or break the line.'}
+                  </p>
+                )}
 
                 {/* The controls, on their own line under the text. ATTACH opens the row on the
                     left and the acting group closes it on the right — the two halves are what the
