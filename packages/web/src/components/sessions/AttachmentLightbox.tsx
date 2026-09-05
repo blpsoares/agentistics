@@ -27,10 +27,19 @@ export interface AttachmentLightboxProps {
    * the reader last saw — which is the whole reason its menu exists here too.
    */
   onImageMenu?: (x: number, y: number, index: number) => void
+  /**
+   * How to turn a path into a URL, when the default is not right.
+   *
+   * The default is the attachments route, which is what the chat and the sent half of the gallery
+   * need. A file the SESSION produced lives wherever the session put it and is served by a
+   * different route bound to that session, so the caller that knows which is which resolves it —
+   * this component never guesses from the path.
+   */
+  srcFor?: (path: string) => string
 }
 
 export function AttachmentLightbox({
-  paths, index, onIndexChange, onClose, lang, onImageMenu,
+  paths, index, onIndexChange, onClose, lang, onImageMenu, srcFor,
 }: AttachmentLightboxProps) {
   const pt = lang === 'pt'
   const many = paths.length > 1
@@ -90,7 +99,7 @@ export function AttachmentLightbox({
       )}
 
       <img
-        src={attachmentUrl(path)}
+        src={srcFor ? srcFor(path) : attachmentUrl(path)}
         alt=""
         onClick={e => e.stopPropagation()}
         {...(onImageMenu ? {

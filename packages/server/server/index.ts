@@ -1457,6 +1457,47 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
+    // THE BYTES of an image or PDF a session produced. Separate from `/api/fleet/file`, which
+    // answers JSON with text and refuses binaries by design. Same allowlist, plus a closed content
+    // table (`artifact-media.ts`) — and the response is locked down so a mislabelled file cannot
+    // become script on this origin: `nosniff`, a `default-src 'none'` policy, and no `Vary` games.
+    if (url.pathname === '/api/fleet/media' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      const path = url.searchParams.get('path')
+      if (!id || !path) {
+        return new Response(JSON.stringify({ ok: false, message: 'bad_request' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      try {
+        const { readFleetArtifactMedia, fleetLang } = await import('./sessions/fleet-web')
+        const out = await readFleetArtifactMedia(fleetLang(url.searchParams.get('lang')), id, path)
+        if (!out.ok) {
+          return new Response(JSON.stringify({ ok: false, message: out.message }), {
+            status: out.status,
+            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response(out.bytes as unknown as BodyInit, {
+          headers: {
+            ...CORS_HEADERS,
+            'Content-Type': out.mime,
+            'Content-Disposition': `inline; filename="${out.name.replace(/[^\w.-]/g, '_')}"`,
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': "default-src 'none'; sandbox",
+            // A session rewrites the file it is working on; a cached copy would show the old one.
+            'Cache-Control': 'no-store',
+          },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify({ ok: false, ...safeError(err, { verbose: PROFILE === 'local' }).body }), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     if (url.pathname === '/api/fleet/stream' && req.method === 'GET') {
       const id = url.searchParams.get('id')
       if (!id) {

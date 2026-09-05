@@ -41,7 +41,7 @@ import {
   formatBytes, galleryImageKey, galleryImages, galleryMenuEntries, type GalleryFile,
   type GalleryGroup, type GalleryView,
 } from '../../lib/gallery'
-import { attachmentNameUrl } from '../../lib/attachmentUrl'
+import { galleryFileUrl } from '../../lib/attachmentUrl'
 import { overlayPadding } from '../../lib/mobileOverlay'
 import { goToTurn } from '../../lib/turnScroll'
 import { useAttachmentSizes } from '../../hooks/useAttachmentSizes'
@@ -50,6 +50,8 @@ import { AttachmentLightbox } from './AttachmentLightbox'
 import { SessionRowMenu } from './SessionRowMenu'
 
 export interface GalleryTabProps {
+  /** The session these files belong to — what a PRODUCED file's URL is resolved against. */
+  sessionId: string
   groups: readonly GalleryGroup[]
   lang: 'pt' | 'en'
   view: GalleryView
@@ -59,14 +61,17 @@ export interface GalleryTabProps {
 /** How long a touch has to hold to mean "right-click". The same 500ms the session rows use. */
 const LONG_PRESS_MS = 500
 
-export function GalleryTab({ groups, lang, view, onViewChange }: GalleryTabProps) {
+export function GalleryTab({ sessionId, groups, lang, view, onViewChange }: GalleryTabProps) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
 
   /** The flat run the lightbox steps through — the WHOLE gallery, see `galleryImages`. */
   const images = useMemo(() => galleryImages(groups), [groups])
+  // SENT files only: the size is answered by a `HEAD` on the attachments route, which knows
+  // nothing about a file the session wrote somewhere else. A produced row shows no size rather
+  // than a wrong one — the same rule the rest of this panel keeps.
   const names = useMemo(
-    () => groups.flatMap(g => g.files.filter(f => f.image).map(f => f.name)),
+    () => groups.flatMap(g => g.files.filter(f => f.image && f.origin !== 'produced').map(f => f.name)),
     [groups],
   )
   const sizes = useAttachmentSizes(names)
@@ -174,7 +179,7 @@ export function GalleryTab({ groups, lang, view, onViewChange }: GalleryTabProps
                 {group.files.map((file, i) => (
                   <Tile
                     key={`${file.path}-${i}`}
-                    file={file} pt={pt} isMobile={isMobile}
+                    file={file} sessionId={sessionId} pt={pt} isMobile={isMobile}
                     size={sizes[file.name]}
                     broken={broken[file.name] === true}
                     onBroken={() => markBroken(file.name)}
@@ -213,13 +218,19 @@ export function GalleryTab({ groups, lang, view, onViewChange }: GalleryTabProps
             const hit = images[at]
             if (hit) openMenu(x, y, hit.group)
           }}
+          // The lightbox steps across BOTH halves of the gallery, so the route differs per image.
+          // Resolved from the file the path belongs to, never guessed from the path itself.
+          srcFor={path => {
+            const file = groups.flatMap(g => g.files).find(f => f.path === path)
+            return file ? galleryFileUrl(file, sessionId) : galleryFileUrl({ path, name: path.split('/').pop() ?? path }, sessionId)
+          }}
         />
       )}
 
       {menu && (
         <SessionRowMenu
           x={menu.x} y={menu.y}
-          entries={galleryMenuEntries(pt).map(e => ({ action: e.action, label: e.label, enabled: e.enabled }))}
+          entries={galleryMenuEntries(pt, menu.group).map(e => ({ action: e.action, label: e.label, enabled: e.enabled }))}
           onPick={action => pick(action, menu.group)}
           onClose={() => setMenu(null)}
         />
@@ -351,8 +362,9 @@ function RowItem({ file, size, pt, isMobile, onOpen, onMenu }: {
   )
 }
 
-function Tile({ file, size, pt, isMobile, broken, onBroken, onOpen, onMenu }: {
+function Tile({ file, sessionId, size, pt, isMobile, broken, onBroken, onOpen, onMenu }: {
   file: GalleryFile
+  sessionId: string
   size: number | undefined
   pt: boolean
   isMobile: boolean
@@ -380,7 +392,7 @@ function Tile({ file, size, pt, isMobile, broken, onBroken, onOpen, onMenu }: {
       }}>
         {previewable ? (
           <img
-            src={attachmentNameUrl(file.name)}
+            src={galleryFileUrl(file, sessionId)}
             alt={file.name}
             loading="lazy"
             // A preview that fails is not left as a broken image: the tile falls back to the same

@@ -572,6 +572,102 @@ export async function readFleetArtifact(
 }
 
 /**
+ * The BYTES of one media file a session produced — a screenshot, a diagram, a PDF.
+ *
+ * A second route rather than a flag on `/api/fleet/file`, because that one answers JSON with text
+ * in it and deliberately refuses binaries. This one answers the file.
+ *
+ * IT REUSES THE SAME ALLOWLIST, and that is the whole safety of it: the path must be one this
+ * session actually wrote, resolved inside the session's own directory, symlinks and all — the exact
+ * `planArtifactRead` the text route goes through. What is added here is a CONTENT decision
+ * (`artifact-media.ts`), and it is a closed table: an extension it does not know is refused rather
+ * than served as `application/octet-stream`, or this becomes a general download for anything a
+ * session ever touched.
+ */
+export async function readFleetArtifactMedia(
+  lang: CliLang, id: string, path: string,
+): Promise<
+  | { ok: true; bytes: Uint8Array; mime: string; name: string }
+  | { ok: false; message: string; status: number }
+> {
+  const { mediaTypeFor, MAX_MEDIA_BYTES, REFUSED_EXT, extensionOf } = await import('./artifact-media')
+  const pt = lang === 'pt'
+  const type = mediaTypeFor(path)
+  if (!type) {
+    const refused = REFUSED_EXT.has(extensionOf(path))
+    return {
+      ok: false, status: 415,
+      message: refused
+        ? (pt
+          ? 'Esse formato pode carregar script, então não é exibido aqui. Abra o arquivo pela aba de arquivos.'
+          : 'That format can carry script, so it is not displayed here. Open it from the files tab.')
+        : (pt
+          ? 'Esse arquivo não é uma imagem nem um PDF.'
+          : 'That file is not an image or a PDF.'),
+    }
+  }
+
+  const host = await hostFor(lang)
+  if (!host.sessions) return { ok: false, status: 404, message: controlStrings(lang).sessionsNoHost }
+  const fleet = await host.sessions()
+  const row = fleet.sessions.find(r => r.id === id || r.conversationId === id)
+  if (!row?.cwd) {
+    return {
+      ok: false, status: 404,
+      message: pt
+        ? 'Essa sessão não está na lista desta máquina, ou não tem uma pasta registrada.'
+        : 'That session is not in this machine’s list, or has no recorded folder.',
+    }
+  }
+
+  const { readSessionChat } = await import('./chat-web')
+  const chat = await readSessionChat(host, lang, row.id)
+  const { resolveArtifactPath } = await import('./artifact-list')
+  const raw = artifactPathsFromTurns(chat.turns)
+  const allowed = [...new Set(raw.flatMap(p => {
+    const r = resolveArtifactPath(p, row.cwd!)
+    return r ? [p, r] : [p]
+  }))]
+  const asked = resolveArtifactPath(path, row.cwd) ?? path
+  const { planArtifactRead } = await import('./artifact-file')
+  const plan = planArtifactRead({
+    path: allowed.includes(path) ? asked : path, cwd: row.cwd, allowed,
+  })
+  if (!plan.ok) {
+    return {
+      ok: false, status: 403,
+      message: pt
+        ? 'Esse arquivo não está entre os que esta sessão escreveu.'
+        : 'That file is not among the ones this session wrote.',
+    }
+  }
+
+  const { stat, readFile } = await import('node:fs/promises')
+  try {
+    const st = await stat(plan.path)
+    if (!st.isFile()) return { ok: false, status: 404, message: pt ? 'Não é um arquivo.' : 'Not a file.' }
+    if (st.size > MAX_MEDIA_BYTES) {
+      return {
+        ok: false, status: 413,
+        message: pt
+          ? 'Esse arquivo é grande demais para ser exibido aqui.'
+          : 'That file is too large to display here.',
+      }
+    }
+    const buf = await readFile(plan.path)
+    return {
+      ok: true, bytes: new Uint8Array(buf), mime: type.mime,
+      name: plan.path.split('/').pop() ?? 'file',
+    }
+  } catch {
+    return {
+      ok: false, status: 404,
+      message: pt ? 'Esse arquivo não está mais no disco.' : 'That file is no longer on disk.',
+    }
+  }
+}
+
+/**
  * The panel's LIST: what this session wrote that is still a readable file with content.
  *
  * Answered by the server because only it can look at the disk. The browser keeps deriving the kind,

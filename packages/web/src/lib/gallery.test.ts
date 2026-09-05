@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   fileFormat, formatBytes, galleryFileCount, galleryGroups, galleryImageKey, galleryImages,
-  galleryMenuEntries, parseGalleryView, type GalleryTurn,
-} from './gallery'
+  galleryMenuEntries, parseGalleryView, type GalleryTurn, producedGroups } from './gallery'
 
 const DIR = '/home/u/.agentistics/attachments'
 const shot = `${DIR}/724e7aa8-image.png`
@@ -65,7 +64,7 @@ describe('galleryGroups', () => {
   it('marks a file that cannot be previewed rather than promising a thumbnail', () => {
     const groups = galleryGroups([user(`${notes}\nleia`)])
     expect(groups[0]!.files[0]).toEqual({
-      path: notes, name: 'aa11bb22-notes.txt', image: false, format: 'TXT',
+      path: notes, name: 'aa11bb22-notes.txt', image: false, format: 'TXT', origin: 'sent',
     })
   })
 
@@ -142,5 +141,33 @@ describe('galleryMenuEntries', () => {
       .toEqual(['Go to message', 'View message', 'Cancel'])
     expect(galleryMenuEntries(true).map(e => e.label))
       .toEqual(['Ir para a mensagem', 'Ver mensagem', 'Cancelar'])
+  })
+})
+
+describe('what the SESSION produced', () => {
+  it('lists images and PDFs the session wrote, in one block', () => {
+    const out = producedGroups([
+      { path: '/w/shot.png', name: 'shot.png' },
+      { path: '/w/report.pdf', name: 'report.pdf' },
+      { path: '/w/index.ts', name: 'index.ts' },
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0]!.files.map(f => f.name)).toEqual(['shot.png', 'report.pdf'])
+    expect(out[0]!.files[0]!.image).toBe(true)
+    expect(out[0]!.files[1]!.image).toBe(false)   // a PDF has no thumbnail to promise
+    expect(out[0]!.files.every(f => f.origin === 'produced')).toBe(true)
+  })
+
+  it('has NO message behind it, and says so with index -1', () => {
+    const out = producedGroups([{ path: '/w/shot.png', name: 'shot.png' }])
+    expect(out[0]!.index).toBe(-1)
+    // …which is what removes the two verbs that name a message.
+    expect(galleryMenuEntries(false, out[0]!).map(e => e.action)).toEqual(['cancel'])
+    expect(galleryMenuEntries(false, { index: 3 }).map(e => e.action)).toEqual(['goto', 'view', 'cancel'])
+  })
+
+  it('a session that produced no media produces no block', () => {
+    expect(producedGroups([{ path: '/w/index.ts', name: 'index.ts' }])).toEqual([])
+    expect(producedGroups([])).toEqual([])
   })
 })

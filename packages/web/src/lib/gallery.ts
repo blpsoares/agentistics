@@ -46,9 +46,26 @@ export interface GalleryFile {
   image: boolean
   /** The extension, uppercased, for the FORMAT column. `''` when the name carries none. */
   format: string
+  /** Where the bytes come from — see `GalleryOrigin`. Absent reads as `sent` (every older group). */
+  origin?: GalleryOrigin
 }
 
 /** One message, and the files it carried. */
+/**
+ * WHERE a gallery row's bytes come from.
+ *
+ * `sent` files are attachments in `~/.agentistics/attachments`, addressed by NAME through the
+ * attachment route. `produced` files are ones the SESSION wrote — a screenshot, a diagram, a PDF —
+ * which live wherever the session put them and are addressed by PATH through `/api/fleet/media`,
+ * behind the same allowlist the file tab reads through.
+ *
+ * The distinction is on the FILE and not on the group because a reader is asking "what images are
+ * in this conversation", not "which route serves them" — but a `<img src>` needs the answer, and
+ * guessing it from the path would break the moment somebody attaches a file from outside the
+ * attachments folder.
+ */
+export type GalleryOrigin = 'sent' | 'produced'
+
 export interface GalleryGroup {
   /**
    * The message's position in the turns list.
@@ -93,7 +110,10 @@ export function galleryGroups(turns: readonly GalleryTurn[]): GalleryGroup[] {
     if (attachments.length === 0) return
     const files = attachments.map(path => {
       const name = attachmentName(path)
-      return { path, name, image: isImageAttachment(path), format: fileFormat(name) }
+      return {
+        path, name, image: isImageAttachment(path), format: fileFormat(name),
+        origin: 'sent' as const,
+      }
     })
     out.push(turn.at ? { index, at: turn.at, text, files } : { index, text, files })
   })
@@ -192,10 +212,63 @@ export interface GalleryMenuEntry {
  * nothing. A fourth would be a different feature; a different wording would be a second vocabulary
  * for one gesture.
  */
-export function galleryMenuEntries(pt: boolean): GalleryMenuEntry[] {
+export function galleryMenuEntries(pt: boolean, group?: { index: number }): GalleryMenuEntry[] {
+  // A PRODUCED file has no message behind it — the session wrote it, nobody sent it — so the two
+  // entries that name one are ABSENT rather than present and refusing. `index: -1` is how
+  // `producedGroups` says so, and a `goto` on it would scroll to whatever turn -1 resolves to.
+  const hasMessage = group === undefined || group.index >= 0
   return [
-    { action: 'goto', label: pt ? 'Ir para a mensagem' : 'Go to message', enabled: true },
-    { action: 'view', label: pt ? 'Ver mensagem' : 'View message', enabled: true },
-    { action: 'cancel', label: pt ? 'Cancelar' : 'Cancel', enabled: true },
+    ...(hasMessage
+      ? [
+        { action: 'goto' as const, label: pt ? 'Ir para a mensagem' : 'Go to message', enabled: true },
+        { action: 'view' as const, label: pt ? 'Ver mensagem' : 'View message', enabled: true },
+      ]
+      : []),
+    { action: 'cancel' as const, label: pt ? 'Cancelar' : 'Cancel', enabled: true },
   ]
+}
+
+
+/** Extensions the media route serves. Mirrors `artifact-media.ts`'s table — see the note below. */
+const PRODUCED_IMAGE = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'])
+const PRODUCED_OTHER = new Set(['pdf'])
+
+/**
+ * What the SESSION produced, as gallery groups.
+ *
+ * Asked for directly: "na galeria tbm devem ter as suas imagens, quando vc gerar imagens, tirar
+ * prints, gerar pdfs e etc". Until now the gallery was only what a person ATTACHED, so a screenshot
+ * the assistant took could be found in the files tab and nowhere a person would look for a picture.
+ *
+ * ONE GROUP, not one per message, and that is a difference from the sent side rather than an
+ * oversight: a sent group is a MESSAGE — the text that came with the files is what names it — while
+ * a produced file has no message of its own, only the turn that wrote it. Grouping by turn would
+ * make a row per file with no heading worth reading. They are ordered as the transcript wrote them,
+ * newest LAST, matching the live feed.
+ *
+ * The extension table is duplicated from the server's `artifact-media.ts` on purpose: the web
+ * bundle cannot import from `packages/server`, and the failure mode of a drift is visible and
+ * harmless — a file listed here that the route refuses shows its refusal in the lightbox, which is
+ * the same sentence it would have shown anyway.
+ */
+export function producedGroups(
+  artifacts: readonly { path: string; name: string }[],
+): GalleryGroup[] {
+  const files = artifacts
+    .map(a => {
+      const dot = a.name.lastIndexOf('.')
+      const ext = dot > 0 ? a.name.slice(dot + 1).toLowerCase() : ''
+      return { a, ext }
+    })
+    .filter(({ ext }) => PRODUCED_IMAGE.has(ext) || PRODUCED_OTHER.has(ext))
+    .map(({ a, ext }) => ({
+      path: a.path,
+      name: a.name,
+      image: PRODUCED_IMAGE.has(ext),
+      format: ext.toUpperCase(),
+      origin: 'produced' as const,
+    }))
+  // `index: -1` is deliberate and is READ: there is no message to go to, so the "recall the
+  // message" verb must be absent rather than scrolling to whatever turn -1 resolves to.
+  return files.length === 0 ? [] : [{ index: -1, text: '', files }]
 }

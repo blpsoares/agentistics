@@ -2778,8 +2778,8 @@ export default function AppLayout() {
           onClick={toggleArtifacts}
           aria-pressed={artifacts.open}
           title={lang === 'pt'
-            ? 'Arquivos que esta sessão escreveu'
-            : 'Files this session has written'}
+            ? 'Conteúdo desta sessão — arquivos, docs, atividade, galeria e skills'
+            : 'This session’s contents — files, docs, activity, gallery and skills'}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
             height: 30, padding: '0 10px', borderRadius: 9, cursor: 'pointer',

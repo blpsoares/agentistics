@@ -1489,14 +1489,17 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                           secure context, so a dashboard reached over plain HTTP on a LAN never has
                           a microphone. A control that silently does nothing there is one people
                           report as broken, which is what happened. */}
-                      {/* Hidden exactly where the standalone button above is shown, so dictation is
+                      {/* NOT RENDERED where the standalone button above is shown, so dictation is
                           in ONE place at a time — two controls for one act is two states to keep in
                           agreement. Where it cannot work it lives here, because only here can it
-                          say why. */}
-                      <button
+                          say why.
+                          It was `hidden` and that did nothing: the row sets `display: flex` inline,
+                          and an inline style beats the user-agent rule `[hidden] { display: none }`
+                          without `!important`. So the microphone appeared TWICE — reported as
+                          exactly that. A conditional render has no such loophole. */}
+                      {(isMobile || dictation.state !== 'ready') && <button
                         onClick={() => { if (dictation.state === 'ready') { setMoreOpen(false); toggleDictation() } }}
                         disabled={dictation.state !== 'ready'}
-                        hidden={!isMobile && dictation.state === 'ready'}
                         style={{
                           display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
                           minHeight: 40, padding: '6px 8px', borderRadius: 7, border: 'none',
@@ -1516,7 +1519,7 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                             </span>
                           )}
                         </span>
-                      </button>
+                      </button>}
 
                       {/* The address that WOULD work, when there is one.
                           `localhost` is a secure context and `http://192.168.x.y:47292` is not, so

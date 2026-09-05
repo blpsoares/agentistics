@@ -26,17 +26,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
-  BookOpen, Terminal, Brain, Send, Eye, Image,
+  BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles,
 } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
 import { agoLabel, isDoc, liveEvents, writeStatus, type LiveEvent, type LiveTurn, type WriteStatus } from '../../lib/artifactTabs'
 import {
-  galleryFileCount, galleryGroups, parseGalleryView, type GalleryTurn, type GalleryView,
+  galleryFileCount, galleryGroups, parseGalleryView, producedGroups,
+  type GalleryTurn, type GalleryView,
 } from '../../lib/gallery'
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
 
-type TabId = 'files' | 'docs' | 'live' | 'gallery'
+type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills'
 
 /** Where the view toggle is remembered. One key, read and written in one place. */
 const GALLERY_VIEW_KEY = 'agentistics:gallery-view'
@@ -115,7 +116,7 @@ export function ArtifactsAside({
   const askedAt = tabRequest?.at
   useEffect(() => {
     const t = tabRequest?.tab
-    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery') setTab(t)
+    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills') setTab(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askedAt])
 
@@ -132,8 +133,17 @@ export function ArtifactsAside({
    * inferred from a scroll position.
    */
   const feed = useMemo(() => liveEvents(turns ?? []), [turns])
-  /** What the PERSON sent, grouped by message. See `gallery.ts` — nothing here re-derives it. */
-  const gallery = useMemo(() => galleryGroups((turns ?? []) as readonly GalleryTurn[]), [turns])
+  /**
+   * The gallery: what the PERSON sent, grouped by message, PLUS what the SESSION produced.
+   *
+   * Two sources, one list, because a reader looking for a picture is not asking who made it. The
+   * produced block goes LAST: the sent groups carry the messages they came with and read as the
+   * conversation, while the produced one is a single block with no message of its own.
+   */
+  const gallery = useMemo(() => [
+    ...galleryGroups((turns ?? []) as readonly GalleryTurn[]),
+    ...producedGroups(artifacts),
+  ], [turns, artifacts])
   const galleryFiles = useMemo(() => galleryFileCount(gallery), [gallery])
   /** LIST or GRID, remembered. A private window that refuses storage simply keeps the default. */
   const [galleryView, setGalleryView] = useState<GalleryView>(() => {
@@ -143,6 +153,32 @@ export function ArtifactsAside({
     setGalleryView(v)
     try { localStorage.setItem(GALLERY_VIEW_KEY, v) } catch { /* private mode */ }
   }
+  /**
+   * The skills this session can invoke, read ONCE and only when the tab is opened.
+   *
+   * The composer fetches the same list for its `/` picker; this is a second reader of one route,
+   * not a second source. Deliberately not lifted into a shared store: the two are opened at
+   * different moments and a store would fetch for a reader that never asked.
+   *
+   * `null` is "not read yet" and `[]` is "none", which are different sentences on screen — the same
+   * distinction the rest of this panel keeps.
+   */
+  const [skills, setSkills] = useState<{ name: string; description: string }[] | null>(null)
+  const [skillsNote, setSkillsNote] = useState<string | null>(null)
+  useEffect(() => {
+    if (tab !== 'skills' || skills !== null) return
+    let alive = true
+    fetch(`/api/fleet/skills?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { skills?: { name: string; description: string }[]; reason?: string } | null) => {
+        if (!alive) return
+        setSkills(d?.skills ?? [])
+        setSkillsNote(d?.reason ?? null)
+      })
+      .catch(() => { if (alive) setSkills([]) })
+    return () => { alive = false }
+  }, [tab, skills, sessionId, pt])
+
   const feedRef = useRef<HTMLDivElement>(null)
   /** A clock, so "3m ago" ages while the panel is open rather than freezing at its first render. */
   const [now, setNow] = useState(() => Date.now())
@@ -171,7 +207,7 @@ export function ArtifactsAside({
       padding: '10px 12px', borderBottom: '1px solid var(--border)',
     }}>
       <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: 'var(--text-primary)' }}>
-        {pt ? 'Artefatos' : 'Artifacts'}
+        {pt ? 'Conteúdo' : 'Contents'}
       </span>
       {artifacts.length > 0 && (
         <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
@@ -182,7 +218,7 @@ export function ArtifactsAside({
       <button
         onClick={onClose}
         aria-label={pt ? 'Fechar artefatos' : 'Close artifacts'}
-        title={pt ? 'Fechar artefatos' : 'Close artifacts'}
+        title={pt ? 'Fechar o painel' : 'Close the panel'}
         style={{
           marginLeft: 'auto', display: 'flex', width: 26, height: 26, borderRadius: 7,
           alignItems: 'center', justifyContent: 'center', border: 'none',
@@ -205,6 +241,10 @@ export function ArtifactsAside({
       icon: <Image size={12} />,
       count: galleryFiles,
     },
+    // The count is 0 until the tab is opened, and that is honest rather than lazy: the panel has
+    // not asked the host yet, and a number it has not measured is the thing this codebase refuses
+    // to print everywhere else.
+    { id: 'skills', label: 'Skills', icon: <Sparkles size={12} />, count: skills?.length ?? 0 },
   ]
 
   const tabBar = (
@@ -318,6 +358,58 @@ export function ArtifactsAside({
   }
 
   /**
+   * The SKILLS this session can invoke.
+   *
+   * A reference list, not a launcher: invoking one is typing `/name`, which the composer's own
+   * picker already does with the draft in front of you. Putting a run button here would be a second
+   * way to send something into a session, and the two would disagree the first time one of them
+   * learned about arguments.
+   *
+   * THREE STATES, three sentences: not read yet, none installed, and the host's own reason when it
+   * has one (a harness that has no skills at all says so through the route).
+   */
+  const skillsBody = () => (
+    <div style={{ padding: '10px 12px', overflowY: 'auto', minHeight: 0, flex: 1 }}>
+      {skills === null ? (
+        <Note text={pt ? "Lendo as skills desta sessão…" : "Reading this session’s skills…"} />
+      ) : skills.length === 0 ? (
+        <Note text={skillsNote ?? (pt
+          ? 'Nenhuma skill instalada para esta sessão.'
+          : 'No skills installed for this session.')} />
+      ) : (
+        <>
+          {skillsNote && (
+            <p style={{ margin: '0 0 10px', fontSize: 11, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+              {skillsNote}
+            </p>
+          )}
+          <p style={{ margin: '0 0 10px', fontSize: 11, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+            {pt
+              ? 'Digite / na caixa de mensagem para invocar uma delas.'
+              : 'Type / in the message box to invoke one of these.'}
+          </p>
+          {skills.map(sk => (
+            <div key={sk.name} style={{
+              padding: '8px 10px', marginBottom: 6, borderRadius: 9,
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+            }}>
+              <p style={{
+                margin: 0, fontSize: 12, fontWeight: 650, color: 'var(--text-primary)',
+                fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+              }}>/{sk.name}</p>
+              {sk.description && (
+                <p style={{
+                  margin: '3px 0 0', fontSize: 11, lineHeight: 1.5, color: 'var(--text-tertiary)',
+                }}>{sk.description}</p>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  )
+
+  /**
    * The gallery, or the reason it is not showing one.
    *
    * "The conversation has not loaded" and "nothing was ever sent" are different facts and get
@@ -333,6 +425,7 @@ export function ArtifactsAside({
     }
     return (
       <GalleryTab
+        sessionId={sessionId}
         groups={gallery}
         lang={lang}
         view={galleryView}
@@ -390,6 +483,7 @@ export function ArtifactsAside({
           {unavailable ? body()
             : tab === 'live' ? liveBody()
             : tab === 'gallery' ? galleryBody()
+            : tab === 'skills' ? skillsBody()
             : body()}
         </>
       )}
