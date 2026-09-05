@@ -2,7 +2,18 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { Outlet, NavLink, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { version } from '../../../package.json'
-import { Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart2, Bot, Calendar, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Code2, Cpu, Database, DollarSign, Download, FileCode, FileDown, FileText, Flame, FolderOpen, GitBranch, GitCommit, GitCompare, Globe, Home, KeyRound, Layers, LogOut, Maximize2, MessageSquare, MessagesSquare, Moon, MoreHorizontal, PanelLeft, RefreshCw, Server, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Tag as TagIcon, Target, TerminalSquare, TrendingUp, Trophy, Users, Wrench, X, Zap } from 'lucide-react'
+import {
+  Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart2, Bot,
+  Calendar, CheckCircle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
+  Clock, Code2, Cpu, Database, DollarSign, Download,
+  FileCode, FileDown, FileText, Flame, FolderOpen, GitBranch,
+  GitCommit, GitCompare, Globe, Home, KeyRound, Layers,
+  LogOut, Maximize2, MessageSquare, MessagesSquare, Moon, MoreHorizontal,
+  PanelLeft, RefreshCw, Server, Settings, Shield, ShieldCheck,
+  SlidersHorizontal, Sparkles, Sun, Tag as TagIcon, Target, TerminalSquare,
+  TrendingUp, Trophy, Users, Wrench, X, Zap,
+  ZoomIn,
+} from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import { usePlanBasis } from './hooks/usePlanBasis'
 import { planScopeHarnesses, planScopeNote } from './lib/costBasis'
@@ -11,6 +22,7 @@ import { DEFAULT_CARD_ORDER, migrateCardOrder, type CardId } from './lib/cardOrd
 import { BillingIntroModal } from './components/BillingIntroModal'
 import type { LoadProgress } from './hooks/useData'
 import { useIsMobile } from './hooks/useIsMobile'
+import { useAccessibility } from './hooks/useAccessibility'
 import type { TagDef } from './lib/tagMatch'
 import { canCreateTagFromFilters, filtersToTagDraft } from './lib/filtersToTag'
 import type { BillingSettings, CostBasis, Filters, HarnessId, HealthIssue, SavedComparison, TeamConfig } from '@agentistics/core'
@@ -26,6 +38,9 @@ import { ModelBreakdown } from './components/ModelBreakdown'
 import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
 import { NotificationToasts } from './components/NotificationToasts'
+import { MagnifierLayer } from './components/a11y/MagnifierLayer'
+import { HideLensesButton } from './components/a11y/HideLensesButton'
+import { MagnifierButton } from './components/a11y/MagnifierButton'
 import { NotificationBell } from './components/NotificationBell'
 import { HardwareModal } from './components/HardwareModal'
 import { useNotificationStream } from './hooks/useNotificationStream'
@@ -41,7 +56,7 @@ import { CacheHitRatePanel } from './components/CacheHitRatePanel'
 import { BudgetPanel } from './components/BudgetPanel'
 import { SessionDrilldownModal } from './components/SessionDrilldownModal'
 import { TranscriptModal } from './components/TranscriptModal'
-import type { PrefsDraft } from './lib/app-context'
+import type { PrefsDraft, AppContext } from './lib/app-context'
 import { TtyChat } from './components/TtyChat'
 import { UpdateModal } from './components/UpdateModal'
 import { InstallModal } from './components/InstallModal'
@@ -648,7 +663,7 @@ function fmtCostFull(usd: number, currency: 'USD' | 'BRL' = 'USD', rate = 1): st
 
 function MobileBottomNav({
   lang, harnesses, onRefresh, onOpenHardware, liveUpdates, onToggleLive, updateInterval, healthIssues, isCentral, hasWorkflows,
-  principal, theme, onToggleTheme, onToggleLang,
+  principal, theme, onToggleTheme, onToggleLang, a11yEnabled,
 }: {
   lang: Lang
   harnesses?: HarnessId[]
@@ -667,6 +682,9 @@ function MobileBottomNav({
   theme: Theme
   onToggleTheme: () => void
   onToggleLang: () => void
+  /** Whether the magnifier feature is on. Once it is, the header button is the way in — a tile
+   *  here too would be a second entry point to the same screen. */
+  a11yEnabled: boolean
 }) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -722,6 +740,12 @@ function MobileBottomNav({
     // Unconditional: the page's filter mode compares two SCOPES and needs no second harness.
     // Only the by-harness mode inside it stays gated.
     { key: 'compare', label: pt ? 'Comparar' : 'Compare', icon: GitCompare, onClick: () => { closeSheet(); navigate('/compare') }, active: location.pathname.startsWith('/compare') },
+    // Only while the feature is OFF: once it's on, the header magnifier button (beside the bell)
+    // is the way in, and two entry points to the same screen on a phone is one too many. Same
+    // ZoomIn icon as the header button — one feature, one icon.
+    ...(a11yEnabled
+      ? []
+      : [{ key: 'accessibility', label: pt ? 'Acessibilidade' : 'Accessibility', icon: ZoomIn, onClick: () => { closeSheet(); navigate('/settings/accessibility') }, active: location.pathname.startsWith('/settings/accessibility') } as Tile]),
   ]
   const activeIssueCount = healthIssues?.length ?? 0
   const actionTiles: Tile[] = [
@@ -1336,6 +1360,21 @@ export default function AppLayout() {
 
   // IAM gate (central only)
   const [iam, setIam] = useState<IamState | undefined>(undefined)
+
+  // `useAccessibility` is mounted here — ABOVE the `if (!iam.authed) return <Login/>` gate below —
+  // so its own load effect always runs before that gate can block anything. On a central,
+  // `/api/accessibility` answers 401 before sign-in and 403 before an owner's MFA enrolment
+  // (`AUTH_PUBLIC` / `MFA_EXEMPT` in `server/index-routes.ts` name neither route), so a stable
+  // identity of `undefined` through both of those states — collapsing to the account id only once
+  // a session is fully authorized — is what lets the hook's load effect re-fire the moment one
+  // becomes available, instead of being stuck forever with whatever its first, pre-auth fetch saw.
+  // On a non-central machine the route is never gated, so a constant identity is correct: the
+  // effect runs once, exactly as it always has.
+  const a11yIdentity = !teamSession?.central
+    ? 'solo'
+    : (iam?.authed && !iam.mfaEnrollmentRequired ? (iam.account?.id ?? 'unknown-account') : undefined)
+  const a11y = useAccessibility(a11yIdentity)
+
   const reloadIam = useCallback(() => {
     Promise.all([
       fetch('/api/iam/status').then(r => r.ok ? r.json() : { needsBootstrap: false }),
@@ -2643,6 +2682,41 @@ export default function AppLayout() {
     )
   }
 
+  // Built once so the magnifier layer (Task 8) can be handed the exact same object the pages get
+  // via <Outlet context>; two separately-built objects would drift out of sync.
+  const appCtx: AppContext = {
+    data,
+    derived,
+    statsCache,
+    filters, setFilters, activeOnly, setActiveOnly,
+    availableProjects, availableHarnesses,
+    lang, theme, currency, setCurrency, brlRate,
+    billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
+    comparisons, saveComparisons,
+    tags: tagsList, monthCommitment,
+    chatModel, chatSoundEnabled, chatSoundId,
+    savePreferences,
+    pwaPrompt,
+    onPwaInstalled: () => { setPwaInstalled(true); setPwaPrompt(null) },
+    liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
+    riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
+    monthlyBudgetUSD, updateBudget,
+    totalInputTokens, totalOutputTokens,
+    setExpandedChart, setSelectedSession, setInfoModalIndex,
+    infoItems,
+    cardOrder, setCardOrder,
+    cardPrecision, setCardPrecision,
+    sessionCountByProject, models, modelGroups, modelsInProject, users: usersWithMachines,
+    harnesses: data.harnesses,
+    isCentral,
+    me: iam?.account,
+    teams: teamsList,
+    machines: machinesList,
+    deniedRepoLabels,
+    refreshDeniedRepoLabels,
+    a11y,
+  }
+
   /**
    * The sessions workspace's ONE bar: the selected session's title, the filters, the view tabs and
    * the actions — drawn INTO the fixed top strip.
@@ -2736,6 +2810,13 @@ export default function AppLayout() {
           harnessesOutOfView={fleetOptions.harnessesAll.filter(h => !fleetOptions.harnesses.includes(h))}
           lang={lang}
         />
+      </div>
+
+      {/* The magnifier pair, here for the reason it is in the dashboard's strip: this workspace
+          renders no <header>, so without it the lenses would have no control on this route. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        <MagnifierButton ctx={appCtx} />
+        <HideLensesButton ctx={appCtx} />
       </div>
 
       {/* A RULE, not more gap. Everything to the left narrows the LIST; everything to the right is
@@ -2902,6 +2983,11 @@ export default function AppLayout() {
             you ACT on the page. It also stopped the header carrying a "5 sessions" three
             centimetres from the strip's own "5 sessions" — two different numbers (this one is
             filtered, that one is all-time) whose agreement was a coincidence of this machine. */}
+        {/* The magnifier pair. It rode in the desktop filter band this strip replaced, so it moves
+            with everything else that band carried — a lens control that exists on the phone and
+            not on the desktop is the accessibility feature missing from the wider screen. */}
+        <MagnifierButton ctx={appCtx} />
+        <HideLensesButton ctx={appCtx} />
         {data?.healthIssues && data.healthIssues.length > 0 && (
           <HealthWarnings issues={data.healthIssues} lang={lang} />
         )}
@@ -3058,6 +3144,13 @@ export default function AppLayout() {
    * why the strip is asked to hand them the box the body has (`trailingFlush`).
    */
   const stripTrailing = sessionTopBar ?? dashboardTopBar
+
+  // Whether some chrome already draws the magnifier buttons — mirrored from the slots themselves
+  // (never re-hardcoded) so MagnifierLayer knows when NO slot exists and must draw its own
+  // floating button. Two slots host them: the phone's sticky <header> below, and the desktop top
+  // strip's trailing region. `stripTrailing` IS that region, so asking it is exact; a second copy
+  // of its conditions would be a second place for the two to disagree.
+  const headerHostsMagnifier = (!inSessionsWorkspace && isMobile) || stripTrailing !== null
 
   return (
     <div style={{
@@ -3229,6 +3322,8 @@ export default function AppLayout() {
           }}>
             <img src='/minimalistLogo.png' alt="agentistics" style={{ height: 44, width: 'auto' }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <MagnifierButton ctx={appCtx} />
+              <HideLensesButton ctx={appCtx} />
               {data?.healthIssues && data.healthIssues.length > 0 && (
                 <HealthWarnings issues={data.healthIssues} lang={lang} />
               )}
@@ -3443,37 +3538,7 @@ export default function AppLayout() {
               gap: isMobile ? 14 : 20,
             }
       }>
-        <Outlet context={{
-          data,
-          derived,
-          statsCache,
-          filters, setFilters, activeOnly, setActiveOnly,
-          availableProjects, availableHarnesses,
-          lang, theme, currency, setCurrency, brlRate,
-          billing, saveBilling, costBasis, setCostBasis, planBasis, billingReady, openBillingSetup,
-          comparisons, saveComparisons,
-          tags: tagsList, monthCommitment,
-          chatModel, chatSoundEnabled, chatSoundId,
-          savePreferences,
-          pwaPrompt,
-          onPwaInstalled: () => { setPwaInstalled(true); setPwaPrompt(null) },
-          liveUpdates, setLiveUpdates, updateInterval, setUpdateInterval,
-          riskyMode, setRiskyMode, highlightUpdates, setHighlightUpdates,
-          monthlyBudgetUSD, updateBudget,
-          totalInputTokens, totalOutputTokens,
-          setExpandedChart, setSelectedSession, setInfoModalIndex,
-          infoItems,
-          cardOrder, setCardOrder: setCardOrder as (o: string[]) => void,
-          cardPrecision, setCardPrecision,
-          sessionCountByProject, models, modelGroups, modelsInProject, users: usersWithMachines,
-          harnesses: data.harnesses,
-          isCentral,
-          me: iam?.account,
-          teams: teamsList,
-          machines: machinesList,
-          deniedRepoLabels,
-          refreshDeniedRepoLabels,
-        }} />
+        <Outlet context={appCtx} />
       </main>
 
       {/* Install Modal — shown once after first data load */}
@@ -3616,6 +3681,7 @@ export default function AppLayout() {
           theme={theme}
           onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           onToggleLang={() => { const next = lang === 'pt' ? 'en' : 'pt'; setLang(next); if (next === 'pt') setCurrency('BRL'); else if (currency === 'BRL') setCurrency('USD') }}
+          a11yEnabled={a11y.prefs.enabled}
         />
       )}
 
@@ -3795,6 +3861,9 @@ export default function AppLayout() {
 
       {/* Global notification toasts (auto-dismiss with an exit animation; history in the bell) */}
       <NotificationToasts lang={lang} />
+
+      {/* Accessibility magnifiers — a portal appended to document.body, outside #root. */}
+      <MagnifierLayer ctx={appCtx} hasHeaderSlot={headerHostsMagnifier} />
 
       {/* Mounted once, at the ROOT: stepUpFetch opens this whenever the server demands re-auth,
           and every page can trigger that. It used to live inside SideNav — desktop-only chrome —
