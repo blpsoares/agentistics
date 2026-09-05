@@ -75,9 +75,15 @@ hands the click to the one beneath.
   reachable at all: a centred region plus a lens clamped on screen leaves a dead band at every edge
   (~150px at 4×). At the viewport's centre it agrees exactly with the old centred rule, so nothing
   moves in normal use.
-- `'cursor'` for the **follow** lens — centred on the lens, clamped inside the viewport. Its
-  position IS the pointer, and a pointer must show what is under it or aiming becomes impossible.
-  With this, a plain pass-through click lands on the element the user is looking at.
+- `'cursor'` for the **follow** lens — centred on the pointer, and **not clamped**. Its position IS
+  the pointer, and a pointer must show what is under it or aiming becomes impossible; with this, a
+  plain pass-through click lands on the element the user is looking at. The clamp that used to slide
+  the region back inside the viewport is gone: this lens is never kept on screen (no `clampLens`),
+  so near an edge half its frame hangs off, and sliding the region while the frame stayed put pushed
+  the page's outer band into the half nobody can see — the same dead band `'pan'` exists to remove,
+  arriving by a different route. Unclamped, the edge is reached by putting the pointer on it. The
+  cost is that part of the lens then shows the blank beyond the page, which is what is actually
+  there.
 
 **Cost is bounded per frame, not per lens count** (`mirrorSchedule.ts`, pure and tested): at most
 two lenses re-clone per frame, least-recently-synced first, off-screen lenses never, and the

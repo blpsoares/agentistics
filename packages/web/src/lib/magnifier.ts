@@ -89,7 +89,7 @@ export type SourceAnchor = 'pan' | 'cursor'
 
 /**
  * The viewport region a lens magnifies: shrunk by the zoom, then read into position by `anchor`
- * (see `SourceAnchor` above) — PANNED for a placed lens, CENTRED-and-clamped for the cursor-
+ * (see `SourceAnchor` above) — PANNED for a placed lens, CENTRED on the pointer for the cursor-
  * following one.
  *
  * What the lens actually SHOWS is its content box — `box-sizing: border-box` makes that
@@ -102,9 +102,12 @@ export function sourceRect(lens: LensStyle & { x: number; y: number }, vp: Viewp
   const width = (lens.width - 2 * lens.borderWidth) / lens.zoom
   const height = (lens.height - 2 * lens.borderWidth) / lens.zoom
 
-  const axis = anchor === 'cursor' ? cursorAxis : panAxis
-  const x = axis(lens.x, lens.width, width, vp.width)
-  const y = axis(lens.y, lens.height, height, vp.height)
+  const x = anchor === 'cursor'
+    ? cursorAxis(lens.x, lens.width, width)
+    : panAxis(lens.x, lens.width, width, vp.width)
+  const y = anchor === 'cursor'
+    ? cursorAxis(lens.y, lens.height, height)
+    : panAxis(lens.y, lens.height, height, vp.height)
 
   return { x, y, width, height }
 }
@@ -145,21 +148,31 @@ function panAxis(lensPos: number, lensSize: number, regionSize: number, vpSize: 
 }
 
 /**
- * One axis of the CURSOR anchor — for the follow lens, whose position IS the pointer. The region
- * is centred on the lens's own centre (`lensPos + lensSize/2 - regionSize/2`), which is what
- * makes `lensPointToPage`'s inverse map the lens's visual centre back to the exact viewport point
- * the lens sits over — the property that makes aiming through it possible at all.
+ * One axis of the CURSOR anchor — for the follow lens, whose position IS the pointer. The region is
+ * centred on the lens's own centre, and that is the whole rule: `lensPointToPage`'s inverse then
+ * maps the lens's visual centre back to the exact viewport point the cursor sits on, everywhere on
+ * the page, which is the property that makes aiming through it possible at all.
  *
- * That centred position is then CLAMPED into `[0, vpSize - regionSize]`, shifting it back inside
- * the viewport rather than letting it run off an edge — never by resizing the region, which would
- * change the magnification. When the region is as large as (or larger than) the viewport itself
- * (reachable below 1x zoom) that clamp range is empty or inverted, so the region is centred on
- * the viewport instead — the same "nothing to clamp against" case `panAxis` handles.
+ * IT IS DELIBERATELY NOT CLAMPED INTO THE VIEWPORT, and that is a fix rather than an oversight.
+ * This lens is centred on the pointer and is NOT kept on screen (see `FollowLens` — unlike a placed
+ * lens it has no `clampLens`), so near an edge half of its frame hangs off the screen. Sliding the
+ * REGION back inside while the FRAME stayed where it was pushed the page's own outer band into the
+ * half nobody can see: with an 800px lens at 2x, a cursor at x=100 showed the band from x=195
+ * onwards and painted everything left of it off-screen — reported as "at the edges I cannot see the
+ * real content", the same complaint `panAxis` answers for a placed lens, arriving here by a
+ * different route. Unclamped, the point under the cursor is at the lens's centre at every position,
+ * so the edge is reached by putting the pointer on it and the corner by putting the pointer in it.
+ *
+ * The cost is stated: at an edge, part of the lens shows the area BEYOND the page, which is blank.
+ * That is honest — there is nothing there — and it is how a pointer-anchored OS magnifier behaves.
+ * Showing blank where there is nothing beats hiding content that exists.
+ *
+ * A region larger than the viewport (reachable below 1x zoom) needs no special case here for the
+ * same reason: centring it on the cursor is exactly right, and it was the clamp — not the size —
+ * that ever made a branch necessary.
  */
-function cursorAxis(lensPos: number, lensSize: number, regionSize: number, vpSize: number): number {
-  if (regionSize >= vpSize) return (vpSize - regionSize) / 2
-  const desired = lensPos + lensSize / 2 - regionSize / 2
-  return Math.min(Math.max(desired, 0), vpSize - regionSize)
+function cursorAxis(lensPos: number, lensSize: number, regionSize: number): number {
+  return lensPos + lensSize / 2 - regionSize / 2
 }
 
 /**

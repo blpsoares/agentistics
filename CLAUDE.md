@@ -1813,8 +1813,11 @@ harness must not break.
   region pans proportionally to the lens's position, which is what makes the page's outer band
   reachable (a centred region plus an on-screen-clamped lens leaves a ~150px dead band at 4×); it
   agrees exactly with the old centred rule at the viewport's centre. `'cursor'` for the FOLLOW lens:
-  centred and clamped, because its position IS the pointer and a pointer must show what is under it
-  or aiming becomes impossible.
+  centred on the pointer and NOT clamped, because its position IS the pointer and a pointer must
+  show what is under it or aiming becomes impossible. The clamp is gone on purpose: this lens is
+  never kept on screen, so sliding the region back inside the viewport while its frame stayed
+  half-off painted the page's outer band where nobody can see it — the same dead band `'pan'`
+  removes, reached by a different route.
 - **There is no cap on the number of lenses** — the cost is bounded by `mirrorSchedule.ts` instead:
   two re-clones per frame, least-recently-synced first, off-screen never, with a backoff when a
   measured cycle overruns. Twenty lenses cost ten frames, not one frame of twenty clones.
