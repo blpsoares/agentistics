@@ -92,3 +92,25 @@ export function countSkills(groups: readonly SkillGroup[]): number {
 export function skillInvocation(skill: SkillEntry): string {
   return `/${skill.name} `
 }
+
+
+/**
+ * A `SKILL.md`'s YAML header, separated from the document.
+ *
+ * Markdown does not know what frontmatter is: rendered, the opening `---` becomes a horizontal rule
+ * and `name:` / `description:` become a paragraph that reads like the skill's first sentence. It is
+ * a header, so it is shown as one.
+ *
+ * The delimiter must be the FIRST line — a `---` further down is a rule in the document and closing
+ * on it would eat half the skill.
+ */
+export function splitFrontmatter(text: string): { front: string; body: string } {
+  if (!/^---\r?\n/.test(text)) return { front: '', body: text }
+  const rest = text.replace(/^---\r?\n/, '')
+  const end = rest.search(/^---\s*$/m)
+  if (end < 0) return { front: '', body: text }
+  return {
+    front: rest.slice(0, end).replace(/\s+$/, ''),
+    body: rest.slice(end).replace(/^---\s*\r?\n?/, ''),
+  }
+}

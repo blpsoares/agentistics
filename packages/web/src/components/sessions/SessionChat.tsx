@@ -52,6 +52,7 @@ import {
 import { markExcerpt, quoteFor, replyAuthor, replyPreview, type ReplyTarget } from '../../lib/replyQuote'
 import { pendingEchoes } from '../../lib/echoMatch'
 import { applyDraftRequest, useDraftRequest } from '../../lib/composerStore'
+import { splitSlashLine } from '../../lib/slashLine'
 import { lastSentMessage, turnAnchorId } from '../../lib/lastSent'
 import { goToTurn } from '../../lib/turnScroll'
 import { attachmentName, isImageAttachment, splitMessage } from '../../lib/messageAttachments'
@@ -644,6 +645,10 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
    * so a request can never land in another conversation's box. It APPENDS and never sends: what
    * reaches a session is what the person pressed enter on.
    */
+  /** The leading `/skill` of what is typed, for the field's own marker. See `slashLine.ts`. */
+  const slashDraft = useMemo(() => splitSlashLine(draft), [draft])
+  const underlayRef = useRef<HTMLDivElement | null>(null)
+
   const draftReq = useDraftRequest()
   const draftReqAt = draftReq?.sessionId === session.id ? draftReq.at : undefined
   useEffect(() => {
@@ -1305,6 +1310,36 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                   onChange={e => pick(e.target.files)}
                   style={{ display: 'none' }}
                 />
+                {/* THE INVOCATION IS MARKED IN THE FIELD ITSELF.
+                    A textarea cannot hold coloured spans, so this is the standard underlay: a div
+                    with the SAME typography and padding, behind the field, drawing the command as a
+                    highlighted block with transparent text. The field above keeps its own colour
+                    and its own caret — which is the reason it is a BACKGROUND and not a colour
+                    swap: `color: transparent` on the textarea would take the selection highlight
+                    and the caret with it, and a millimetre of metric drift would then be unreadable
+                    text rather than a marker sitting slightly off.
+                    It scrolls with the field, is `aria-hidden` (the text is already in the field,
+                    and a screen reader must not hear it twice) and takes no pointer events. */}
+                <div style={{ position: 'relative' }}>
+                  {slashDraft.command !== '' && (
+                    <div
+                      aria-hidden
+                      ref={underlayRef}
+                      style={{
+                        position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none',
+                        boxSizing: 'border-box', padding: '6px 6px',
+                        fontFamily: 'inherit', fontSize: 13.5, lineHeight: 1.5,
+                        whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', color: 'transparent',
+                      }}
+                    >
+                      <span style={{
+                        background: 'var(--anthropic-orange-dim)',
+                        boxShadow: '0 0 0 1px var(--anthropic-orange)',
+                        borderRadius: 4,
+                      }}>{slashDraft.command}</span>
+                      {slashDraft.rest}
+                    </div>
+                  )}
                 <textarea
                   ref={textareaRef}
                   value={draft}
@@ -1356,8 +1391,15 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                     resize: 'none', border: 'none', outline: 'none', background: 'transparent',
                     color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 13.5,
                     lineHeight: 1.5, maxHeight: maxComposerH, overflowY: 'auto', padding: '6px 6px',
+                    // Above the underlay, and transparent so the mark shows through.
+                    position: 'relative', zIndex: 1,
+                  }}
+                  onScroll={e => {
+                    const u = underlayRef.current
+                    if (u) u.scrollTop = (e.target as HTMLTextAreaElement).scrollTop
                   }}
                 />
+                </div>
 
                 {/* The controls, on their own line under the text. ATTACH opens the row on the
                     left and the acting group closes it on the right — the two halves are what the

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import {
-  countSkills, groupSkills, matchesSkill, packageOf, shortName, skillInvocation,
+  countSkills, groupSkills, matchesSkill, packageOf, shortName, skillInvocation, splitFrontmatter,
 } from './skillGroups'
 
 const plugin = (name: string, description = '') =>
@@ -48,4 +48,23 @@ test('an empty search is not a filter', () => {
 
 test('the invocation is what a person would type, with the trailing space', () => {
   expect(skillInvocation(plugin('superpowers:tdd'))).toBe('/superpowers:tdd ')
+})
+
+test('frontmatter is separated from the document', () => {
+  const md = '---\nname: tdd\ndescription: write the test first\n---\n\n# TDD\n\nSteps.'
+  const { front, body } = splitFrontmatter(md)
+  expect(front).toBe('name: tdd\ndescription: write the test first')
+  expect(body.startsWith('# TDD')).toBe(true)
+})
+
+test('a `---` that is not the FIRST line is a rule in the document', () => {
+  // Closing on it would eat half the skill.
+  const md = '# Title\n\n---\n\nbody'
+  expect(splitFrontmatter(md)).toEqual({ front: '', body: md })
+})
+
+test('an unterminated header is left alone rather than half-eaten', () => {
+  const md = '---\nname: x\n\nstill going'
+  expect(splitFrontmatter(md).front).toBe('')
+  expect(splitFrontmatter(md).body).toBe(md)
 })

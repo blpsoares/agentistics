@@ -33,6 +33,9 @@ import {
   countSkills, groupSkills, shortName, skillInvocation, type SkillEntry,
 } from '../../lib/skillGroups'
 import { requestDraft } from '../../lib/composerStore'
+import { splitFrontmatter } from '../../lib/skillGroups'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { agoLabel, isDoc, liveEvents, writeStatus, type LiveEvent, type LiveTurn, type WriteStatus } from '../../lib/artifactTabs'
 import {
@@ -47,6 +50,7 @@ type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills'
 /** Where the view toggle is remembered. One key, read and written in one place. */
 const GALLERY_VIEW_KEY = 'agentistics:gallery-view'
 const GALLERY_SCOPE_KEY = 'agentistics:gallery-scope'
+const SKILL_FORMAT_KEY = 'agentistics:skill-format'
 
 export interface ArtifactsAsideProps {
   /**
@@ -183,6 +187,14 @@ export function ArtifactsAside({
   const [skillQuery, setSkillQuery] = useState('')
   /** The skill being READ, and its file. `null` is the list; a name is the detail view. */
   const [openSkill, setOpenSkill] = useState<string | null>(null)
+  /** How the skill's file is shown. Remembered, because it is a preference and not a per-skill one. */
+  const [skillFormat, setSkillFormat] = useState<'md' | 'text'>(() => {
+    try { return localStorage.getItem(SKILL_FORMAT_KEY) === 'text' ? 'text' : 'md' } catch { return 'md' }
+  })
+  const chooseSkillFormat = (v: 'md' | 'text') => {
+    setSkillFormat(v)
+    try { localStorage.setItem(SKILL_FORMAT_KEY, v) } catch { /* private mode */ }
+  }
   const [skillBody, setSkillBody] = useState<
     { ok: true; text: string; truncated: boolean } | { ok: false; message: string } | null
   >(null)
@@ -465,15 +477,67 @@ export function ArtifactsAside({
               <Note text={skillBody.message} />
             ) : (
               <>
-                {/* The SKILL ITSELF, as written. Monospace and pre-wrapped: it is a document with
-                    structure, and reflowing it would lose the very layout it was written in. */}
-                <pre style={{
-                  margin: 0, padding: '10px 12px', borderRadius: 9, overflowX: 'auto',
+                {/* TWO READINGS OF ONE FILE, and both are wanted: a SKILL.md is written to be read
+                    (headings, lists, tables) and is also a file whose exact bytes matter when you
+                    are about to run it. Formatted by default, source one click away, and the
+                    choice is remembered. */}
+                <div role="tablist" style={{
+                  display: 'flex', gap: 2, padding: 2, marginBottom: 8, borderRadius: 8,
                   background: 'var(--bg-base)', border: '1px solid var(--border-subtle)',
-                  fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-                  fontSize: 11, lineHeight: 1.6, color: 'var(--text-secondary)',
-                  whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
-                }}>{skillBody.text}</pre>
+                  width: 'fit-content',
+                }}>
+                  {([['md', pt ? 'Formatado' : 'Formatted'], ['text', pt ? 'Texto' : 'Text']] as const)
+                    .map(([id, label]) => (
+                      <button
+                        key={id}
+                        role="tab"
+                        aria-selected={skillFormat === id}
+                        onClick={() => chooseSkillFormat(id)}
+                        style={{
+                          minHeight: isMobile ? 44 : 24, padding: '0 10px', borderRadius: 6,
+                          border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
+                          background: skillFormat === id ? 'var(--bg-elevated)' : 'transparent',
+                          color: skillFormat === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                          fontWeight: skillFormat === id ? 650 : 400,
+                        }}
+                      >{label}</button>
+                    ))}
+                </div>
+                {skillFormat === 'md' ? (
+                  <div className="ag-chat-md" style={{
+                    fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)',
+                    overflowWrap: 'anywhere',
+                  }}>
+                    {/* The FRONTMATTER is not prose and markdown does not know that: rendered, its
+                        `---` becomes a rule and `name:`/`description:` become a paragraph that
+                        reads like the skill's first sentence. It is shown as the header it is. */}
+                    {(() => {
+                      const { front, body } = splitFrontmatter(skillBody.text)
+                      return (
+                        <>
+                          {front !== '' && (
+                            <pre style={{
+                              margin: '0 0 10px', padding: '8px 10px', borderRadius: 8,
+                              background: 'var(--bg-base)', border: '1px solid var(--border-subtle)',
+                              fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+                              fontSize: 10.5, lineHeight: 1.55, color: 'var(--text-tertiary)',
+                              whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+                            }}>{front}</pre>
+                          )}
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+                        </>
+                      )
+                    })()}
+                  </div>
+                ) : (
+                  <pre style={{
+                    margin: 0, padding: '10px 12px', borderRadius: 9, overflowX: 'auto',
+                    background: 'var(--bg-base)', border: '1px solid var(--border-subtle)',
+                    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+                    fontSize: 11, lineHeight: 1.6, color: 'var(--text-secondary)',
+                    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+                  }}>{skillBody.text}</pre>
+                )}
                 {skillBody.truncated && (
                   <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--text-tertiary)' }}>
                     {pt
