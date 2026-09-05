@@ -306,20 +306,21 @@ export default function SessionsPage() {
       onClick={() => openArtifacts('live')}
       title={`${HINT_VERB[hint.kind]} · ${hint.text}`}
       style={{
-        // ABOVE THE COMPOSER, not glued to the middle of the right edge.
-        // It was a tab hanging off the side at half height: it covered the conversation's text,
-        // sat where nothing else on the screen is, and read as a torn-off piece of the panel it
-        // opens. Here it is where a status line belongs — at the bottom, over the gap between the
-        // last message and the box you type in, which is the one part of a chat that is reliably
-        // empty and the part your eye is already on while you wait for the session.
-        position: 'absolute', bottom: 14, right: 18,
-        zIndex: 15, display: 'flex', alignItems: 'center', gap: 8,
-        maxWidth: 340, padding: '8px 12px',
-        borderRadius: 999, cursor: 'pointer',
-        border: '1px solid var(--anthropic-orange)',
-        background: 'var(--bg-surface)', color: 'var(--text-primary)',
-        fontFamily: 'inherit', fontSize: 11.5, textAlign: 'left',
-        boxShadow: '0 10px 26px rgba(0,0,0,0.45)',
+        // THIRD PLACE, and the first two were both wrong for the same reason: it FLOATED.
+        // Hanging off the middle of the right edge it covered the conversation's text; sitting
+        // above the composer it covered the composer — "ficou ULTRA em cima do input de prompt".
+        // Anything absolutely positioned over a chat is over SOMETHING, because a chat has no
+        // reliably empty region: the messages grow up from the composer and the gap between them
+        // closes as soon as there is anything to read.
+        // So it stopped floating. It is a strip at the TOP of the conversation, in the flow, under
+        // the header — the place a status line lives in every application that has one, pushing
+        // the messages down by its own height instead of hiding one of them. It is also where the
+        // eye goes when something changes, which is the whole reason it exists.
+        display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
+        width: '100%', padding: '7px 14px', textAlign: 'left', cursor: 'pointer',
+        border: 'none', borderBottom: '1px solid var(--border-subtle)',
+        background: 'var(--anthropic-orange-dim)', color: 'var(--text-primary)',
+        fontFamily: 'inherit', fontSize: 11.5,
       }}
     >
       {/* It PULSES, because the fact it reports is that something is happening right now — a
@@ -328,15 +329,16 @@ export default function SessionsPage() {
         width: 7, height: 7, borderRadius: 4, flexShrink: 0,
         background: 'var(--anthropic-orange)',
       }} />
-      <span style={{ minWidth: 0 }}>
-        <span style={{ display: 'block', fontWeight: 700, color: 'var(--anthropic-orange)' }}>
-          {HINT_VERB[hint.kind]}
-        </span>
-        {/* The THING, not a count: a path or a command says whether this is worth watching. */}
-        <span style={{
-          display: 'block', color: 'var(--text-tertiary)', fontSize: 10.5,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl',
-        }}>{hint.text}</span>
+      <span style={{ fontWeight: 700, color: 'var(--anthropic-orange)', flexShrink: 0 }}>
+        {HINT_VERB[hint.kind]}
+      </span>
+      {/* The THING, not a count: a path or a command says whether this is worth watching. */}
+      <span style={{
+        minWidth: 0, flex: 1, color: 'var(--text-tertiary)', fontSize: 11,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl',
+      }}>{hint.text}</span>
+      <span style={{ flexShrink: 0, color: 'var(--anthropic-orange)', fontSize: 11 }}>
+        {pt ? 'acompanhar →' : 'follow →'}
       </span>
     </button>
   )
@@ -533,7 +535,10 @@ export default function SessionsPage() {
                     onClick={() => setSessionView(id)}
                     style={{
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      width: 38, height: 34, borderRadius: 7, border: 'none', cursor: 'pointer',
+                      // 44px, the mobile figure this repo holds everything else to. They were
+                      // 38x34 — under the rule, in the one bar this screen has, on the control
+                      // that switches between its two halves.
+                      width: 44, height: 40, borderRadius: 7, border: 'none', cursor: 'pointer',
                       background: sessionView === id ? 'var(--bg-surface)' : 'transparent',
                       color: sessionView === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
                     }}
@@ -628,9 +633,9 @@ export default function SessionsPage() {
       // The panel is shut. The marker rides the right edge of the session, which is where the panel
       // it opens will appear — so the control and its result are in the same place.
       return edgeMarker === null ? panel : (
-        <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-          {panel}
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           {edgeMarker}
+          {panel}
         </div>
       )
     }

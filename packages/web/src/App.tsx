@@ -2738,6 +2738,18 @@ export default function AppLayout() {
         />
       </div>
 
+      {/* A RULE, not more gap. Everything to the left narrows the LIST; everything to the right is
+          about the session you have open — two different questions that were sitting in one
+          undifferentiated row of controls, which is what "entulhado" describes. A one-pixel line
+          costs nothing and says where the row changes subject; the group after it keeps a wider
+          gap of its own so the eye lands on the break rather than counting buttons. */}
+      {selectedFleetSession && (
+        <span aria-hidden style={{
+          width: 1, alignSelf: 'stretch', margin: '4px 4px 4px 2px', flexShrink: 0,
+          background: 'var(--border-subtle)',
+        }} />
+      )}
+
       {selectedFleetSession && selectedFleetSession.conversationBlind === undefined && (
         <div role="tablist" style={{
           display: 'flex', gap: 3, padding: 2, borderRadius: 9, flexShrink: 0,
