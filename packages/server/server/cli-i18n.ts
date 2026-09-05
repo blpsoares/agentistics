@@ -109,6 +109,12 @@ export interface CliStrings {
     external: string
     closed: string
   }
+  /**
+   * The mark a row wears when the MAIN agent has finished its turn while something it started is
+   * still running — a background subagent. Appended to the state word, never instead of it: the
+   * session needs a person, and the mark only says why the harness still looks busy.
+   */
+  sessBackground: string
   /** Said on a session whose harness has no probed approval markers. */
   sessApprovalBlind: (harness: string) => string
   /**
@@ -490,6 +496,7 @@ const EN: CliStrings = {
     closed: 'off',
     external: 'external',
   },
+  sessBackground: 'subagent',
   sessApprovalBlind: (harness: string) =>
     `agentop has no verified screen markers for ${harness}, so a blocking question here shows as "needs you" like any other pause.`,
   sessDirGone: 'this directory no longer exists — a removed worktree, most likely. Reopening will not work until it is back.',
@@ -773,6 +780,7 @@ const PT: CliStrings = {
     closed: 'fechada',
     external: 'externa',
   },
+  sessBackground: 'subagente',
   sessApprovalBlind: (harness: string) =>
     `o agentop não tem marcadores de tela verificados para ${harness}, então uma pergunta bloqueante aqui aparece como "precisa de você", como qualquer outra pausa.`,
   sessDirGone: 'este diretório não existe mais — provavelmente uma worktree removida. Reabrir não vai funcionar enquanto ele não voltar.',

@@ -100,9 +100,17 @@ export function toControlSession(
     cwd: v.cwd,
     project,
     ...(v.model ? { model: v.model } : {}),
+    ...(v.effort ? { effort: v.effort } : {}),
     ...(v.note ? { note: v.note } : {}),
     state,
-    stateLabel: stateLabel(state, s),
+    // The mark rides ON the state word rather than in a cell of its own, so it reaches every
+    // surface that draws a row — the cockpit, `session ls`, the workspace, the extension, the
+    // relayed fleet — from the one place the word is decided. A cell of its own would have to be
+    // added to each of them, and the first one missed would say `needs you` about a session that
+    // still has work running, which is the reading this mark exists to correct.
+    stateLabel: v.background ? `${stateLabel(state, s)} · ${s.sessBackground}` : stateLabel(state, s),
+    // The machine-readable half, for a surface that wants to style it rather than read it.
+    ...(v.background ? { background: true } : {}),
     actionable: v.status !== 'external' && v.status !== 'closed',
     // Stated only where it is TRUE and only for a session we actually HOST. A row that is closed or
     // running outside agentop has no screen to read at all, so "approval detection is unavailable

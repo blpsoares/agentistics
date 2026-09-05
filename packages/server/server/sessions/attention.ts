@@ -109,8 +109,20 @@ export function attentionOf(o: {
 
   // The marker is PROOF of work only while the screen has been moving at all recently. A footer
   // that lingers is not evidence, and silence eventually outweighs it — see `MARKER_STALE_MS`.
+  //
+  // AND IT MUST BE THE MAIN AGENT. `esc to interrupt` is printed whenever anything is
+  // interruptible, background subagents included, so a session that had already answered and was
+  // waiting for a person read as `working` — telling them nothing was needed when something was.
+  // Where the harness draws a distinct marker for its own turn (`mainWorking`), that is what
+  // counts; the interruptible marker alone means work is happening SOMEWHERE, which
+  // `backgroundWork` below reports separately. A harness with no `mainWorking` keeps the old
+  // behaviour exactly.
   const silentFor = o.nowMs - o.lastActivityMs
-  if (silentFor <= MARKER_STALE_MS && working(text)) {
+  const mainMarker = o.rules?.mainWorking
+  const producing = mainMarker
+    ? mainMarker.some(re => re.test(text))
+    : working(text)
+  if (silentFor <= MARKER_STALE_MS && producing) {
     return 'working'
   }
 
@@ -186,4 +198,27 @@ export function frameTail(frame: readonly string[], max = 4): string[] {
     out.push(line)
   }
   return out.reverse()
+}
+
+
+/**
+ * Is something running that is NOT the main agent's turn — PURE.
+ *
+ * True when the harness says something is interruptible while its own turn marker is absent: a
+ * background subagent, a watcher, a build being followed. The session still NEEDS A PERSON, and
+ * that is what the state says; this is the mark beside it, so "needs you" does not read as "and
+ * nothing is happening".
+ *
+ * Answers `false` for a harness with no `mainWorking`: without a way to tell the main turn apart,
+ * every interruptible frame would be reported as background work, which is a confident claim made
+ * out of an absence.
+ */
+export function backgroundWork(o: {
+  frame: readonly string[]
+  rules?: AttentionRules
+}): boolean {
+  if (!o.rules?.mainWorking?.length || !o.rules.working?.length) return false
+  const text = o.frame.join('\n')
+  if (o.rules.mainWorking.some(re => re.test(text))) return false
+  return o.rules.working.some(re => re.test(text))
 }

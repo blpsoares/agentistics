@@ -228,8 +228,24 @@ export const tmuxBackend: SessionBackend = {
     if (req.initialPrompt) {
       // Deliver the prompt only once the harness is READY — polled, not a fixed sleep — so a slow
       // start does not lose it and a startup dialog is never submitted into. See `deliverInitialPrompt`.
-      await deliverInitialPrompt(req.id, req.initialPrompt)
+      //
+      // NOT AWAITED. The session EXISTS the moment tmux has it, which is what `spawn` promises and
+      // what the caller acts on; the prompt is a follow-up to a session that is already there.
+      // Awaiting it held every caller for as long as the harness took to draw its input box — up to
+      // `DELIVER_DEADLINE_MS`, which is fifteen seconds — so "create session" in the browser spun
+      // for the whole of claude's startup with a session that had been running since millisecond
+      // seven. Reported as creating a session taking VERY long. Nothing downstream needs the
+      // delivery to have happened: the pane is watched live, a `batch` starts its sessions in
+      // parallel instead of one startup after another, and delivery was already best-effort with
+      // its own fallback and deadline.
+      //
+      // The promise is returned so a caller that genuinely must wait can, and is caught here so a
+      // caller that does not never sees an unhandled rejection.
+      const delivery = deliverInitialPrompt(req.id, req.initialPrompt)
+        .catch(e => { console.error(`[session] ${req.id} initial prompt not delivered:`, e) })
+      return { delivery }
     }
+    return {}
   },
 
   sendText: sendTextTo,

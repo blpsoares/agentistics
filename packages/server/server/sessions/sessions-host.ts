@@ -33,6 +33,7 @@ import type { ManagedSession, SessionActivity, SessionBackend } from './types'
 import { calculateProcCpu, type ProcStatSample } from '../hardware-pure'
 import { readProcRss, readProcStat } from '../hardware-probe'
 import { procAvailable } from './proc-liveness'
+import { backgroundWork } from './attention'
 
 /** How often the cockpit refreshes. Five seconds is the interval the feature was specified at. */
 export const SESSION_POLL_MS = Number(process.env.AGENTISTICS_SESSION_POLL_MS) > 0
@@ -244,6 +245,8 @@ export function createSessionsPoller(o: {
       const activity = new Map<string, SessionActivity>()
       /** Rows whose reading is backed by more than movement — see `confirmActivities`. */
       const corroborated = new Set<string>()
+      /** Rows with work running that is not their own turn — see `backgroundWork`. */
+      const background = new Set<string>()
       const tails = new Map<string, string[]>()
       const approvals = new Map<string, string[]>()
       const dialogOptions = new Map<string, DialogOption[]>()
@@ -285,6 +288,7 @@ export function createSessionsPoller(o: {
           corroborated.add(r.id)
         }
         const before = prevDigest.get(r.id)
+        if (backgroundWork({ frame, ...(rules ? { rules } : {}) })) background.add(r.id)
         const state = attentionOf({
           alive: true,
           lastActivityMs: b.lastActivityMs,
@@ -399,6 +403,7 @@ export function createSessionsPoller(o: {
       const sessions = buildSessionViews({
         reconciled,
         activity: confirmedActivity,
+        background,
         tails,
         chatTails,
         approvals,
