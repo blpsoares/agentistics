@@ -52,7 +52,9 @@ import {
 } from '../../lib/skillMenu'
 import { markExcerpt, quoteFor, replyAuthor, replyPreview, type ReplyTarget } from '../../lib/replyQuote'
 import { pendingEchoes } from '../../lib/echoMatch'
-import { applyDraftRequest, useDraftRequest } from '../../lib/composerStore'
+import {
+  applyDraftRequest, consumeDraftRequest, getDraftRequest, useDraftRequest,
+} from '../../lib/composerStore'
 import { splitSlashLine } from '../../lib/slashLine'
 import { lastSentMessage, turnAnchorId } from '../../lib/lastSent'
 import { goToTurn } from '../../lib/turnScroll'
@@ -660,10 +662,23 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
 
   const draftReq = useDraftRequest()
   const draftReqAt = draftReq?.sessionId === session.id ? draftReq.at : undefined
+  /**
+   * The stamp this composer arrived with, so a request made BEFORE it existed is never applied.
+   *
+   * Two guards, because they cover different halves of the same accident. The store is cleared when
+   * a request is taken (`consumeDraftRequest`), which stops it being re-applied on every remount —
+   * and mounting is what going back to a session is. This ref covers the moment before that: a
+   * composer that mounts while a request is still in flight for ANOTHER session, or an ask that
+   * was never consumed because nothing was mounted to take it.
+   */
+  const seenReqAt = useRef<number | undefined>(getDraftRequest()?.at)
   useEffect(() => {
     if (draftReqAt === undefined || !draftReq) return
+    if (seenReqAt.current === draftReqAt) return
+    seenReqAt.current = draftReqAt
     editDraft(d => applyDraftRequest(d, draftReq.text))
     textareaRef.current?.focus()
+    consumeDraftRequest(draftReqAt)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftReqAt])
 

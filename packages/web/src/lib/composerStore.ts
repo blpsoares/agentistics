@@ -21,10 +21,19 @@ export interface DraftRequest {
   sessionId: string
   /** Appended to whatever is already typed — never a replacement, see `applyDraftRequest`. */
   text: string
+  /**
+   * The request's IDENTITY, and it is a counter rather than a clock.
+   *
+   * `Date.now()` was the obvious choice and it is wrong here: two asks inside the same millisecond
+   * carry the same number, and then `consumeDraftRequest` — which checks the stamp precisely so a
+   * late consumer cannot clear a newer request — clears the newer one instead. A monotonic counter
+   * cannot collide, and nothing about this field is a time anybody reads.
+   */
   at: number
 }
 
 let request: DraftRequest | null = null
+let seq = 0
 const listeners = new Set<() => void>()
 
 function emit(next: DraftRequest | null): void {
@@ -33,11 +42,25 @@ function emit(next: DraftRequest | null): void {
 }
 
 export function requestDraft(sessionId: string, text: string): void {
-  emit({ sessionId, text, at: Date.now() })
+  seq += 1
+  emit({ sessionId, text, at: seq })
 }
 
 export function getDraftRequest(): DraftRequest | null {
   return request
+}
+
+/**
+ * The composer took it. CLEARS the request.
+ *
+ * Without this the store keeps the last ask forever, and the composer re-applies it on every
+ * MOUNT — which is what navigating back to a session is. Reported as a skill appearing in the box
+ * by itself, over and over: "toda hora ta spawnando aqui no input a skill de frontend SOZINHO".
+ *
+ * The stamp is checked so a late consumer cannot clear a NEWER request it never applied.
+ */
+export function consumeDraftRequest(at: number): void {
+  if (request?.at === at) emit(null)
 }
 
 export function useDraftRequest(): DraftRequest | null {
