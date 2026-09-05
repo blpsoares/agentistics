@@ -27,7 +27,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
   BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles, ChevronLeft, ChevronDown, ChevronRight,
-  ExternalLink, Bot,
+  ExternalLink, Bot, Plug, Plus, Trash2,
 } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
 import {
@@ -48,6 +48,10 @@ import {
   unmeasuredText, unpricedText,
   type SubagentRow, type SubagentsPayload, type SubagentsState,
 } from '../../lib/subagents'
+import {
+  cannotWriteText, offerableScopes, runText, runningMcpCount, scopeText,
+  type McpEntry, type McpListPayload, type McpScope,
+} from '../../lib/mcpPanel'
 import { fmt, fmtCost } from '@agentistics/core'
 import {
   galleryFileCount, galleryGroups, parseGalleryScope, parseGalleryView, producedGroups,
@@ -56,7 +60,7 @@ import {
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
 
-type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills' | 'agents'
+type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills' | 'agents' | 'mcps'
 
 /** Where the view toggle is remembered. One key, read and written in one place. */
 const GALLERY_VIEW_KEY = 'agentistics:gallery-view'
@@ -64,6 +68,14 @@ const GALLERY_SCOPE_KEY = 'agentistics:gallery-scope'
 const SKILL_FORMAT_KEY = 'agentistics:skill-format'
 
 export interface ArtifactsAsideProps {
+  /**
+   * The session's own directory.
+   *
+   * Only the MCP tab uses it, and it uses it for a decision rather than a label: the `local` and
+   * `project` scopes are resolved against a directory, so without one they are ABSENT from the
+   * picker rather than present and silently widened to "this machine".
+   */
+  cwd?: string
   /**
    * A tab an OPENER asked for, with the stamp that makes it a request rather than a setting.
    *
@@ -119,7 +131,7 @@ function KindIcon({ kind }: { kind: Artifact['kind'] }) {
 }
 
 export function ArtifactsAside({
-  sessionId, lang, artifacts, loading, unavailable, unlistedWrites, turns, facts, onClose,
+  sessionId, cwd, lang, artifacts, loading, unavailable, unlistedWrites, turns, facts, onClose,
   tabRequest,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
@@ -129,6 +141,10 @@ export function ArtifactsAside({
   /** The SUBAGENTS tab's own state — declared here because the tab BAR reads its count. */
   const [agentsState, setAgentsState] = useState<SubagentsState | null>(null)
   const [openAgent, setOpenAgent] = useState<SubagentRow | null>(null)
+  /** The MCP tab's own state — declared here because the tab BAR reads its count. */
+  const [mcp, setMcp] = useState<McpListPayload | null>(null)
+  const [mcpError, setMcpError] = useState<string | null>(null)
+  const [mcpNonce, setMcpNonce] = useState(0)
 
   /**
    * Honour a requested tab, once per request.
@@ -142,7 +158,7 @@ export function ArtifactsAside({
   const askedAt = tabRequest?.at
   useEffect(() => {
     const t = tabRequest?.tab
-    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills' || t === 'agents') setTab(t)
+    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills' || t === 'agents' || t === 'mcps') setTab(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askedAt])
 
@@ -322,6 +338,7 @@ export function ArtifactsAside({
       icon: <Bot size={12} />,
       count: subagentCount(agentsState),
     },
+    { id: 'mcps', label: 'MCPs', icon: <Plug size={12} />, count: mcp?.servers.length ?? null },
   ]
 
   const tabBar = (
@@ -351,6 +368,12 @@ export function ArtifactsAside({
               <span style={{ fontSize: 10, opacity: 0.7, fontVariantNumeric: 'tabular-nums' }}>{t.count}</span>
             )}
             {/* One dot per tab that has something RUNNING behind it — the reason to look now. */}
+            {t.id === 'mcps' && runningMcpCount(mcp?.servers ?? null) > 0 && (
+              <span
+                aria-hidden
+                style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', flexShrink: 0 }}
+              />
+            )}
             {t.id === 'agents' && runningCount(agentsState) > 0 && (
               <span
                 aria-hidden
@@ -433,6 +456,49 @@ export function ArtifactsAside({
       </div>
     )
   }
+
+  /**
+   * THE MCP TAB — what this machine has configured, what is actually running, and the two writes.
+   *
+   * Re-read on `mcpNonce`, which a write bumps: the list after an install must be the list the
+   * harness's own command produced, not the one this panel guessed it would produce.
+   */
+  useEffect(() => {
+    if (tab !== 'mcps') return
+    let alive = true
+    const read = async () => {
+      try {
+        const q = cwd ? `?projectPath=${encodeURIComponent(cwd)}` : ''
+        const res = await fetch(`/api/mcp/servers${q}`)
+        if (!alive) return
+        if (!res.ok) {
+          // 403 is the exposure profile refusing host power, and it is a different fact from a
+          // machine with no MCPs — the same rule the live-sessions panel keeps.
+          setMcpError(res.status === 403
+            ? (pt ? 'Este perfil de exposição não permite ler nem mudar a configuração de MCP desta máquina.'
+              : 'This exposure profile does not allow reading or changing this machine’s MCP configuration.')
+            : (pt ? 'Não foi possível ler os MCPs.' : 'The MCP servers could not be read.'))
+          return
+        }
+        setMcpError(null)
+        setMcp(await res.json() as McpListPayload)
+      } catch {
+        if (alive) setMcpError(pt ? 'Não foi possível ler os MCPs.' : 'The MCP servers could not be read.')
+      }
+    }
+    void read()
+    return () => { alive = false }
+  }, [tab, cwd, pt, mcpNonce])
+
+  const mcpBody = (): React.ReactNode => (
+    <McpTab
+      lang={lang}
+      list={mcp}
+      error={mcpError}
+      {...(cwd ? { cwd } : {})}
+      onChanged={() => setMcpNonce(n => n + 1)}
+    />
+  )
 
   const liveBody = (): React.ReactNode => {
     if (feed.length === 0) {
@@ -804,6 +870,7 @@ export function ArtifactsAside({
             : tab === 'gallery' ? galleryBody()
             : tab === 'skills' ? skillsBody()
             : tab === 'agents' ? agentsBody()
+            : tab === 'mcps' ? mcpBody()
             : body()}
         </>
       )}
@@ -1275,6 +1342,287 @@ function SubagentActivity({ sessionId, row, pt, now, onBack }: {
             <EventRow key={i} e={e} pt={pt} now={now} sessionId={sessionId} agentId={row.agentId} />
           ))}
           <div ref={tailRef} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The MCP panel: the servers, and the one form that adds another.
+ *
+ * WRITING IS AN EXPLICIT ACT, and its SCOPE is the user's choice — `user` reaches every project on
+ * this machine, `project` is written into a repository other people pull. So the picker states what
+ * each one does (`scopeText`), a scope that cannot work here is ABSENT rather than present and
+ * failing (`offerableScopes`), and a removal names the scope it is removing from, because that is
+ * the exact inverse of the install and nothing else is.
+ */
+function McpTab({ lang, list, error, cwd, onChanged }: {
+  lang: 'pt' | 'en'
+  list: McpListPayload | null
+  error: string | null
+  cwd?: string
+  onChanged: () => void
+}) {
+  const pt = lang === 'pt'
+  const [adding, setAdding] = useState(false)
+  const [paste, setPaste] = useState('')
+  const [name, setName] = useState('')
+  const [scope, setScope] = useState<McpScope>('user')
+  const [busy, setBusy] = useState(false)
+  const [said, setSaid] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null)
+  const scopes = offerableScopes(cwd)
+
+  const write = async (path: string, body: Record<string, unknown>) => {
+    setBusy(true)
+    setSaid(null)
+    try {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, lang, ...(cwd ? { projectPath: cwd } : {}) }),
+      })
+      const out = await res.json() as { ok: boolean; names?: string[]; message?: string }
+      if (out.ok) {
+        setSaid({ tone: 'ok', text: (out.names ?? []).join(', ') })
+        setPaste(''); setName(''); setAdding(false)
+        onChanged()
+      } else {
+        // The SERVER's own sentence, verbatim — including the harness command's own error, which
+        // says far more about a refused config than any wording invented here.
+        setSaid({ tone: 'bad', text: out.message ?? (pt ? 'não deu certo' : 'that did not work') })
+      }
+    } catch {
+      setSaid({ tone: 'bad', text: pt ? 'não foi possível falar com o servidor' : 'the server could not be reached' })
+    } finally { setBusy(false) }
+  }
+
+  if (error !== null) return <Note icon={<Plug size={16} />} text={error} />
+  if (list === null) return <Note icon={<Loader size={16} />} text={pt ? 'Lendo os MCPs…' : 'Reading the MCP servers…'} />
+
+  return (
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
+      {/* The one thing a machine without the harness's CLI cannot do, said before anything offers
+          to do it. */}
+      {!list.canWrite && (
+        <p style={{
+          margin: '0 2px 8px', fontSize: 10.5, lineHeight: 1.5, color: 'var(--text-tertiary)',
+          border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '6px 8px',
+        }}>{cannotWriteText(pt)}</p>
+      )}
+
+      {list.servers.length === 0 && (
+        <Note icon={<Plug size={16} />} text={pt
+          ? 'Nenhum servidor MCP configurado para esta máquina ou este projeto.'
+          : 'No MCP server is configured for this machine or this project.'} />
+      )}
+
+      {list.servers.map(s => (
+        <McpRow
+          key={`${s.scope}:${s.name}`} entry={s} pt={pt} canWrite={list.canWrite} busy={busy}
+          onRemove={() => void write('/api/mcp/remove', { name: s.name, scope: s.scope })}
+        />
+      ))}
+
+      {list.canWrite && !adding && (
+        <button
+          onClick={() => { setAdding(true); setSaid(null) }}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6,
+            padding: '5px 10px', borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit',
+            fontSize: 11.5, fontWeight: 600, border: '1px dashed var(--border)',
+            background: 'transparent', color: 'var(--text-secondary)',
+          }}
+        >
+          <Plus size={12} /> {pt ? 'Adicionar um MCP' : 'Add an MCP'}
+        </button>
+      )}
+
+      {adding && (
+        <form
+          onSubmit={e => { e.preventDefault(); void write('/api/mcp/install', { paste, scope, ...(name ? { name } : {}) }) }}
+          style={{
+            marginTop: 8, padding: 8, borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 7,
+            border: '1px solid var(--border-subtle)',
+          }}
+        >
+          <p style={{ margin: 0, fontSize: 10.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+            {pt
+              ? 'Cole o JSON do servidor — o bloco `mcpServers` inteiro, uma entrada nomeada, ou só a configuração (aí o nome é obrigatório).'
+              : 'Paste the server’s JSON — the whole `mcpServers` block, one named entry, or just the config (then the name is required).'}
+          </p>
+          <textarea
+            value={paste}
+            onChange={e => setPaste(e.target.value)}
+            rows={5}
+            spellCheck={false}
+            placeholder={'{"mcpServers":{"sentry":{"type":"http","url":"https://mcp.sentry.dev/mcp"}}}'}
+            style={{
+              width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 6, resize: 'vertical',
+              border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)',
+              fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 11, lineHeight: 1.5,
+            }}
+          />
+          <input
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder={pt ? 'Nome (só se o JSON não trouxer um)' : 'Name (only if the JSON carries none)'}
+            style={{
+              width: '100%', boxSizing: 'border-box', minHeight: 30, padding: '0 8px', borderRadius: 6,
+              border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)',
+              fontFamily: 'inherit',
+            }}
+          />
+          {/* THE SCOPE, with what it MEANS beside it. A scope that cannot work here is absent. */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {scopes.map(sc => {
+              const t = scopeText(sc, pt)
+              const on = scope === sc
+              return (
+                <label
+                  key={sc}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 7, padding: '5px 7px', borderRadius: 6,
+                    cursor: 'pointer', border: `1px solid ${on ? 'var(--anthropic-orange)' : 'var(--border-subtle)'}`,
+                  }}
+                >
+                  <input
+                    type="radio" name="mcp-scope" checked={on} onChange={() => setScope(sc)}
+                    style={{ marginTop: 2, accentColor: 'var(--anthropic-orange)' }}
+                  />
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: 11.5, fontWeight: 600, color: 'var(--text-primary)' }}>{t.label}</span>
+                    <span style={{ display: 'block', fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)' }}>{t.reach}</span>
+                  </span>
+                </label>
+              )
+            })}
+            {!cwd && (
+              <span style={{ fontSize: 10, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+                {pt
+                  ? 'Esta sessão não tem um diretório registrado, então só o escopo desta máquina pode ser oferecido.'
+                  : 'This session has no recorded directory, so only the machine-wide scope can be offered.'}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              type="submit"
+              disabled={busy || paste.trim() === ''}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 7,
+                fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+                cursor: busy || paste.trim() === '' ? 'default' : 'pointer',
+                opacity: busy || paste.trim() === '' ? 0.5 : 1,
+                border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange)', color: '#fff',
+              }}
+            >
+              <Plus size={12} /> {busy ? (pt ? 'Adicionando…' : 'Adding…') : (pt ? 'Adicionar' : 'Add')}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAdding(false); setSaid(null) }}
+              style={{
+                padding: '5px 11px', borderRadius: 7, fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+                cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg-card)',
+                color: 'var(--text-secondary)',
+              }}
+            >{pt ? 'Cancelar' : 'Cancel'}</button>
+          </div>
+        </form>
+      )}
+
+      {said && (
+        <p role="status" style={{
+          margin: '8px 2px 0', fontSize: 10.5, lineHeight: 1.5,
+          color: said.tone === 'ok' ? '#22c55e' : '#ef4444',
+        }}>
+          {said.tone === 'ok'
+            ? (pt ? `Pronto: ${said.text}` : `Done: ${said.text}`)
+            : said.text}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** One configured server: what it is, where it is configured, and what it is doing right now. */
+function McpRow({ entry, pt, canWrite, busy, onRemove }: {
+  entry: McpEntry; pt: boolean; canWrite: boolean; busy: boolean; onRemove: () => void
+}) {
+  const [confirm, setConfirm] = useState(false)
+  const run = runText(entry.run, pt)
+  const sc = scopeText(entry.scope, pt)
+  return (
+    <div style={{
+      border: '1px solid var(--border-subtle)', borderRadius: 8, padding: '7px 9px', marginBottom: 6,
+      minWidth: 0,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
+        <span style={{
+          fontSize: 9, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase',
+          color: run.color, flexShrink: 0,
+        }}>{run.text}</span>
+        <span style={{
+          fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', minWidth: 0,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{entry.name}</span>
+        <span style={{ marginLeft: 'auto', flexShrink: 0, fontSize: 10, color: 'var(--text-tertiary)' }}>{sc.label}</span>
+        {canWrite && (
+          <button
+            onClick={() => setConfirm(v => !v)}
+            disabled={busy}
+            title={pt ? 'Remover' : 'Remove'}
+            aria-label={pt ? 'Remover' : 'Remove'}
+            style={{
+              flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: 22, height: 22, borderRadius: 6, padding: 0, cursor: busy ? 'default' : 'pointer',
+              border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-tertiary)',
+            }}
+          >
+            <Trash2 size={11} />
+          </button>
+        )}
+      </div>
+      {/* WHY the status says what it says — the sentence, never a colour alone. */}
+      {run.detail && (
+        <div style={{ marginTop: 3, fontSize: 10.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>{run.detail}</div>
+      )}
+      <div style={{
+        marginTop: 3, fontSize: 10.5, color: 'var(--text-tertiary)', wordBreak: 'break-word',
+        fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+      }}>
+        {entry.url ?? [entry.command, ...(entry.args ?? [])].filter(Boolean).join(' ')}
+      </div>
+      {/* Environment VARIABLE NAMES only. One configured server here holds a database URI with
+          credentials in it, and a value that reaches this panel is on a screen forever. */}
+      {entry.envKeys && entry.envKeys.length > 0 && (
+        <div style={{ marginTop: 3, fontSize: 10, color: 'var(--text-tertiary)' }}>
+          {pt ? 'variáveis: ' : 'env: '}{entry.envKeys.join(', ')}
+        </div>
+      )}
+      {confirm && (
+        <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          {/* The removal NAMES the scope it removes from — the exact inverse of the install, and
+              nothing else is. */}
+          <span style={{ fontSize: 10.5, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            {pt ? `Remover "${entry.name}" de: ${sc.label} — ${sc.reach}?` : `Remove "${entry.name}" from: ${sc.label} — ${sc.reach}?`}
+          </span>
+          <button
+            onClick={() => { setConfirm(false); onRemove() }}
+            style={{
+              padding: '3px 10px', borderRadius: 6, fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
+              cursor: 'pointer', border: '1px solid #ef4444', background: 'transparent', color: '#ef4444',
+            }}
+          >{pt ? 'Remover' : 'Remove'}</button>
+          <button
+            onClick={() => setConfirm(false)}
+            style={{
+              padding: '3px 10px', borderRadius: 6, fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
+              cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg-card)',
+              color: 'var(--text-secondary)',
+            }}
+          >{pt ? 'Cancelar' : 'Cancel'}</button>
         </div>
       )}
     </div>
