@@ -119,7 +119,12 @@ describe('createSessionsPoller', () => {
     expect((await p.poll()).attention).toBe(0)
   })
 
-  it('sees a frame that changed between two polls as working, and confirms waiting before it flips', async () => {
+  it('a SINGLE frame change never reaches the row — that is what a repaint looks like', async () => {
+    // On claude, which prints `esc to interrupt` whenever it is working, movement WITHOUT that
+    // marker is most likely a repaint: a tmux advisory line, a plugin notice, a status clock. Each
+    // one used to flip the row to `working` for a poll and back, so the row alternated between
+    // `working` and `needs you` continuously with a notification each time — reported exactly that
+    // way. `confirmActivities`' `corroborated` set is where this lives.
     const frames: Record<string, string[]> = { a: ['one'] }
     const p = poller({
       backend: fakeBackend({ sessions: [backendSession('a')], frames }),
@@ -127,15 +132,52 @@ describe('createSessionsPoller', () => {
     })
     expect((await p.poll()).sessions[0]!.activity).toBe('waiting')
     frames.a = ['two']
-    // A changed frame is movement, and movement is believed at once.
-    expect((await p.poll()).sessions[0]!.activity).toBe('working')
-    // Now the frame goes quiet. The RAW reading is `waiting`, but a single quiet poll after work is
-    // not yet a fact — the fleet holds `working` rather than assert a person is needed on one frame.
-    // This one-interval confirmation is the whole point: it is what stopped the counter reporting a
-    // session that had just gone quiet (a repaint, a finished sub-turn) as "waiting on you".
-    expect((await p.poll()).sessions[0]!.activity).toBe('working')
-    // Seen quiet on two consecutive polls now — confirmed waiting.
     expect((await p.poll()).sessions[0]!.activity).toBe('waiting')
+    // The frame has stopped changing — the repaint is over and the row never moved.
+    expect((await p.poll()).sessions[0]!.activity).toBe('waiting')
+  })
+
+  it('a SUSTAINED change is real work, and reaches the row', async () => {
+    // Two polls in a row that both moved. That is not a repaint, and it is what an assistant
+    // drawing output actually looks like on a harness whose marker is off screen.
+    const frames: Record<string, string[]> = { a: ['one'] }
+    const p = poller({
+      backend: fakeBackend({ sessions: [backendSession('a')], frames }),
+      registry: [managed('a')],
+    })
+    expect((await p.poll()).sessions[0]!.activity).toBe('waiting')
+    frames.a = ['two']
+    expect((await p.poll()).sessions[0]!.activity).toBe('waiting')
+    frames.a = ['three']
+    expect((await p.poll()).sessions[0]!.activity).toBe('working')
+    // …and going quiet still takes two polls to be believed, unchanged.
+    expect((await p.poll()).sessions[0]!.activity).toBe('working')
+    expect((await p.poll()).sessions[0]!.activity).toBe('waiting')
+  })
+
+  it('a harness with NO working marker still believes movement at once', async () => {
+    // Codex draws an identical screen streaming and idle, so movement is the only signal it has.
+    // Requiring corroboration there would mean it never reads as working at all.
+    const frames: Record<string, string[]> = { a: ['one'] }
+    const p = poller({
+      backend: fakeBackend({ sessions: [backendSession('a')], frames }),
+      registry: [managed('a', { harness: 'codex' })],
+    })
+    expect((await p.poll()).sessions[0]!.activity).toBe('waiting')
+    frames.a = ['two']
+    expect((await p.poll()).sessions[0]!.activity).toBe('working')
+  })
+
+  it('the harness saying so is believed at once', async () => {
+    // `esc to interrupt` is claude's own statement that it is working — evidence, not a repaint.
+    const frames: Record<string, string[]> = { a: ['idle'] }
+    const p = poller({
+      backend: fakeBackend({ sessions: [backendSession('a')], frames }),
+      registry: [managed('a')],
+    })
+    expect((await p.poll()).sessions[0]!.activity).toBe('waiting')
+    frames.a = ['esc to interrupt']
+    expect((await p.poll()).sessions[0]!.activity).toBe('working')
   })
 
   it('never captures a dead pane', async () => {

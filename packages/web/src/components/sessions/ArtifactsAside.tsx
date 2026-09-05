@@ -26,7 +26,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
-  BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles, ChevronLeft,
+  BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles, ChevronLeft, GitPullRequest,
+  ExternalLink,
 } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
 import {
@@ -45,7 +46,7 @@ import {
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
 
-type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills'
+type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills' | 'prs'
 
 /** Where the view toggle is remembered. One key, read and written in one place. */
 const GALLERY_VIEW_KEY = 'agentistics:gallery-view'
@@ -127,7 +128,7 @@ export function ArtifactsAside({
   const askedAt = tabRequest?.at
   useEffect(() => {
     const t = tabRequest?.tab
-    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills') setTab(t)
+    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills' || t === 'prs') setTab(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askedAt])
 
@@ -233,6 +234,22 @@ export function ArtifactsAside({
     return () => { alive = false }
   }, [tab, skills, sessionId, pt])
 
+  /** The repository's pull requests, read once when the tab is opened. See `github-prs.ts`. */
+  const [prs, setPrs] = useState<{
+    pulls: { number: number; title: string; url: string; state: string; draft: boolean; review?: string; branch: string }[]
+    unavailable?: string
+    detail?: string
+  } | null>(null)
+  useEffect(() => {
+    if (tab !== 'prs' || prs !== null) return
+    let alive = true
+    fetch(`/api/fleet/prs?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
+      .then(r => r.json())
+      .then(d => { if (alive) setPrs(d) })
+      .catch(() => { if (alive) setPrs({ pulls: [], unavailable: 'failed' }) })
+    return () => { alive = false }
+  }, [tab, prs, sessionId, pt])
+
   const feedRef = useRef<HTMLDivElement>(null)
   /** A clock, so "3m ago" ages while the panel is open rather than freezing at its first render. */
   const [now, setNow] = useState(() => Date.now())
@@ -299,6 +316,7 @@ export function ArtifactsAside({
     // not asked the host yet, and a number it has not measured is the thing this codebase refuses
     // to print everywhere else.
     { id: 'skills', label: 'Skills', icon: <Sparkles size={12} />, count: skills?.length ?? 0 },
+    { id: 'prs', label: 'PRs', icon: <GitPullRequest size={12} />, count: prs?.pulls.length ?? 0 },
   ]
 
   const tabBar = (
@@ -626,6 +644,85 @@ export function ArtifactsAside({
   }
 
   /**
+   * The repository's pull requests.
+   *
+   * A READ, and it says so by having no verb: this product runs assistants that open and merge PRs
+   * when a person asks them to, and a merge button here would be a different feature with a
+   * different consent question. Every row is a link out.
+   *
+   * The four absences are four sentences — `gh` missing, `gh` not logged in, no GitHub repository
+   * here, and it ran and failed. A single "no pull requests" would send a reader to fix the wrong
+   * thing, and three of them are not about pull requests at all.
+   */
+  const PR_ABSENT: Record<string, { pt: string; en: string }> = {
+    'no-gh': {
+      pt: 'O GitHub CLI (gh) não está instalado nesta máquina — é ele que lê os PRs.',
+      en: 'The GitHub CLI (gh) is not installed on this machine — it is what reads the PRs.',
+    },
+    'no-auth': {
+      pt: 'O gh está instalado e não autenticado. Rode `gh auth login` no terminal.',
+      en: 'gh is installed and not authenticated. Run `gh auth login` in a terminal.',
+    },
+    'no-repo': {
+      pt: 'A pasta desta sessão não é um repositório do GitHub.',
+      en: 'This session’s folder is not a GitHub repository.',
+    },
+    failed: {
+      pt: 'O gh respondeu com erro.',
+      en: 'gh answered with an error.',
+    },
+  }
+
+  const prsBody = () => (
+    <div style={{ padding: '10px 12px', overflowY: 'auto', minHeight: 0, flex: 1 }}>
+      {prs === null ? (
+        <Note icon={<Loader size={13} className="ag-working-spin" />}
+          text={pt ? 'Lendo os pull requests…' : 'Reading the pull requests…'} />
+      ) : prs.unavailable ? (
+        <Note text={[
+          (PR_ABSENT[prs.unavailable] ?? PR_ABSENT.failed!)[pt ? 'pt' : 'en'],
+          prs.detail ?? '',
+        ].filter(Boolean).join(' ')} />
+      ) : prs.pulls.length === 0 ? (
+        <Note text={pt ? 'Nenhum pull request neste repositório.' : 'No pull requests in this repository.'} />
+      ) : (
+        prs.pulls.map(pr => (
+          <a
+            key={pr.number}
+            href={pr.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            style={{
+              display: 'block', padding: '8px 10px', marginBottom: 6, borderRadius: 9,
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+              textDecoration: 'none', color: 'inherit',
+            }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+              <PrState state={pr.state} draft={pr.draft} pt={pt} />
+              {pr.review && <PrReview review={pr.review} pt={pt} />}
+              <span style={{ marginLeft: 'auto', fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+                #{pr.number}
+              </span>
+              <ExternalLink size={11} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+            </span>
+            <span style={{
+              display: 'block', fontSize: 12, lineHeight: 1.45, color: 'var(--text-primary)',
+            }}>{pr.title}</span>
+            {pr.branch && (
+              <span style={{
+                display: 'block', marginTop: 3, fontSize: 10.5, color: 'var(--text-tertiary)',
+                fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{pr.branch}</span>
+            )}
+          </a>
+        ))
+      )}
+    </div>
+  )
+
+  /**
    * The gallery, or the reason it is not showing one.
    *
    * "The conversation has not loaded" and "nothing was ever sent" are different facts and get
@@ -702,6 +799,7 @@ export function ArtifactsAside({
             : tab === 'live' ? liveBody()
             : tab === 'gallery' ? galleryBody()
             : tab === 'skills' ? skillsBody()
+            : tab === 'prs' ? prsBody()
             : body()}
         </>
       )}
@@ -870,5 +968,37 @@ function Note({ text, icon }: { text: string; icon?: React.ReactNode }) {
         {text}
       </p>
     </div>
+  )
+}
+
+
+/** OPEN / MERGED / CLOSED, in the colours GitHub itself uses, so the state is read before the word. */
+function PrState({ state, draft, pt }: { state: string; draft: boolean; pt: boolean }) {
+  const s = draft ? 'DRAFT' : state.toUpperCase()
+  const colour = s === 'MERGED' ? '#a371f7' : s === 'CLOSED' ? 'var(--accent-red)'
+    : s === 'DRAFT' ? 'var(--text-tertiary)' : '#3fb950'
+  const label = pt
+    ? ({ OPEN: 'aberto', MERGED: 'merged', CLOSED: 'fechado', DRAFT: 'rascunho' } as Record<string, string>)[s] ?? s.toLowerCase()
+    : s.toLowerCase()
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', borderRadius: 999,
+      fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+      color: colour, border: `1px solid ${colour}`,
+    }}>{label}</span>
+  )
+}
+
+/** The review decision, and ONLY when GitHub actually stated one — see `parsePrList`. */
+function PrReview({ review, pt }: { review: string; pt: boolean }) {
+  const map: Record<string, { pt: string; en: string; colour: string }> = {
+    APPROVED: { pt: 'aprovado', en: 'approved', colour: '#3fb950' },
+    CHANGES_REQUESTED: { pt: 'mudanças pedidas', en: 'changes requested', colour: 'var(--anthropic-orange)' },
+    REVIEW_REQUIRED: { pt: 'aguarda review', en: 'review required', colour: 'var(--text-tertiary)' },
+  }
+  const e = map[review]
+  if (!e) return null
+  return (
+    <span style={{ fontSize: 10, fontWeight: 650, color: e.colour }}>{pt ? e.pt : e.en}</span>
   )
 }
