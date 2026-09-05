@@ -241,19 +241,57 @@ export interface SessionMeta {
   mcp_tool_names?: string[]
 }
 
+/**
+ * Where an invocation's numbers came from — or that there are none.
+ *
+ * This field exists because there was a third state all along and no way to say it. Claude Code
+ * used to answer an `Agent` call synchronously, with `totalTokens`, `usage` and `toolStats` in the
+ * `tool_result`; it now launches agents ASYNCHRONOUSLY, and the result that comes back at launch is
+ * `{isAsync: true, status: "async_launched", agentId, outputFile}` and nothing else. The reader
+ * still parsed cleanly and filled the gap with zeros. Measured on one machine: 74 sessions holding
+ * agent metrics, every async invocation reading `totalTokens: 0, costUSD: 0` — while one of those
+ * agents had in fact read 123,6 million cached tokens.
+ *
+ * - `harness`    — the harness reported the numbers itself (a synchronous call).
+ * - `transcript` — read from the agent's own transcript, `<conversation>/subagents/agent-<id>.jsonl`.
+ * - `none`       — nothing could measure it, and every figure below is `null` rather than `0`.
+ */
+export type AgentMeasurement = 'harness' | 'transcript' | 'none'
+
 export interface AgentInvocation {
   toolUseId: string
+  /** The harness's own id for the agent this call started, when it recorded one (async launches). */
+  agentId?: string
   agentType: string
   description: string
-  status: 'completed' | 'failed'
-  totalTokens: number
-  totalDurationMs: number
-  totalToolUseCount: number
-  inputTokens: number
-  outputTokens: number
-  cacheReadTokens: number
-  cacheWriteTokens: number
-  toolStats: {
+  /**
+   * `running` and `unknown` are not decoration: an async agent that has not reported back is still
+   * working, and one whose session ended without recording an outcome was never seen to finish.
+   * Calling either `completed` is the same confident answer `measured` exists to stop.
+   */
+  status: 'completed' | 'failed' | 'running' | 'stopped' | 'unknown'
+  measured: AgentMeasurement
+  /**
+   * EVERY FIGURE BELOW IS `null` WHEN IT COULD NOT BE MEASURED, never `0`.
+   *
+   * They are nullable as a GROUP because they are measured as one: they all come from the same
+   * source, so a reader that has any of them has all of them.
+   */
+  totalTokens: number | null
+  totalDurationMs: number | null
+  totalToolUseCount: number | null
+  inputTokens: number | null
+  outputTokens: number | null
+  cacheReadTokens: number | null
+  cacheWriteTokens: number | null
+  /**
+   * The harness's own per-category counts.
+   *
+   * ABSENT for a `transcript`-measured agent: the call counts are reconstructable from its
+   * transcript but the LINE deltas are not, and a record with real counts beside invented zeros
+   * reads as whole. Half a measurement is worse than none.
+   */
+  toolStats?: {
     readCount: number
     searchCount: number
     bashCount: number
@@ -262,15 +300,22 @@ export interface AgentInvocation {
     linesRemoved: number
     otherToolCount: number
   }
-  costUSD: number
+  costUSD: number | null
 }
 
 export interface SessionAgentMetrics {
   invocations: AgentInvocation[]
   totalInvocations: number
+  /** The totals sum only the MEASURED invocations — see `unmeasuredInvocations`. */
   totalTokens: number
   totalDurationMs: number
   totalCostUSD: number
+  /**
+   * How many of `totalInvocations` contributed nothing to the totals because nothing could measure
+   * them. Reported so a surface can say "3 of 55 could not be measured" instead of presenting a
+   * partial sum as a complete one.
+   */
+  unmeasuredInvocations: number
 }
 
 export interface WorkflowAgent {
