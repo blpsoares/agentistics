@@ -74,6 +74,14 @@ export interface HarnessTranscript {
  * short" is exactly "was there a turn beyond it". Asking for `max + 1` and getting it back IS that
  * evidence, which is the same question `readChatWindow` answers by hoisting its loop index — one
  * extra turn parsed instead of a second return channel through four pure parsers and their tests.
+ *
+ * THE `+ 1` IS WHAT MAKES IT EXACT, and it is the whole reason `older` can be REQUIRED of every
+ * reader rather than optional. Inferring the answer from `turns.length === max` would call a
+ * conversation of exactly `max` turns a window — a false sentence in the reassuring direction — so
+ * that inference is refused; this one asks for a turn BEYOND the window and claims `older` only if
+ * one came back. An optional flag would have been the alternative, and it is worse in the direction
+ * that matters: four readers silently answering "nothing was hidden" is the very bug the notice was
+ * written to fix, on a transcript measured at 1239 turns against a 400-turn window.
  */
 function windowed(all: ChatTurn[], max: number): TranscriptRead {
   return all.length > max

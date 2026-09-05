@@ -145,9 +145,10 @@ export async function readSessionChat(
     }
   }
 
-  // `older` is asked of the READER rather than of Claude's window function, so the sentence a long
-  // conversation gets is the same one on every harness. A window that hides things has to say it is
-  // a window — see `TranscriptRead`.
+  // `older` is asked of the READER, and EVERY reader answers it — see `TranscriptRead`. It was
+  // briefly an optional `readWindow` that only Claude implemented, which gives the other four the
+  // silent version of the bug the notice exists to fix: the antigravity transcript this reader was
+  // written against holds 1239 turns, so a 400-turn window cuts it and says nothing.
   const read = await reader.read(path, MAX_TURNS)
     .catch(() => ({ turns: [] as ChatTurn[], older: false }))
   return {
