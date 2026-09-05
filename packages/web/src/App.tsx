@@ -2893,6 +2893,8 @@ export default function AppLayout() {
           lang={lang === 'pt' ? 'pt' : 'en'}
           currency={currency}
           brlRate={brlRate}
+          {...(selectedFleetSession.model ? { startedModel: selectedFleetSession.model } : {})}
+          {...(selectedFleetSession.effort ? { startedEffort: selectedFleetSession.effort } : {})}
         />
       )}
 

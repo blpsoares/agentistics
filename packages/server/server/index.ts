@@ -1185,6 +1185,22 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
 
     // The repository's pull requests, read through `gh` in the SESSION's directory. A READ: no
     // route here opens, merges or comments on anything.
+    // What only the conversation's own transcript can answer — today, how many times it has been
+    // compacted. Guarded by the `/api/fleet` PREFIX already registered in `capability-guard.ts`.
+    if (url.pathname === '/api/fleet/conversation' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ unavailable: 'bad_request' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { readConversationFacts, fleetLang } = await import('./sessions/fleet-web')
+      const out = await readConversationFacts(fleetLang(url.searchParams.get('lang')), id)
+      return new Response(JSON.stringify(out), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/fleet/prs' && req.method === 'GET') {
       const id = url.searchParams.get('id')
       if (!id) {
