@@ -50,6 +50,7 @@ import {
   applySkill, emptyPickerReason, filterSkills, flattenGroups, groupSkills, slashQuery, stepSkill,
 } from '../../lib/skillMenu'
 import { markExcerpt, quoteFor, replyAuthor, replyPreview, type ReplyTarget } from '../../lib/replyQuote'
+import { pendingEchoes } from '../../lib/echoMatch'
 import { lastSentMessage, turnAnchorId } from '../../lib/lastSent'
 import { goToTurn } from '../../lib/turnScroll'
 import { attachmentName, isImageAttachment, splitMessage } from '../../lib/messageAttachments'
@@ -580,14 +581,14 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
     return () => clearInterval(t)
   }, [echo.length])
 
-  // Retire an echo the moment the transcript carries it. Compared on collapsed whitespace, because
-  // the harness re-wraps what it stores and an exact match would leave the echo standing forever
-  // beside its own committed copy.
+  // Retire an echo the moment the transcript carries it — CONTAINMENT, not equality, because a
+  // busy harness commits its whole queue as ONE user turn and each message is then a substring of
+  // what was stored. See `echoMatch.ts` for the measurement that forced this.
   useEffect(() => {
     if (echo.length === 0) return
-    const seen = new Set(turns.filter(t => t.role === 'user').map(t => collapse(t.text)))
+    const userTurns = turns.filter(t => t.role === 'user').map(t => t.text)
     editEcho(list => {
-      const kept = list.filter(text => !seen.has(collapse(text)))
+      const kept = pendingEchoes(list, userTurns)
       return kept.length === list.length ? list : kept
     })
   }, [turns, echo.length, editEcho])
