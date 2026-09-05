@@ -17,7 +17,7 @@ import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { formatUptime, summarizeFleet } from '../../lib/fleetSummary'
 import { ActivityHeatmap } from '../ActivityHeatmap'
-import { activityTrend, trendPeak, type TrendDay } from '../../lib/activityTrend'
+import { linePoints, trendChart, type TrendSeries } from '../../lib/trendLines'
 
 export interface HeatmapDay { date: string; value: number; sessions: number; tools: number }
 
@@ -47,11 +47,21 @@ export interface FleetOverviewProps {
    * everywhere: this is per-session sums, the same source the dashboard's own heatmap reads.
    */
   heatmap?: readonly HeatmapDay[]
+  /**
+   * The same days split by harness — `derived.heatmapByHarness`, never a second aggregation.
+   *
+   * Separate from `heatmap` rather than derived from it because a heat cell is one colour: the
+   * calendar cannot say that a day was forty Claude sessions and two Antigravity ones, and that
+   * is exactly what the line beside it is for.
+   */
+  heatmapByHarness?: Readonly<Record<string, readonly { date: string; sessions: number }[]>>
 }
 
-export function FleetOverview({ lang, rows, loading, unsupported, unavailable, heatmap }: FleetOverviewProps) {
-  /** The same filtered days the calendar draws, as a day-by-day series. See `activityTrend.ts`. */
-  const trend = useMemo(() => activityTrend(heatmap ?? []), [heatmap])
+export function FleetOverview({
+  lang, rows, loading, unsupported, unavailable, heatmap, heatmapByHarness,
+}: FleetOverviewProps) {
+  /** One line per harness, on one axis and one scale. See `trendLines.ts`. */
+  const chart = useMemo(() => trendChart(heatmapByHarness ?? {}), [heatmapByHarness])
   const pt = lang === 'pt'
   const s = useMemo(() => summarizeFleet(rows, Date.now()), [rows])
 
@@ -259,8 +269,8 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable, h
             <div style={{ flex: '1 1 420px', maxWidth: 620, minWidth: 0 }}>
               <ActivityHeatmap data={[...heatmap]} weeks={26} />
             </div>
-            <div style={{ flex: '1 1 300px', minWidth: 260 }}>
-              <ActivityTrend series={trend} lang={lang} />
+            <div style={{ flex: '1 1 320px', minWidth: 280 }}>
+              <ActivityTrend chart={chart} lang={lang} />
             </div>
           </div>
         </section>
@@ -335,25 +345,30 @@ function Notice({ text }: { text: string }) {
 
 
 /**
- * The window's activity as a shape: one bar per day, oldest at the left.
+ * The window's activity as SHAPES: one line per harness, overlaid on one axis.
  *
  * Drawn by hand rather than with the charting library the dashboard uses, for the same reason the
- * heatmap is: this is a strip a few hundred pixels wide with no axes, no legend and no tooltip
- * chrome to configure away, and the library's smallest useful chart is larger than the space.
+ * heatmap is: this is a strip a few hundred pixels wide with no axes and no tooltip chrome to
+ * configure away, and the library's smallest useful chart is bigger than the space.
  *
- * IT SAYS WHAT IT IS MEASURING. A bar chart with no scale is a decoration; the peak and the span
- * are printed beside it, so a reader can tell three sessions from thirty without hovering.
+ * IT SAYS WHAT IT IS MEASURING. A line with no scale is a decoration, so the peak and the span are
+ * printed, and the legend carries each harness's own total — which is the number that says whether
+ * a line hugging the floor is "a little" or "almost nothing".
+ *
+ * Every decision about the DATA — the shared axis, zeros for quiet days, a harness with nothing
+ * being absent rather than flat — is in `trendLines.ts`. This function only draws.
  */
-function ActivityTrend({ series, lang }: { series: readonly TrendDay[]; lang: 'pt' | 'en' }) {
+function ActivityTrend({ chart, lang }: {
+  chart: ReturnType<typeof trendChart>
+  lang: 'pt' | 'en'
+}) {
   const pt = lang === 'pt'
-  const peak = trendPeak(series)
-  if (series.length === 0 || peak === 0) {
-    // Never a row of empty bars: an empty measurement and "nothing in this window" are different
-    // facts, and a flat baseline reads as the first while meaning the second.
-    return null
-  }
-  const first = series[0]!.date
-  const last = series[series.length - 1]!.date
+  if (chart.series.length === 0 || chart.peak === 0) return null
+
+  const W = 300
+  const H = 92
+  const first = chart.days[0]!
+  const last = chart.days[chart.days.length - 1]!
   return (
     <div>
       <h3 style={{
@@ -364,31 +379,57 @@ function ActivityTrend({ series, lang }: { series: readonly TrendDay[]; lang: 'p
       </h3>
       <p style={{ margin: '0 0 10px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
         {pt
-          ? `Sessões por dia · pico de ${peak} · ${first} a ${last}`
-          : `Sessions per day · peak ${peak} · ${first} to ${last}`}
+          ? `Sessões por dia · pico de ${chart.peak} · ${first} a ${last}`
+          : `Sessions per day · peak ${chart.peak} · ${first} to ${last}`}
       </p>
-      <div style={{
-        display: 'flex', alignItems: 'flex-end', gap: 2, height: 90,
-        borderBottom: '1px solid var(--border)', paddingBottom: 1,
-      }}>
-        {series.map(d => (
-          <div
-            key={d.date}
-            title={pt
-              ? `${d.date} · ${d.sessions} ${d.sessions === 1 ? 'sessão' : 'sessões'} · ${d.messages} msgs`
-              : `${d.date} · ${d.sessions} ${d.sessions === 1 ? 'session' : 'sessions'} · ${d.messages} msgs`}
-            style={{
-              flex: 1, minWidth: 2,
-              // A day with activity always draws SOMETHING: a bar rounded to zero pixels is a day
-              // the chart says was quiet when it was not.
-              height: d.sessions === 0 ? 1 : `${Math.max(2, Math.round((d.sessions / peak) * 88))}px`,
-              background: d.sessions === 0 ? 'var(--border)' : 'var(--anthropic-orange)',
-              opacity: d.sessions === 0 ? 1 : 0.55 + 0.45 * (d.sessions / peak),
-              borderRadius: '2px 2px 0 0',
-            }}
+      {/* `preserveAspectRatio="none"` so the strip stretches to whatever column it lands in: the
+          shape is what is read here, and the day spacing carries no meaning a reader measures. */}
+      <svg
+        viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img"
+        aria-label={pt ? 'Sessões por dia, uma linha por assistente' : 'Sessions per day, one line per assistant'}
+        style={{ width: '100%', height: H, display: 'block', overflow: 'visible' }}
+      >
+        <line x1={0} y1={H} x2={W} y2={H} stroke="var(--border)" strokeWidth={1} />
+        {chart.series.map(s => (
+          <polyline
+            key={s.harness}
+            points={linePoints(s, chart.peak, W, H)}
+            fill="none"
+            stroke={harnessColor(s.harness)}
+            strokeWidth={1.6}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            // Vector strokes scale with the box under `preserveAspectRatio="none"`, which would
+            // make a stretched line thicker horizontally than vertically.
+            vectorEffect="non-scaling-stroke"
           />
         ))}
+      </svg>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', marginTop: 8 }}>
+        {chart.series.map(s => <TrendKey key={s.harness} series={s} pt={pt} />)}
       </div>
     </div>
   )
+}
+
+/** One legend entry: the colour, the harness's name, and the total that gives its line a size. */
+function TrendKey({ series, pt }: { series: TrendSeries; pt: boolean }) {
+  const label = (HARNESS_LABELS as Record<string, string>)[series.harness] ?? series.harness
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+      <span aria-hidden style={{
+        width: 10, height: 2, borderRadius: 1, flexShrink: 0,
+        background: harnessColor(series.harness),
+      }} />
+      <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
+      <span style={{ color: 'var(--text-tertiary)' }}>
+        {series.total}{pt ? '' : ''}
+      </span>
+    </span>
+  )
+}
+
+/** A harness with no colour of its own gets the neutral one, never a colour borrowed from another. */
+function harnessColor(harness: string): string {
+  return (HARNESS_COLORS as Record<string, string>)[harness] ?? 'var(--text-tertiary)'
 }

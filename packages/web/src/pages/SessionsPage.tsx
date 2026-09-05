@@ -747,6 +747,7 @@ export default function SessionsPage() {
           loading={loading}
           unsupported={unsupported}
           heatmap={derived.heatmapData}
+          heatmapByHarness={derived.heatmapByHarness}
           {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
         />
       </div>

@@ -1397,6 +1397,47 @@ export function computeDerivedStats(
     }
     heatmapData.sort((a, b) => a.date.localeCompare(b.date))
 
+    /**
+     * The same days, split BY HARNESS — one series each, for the trend beside the calendar.
+     *
+     * It follows the two branches above exactly rather than re-deriving anything, and that is the
+     * whole reason it lives here: `stats-cache.json` is Claude-only, so in the unfiltered branch
+     * Claude's days come from its OWN cache (which reaches back past the transcripts Claude
+     * deletes) while every other harness is summed per session — the rule this file already keeps
+     * for the totals. A single session-sum for all six would have drawn a Claude line that stops
+     * 30 days ago beside a calendar that does not.
+     *
+     * A harness with no day in the window gets NO entry, never an all-zero series: a flat line
+     * along the axis reads as a measurement that came back zero.
+     */
+    const heatmapByHarness: Record<string, { date: string; value: number; sessions: number }[]> = {}
+    {
+      const perSession = sessionFiltered ? filteredSessions : nonClaudeInRange
+      const byHarnessDay: Record<string, Record<string, { value: number; sessions: number }>> = {}
+      for (const s of perSession) {
+        if (!isDateStr(s.start_time)) continue
+        const day = format(parseISO(s.start_time), 'yyyy-MM-dd')
+        const h = s.harness ?? 'claude'
+        const days = byHarnessDay[h] ?? (byHarnessDay[h] = {})
+        const cell = days[day] ?? (days[day] = { value: 0, sessions: 0 })
+        cell.value += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+        cell.sessions += 1
+      }
+      for (const [h, days] of Object.entries(byHarnessDay)) {
+        heatmapByHarness[h] = Object.entries(days)
+          .map(([date, v]) => ({ date, ...v }))
+          .sort((a, b) => a.date.localeCompare(b.date))
+      }
+      if (!sessionFiltered) {
+        // Claude's own history, from the cache. `add` is unused on this path by design — the cache
+        // carries a count per day, not one row per session.
+        const claude = extendedDailyActivity
+          .filter(d => d.sessionCount > 0)
+          .map(d => ({ date: d.date, value: d.messageCount, sessions: d.sessionCount }))
+        if (claude.length > 0) heatmapByHarness.claude = claude
+      }
+    }
+
     // Model usage — respects date + model filters
     const globalModelUsage = effectiveStatsCache.modelUsage ?? {}
     const dateFiltered = filters.dateRange !== 'all' || !!filters.customStart || !!filters.customEnd
@@ -1908,6 +1949,7 @@ export function computeDerivedStats(
       longestStreak,
       streakDayBreakdown,
       heatmapData,
+      heatmapByHarness,
       modelUsage: filteredModelUsage,
       modelTokensByDate,
       toolCounts,
