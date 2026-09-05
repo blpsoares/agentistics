@@ -154,7 +154,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
         const first = a11y.lenses[0]
         if (!first) return
         e.preventDefault()
-        a11y.select(first.id)
+        a11y.select(first.id, 'keyboard')
         a11y.announce(text.announce(text.lensLabel(ordinal(first.id)), first.zoom, first.width, first.height, first.x, first.y, first.pinned))
         return
       }
@@ -171,7 +171,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
         const next = a11y.lenses[(idx + (e.shiftKey ? -1 : 1) + n) % n]
         if (!next) return
         e.preventDefault()
-        a11y.select(next.id)
+        a11y.select(next.id, 'keyboard')
         a11y.announce(text.announce(text.lensLabel(ordinal(next.id)), next.zoom, next.width, next.height, next.x, next.y, next.pinned))
         return
       }
@@ -264,7 +264,7 @@ export function MagnifierLayer({ ctx, hasHeaderSlot }: { ctx: AppContext; hasHea
           lens={lens}
           index={i + 1}
           selected={a11y.selectedId === lens.id}
-          revealed={a11y.selectedId === lens.id}
+          selectedVia={a11y.selectedVia}
           global={globalIds.has(lens.id)}
           text={text}
           isMobile={isMobile}

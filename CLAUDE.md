@@ -1799,6 +1799,12 @@ harness must not break.
 - **Left click, wheel and hover go to the PAGE; right click goes to the LENS.** That is why a pinned
   lens is still reachable: right click opens its menu in every pin state, which is where unpin and
   remove live. Pinned means immovable, not unreachable.
+- **A pinned lens is revealed by the KEYBOARD and never by the pointer** (`lensInteractive`, pure).
+  Every pointer path selects, so revealing on SELECTION meant the one gesture a mouse has for
+  reaching a pinned lens's menu also gave back its drag handle — the next drag moved a lens pinned
+  precisely so it would stop moving. `Tab`/`Ctrl+Shift+M` keep their reveal, because keyboard is the
+  only way a pinned lens is reachable at all. The reveal follows the SOURCE of the selection
+  (`A11yState.selectedVia`), never the selection itself.
 - **Interaction is forwarded by COORDINATE** (`lensPointToPage`, the exact inverse of the rendering
   geometry), never by making the clone live. The probe that finds the target must make the WHOLE
   magnifier layer transparent to hit-testing first — with two lenses stacked, hiding only the top

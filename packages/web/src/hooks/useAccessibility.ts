@@ -16,6 +16,7 @@ import { useLocation } from 'react-router-dom'
 import type { AccessibilityPrefs, LensStyle, MagnifierLens } from '@agentistics/core'
 import { DEFAULT_ACCESSIBILITY_PREFS, mintLensId, sanitizeAccessibilityPrefs } from '@agentistics/core'
 import { clampLens, newLens, pageKey } from '../lib/magnifier'
+import type { SelectionSource } from '../lib/magnifier'
 
 const SAVE_DEBOUNCE_MS = 400
 
@@ -33,6 +34,14 @@ export interface A11yState {
    */
   lenses: MagnifierLens[]
   selectedId: string | null
+  /**
+   * How `selectedId` came to be selected. It is not decoration: `lensInteractive` reveals a PINNED
+   * lens for the keyboard and never for the pointer, because every pointer path selects — reaching
+   * a pinned lens's menu with a right click would otherwise hand its drag handle straight back.
+   * Meaningless while `selectedId` is null, and left as it was rather than reset, since nothing
+   * reads it then.
+   */
+  selectedVia: SelectionSource
   followOn: boolean
   /**
    * True while every PLACED lens on this page is hidden — a "let me see the page underneath for
@@ -68,7 +77,9 @@ export interface A11yState {
    */
   setLensGlobal(id: string, global: boolean): void
   setAllPinned(pinned: boolean): void
-  select(id: string | null): void
+  /** `via` says how — see `selectedVia`. It defaults to `'pointer'`, the answer that reveals
+   *  nothing, so a new call site has to ASK for the reveal rather than inherit it. */
+  select(id: string | null, via?: SelectionSource): void
   toggleFollow(): void
   toggleLensesHidden(): void
   announce(text: string): void
@@ -86,6 +97,7 @@ export function useAccessibility(identity: string | undefined): A11yState {
   const [prefs, setPrefs] = useState<AccessibilityPrefs>(DEFAULT_ACCESSIBILITY_PREFS)
   const [loaded, setLoaded] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedVia, setSelectedVia] = useState<SelectionSource>('pointer')
   const [followOn, setFollowOn] = useState(false)
   const [lensesHidden, setLensesHidden] = useState(false)
   const [announcement, setAnnouncement] = useState('')
@@ -200,6 +212,7 @@ export function useAccessibility(identity: string | undefined): A11yState {
     page,
     lenses,
     selectedId,
+    selectedVia,
     followOn,
     lensesHidden,
     announcement,
@@ -305,7 +318,7 @@ export function useAccessibility(identity: string | undefined): A11yState {
       else byPage[page] = nextPage
       commit({ ...cur, lensesByPage: byPage, globalLenses: nextGlobal })
     },
-    select: setSelectedId,
+    select: (id, via = 'pointer') => { setSelectedId(id); setSelectedVia(via) },
     toggleFollow: () => setFollowOn(v => !v),
     // Deliberately NOT routed through `commit()` — see the `lensesHidden` doc comment above. This
     // is UI state exactly like `followOn`, never a preference.

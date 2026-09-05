@@ -55,6 +55,14 @@ left alone.
 is what makes the interaction learnable, and it is why a pinned lens is still reachable: right
 click opens its menu in every pin state, which is where unpin and remove live.
 
+**A pinned lens is revealed by the KEYBOARD and never by the pointer** (`lensInteractive`). Every
+pointer path selects, so reveal-on-selection meant that reaching a pinned lens's menu — the one way
+a mouse reaches unpin — handed its drag handle and control strip straight back, and the next drag
+moved a lens the user had pinned precisely so it would stop moving. `Tab` and `Ctrl+Shift+M` still
+cycle pinned lenses and still reveal them: keyboard is the only way they are reachable at all, and
+a selection someone had to press a key to make is not one they make while aiming at something else.
+So the reveal follows the SOURCE of the selection, never the selection.
+
 **Interaction is forwarded by coordinate, not by making the clone live.** The point acted on inside
 a lens is mapped back through the exact inverse of the rendering geometry (`lensPointToPage`) and
 the event is dispatched at the real page point. The probe that finds the target must make the WHOLE
