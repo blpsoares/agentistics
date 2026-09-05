@@ -207,41 +207,38 @@ describe('sourceRect — cursor anchor, so the follow lens shows exactly what is
     }
   })
 
-  test('left/top edge: the region is shifted back inside, starting at 0 — never past it, never resized', () => {
-    // A wrong implementation this would catch: one that clamps the region's ORIGIN to
-    // `[0, Infinity)` only (no upper bound) — it would also read 0 here, but the sibling
-    // right/bottom test below is what that variant fails.
+  test('AT THE EDGES TOO — the centre still shows the point under the cursor, at every corner', () => {
+    // The regression. The region used to be clamped back inside the viewport while the FRAME kept
+    // hanging off the screen, so the page's outer band was painted into the half nobody can see
+    // and the reader could not reach it at all. These are the positions that clamp engaged at.
     const vp = { width: 1200, height: 900 }
-    const l = lens({ x: 0, y: 0, width: 200, height: 200, borderWidth: 5, zoom: 0.5 })
-    const s = sourceRect(l, vp, 'cursor')
-    expect(s.x).toBe(0)
-    expect(s.y).toBe(0)
-    // Size asserted CONCRETELY — (200 - 2*5) / 0.5 = 380 — not as `vp.width - s.width`, which a
-    // shrink-to-fit implementation (one that resizes the region to end exactly at the edge
-    // instead of just sliding it) would satisfy trivially.
-    expect(s.width).toBe(380)
-    expect(s.height).toBe(380)
+    const W = 800
+    const H = 600
+    for (const [cx, cy] of [[0, 0], [5, 5], [100, 80], [vp.width, vp.height], [vp.width - 3, 40]] as const) {
+      const l = lens({ x: cx - W / 2, y: cy - H / 2, width: W, height: H, zoom: 2, borderWidth: 4 })
+      const got = lensPointToPage(l, vp, l.width / 2, l.height / 2, 'cursor')
+      expect(got.x).toBeCloseTo(cx, 5)
+      expect(got.y).toBeCloseTo(cy, 5)
+    }
   })
 
-  test('right/bottom edge: the region is shifted back inside, ending exactly at the viewport edge — never resized', () => {
+  test('the region is NOT clamped into the viewport — it follows the pointer past the edge', () => {
+    // Asserted as a concrete origin rather than "is negative": the region is
+    // (200 - 2*5) / 0.5 = 380 wide and centred on a cursor at (100, 100), so it starts at -90.
+    // A clamped implementation reads 0 here, which is exactly the bug.
     const vp = { width: 1200, height: 900 }
-    const l = lens({ x: 1000, y: 700, width: 200, height: 200, borderWidth: 5, zoom: 0.5 })
+    const l = lens({ x: 100 - 100, y: 100 - 100, width: 200, height: 200, borderWidth: 5, zoom: 0.5 })
     const s = sourceRect(l, vp, 'cursor')
-    // Same concrete size as the left/top-edge case — the clamp only ever slides the region.
     expect(s.width).toBe(380)
     expect(s.height).toBe(380)
-    expect(s.x).toBe(vp.width - 380)
-    expect(s.y).toBe(vp.height - 380)
+    expect(s.x).toBe(-90)
+    expect(s.y).toBe(-90)
   })
 
-  test('a region larger than the viewport is centred, not pinned to whichever edge the lens is nearest', () => {
-    // A wrong implementation this would catch: clamping the desired origin into
-    // `[0, vpSize - regionSize]` unconditionally, with no separate "centre it" branch — when
-    // `regionSize > vpSize` that range is inverted (its upper bound is negative), so
-    // `Math.min(Math.max(desired, 0), negative)` collapses to 0 regardless of the lens's position,
-    // which is indistinguishable from "pinned to the left/top edge". Centring instead makes the
-    // result the SAME for two very different lens positions, which a pinned-edge implementation
-    // could never produce for both.
+  test('a region larger than the viewport follows the pointer as well — no special case', () => {
+    // It used to be centred on the VIEWPORT here, which detached the image from the cursor at the
+    // one zoom range (below 1x) where the region can outgrow the screen. Two different cursor
+    // positions must give two different regions, each centred on its own cursor.
     const vp = { width: 1024, height: 900 }
     const width = 2000
     const height = 200
@@ -249,10 +246,10 @@ describe('sourceRect — cursor anchor, so the follow lens shows exactly what is
     const zoom = ZOOM_MIN
     const interior = (width - 2 * borderWidth) / zoom
     expect(interior).toBeGreaterThan(vp.width)
-    const left = sourceRect(lens({ x: 0, y: 300, width, height, borderWidth, zoom }), vp, 'cursor')
-    const right = sourceRect(lens({ x: vp.width - 1, y: 300, width, height, borderWidth, zoom }), vp, 'cursor')
-    expect(left.x).toBeCloseTo((vp.width - interior) / 2)
-    expect(right.x).toBeCloseTo((vp.width - interior) / 2)
+    for (const cx of [0, vp.width - 1]) {
+      const s = sourceRect(lens({ x: cx - width / 2, y: 300, width, height, borderWidth, zoom }), vp, 'cursor')
+      expect(s.x + interior / 2).toBeCloseTo(cx, 5)
+    }
   })
 })
 
