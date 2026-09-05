@@ -45,7 +45,20 @@ export interface PrList {
   unavailable?: PrUnavailable
   /** The message `gh` itself printed, for `failed`. Never composed here. */
   detail?: string
+  /**
+   * How many the read asked for — `PR_LIMIT`, travelling so the UI can SAY it.
+   *
+   * The list is newest-first and capped, so a repository with more than this many pull requests
+   * shows a WINDOW; a panel that does not say so reads as the whole set, which is how a reader
+   * concludes a PR was deleted. The number is on the wire rather than restated in the browser
+   * because `packages/web` cannot import this module, and a second copy of a cap is a second
+   * number to change.
+   */
+  limit?: number
 }
+
+/** How many pull requests one read asks for. A tab, not an archive. */
+export const PR_LIMIT = 30
 
 /** The exact JSON fields asked of `gh`. Kept beside the parser so the two cannot drift. */
 export const PR_FIELDS = 'number,title,url,state,isDraft,reviewDecision,headRefName,author,updatedAt'
@@ -120,7 +133,8 @@ export function classifyPrFailure(code: number, stderr: string): PrUnavailable {
  * Run `gh` in a session's directory and read back its pull requests.
  *
  * The IMPURE half, deliberately thin: everything it decides is one of the two pure functions above.
- * `--limit 30` because this is a tab, not an archive, and the list is newest-first.
+ * `PR_LIMIT` because this is a tab, not an archive, and the list is newest-first — the cap travels
+ * back on `PrList.limit` so the panel can say which window it is showing.
  *
  * The cwd is the SESSION'S, so the repository is whichever one that session is working in — asking
  * from the server's own directory would answer about agentop on a machine using it for something
@@ -130,7 +144,7 @@ export async function readPullRequests(cwd: string): Promise<PrList> {
   if (!cwd) return { pulls: [], unavailable: 'no-repo' }
   try {
     const proc = Bun.spawn(
-      ['gh', 'pr', 'list', '--limit', '30', '--state', 'all', '--json', PR_FIELDS],
+      ['gh', 'pr', 'list', '--limit', String(PR_LIMIT), '--state', 'all', '--json', PR_FIELDS],
       { cwd, stdout: 'pipe', stderr: 'pipe' },
     )
     const [out, err] = await Promise.all([
@@ -146,7 +160,7 @@ export async function readPullRequests(cwd: string): Promise<PrList> {
         ...(kind === 'failed' && err.trim() ? { detail: err.trim().split('\n').slice(0, 2).join(' ') } : {}),
       }
     }
-    return { pulls: parsePrList(out) }
+    return { pulls: parsePrList(out), limit: PR_LIMIT }
   } catch (e) {
     // `gh` missing entirely lands here on some platforms rather than as an exit code.
     return { pulls: [], unavailable: classifyPrFailure(127, e instanceof Error ? e.message : '') }
