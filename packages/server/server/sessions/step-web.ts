@@ -25,11 +25,23 @@ export type StepResponse =
   /** Already localized. "I cannot open this one" and "there is nothing here" are different facts. */
   | { ok: false; message: string }
 
+/** The shape a subagent id must have before it is allowed to name a file. Mirrors `subagents-web`. */
+const AGENT_ID = /^[A-Za-z0-9_-]{1,128}$/
+
 export async function readSessionStep(
   host: StartHost,
   lang: CliLang,
   id: string,
   ref: string,
+  /**
+   * Open a step of a SUBAGENT's own conversation rather than the session's.
+   *
+   * The subagents aside renders its activity with the same feed and the same expanding rows, and
+   * those rows carry refs from the subagent's transcript — which are not in the parent's. Without
+   * this they would all answer "this step is not in this transcript", which is rule 1 of
+   * `stepDetail.ts` broken from the server side.
+   */
+  agentId?: string,
 ): Promise<StepResponse> {
   const pt = lang === 'pt'
   if (!host.sessions) return { ok: false, message: controlStrings(lang).sessionsNoHost }
@@ -62,7 +74,13 @@ export async function readSessionStep(
     }
   }
 
-  const path = await resolveChatTranscriptPath(row.cwd, conversationId).catch(() => null)
+  const conversationPath = await resolveChatTranscriptPath(row.cwd, conversationId).catch(() => null)
+  if (agentId !== undefined && !AGENT_ID.test(agentId)) {
+    return { ok: false, message: pt ? 'Identificador de subagente inválido.' : 'Invalid subagent identifier.' }
+  }
+  const path = conversationPath === null || agentId === undefined
+    ? conversationPath
+    : `${conversationPath.replace(/\.jsonl$/, '')}/subagents/agent-${agentId}.jsonl`
   if (!path) {
     return {
       ok: false,

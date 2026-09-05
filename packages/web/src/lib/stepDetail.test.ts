@@ -66,3 +66,10 @@ describe('stepUrl', () => {
       .toBe('/api/fleet/step?id=closed%3Aa%20b&ref=toolu_1&lang=en')
   })
 })
+
+describe('stepUrl — a subagent step comes from the subagent’s own transcript', () => {
+  it('names the agent when there is one', () => {
+    expect(stepUrl('row1', 'toolu_1', 'en', 'a23c9')).toBe(
+      '/api/fleet/step?id=row1&ref=toolu_1&agent=a23c9&lang=en')
+  })
+})

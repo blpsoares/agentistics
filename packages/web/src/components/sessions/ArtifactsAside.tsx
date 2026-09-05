@@ -27,7 +27,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
   BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles, ChevronLeft, ChevronDown, ChevronRight,
-  ExternalLink,
+  ExternalLink, Bot,
 } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
 import {
@@ -44,13 +44,19 @@ import {
   type StepPayload, type StepState,
 } from '../../lib/stepDetail'
 import {
+  runningCount, subagentCount, subagentStatusText, subagentsPollMs, subagentsStateOf,
+  unmeasuredText, unpricedText,
+  type SubagentRow, type SubagentsPayload, type SubagentsState,
+} from '../../lib/subagents'
+import { fmt, fmtCost } from '@agentistics/core'
+import {
   galleryFileCount, galleryGroups, parseGalleryScope, parseGalleryView, producedGroups,
   type GalleryScope, type GalleryTurn, type GalleryView,
 } from '../../lib/gallery'
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
 
-type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills'
+type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills' | 'agents'
 
 /** Where the view toggle is remembered. One key, read and written in one place. */
 const GALLERY_VIEW_KEY = 'agentistics:gallery-view'
@@ -120,6 +126,10 @@ export function ArtifactsAside({
   const isMobile = useIsMobile()
   const [open, setOpen] = useState<Artifact | null>(null)
   const [tab, setTab] = useState<TabId>('files')
+  /** The SUBAGENTS tab's own state — declared here because the tab BAR reads its count. */
+  const [agentsState, setAgentsState] = useState<SubagentsState | null>(null)
+  const [openAgent, setOpenAgent] = useState<SubagentRow | null>(null)
+
   /**
    * Honour a requested tab, once per request.
    *
@@ -132,7 +142,7 @@ export function ArtifactsAside({
   const askedAt = tabRequest?.at
   useEffect(() => {
     const t = tabRequest?.tab
-    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills') setTab(t)
+    if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills' || t === 'agents') setTab(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askedAt])
 
@@ -290,7 +300,7 @@ export function ArtifactsAside({
   )
 
   /** The three tabs. A count rides each one, so the panel says what is behind a tab unopened. */
-  const tabs: { id: TabId; label: string; icon: React.ReactNode; count: number }[] = [
+  const tabs: { id: TabId; label: string; icon: React.ReactNode; count: number | null }[] = [
     { id: 'files', label: pt ? 'Arquivos' : 'Files', icon: <Files size={12} />, count: artifacts.length },
     { id: 'docs', label: pt ? 'Docs' : 'Docs', icon: <BookOpen size={12} />, count: docs.length },
     { id: 'live', label: 'Live', icon: <Activity size={12} />, count: feed.length },
@@ -304,6 +314,14 @@ export function ArtifactsAside({
     // not asked the host yet, and a number it has not measured is the thing this codebase refuses
     // to print everywhere else.
     { id: 'skills', label: 'Skills', icon: <Sparkles size={12} />, count: skills?.length ?? 0 },
+    // `null`, not 0, wherever a count would be a claim: only Claude Code records subagents at all,
+    // and until the tab is opened this panel has not asked. See `subagentCount`.
+    {
+      id: 'agents',
+      label: pt ? 'Subagentes' : 'Subagents',
+      icon: <Bot size={12} />,
+      count: subagentCount(agentsState),
+    },
   ]
 
   const tabBar = (
@@ -329,14 +347,92 @@ export function ArtifactsAside({
           >
             {t.icon}
             {t.label}
-            {t.count > 0 && (
+            {t.count !== null && t.count > 0 && (
               <span style={{ fontSize: 10, opacity: 0.7, fontVariantNumeric: 'tabular-nums' }}>{t.count}</span>
+            )}
+            {/* One dot per tab that has something RUNNING behind it — the reason to look now. */}
+            {t.id === 'agents' && runningCount(agentsState) > 0 && (
+              <span
+                aria-hidden
+                style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', flexShrink: 0 }}
+              />
             )}
           </button>
         )
       })}
     </div>
   )
+
+  /**
+   * THE SUBAGENTS TAB — every subagent this conversation ran, running or finished.
+   *
+   * Fetched when the tab is opened and re-fetched only while one is still RUNNING: a finished
+   * agent's numbers cannot change, and the list costs a full read of the parent transcript (that is
+   * where the outcomes are recorded). All of those rules are in `lib/subagents.ts`.
+   */
+  useEffect(() => {
+    // The tab is what asks. Nothing is fetched for a panel nobody opened onto it.
+    if (tab !== 'agents') return
+    let alive = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let first = true
+    const read = async () => {
+      if (first) setAgentsState({ phase: 'loading' })
+      try {
+        const res = await fetch(`/api/fleet/subagents?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
+        if (!alive) return
+        if (!res.ok) {
+          setAgentsState({ phase: 'failed', message: pt ? 'Não foi possível ler os subagentes.' : 'The subagents could not be read.' })
+          return
+        }
+        const next = subagentsStateOf(await res.json() as SubagentsPayload)
+        if (!alive) return
+        setAgentsState(next)
+        const wait = subagentsPollMs(next)
+        if (wait !== null) timer = setTimeout(read, wait)
+      } catch {
+        if (alive) setAgentsState({ phase: 'failed', message: pt ? 'Não foi possível ler os subagentes.' : 'The subagents could not be read.' })
+      } finally { first = false }
+    }
+    void read()
+    return () => { alive = false; if (timer) clearTimeout(timer) }
+  }, [tab, sessionId, pt])
+
+  /** A different session is a different fleet of subagents; nothing carries over. */
+  useEffect(() => { setAgentsState(null); setOpenAgent(null) }, [sessionId])
+
+  const agentsBody = (): React.ReactNode => {
+    // One open agent replaces the list, exactly as an open FILE does — 440px cannot hold a list and
+    // a conversation side by side.
+    if (openAgent) {
+      return (
+        <SubagentActivity
+          sessionId={sessionId} row={openAgent} pt={pt} now={now}
+          onBack={() => setOpenAgent(null)}
+        />
+      )
+    }
+    const st = agentsState
+    if (st === null || st.phase === 'loading') {
+      return <Note icon={<Loader size={16} />} text={pt ? 'Lendo os subagentes…' : 'Reading the subagents…'} />
+    }
+    // FOUR SENTENCES, and never one shared empty box: the harness cannot report them, the read
+    // failed, this conversation ran none, or here they are.
+    if (st.phase === 'unsupported') return <Note icon={<Bot size={16} />} text={st.message} />
+    if (st.phase === 'failed') return <Note text={st.message} />
+    if (st.rows.length === 0) {
+      return <Note icon={<Bot size={16} />} text={pt
+        ? 'Esta conversa não delegou nada a um subagente.'
+        : 'This conversation has not delegated anything to a subagent.'} />
+    }
+    return (
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
+        {st.rows.map(r => (
+          <SubagentCard key={r.agentId} row={r} pt={pt} now={now} onOpen={() => setOpenAgent(r)} />
+        ))}
+      </div>
+    )
+  }
 
   const liveBody = (): React.ReactNode => {
     if (feed.length === 0) {
@@ -707,6 +803,7 @@ export function ArtifactsAside({
             : tab === 'live' ? liveBody()
             : tab === 'gallery' ? galleryBody()
             : tab === 'skills' ? skillsBody()
+            : tab === 'agents' ? agentsBody()
             : body()}
         </>
       )}
@@ -800,7 +897,9 @@ function Row({ a, pt, fact, onOpen }: {
  * asks `/api/fleet/step`, and asks AGAIN only while the server says the step is still running,
  * which is the whole of "expanding in real time". Every rule here is in `lib/stepDetail.ts`.
  */
-function useStepDetail(sessionId: string, e: LiveEvent, open: boolean, pt: boolean): StepState | null {
+function useStepDetail(
+  sessionId: string, e: LiveEvent, open: boolean, pt: boolean, agentId?: string,
+): StepState | null {
   const kind = stepOpenable(e)
   const [state, setState] = useState<StepState | null>(null)
 
@@ -817,7 +916,7 @@ function useStepDetail(sessionId: string, e: LiveEvent, open: boolean, pt: boole
     const read = async () => {
       if (first) setState({ phase: 'loading' })
       try {
-        const res = await fetch(stepUrl(sessionId, e.ref!, pt ? 'pt' : 'en'))
+        const res = await fetch(stepUrl(sessionId, e.ref!, pt ? 'pt' : 'en', agentId))
         if (!alive) return
         if (!res.ok) {
           setState({ phase: 'failed', message: pt ? 'Não foi possível abrir este passo.' : 'This step could not be opened.' })
@@ -838,7 +937,7 @@ function useStepDetail(sessionId: string, e: LiveEvent, open: boolean, pt: boole
     void read()
     return () => { alive = false; if (timer) clearTimeout(timer) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, kind, sessionId, e.ref, e.full, pt])
+  }, [open, kind, sessionId, e.ref, e.full, pt, agentId])
 
   return state
 }
@@ -862,12 +961,15 @@ function StepBlock({ label, text, tone }: { label: string; text: string; tone?: 
   )
 }
 
-function EventRow({ e, pt, now, onOpen, status, sessionId }: {
-  e: LiveEvent; pt: boolean; now: number; onOpen?: () => void; status?: WriteStatus; sessionId: string
+function EventRow({ e, pt, now, onOpen, status, sessionId, agentId }: {
+  e: LiveEvent; pt: boolean; now: number; onOpen?: () => void; status?: WriteStatus
+  sessionId: string
+  /** Set inside a SUBAGENT's activity: its refs live in its own transcript, not the parent's. */
+  agentId?: string
 }) {
   const [open, setOpen] = useState(false)
   const openable = stepOpenable(e)
-  const detail = useStepDetail(sessionId, e, open, pt)
+  const detail = useStepDetail(sessionId, e, open, pt, agentId)
   const notice = detail ? stepNotice(detail, pt) : null
   const meta: Record<LiveEvent['kind'], { icon: React.ReactNode; color: string; label: string }> = {
     wrote: { icon: <FileEdit size={11} />, color: 'var(--anthropic-orange)', label: pt ? 'escreveu' : 'wrote' },
@@ -1006,6 +1108,175 @@ function EventRow({ e, pt, now, onOpen, status, sessionId }: {
         )}
       </div>
     )}
+    </div>
+  )
+}
+
+/**
+ * ONE SUBAGENT, as a row.
+ *
+ * The numbers are the point: tokens (ALL FOUR counters — the server sums them through `tokens.ts`)
+ * and the cost of them. Where a number does not exist it is REPLACED by the sentence that says why,
+ * never printed as a zero — a subagent measured here read 123,6 M cached tokens against 698 fresh
+ * ones, so a zero on this row is not a rounding error, it is a wrong answer by a factor of a
+ * hundred thousand.
+ */
+function SubagentCard({ row, pt, now, onOpen }: {
+  row: SubagentRow; pt: boolean; now: number; onOpen: () => void
+}) {
+  const st = subagentStatusText(row.status, pt)
+  const unmeasured = unmeasuredText(row, pt)
+  const unpriced = unpricedText(row, pt)
+  const title = row.description ?? row.agentType ?? row.agentId
+  return (
+    <button
+      onClick={onOpen}
+      style={{
+        display: 'block', width: '100%', textAlign: 'left', border: '1px solid var(--border-subtle)',
+        background: 'transparent', borderRadius: 8, padding: '7px 9px', marginBottom: 6,
+        cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
+      }}
+      onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-elevated)' }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
+        <span style={{
+          fontSize: 9, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase',
+          color: st.color, flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4,
+        }}>
+          {row.status === 'running' && (
+            <span aria-hidden style={{
+              width: 6, height: 6, borderRadius: '50%', background: st.color,
+              animation: 'ag-agent-pulse 1.6s ease-in-out infinite',
+            }} />
+          )}
+          {st.text}
+        </span>
+        <span style={{
+          fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', minWidth: 0,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{title}</span>
+        {agoLabel(row.lastAt ?? row.startedAt, now, pt) !== '' && (
+          <span style={{
+            marginLeft: 'auto', flexShrink: 0, fontSize: 10, color: 'var(--text-tertiary)',
+            fontVariantNumeric: 'tabular-nums',
+          }}>{agoLabel(row.lastAt ?? row.startedAt, now, pt)}</span>
+        )}
+      </div>
+      <div style={{
+        marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: '2px 10px',
+        fontSize: 10.5, color: 'var(--text-tertiary)', lineHeight: 1.5,
+      }}>
+        {/* TOKENS: every counter. The breakdown rides the title attribute so the headline can be
+            accounted for without spending a row on four numbers. */}
+        {row.totalTokens !== null ? (
+          <span
+            title={row.tokens
+              ? `${pt ? 'entrada' : 'input'} ${fmt(row.tokens.input)} · ${pt ? 'saída' : 'output'} ${fmt(row.tokens.output)} · ${pt ? 'cache lido' : 'cache read'} ${fmt(row.tokens.cacheRead)} · ${pt ? 'cache escrito' : 'cache written'} ${fmt(row.tokens.cacheWrite)}`
+              : undefined}
+          >
+            <strong style={{ color: 'var(--text-secondary)' }}>{fmt(row.totalTokens)}</strong> tok
+          </span>
+        ) : (
+          <span>{unmeasured}</span>
+        )}
+        {row.costUSD !== null
+          ? <span><strong style={{ color: 'var(--text-secondary)' }}>{fmtCost(row.costUSD)}</strong></span>
+          : unpriced && <span>{unpriced}</span>}
+        {row.toolCalls > 0 && <span>{fmt(row.toolCalls)} {pt ? 'chamadas' : 'calls'}</span>}
+        {row.modelId && <span style={{ fontFamily: 'var(--font-mono, monospace)' }}>{row.modelId}</span>}
+        {row.spawnDepth !== undefined && row.spawnDepth > 1 && (
+          <span>{pt ? `nível ${row.spawnDepth}` : `depth ${row.spawnDepth}`}</span>
+        )}
+      </div>
+      <style>{`@keyframes ag-agent-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }`}</style>
+    </button>
+  )
+}
+
+/**
+ * ONE SUBAGENT'S OWN ACTIVITY — what it is doing, or what it did.
+ *
+ * It is the very feed the Live tab draws, over the subagent's own turns, so a subagent's work is
+ * read by one implementation rather than a second one that would drift. Its rows open the same way,
+ * against the subagent's transcript (`stepUrl`'s `agentId`).
+ */
+function SubagentActivity({ sessionId, row, pt, now, onBack }: {
+  sessionId: string; row: SubagentRow; pt: boolean; now: number; onBack: () => void
+}) {
+  const [turns, setTurns] = useState<readonly LiveTurn[] | null>(null)
+  const [failed, setFailed] = useState<string | null>(null)
+  const tailRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const read = async () => {
+      try {
+        const res = await fetch(
+          `/api/fleet/subagents?id=${encodeURIComponent(sessionId)}&agent=${encodeURIComponent(row.agentId)}&lang=${pt ? 'pt' : 'en'}`,
+        )
+        if (!alive) return
+        const body = await res.json() as { ok: boolean; turns?: LiveTurn[]; message?: string }
+        if (!alive) return
+        if (!body.ok) { setFailed(body.message ?? (pt ? 'Não foi possível ler este subagente.' : 'This subagent could not be read.')); return }
+        setFailed(null)
+        setTurns(body.turns ?? [])
+        // A RUNNING agent is still writing; a finished one cannot change, so it is read once.
+        if (row.status === 'running') timer = setTimeout(read, 3000)
+      } catch {
+        if (alive) setFailed(pt ? 'Não foi possível ler este subagente.' : 'This subagent could not be read.')
+      }
+    }
+    void read()
+    return () => { alive = false; if (timer) clearTimeout(timer) }
+  }, [sessionId, row.agentId, row.status, pt])
+
+  const feed = useMemo(() => liveEvents(turns ?? []), [turns])
+  // Follow the tail while it is running — the newest step is the one being watched.
+  useEffect(() => { if (row.status === 'running') tailRef.current?.scrollIntoView({ block: 'end' }) }, [feed.length, row.status])
+
+  const st = subagentStatusText(row.status, pt)
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', flexShrink: 0,
+        borderBottom: '1px solid var(--border-subtle)',
+      }}>
+        <button
+          onClick={onBack}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 3, border: 'none', background: 'transparent',
+            color: 'var(--text-tertiary)', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, padding: 0,
+          }}
+        >
+          <ChevronLeft size={13} /> {pt ? 'Subagentes' : 'Subagents'}
+        </button>
+        <span style={{
+          fontSize: 11.5, fontWeight: 600, color: 'var(--text-primary)', minWidth: 0,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{row.description ?? row.agentType ?? row.agentId}</span>
+        <span style={{
+          marginLeft: 'auto', flexShrink: 0, fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+          textTransform: 'uppercase', color: st.color,
+        }}>{st.text}</span>
+      </div>
+      {failed !== null ? (
+        <Note text={failed} />
+      ) : turns === null ? (
+        <Note icon={<Loader size={16} />} text={pt ? 'Lendo…' : 'Reading…'} />
+      ) : feed.length === 0 ? (
+        <Note icon={<Bot size={16} />} text={row.status === 'running'
+          ? (pt ? 'Este subagente começou e ainda não fez nada.' : 'This subagent has started and has not done anything yet.')
+          : (pt ? 'Este subagente não registrou nenhuma ação.' : 'This subagent recorded no actions.')} />
+      ) : (
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
+          {feed.map((e, i) => (
+            <EventRow key={i} e={e} pt={pt} now={now} sessionId={sessionId} agentId={row.agentId} />
+          ))}
+          <div ref={tailRef} />
+        </div>
+      )}
     </div>
   )
 }

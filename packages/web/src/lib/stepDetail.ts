@@ -81,7 +81,15 @@ export function stepNotice(state: StepState, pt: boolean): string | null {
     : `Showing part of ${cut.join(' and ')} — the rest is too long for this column.`
 }
 
-/** The URL one step is read from. One place, so the panel never assembles it by hand. */
-export function stepUrl(sessionId: string, ref: string, lang: 'pt' | 'en'): string {
-  return `/api/fleet/step?id=${encodeURIComponent(sessionId)}&ref=${encodeURIComponent(ref)}&lang=${lang}`
+/**
+ * The URL one step is read from. One place, so the panel never assembles it by hand.
+ *
+ * `agentId` opens a step of a SUBAGENT's conversation: the subagents aside draws its activity with
+ * this very feed, and those rows carry refs from the subagent's own transcript, not the parent's.
+ */
+export function stepUrl(
+  sessionId: string, ref: string, lang: 'pt' | 'en', agentId?: string,
+): string {
+  const agent = agentId ? `&agent=${encodeURIComponent(agentId)}` : ''
+  return `/api/fleet/step?id=${encodeURIComponent(sessionId)}&ref=${encodeURIComponent(ref)}${agent}&lang=${lang}`
 }

@@ -1401,6 +1401,42 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
+    // The SUBAGENTS this conversation ran — the list, and one agent's own activity. Both ride the
+    // `/api/fleet` prefix guard and the central 404 above.
+    //
+    // `supported: false` is a real answer here: only Claude Code records subagents
+    // (`HARNESS_CAPABILITIES.agents`), and answering "0 subagents" for the other five would be the
+    // confident zero this area exists to prevent.
+    if (url.pathname === '/api/fleet/subagents' && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      try {
+        const { readSessionSubagents, readSubagentActivity } = await import('./sessions/subagents-web')
+        const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
+        const lang = fleetLang(url.searchParams.get('lang'))
+        const host = await hostForFleet(lang)
+        const agent = url.searchParams.get('agent')
+        // ONE route, two questions: without `agent` it is the list, with it the agent's activity.
+        // Splitting them would be two paths resolving the same row through the same three steps.
+        const payload = agent
+          ? await readSubagentActivity(host, lang, id, agent)
+          : await readSessionSubagents(host, lang, id)
+        return new Response(JSON.stringify(payload), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify(safeError(err, { verbose: PROFILE === 'local' }).body), {
+          status: 500,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     // ONE STEP of that conversation, opened up — the Live feed's rows expand into the command that
     // ran and what it printed, WHILE it runs. Guarded by the `/api/fleet` PREFIX in
     // `capability-guard.ts` (localShell) and 404'd on a central with the rest of `/api/fleet*`, both
@@ -1418,7 +1454,12 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         const { readSessionStep } = await import('./sessions/step-web')
         const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
         const lang = fleetLang(url.searchParams.get('lang'))
-        const payload = await readSessionStep(await hostForFleet(lang), lang, id, ref)
+        // `agent` opens a step of a SUBAGENT's own conversation — its activity feed carries refs
+        // from its own transcript, which are not in the parent's.
+        const agent = url.searchParams.get('agent')
+        const payload = await readSessionStep(
+          await hostForFleet(lang), lang, id, ref, agent ?? undefined,
+        )
         return new Response(JSON.stringify(payload), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
