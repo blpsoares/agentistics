@@ -18,6 +18,7 @@ import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import { controlStrings } from '@agentistics/tui/control/i18n'
 import { readChatWindow, resolveChatTranscriptPath, type ChatTurn } from './chat-tail'
+import { conversationOfRow } from './row-conversation'
 
 export interface ChatPayload {
   /** The turns, oldest first. Empty with no `unavailable` means a conversation with nothing in it. */
@@ -70,7 +71,13 @@ export async function readSessionChat(
   // The EXACT link, or nothing. `conversationBlind` is the row's own sentence for a harness that
   // can never report which conversation it is writing — reused rather than reworded, so the chat
   // view and the row give one answer.
-  if (!row.conversationId) {
+  //
+  // A CLOSED row names its conversation in its ID, not in `conversationId` — it is a conversation
+  // you can reopen rather than a session that recorded a link. Reading only the field, this refused
+  // every finished conversation with "no linked conversation yet", which is the one row people open
+  // precisely to read one. `conversationOfRow` is the single place both shapes are known.
+  const conversationId = conversationOfRow(row)
+  if (!conversationId) {
     return {
       turns: [],
       unavailable: row.conversationBlind ?? (lang === 'pt'
@@ -80,7 +87,7 @@ export async function readSessionChat(
     }
   }
 
-  const path = await resolveChatTranscriptPath(row.cwd, row.conversationId).catch(() => null)
+  const path = await resolveChatTranscriptPath(row.cwd, conversationId).catch(() => null)
   if (!path) {
     // A LIVE session whose transcript is not on disk YET is an EMPTY conversation, not a missing
     // one — and the difference is the whole usability of a new session. A harness writes its

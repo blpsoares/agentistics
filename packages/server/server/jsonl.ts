@@ -448,7 +448,15 @@ export async function parseSessionJsonl(
   // Use whichever count is higher: git-tracked files changed or files Claude directly edited
   const filesModifiedCount = Math.max(gitFileStats.filesModified, claudeFilesModified.size)
 
-  // Extract agent metrics if this session used the Agent tool
+  /**
+   * Agent metrics, if this session used the Agent tool — the PARENT half only.
+   *
+   * What each async agent actually SPENT lives in its own transcript beside this one, and is filled
+   * in by `withSubagentMetrics` at the caching layer (`parse-cache-jsonl.ts`). It is deliberately
+   * NOT done here: this result is cached against THIS file's stamp, and a completed row would then
+   * hold numbers read from files that change while this one does not — a running agent's figures
+   * would freeze until something happened to write to the conversation.
+   */
   const agentMetrics = toolCounts['Agent']
     ? extractAgentMetrics(iterLines(content), modelId)
     : undefined

@@ -51,6 +51,15 @@ export interface ChatTurn {
     name: string
     detail?: string
     /**
+     * The harness's own `tool_use` id for this call.
+     *
+     * The EXACT key `/api/fleet/step` opens the step with — the transcript's `tool_result` names
+     * this same id, so the pairing is a lookup and never a position (the mistake
+     * `workflow-match.ts` exists to have fixed once). Absent on a transcript that carries no id,
+     * and a feed row with no `ref` simply does not open rather than opening onto a guess.
+     */
+    ref?: string
+    /**
      * For a SHELL call, the paths that command writes — read by the pure `shell-writes.ts`.
      *
      * `detail` is only the command's first LINE, which is where the artifacts panel went blind: a
@@ -326,11 +335,11 @@ function extractAssistantText(e: Record<string, unknown>): string | null {
 
 /** The tool names an assistant entry is calling, when it carries no text at all — see `ChatTurn.pending`. */
 /** The tools one assistant event invoked, each with the first meaningful line of its input. */
-function extractToolCalls(e: Record<string, unknown>): Array<{ name: string; detail?: string }> {
+function extractToolCalls(e: Record<string, unknown>): Array<{ name: string; detail?: string; ref?: string }> {
   if (e.type !== 'assistant') return []
   const msgContent = (e.message as Record<string, unknown> | undefined)?.content
   if (!Array.isArray(msgContent)) return []
-  const out: Array<{ name: string; detail?: string }> = []
+  const out: Array<{ name: string; detail?: string; ref?: string }> = []
   for (const part of msgContent as Record<string, unknown>[]) {
     if (part.type !== 'tool_use' || typeof part.name !== 'string') continue
     const detail = toolDetail(part.input)
@@ -342,6 +351,8 @@ function extractToolCalls(e: Record<string, unknown>): Array<{ name: string; det
     const writes = cmd === '' ? [] : shellWrites(cmd)
     out.push({
       name: part.name,
+      // The id the step reader opens this call with. Only when the transcript actually carries one.
+      ...(typeof part.id === 'string' && part.id !== '' ? { ref: part.id } : {}),
       ...(detail ? { detail } : {}),
       ...(writes.length > 0 ? { writes } : {}),
       ...(cmd !== '' && writes.length === 0 && hasUnreadableWrite(cmd) ? { opaqueWrite: true } : {}),
@@ -418,7 +429,7 @@ function toolActivityLabel(tools: string[]): string {
  * the newest message is worse than a slow one. Growth is bounded, and a file smaller than the window
  * is simply read whole — this is the same result as before, reached by reading far less.
  */
-const TAIL_BYTES = 256 * 1024
+export const TAIL_BYTES = 256 * 1024
 const MAX_TAIL_BYTES = 16 * 1024 * 1024
 
 /**
@@ -429,7 +440,7 @@ const MAX_TAIL_BYTES = 16 * 1024 * 1024
  * the first newline, so the partial line — and any broken byte sequence inside it — never reaches
  * `JSON.parse`.
  */
-async function readTailBytes(path: string, bytes: number): Promise<{ text: string; atStart: boolean } | null> {
+export async function readTailBytes(path: string, bytes: number): Promise<{ text: string; atStart: boolean } | null> {
   let fh
   try { fh = await open(path, 'r') } catch { return null }
   try {
