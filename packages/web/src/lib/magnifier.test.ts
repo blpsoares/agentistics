@@ -10,6 +10,7 @@ import {
   newLens,
   lensControls,
   lensPointToPage,
+  lensInteractive,
   MOVE_STEP_PX,
   MOVE_FINE_PX,
   RESIZE_STEP_PX,
@@ -468,5 +469,32 @@ describe('newLens', () => {
     expect(made.x).toBe(300)
     expect(made.y).toBe(250)
     expect(made.pinned).toBe(false)
+  })
+})
+
+describe('lensInteractive', () => {
+  test('an unpinned lens is always movable, selected or not, by either source', () => {
+    for (const via of ['pointer', 'keyboard'] as const) {
+      for (const selected of [true, false]) {
+        expect(lensInteractive({ pinned: false }, selected, via)).toBe(true)
+      }
+    }
+  })
+
+  test('a pinned lens stays immovable when the POINTER selected it', () => {
+    // This is the regression: right-clicking a pinned lens to reach its menu selects it, and
+    // selection alone used to hand back the drag handle and the control strip.
+    expect(lensInteractive({ pinned: true }, true, 'pointer')).toBe(false)
+  })
+
+  test('a pinned lens is revealed when the KEYBOARD selected it', () => {
+    // Tab and Ctrl+Shift+M cycle pinned lenses on purpose — keyboard is the only way they are
+    // reachable at all, so the reveal has to survive there or the pin becomes a one-way door.
+    expect(lensInteractive({ pinned: true }, true, 'keyboard')).toBe(true)
+  })
+
+  test('a pinned lens nobody selected is immovable however the last selection was made', () => {
+    expect(lensInteractive({ pinned: true }, false, 'keyboard')).toBe(false)
+    expect(lensInteractive({ pinned: true }, false, 'pointer')).toBe(false)
   })
 })

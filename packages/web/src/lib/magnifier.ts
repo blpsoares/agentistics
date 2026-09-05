@@ -325,6 +325,35 @@ export function lensControls(innerWidthPx: number, controlPx: number, labelPx: n
   return controls
 }
 
+/** How the current selection was made. The pointer and the keyboard do NOT reach a pinned lens
+ *  alike — see `lensInteractive`. */
+export type SelectionSource = 'keyboard' | 'pointer'
+
+/**
+ * Whether a lens may be MOVED and RESIZED right now — and therefore whether its control strip is
+ * drawn at all.
+ *
+ * PINNED MEANS IMMOVABLE TO THE POINTER. That is the whole of what the user asked the pin for:
+ * once a lens is placed and sized, "simplesmente não sofre efeito de cliques". Selection alone
+ * used to lift it, and every pointer path selects — right-clicking a pinned lens to reach its menu
+ * (the one way a mouse reaches unpin and remove) handed the strip and the drag straight back, so
+ * the gesture for reading a pinned lens's settings was also the gesture that un-pinned it in
+ * practice: the next drag moved it.
+ *
+ * The KEYBOARD is the exception, and it has to be: `Tab` and `Ctrl+Shift+M` cycle every lens
+ * including the pinned ones, because keyboard is the only way they are reachable at all, and a
+ * selection a person had to press a key to make is not one they make by accident while aiming at
+ * something else. So the reveal follows the SOURCE of the selection, never the selection itself.
+ */
+export function lensInteractive(
+  lens: Pick<MagnifierLens, 'pinned'>,
+  selected: boolean,
+  via: SelectionSource,
+): boolean {
+  if (!lens.pinned) return true
+  return selected && via === 'keyboard'
+}
+
 /** A new lens, centred in the viewport, with an id no sibling holds. */
 export function newLens(style: LensStyle, vp: Viewport, taken: Set<string>): MagnifierLens {
   return {

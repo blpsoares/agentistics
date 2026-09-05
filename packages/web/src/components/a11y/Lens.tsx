@@ -33,7 +33,8 @@
 import React, { useEffect, useRef } from 'react'
 import { Pin, PinOff, Move, X, Plus, Minus, Sliders, Globe } from 'lucide-react'
 import type { MagnifierLens } from '@agentistics/core'
-import { stageTransform, lensControls, lensPointToPage, fmtZoom, ZOOM_STEP, MAGNIFIER_LAYER_ID } from '../../lib/magnifier'
+import { stageTransform, lensControls, lensPointToPage, lensInteractive, fmtZoom, ZOOM_STEP, MAGNIFIER_LAYER_ID } from '../../lib/magnifier'
+import type { SelectionSource } from '../../lib/magnifier'
 import { createMirrorHost, type MirrorScheduler } from '../../lib/magnifierMirror'
 import type { A11yText } from './i18n'
 
@@ -84,8 +85,9 @@ interface Props {
   /** 1-based position among this page's lenses — what a listener hears, never the internal id. */
   index: number
   selected: boolean
-  /** True while a pinned lens is temporarily revealed by keyboard selection. */
-  revealed: boolean
+  /** How the current selection was made — a PINNED lens is revealed for the keyboard and never
+   *  for the pointer. See `lensInteractive`. */
+  selectedVia: SelectionSource
   /** True while `lens` lives in `globalLenses` — it follows the user across every page. */
   global: boolean
   text: A11yText
@@ -100,7 +102,7 @@ interface Props {
 }
 
 export function Lens({
-  lens, index, selected, revealed, global, text, isMobile, scheduler, onChange, onSelect, onRemove, onContextMenu, onOpenMenu,
+  lens, index, selected, selectedVia, global, text, isMobile, scheduler, onChange, onSelect, onRemove, onContextMenu, onOpenMenu,
 }: Props) {
   const stageRef = useRef<HTMLDivElement | null>(null)
   // The magnified area's own frame — see `elementBehindLens` below for why forwarding needs it.
@@ -128,7 +130,7 @@ export function Lens({
   }, [lens.id, scheduler])
 
   const t = stageTransform(lens, { width: window.innerWidth, height: window.innerHeight })
-  const interactive = !lens.pinned || revealed
+  const interactive = lensInteractive(lens, selected, selectedVia)
   const control = isMobile ? 44 : 26
   // The header strip is `overflow: hidden` inside the frame, so on a small lens the rightmost
   // controls (pin, remove) would otherwise be clipped away — invisible and unreachable, not
