@@ -49,7 +49,7 @@ import { modelSwitchLine, modelSwitchReason } from '../../lib/modelSwitch'
 import {
   applySkill, emptyPickerReason, filterSkills, flattenGroups, groupSkills, slashQuery, stepSkill,
 } from '../../lib/skillMenu'
-import { quoteLines, replyAuthor, replyPreview } from '../../lib/replyQuote'
+import { markExcerpt, quoteFor, replyAuthor, replyPreview, type ReplyTarget } from '../../lib/replyQuote'
 import { lastSentMessage, turnAnchorId } from '../../lib/lastSent'
 import { goToTurn } from '../../lib/turnScroll'
 import { attachmentName, isImageAttachment, splitMessage } from '../../lib/messageAttachments'
@@ -406,7 +406,7 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
    * sent above what you write, which is what the assistant will actually see and is the same thing
    * mail has always done. Saying it plainly beats a UI that implies threading the session cannot do.
    */
-  const [replyTo, setReplyTo] = useState<{ role: 'user' | 'assistant'; text: string } | null>(
+  const [replyTo, setReplyTo] = useState<ReplyTarget | null>(
     () => sessionScratch.readReply(session.id),
   )
 
@@ -421,7 +421,7 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
    * reason for that shape — the id and the value are read together, so a session switch can never
    * write one conversation's reply into another's slot.
    */
-  const editReply = useCallback((next: { role: 'user' | 'assistant'; text: string } | null) => {
+  const editReply = useCallback((next: ReplyTarget | null) => {
     sessionScratch.writeReply(session.id, next)
     setReplyTo(next)
   }, [session.id])
@@ -641,6 +641,22 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
   }, [toTail, editReply])
 
   /**
+   * Reply to the SELECTED PART of an assistant turn.
+   *
+   * The same act as `onReplyToTurn` with a different target, so it goes through the same composer
+   * bar and the same send path — what changes is decided in `replyQuote.ts`: the excerpt travels
+   * whole rather than capped at four lines, and is marked at whichever ends it does not reach.
+   *
+   * A selection that trims to nothing is dropped rather than clearing an existing reply target: a
+   * stray drag must not throw away the message the user had already chosen to answer.
+   */
+  const onReplyToExcerpt = useCallback((t: ChatTurn, selected: string) => {
+    const text = markExcerpt(t.text, selected)
+    if (text === '') return
+    editReply({ role: t.role, text, excerpt: true }); setAtTail(true); toTail()
+  }, [toTail, editReply])
+
+  /**
    * Land at the END on first paint, then follow the tail only while the reader is already there.
    *
    * `useLayoutEffect` for the landing: with a plain effect the conversation paints at the top and
@@ -816,7 +832,7 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
     // pointed at, and burying the paths inside a sentence makes them easy to miss.
     // Quote first, then the paths, then what was typed. The quote is trimmed to a few lines: a
     // reply that repeats forty lines back at the session costs it context for no benefit.
-    const quote = replyTo ? quoteLines(replyTo.text) : ''
+    const quote = replyTo ? quoteFor(replyTo) : ''
     const full = [quote, ...attached.map(a => a.path), text].filter(x => x !== '').join('\n')
     setSending(true)
     const out = await act({ id: session.id, action: 'prompt', text: full })
@@ -879,6 +895,11 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
               harness={session.harness}
               anchorId={turnAnchorId('turn', i)}
               {...(canPrompt ? { onReply: onReplyToTurn } : {})}
+              {
+                // Only on the assistant's side: quoting a fragment of your OWN message back at the
+                // session says nothing it did not already read from you a moment ago.
+                ...(canPrompt && t.role === 'assistant' ? { onReplyExcerpt: onReplyToExcerpt } : {})
+              }
             />
           ))}
 
@@ -1100,7 +1121,9 @@ export function SessionChat({ session, row, lang, act, onArtifacts }: SessionCha
                   <CornerUpLeft size={13} style={{ flexShrink: 0, marginTop: 3, color: 'var(--anthropic-orange)' }} />
                   <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--anthropic-orange)' }}>
-                      {pt ? 'Respondendo a' : 'Replying to'}
+                      {replyTo.excerpt
+                        ? (pt ? 'Respondendo a um trecho de' : 'Replying to an excerpt from')
+                        : (pt ? 'Respondendo a' : 'Replying to')}
                       {' '}
                       {replyAuthor(
                         replyTo.role,

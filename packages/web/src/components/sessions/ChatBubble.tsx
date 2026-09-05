@@ -18,7 +18,7 @@
  * than the bubble, and letting it set the width is how a message ends up outside its own card.
  */
 
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 // A single newline is a LINE BREAK here. Without this plugin markdown collapses it to a space, so a
@@ -90,6 +90,13 @@ export interface ChatBubbleProps {
    */
   onReply?: (turn: ChatTurn) => void
   /**
+   * Reply to the SELECTED PART of this turn.
+   *
+   * Offered only on the assistant's own messages, and only while a selection actually sits inside
+   * this bubble. Same stability requirement as `onReply` — see the note above.
+   */
+  onReplyExcerpt?: (turn: ChatTurn, excerpt: string) => void
+  /**
    * A DOM id for this bubble, so something outside the conversation can scroll to it.
    *
    * The id is composed by `lastSent.ts`'s `turnAnchorId` — one rule shared by whatever renders the
@@ -132,7 +139,7 @@ const SYSTEM_NOTE_PT: Record<string, string> = {
   'injected by the assistant': 'injetado pelo assistente',
 }
 
-export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, awaitingWorking, awaitingSinceMs, onReply, anchorId }: ChatBubbleProps) {
+export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, awaitingWorking, awaitingSinceMs, onReply, onReplyExcerpt, anchorId }: ChatBubbleProps) {
   const pt = lang === 'pt'
   const mine = turn.role === 'user'
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
@@ -164,6 +171,57 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
       window.removeEventListener('scroll', close, true)
     }
   }, [menuAt])
+
+  /**
+   * The floating "reply to this excerpt" control, anchored where the selection ended.
+   *
+   * WHY IT EXISTS: a reply quotes the message, and the assistant's messages are long. Somebody
+   * answering one sentence of a forty-line answer pays for the other thirty-nine in context they
+   * are asking about nothing. Selecting the sentence is what they already do to read it.
+   *
+   * THE SELECTION MUST BE INSIDE THIS BUBBLE, both ends of it. A drag that starts in one message
+   * and ends in another has a `toString()` that reads perfectly and belongs to neither turn, and
+   * attributing it to one of them is inventing a quote. Containment is asked of the DOM rather
+   * than by matching text: the bubble renders markdown, so what was selected legitimately differs
+   * from `turn.text`, which is also why `markExcerpt` marks an unlocatable excerpt at both ends.
+   *
+   * THE TEXT IS CAPTURED NOW, not when the button is pressed: pressing a button collapses the
+   * selection in some browsers, so reading it at click time reads an empty one.
+   */
+  const [excerpt, setExcerpt] = useState<{ x: number; y: number; text: string } | null>(null)
+  const readSelection = useCallback(() => {
+    if (!onReplyExcerpt || provisional) return
+    const sel = window.getSelection()
+    const body = bodyRef.current
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !body) { setExcerpt(null); return }
+    if (!body.contains(sel.anchorNode) || !body.contains(sel.focusNode)) { setExcerpt(null); return }
+    const text = sel.toString().trim()
+    if (text === '') { setExcerpt(null); return }
+    const rect = sel.getRangeAt(0).getBoundingClientRect()
+    const box = body.getBoundingClientRect()
+    setExcerpt({
+      // Below the selection's own end, clamped inside the bubble so a selection at the right edge
+      // does not put the control off the pane.
+      x: Math.max(0, Math.min(rect.right - box.left, box.width - 150)),
+      y: Math.min(rect.bottom - box.top + 6, box.height),
+      text,
+    })
+  }, [onReplyExcerpt, provisional])
+  useEffect(() => {
+    if (excerpt === null) return
+    // It goes away when the selection does — clicking elsewhere, or a keystroke that moves the
+    // caret. A control offering to quote a selection that no longer exists quotes the old one.
+    const check = () => {
+      const sel = window.getSelection()
+      if (!sel || sel.isCollapsed || sel.toString().trim() === '') setExcerpt(null)
+    }
+    document.addEventListener('selectionchange', check)
+    window.addEventListener('scroll', () => setExcerpt(null), true)
+    return () => {
+      document.removeEventListener('selectionchange', check)
+      window.removeEventListener('scroll', () => setExcerpt(null), true)
+    }
+  }, [excerpt])
 
   // An attachment is a PATH the composer typed into the pane (see `attachmentPreview.ts`'s header),
   // so it arrives in `turn.text` like any other line — pulled out here rather than at the source, so
@@ -252,6 +310,8 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
 
       <div
         ref={bodyRef}
+        onMouseUp={readSelection}
+        onTouchEnd={readSelection}
         onContextMenu={e => {
           // Only where a reply is actually possible. Swallowing the browser's own menu to offer
           // one entry that is not there would be a control that teaches the wrong thing.
@@ -335,6 +395,32 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
               {pt ? 'Responder' : 'Reply'}
             </button>
           </div>
+        )}
+
+        {/* Reply to just what is selected. It is the only control that appears ON a selection, so
+            it says which of the two replies it is in words — an icon alone here reads as the same
+            button that is already sitting in the bubble's corner. */}
+        {excerpt && onReplyExcerpt && (
+          <button
+            onMouseDown={e => {
+              // The press must not collapse the selection before the click lands, and must not
+              // reach the document listener that closes the menu.
+              e.preventDefault(); e.stopPropagation()
+            }}
+            onClick={() => { const t = excerpt.text; setExcerpt(null); onReplyExcerpt(turn, t) }}
+            style={{
+              position: 'absolute', top: excerpt.y, left: excerpt.x, zIndex: 41,
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '5px 9px', borderRadius: 8, minHeight: 30,
+              background: 'var(--bg-elevated)', border: '1px solid var(--anthropic-orange)',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+              color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 12, cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <CornerUpLeft size={12} style={{ flexShrink: 0, color: 'var(--anthropic-orange)' }} />
+            {pt ? 'Responder ao trecho' : 'Reply to excerpt'}
+          </button>
         )}
 
         {/* Small squares ABOVE the text — what was attached, rendered rather than left as a bare

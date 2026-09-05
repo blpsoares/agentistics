@@ -23,6 +23,15 @@
 export interface ReplyTarget {
   role: 'user' | 'assistant'
   text: string
+  /**
+   * The text is a SELECTED EXCERPT of the turn, not the turn.
+   *
+   * It changes two things and is therefore a field rather than something inferred from length: the
+   * quote is not capped (see `quoteFor`), and the bar says "an excerpt of" rather than naming the
+   * message, because a preview showing the middle of a paragraph with no such warning reads as the
+   * whole of a very short message.
+   */
+  excerpt?: boolean
 }
 
 /** How many lines of the quoted message travel with the reply. See decision 1. */
@@ -63,6 +72,46 @@ export function replyPreview(text: string, max: number = PREVIEW_LINES): string 
 }
 
 /**
+ * An excerpt, marked at the ends it does not reach.
+ *
+ * REPLYING TO A SELECTION IS A DIFFERENT ACT from replying to a message: the sender has said which
+ * part they mean, and the reason they did it is that the whole message is expensive to send back.
+ * So the excerpt travels VERBATIM and WHOLE — capping what somebody deliberately selected sends a
+ * different message from the one they composed, which is the one thing a quote may never do.
+ *
+ * What it must not do is read as the whole turn. So an ellipsis is added at each end the excerpt
+ * does not reach. **An excerpt that cannot be located in the turn is marked at BOTH ends**: the
+ * bubble renders markdown, so a selection taken off the screen legitimately differs from the source
+ * text, and between "claim it is complete" and "say it may be partial" only the second is wrong in
+ * the harmless direction.
+ *
+ * Whitespace is normalised for the comparison ONLY. The returned text keeps the selection's own
+ * line breaks, because they are what the reader saw.
+ */
+export function markExcerpt(full: string, selected: string): string {
+  const text = selected.trim()
+  if (text === '') return ''
+  const norm = (s: string): string => s.replace(/\s+/g, ' ').trim()
+  const haystack = norm(full)
+  const needle = norm(text)
+  const at = needle === '' ? -1 : haystack.indexOf(needle)
+  const lead = at !== 0
+  const trail = at < 0 || at + needle.length !== haystack.length
+  return `${lead ? '…' : ''}${text}${trail ? '…' : ''}`
+}
+
+/**
+ * The `> ` block that actually travels, for either kind of target.
+ *
+ * ONE function, because the cap is the difference and a caller choosing between two quoting
+ * helpers is a caller that will one day cap an excerpt. A whole message is an INFERRED quantity and
+ * is bounded (decision 1); an excerpt was CHOSEN and is not.
+ */
+export function quoteFor(target: ReplyTarget): string {
+  return target.excerpt ? quoteLines(target.text, Number.POSITIVE_INFINITY) : quoteLines(target.text)
+}
+
+/**
  * Who said it.
  *
  * The assistant side is the harness's own label, passed in rather than looked up here: the label
@@ -98,6 +147,9 @@ export function parseReply(raw: string | null): ReplyTarget | null {
     const { role, text } = v as Record<string, unknown>
     if (role !== 'user' && role !== 'assistant') return null
     if (typeof text !== 'string' || text.trim() === '') return null
-    return { role, text }
+    // The mark is only ever honoured when it is literally `true`: a stored value of any other
+    // shape is a document this code did not write, and reading it as truthy would uncap the quote.
+    const excerpt = (v as Record<string, unknown>).excerpt === true
+    return excerpt ? { role, text, excerpt: true } : { role, text }
   } catch { return null }
 }
