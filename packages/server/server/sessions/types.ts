@@ -363,7 +363,15 @@ export interface SessionBackend {
   readonly id: 'tmux' | 'pty'
   /** Why this backend cannot run here, already localized. Absent when it can. */
   unavailable(): Promise<string | undefined>
-  spawn(req: BackendSpawn): Promise<void>
+  /**
+   * Start the session. Resolves once the session EXISTS — not once its first prompt has landed.
+   *
+   * An `initialPrompt` is delivered as a FOLLOW-UP: the harness has to draw its input box before a
+   * prompt can be typed into it, and waiting for that held every caller for the whole of the CLI's
+   * startup. `delivery` is that follow-up, for the rare caller that must wait; ignoring it is the
+   * normal case and never leaves an unhandled rejection.
+   */
+  spawn(req: BackendSpawn): Promise<{ delivery?: Promise<void> } | void>
   list(): Promise<BackendSession[]>
   /** Newest-last lines of the last rendered frame, trailing blanks removed. */
   capture(id: string, lines: number): Promise<string[]>
