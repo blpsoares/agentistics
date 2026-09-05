@@ -42,6 +42,15 @@ export interface ChatPayload {
   unavailable?: string
   /** True while the session is running, so the view knows whether to expect more. */
   live: boolean
+  /**
+   * Already-localized: these turns are the END of a longer conversation.
+   *
+   * Present ONLY when the read stopped on its cap with transcript still above it. Everything built
+   * on these turns inherits the window — the gallery lists the files of the turns it was given —
+   * so a panel that empties because of the cap must be able to say that is why, instead of showing
+   * nothing and letting it read as "there was never anything here".
+   */
+  older?: string
 }
 
 /** The most turns one read returns. A conversation of thousands must not arrive as one response. */
@@ -136,6 +145,20 @@ export async function readSessionChat(
     }
   }
 
-  const turns = await reader.read(path, MAX_TURNS).catch(() => [] as ChatTurn[])
-  return { turns, live }
+  // `older` is asked of the READER rather than of Claude's window function, so the sentence a long
+  // conversation gets is the same one on every harness. A window that hides things has to say it is
+  // a window — see `TranscriptRead`.
+  const read = await reader.read(path, MAX_TURNS)
+    .catch(() => ({ turns: [] as ChatTurn[], older: false }))
+  return {
+    turns: read.turns,
+    live,
+    ...(read.older
+      ? {
+          older: lang === 'pt'
+            ? `Esta é a parte final da conversa — as últimas ${MAX_TURNS} interações. O que veio antes está na transcrição, mas fora desta janela.`
+            : `This is the end of a longer conversation — its last ${MAX_TURNS} turns. What came before is still in the transcript, outside this window.`,
+        }
+      : {}),
+  }
 }

@@ -98,6 +98,7 @@ import { CentralSessions } from './components/sessions/CentralSessions'
 import { PAGE_INSET, PAGE_MAX_WIDTH } from './components/sessions/FleetOverview'
 import { setFleetSourceCentral } from './lib/fleet'
 import { sessionPath } from './lib/sessionRoute'
+import { SessionStatsMenu } from './components/sessions/SessionStatsMenu'
 
 /**
  * What the SESSIONS filter bar may filter by — narrower than the dashboard's on purpose: a fleet
@@ -2878,6 +2879,25 @@ export default function AppLayout() {
           conversation, and the conversation does not leave the machine. A control that cannot work
           is not rendered inert — the same rule the fleet's verbs keep. The sentence is on the row
           in the panel's place, so the absence is explained where the button would have been. */}
+      {/* WHAT THIS CONVERSATION HAS SPENT. The context percentage rides the button, because it is
+          the one figure that changes what you do next: a session near its window is one to finish
+          rather than extend. The record comes from the store by CONVERSATION id — a session the
+          store has not seen yet reads as "not recorded yet", never as zero. */}
+      {selectedFleetSession && (
+        <SessionStatsMenu
+          harness={selectedFleetSession.harness}
+          sessionId={selectedFleetSession.conversationId ?? selectedFleetSession.id}
+          meta={selectedFleetSession.conversationId
+            ? data?.sessions?.find(x => x.session_id === selectedFleetSession.conversationId)
+            : undefined}
+          lang={lang === 'pt' ? 'pt' : 'en'}
+          currency={currency}
+          brlRate={brlRate}
+          {...(selectedFleetSession.model ? { startedModel: selectedFleetSession.model } : {})}
+          {...(selectedFleetSession.effort ? { startedEffort: selectedFleetSession.effort } : {})}
+        />
+      )}
+
       {selectedFleetSession && !isCentral && (
         <button
           onClick={toggleArtifacts}

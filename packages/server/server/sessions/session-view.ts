@@ -59,6 +59,14 @@ export interface SessionView {
   /** ABSENT for an external session — not capturable, so not knowable. */
   activity?: SessionActivity
   /**
+   * Work is running that is NOT this session's own turn — a background subagent.
+   *
+   * The session still needs a person, and `activity` says so. This exists so "needs you" does not
+   * read as "and nothing is happening". Absent on a `working` row, which has nothing to add, and on
+   * a harness that cannot tell its own turn apart — see `backgroundWork`.
+   */
+  background?: boolean
+  /**
    * The last few meaningful lines of this session's screen — what it is saying right now.
    *
    * Only ever present for a session agentop hosts: it comes from the frame that was captured to
@@ -367,6 +375,13 @@ export const DEFAULT_CLOSED_LIMIT = 300
 export function buildSessionViews(o: {
   reconciled: readonly ReconciledSession[]
   activity: ReadonlyMap<string, SessionActivity>
+  /**
+   * Rows with work running that is NOT their own turn — a background subagent, a watcher.
+   *
+   * The STATE still says the session needs a person, because it does. This is the mark beside it,
+   * so "needs you" does not read as "and nothing is happening". See `backgroundWork`.
+   */
+  background?: ReadonlySet<string>
   /** The tail of each hosted session's screen, keyed by session id. */
   tails?: ReadonlyMap<string, string[]>
   /** Role-tagged chat turns, keyed by session id — see `SessionView.chatTurns`. */
@@ -503,6 +518,9 @@ export function buildSessionViews(o: {
       cwd: r.managed?.cwd ?? '',
       status: finished ? ('exited' as const) : r.status,
       ...(activity ? { activity } : {}),
+      // Only where it ADDS something: a row that is already `working` has nothing to mark, and a
+      // finished one has nothing running.
+      ...(!finished && activity !== 'working' && o.background?.has(r.id) ? { background: true } : {}),
       ...((o.tails?.get(r.id)?.length ?? 0) > 0 ? { lastLines: o.tails!.get(r.id)! } : {}),
       ...((o.chatTails?.get(r.id)?.length ?? 0) > 0 ? { chatTurns: o.chatTails!.get(r.id)! } : {}),
       // Only while it is genuinely asking. A dialog frame carried on a row that has moved on would

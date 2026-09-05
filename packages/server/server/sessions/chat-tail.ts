@@ -450,9 +450,48 @@ async function readTurnsFromTail(
  * on mtime would be a cache that misses every time by construction while holding whole transcripts
  * in memory.
  */
-export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]> {
+/**
+ * How many times this conversation has been COMPACTED.
+ *
+ * The harness DECLARES it (`isCompactSummary: true` on the entry it writes), so this is a count of
+ * something stated rather than a heuristic — the same field `classifyUserEntry` uses to keep a
+ * compaction summary out of the chat as a message nobody sent.
+ *
+ * Over the WHOLE file, never the chat window: it answers "how much of this conversation has already
+ * been thrown away", and counting only the part still on screen would answer it with the one number
+ * that is always too low. Measured on a real 39 MB transcript: 70 ms.
+ *
+ * A file that cannot be read yields `null`, never `0` — "no compactions" and "we could not look"
+ * are different facts, and a confident zero here would read as a fresh conversation.
+ */
+export async function countCompactions(path: string): Promise<number | null> {
   let content: string
-  try { content = await readFile(path, 'utf-8') } catch { return [] }
+  try { content = await readFile(path, 'utf-8') } catch { return null }
+  let n = 0
+  for (const line of content.split('\n')) if (line.includes('"isCompactSummary":true')) n++
+  return n
+}
+
+export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]> {
+  return (await readChatWindow(path, max)).turns
+}
+
+/**
+ * The same read, plus whether the window CUT the conversation short.
+ *
+ * The cap is a fact about the READ, not about the conversation, and every surface built on top of
+ * these turns inherits it silently: the gallery lists the files of the turns it was given, so on a
+ * long transcript it emptied itself with nothing on screen saying why — reported exactly that way,
+ * as "everything in the gallery disappeared and there is no warning about it". A window that hides
+ * things has to say it is a window. `older` is true only when the walk stopped ON the cap with
+ * substantive lines still above it; a conversation shorter than `max` reports nothing.
+ */
+export async function readChatWindow(
+  path: string,
+  max = 400,
+): Promise<{ turns: ChatTurn[]; older: boolean }> {
+  let content: string
+  try { content = await readFile(path, 'utf-8') } catch { return { turns: [], older: false } }
 
   const lines = content.split('\n')
   const turns: ChatTurn[] = []
@@ -461,7 +500,9 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
   /** Ids whose `<task-notification>` has already arrived. */
   const finishedTasks = new Set<string>()
   let newest = true
-  for (let i = lines.length - 1; i >= 0 && turns.length < max; i--) {
+  // Hoisted so the walk can report WHERE it stopped — see `older` at the return.
+  let i = lines.length - 1
+  for (; i >= 0 && turns.length < max; i--) {
     const line = (lines[i] ?? '').trim()
     if (!line) continue
     let e: Record<string, unknown>
@@ -523,5 +564,10 @@ export async function readChatTurns(path: string, max = 400): Promise<ChatTurn[]
   }
 
   turns.reverse()
-  return turns
+  // The walk stopped on the cap with content still above it: this is a WINDOW onto a longer
+  // conversation, and every surface reading these turns has to be able to say so. A blank tail is
+  // not content — a transcript ends with one, and reporting that as "there is more" would put the
+  // notice on every conversation.
+  const older = i >= 0 && lines.slice(0, i + 1).some(l => l.trim() !== '')
+  return { turns, older }
 }

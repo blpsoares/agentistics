@@ -1258,19 +1258,48 @@ Only active when `SERVE_STATIC=1` (set by `cli.ts` for the `server` subcommand).
 
 Agent metrics are extracted from raw JSONL files by `server/agent-metrics.ts`. They are available in the `agentMetrics` field of each `SessionMeta`.
 
-### Data available per Agent invocation
+### The numbers are in the SUBAGENT'S OWN transcript, not in the parent's result
+
+**Claude Code made the `Agent` tool asynchronous on 2026-08-14 and the parent's `toolUseResult`
+stopped carrying any numbers.** It is now `{ agentId, description, isAsync, outputFile,
+resolvedModel, status: 'async_launched' }` — no `usage`, no `totalTokens`, no `toolStats`, no
+duration. Every `?? 0` in the old reader fired at once and each invocation was published **priced at
+nothing**: measured on one machine, 391 of 391 invocations from 08-14 onward reported 0 tokens while
+the panel kept drawing rows for all of them. That is the whole failure mode worth remembering — a
+PARTIALLY working reader. `agentType` and `description` come from the parent's `tool_use` input, so
+the rows kept their names and only the values were gone, and it went unnoticed for three weeks.
+
+The numbers moved to `~/.claude/projects/<project>/<session-id>/subagents/agent-<agentId>.jsonl`
+(+ an `agent-<agentId>.meta.json` naming the parent's `toolUseId`). `subagent-parse.ts` is **pure**
+— it sums one such transcript — and `subagent-metrics.ts` does the I/O: find, recurse, memoize.
+
+- **`outputFile` is NOT the file to read.** It is the agent's text answer in the run's `/tmp` scratch
+  directory, cleared on reboot and already gone for every invocation measured here. The durable one
+  is under `subagents/`.
+- **Price each model at ITS OWN rate.** A subagent commonly runs `haiku` under an `opus` parent (four
+  distinct models across 440 transcripts here), so one `modelId` for the whole invocation bills a
+  cheap agent as an expensive one — which is exactly what the old reader did with the parent's model.
+- **A nested subagent counts inside the invocation that spawned it.** Only a top-level `Agent`
+  `tool_use` becomes an `AgentInvocation`, so a subtree left out is left out of the session's totals
+  entirely. Cycle-safe by a visited set.
+- **The DURATION is the root's own span** — a nested agent runs inside its parent, and adding the two
+  counts the same wall time twice.
+- **An invocation whose transcript is gone is `unmeasured: true`, never a zero.** Read that flag
+  BEFORE any figure on the record: it carries zeros only because the type has no other value to
+  carry. `SessionAgentMetrics` totals exclude them and `unmeasuredInvocations` counts them, so a
+  surface can say the totals cover fewer rows than it is showing (`web/src/lib/agentMeasured.ts`).
+  Same rule as `HARNESS_CAPABILITIES`, applied to one row instead of a whole harness.
 
 | Field | Source |
 |---|---|
-| `agentType` | `toolUseResult.agentType` in the JSONL message envelope |
+| `agentType` | `toolUseResult.agentType`, else the `tool_use` input's `subagent_type` |
 | `description` | `tool_use.input.description` |
-| `totalTokens` | `toolUseResult.totalTokens` |
-| `totalDurationMs` | `toolUseResult.totalDurationMs` |
-| `totalToolUseCount` | `toolUseResult.totalToolUseCount` |
-| `inputTokens / outputTokens / cacheReadTokens / cacheWriteTokens` | `toolUseResult.usage.*` |
-| `toolStats` (reads, searches, bash, edits, lines changed) | `toolUseResult.toolStats` |
-| `costUSD` | Calculated via `calcCost()` |
-| `status` | `toolUseResult.status` (`completed` / `failed`) |
+| `agentId` | `toolUseResult.agentId` — names the subagent transcript |
+| `totalTokens` (all four counters) / `inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens` | the subagent transcript's `message.usage`, per model; legacy: `toolUseResult.usage.*` |
+| `totalDurationMs` | the subagent transcript's first→last timestamp; legacy: `toolUseResult.totalDurationMs` |
+| `totalToolUseCount` / `toolStats` | the subagent transcript's `tool_use` items and `structuredPatch` hunks; legacy: `toolUseResult.toolStats` |
+| `costUSD` | `calcCost()` per model of the subagent's own turns |
+| `status` | `toolUseResult.status` (`failed` → `failed`, anything else → `completed`) |
 
 ### What is NOT available for Skills and Tasks
 
