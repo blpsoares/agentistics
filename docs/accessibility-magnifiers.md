@@ -51,6 +51,17 @@ everywhere. A transform is paint-only and cannot affect layout. Only stickies wh
 WINDOW are moved at all; one inside an `overflow: auto` panel already reproduces correctly and is
 left alone.
 
+**And that transform is re-derived from a MEASUREMENT on every scroll, never extrapolated**
+(`stickyOffset`). A sticky copy inside the clone never engages — it has no scrolling ancestor — so
+it paints at `flow − scroll` and the correction is `live − (flow − scroll)`, where `live` is where
+the browser is painting the real element right now. Taking the last sync's correction and adding
+the scroll delta instead holds the copy still on screen, which is right while the element is STUCK
+and wrong for the whole time it is not: an unstuck sticky flows with the page, so its copy has to
+flow too, and it instead froze where the last sync left it until the next one landed. Measuring
+costs one `getBoundingClientRect` per window-scrolled sticky per frame, shared across every lens by
+one cache `applyScroll` passes down — otherwise each lens's write to its own clone invalidates
+layout before the next one reads, and the cost becomes one forced layout per lens.
+
 **Left click, wheel and hover go to the PAGE. Right click goes to the LENS.** That single sentence
 is what makes the interaction learnable, and it is why a pinned lens is still reachable: right
 click opens its menu in every pin state, which is where unpin and remove live.
@@ -112,7 +123,9 @@ the signed-in identity changes.
 
 - **Canvas / WebGL content may not mirror.** The session terminal is the case that matters. Stated
   in the settings screen rather than left to be discovered.
-- **A sticky element in its unstuck phase can lag** up to one heartbeat between full syncs.
+- **A sticky's FLOW position is only as fresh as the last full sync.** Its correction is measured
+  every frame, so both phases and the crossing between them are right immediately; what still waits
+  on a re-clone is the element having MOVED or RESIZED in the layout.
 - **No DOM test environment.** The pure modules are unit-tested; the mirror's effects and the
   forwarded interaction can only be verified in a browser.
 

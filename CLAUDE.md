@@ -1796,6 +1796,13 @@ harness must not break.
   once and corrupted the mirror on every page, because this app's header is sticky everywhere. A
   transform is paint-only and cannot affect layout. Only WINDOW-scrolled stickies are moved at all —
   one inside an `overflow: auto` panel already reproduces correctly and is left alone.
+- **A sticky copy's transform is MEASURED every scroll frame, never extrapolated** (`stickyOffset`,
+  pure). The copy never engages inside the clone, so it paints at `flow − scroll` and the correction
+  is `live − (flow − scroll)`. Carrying the last sync's correction forward by the scroll delta
+  instead holds the copy still on screen: right while the element is STUCK, wrong the whole time it
+  is not — an unstuck sticky flows with the page and its copy froze where the last sync left it. The
+  live reads are shared across every lens by one cache `applyScroll` passes into each
+  `setScroll`, or N lenses cost N forced layouts per frame instead of one.
 - **Left click, wheel and hover go to the PAGE; right click goes to the LENS.** That is why a pinned
   lens is still reachable: right click opens its menu in every pin state, which is where unpin and
   remove live. Pinned means immovable, not unreachable.

@@ -11,6 +11,7 @@ import {
   lensControls,
   lensPointToPage,
   lensInteractive,
+  stickyOffset,
   MOVE_STEP_PX,
   MOVE_FINE_PX,
   RESIZE_STEP_PX,
@@ -496,5 +497,48 @@ describe('lensInteractive', () => {
   test('a pinned lens nobody selected is immovable however the last selection was made', () => {
     expect(lensInteractive({ pinned: true }, false, 'keyboard')).toBe(false)
     expect(lensInteractive({ pinned: true }, false, 'pointer')).toBe(false)
+  })
+})
+
+describe('stickyOffset', () => {
+  // An aside 400px down the document, `position: sticky; top: 12`. It flows until the page has
+  // scrolled 388px, and is stuck at viewport y=12 from there on.
+  const FLOW = { x: 0, y: 400 }
+  const liveAt = (scrollY: number) => ({ left: 0, top: Math.max(12, FLOW.y - scrollY) })
+
+  test('is ZERO through the whole unstuck phase — the copy flows with the page', () => {
+    // The regression. The rule this replaced returned the scroll DELTA here, which pins the copy
+    // where the last full sync left it while the live element scrolls away underneath.
+    for (const scrollY of [0, 100, 250, 388]) {
+      const got = stickyOffset(FLOW, liveAt(scrollY), { x: 0, y: scrollY })
+      expect(got.dy).toBe(0)
+    }
+  })
+
+  test('once stuck, it grows with the scroll so the copy stays at the live viewport position', () => {
+    // flow − scroll puts the copy at 400−600 = −200; the live element is stuck at 12.
+    expect(stickyOffset(FLOW, liveAt(600), { x: 0, y: 600 }).dy).toBe(212)
+    expect(stickyOffset(FLOW, liveAt(1000), { x: 0, y: 1000 }).dy).toBe(612)
+  })
+
+  test('the copy lands exactly on the live element in BOTH phases', () => {
+    for (const scrollY of [0, 200, 388, 389, 700]) {
+      const live = liveAt(scrollY)
+      const { dy } = stickyOffset(FLOW, live, { x: 0, y: scrollY })
+      // Where the copy ends up painted: its own flow position in the stage, plus the correction.
+      expect(FLOW.y - scrollY + dy).toBe(live.top)
+    }
+  })
+
+  test('crossing the threshold needs no full sync — one scroll step is enough', () => {
+    // 388 -> 389 is the frame the element engages on. Both are computed from the same rule, so
+    // neither waits on a re-clone to become correct.
+    expect(stickyOffset(FLOW, liveAt(388), { x: 0, y: 388 }).dy).toBe(0)
+    expect(stickyOffset(FLOW, liveAt(389), { x: 0, y: 389 }).dy).toBe(1)
+  })
+
+  test('the horizontal term follows the same rule', () => {
+    expect(stickyOffset({ x: 40, y: 0 }, { left: 40, top: 0 }, { x: 0, y: 0 }).dx).toBe(0)
+    expect(stickyOffset({ x: 40, y: 0 }, { left: 8, top: 0 }, { x: 120, y: 0 }).dx).toBe(88)
   })
 })
