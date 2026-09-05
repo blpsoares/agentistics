@@ -41,21 +41,41 @@ export interface SubagentRow {
 }
 
 export type SubagentsPayload =
-  | { ok: true; supported: true; rows: SubagentRow[] }
+  | { ok: true; supported: true; rows: SubagentRow[]; total: number; hasMore: boolean }
   | { ok: true; supported: false; message: string }
   | { ok: false; message: string }
 
 /** What the panel holds while the tab is open. */
 export type SubagentsState =
   | { phase: 'loading' }
-  | { phase: 'ready'; rows: SubagentRow[] }
+  | { phase: 'ready'; rows: SubagentRow[]; total: number; hasMore: boolean }
   | { phase: 'unsupported'; message: string }
   | { phase: 'failed'; message: string }
 
 export function subagentsStateOf(payload: SubagentsPayload): SubagentsState {
   if (!payload.ok) return { phase: 'failed', message: payload.message }
   if (!payload.supported) return { phase: 'unsupported', message: payload.message }
-  return { phase: 'ready', rows: payload.rows }
+  return { phase: 'ready', rows: payload.rows, total: payload.total, hasMore: payload.hasMore }
+}
+
+/** How many are loaded at a time. Matches the server's own default. */
+export const SUBAGENT_PAGE = 20
+
+/**
+ * One page appended to what is already on screen.
+ *
+ * By AGENT ID, because a poll can return a row that is already here with newer numbers — the list
+ * is ordered by last activity, so a running agent MOVES. Appending blindly would draw it twice, and
+ * replacing the whole list would throw away the pages somebody already asked for.
+ */
+export function appendPage(have: readonly SubagentRow[], page: readonly SubagentRow[]): SubagentRow[] {
+  const merged = [...have]
+  for (const row of page) {
+    const at = merged.findIndex(r => r.agentId === row.agentId)
+    if (at === -1) merged.push(row)
+    else merged[at] = row
+  }
+  return merged
 }
 
 /**
@@ -65,7 +85,7 @@ export function subagentsStateOf(payload: SubagentsPayload): SubagentsState {
  * the same N/A-versus-a-confident-0 rule the dashboard applies to every capability-gated metric.
  */
 export function subagentCount(state: SubagentsState | null): number | null {
-  return state?.phase === 'ready' ? state.rows.length : null
+  return state?.phase === 'ready' ? state.total : null
 }
 
 /** How many are running right now — the number worth putting on the tab beside the total. */

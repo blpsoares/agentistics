@@ -103,6 +103,47 @@ export function parseTaskOutcomes(content: string): Map<string, string> {
 }
 
 /**
+ * WHICH AGENTS ONE PAGE HOLDS, and how many there are in all.
+ *
+ * Paging exists here for a reason that is not cosmetic: the expensive part of listing agents is
+ * SUMMARISING each one's transcript, and a conversation here holds 57 of them over 35 MB. Reading
+ * all of it to draw a list somebody scrolls is work nobody asked for, and it is what made the tab
+ * take long enough to look broken.
+ *
+ * The order is BY LAST ACTIVITY, newest first — which is why it is decided from the file's mtime
+ * rather than from `startedAt`. `startedAt` is inside the transcript, so ordering by it would mean
+ * reading every transcript to decide which twenty to read. The mtime is one `stat`, it is what
+ * "most recent" actually means for an agent (its last write), and it lets the page be chosen before
+ * anything is opened.
+ */
+export interface AgentFile {
+  agentId: string
+  /** Last write, epoch ms. The sort key, and the only thing read before the page is chosen. */
+  mtimeMs: number
+}
+
+export interface AgentPage {
+  /** The agents this page holds, newest first. */
+  files: AgentFile[]
+  /** How many exist in all — so a partial list can say it is partial. */
+  total: number
+  /** True when there are older ones behind this page. */
+  hasMore: boolean
+}
+
+export const DEFAULT_AGENT_PAGE = 20
+
+export function pageOfAgents(files: readonly AgentFile[], limit: number, offset: number): AgentPage {
+  const ordered = [...files].sort((a, b) => b.mtimeMs - a.mtimeMs)
+  // A negative or absurd request is CLAMPED rather than refused: it comes from a query string, and
+  // an empty page for a typo reads as "this session has no agents".
+  const from = Math.max(0, Math.min(offset, ordered.length))
+  const size = Math.max(1, Math.min(limit, 200))
+  const page = ordered.slice(from, from + size)
+  return { files: page, total: ordered.length, hasMore: from + page.length < ordered.length }
+}
+
+/**
  * What a subagent SPENT and DID, from its own transcript.
  *
  * `null` tokens mean the transcript carried no usage at all — an agent that has been launched and

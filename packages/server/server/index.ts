@@ -1044,10 +1044,12 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       })
     }
 
-    if ((url.pathname === '/api/mcp/install' || url.pathname === '/api/mcp/remove') && req.method === 'POST') {
+    if ((url.pathname === '/api/mcp/install' || url.pathname === '/api/mcp/remove'
+      || url.pathname === '/api/mcp/replace') && req.method === 'POST') {
       try {
         const read = await readJsonLimited<{
           paste?: string; name?: string; scope?: string; projectPath?: string; lang?: string
+          original?: string
         }>(req, LIMITS.bodyBytes)
         if (!read.ok) {
           return new Response(JSON.stringify({ ok: false, message: read.error }), {
@@ -1066,17 +1068,26 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
           })
         }
-        const { installMcp, uninstallMcp } = await import('./mcp-admin')
+        const { installMcp, replaceMcp, uninstallMcp } = await import('./mcp-admin')
         const result = url.pathname === '/api/mcp/install'
           ? await installMcp({
             paste: body.paste ?? '', scope, lang,
             ...(body.name ? { name: body.name } : {}),
             ...(body.projectPath ? { projectPath: body.projectPath } : {}),
           })
-          : await uninstallMcp({
-            name: body.name ?? '', scope, lang,
-            ...(body.projectPath ? { projectPath: body.projectPath } : {}),
-          })
+          // REPLACE is remove-then-add, because `add-json` refuses an existing name. The ORIGINAL
+          // travels with it: it is the only thing that can put the server back if the add fails,
+          // and it is on screen at the moment the button is pressed.
+          : url.pathname === '/api/mcp/replace'
+            ? await replaceMcp({
+              name: body.name ?? '', scope, lang,
+              paste: body.paste ?? '', original: body.original ?? '',
+              ...(body.projectPath ? { projectPath: body.projectPath } : {}),
+            })
+            : await uninstallMcp({
+              name: body.name ?? '', scope, lang,
+              ...(body.projectPath ? { projectPath: body.projectPath } : {}),
+            })
         return new Response(JSON.stringify(result), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -1483,9 +1494,18 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         const agent = url.searchParams.get('agent')
         // ONE route, two questions: without `agent` it is the list, with it the agent's activity.
         // Splitting them would be two paths resolving the same row through the same three steps.
+        // Paged: choosing which agents to show costs a stat each, while summarising one costs
+        // reading its transcript. See `pageOfAgents`.
+        const num = (v: string | null): number | undefined => {
+          const n = Number(v)
+          return v !== null && Number.isFinite(n) ? n : undefined
+        }
         const payload = agent
           ? await readSubagentActivity(host, lang, id, agent)
-          : await readSessionSubagents(host, lang, id)
+          : await readSessionSubagents(host, lang, id, {
+            ...(num(url.searchParams.get('limit')) !== undefined ? { limit: num(url.searchParams.get('limit'))! } : {}),
+            ...(num(url.searchParams.get('offset')) !== undefined ? { offset: num(url.searchParams.get('offset'))! } : {}),
+          })
         return new Response(JSON.stringify(payload), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })

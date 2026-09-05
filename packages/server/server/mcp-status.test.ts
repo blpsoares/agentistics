@@ -3,7 +3,7 @@ import { mcpRunState } from './mcp-status'
 import type { McpServer } from './mcp-config'
 
 const stdio = (over: Partial<McpServer> = {}): McpServer => ({
-  name: 'MongoDB', scope: 'user', transport: 'stdio',
+  name: 'MongoDB', scope: 'user', transport: 'stdio', config: '{}',
   command: 'npx', args: ['-y', 'mongodb-mcp-server@2.1.0', '--readOnly'], ...over,
 })
 

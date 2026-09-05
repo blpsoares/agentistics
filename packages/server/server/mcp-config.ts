@@ -51,6 +51,17 @@ export interface McpServer {
   url?: string
   /** The directory a `local` or `project` server belongs to. */
   projectPath?: string
+  /**
+   * The server's own configuration, as JSON, WITH EVERY ENV VALUE REMOVED.
+   *
+   * The panel shows it so a person can read and edit what is actually configured — asked for
+   * directly. The values are stripped for the same reason `envKeys` exists: one server configured
+   * here holds a database URI with credentials in it, and a value that crosses this boundary is on
+   * a screen and in a response body forever. The KEYS are kept with empty strings, so an edit
+   * shows which variables exist and can set them, and `claude mcp add-json` receives whatever the
+   * person actually typed.
+   */
+  config: string
 }
 
 /**
@@ -87,10 +98,16 @@ export function serversFromMap(
     const args = Array.isArray(cfg.args)
       ? (cfg.args as unknown[]).filter((a): a is string => typeof a === 'string')
       : undefined
+    // Env VALUES are dropped, KEYS kept — see `McpServer.config`.
+    const shown: Record<string, unknown> = { ...cfg }
+    if (envKeysOf(cfg.env)) {
+      shown.env = Object.fromEntries(envKeysOf(cfg.env)!.map(k => [k, '']))
+    }
     out.push({
       name,
       scope,
       transport,
+      config: JSON.stringify(shown, null, 2),
       ...(typeof cfg.command === 'string' ? { command: cfg.command } : {}),
       ...(args && args.length > 0 ? { args } : {}),
       ...(envKeysOf(cfg.env) ? { envKeys: envKeysOf(cfg.env)! } : {}),

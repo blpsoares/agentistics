@@ -23,8 +23,9 @@ import type { CliLang } from '../cli-lang'
 import { readChatWindow, resolveChatTranscriptPath, type ChatTurn } from './chat-tail'
 import { conversationOfRow } from './row-conversation'
 import {
-  agentIdFromFile, parseSubagentMeta, parseTaskOutcomes, subagentCost, subagentStatus,
-  summarizeSubagent, type SubagentMeta, type SubagentStatus, type SubagentUsage,
+  DEFAULT_AGENT_PAGE, agentIdFromFile, pageOfAgents, parseSubagentMeta, parseTaskOutcomes,
+  subagentCost, subagentStatus, summarizeSubagent,
+  type AgentFile, type SubagentMeta, type SubagentStatus, type SubagentUsage,
 } from './subagents'
 
 /** The shape an id from a client must have before it is allowed to name a file. */
@@ -54,7 +55,15 @@ export interface SubagentRow {
 }
 
 export type SubagentsPayload =
-  | { ok: true; supported: true; rows: SubagentRow[] }
+  | {
+      ok: true
+      supported: true
+      rows: SubagentRow[]
+      /** How many agents exist in all, so a page can say it is a page. */
+      total: number
+      /** There are older ones behind this page. */
+      hasMore: boolean
+    }
   /** This harness cannot report subagents at all — already localized, and NOT an empty list. */
   | { ok: true; supported: false; message: string }
   | { ok: false; message: string }
@@ -69,9 +78,34 @@ export type SubagentsPayload =
  */
 const summaryMemo = new Map<string, { mtimeMs: number; size: number; usage: SubagentUsage }>()
 
+/**
+ * The parent's `<task-notification>` outcomes, memoized on ITS stamp.
+ *
+ * One list request scans the whole conversation for them — 4,4 MB on a real one here — and paging
+ * would otherwise pay that on every page. A finished conversation is scanned once; a live one is
+ * re-scanned when it grows, which is exactly when a new outcome can appear.
+ */
+const outcomeMemo = new Map<string, { mtimeMs: number; size: number; outcomes: Map<string, string> }>()
+
+async function readOutcomes(path: string): Promise<Map<string, string>> {
+  let mtimeMs: number
+  let size: number
+  try {
+    const st = await stat(path)
+    mtimeMs = st.mtimeMs
+    size = st.size
+  } catch { return new Map() }
+  const hit = outcomeMemo.get(path)
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.outcomes
+  const outcomes = await readFile(path, 'utf-8').then(parseTaskOutcomes).catch(() => new Map<string, string>())
+  outcomeMemo.set(path, { mtimeMs, size, outcomes })
+  return outcomes
+}
+
 /** Reset the memo. Tests only. */
 export function forgetSubagentSummaries(): void {
   summaryMemo.clear()
+  outcomeMemo.clear()
 }
 
 async function summarize(path: string): Promise<SubagentUsage> {
@@ -147,6 +181,7 @@ function unsupported(harness: string | undefined, lang: CliLang): string {
 
 export async function readSessionSubagents(
   host: StartHost, lang: CliLang, id: string,
+  page: { limit?: number; offset?: number } = {},
 ): Promise<SubagentsPayload> {
   if (!host.sessions) return { ok: false, message: 'no session host' }
   const r = await resolve(host, lang, id)
@@ -160,20 +195,33 @@ export async function readSessionSubagents(
   let names: string[]
   // A conversation that ran no subagents has no directory at all — a real empty list, and a
   // different fact from the harness not recording them.
-  try { names = await readdir(dir) } catch { return { ok: true, supported: true, rows: [] } }
+  try { names = await readdir(dir) } catch { return { ok: true, supported: true, rows: [], total: 0, hasMore: false } }
 
-  const outcomes = await readFile(r.transcript, 'utf-8')
-    .then(parseTaskOutcomes)
-    .catch(() => new Map<string, string>())
+  /**
+   * ONE `stat` PER AGENT, and nothing opened yet.
+   *
+   * This is the whole point of paging here: choosing which twenty to show costs a stat each, while
+   * SUMMARISING one costs reading its transcript. 57 agents over 35 MB is what made this tab take
+   * long enough to look broken.
+   */
+  const files: AgentFile[] = []
+  await Promise.all(names.map(async name => {
+    const agentId = agentIdFromFile(name)
+    if (!agentId) return
+    const st = await stat(`${dir}/${name}`).catch(() => null)
+    // A file we cannot stat still EXISTS and is still an agent; it simply sorts oldest.
+    files.push({ agentId, mtimeMs: st?.mtimeMs ?? 0 })
+  }))
+  const chosen = pageOfAgents(files, page.limit ?? DEFAULT_AGENT_PAGE, page.offset ?? 0)
+
+  const outcomes = await readOutcomes(r.transcript)
 
   const rows: SubagentRow[] = []
-  for (const name of names) {
-    const agentId = agentIdFromFile(name)
-    if (!agentId) continue
+  for (const { agentId } of chosen.files) {
     const meta = await readFile(`${dir}/agent-${agentId}.meta.json`, 'utf-8')
       .then(raw => parseSubagentMeta(agentId, raw))
       .catch((): SubagentMeta => ({ agentId }))
-    const usage = await summarize(`${dir}/${name}`)
+    const usage = await summarize(`${dir}/agent-${agentId}.jsonl`)
     const tokens = usage.tokens
     rows.push({
       agentId,
@@ -194,9 +242,9 @@ export async function readSessionSubagents(
     })
   }
 
-  // Newest first: the one you are watching is the one that just started.
-  rows.sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''))
-  return { ok: true, supported: true, rows }
+  // The ORDER was already decided by `pageOfAgents`, from the files' own last-write times — not
+  // re-sorted here on `startedAt`, or page 2 would interleave with page 1.
+  return { ok: true, supported: true, rows, total: chosen.total, hasMore: chosen.hasMore }
 }
 
 export type SubagentActivityPayload =
@@ -245,7 +293,7 @@ export async function readSubagentActivity(
   if (turns.length === 0) {
     // Launched and silent so far, or a transcript that is gone. Both are said rather than drawn as
     // an empty pane, which reads as "it did nothing".
-    const outcomes = await readFile(r.transcript, 'utf-8').then(parseTaskOutcomes).catch(() => new Map<string, string>())
+    const outcomes = await readOutcomes(r.transcript)
     const status = subagentStatus(outcomes.get(agentId), r.live)
     return status === 'running'
       ? { ok: true, turns: [], status, older: false }
@@ -256,6 +304,6 @@ export async function readSubagentActivity(
           : 'There is no transcript for this subagent — it wrote nothing, or the file is no longer on disk.',
       }
   }
-  const outcomes = await readFile(r.transcript, 'utf-8').then(parseTaskOutcomes).catch(() => new Map<string, string>())
+  const outcomes = await readOutcomes(r.transcript)
   return { ok: true, turns, status: subagentStatus(outcomes.get(agentId), r.live), older }
 }

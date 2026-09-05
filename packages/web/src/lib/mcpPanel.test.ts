@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { cannotWriteText, offerableScopes, runText, runningMcpCount, scopeText, type McpEntry } from './mcpPanel'
 
-const entry = (run: McpEntry['run']): McpEntry => ({ name: 'x', scope: 'user', transport: 'stdio', run })
+const entry = (run: McpEntry['run']): McpEntry => ({ name: 'x', scope: 'user', transport: 'stdio', config: '{}', run })
 
 describe('runText — the word "offline" is never used', () => {
   it('never says offline for a server nothing is running', () => {

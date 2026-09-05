@@ -34,6 +34,13 @@ export interface McpEntry {
   envKeys?: string[]
   url?: string
   projectPath?: string
+  /**
+   * The server's own configuration as JSON, with every env VALUE stripped and the keys kept.
+   *
+   * The panel shows it so a person can read and edit what is actually configured. The values never
+   * cross the boundary — one server configured here holds a database URI with credentials in it.
+   */
+  config: string
   run: McpRunState
 }
 

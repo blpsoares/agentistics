@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
-  agentIdFromFile, parseSubagentMeta, parseTaskOutcomes, subagentCost, subagentStatus,
+  agentIdFromFile, pageOfAgents, parseSubagentMeta, parseTaskOutcomes, subagentCost, subagentStatus,
   summarizeSubagent,
 } from './subagents'
 
@@ -132,5 +132,35 @@ describe('subagentCost — a price needs both halves', () => {
   it('withholds a price rather than inventing one', () => {
     expect(subagentCost(null, 'claude-haiku-4-5-20251001')).toBe(null)
     expect(subagentCost({ input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, null)).toBe(null)
+  })
+})
+
+describe('pageOfAgents — the page is chosen before anything is opened', () => {
+  const f = (agentId: string, mtimeMs: number) => ({ agentId, mtimeMs })
+
+  it('orders by LAST ACTIVITY, newest first', () => {
+    // From the file's mtime, not `startedAt`: that one is inside the transcript, so ordering by it
+    // would mean reading every transcript to decide which twenty to read.
+    const p = pageOfAgents([f('old', 100), f('new', 300), f('mid', 200)], 10, 0)
+    expect(p.files.map(x => x.agentId)).toEqual(['new', 'mid', 'old'])
+  })
+
+  it('reports the total and whether there are older ones behind the page', () => {
+    const all = Array.from({ length: 57 }, (_, i) => f(`a${i}`, i))
+    const first = pageOfAgents(all, 20, 0)
+    expect(first.files).toHaveLength(20)
+    expect(first.total).toBe(57)
+    expect(first.hasMore).toBe(true)
+    const last = pageOfAgents(all, 20, 40)
+    expect(last.files).toHaveLength(17)
+    expect(last.hasMore).toBe(false)
+  })
+
+  it('clamps a nonsense request instead of returning an empty page', () => {
+    // It comes from a query string, and an empty page for a typo reads as "this session ran none".
+    const all = [f('a', 1), f('b', 2)]
+    expect(pageOfAgents(all, 10, -5).files).toHaveLength(2)
+    expect(pageOfAgents(all, 0, 0).files).toHaveLength(1)
+    expect(pageOfAgents(all, 10, 99)).toEqual({ files: [], total: 2, hasMore: false })
   })
 })

@@ -189,6 +189,78 @@ export async function installMcp(o: {
   return { ok: true, names: done }
 }
 
+/**
+ * REPLACE one server's configuration, in place.
+ *
+ * `claude mcp add-json` REFUSES a name that already exists ("already exists in local config",
+ * measured), so an edit is a removal followed by an addition — two operations, and the window
+ * between them is one where the server is gone.
+ *
+ * So the failure of the second is handled rather than reported: the ORIGINAL json is put back, and
+ * the answer says which of the three things happened. Losing somebody's MCP configuration to a
+ * typo in a field they were editing is the outcome this exists to prevent, and "it failed" with the
+ * old one already deleted is the same loss with a message on top.
+ *
+ * The caller passes the original because it is the only thing that can restore it, and it is on
+ * screen at the moment they press the button — the panel is showing it.
+ */
+export async function replaceMcp(o: {
+  name: string
+  scope: McpScope
+  paste: string
+  original: string
+  projectPath?: string
+  lang: 'pt' | 'en'
+}): Promise<McpWriteResult> {
+  const pt = o.lang === 'pt'
+  if (!(await claudeCliAvailable())) return noCli(pt)
+  if (!validMcpName(o.name)) {
+    return { ok: false, message: pt ? 'Esse nome não é um nome de servidor válido.' : 'That is not a valid server name.' }
+  }
+  // The NEW config is parsed BEFORE anything is removed. A paste that cannot be read must never
+  // cost the configuration that is already working.
+  const parsed = parseMcpPaste(o.paste, o.name)
+  if (!parsed.ok || parsed.servers.length !== 1) {
+    return {
+      ok: false,
+      message: pt
+        ? 'Não consegui ler esse JSON como UM servidor — nada foi alterado.'
+        : 'That JSON does not read as ONE server — nothing was changed.',
+    }
+  }
+  const next = { name: o.name, json: parsed.servers[0]!.json }
+  const cwd = scopeNeedsProject(o.scope) ? o.projectPath : undefined
+  if (scopeNeedsProject(o.scope) && !(cwd && path.isAbsolute(cwd))) {
+    return {
+      ok: false,
+      message: pt
+        ? 'Este escopo é resolvido contra um diretório, e nenhum foi informado.'
+        : 'This scope is resolved against a directory and none was given.',
+    }
+  }
+
+  const removed = await runClaude(mcpRemoveArgs(o.name, o.scope), cwd)
+  if (removed.code !== 0) {
+    return { ok: false, message: removed.out || (pt ? 'não consegui remover a versão antiga.' : 'the old version could not be removed.') }
+  }
+  const added = await runClaude(mcpAddArgs(next, o.scope), cwd)
+  if (added.code === 0) return { ok: true, names: [o.name] }
+
+  // The add failed and the old one is already gone — put it back.
+  const restored = await runClaude(mcpAddArgs({ name: o.name, json: o.original }, o.scope), cwd)
+  return {
+    ok: false,
+    message: restored.code === 0
+      ? (pt
+        ? `A alteração falhou e a configuração anterior foi restaurada. O comando disse: ${added.out || 'nada'}`
+        : `The change failed and the previous configuration was restored. The command said: ${added.out || 'nothing'}`)
+      // Both failed. SAY it, loudly — the panel still holds the original json on screen.
+      : (pt
+        ? `A alteração falhou E a restauração também: "${o.name}" NÃO está mais configurado. Copie o JSON original desta tela e adicione de novo. O comando disse: ${added.out || 'nada'}`
+        : `The change failed AND the restore failed too: "${o.name}" is NO LONGER configured. Copy the original JSON from this screen and add it again. The command said: ${added.out || 'nothing'}`),
+  }
+}
+
 /** The exact inverse of an install: the same name, in the same scope it was written to. */
 export async function uninstallMcp(o: {
   name: string

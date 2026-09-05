@@ -28,7 +28,7 @@ import { asideCache, asideKey } from '../../lib/asideCache'
 import {
   FileEdit, FilePlus2, PanelRightClose, Loader, FileText, Activity, Files,
   BookOpen, Terminal, Brain, Send, Eye, Image, Sparkles, ChevronLeft, ChevronDown, ChevronRight,
-  ExternalLink, Bot, Plug, Plus, Trash2, GitPullRequest,
+  ExternalLink, Bot, Plug, Plus, Trash2, Pencil, GitPullRequest,
 } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
 import {
@@ -45,10 +45,11 @@ import {
   type StepPayload, type StepState,
 } from '../../lib/stepDetail'
 import {
-  runningCount, subagentCount, subagentStatusText, subagentsPollMs, subagentsStateOf,
-  unmeasuredText, unpricedText,
+  SUBAGENT_PAGE, appendPage, runningCount, subagentCount, subagentStatusText, subagentsPollMs,
+  subagentsStateOf, unmeasuredText, unpricedText,
   type SubagentRow, type SubagentsPayload, type SubagentsState,
 } from '../../lib/subagents'
+import { ConfirmModal } from '../../pages/settings/primitives'
 import {
   cannotWriteText, offerableScopes, runText, runningMcpCount, scopeText,
   type McpEntry, type McpListPayload, type McpScope,
@@ -464,6 +465,9 @@ export function ArtifactsAside({
     if (tab !== 'agents') return
     const key = asideKey(sessionId, 'subagents')
     const hit = asideCache.read<SubagentsState>(key)
+    // The POLL re-reads the first page only: it is the newest by last activity, so it is where a
+    // running agent's numbers move. Pages already asked for are merged, never replaced.
+    const loaded = hit.value?.phase === 'ready' ? hit.value.rows.length : 0
     // A fresh answer with nothing RUNNING behind it cannot change; anything else is refreshed, and
     // a stale answer stays on screen while it is (`AsideRead.stale`).
     if (hit.value && !hit.stale && subagentsPollMs(hit.value) === null) return
@@ -475,13 +479,17 @@ export function ArtifactsAside({
     const read = async () => {
       if (first) setAgentsState({ phase: 'loading' })
       try {
-        const res = await fetch(`/api/fleet/subagents?id=${encodeURIComponent(sessionId)}&lang=${pt ? 'pt' : 'en'}`)
+        const res = await fetch(`/api/fleet/subagents?id=${encodeURIComponent(sessionId)}&limit=${Math.max(SUBAGENT_PAGE, loaded)}&lang=${pt ? 'pt' : 'en'}`)
         if (!alive) return
         if (!res.ok) {
           setAgentsState(prev => prev ?? { phase: 'failed', message: pt ? 'Não foi possível ler os subagentes.' : 'The subagents could not be read.' })
           return
         }
-        const next = subagentsStateOf(await res.json() as SubagentsPayload)
+        const fresh = subagentsStateOf(await res.json() as SubagentsPayload)
+        // Merge onto what is already on screen, so a poll never drops the pages somebody loaded.
+        const next: SubagentsState = fresh.phase === 'ready'
+          ? { ...fresh, rows: appendPage(hit.value?.phase === 'ready' ? hit.value.rows : [], fresh.rows) }
+          : fresh
         asideCache.write(key, next)
         if (!alive) return
         setAgentsState(next)
@@ -508,6 +516,26 @@ export function ArtifactsAside({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, cwd])
 
+  /** Loading the NEXT page — its own flag, so the button spins without the list going blank. */
+  const [agentsMore, setAgentsMore] = useState(false)
+  const loadMoreAgents = async () => {
+    const st = agentsState
+    if (st?.phase !== 'ready' || agentsMore) return
+    setAgentsMore(true)
+    try {
+      const res = await fetch(
+        `/api/fleet/subagents?id=${encodeURIComponent(sessionId)}&offset=${st.rows.length}&limit=${SUBAGENT_PAGE}&lang=${pt ? 'pt' : 'en'}`,
+      )
+      if (!res.ok) return
+      const page = subagentsStateOf(await res.json() as SubagentsPayload)
+      if (page.phase !== 'ready') return
+      const next: SubagentsState = { ...page, rows: appendPage(st.rows, page.rows) }
+      asideCache.write(asideKey(sessionId, 'subagents'), next)
+      setAgentsState(next)
+    } catch { /* the list stays as it is; the button can be pressed again */ }
+    finally { setAgentsMore(false) }
+  }
+
   const agentsBody = (): React.ReactNode => {
     // One open agent replaces the list, exactly as an open FILE does — 440px cannot hold a list and
     // a conversation side by side.
@@ -521,7 +549,9 @@ export function ArtifactsAside({
     }
     const st = agentsState
     if (st === null || st.phase === 'loading') {
-      return <Note icon={<Loader size={16} />} text={pt ? 'Lendo os subagentes…' : 'Reading the subagents…'} />
+      return <Note icon={<Spinner />} text={pt
+        ? 'Lendo os subagentes desta conversa… isso lê a transcrição de cada um.'
+        : 'Reading this conversation’s subagents… this opens each one’s transcript.'} />
     }
     // FOUR SENTENCES, and never one shared empty box: the harness cannot report them, the read
     // failed, this conversation ran none, or here they are.
@@ -534,9 +564,34 @@ export function ArtifactsAside({
     }
     return (
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
+        {/* A PAGE SAYS IT IS A PAGE. Newest first, by each agent's last activity. */}
+        {st.total > st.rows.length && (
+          <p style={{ margin: '0 8px 6px', fontSize: 10, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+            {pt
+              ? `Mostrando os ${st.rows.length} mais recentes de ${st.total}.`
+              : `Showing the ${st.rows.length} most recent of ${st.total}.`}
+          </p>
+        )}
         {st.rows.map(r => (
           <SubagentCard key={r.agentId} row={r} pt={pt} now={now} onOpen={() => setOpenAgent(r)} />
         ))}
+        {st.hasMore && (
+          <button
+            onClick={() => void loadMoreAgents()}
+            disabled={agentsMore}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, width: '100%', justifyContent: 'center',
+              minHeight: isMobile ? 44 : 30, borderRadius: 8, marginTop: 2, fontFamily: 'inherit',
+              fontSize: 11.5, fontWeight: 600, cursor: agentsMore ? 'default' : 'pointer',
+              border: '1px dashed var(--border)', background: 'transparent', color: 'var(--text-secondary)',
+            }}
+          >
+            {agentsMore ? <Spinner size={13} /> : null}
+            {agentsMore
+              ? (pt ? 'Lendo mais…' : 'Reading more…')
+              : (pt ? `Carregar mais ${Math.min(SUBAGENT_PAGE, st.total - st.rows.length)}` : `Load ${Math.min(SUBAGENT_PAGE, st.total - st.rows.length)} more`)}
+          </button>
+        )}
       </div>
     )
   }
@@ -1571,10 +1626,23 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
   const [scope, setScope] = useState<McpScope>('user')
   const [busy, setBusy] = useState(false)
   const [said, setSaid] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null)
+  /**
+   * The row a removal is being confirmed for.
+   *
+   * A CENTRED modal rather than an inline row, and the row is held here rather than in the card: a
+   * destructive act should take the screen, not appear beside twelve other controls where a
+   * mis-click reaches it.
+   */
+  const [removing, setRemoving] = useState<McpEntry | null>(null)
+  /** Which row is mid-write, so the card can say so — a removal takes a second or two. */
+  const [working, setWorking] = useState<string | null>(null)
+  /** The row being edited, and the JSON as it is being typed. */
+  const [editing, setEditing] = useState<McpEntry | null>(null)
   const scopes = offerableScopes(cwd)
 
-  const write = async (path: string, body: Record<string, unknown>) => {
+  const write = async (path: string, body: Record<string, unknown>, row?: string) => {
     setBusy(true)
+    setWorking(row ?? null)
     setSaid(null)
     try {
       const res = await fetch(path, {
@@ -1585,7 +1653,7 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
       const out = await res.json() as { ok: boolean; names?: string[]; message?: string }
       if (out.ok) {
         setSaid({ tone: 'ok', text: (out.names ?? []).join(', ') })
-        setPaste(''); setName(''); setAdding(false)
+        setPaste(''); setName(''); setAdding(false); setEditing(null)
         onChanged()
       } else {
         // The SERVER's own sentence, verbatim — including the harness command's own error, which
@@ -1594,11 +1662,11 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
       }
     } catch {
       setSaid({ tone: 'bad', text: pt ? 'não foi possível falar com o servidor' : 'the server could not be reached' })
-    } finally { setBusy(false) }
+    } finally { setBusy(false); setWorking(null) }
   }
 
   if (error !== null) return <Note icon={<Plug size={16} />} text={error} />
-  if (list === null) return <Note icon={<Loader size={16} />} text={pt ? 'Lendo os MCPs…' : 'Reading the MCP servers…'} />
+  if (list === null) return <Note icon={<Spinner />} text={pt ? 'Lendo os MCPs…' : 'Reading the MCP servers…'} />
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '6px 6px 10px' }}>
@@ -1620,22 +1688,62 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
       {list.servers.map(s => (
         <McpRow
           key={`${s.scope}:${s.name}`} entry={s} pt={pt} canWrite={list.canWrite} busy={busy}
-          onRemove={() => void write('/api/mcp/remove', { name: s.name, scope: s.scope })}
+          working={working === `${s.scope}:${s.name}`}
+          onRemove={() => setRemoving(s)}
+          onEdit={() => { setEditing(s); setSaid(null) }}
         />
       ))}
 
-      {list.canWrite && !adding && (
+      {/* THE REMOVAL, centred, and never armed by the click that opened it. `ConfirmModal` is the
+          one this codebase already uses for a destructive act; a second one would be a second set
+          of rules about what a confirmation looks like. */}
+      <ConfirmModal
+        open={removing !== null}
+        title={pt ? 'Remover este servidor MCP?' : 'Remove this MCP server?'}
+        message={removing === null ? '' : (pt
+          ? `"${removing.name}" sai de: ${scopeText(removing.scope, pt).label} — ${scopeText(removing.scope, pt).reach}. Isso roda \`claude mcp remove\` e altera a configuração de verdade.`
+          : `"${removing.name}" leaves: ${scopeText(removing.scope, pt).label} — ${scopeText(removing.scope, pt).reach}. This runs \`claude mcp remove\` and changes the real configuration.`)}
+        confirmLabel={pt ? 'Remover' : 'Remove'}
+        cancelLabel={pt ? 'Cancelar' : 'Cancel'}
+        onCancel={() => setRemoving(null)}
+        onConfirm={() => {
+          const target = removing
+          setRemoving(null)
+          if (target) void write('/api/mcp/remove', { name: target.name, scope: target.scope }, `${target.scope}:${target.name}`)
+        }}
+      />
+
+      {/* THE PRIMARY ACTION OF THIS TAB, drawn like one. It was a dashed grey outline under a list of
+          grey cards and disappeared into them — reported as "ficou escondido". */}
+      {/* THE EDITOR — what is configured, shown, and changeable.
+          `claude mcp add-json` refuses a name that already exists, so applying this is a removal
+          followed by an addition; the ORIGINAL travels with the request so the server can put it
+          back if the addition fails. See `replaceMcp`. */}
+      {editing && (
+        <McpEditor
+          entry={editing}
+          pt={pt}
+          busy={busy}
+          onCancel={() => setEditing(null)}
+          onApply={next => void write('/api/mcp/replace', {
+            name: editing.name, scope: editing.scope, paste: next, original: editing.config,
+          }, `${editing.scope}:${editing.name}`)}
+        />
+      )}
+
+      {list.canWrite && !adding && !editing && (
         <button
           onClick={() => { setAdding(true); setSaid(null) }}
           style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6,
-            minHeight: isMobile ? 44 : undefined,
-            padding: isMobile ? '0 14px' : '5px 10px', borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit',
-            fontSize: 11.5, fontWeight: 600, border: '1px dashed var(--border)',
-            background: 'transparent', color: 'var(--text-secondary)',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            width: '100%', marginTop: 6,
+            minHeight: isMobile ? 44 : 32,
+            padding: isMobile ? '0 14px' : '0 12px', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+            fontSize: 12, fontWeight: 700, border: '1px solid var(--anthropic-orange)',
+            background: 'var(--anthropic-orange)', color: '#fff',
           }}
         >
-          <Plus size={12} /> {pt ? 'Adicionar um MCP' : 'Add an MCP'}
+          <Plus size={13} /> {pt ? 'Adicionar um MCP' : 'Add an MCP'}
         </button>
       )}
 
@@ -1750,12 +1858,97 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
   )
 }
 
-/** One configured server: what it is, where it is configured, and what it is doing right now. */
-function McpRow({ entry, pt, canWrite, busy, onRemove }: {
-  entry: McpEntry; pt: boolean; canWrite: boolean; busy: boolean; onRemove: () => void
+/**
+ * One server's configuration, open for reading and changing.
+ *
+ * It exists because "editar um MCP, dai eu consigo ver o json dele" is two things at once and the
+ * first is the load-bearing one: a person cannot decide whether a server is configured right
+ * without seeing how it is configured. The env VALUES are not here — the server strips them and
+ * keeps the keys, so what is on screen shows which variables exist without putting a credential on
+ * it. Leaving a key empty sends it empty; that is a real edit, and it is the person's to make.
+ */
+function McpEditor({ entry, pt, busy, onCancel, onApply }: {
+  entry: McpEntry; pt: boolean; busy: boolean; onCancel: () => void; onApply: (json: string) => void
 }) {
   const isMobile = useIsMobile()
-  const [confirm, setConfirm] = useState(false)
+  const [draft, setDraft] = useState(entry.config)
+  // A different row is a different document; the draft must not follow the reader to it.
+  useEffect(() => { setDraft(entry.config) }, [entry.scope, entry.name, entry.config])
+  const changed = draft.trim() !== entry.config.trim()
+  const sc = scopeText(entry.scope, pt)
+  return (
+    <div style={{
+      marginTop: 8, padding: 8, borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 7,
+      border: '1px solid var(--anthropic-orange)',
+    }}>
+      <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text-primary)' }}>
+        {entry.name}
+        <span style={{ marginLeft: 6, fontWeight: 500, fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+          · {sc.label}
+        </span>
+      </div>
+      <p style={{ margin: 0, fontSize: 10.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+        {pt
+          ? 'Os valores das variáveis de ambiente não aparecem aqui — só os nomes. Deixar um vazio grava vazio.'
+          : 'Environment variable VALUES are not shown here — only their names. Leaving one empty writes it empty.'}
+      </p>
+      <textarea
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        rows={10}
+        spellCheck={false}
+        disabled={busy}
+        style={{
+          width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 6, resize: 'vertical',
+          border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)',
+          fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 11, lineHeight: 1.5,
+          opacity: busy ? 0.6 : 1,
+        }}
+      />
+      {/* What applying actually DOES, said before it is pressed — it is not an in-place edit. */}
+      <p style={{ margin: 0, fontSize: 10, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+        {pt
+          ? 'Salvar remove e adiciona de novo, porque é assim que o `claude mcp` altera um servidor. Se a segunda etapa falhar, a versão atual é restaurada.'
+          : 'Saving removes and re-adds, because that is how `claude mcp` changes a server. If the second step fails, the current version is restored.'}
+      </p>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button
+          onClick={() => onApply(draft)}
+          disabled={busy || !changed || draft.trim() === ''}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 7,
+            minHeight: isMobile ? 44 : 30, padding: isMobile ? '0 14px' : '0 12px',
+            fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700,
+            cursor: busy || !changed ? 'default' : 'pointer', opacity: busy || !changed ? 0.5 : 1,
+            border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange)', color: '#fff',
+          }}
+        >
+          {busy ? <Spinner size={12} /> : null}
+          {busy ? (pt ? 'Salvando…' : 'Saving…') : (pt ? 'Salvar' : 'Save')}
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={busy}
+          style={{
+            minHeight: isMobile ? 44 : 30, padding: isMobile ? '0 14px' : '0 12px', borderRadius: 7,
+            fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, cursor: busy ? 'default' : 'pointer',
+            border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-secondary)',
+          }}
+        >{pt ? 'Fechar' : 'Close'}</button>
+      </div>
+    </div>
+  )
+}
+
+/** One configured server: what it is, where it is configured, and what it is doing right now. */
+function McpRow({ entry, pt, canWrite, busy, working, onRemove, onEdit }: {
+  entry: McpEntry; pt: boolean; canWrite: boolean; busy: boolean
+  /** This row is mid-write. A removal takes a second or two and must not look inert. */
+  working: boolean
+  onRemove: () => void
+  onEdit: () => void
+}) {
+  const isMobile = useIsMobile()
   const run = runText(entry.run, pt)
   const sc = scopeText(entry.scope, pt)
   return (
@@ -1774,20 +1967,38 @@ function McpRow({ entry, pt, canWrite, busy, onRemove }: {
         }}>{entry.name}</span>
         <span style={{ marginLeft: 'auto', flexShrink: 0, fontSize: 10, color: 'var(--text-tertiary)' }}>{sc.label}</span>
         {canWrite && (
-          <button
-            onClick={() => setConfirm(v => !v)}
-            disabled={busy}
-            title={pt ? 'Remover' : 'Remove'}
-            aria-label={pt ? 'Remover' : 'Remove'}
-            style={{
-              flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: isMobile ? 44 : 22, height: isMobile ? 44 : 22, borderRadius: 6, padding: 0,
-              cursor: busy ? 'default' : 'pointer',
-              border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-tertiary)',
-            }}
-          >
-            <Trash2 size={11} />
-          </button>
+          <>
+            <button
+              onClick={onEdit}
+              disabled={busy}
+              title={pt ? 'Ver e editar o JSON' : 'View and edit the JSON'}
+              aria-label={pt ? 'Editar' : 'Edit'}
+              style={{
+                flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: isMobile ? 44 : 22, height: isMobile ? 44 : 22, borderRadius: 6, padding: 0,
+                cursor: busy ? 'default' : 'pointer',
+                border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-tertiary)',
+              }}
+            >
+              <Pencil size={11} />
+            </button>
+            <button
+              onClick={onRemove}
+              disabled={busy}
+              title={pt ? 'Remover' : 'Remove'}
+              aria-label={pt ? 'Remover' : 'Remove'}
+              style={{
+                flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: isMobile ? 44 : 22, height: isMobile ? 44 : 22, borderRadius: 6, padding: 0,
+                cursor: busy ? 'default' : 'pointer',
+                border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-tertiary)',
+              }}
+            >
+              {/* The wait is SHOWN. `claude mcp remove` takes a second or two, and a button that
+                  did nothing visible for that long reads as one that did not work. */}
+              {working ? <Spinner size={11} /> : <Trash2 size={11} />}
+            </button>
+          </>
         )}
       </div>
       {/* WHY the status says what it says — the sentence, never a colour alone. */}
@@ -1807,34 +2018,19 @@ function McpRow({ entry, pt, canWrite, busy, onRemove }: {
           {pt ? 'variáveis: ' : 'env: '}{entry.envKeys.join(', ')}
         </div>
       )}
-      {confirm && (
-        <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          {/* The removal NAMES the scope it removes from — the exact inverse of the install, and
-              nothing else is. */}
-          <span style={{ fontSize: 10.5, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-            {pt ? `Remover "${entry.name}" de: ${sc.label} — ${sc.reach}?` : `Remove "${entry.name}" from: ${sc.label} — ${sc.reach}?`}
-          </span>
-          <button
-            onClick={() => { setConfirm(false); onRemove() }}
-            style={{
-              minHeight: isMobile ? 44 : undefined, padding: isMobile ? '0 14px' : '3px 10px',
-              borderRadius: 6, fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
-              cursor: 'pointer', border: '1px solid #ef4444', background: 'transparent', color: '#ef4444',
-            }}
-          >{pt ? 'Remover' : 'Remove'}</button>
-          <button
-            onClick={() => setConfirm(false)}
-            style={{
-              minHeight: isMobile ? 44 : undefined, padding: isMobile ? '0 14px' : '3px 10px',
-              borderRadius: 6, fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
-              cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg-card)',
-              color: 'var(--text-secondary)',
-            }}
-          >{pt ? 'Cancelar' : 'Cancel'}</button>
-        </div>
-      )}
     </div>
   )
+}
+
+/**
+ * A spinner that actually SPINS, through the class this file already uses everywhere else.
+ *
+ * The new tabs drew lucide's `Loader` glyph STILL, which on a read that takes several seconds reads
+ * as a frozen icon rather than as work in progress — reported as "não teve nenhum loader
+ * indicando". Motion is the whole signal, and `ag-working-spin` is where this codebase keeps it.
+ */
+function Spinner({ size = 16 }: { size?: number }) {
+  return <Loader size={size} className="ag-working-spin" />
 }
 
 function Note({ text, icon }: { text: string; icon?: React.ReactNode }) {

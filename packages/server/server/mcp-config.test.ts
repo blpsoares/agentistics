@@ -37,6 +37,21 @@ describe('reading the scopes that actually exist', () => {
     expect(JSON.stringify(mongo)).not.toContain('mongodb://')
   })
 
+  it('shows the CONFIG for reading and editing, with the env values stripped out of it', () => {
+    // The panel shows what is actually configured; a value that crosses this boundary is on a
+    // screen and in a response body forever. The KEY is kept, so an edit can see it and set it.
+    const mongo = serversFromClaudeJson(doc).find(s => s.name === 'MongoDB')!
+    expect(mongo.config).toContain('mongodb-mcp-server@2.1.0')
+    expect(mongo.config).toContain('MDB_MCP_CONNECTION_STRING')
+    expect(mongo.config).not.toContain('user:pw')
+    expect(JSON.parse(mongo.config).env).toEqual({ MDB_MCP_CONNECTION_STRING: '' })
+  })
+
+  it('leaves a server with no env alone', () => {
+    const s = serversFromMcpJson({ mcpServers: { plain: { command: 'x', args: ['-y'] } } }, '/repo')
+    expect(JSON.parse(s[0]!.config)).toEqual({ command: 'x', args: ['-y'] })
+  })
+
   it('tells a stdio server from a remote one, with or without a `type`', () => {
     const all = serversFromClaudeJson(doc)
     expect(all.find(s => s.name === 'MongoDB')?.transport).toBe('stdio')
@@ -45,7 +60,10 @@ describe('reading the scopes that actually exist', () => {
 
   it('reads <repo>/.mcp.json as the PROJECT scope', () => {
     const s = serversFromMcpJson({ mcpServers: { shared: { command: 'x' } } }, '/repo')
-    expect(s).toEqual([{ name: 'shared', scope: 'project', transport: 'stdio', command: 'x', projectPath: '/repo' }])
+    expect(s).toEqual([{
+      name: 'shared', scope: 'project', transport: 'stdio', command: 'x', projectPath: '/repo',
+      config: '{\n  "command": "x"\n}',
+    }])
   })
 
   it('survives junk rather than throwing', () => {
@@ -56,7 +74,8 @@ describe('reading the scopes that actually exist', () => {
 })
 
 describe('mergeScopes — the definition that WINS is the one listed', () => {
-  const s = (name: string, scope: McpServer['scope']): McpServer => ({ name, scope, transport: 'stdio', command: 'x' })
+  const s = (name: string, scope: McpServer['scope']): McpServer =>
+    ({ name, scope, transport: 'stdio', command: 'x', config: '{}' })
 
   it('keeps the narrowest scope for a name', () => {
     // Claude Code resolves local → project → user, so listing all three would show configurations
