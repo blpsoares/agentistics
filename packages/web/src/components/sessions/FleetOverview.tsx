@@ -17,6 +17,7 @@ import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { formatUptime, summarizeFleet } from '../../lib/fleetSummary'
 import { ActivityHeatmap } from '../ActivityHeatmap'
+import { activityTrend, trendPeak, type TrendDay } from '../../lib/activityTrend'
 
 export interface HeatmapDay { date: string; value: number; sessions: number; tools: number }
 
@@ -49,6 +50,8 @@ export interface FleetOverviewProps {
 }
 
 export function FleetOverview({ lang, rows, loading, unsupported, unavailable, heatmap }: FleetOverviewProps) {
+  /** The same filtered days the calendar draws, as a day-by-day series. See `activityTrend.ts`. */
+  const trend = useMemo(() => activityTrend(heatmap ?? []), [heatmap])
   const pt = lang === 'pt'
   const s = useMemo(() => summarizeFleet(rows, Date.now()), [rows])
 
@@ -248,8 +251,17 @@ export function FleetOverview({ lang, rows, loading, unsupported, unavailable, h
               tell four shades apart. The cap lives HERE rather than in the component, which is
               also used inside a dashboard card that constrains it already, and inside an expanded
               modal that is supposed to be large. */}
-          <div style={{ maxWidth: 620 }}>
-            <ActivityHeatmap data={[...heatmap]} weeks={26} />
+          {/* TWO VIEWS OF ONE SET, side by side, because they are read differently: the calendar is
+              TEXTURE — which days, over half a year — and the trend is a SHAPE — how the window the
+              filters selected actually moved. Capping the calendar left this room empty, and empty
+              room beside a chart reads as something that failed to load. */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24, alignItems: 'flex-start' }}>
+            <div style={{ flex: '1 1 420px', maxWidth: 620, minWidth: 0 }}>
+              <ActivityHeatmap data={[...heatmap]} weeks={26} />
+            </div>
+            <div style={{ flex: '1 1 300px', minWidth: 260 }}>
+              <ActivityTrend series={trend} lang={lang} />
+            </div>
           </div>
         </section>
       )}
@@ -317,6 +329,66 @@ function Notice({ text }: { text: string }) {
       }}>
         {text}
       </p>
+    </div>
+  )
+}
+
+
+/**
+ * The window's activity as a shape: one bar per day, oldest at the left.
+ *
+ * Drawn by hand rather than with the charting library the dashboard uses, for the same reason the
+ * heatmap is: this is a strip a few hundred pixels wide with no axes, no legend and no tooltip
+ * chrome to configure away, and the library's smallest useful chart is larger than the space.
+ *
+ * IT SAYS WHAT IT IS MEASURING. A bar chart with no scale is a decoration; the peak and the span
+ * are printed beside it, so a reader can tell three sessions from thirty without hovering.
+ */
+function ActivityTrend({ series, lang }: { series: readonly TrendDay[]; lang: 'pt' | 'en' }) {
+  const pt = lang === 'pt'
+  const peak = trendPeak(series)
+  if (series.length === 0 || peak === 0) {
+    // Never a row of empty bars: an empty measurement and "nothing in this window" are different
+    // facts, and a flat baseline reads as the first while meaning the second.
+    return null
+  }
+  const first = series[0]!.date
+  const last = series[series.length - 1]!.date
+  return (
+    <div>
+      <h3 style={{
+        margin: '0 0 4px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
+        letterSpacing: '0.06em', color: 'var(--text-tertiary)',
+      }}>
+        {pt ? 'No período' : 'Over the window'}
+      </h3>
+      <p style={{ margin: '0 0 10px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
+        {pt
+          ? `Sessões por dia · pico de ${peak} · ${first} a ${last}`
+          : `Sessions per day · peak ${peak} · ${first} to ${last}`}
+      </p>
+      <div style={{
+        display: 'flex', alignItems: 'flex-end', gap: 2, height: 90,
+        borderBottom: '1px solid var(--border)', paddingBottom: 1,
+      }}>
+        {series.map(d => (
+          <div
+            key={d.date}
+            title={pt
+              ? `${d.date} · ${d.sessions} ${d.sessions === 1 ? 'sessão' : 'sessões'} · ${d.messages} msgs`
+              : `${d.date} · ${d.sessions} ${d.sessions === 1 ? 'session' : 'sessions'} · ${d.messages} msgs`}
+            style={{
+              flex: 1, minWidth: 2,
+              // A day with activity always draws SOMETHING: a bar rounded to zero pixels is a day
+              // the chart says was quiet when it was not.
+              height: d.sessions === 0 ? 1 : `${Math.max(2, Math.round((d.sessions / peak) * 88))}px`,
+              background: d.sessions === 0 ? 'var(--border)' : 'var(--anthropic-orange)',
+              opacity: d.sessions === 0 ? 1 : 0.55 + 0.45 * (d.sessions / peak),
+              borderRadius: '2px 2px 0 0',
+            }}
+          />
+        ))}
+      </div>
     </div>
   )
 }
