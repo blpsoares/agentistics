@@ -375,6 +375,41 @@ export function fleetActivityStates(
   return out
 }
 
+/**
+ * A row this page has NEVER SEEN is a level, not a transition — so it is not news.
+ *
+ * This is the first-snapshot rule applied per SESSION instead of per page, and it exists because
+ * the two are the same mistake at different scales. Rows join and leave the fleet for reasons that
+ * are not a session changing state: a short-lived session can be born and finished inside one poll
+ * interval; `collapseSupersededSessions` hides a retired predecessor and can show it again when its
+ * live sibling ends; a row reading `lost` for one poll drops out of the activity map entirely
+ * (`lost` has no words here — see `fleetActivityStates`) and returns as `exited` on the next. Every
+ * one of those arrives with no previous state, and every one of them rang "[Session Closed]" for a
+ * session nobody had watched close. That is the reported bug: "notificações de sessões FECHADAS
+ * estão disparando para sessões que já fecharam."
+ *
+ * ONE EXCEPTION, and it is stated rather than inferred: `waiting-approval`. Every other sentence
+ * here reports a CHANGE ("it finished its turn", "it was closed", "it started working") and is only
+ * true if somebody watched the state before it. `waiting-approval` reports a session BLOCKED ON A
+ * PERSON, which stays true until that person answers — and there may be no later transition to ring
+ * on, so silence there costs the session itself rather than one notification. The OS `tag` is
+ * per session, so a repeat replaces the previous toast instead of stacking.
+ *
+ * Pure, and separate from `handleSessionStateTransitions` on purpose: that one is the raw diff and
+ * its "an absent previous state is news" behaviour is pinned by its own test. The fleet is what
+ * needs this rule, so the fleet is where it lives.
+ */
+export function announceable(
+  prev: Record<string, SessionActivity>,
+  next: Record<string, SessionActivity>,
+): Record<string, SessionActivity> {
+  const out: Record<string, SessionActivity> = {}
+  for (const [id, state] of Object.entries(next)) {
+    if (prev[id] !== undefined || state === 'waiting-approval') out[id] = state
+  }
+  return out
+}
+
 export function notifyFleetTransitions(
   prev: Record<string, SessionActivity> | null,
   rows: readonly { id: string; state: string; title?: string; cwd?: string; harness?: string }[],
@@ -392,6 +427,8 @@ export function notifyFleetTransitions(
       ...(r.harness ? { harness: r.harness } : {}),
     })
   }
-  handleSessionStateTransitions(prev, next, map, lang)
+  handleSessionStateTransitions(prev, announceable(prev, next), map, lang)
+  // The FULL snapshot is what the caller keeps, withheld rows included: a row seen for the first
+  // time now is not news, and must be a baseline the moment it changes.
   return next
 }

@@ -138,3 +138,57 @@ describe('the caller that was missing — the live fleet', () => {
     expect(captured[0]?.body).toContain('agentistics')
   })
 })
+
+describe('a row nobody watched arrive is not an event that happened', () => {
+  /**
+   * The report: "notificações de sessões FECHADAS estão disparando para sessões que já fecharam."
+   *
+   * `handleSessionStateTransitions` treats an id absent from the previous map as news, which is
+   * correct for the raw diff and wrong for a fleet: rows JOIN and LEAVE this list for reasons that
+   * are not the session changing state. A short-lived session can be born and finished inside one
+   * poll interval; `collapseSupersededSessions` hides a retired predecessor and can show it again;
+   * a row that reads `lost` for one poll leaves the activity map entirely (`lost` has no words
+   * here) and returns to `exited` on the next. Every one of those arrives as an id with no
+   * previous state, and every one of them rang "[Session Closed]".
+   */
+  it('does not announce a session first seen already finished', () => {
+    const first = notifyFleetTransitions(null, [{ id: 'a', state: 'working' }], 'en')
+    notifyFleetTransitions(first, [{ id: 'a', state: 'working' }, { id: 'b', state: 'exited' }], 'en')
+    expect(captured).toHaveLength(0)
+  })
+
+  it('still announces a session it watched finish', () => {
+    const first = notifyFleetTransitions(null, [{ id: 'a', state: 'working' }], 'en')
+    notifyFleetTransitions(first, [{ id: 'a', state: 'exited' }], 'en')
+    expect(captured).toHaveLength(1)
+    expect(captured[0]!.title).toContain('Session Closed')
+  })
+
+  it('does not re-announce a finished row that left the list and came back', () => {
+    // `lost` carries no words here, so the row drops out of the activity map and returns with no
+    // previous state — which is exactly the flapping case, and it rang every time it came back.
+    const s1 = notifyFleetTransitions(null, [{ id: 'a', state: 'working' }], 'en')
+    const s2 = notifyFleetTransitions(s1, [{ id: 'a', state: 'exited' }], 'en')
+    expect(captured).toHaveLength(1)
+    const s3 = notifyFleetTransitions(s2, [{ id: 'a', state: 'lost' }], 'en')
+    notifyFleetTransitions(s3, [{ id: 'a', state: 'exited' }], 'en')
+    expect(captured).toHaveLength(1)
+  })
+
+  it('records a first-sighted row so its NEXT change is news', () => {
+    const first = notifyFleetTransitions(null, [{ id: 'a', state: 'working' }], 'en')
+    const second = notifyFleetTransitions(first, [{ id: 'a', state: 'working' }, { id: 'b', state: 'exited' }], 'en')
+    expect(second).toEqual({ a: 'working', b: 'exited' })
+  })
+
+  it('makes the ONE exception for a session blocked on a person', () => {
+    // Silence on `waiting-approval` costs the session itself: it stays blocked until somebody
+    // answers, and there may never be another transition to ring on.
+    const first = notifyFleetTransitions(null, [{ id: 'a', state: 'working' }], 'en')
+    notifyFleetTransitions(first, [
+      { id: 'a', state: 'working' }, { id: 'b', state: 'waiting-approval' },
+    ], 'en')
+    expect(captured).toHaveLength(1)
+    expect(captured[0]!.title).toContain('Needs Approval')
+  })
+})
