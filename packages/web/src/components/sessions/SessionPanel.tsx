@@ -137,8 +137,21 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
       )}
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* KEYED BY THE SESSION, and this is a correctness fix rather than a hint to React.
+            Without it the same instance is reused when `session` changes, so every piece of state
+            that is READ ONCE AT MOUNT belongs to whichever session was open first: the draft
+            (`useState(() => readDraft(session.id))`), the attachments, and the in-flight `sending`
+            / `stopping` flags.
+            Reported, and it is the worst shape this could take: a message typed for one session
+            was sent into ANOTHER after switching rows mid-request, with every button in the new
+            session's composer stuck on a spinner that belonged to the old one. Per-session state
+            must not outlive the session, and a `key` is how React is told that. */}
         {active === 'chat' ? (
-          <SessionChat session={session} {...(row ? { row } : {})} lang={lang} act={act} {...(onArtifacts ? { onArtifacts } : {})} />
+          <SessionChat
+            key={session.id}
+            session={session} {...(row ? { row } : {})} lang={lang} act={act}
+            {...(onArtifacts ? { onArtifacts } : {})}
+          />
         ) : (
           <div style={{ flex: 1, minHeight: 0, padding: 16, display: 'flex', flexDirection: 'column' }}>
             {/* The very component the sessions list uses. Assembling a second one from the stream

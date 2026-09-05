@@ -4,6 +4,7 @@ import { activeMinutesOf } from '@agentistics/core'
 import { getGitFileStats } from './git'
 import { countGitCommands } from './harness-activity'
 import { extractAgentMetrics } from './agent-metrics'
+import { addDelta, editDelta, type EditDelta } from './edit-lines'
 
 // File extension → language name (used when session-meta is absent)
 export const EXT_TO_LANG: Record<string, string> = {
@@ -240,6 +241,8 @@ export async function parseSessionJsonl(
   let toolErrors = 0, userInterruptions = 0
   let hasMcp = false
   const claudeFilesModified = new Set<string>()
+  /** Lines this session's OWN edits changed — see `edit-lines.ts`. */
+  let editLines: EditDelta = { added: 0, removed: 0 }
   const toolCounts: Record<string, number> = {}
   const toolOutputTokens: Record<string, number> = {}
   const agentFileReads: Record<string, number> = {}
@@ -400,6 +403,10 @@ export async function parseSessionJsonl(
                 // Count files Claude directly wrote or edited (not git-based)
                 if (['Edit', 'Write', 'MultiEdit'].includes(toolName)) {
                   claudeFilesModified.add(fp)
+                  // …and the LINES, from the same call. See `edit-lines.ts`: the git-diff figure
+                  // measures uncommitted work, so a session that commits as it goes reported
+                  // `+0 / −0` beside a real file count.
+                  editLines = addDelta(editLines, editDelta(toolName, p.input))
                 }
 
                 // Detect agent instruction file reads (Read tool only — Glob/Grep/Search
@@ -487,8 +494,13 @@ export async function parseSessionJsonl(
     uses_mcp: hasMcp,
     uses_web_search: 'WebSearch' in toolCounts,
     uses_web_fetch: 'WebFetch' in toolCounts,
-    lines_added: gitFileStats.linesAdded,
-    lines_removed: gitFileStats.linesRemoved,
+    // The session's OWN edits win over the working-tree diff, and fall back to it: the diff is 0
+    // for a session that committed its work, while the edits are what it actually changed. Taking
+    // the larger keeps a session that edited outside git (or through the shell) from reporting less
+    // than git can see — the same `Math.max` shape `filesModifiedCount` already uses, and for the
+    // same reason.
+    lines_added: Math.max(gitFileStats.linesAdded, editLines.added),
+    lines_removed: Math.max(gitFileStats.linesRemoved, editLines.removed),
     files_modified: filesModifiedCount,
     message_hours: messageHours,
     user_message_timestamps: userMessageTimestamps,

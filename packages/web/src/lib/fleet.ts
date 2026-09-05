@@ -254,6 +254,14 @@ async function pollCentralOnce(): Promise<void> {
  */
 let lastActivity: Record<string, SessionActivity> | null = null
 
+/**
+ * How long a verb may go unanswered before the UI says so.
+ *
+ * Long enough that ordinary slowness is not reported as a failure — a `prompt` reads the pane
+ * before typing — and short enough that nobody sits in front of a spinner wondering.
+ */
+const ACT_TIMEOUT_MS = 20_000
+
 async function pollOnce(): Promise<void> {
   if (pollCentral) return pollCentralOnce()
   try {
@@ -327,11 +335,37 @@ export function useFleet(lang: 'pt' | 'en', enabled = true): FleetState {
 
   const act = useCallback<FleetState['act']>(async req => {
     try {
-      const res = await fetch(`/api/fleet/act?lang=${lang}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(req),
-      })
+      /*
+       * A VERB THAT NEVER ANSWERS MUST STOP BEING A SPINNER.
+       *
+       * There was no timeout, so a request the machine did not answer left the composer spinning
+       * for as long as the page stayed open. Measured from a real transcript: a message reached the
+       * session's pane at 18:46:45 and a SECOND copy of it at 18:51:17 — four and a half minutes
+       * later, because from the outside the first one had simply not happened. The duplicate was
+       * not a double send; it was the only thing a person can do with a control that never comes
+       * back.
+       *
+       * The budget is generous on purpose: `prompt` reads the pane before typing and a busy machine
+       * is slow, so a short timeout would report failures that are merely slowness — and a message
+       * reported as failed is one somebody sends again, which is the bug this is fixing.
+       *
+       * IT DOES NOT CLAIM THE VERB FAILED. The request may well have landed; what timed out is our
+       * knowledge of it. The sentence says exactly that, and the poll that follows is what settles
+       * it — which is why `pollOnce` still runs.
+       */
+      const ctl = new AbortController()
+      const timer = setTimeout(() => ctl.abort(), ACT_TIMEOUT_MS)
+      let res: Response
+      try {
+        res = await fetch(`/api/fleet/act?lang=${lang}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(req),
+          signal: ctl.signal,
+        })
+      } finally {
+        clearTimeout(timer)
+      }
       // Read through `parseActResult`, which is where "every field the answer carries is carried
       // on" is written down and tested. This was an object literal building `{ ok, message }` while
       // the declared return type promised `id?: string` — so a reopen spawned its session and the
@@ -341,10 +375,19 @@ export function useFleet(lang: 'pt' | 'en', enabled = true): FleetState {
       // it is how a control that worked looks like one that did nothing.
       await pollOnce()
       return out
-    } catch {
+    } catch (err) {
+      // A poll settles what actually happened — see the note above. It runs even here.
+      void pollOnce()
+      const timedOut = err instanceof Error && err.name === 'AbortError'
       return {
         ok: false,
-        message: lang === 'pt' ? 'Erro de rede ao falar com esta máquina.' : 'Network error talking to this machine.',
+        message: timedOut
+          ? (lang === 'pt'
+            ? 'A máquina não respondeu a tempo. A ação pode ter acontecido — confira a lista antes de repetir.'
+            : 'The machine did not answer in time. The action may still have happened — check the list before repeating it.')
+          : (lang === 'pt'
+            ? 'Erro de rede ao falar com esta máquina.'
+            : 'Network error talking to this machine.'),
       }
     }
   }, [lang])
