@@ -169,9 +169,31 @@ const META_KINDS: Array<{ test: RegExp; note: string }> = [
  * unwrapping. The flag only decides that a tag-less entry is the harness's; where a tag exists it
  * is the better answer.
  */
-export function classifyUserEntry({ text, isMeta }: { text: string; isMeta?: boolean }): UserEntry {
+export function classifyUserEntry(
+  { text, isMeta, isCompactSummary }: { text: string; isMeta?: boolean; isCompactSummary?: boolean },
+): UserEntry {
   const trimmed = text.trim()
   if (trimmed === '') return { kind: 'system', note: '' }
+
+  /*
+   * THE COMPACTION SUMMARY IS NOT A MESSAGE ANYBODY SENT, and it is the largest thing in the
+   * transcript. When a conversation runs out of context Claude Code writes the summary back in as
+   * a `user` entry — carrying NO `isMeta` and no envelope tag, so both of the rules above read it
+   * as the person having typed it. What the chat then drew was a wall of "Primary Request and
+   * Intent / Files and Code Sections" in a user bubble: a prompt the user is looking at, did not
+   * write, and cannot account for. Reported exactly that way — "um prompt GIGANTE que nao foi eu
+   * que enviei" — and 12 transcripts on the machine it was reported from carry one.
+   *
+   * The harness DECLARES it (`isCompactSummary: true`), so this is not a heuristic and does not
+   * belong in `META_KINDS`: matching it by its opening sentence would both miss a reworded one and
+   * catch a person quoting it. Checked BEFORE `isMeta`, because it is the more specific fact — a
+   * summary that also carried the flag would otherwise get the generic note.
+   *
+   * A NOTE, never the body: the same rule every other injected entry keeps. What was compacted is
+   * the conversation the reader is already looking at.
+   */
+  if (isCompactSummary === true) return { kind: 'system', note: 'the conversation was compacted' }
+
   if (isMeta !== true) return classifyUserText(trimmed)
 
   // A tag the table knows says more than the flag does, so it wins — but only ever toward `system`:

@@ -145,3 +145,28 @@ describe('classifyUserEntry — isMeta', () => {
     expect(classifyUserText('hello')).toEqual({ kind: 'person', text: 'hello' })
   })
 })
+
+
+describe('the compaction summary', () => {
+  it('a compaction summary is a NOTE, never a message the person sent', () => {
+  // Claude Code writes the summary back in as a `user` entry with no `isMeta` and no envelope tag,
+  // so both other rules read it as typed. It is the largest thing in a transcript.
+  const summary = 'This session is being continued from a previous conversation that ran out of '
+    + 'context.\n\nSummary:\n1. Primary Request and Intent:\n…'
+  const out = classifyUserEntry({ text: summary, isCompactSummary: true })
+  expect(out.kind).toBe('system')
+  expect(out).toEqual({ kind: 'system', note: 'the conversation was compacted' })
+  })
+
+  it('the compaction flag outranks isMeta, so the note is the specific one', () => {
+  expect(classifyUserEntry({ text: 'anything', isMeta: true, isCompactSummary: true }))
+    .toEqual({ kind: 'system', note: 'the conversation was compacted' })
+  })
+
+  it('the same text WITHOUT the flag is still the person — it is not matched by its wording', () => {
+  // Quoting the summary back at a session is a message somebody typed. The harness declares the
+  // real one; a sentence match would both miss a reworded summary and eat a genuine quote.
+  const quoted = 'This session is being continued from a previous conversation that ran out of context.'
+  expect(classifyUserEntry({ text: quoted }).kind).toBe('person')
+  })
+})

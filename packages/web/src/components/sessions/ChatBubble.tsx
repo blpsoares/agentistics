@@ -132,6 +132,7 @@ const SYSTEM_NOTE_PT: Record<string, string> = {
   'a skill was loaded': 'uma skill foi carregada',
   'a skill was re-invoked': 'uma skill foi reinvocada',
   'a message from another session': 'uma mensagem de outra sessão',
+  'the conversation was compacted': 'a conversa foi compactada — o resumo do que veio antes',
   'an image was attached': 'uma imagem foi anexada',
   'the session was resumed': 'a sessão foi retomada',
   'an idle notice about another session': 'aviso de ociosidade sobre outra sessão',
