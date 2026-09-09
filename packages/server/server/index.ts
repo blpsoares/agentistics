@@ -3829,12 +3829,12 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
 
 try {
 // PORT (47291) is always the api + mcp endpoint.
-Bun.serve<WSData>({ port: PORT, idleTimeout: 60, maxRequestBodySize: LIMITS.ingestBodyBytes, websocket: _wsHandlers, fetch: handleRequest })
+Bun.serve<WSData>({ hostname: '0.0.0.0', port: PORT, idleTimeout: 60, maxRequestBodySize: LIMITS.ingestBodyBytes, websocket: _wsHandlers, fetch: handleRequest })
 // Binary mode also serves the web dashboard on WEB_PORT (47292) — that's the URL you open.
 // Same handler → the SPA's same-origin `/api/*` calls resolve against 47292 and just work,
 // while 47291 stays the dedicated api + mcp port.
 if (SERVE_STATIC) {
-  Bun.serve<WSData>({ port: WEB_PORT, idleTimeout: 60, maxRequestBodySize: LIMITS.ingestBodyBytes, websocket: _wsHandlers, fetch: handleRequest })
+  Bun.serve<WSData>({ hostname: '0.0.0.0', port: WEB_PORT, idleTimeout: 60, maxRequestBodySize: LIMITS.ingestBodyBytes, websocket: _wsHandlers, fetch: handleRequest })
 }
 
 const _ESC = '\x1b'
