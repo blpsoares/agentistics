@@ -303,6 +303,40 @@ export type RestartOutcome = { ok: boolean; failures: string[] }
  *   THIS binary so the image tag matches the version we just installed (the running process
  *   still carries the old version number).
  */
+/**
+ * Detect and restart unmanaged background `agentop server` processes (e.g. started via
+ * `agentop server --bg` or `agentop start`) so upgrading always replaces the running server.
+ */
+async function restartBackgroundServerPids(newBin: string): Promise<boolean> {
+  try {
+    const { out } = await sh(['pgrep', '-f', 'agentop.*(server|start)'])
+    const pids = out.split('\n')
+      .map(s => parseInt(s.trim(), 10))
+      .filter(p => !isNaN(p) && p > 0 && p !== process.pid && p !== process.ppid)
+
+    if (pids.length === 0) return false
+
+    process.stdout.write('  Restarting background agentop server process…\n')
+    for (const pid of pids) {
+      try { process.kill(pid, 'SIGTERM') } catch { /* already gone */ }
+    }
+    await new Promise(r => setTimeout(r, 1000))
+    for (const pid of pids) {
+      try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
+    }
+
+    const { spawn } = await import('node:child_process')
+    const { homedir } = await import('node:os')
+    const { join } = await import('node:path')
+    const log = join(homedir(), '.agentistics', 'agentop-server.log')
+    const child = spawn('sh', ['-c', `nohup "${newBin}" server --bg >> "${log}" 2>&1 &`], { stdio: 'ignore', detached: true })
+    child.unref()
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function restartRunningServices(newBin: string): Promise<RestartOutcome> {
   let didSomething = false
   const failures: string[] = []
@@ -350,6 +384,12 @@ async function restartRunningServices(newBin: string): Promise<RestartOutcome> {
         '(re-run `agentop start` from the repo)',
       )
     }
+  }
+
+  // 4) Background unmanaged server process: if systemd did not restart server, check for and bounce running background server
+  if (!didSomething) {
+    const restartedBg = await restartBackgroundServerPids(newBin)
+    if (restartedBg) didSomething = true
   }
 
   if (!didSomething && failures.length === 0) {
