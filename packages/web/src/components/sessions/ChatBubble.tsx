@@ -216,6 +216,7 @@ function SystemNote({ note, noteRef, pt }: { note: string; noteRef?: string; pt:
 }
 
 export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provisional, awaiting, awaitingWorking, awaitingSinceMs, onReply, onReplyExcerpt, anchorId, attachmentSends }: ChatBubbleProps) {
+  const isMobile = useIsMobile()
   const pt = lang === 'pt'
   const mine = turn.role === 'user'
   /**
