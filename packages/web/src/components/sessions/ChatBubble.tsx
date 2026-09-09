@@ -169,12 +169,8 @@ function SystemNote({ note, noteRef, pt }: { note: string; noteRef?: string; pt:
     background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
     maxWidth: '90%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
     fontFamily: 'inherit',
-    // THE TAP TARGET IS 44px, THE CHIP IS NOT. A conversation can hold a run of these back to
-    // back, and a 44px band per note would push the messages apart; padding plus an equal negative
-    // margin buys the target without changing a pixel of the layout. Mobile only — 44 is the
-    // mobile number, and applying it on a pointer would put a huge invisible box over the text
-    // above and below.
-    ...(isMobile ? { padding: '14px 10px', margin: '-11px 0' } : {}),
+    // Sleek chip dimensions on mobile and desktop
+    ...(isMobile ? { padding: '4px 10px', margin: '2px 0' } : {}),
   }
 
   if (tab !== null) {
@@ -386,7 +382,7 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
 
   return (
     <div className="ag-bubble" {...(anchorId ? { id: anchorId } : {})} style={{
-      display: 'flex', gap: 10, minWidth: 0,
+      display: 'flex', gap: isMobile ? 6 : 10, minWidth: 0,
       flexDirection: mine ? 'row-reverse' : 'row',
       alignItems: 'flex-start',
     }}>
@@ -423,11 +419,13 @@ export const ChatBubble = memo(function ChatBubble({ turn, lang, harness, provis
         style={{
         // `minWidth: 0` is what actually keeps wide content inside the card: without it a flex item
         // refuses to shrink below its content, and a long line pushes the bubble off the pane.
-        minWidth: 0, maxWidth: mine ? '82%' : '100%',
-        display: 'flex', flexDirection: 'column', gap: 6,
+        minWidth: 0, maxWidth: mine ? (isMobile ? '85%' : '82%') : '100%',
+        display: 'flex', flexDirection: 'column', gap: isMobile ? 4 : 6,
         background: mine ? 'var(--bg-elevated)' : 'var(--bg-card)',
         border: '1px solid var(--border-subtle)',
-        borderRadius: 14, padding: '11px 14px', position: 'relative',
+        borderRadius: isMobile ? 12 : 14,
+        padding: isMobile ? (mine ? '8px 11px' : '9px 12px') : '11px 14px',
+        position: 'relative',
         // Faded while the session has not read it. The TEXT stays fully legible — this is a
         // statement about delivery, not about the message being less important to read back.
         opacity: awaiting ? 0.62 : 1,
