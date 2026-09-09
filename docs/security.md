@@ -266,6 +266,61 @@ whole, and they are there for a machine's own profile if the surface ever moves.
 rule that ate skill names would be a rule about a field, which is a different mechanism and would
 have to be a declared per-connection option rather than a silent scrub.
 
+### 8.0b The delivery board — free text, per task, off by default
+
+The board (`/tasks`) is the one thing a member pushes that is **free text by design**: a title, a
+description somebody wrote out, every comment, the subtasks, the names of the files attached to a
+card. So it travels under a second, narrower gate than everything else:
+
+- **`Task.shared`, absent reading as NOT shared.** This is deliberately *not* the `shareMode`
+  migration rule (where absence reads as denylist, i.e. share) — it is the `chat-gate.ts` reading.
+  There, treating absence as anything else would silently invert live sharing rules; here, it
+  would publish text nobody offered. There is no "share everything" switch, which would be the
+  lenient default by another door. A board is opted in one delivery at a time, by its owner, from
+  the delivery's own screen or `agentop task share <ref>`.
+- **The connection's rules still bind the sessions, unchanged.** Sharing a delivery adds its own
+  record to what already travels; it can never widen a repository or project rule. A shared task
+  whose work sits in a withheld repository ships its record and **none** of its sessions — and the
+  central is told how many are missing (`sessionsWithheld`), so the delivery reads as *measured
+  short* rather than as one that cost less.
+- **The text is redacted at BOTH boundaries** — `redactSharedTask` on the member before the push,
+  and again in `toTeamTaskDoc` on the central at ingest. The second pass is not belt-and-braces: a
+  central cannot assume its members run current code, and in a mixed-version fleet the machine
+  still on the old build is exactly the one that leaks. The redactor is the same precise, never
+  exhaustive one `first_prompt` goes through, with the same limit: it is a safety net for the
+  accidental paste, never a substitute for rotating a leaked credential.
+- **File BYTES do not travel.** The central learns that a delivery has N files and what they are
+  called; fetching one would be an on-demand pull over the reverse channel, the way raw chat
+  already works, and does not exist yet.
+- **No number computed on the member travels.** Cost, rounds and tokens are resolved on the
+  central by the same `task-rollup.ts` the machine's own board uses, over the sessions it already
+  holds. A total shipped from the member would be a second answer to "what did this cost".
+- **The claim does not travel.** A 30-minute lease pushed on a seconds-to-minutes cadence arrives
+  stale and would read as "somebody is working on this right now" long after they stopped.
+- **A revoke or a `leave` takes the boards with it** (`deleteMemberTasks`), like the sessions and
+  the workflow runs: text shared under a relationship does not outlive it.
+- **The central's board is read-only.** `GET /api/team/tasks` is authenticated like every other
+  team route and there is no write path: the record lives on the machine that owns it.
+- **It is scoped to the VIEWER by the rule `/api/data` already applies** — an owner sees every
+  machine; anyone else sees the machines of the teams they MANAGE (`dataTeamIdsOf`; belonging is
+  not reading) plus the machines they own, so a loose machine is still visible to its owner. A
+  machine outside that scope is not filtered out of the answer, it is never built into it, so no
+  title of theirs can reach the viewer through any field. A machine the roster cannot attribute (a
+  revoked or legacy identity carries no team) is withheld from a scoped viewer and shown to an
+  owner — fail closed. This is deliberately not a new visibility model: a second answer to "who may
+  read this" is a second place for it to be answered differently.
+- **A delivery may only ever name its OWN machine's sessions.** `sessionIds` arrives from the
+  member, so the central resolves each id against that machine's sessions and counts anything else
+  as MISSING. Without that check a machine could list a neighbour's session id and have the central
+  resolve that session's cost, tokens, harness and repository under its own delivery — reading a
+  colleague's numbers back off its own board. The ids are UUIDs and so not guessable, which makes
+  it hard rather than impossible; the check makes it neither.
+
+What is NOT guaranteed here is everything §8 already lists — in particular, **a delivery already
+pushed is disclosed by its removal**, exactly as a repository is. Turning sharing off stops future
+pushes; withdrawing what a central already holds is the observable delete described above.
+>>>>>>> origin/feat/alm-central-sync
+
 ### 8.1 Rules are per machine, and how a machine finds out
 
 Sharing rules live on the machine that declares them. Restricting a repository on one laptop does

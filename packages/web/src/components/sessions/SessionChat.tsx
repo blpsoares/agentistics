@@ -857,7 +857,7 @@ export function SessionChat({ session, row, lang, act, onArtifacts, onReopened }
    * queue, is precisely the one somebody is watching the screen to understand.
    */
   const working = session.state === 'working'
-  const { state: term } = useTerminalStream(working || echo.length > 0 ? session.id : null)
+  const { state: term } = useTerminalStream(session.id)
 
   // A turn just ENDED. The live bubble is gone the moment `working` drops, and the real one is up
   // to `CHAT_POLL_MS` away — a gap where neither source is showing the answer that just finished.
@@ -2282,7 +2282,7 @@ export function SessionChat({ session, row, lang, act, onArtifacts, onReopened }
                     // colour the text would otherwise be, so it never rides on `color` and vanishes
                     // the moment `color` does.
                     color: needsMirror(cmdToken, mentions) ? 'transparent' : 'var(--text-primary)',
-                    caretColor: 'var(--text-primary)',
+                    caretColor: 'var(--anthropic-orange)',
                     fontFamily: 'inherit', fontSize: 13.5,
                     lineHeight: 1.5, maxHeight: maxComposerH, overflowY: 'auto', padding: '6px 6px',
                     // Above the mirror.
