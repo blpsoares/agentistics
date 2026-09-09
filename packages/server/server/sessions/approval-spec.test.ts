@@ -46,12 +46,13 @@ describe('choiceKey', () => {
     // produced `User rejected write` (option 3 = No), and `3` at an AskUserQuestion selected that
     // question's third answer.
     expect(choiceKey(approvalFor('claude'), 3)).toBe('3')
+    expect(choiceKey(approvalFor('antigravity'), 3)).toBe('3')
   })
 
   it('REFUSES on a harness where nobody has verified how to choose', () => {
     // There is no safe fallback to the confirm key. Confirming the highlighted row on a dialog
     // somebody is being shown four answers to is choosing for them, which is the whole defect.
-    for (const id of ['codex', 'kimi', 'gemini', 'copilot', 'antigravity'] as const) {
+    for (const id of ['codex', 'kimi', 'gemini', 'copilot'] as const) {
       expect(choiceKey(approvalFor(id), 1), id).toBeNull()
     }
   })

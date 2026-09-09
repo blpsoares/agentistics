@@ -116,9 +116,11 @@ export const ATTENTION_RULES: Record<HarnessId, AttentionRules | null> = {
   },
   antigravity: {
     probed: 'agy 1.1.12, 2026-08-13',
-    // agy words its footer differently from the others — `Navigate`/`Confirm` capitalised, no `esc`
-    // — which is precisely why each harness gets its own probed pattern instead of one shared guess.
-    approval: [/↑\/↓ Navigate · enter Confirm/],
+    approval: [
+      /↑\/↓ Navigate · enter Confirm/,
+      /Enter to select/,
+      /Enter to confirm/,
+    ],
   },
 }
 

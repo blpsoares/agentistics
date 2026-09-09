@@ -156,7 +156,17 @@ export const APPROVAL_SPECS: Record<HarnessId, ApprovalSpec | null> = {
   kimi: { key: 'Enter', probed: 'kimi 0.35.0, 2026-08-13' },
   gemini: { key: 'Enter', probed: 'gemini 0.55.1, 2026-08-13' },
   copilot: { key: 'Enter', probed: 'GitHub Copilot CLI 1.0.79, 2026-08-13' },
-  antigravity: { key: 'Enter', probed: 'agy 1.1.12, 2026-08-13' },
+  antigravity: {
+    key: 'Enter',
+    probed: 'agy 1.1.12, 2026-08-13',
+    choice: { kind: 'digit', probed: 'agy 1.1.25, 2026-09-09 (AskUserQuestion / ask_question)' },
+    move: { down: 'Down', up: 'Up', probed: 'agy 1.1.25, 2026-09-09 (option picker)' },
+    markerSelect: { probed: 'agy 1.1.25, 2026-09-09' },
+    fieldOpen: {
+      pattern: /ctrl\+g to edit/i,
+      probed: 'agy 1.1.25, 2026-09-09',
+    },
+  },
 }
 
 /**
