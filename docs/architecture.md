@@ -59,9 +59,9 @@ agentistics/
 │   │   │   ├── App.tsx               # Router, global state, header
 │   │   │   ├── pages/
 │   │   │   │   ├── HomePage.tsx      # Main dashboard (KPIs, charts, sessions)
+│   │   │   │   ├── TasksPage.tsx     # ALM Tasks & Subtasks board (/tasks)
 │   │   │   │   ├── CustomPage.tsx    # Custom layout builder (/custom)
 │   │   │   │   ├── CostsPage.tsx     # Cost deep-dive
-│   │   │   │   ├── ProjectsPage.tsx  # Projects overview
 │   │   │   │   └── ToolsPage.tsx     # Tool metrics breakdown
 │   │   │   ├── hooks/
 │   │   │   │   ├── useData.ts        # Fetches /api/data + SSE + useDerivedStats()
@@ -451,3 +451,11 @@ All layers import from `@agentistics/core` (`packages/core/src/types.ts`). Never
 **`files_modified` takes max of two sources** — `server/jsonl.ts` tracks unique file paths from Edit/Write/MultiEdit tool calls, then takes `Math.max(gitFileStats.filesModified, claudeFilesModified.size)`. The FILES KPI in `useData.ts` prefers the session-level count and only falls back to project-level git stats if sessions show 0.
 
 **`getProjectGitStats` handles workspace folders** — if a project path is not itself a git repo, `server/git.ts` scans one level of subdirectories and aggregates stats from all git repos found there. This covers workspace folders like `~/zuke` that contain multiple repos.
+
+**ALM Tasks & Subtasks Board** — The standalone Projects page was retired in favor of an Application Lifecycle Management board (`/tasks`). Sessions belong to subtasks, and deliveries map to software components. Comprehensive session metrics for projects are presented in the right aside drawer.
+
+**Utility Shell (Phases 1 & 2)** — Each background session provides a dedicated interactive utility shell operating on its own WebSocket socket. Capped and opt-in, it allows real-time terminal output viewing and typing directly in the web UI without affecting fleet telemetry.
+
+**Session Lifecycle Decoupling** — Session tmux processes operate independently from the `@agentistics/server` daemon. Server restarts or crashes leave running fleet sessions untouched.
+
+**Session Behaviour Profile & Metrics** — Prompts and answers now record character/token lengths. Activity trends are attributed to the date a session performed work rather than its creation date.
