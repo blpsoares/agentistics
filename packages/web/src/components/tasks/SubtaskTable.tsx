@@ -147,8 +147,12 @@ export function SubtaskTable(p: SubtaskTableProps) {
                   }}
                 />
               </td>
-              <td style={cell}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+              {/* `minWidth` + `nowrap`: the status chip and the blocked-by badge are two small
+                  controls meant to sit on ONE line — without a floor here `table-layout: auto`
+                  could squeeze this column below their combined width and wrap the badge onto
+                  its own row, which reads as a broken layout rather than two controls. */}
+              <td style={{ ...cell, minWidth: 130, whiteSpace: 'nowrap' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'nowrap' }}>
                   <StatusPick
                     value={t.status} lang={p.lang}
                     onPick={s => void p.onPatch(t.id, { status: s })}

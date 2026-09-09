@@ -707,6 +707,173 @@ function CommentBody({ body, files }: { body: string; files: TaskFile[] }) {
   )
 }
 
+/**
+ * The explicit "attach a file" control — beside paste and drag-and-drop, never a replacement for
+ * them. Not every input device can paste a file (a phone's on-screen keyboard has no
+ * clipboard-file gesture), so the button is the one path that always works.
+ */
+function AttachButton({ onFiles, disabled }: { onFiles: (files: File[]) => void; disabled?: boolean }) {
+  const isMobile = useIsMobile()
+  const inputRef = useRef<HTMLInputElement>(null)
+  return (
+    <>
+      <input
+        ref={inputRef} type="file" multiple disabled={disabled}
+        style={{ display: 'none' }}
+        onChange={e => {
+          const files = Array.from(e.target.files ?? [])
+          // Reset so picking the SAME file twice in a row still fires `onChange`.
+          e.target.value = ''
+          if (files.length > 0) onFiles(files)
+        }}
+      />
+      <button
+        type="button" disabled={disabled} onClick={() => inputRef.current?.click()}
+        title="Attach a file"
+        style={{ ...button(isMobile), padding: isMobile ? undefined : '0 10px', flexShrink: 0 }}
+      ><Paperclip size={13} /></button>
+    </>
+  )
+}
+
+/** A pending attachment, shown as a chip — the same shape a comment draft and the description
+    editor both need, so the row is drawn once. */
+function AttachmentChips({ attached, onRemove }: {
+  attached: readonly CommentAttachment[]
+  onRemove: (id: string) => void
+}) {
+  if (attached.length === 0) return null
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      {attached.map(a => (
+        <span
+          key={a.id}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 6px',
+            ...surface, background: 'var(--bg-base)',
+          }}
+        >
+          {looksLikeImage(a.name)
+            ? <img src={fileUrl(a.id)} alt={a.name} style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4 }} />
+            : <FileText size={14} style={{ color: 'var(--text-tertiary)' }} />}
+          <span style={{ fontSize: 11.5, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {a.name}
+          </span>
+          <button
+            // Unpicking the REFERENCE only: the file stays on the task, where the Files tab can
+            // delete it. Removing bytes because a draft changed its mind is a surprise.
+            onClick={() => onRemove(a.id)} title="Not on this comment"
+            style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex' }}
+          ><X size={12} /></button>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * The delivery's DESCRIPTION — what the whole thing is for, editable the same way a comment is
+ * written: plain text plus files pasted, dropped or attached into it. `Task.detail` already carried
+ * this shape (see `commentBody.ts`); it just had no editor, so the field could be set once at
+ * creation and never touched again.
+ */
+function DescriptionEditor({ id, task, files, onSaved }: {
+  id: string
+  task: TaskListRow['task']
+  files: TaskFile[]
+  onSaved: (detail: string) => void | Promise<void>
+}) {
+  const isMobile = useIsMobile()
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(task.detail ?? '')
+  const [attached, setAttached] = useState<CommentAttachment[]>([])
+  const [dropping, setDropping] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const take = (fl: File[]) => {
+    setBusy(true)
+    void (async () => {
+      const minted: CommentAttachment[] = []
+      for (const f of fl) {
+        // A screenshot on the clipboard has no filename; mint one from the moment so the record
+        // never carries an empty name, which renders as a blank you cannot tell from a broken one.
+        const named = f.name && f.name !== 'image.png'
+          ? f
+          : new File([f], `paste-${new Date().toISOString().replace(/[:.]/g, '-')}.${(f.type.split('/')[1] || 'bin')}`, { type: f.type })
+        const fileId = await uploadFile(id, named, 'you')
+        if (fileId) minted.push({ id: fileId, name: named.name })
+      }
+      if (minted.length > 0) setAttached(a => [...a, ...minted])
+      setBusy(false)
+    })()
+  }
+
+  if (!editing) {
+    return task.detail
+      ? (
+        <div style={{ ...surface, padding: 14, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <CommentBody body={task.detail} files={files} />
+          </div>
+          <button
+            onClick={() => { setText(task.detail ?? ''); setAttached([]); setEditing(true) }}
+            title="Edit description"
+            style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex', flexShrink: 0 }}
+          ><Pencil size={13} /></button>
+        </div>
+      )
+      : (
+        <button
+          style={{ ...button(isMobile), justifySelf: 'start' }}
+          onClick={() => { setText(''); setAttached([]); setEditing(true) }}
+        ><Plus size={13} /> Add a description</button>
+      )
+  }
+
+  return (
+    <div
+      style={{
+        ...surface, padding: 13, display: 'grid', gap: 9,
+        outline: dropping ? '1px dashed var(--anthropic-orange)' : 'none',
+      }}
+      onDragOver={e => { e.preventDefault(); setDropping(true) }}
+      onDragLeave={() => setDropping(false)}
+      onDrop={e => {
+        e.preventDefault(); setDropping(false)
+        const fl = Array.from(e.dataTransfer?.files ?? [])
+        if (fl.length > 0) take(fl)
+      }}
+    >
+      <textarea
+        autoFocus
+        style={{ ...field(isMobile), minHeight: 90, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.6 }}
+        value={text}
+        placeholder="What is this delivery for? Paste a file, or attach one."
+        onChange={e => setText(e.target.value)}
+        onPaste={e => {
+          const fl = Array.from(e.clipboardData?.files ?? [])
+          if (fl.length === 0) return
+          e.preventDefault()
+          take(fl)
+        }}
+      />
+      <AttachmentChips attached={attached} onRemove={fid => setAttached(a => a.filter(x => x.id !== fid))} />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <AttachButton disabled={busy} onFiles={take} />
+        <span style={{ flex: 1 }} />
+        <button
+          style={button(isMobile, 'primary')} disabled={busy}
+          onClick={() => void (async () => {
+            await onSaved(bodyWithAttachments(text, attached))
+            setEditing(false)
+          })()}
+        >Save</button>
+        <button style={button(isMobile)} onClick={() => setEditing(false)}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
 function CommentsTab({ id, detail, onChanged }: {
   id: string
   detail: TaskDetail
@@ -837,32 +1004,7 @@ function CommentsTab({ id, detail, onChanged }: {
             void take(files)
           }}
         />
-        {attached.length > 0 && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {attached.map(a => (
-              <span
-                key={a.id}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 6px',
-                  ...surface, background: 'var(--bg-base)',
-                }}
-              >
-                {looksLikeImage(a.name)
-                  ? <img src={fileUrl(a.id)} alt={a.name} style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4 }} />
-                  : <FileText size={14} style={{ color: 'var(--text-tertiary)' }} />}
-                <span style={{ fontSize: 11.5, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {a.name}
-                </span>
-                <button
-                  // Unpicking the REFERENCE only: the file stays on the task, where the Files tab
-                  // can delete it. Removing bytes because a draft changed its mind is a surprise.
-                  onClick={() => setAttached(v => v.filter(x => x.id !== a.id))} title="Not on this comment"
-                  style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex' }}
-                ><X size={12} /></button>
-              </span>
-            ))}
-          </div>
-        )}
+        <AttachmentChips attached={attached} onRemove={fid => setAttached(v => v.filter(x => x.id !== fid))} />
         <ConfirmModal
           open={removing !== null}
           title="Delete this comment?"
@@ -876,16 +1018,20 @@ function CommentsTab({ id, detail, onChanged }: {
             if (target) void run(() => removeComment(id, target))
           }}
         />
-        <button
-          style={{ ...button(isMobile, 'primary'), justifySelf: 'start' }}
-          disabled={busy || (!draft.trim() && attached.length === 0)}
-          onClick={() => void run(async () => {
-            await addComment(id, 'you', bodyWithAttachments(draft, attached))
-            setDraft(''); setAttached([])
-          })}
-        >
-          <MessageSquare size={14} /> Comment
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <AttachButton disabled={busy} onFiles={take} />
+          <span style={{ flex: 1 }} />
+          <button
+            style={button(isMobile, 'primary')}
+            disabled={busy || (!draft.trim() && attached.length === 0)}
+            onClick={() => void run(async () => {
+              await addComment(id, 'you', bodyWithAttachments(draft, attached))
+              setDraft(''); setAttached([])
+            })}
+          >
+            <MessageSquare size={14} /> Comment
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -948,11 +1094,12 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
         alignItems: 'start',
       }}>
         <div style={{ display: 'grid', gap: 12, minWidth: 0 }}>
-          {detail.task.detail && (
-            <div style={{ ...surface, padding: 14, fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-              {detail.task.detail}
-            </div>
-          )}
+          <DescriptionEditor
+            id={id}
+            task={detail.task}
+            files={detail.files}
+            onSaved={next => run(() => editTask(id, { detail: next }))}
+          />
 
           <div style={{ display: 'flex', gap: 2, overflowX: 'auto', borderBottom: '1px solid var(--border)' }}>
             {TABS.map(([key, label, count]) => (
