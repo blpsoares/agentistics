@@ -115,11 +115,14 @@ export const ATTENTION_RULES: Record<HarnessId, AttentionRules | null> = {
     approval: [/↑\/↓ to navigate · enter to select/],
   },
   antigravity: {
-    probed: 'agy 1.1.12, 2026-08-13',
+    probed: 'agy 1.1.25, 2026-09-09',
     approval: [
-      /↑\/↓ Navigate · enter Confirm/,
-      /Enter to select/,
-      /Enter to confirm/,
+      /↑\/↓ Navigate · enter Confirm/i,
+      /Enter to confirm/i,
+      /tab Amend/i,
+      /ctrl\+g edit/i,
+      /ctrl\+r Review/i,
+      /Do you want to proceed/i,
     ],
   },
 }
