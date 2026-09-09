@@ -50,7 +50,9 @@ import { BetaTag } from '../components/BetaTag'
 import { StatusChip } from '../components/tasks/StatusChip'
 import { boardCopy, statusLabel, type Lang } from '../components/tasks/copy'
 import { TaskFiles } from '../components/tasks/TaskFiles'
+import { TaskSharing } from '../components/tasks/TaskSharing'
 import { BoardOverviewView } from '../components/tasks/BoardOverviewView'
+import { CentralTaskBoard } from '../components/tasks/CentralTaskBoard'
 import { NewTaskWizard } from '../components/tasks/NewTaskWizard'
 import { NewSessionModal } from '../components/sessions/NewSessionModal'
 import {
@@ -62,7 +64,7 @@ import {
   attachSession, detachSession, fmtDuration, markTask, patchSubtask, removeComment, removeLink,
   removeSubtask,
   claimTask, editTask, moveTask, setBlockedBy, uploadFile, useNextTasks, useTaskActivity,
-  useTaskDetail, useTaskList,
+  useCentralTasks, useTaskDetail, useTaskList,
   type AttemptRollup, type AttemptView, type TaskDetail, type TaskFieldPatch, type TaskFile,
   type TaskListRow, type TaskRecord, type TasksError, type TaskStatus,
 } from '../lib/tasks'
@@ -80,6 +82,55 @@ function EmptyNotice({ error }: { error: TasksError }) {
   )
 }
 
+
+/**
+ * The central's board.
+ *
+ * A DIFFERENT page from the machine's, and deliberately so: there is no board on a central. What it
+ * holds is what its machines chose to share, it is read-only, and it groups by machine because a
+ * board belongs to the person whose machine runs it.
+ */
+function CentralBoard() {
+  const { lang, currency, brlRate } = useOutletContext<AppContext>()
+  const isMobile = useIsMobile()
+  const { machines, error } = useCentralTasks(true)
+
+  return (
+    <div style={{
+      padding: isMobile ? 12 : 18,
+      paddingBottom: isMobile ? 'calc(var(--mobile-nav-h) + 24px)' : 18,
+      display: 'grid', gap: 14,
+    }}>
+      <div>
+        <h1 style={{ fontSize: 19, margin: 0, fontWeight: 650, display: 'flex', alignItems: 'center', gap: 8 }}>
+          {lang === 'pt' ? 'Entregas' : 'Deliveries'}
+          <BetaTag what="The delivery board" />
+        </h1>
+        <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--text-tertiary)' }}>
+          {lang === 'pt'
+            ? 'O que cada máquina escolheu compartilhar. Uma entrega só viaja quando o dono dela liga o compartilhamento, e as sessões dela continuam seguindo as regras da conexão.'
+            : 'What each machine chose to share. A delivery travels only when its owner turns sharing on, and its sessions still follow the connection’s rules.'}
+        </p>
+      </div>
+
+      {machines === null && (
+        <div style={{ color: 'var(--text-tertiary)', fontSize: 12.5 }}>Loading…</div>
+      )}
+      {machines !== null && error && <EmptyNotice error={error} />}
+      {machines !== null && !error && machines.length === 0 && (
+        <div style={{ ...surface, padding: 16, color: 'var(--text-tertiary)', display: 'flex', gap: 10, alignItems: 'center', fontSize: 12.5 }}>
+          <ClipboardList size={16} />
+          {lang === 'pt'
+            ? 'Nenhuma máquina conectada a esta central ainda. Uma máquina aparece aqui assim que se conecta, mesmo sem compartilhar entrega nenhuma.'
+            : 'No machine is connected to this central yet. A machine appears here as soon as it connects, even when it shares no delivery at all.'}
+        </div>
+      )}
+      {machines !== null && !error && machines.length > 0 && (
+        <CentralTaskBoard machines={machines} lang={lang} currency={currency} brlRate={brlRate} />
+      )}
+    </div>
+  )
+}
 
 // ------------------------------------------------------------------------------- list
 
@@ -443,5 +494,9 @@ function TaskDetailView({ id }: { id: string }) {
 
 export default function TasksPage() {
   const { id } = useParams<{ id: string }>()
+  const { isCentral } = useOutletContext<AppContext>()
+  // A central has no local board to open a task IN, so it never renders the detail either: the
+  // record lives on the machine that owns it, and the row here is a report, not a door.
+  if (isCentral) return <CentralBoard />
   return id ? <TaskDetailView id={id} /> : <TaskList />
 }
