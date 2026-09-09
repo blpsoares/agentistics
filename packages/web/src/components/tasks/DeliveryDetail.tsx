@@ -22,8 +22,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import {
-  Bot, ChevronDown, ClipboardList, ExternalLink, FileText, Link2, MessageSquare, Paperclip, Pencil,
+  Bot, ChevronDown, ExternalLink, FileText, FileVideo, Link2, MessageSquare, Paperclip, Pencil,
   Plus, Trash2, X, XCircle,
 } from 'lucide-react'
 import { PRIORITY_ORDER, type TaskPriorityId } from '@agentistics/core'
@@ -31,7 +34,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { useFleet } from '../../lib/fleet'
 import { sessionPath } from '../../lib/sessionRoute'
 import {
-  bodyWithAttachments, looksLikeImage, parseCommentBody,
+  bodyWithAttachments, looksLikeImage, looksLikeVideo, parseCommentBody,
   type CommentAttachment, type CommentPart,
 } from '../../lib/commentBody'
 import {
@@ -658,9 +661,17 @@ function CommentBody({ body, files }: { body: string; files: TaskFile[] }) {
 
   return (
     <div style={{ display: 'grid', gap: 8 }}>
-      <div style={{ fontSize: 12.5, whiteSpace: 'pre-wrap', lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+      {/* `.ag-chat-md` is the same markdown stylesheet ChatBubble uses — one set of rules for
+          headings/lists/links/emphasis rather than a second copy for board text. Font size and
+          colour are overridden inline (a description reads smaller than a chat bubble); the class
+          supplies everything else (paragraph/list spacing, link colour, bold/italic/quote/rule). */}
+      <div className="ag-chat-md" style={{ fontSize: 12.5, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
         {parts.map((part, i) => {
-          if (part.kind === 'text') return <span key={i}>{part.text}</span>
+          if (part.kind === 'text') {
+            return part.text.trim() === ''
+              ? null
+              : <ReactMarkdown key={i} remarkPlugins={[remarkGfm, remarkBreaks]}>{part.text}</ReactMarkdown>
+          }
           if (!known.has(part.id)) {
             return (
               <span key={i} style={{ ...microLabel, textTransform: 'none', letterSpacing: 0 }}>
@@ -672,8 +683,8 @@ function CommentBody({ body, files }: { body: string; files: TaskFile[] }) {
           return (
             <a
               key={i} href={fileUrl(part.id)}
-              style={{ color: 'var(--accent-blue)', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-            ><FileText size={12} /> {part.name}</a>
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            >{looksLikeVideo(part.name) ? <FileVideo size={12} /> : <FileText size={12} />} {part.name}</a>
           )
         })}
       </div>
@@ -712,13 +723,19 @@ function CommentBody({ body, files }: { body: string; files: TaskFile[] }) {
  * them. Not every input device can paste a file (a phone's on-screen keyboard has no
  * clipboard-file gesture), so the button is the one path that always works.
  */
-function AttachButton({ onFiles, disabled }: { onFiles: (files: File[]) => void; disabled?: boolean }) {
+function AttachButton({ onFiles, disabled, accept }: {
+  onFiles: (files: File[]) => void
+  disabled?: boolean
+  /** Same shape as the native `accept` attribute — narrows the OS file picker, not a guarantee:
+      drag-and-drop and paste bypass it, so the real filter still runs in `onFiles`. */
+  accept?: string
+}) {
   const isMobile = useIsMobile()
   const inputRef = useRef<HTMLInputElement>(null)
   return (
     <>
       <input
-        ref={inputRef} type="file" multiple disabled={disabled}
+        ref={inputRef} type="file" multiple disabled={disabled} accept={accept}
         style={{ display: 'none' }}
         onChange={e => {
           const files = Array.from(e.target.files ?? [])
@@ -755,7 +772,9 @@ function AttachmentChips({ attached, onRemove }: {
         >
           {looksLikeImage(a.name)
             ? <img src={fileUrl(a.id)} alt={a.name} style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4 }} />
-            : <FileText size={14} style={{ color: 'var(--text-tertiary)' }} />}
+            : looksLikeVideo(a.name)
+              ? <FileVideo size={14} style={{ color: 'var(--text-tertiary)' }} />
+              : <FileText size={14} style={{ color: 'var(--text-tertiary)' }} />}
           <span style={{ fontSize: 11.5, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {a.name}
           </span>
@@ -769,6 +788,25 @@ function AttachmentChips({ attached, onRemove }: {
       ))}
     </div>
   )
+}
+
+/**
+ * A description is read far more than it is written — one card at the top of every tab — so it is
+ * bounded on both axes a chat message is not: a length (prose stays a description and never
+ * becomes the story of the delivery, which belongs in comments/subtasks/activity) and a small,
+ * named set of attachment kinds (one representative screenshot, recording and document, not an
+ * evidence dump — that is what the Files tab is for).
+ */
+const DESCRIPTION_MAX_LENGTH = 4000
+const DESCRIPTION_MAX_FILES = 3
+const DESCRIPTION_ACCEPT = 'image/*,video/*,application/pdf'
+
+/** Mirrors `DESCRIPTION_ACCEPT` for paste/drop, which never consult the input's `accept` filter. */
+function isDescriptionFile(f: File): boolean {
+  if (f.type) return f.type.startsWith('image/') || f.type.startsWith('video/') || f.type === 'application/pdf'
+  // A dropped file can arrive with an empty `type` (some OS/browser combinations); fall back to
+  // the extension rather than rejecting it outright.
+  return looksLikeImage(f.name) || looksLikeVideo(f.name) || /\.pdf$/i.test(f.name)
 }
 
 /**
@@ -789,12 +827,18 @@ function DescriptionEditor({ id, task, files, onSaved }: {
   const [attached, setAttached] = useState<CommentAttachment[]>([])
   const [dropping, setDropping] = useState(false)
   const [busy, setBusy] = useState(false)
+  const room = DESCRIPTION_MAX_FILES - attached.length
 
   const take = (fl: File[]) => {
+    // Silently DROP what does not fit rather than refuse the whole batch — pasting a screenshot
+    // alongside a stray text selection should keep the screenshot, and a caller cannot be expected
+    // to pre-filter to exactly what this one field accepts.
+    const accepted = fl.filter(isDescriptionFile).slice(0, room)
+    if (accepted.length === 0) return
     setBusy(true)
     void (async () => {
       const minted: CommentAttachment[] = []
-      for (const f of fl) {
+      for (const f of accepted) {
         // A screenshot on the clipboard has no filename; mint one from the moment so the record
         // never carries an empty name, which renders as a blank you cannot tell from a broken one.
         const named = f.name && f.name !== 'image.png'
@@ -846,9 +890,10 @@ function DescriptionEditor({ id, task, files, onSaved }: {
     >
       <textarea
         autoFocus
+        maxLength={DESCRIPTION_MAX_LENGTH}
         style={{ ...field(isMobile), minHeight: 90, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.6 }}
         value={text}
-        placeholder="What is this delivery for? Paste a file, or attach one."
+        placeholder="What is this delivery for? Markdown works. Paste a file, or attach one."
         onChange={e => setText(e.target.value)}
         onPaste={e => {
           const fl = Array.from(e.clipboardData?.files ?? [])
@@ -857,9 +902,22 @@ function DescriptionEditor({ id, task, files, onSaved }: {
           take(fl)
         }}
       />
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: -4 }}>
+        <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+          Markdown · up to {DESCRIPTION_MAX_FILES} files (image, video or PDF)
+        </span>
+        {/* Read as a countdown once it starts to matter — a bare running total nobody is close to
+            is one more number on the screen, not information. */}
+        <span style={{
+          fontSize: 10.5, fontVariantNumeric: 'tabular-nums', flexShrink: 0,
+          color: text.length >= DESCRIPTION_MAX_LENGTH
+            ? 'var(--accent-red)'
+            : text.length >= DESCRIPTION_MAX_LENGTH * 0.9 ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+        }}>{text.length} / {DESCRIPTION_MAX_LENGTH}</span>
+      </div>
       <AttachmentChips attached={attached} onRemove={fid => setAttached(a => a.filter(x => x.id !== fid))} />
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <AttachButton disabled={busy} onFiles={take} />
+        <AttachButton disabled={busy || room <= 0} onFiles={take} accept={DESCRIPTION_ACCEPT} />
         <span style={{ flex: 1 }} />
         <button
           style={button(isMobile, 'primary')} disabled={busy}
