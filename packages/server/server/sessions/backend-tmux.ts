@@ -8,6 +8,7 @@ import {
   killSessionArgs, listSessionsArgs, paneInfoArgs, parsePaneInfo, parsePrefix, parseTmuxList,
   tmuxListIsEmptyState,
   resolveDefaultTerminal, resolveTruecolorTerm, spawnArgs, sendKeysNamedArgs, sendKeysLiteralArgs,
+  clearHistoryArgs,
   showPrefixArgs, trimCapture,
   type TerminalProfile,
 } from './tmux-cli'
@@ -367,11 +368,23 @@ export const tmuxBackend: SessionBackend = {
     // Literal only, NO Enter — the first half of `sendTextTo`. This is what the browser's key-by-key
     // channel needs: a character appears without submitting a turn. Locked like every other write:
     // a keystroke arriving mid-prompt is the same collision as a second prompt.
-    return writeToPane(id, async () => (await tmux(sendKeysLiteralArgs(id, text))).code === 0)
+    return writeToPane(id, async () => {
+      const ok = (await tmux(sendKeysLiteralArgs(id, text))).code === 0
+      if (ok && (text.trim() === 'clear' || text.includes('clear\r') || text.includes('clear\n') || text.includes('\x0c'))) {
+        await tmux(clearHistoryArgs(id))
+      }
+      return ok
+    })
   },
 
   async sendKey(id: string, key: string) {
-    return writeToPane(id, async () => (await tmux(sendKeysNamedArgs(id, key))).code === 0)
+    return writeToPane(id, async () => {
+      const ok = (await tmux(sendKeysNamedArgs(id, key))).code === 0
+      if (ok && (key === 'C-l' || key === 'Ctrl+L')) {
+        await tmux(clearHistoryArgs(id))
+      }
+      return ok
+    })
   },
 
   async list(): Promise<BackendSession[]> {

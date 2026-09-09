@@ -226,6 +226,10 @@ export function sendKeysEnterArgs(id: string, socket?: string): string[] {
   return sendKeysNamedArgs(id, 'Enter', socket)
 }
 
+export function clearHistoryArgs(id: string, socket?: string): string[] {
+  return sock(['clear-history', '-t', tmuxName(id)], socket)
+}
+
 export function listSessionsArgs(socket?: string): string[] {
   return sock(['list-sessions', '-F', LIST_FORMAT], socket)
 }

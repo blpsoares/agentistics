@@ -15,7 +15,7 @@
 
 import {
   capturePaneAnsiArgs, paneInfoArgs, parsePaneInfo, SHELL_SOCKET, sendKeysLiteralArgs,
-  sendKeysNamedArgs,
+  sendKeysNamedArgs, clearHistoryArgs,
 } from './tmux-cli'
 import type { TerminalCapture } from './types'
 
@@ -56,11 +56,19 @@ export function createShellTerminal(run: TmuxRun): ShellTerminal {
     },
 
     async sendText(id, text) {
-      return (await run(sendKeysLiteralArgs(id, text, SHELL_SOCKET))).code === 0
+      const ok = (await run(sendKeysLiteralArgs(id, text, SHELL_SOCKET))).code === 0
+      if (ok && (text.trim() === 'clear' || text.includes('clear\r') || text.includes('clear\n') || text.includes('\x0c'))) {
+        await run(clearHistoryArgs(id, SHELL_SOCKET))
+      }
+      return ok
     },
 
     async sendKey(id, key) {
-      return (await run(sendKeysNamedArgs(id, key, SHELL_SOCKET))).code === 0
+      const ok = (await run(sendKeysNamedArgs(id, key, SHELL_SOCKET))).code === 0
+      if (ok && (key === 'C-l' || key === 'Ctrl+L')) {
+        await run(clearHistoryArgs(id, SHELL_SOCKET))
+      }
+      return ok
     },
   }
 }
