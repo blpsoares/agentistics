@@ -712,7 +712,7 @@ export async function runUpgrade(lang: CliLang = 'en'): Promise<number> {
 
   let info
   try {
-    info = await getVersionInfo()
+    info = await getVersionInfo({ force: true })
   } catch {
     console.error('Failed to check for updates. Check your internet connection.')
     return 1
