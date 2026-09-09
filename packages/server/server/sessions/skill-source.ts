@@ -51,11 +51,15 @@ export const HARNESS_SKILLS: Record<HarnessId, SkillSource | null> = {
     projectDirs: ['.claude/skills'],
     line: '/{name}',
   },
-  // No documented skill mechanism reachable from a typed line.
+  antigravity: {
+    userDirs: ['.gemini/antigravity-cli/builtin/skills', '.gemini/antigravity-cli/skills', '.gemini/skills', '.claude/skills'],
+    pluginRoots: [],
+    projectDirs: ['.gemini/skills', '.claude/skills'],
+    line: '/{name}',
+  },
   codex: null,
   gemini: null,
   copilot: null,
-  antigravity: null,
   kimi: null,
 }
 

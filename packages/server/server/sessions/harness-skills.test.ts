@@ -33,9 +33,10 @@ describe('HARNESS_SKILLS', () => {
       expect(h in HARNESS_SKILLS).toBe(true)
     }
   })
-  it('is wired for claude only', () => {
+  it('is wired for claude and antigravity', () => {
     expect(HARNESS_SKILLS.claude).not.toBeNull()
-    for (const h of ['codex', 'gemini', 'copilot', 'antigravity', 'kimi'] as const) {
+    expect(HARNESS_SKILLS.antigravity).not.toBeNull()
+    for (const h of ['codex', 'gemini', 'copilot', 'kimi'] as const) {
       expect(HARNESS_SKILLS[h]).toBeNull()
     }
   })
