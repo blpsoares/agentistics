@@ -18,6 +18,10 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { MoreHorizontal, X } from 'lucide-react'
+import { SessionFiling } from '../tasks/SessionFiling'
+import { StopSessionConfirm } from '../tasks/StopSessionConfirm'
+import { boardCopy } from '../tasks/copy'
+import { BetaTag } from '../BetaTag'
 import type { FleetActionId, FleetRow, FleetVerb } from '../../lib/fleet'
 
 export interface SessionActionsProps {
@@ -32,15 +36,66 @@ export interface SessionActionsProps {
    * the action still runs, it simply does not navigate.
    */
   onOpened?: (id: string) => void
+  /**
+   * SURFACE CONTROLS THAT SHARE THIS MENU, drawn above the row's own verbs.
+   *
+   * On a phone the session bar had six controls and no room left for the TITLE — the one thing on
+   * it that says which session you are looking at. Reported as exactly that. They come in here
+   * rather than into a second popover beside this one, because two menus on a 390px bar is the
+   * accumulation being complained about, rearranged.
+   *
+   * They are the CALLER's: this component knows the row's verbs and nothing about filters, panels
+   * or metrics. Each carries its own `onSelect`, and the menu closes after it.
+   */
+  extra?: {
+    id: string
+    label: string
+    icon?: React.ReactNode
+    /** A count or a figure the row would otherwise have shown on the bar (`1`, `59%`). */
+    badge?: string
+    /** Marks the one that is currently showing, so the menu says where you are. */
+    on?: boolean
+    onSelect: () => void
+  }[]
+  /**
+   * A CONTROL, not a row — drawn above `extra` and above the verbs.
+   *
+   * Some of what came off the bar is not a list item. The view switch is a SEGMENTED CONTROL: its
+   * two halves are alternatives to each other, and that is the whole of what it says. Listed as two
+   * rows they read as two independent things you could pick, which is not the same statement — so
+   * it comes in as itself and this menu only places it.
+   *
+   * It is a function of `close` because the caller owns what its control does, and a menu that
+   * stays open after you have used it is a menu you then have to dismiss.
+   */
+  extraTop?: (close: () => void) => React.ReactNode
 }
 
 /** The verbs that take a line of text before they can run. */
-const TEXT_VERBS = new Set<string>(['rename', 'note', 'task'])
+/**
+ * Verbs that ask for a line of text before they run.
+ *
+ * `task` is NOT one of them any more. It used to open a bare field, which meant filing a session
+ * under existing work required remembering the name and typing it identically — and a name typed
+ * one character differently is a second task with the metrics split between them. It now opens the
+ * same `TaskPicker` the board and the aside use: search, pick, or create.
+ */
+const TEXT_VERBS = new Set<string>(['rename', 'note'])
 
 /** Shown in the menu, in this order. `prompt` and `approve` have their own places in the chat. */
-const MENU_ORDER: string[] = ['rename', 'note', 'task', 'openTask', 'finishTask', 'resume', 'kill']
+// `openTask` and `finishTask` are GONE from this menu and from the fleet's verbs: they asked about
+// a delivery at a moment nobody was thinking about one. The question moved to the stop confirmation
+// — see `StopSessionConfirm` — which is when somebody actually knows the answer.
+const MENU_ORDER: string[] = ['rename', 'note', 'task', 'resume', 'kill']
 
-export function SessionActions({ row, lang, act, onGone, onOpened }: SessionActionsProps) {
+/** The verbs that belong to the delivery board rather than to the session itself. */
+const TASK_VERBS = new Set<string>(['task'])
+
+export function SessionActions({
+  row, lang, act, onGone, onOpened, extra = [], extraTop,
+}: SessionActionsProps) {
+  /** Open when the `task` verb was picked — see `TEXT_VERBS`. */
+  const [linking, setLinking] = useState(false)
   const pt = lang === 'pt'
   const [open, setOpen] = useState(false)
   const [asking, setAsking] = useState<FleetVerb | null>(null)
@@ -78,9 +133,11 @@ export function SessionActions({ row, lang, act, onGone, onOpened }: SessionActi
   function pick(v: FleetVerb) {
     if (!v.enabled) return
     setNotice(null)
+    // Filing under a task is a CHOICE from what exists, not a line of text — see `TEXT_VERBS`.
+    if (v.action === 'task') { setOpen(false); setLinking(true); return }
     if (TEXT_VERBS.has(v.action)) {
       // Seeded with what the row already has, so renaming is an edit rather than a retype.
-      setDraft(v.action === 'rename' ? row.title : v.action === 'note' ? (row.note ?? '') : (row.task ?? ''))
+      setDraft(v.action === 'rename' ? row.title : (row.note ?? ''))
       setAsking(v)
       return
     }
@@ -96,13 +153,26 @@ export function SessionActions({ row, lang, act, onGone, onOpened }: SessionActi
         title={pt ? 'Ações da sessão' : 'Session actions'}
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          width: 32, height: 32, borderRadius: 9, cursor: 'pointer',
+          width: 32, height: 32, borderRadius: 9, cursor: 'pointer', flexShrink: 0,
           border: '1px solid var(--border-subtle)', background: 'transparent',
           color: 'var(--text-secondary)',
         }}
       >
         <MoreHorizontal size={16} />
       </button>
+
+      {linking && (
+        <SessionFiling
+          session={{
+            id: row.id, title: row.title,
+            ...(row.harness ? { harness: row.harness } : {}),
+            ...(row.task ? { task: row.task } : {}),
+          }}
+          lang={lang}
+          onChanged={() => setNotice(boardCopy(lang).filed)}
+          onClose={() => setLinking(false)}
+        />
+      )}
 
       {open && (
         <>
@@ -116,6 +186,50 @@ export function SessionActions({ row, lang, act, onGone, onOpened }: SessionActi
             background: 'var(--bg-surface)', border: '1px solid var(--border)',
             borderRadius: 12, padding: 5, boxShadow: 'var(--ag-shadow-menu)',
           }}>
+            {/* THE SURFACE'S OWN CONTROLS, first: they are what the bar gave up to make room for the
+                title, and burying them under the row's verbs would make the trade a bad one. A rule
+                separates them because they act on THIS SCREEN while the verbs act on the SESSION. */}
+            {!asking && !confirming && extraTop && (
+              <div style={{ padding: '2px 2px 6px' }}>{extraTop(() => setOpen(false))}</div>
+            )}
+
+            {!asking && !confirming && extra.length > 0 && (
+              <div style={{
+                display: 'flex', flexDirection: 'column',
+                marginBottom: 4, paddingBottom: 4, borderBottom: '1px solid var(--border-subtle)',
+              }}>
+                {extra.map(x => (
+                  <button
+                    key={x.id}
+                    onClick={() => { setOpen(false); x.onSelect() }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+                      // 44px: this menu is opened with a thumb, and the rule this repo holds every
+                      // other mobile target to.
+                      minHeight: 44, padding: '6px 10px', borderRadius: 8,
+                      border: 'none', background: 'transparent',
+                      color: x.on ? 'var(--anthropic-orange)' : 'var(--text-primary)',
+                      cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5,
+                      fontWeight: x.on ? 650 : 400,
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-elevated)' }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                  >
+                    {x.icon && <span style={{ display: 'flex', flexShrink: 0 }}>{x.icon}</span>}
+                    <span style={{ minWidth: 0, flex: 1 }}>{x.label}</span>
+                    {/* The figure the bar used to print. It is why some of these are worth opening
+                        at all — a metrics row saying nothing is one nobody presses. */}
+                    {x.badge && (
+                      <span style={{
+                        flexShrink: 0, fontSize: 11, fontWeight: 600,
+                        color: x.on ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                      }}>{x.badge}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {asking ? (
               <form
                 onSubmit={e => { e.preventDefault(); void run(asking.action as FleetActionId, draft.trim()) }}
@@ -148,26 +262,17 @@ export function SessionActions({ row, lang, act, onGone, onOpened }: SessionActi
                 </div>
               </form>
             ) : confirming ? (
-              <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5, color: 'var(--text-primary)' }}>
-                  {pt
-                    ? 'Encerrar esta sessão? O que ela estiver fazendo para agora.'
-                    : 'End this session? Whatever it is doing stops now.'}
-                </p>
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                  <button onClick={() => setConfirming(false)} style={ghostBtn}>
-                    {pt ? 'Cancelar' : 'Cancel'}
-                  </button>
-                  <button
-                    onClick={() => void run('kill')}
-                    disabled={busy}
-                    style={{ ...primaryBtn, background: 'var(--accent-red)' }}
-                  >
-                    <X size={13} />
-                    {pt ? 'Encerrar' : 'End'}
-                  </button>
-                </div>
-              </div>
+              <StopSessionConfirm
+                title={row.title}
+                sessionId={row.id}
+                {...(row.task ? { task: row.task } : {})}
+                lang={lang}
+                busy={busy}
+                onStop={() => run('kill')}
+                onCancel={() => setConfirming(false)}
+                onNotice={setNotice}
+                styles={{ danger: { ...primaryBtn, background: 'var(--accent-red)' }, plain: ghostBtn }}
+              />
             ) : (
               <>
                 {verbs.map(v => (
@@ -190,7 +295,14 @@ export function SessionActions({ row, lang, act, onGone, onOpened }: SessionActi
                     onMouseEnter={e => { if (v.enabled) e.currentTarget.style.background = 'var(--bg-elevated)' }}
                     onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
                   >
-                    <span>{v.label}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      {v.label}
+                      {/* The task verbs are the delivery board reaching into this menu. Marked
+                          here too: a reader who only ever opens this menu never sees the board's
+                          own header, and a caveat shown on four surfaces of six is worse than
+                          none — they conclude the unmarked two are the finished part. */}
+                      {TASK_VERBS.has(v.action) && <BetaTag what={pt ? 'As tarefas' : 'Tasks'} />}
+                    </span>
                     {/* The row's OWN sentence for why it cannot take this verb. A control that
                         refuses silently is indistinguishable from one that is broken. */}
                     {!v.enabled && v.reason && (

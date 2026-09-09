@@ -16,7 +16,7 @@
 import { contextFraction, fmt, fmtCost } from '@agentistics/core'
 import type { ControlSession, SessionState } from '@agentistics/tui/control'
 import type { CliStrings } from '../cli-i18n'
-import { approvalFor, isFreeTextOption } from './approval-spec'
+import { approvalFor, canPick, isFreeTextOption } from './approval-spec'
 import { needsChoice } from './dialog-choice'
 import { pickTitle } from './harness-session-file'
 import type { ResolvedRepoFacts } from './repo-facts'
@@ -178,10 +178,14 @@ export function toControlSession(
     // Picking one of them needs a VERIFIED way to select by number on this harness. Only claude has
     // one; everywhere else the options are shown and the answer is a refusal that names why, because
     // falling back to the confirm key would choose for the user among things that differ.
-    ...(needsChoice(v.dialogOptions ?? []) && approvalFor(v.harness)?.choice
+    // The capability asked for is the one THIS dialog's shape needs: a digit for a numbered list, a
+    // move for a numberless one. Asking only about `choice` withheld the picker from claude's trust
+    // prompt — which prints no numbers — and left the bare confirm in its place, so the only
+    // reachable answer was the highlighted `No, exit`.
+    ...(needsChoice(v.dialogOptions ?? []) && canPick(approvalFor(v.harness), v.dialogSelect ?? null)
       ? { canChoose: true as const }
       : {}),
-    ...(needsChoice(v.dialogOptions ?? []) && !approvalFor(v.harness)?.choice && harness
+    ...(needsChoice(v.dialogOptions ?? []) && !canPick(approvalFor(v.harness), v.dialogSelect ?? null) && harness
       ? { chooseBlind: s.sessChooseBlind(harness) }
       : {}),
     // The verb exists only where BOTH halves are true: the session is asking, and somebody has read
@@ -191,8 +195,20 @@ export function toControlSession(
     // A bare confirm is only ever offered where there is NOTHING to choose between — the
     // codex-shaped `Press enter to continue`. On a numbered dialog it would take whichever row is
     // highlighted, which on "only my fix / promote everything / stop here" is picking for somebody.
-    ...(state === 'waiting-approval' && approvalFor(v.harness) && !needsChoice(v.dialogOptions ?? [])
+    //
+    // `!needsChoice(...)` ALONE WAS NOT THAT TEST, and the gap was reported: an empty option list
+    // is also what the reader returns when it REFUSES, so a dialog it had just declined to read
+    // came out here as "nothing to choose between" and drew the confirm button on a six-option
+    // `AskUserQuestion`. That is the exact accident `dialog-choice.ts` exists to prevent, arriving
+    // through its own refusal. The refusal is now a value and it is named here.
+    ...(state === 'waiting-approval' && approvalFor(v.harness)
+      && !needsChoice(v.dialogOptions ?? []) && !v.dialogUnreadable
       ? { canApprove: true as const }
+      : {}),
+    // A dialog agentop can SEE and cannot READ. Said in words naming what does work, exactly like
+    // `chooseBlind` beside it — a verb that is simply absent reads as a broken control.
+    ...(state === 'waiting-approval' && v.dialogUnreadable && harness
+      ? { dialogBlind: s.sessDialogBlind(harness) }
       : {}),
     // Said only where it is TRUE, which is a narrower place than `approvalBlind`: that one explains
     // why a blocked session may be reading as plain `waiting`, this one explains why a session that

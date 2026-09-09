@@ -158,6 +158,7 @@ export interface CliStrings {
   sessApproveUnknown: (harness: string) => string
   /** Said on a row whose dialog offers OPTIONS and whose harness has no verified way to pick one. */
   sessChooseBlind: (harness: string) => string
+  sessDialogBlind: (harness: string) => string
   /** Refused: the dialog offers N options, so there is nothing to merely "approve". */
   sessNeedsChoice: (n: number) => string
   /** Refused: the question changed between being shown and being answered. */
@@ -166,10 +167,25 @@ export interface CliStrings {
   sessChooseUnknown: (harness: string) => string
   /** The chosen option went in — and the sentence names WHICH, because that is the whole point. */
   sessAnswered: (label: string) => string
+  /** The answer landed and the session immediately asked something ELSE. */
+  sessAnsweredNewQuestion: (label: string) => string
+  /** The keystroke was delivered and the dialog did not react to it. */
+  sessAnswerStuck: (label: string) => string
+  /** The write-your-own row was picked and no text field opened for it. */
+  sessAnswerNoField: (label: string) => string
   /** Nothing fell, or everything that did has already been picked back up. */
   sessNoFell: string
   sessFellOpened: (opened: number, skipped: number, held: number) => string
   sessFellNoneOpened: (skipped: number) => string
+  /** Every row that was ticked has since left the group — the list the caller acted on has moved. */
+  sessFellGone: (count: number) => string
+  /** Nothing was ticked. Never read as "all" — see `selectFell`. */
+  sessFellNonePicked: string
+  /** A broadcast that was refused before anything was typed. */
+  sessBroadcastRefused: (reason: string, skipped: number) => string
+  /** What a broadcast did, per outcome. Partial delivery is the NORMAL case. */
+  sessBroadcastDone: (sent: number, failed: number, skipped: number, reopened: number) => string
+  sessBroadcastReopenSlow: string
   /**
    * Refusing to open a conversation a live session already has, and NAMING that session.
    *
@@ -543,6 +559,11 @@ const EN: CliStrings = {
     `agentop has not read ${harness}'s dialog, so it will not guess which key answers it.`,
   sessChooseBlind: (harness: string) =>
     `this dialog is a choice, and nobody has verified how to pick an option on ${harness} — attach to answer it there.`,
+  // Deliberately NOT "cannot be answered": it can, on attach. And it says what agentop actually
+  // knows — that the options are there and it could not read them — because a refusal that hides
+  // its reason is indistinguishable from a control that is simply broken.
+  sessDialogBlind: (harness: string) =>
+    `this ${harness} dialog is taller than agentop can read off the screen, so it cannot say what the options are — attach to answer it there.`,
   sessNeedsChoice: (n: number) =>
     `that dialog offers ${n} options, so there is nothing to simply approve — pick one.`,
   sessChoiceGone:
@@ -550,6 +571,17 @@ const EN: CliStrings = {
   sessChooseUnknown: (harness: string) =>
     `agentop has no verified way to pick an option on ${harness}, and will not confirm the highlighted one for you — attach to answer it there.`,
   sessAnswered: (label: string) => `answered: ${label}`,
+  sessAnsweredNewQuestion: (label: string) =>
+    `answered: ${label} — and the session is already asking something else, which is why a question `
+    + 'is still on screen. Nothing was pressed into the new one.',
+  sessAnswerStuck: (label: string) =>
+    `the key for "${label}" was delivered and the dialog did not move. Nothing else was pressed — `
+    + 'answer it in the session itself (attach), because pressing again could act on a row you did '
+    + 'not choose.',
+  sessAnswerNoField: (label: string) =>
+    `"${label}" did not open a field to type into, so nothing was typed — the words would have gone `
+    + 'wherever the session was listening and the return would have submitted whatever was '
+    + 'highlighted. Answer it in the session itself (attach).',
   sessNoFell: 'nothing fell — no session was lost with the machine still on record.',
   sessFellOpened: (opened: number, skipped: number, held: number) =>
     `reopened ${opened} session(s) that fell.`
@@ -557,6 +589,31 @@ const EN: CliStrings = {
     + (skipped > 0 ? ` ${skipped} could not be reopened.` : ''),
   sessFellNoneOpened: (skipped: number) =>
     `none of the ${skipped} session(s) that fell could be reopened.`,
+  sessFellGone: (count: number) =>
+    `${count} session(s) picked are no longer in that group — they ended, or another window reopened `
+    + 'them already. Nothing was opened.',
+  sessFellNonePicked: 'no session was picked, so nothing was reopened.',
+  sessBroadcastRefused: (reason: string, skipped: number) => {
+    if (reason === 'no-text') return 'nothing was typed, so nothing was sent.'
+    if (reason === 'no-selection') return 'no session was picked. This never means all of them.'
+    if (reason === 'too-many') {
+      return 'that is more sessions than one message may reach at once — pick fewer, or send twice.'
+    }
+    return `none of the ${skipped} session(s) picked can take a prompt right now — see the reason on each.`
+  },
+  sessBroadcastDone: (sent: number, failed: number, skipped: number, reopened: number) => {
+    const parts = [`sent to ${sent} session${sent === 1 ? '' : 's'}`]
+    // Said because it STARTED something: a reopen spawns an assistant, which is a bigger act than
+    // typing into one that was already running, and the person should read that it happened.
+    if (reopened > 0) parts.push(`${reopened} reopened first`)
+    // Named separately: a REFUSAL at write time (the session was asking after all) and a row that
+    // was never eligible are two different things to do something about.
+    if (failed > 0) parts.push(`${failed} refused it`)
+    if (skipped > 0) parts.push(`${skipped} could not be sent to`)
+    return `${parts.join(', ')}.`
+  },
+  sessBroadcastReopenSlow:
+    'it was reopened but had not come up in time to be written to — nothing was typed into it.',
   sessResumeInUse: (holder: string) =>
     `that conversation is already open in ${holder} — open it there instead of starting a second assistant in it.`,
   sessAdoptFailed: (holder: string) =>
@@ -841,6 +898,8 @@ const PT: CliStrings = {
     `o agentop não leu o diálogo do ${harness}, e não vai chutar qual tecla responde.`,
   sessChooseBlind: (harness: string) =>
     `esse diálogo é uma escolha, e ninguém verificou como selecionar uma opção no ${harness} — anexe para responder lá.`,
+  sessDialogBlind: (harness: string) =>
+    `esse diálogo do ${harness} é mais alto do que o agentop consegue ler da tela, então ele não sabe dizer quais são as opções — anexe para responder lá.`,
   sessNeedsChoice: (n: number) =>
     `esse diálogo tem ${n} opções, então não há o que simplesmente aprovar — escolha uma.`,
   sessChoiceGone:
@@ -848,6 +907,17 @@ const PT: CliStrings = {
   sessChooseUnknown: (harness: string) =>
     `o agentop não tem forma verificada de escolher uma opção no ${harness}, e não vai confirmar a destacada por você — anexe para responder lá.`,
   sessAnswered: (label: string) => `respondido: ${label}`,
+  sessAnsweredNewQuestion: (label: string) =>
+    `respondido: ${label} — e a sessão já está perguntando outra coisa, que é por isso que ainda há `
+    + 'uma pergunta na tela. Nada foi enviado para a nova.',
+  sessAnswerStuck: (label: string) =>
+    `a tecla de "${label}" foi entregue e o diálogo não se moveu. Nada mais foi enviado — responda `
+    + 'na própria sessão (attach), porque apertar de novo poderia agir sobre uma opção que você não '
+    + 'escolheu.',
+  sessAnswerNoField: (label: string) =>
+    `"${label}" não abriu um campo para escrever, então nada foi digitado — as palavras iriam para `
+    + 'onde a sessão estivesse ouvindo e o enter submeteria o que estivesse em foco. Responda na '
+    + 'própria sessão (attach).',
   sessNoFell: 'nada caiu — nenhuma sessão foi perdida com registro de que estava viva.',
   sessFellOpened: (opened: number, skipped: number, held: number) =>
     `${opened} sessão(ões) que caíram reabertas.`
@@ -855,6 +925,26 @@ const PT: CliStrings = {
     + (skipped > 0 ? ` ${skipped} não puderam ser reabertas.` : ''),
   sessFellNoneOpened: (skipped: number) =>
     `nenhuma das ${skipped} sessão(ões) que caíram pôde ser reaberta.`,
+  sessFellGone: (count: number) =>
+    `${count} sessão(ões) escolhida(s) não está(ão) mais nesse grupo — terminaram, ou outra janela já `
+    + 'reabriu. Nada foi aberto.',
+  sessFellNonePicked: 'nenhuma sessão foi escolhida, então nada foi reaberto.',
+  sessBroadcastRefused: (reason: string, skipped: number) => {
+    if (reason === 'no-text') return 'nada foi escrito, então nada foi enviado.'
+    if (reason === 'no-selection') return 'nenhuma sessão foi escolhida. Isso nunca quer dizer todas.'
+    if (reason === 'too-many') {
+      return 'são mais sessões do que uma mensagem alcança de uma vez — escolha menos, ou envie duas vezes.'
+    }
+    return `nenhuma das ${skipped} sessão(ões) escolhida(s) pode receber um prompt agora — veja o motivo em cada uma.`
+  },
+  sessBroadcastDone: (sent: number, failed: number, skipped: number) => {
+    const parts = [`enviado para ${sent} sessão${sent === 1 ? '' : 'ões'}`]
+    if (failed > 0) parts.push(`${failed} recusou`)
+    if (skipped > 0) parts.push(`${skipped} não pôde receber`)
+    return `${parts.join(', ')}.`
+  },
+  sessBroadcastReopenSlow:
+    'ela foi reaberta mas não subiu a tempo de receber a mensagem — nada foi digitado nela.',
   sessResumeInUse: (holder: string) =>
     `essa conversa já está aberta em ${holder} — abra ela por lá, em vez de colocar um segundo assistente dentro dela.`,
   sessAdoptFailed: (holder: string) =>

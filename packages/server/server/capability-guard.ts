@@ -16,6 +16,16 @@ import { CAPS, type Capabilities } from './exposure'
 /** Exact path → capability. Detail sub-paths are handled by the prefix table below. */
 const EXACT: ReadonlyMap<string, keyof Capabilities> = new Map<string, keyof Capabilities>([
   ['/api/exec', 'localShell'],
+  // It SPAWNS `tailscale` to read what this machine is already serving — a process, so it is host
+  // power and belongs here. It configures nothing; see `secure-origin.ts`.
+  ['/api/secure-origin', 'localShell'],
+  // It STARTS the configured MCP command to see whether it answers. Host power, and the reason the
+  // route looks the server up in the CONFIG rather than taking a command from the body.
+  ['/api/mcp/check', 'localShell'],
+  // Same reason as `/api/mcp/check`, one line up: it starts every configured server's command to
+  // ask `tools/list`, so it rides `localShell` rather than the `mcpAdmin` prefix below — reading
+  // and writing the CONFIGURATION is a different power from RUNNING it.
+  ['/api/mcp/tools', 'localShell'],
   ['/api/chat-tty', 'localChat'],
   ['/api/chat-harnesses', 'localChat'],
   ['/api/projects-list', 'localTranscripts'],
@@ -52,6 +62,20 @@ const PREFIXES: ReadonlyArray<readonly [string, keyof Capabilities]> = [
   // next fleet route someone adds must be guarded by having been added AT ALL, never by having
   // remembered a second table.
   ['/api/fleet', 'localShell'],
+  // The per-session UTILITY SHELL. It spawns `$SHELL` on the host in a directory of the caller's
+  // session and types whatever arrives into it — the most powerful thing this server offers, more
+  // than `/api/fleet` itself, which at least only ever runs a NAMED assistant CLI. Same capability,
+  // and a PREFIX for the same reason: the next shell route must be guarded by having been added at
+  // all. The user's own opt-in switch is enforced separately, in index.ts — see shell-gate.ts.
+  ['/api/shell', 'localShell'],
+  // The task board reads the session registry and the local store, and its DELIVER verb runs git in
+  // the directories those sessions ran in. That is host power, so it rides the same capability as
+  // the fleet — and a prefix for the same reason: the next task route must be guarded by having
+  // been added at all, never by having remembered a second table.
+  ['/api/tasks', 'localShell'],
+  // The file store is addressed by file id rather than under `/api/tasks/`, so it needs its own
+  // entry: a route that is not registered here is assumed harmless.
+  ['/api/task-files', 'localShell'],
   // The web dashboard's read of the backup engine and its "run now" button. `status` walks the
   // metrics layer and the backup history; `run` spawns `git bundle`/`git diff` across every known
   // repository and, depending on the configured layers, copies the raw harness directories

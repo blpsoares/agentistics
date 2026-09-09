@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test'
-import { isImagePath, splitImageAttachments, splitImageMarkers } from './attachmentPreview'
+import { describe, expect, test, test as it } from 'bun:test'
+import { isImagePath, openComposerLightbox, splitImageAttachments, splitImageMarkers, resolveMarkerPaths, SEND_WINDOW_MS } from './attachmentPreview'
 
 describe('isImagePath', () => {
   test('recognises known image extensions, case-insensitively', () => {
@@ -67,4 +67,75 @@ test('text with no marker is returned untouched, whitespace included', () => {
 test('a turn that is nothing but markers keeps no text', () => {
   expect(splitImageMarkers('[Image #1] [Image #2]')).toEqual({ markers: [1, 2], text: '' })
 })
+})
+
+// --- a marker that CAN find its file ----------------------------------------
+
+const T = Date.UTC(2026, 8, 7, 20, 0, 0)
+const snd = (atMs: number, path: string) => ({ sessionId: 's', atMs, path })
+
+test('three markers and three sends resolve, in the order they were sent', () => {
+  expect(resolveMarkerPaths({
+    markers: [4, 5, 6], turnAtMs: T,
+    sends: [snd(T - 3000, '/a/c.png'), snd(T - 9000, '/a/a.png'), snd(T - 6000, '/a/b.png')],
+  })).toEqual(['/a/a.png', '/a/b.png', '/a/c.png'])
+})
+
+// Every case below answers null: a wrong thumbnail is false and convincing, a chip is merely useless.
+test('one too few, or one too many, resolves nothing', () => {
+  expect(resolveMarkerPaths({ markers: [1, 2], turnAtMs: T, sends: [snd(T - 1, '/a/a.png')] })).toBe(null)
+  expect(resolveMarkerPaths({ markers: [1], turnAtMs: T, sends: [snd(T - 1, '/a/a.png'), snd(T - 2, '/a/b.png')] })).toBe(null)
+})
+
+test('a send after the turn, or older than the window, is not this turn’s', () => {
+  expect(resolveMarkerPaths({ markers: [1], turnAtMs: T, sends: [snd(T + 1, '/a/a.png')] })).toBe(null)
+  expect(resolveMarkerPaths({ markers: [1], turnAtMs: T, sends: [snd(T - SEND_WINDOW_MS - 1, '/a/a.png')] })).toBe(null)
+  expect(resolveMarkerPaths({ markers: [1], turnAtMs: T, sends: [snd(T - SEND_WINDOW_MS, '/a/a.png')] })).toEqual(['/a/a.png'])
+})
+
+test('no markers is not a question, and markers with no record resolve nothing', () => {
+  expect(resolveMarkerPaths({ markers: [], turnAtMs: T, sends: [snd(T - 1, '/a/a.png')] })).toBe(null)
+  expect(resolveMarkerPaths({ markers: [4, 5], turnAtMs: T, sends: [] })).toBe(null)
+})
+
+test('the ordinals are a count, never an index', () => {
+  const s = [snd(T - 2, '/a/a.png'), snd(T - 1, '/a/b.png')]
+  expect(resolveMarkerPaths({ markers: [4, 5], turnAtMs: T, sends: s }))
+    .toEqual(resolveMarkerPaths({ markers: [1, 2], turnAtMs: T, sends: s }))
+})
+
+/**
+ * THE COMPOSER'S OWN LIGHTBOX INDEX.
+ *
+ * A thumbnail in the composer opens the same `AttachmentLightbox` a sent message does, over the
+ * images CURRENTLY attached — and that list is editable underneath it. Removing the picture being
+ * viewed, or every picture, must close the overlay rather than leave it open on a path that is no
+ * longer there; the lightbox renders nothing for a missing path, so without this the reader is left
+ * looking at a black screen with no image and a close button they have to find.
+ */
+describe('openComposerLightbox', () => {
+  it('keeps a valid index', () => {
+    expect(openComposerLightbox(1, 3)).toBe(1)
+    expect(openComposerLightbox(0, 1)).toBe(0)
+  })
+
+  it('closes when nothing is attached any more', () => {
+    expect(openComposerLightbox(0, 0)).toBeNull()
+  })
+
+  it('closes when the image being viewed was the one removed', () => {
+    // Two images, viewing the second, the second is removed: index 1 no longer names anything.
+    // Deliberately NOT clamped to the last image — the reader asked for THAT picture, and silently
+    // showing a different one is a worse answer than closing.
+    expect(openComposerLightbox(1, 1)).toBeNull()
+  })
+
+  it('stays closed when it was never open', () => {
+    expect(openComposerLightbox(null, 3)).toBeNull()
+  })
+
+  it('refuses an index that is not a real position', () => {
+    expect(openComposerLightbox(-1, 3)).toBeNull()
+    expect(openComposerLightbox(1.5, 3)).toBeNull()
+  })
 })

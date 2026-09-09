@@ -31,7 +31,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { asideCache, asideKey } from '../../lib/asideCache'
-import { Activity, BookOpen, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Eye, FileEdit, FilePlus2, FileText, Files, GitBranch, GitPullRequest, Image, LayoutGrid, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow, X } from 'lucide-react'
+import { focusMissNotice, isFocusedRow, rowsCarry, ROW_FLASH } from '../../lib/noteFocus'
+import { Activity, BarChart3, BookOpen, Bot, Brain, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, ExternalLink, Eye, FileEdit, FilePlus2, FileText, Files, GitBranch, GitPullRequest, Image, LayoutGrid, Loader, PanelRightClose, Pencil, Plug, Plus, Send, Sparkles, Terminal, Trash2, Workflow, X } from 'lucide-react'
 import type { Artifact } from '../../lib/sessionArtifacts'
 import {
   countSkills, groupSkills, shortName, skillInvocation, type SkillEntry,
@@ -39,6 +40,7 @@ import {
 import { requestDraft } from '../../lib/composerStore'
 import { splitFrontmatter } from '../../lib/skillGroups'
 import ReactMarkdown from 'react-markdown'
+import { SessionTasksTab } from '../tasks/SessionTasksTab'
 import remarkGfm from 'remark-gfm'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { agoLabel, isDoc, liveEvents, writeStatus, type LiveEvent, type LiveTurn, type WriteStatus } from '../../lib/artifactTabs'
@@ -66,17 +68,21 @@ import {
   type McpEntry, type McpListPayload, type McpScope,
 } from '../../lib/mcpPanel'
 import { splitAsideTabs } from '../../lib/asideTabs'
+import { mcpCheckText } from '../../lib/mcpCheckText'
 import { fmt, fmtCost } from '@agentistics/core'
 import {
   galleryFileCount, galleryGroups, parseGalleryScope, parseGalleryView, producedGroups,
   type GalleryScope, type GalleryTurn, type GalleryView,
 } from '../../lib/gallery'
 import { prCaption } from '../../lib/prCaption'
+import {
+  SessionDrilldownBody, SessionDrilldownHead, type SessionDrilldownProps,
+} from '../SessionDrilldown'
 import { ArtifactDoc } from './ArtifactDoc'
 import { GalleryTab } from './GalleryTab'
 import { createSharedPref } from '../../lib/sharedPref'
 
-type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills' | 'agents' | 'forks' | 'workflows' | 'mcps' | 'prs'
+type TabId = 'files' | 'docs' | 'live' | 'gallery' | 'skills' | 'agents' | 'forks' | 'workflows' | 'mcps' | 'prs' | 'tasks' | 'metrics'
 
 /** Where the view toggle is remembered. One key, read and written in one place. */
 // SHARED. How a person reads the gallery and a skill is about the work, not about the screen —
@@ -126,9 +132,19 @@ export interface ArtifactsAsideProps {
    * whole sentence is "the harness is running something", and pressing it to land on the file list
    * answers a question nobody asked. See `artifactsStore.ts`.
    */
-  tabRequest?: { tab: string; at: number } | null
+  tabRequest?: { tab: string; at: number; ref?: string } | null
   sessionId: string
   lang: 'pt' | 'en'
+  /**
+   * The session itself, for the TASKS tab — what it is called, which harness, and what it is filed
+   * under right now. Absent on a surface that has the id and nothing else; the tab then offers
+   * nothing rather than inventing a name.
+   */
+  session?: { id: string; title: string; harness?: string; task?: string }
+  /** Open a task's page from the tasks tab. */
+  onOpenTask?: (taskId: string) => void
+  /** The filing changed — the caller re-reads the fleet so the row's badge agrees with the tab. */
+  onTaskChanged?: () => void
   /** Every file this session touched, newest first. */
   artifacts: readonly Artifact[]
   /** The conversation has not answered yet — distinct from having answered with nothing. */
@@ -166,6 +182,19 @@ export interface ArtifactsAsideProps {
    * asked not to give.
    */
   facts?: ReadonlyMap<string, { bytes: number; scope: 'project' | 'temp' }>
+  /**
+   * EVERYTHING THE STORE KNOWS ABOUT THIS CONVERSATION — the METRICS tab.
+   *
+   * The full reading used to exist only as a centred dialog on the dashboard's session lists,
+   * where it is 980px wide with nothing beside it. Here it is a tab, so the figures sit next to
+   * the conversation they are about, and the panels are the SAME ones (`SessionDrilldown`) —
+   * a second copy would be a second set of answers about one session.
+   *
+   * ABSENT means the store has no record of this conversation yet, and then there is NO TAB. An
+   * empty tab is a promise that something might be behind it, and the control that opens this
+   * one (the metrics card's link) is withheld on exactly the same fact, so the two agree.
+   */
+  metrics?: SessionDrilldownProps
 }
 
 /** The gap between two tabs. Shared by the bar and the ruler, or the measurement is of a different
@@ -195,7 +224,7 @@ function RunningDot() {
  * desktop, ~343px on a phone), while this costs nothing while it is closed.
  */
 function TabGrid({ tabs, active, pt, isMobile, anchor, onPick, onClose }: {
-  tabs: readonly { id: TabId; label: string; icon: React.ReactNode; count: number | null }[]
+  tabs: readonly { id: TabId; label: string; icon: React.ReactNode; count?: number | null }[]
   active: TabId
   pt: boolean
   isMobile: boolean
@@ -246,12 +275,12 @@ function TabGrid({ tabs, active, pt, isMobile, anchor, onPick, onClose }: {
           fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase',
           color: 'var(--text-tertiary)',
         }}>{pt ? 'Todas as abas' : 'All tabs'}</span>
-        <button
+        <button className="ag-tap-icon"
           onClick={onClose}
           aria-label={pt ? 'Fechar' : 'Close'}
           style={{
             marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: isMobile ? 44 : 22, height: isMobile ? 44 : 22, borderRadius: 6, padding: 0,
+            width: 22, height: 22, borderRadius: 6, padding: 0,
             border: 'none', background: 'transparent', color: 'var(--text-tertiary)', cursor: 'pointer',
           }}
         ><X size={13} /></button>
@@ -290,12 +319,16 @@ function TabGrid({ tabs, active, pt, isMobile, anchor, onPick, onClose }: {
                   bar cell it replaces. A tab NOBODY HAS OPENED has no count, and says so with a
                   dash and a reason on hover: "not asked yet" and "there are none" are different
                   facts, and a `0` would claim the second one. */}
-              <span
-                title={t.count === null
-                  ? (pt ? 'Ainda não lido — abra a aba para contar.' : 'Not read yet — open the tab to count.')
-                  : undefined}
-                style={{ fontSize: 9, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}
-              >{t.count === null ? '—' : t.count}</span>
+              {/* ABSENT is not `null`: a tab that counts nothing prints nothing, while a tab
+                  nobody has opened prints the dash and says why on hover. */}
+              {t.count !== undefined && (
+                <span
+                  title={t.count === null
+                    ? (pt ? 'Ainda não lido — abra a aba para contar.' : 'Not read yet — open the tab to count.')
+                    : undefined}
+                  style={{ fontSize: 9, color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums' }}
+                >{t.count === null ? '—' : t.count}</span>
+              )}
             </button>
           )
         })}
@@ -313,7 +346,7 @@ function KindIcon({ kind }: { kind: Artifact['kind'] }) {
 
 export function ArtifactsAside({
   sessionId, cwd, lang, artifacts, loading, unavailable, older, unlistedWrites, outsideNote, turns, facts, onClose,
-  tabRequest,
+  tabRequest, session, onOpenTask, onTaskChanged, metrics,
 }: ArtifactsAsideProps) {
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
@@ -362,11 +395,32 @@ export function ArtifactsAside({
    * An unknown tab is IGNORED rather than defaulted: whoever wrote it meant something this panel
    * does not have, and dropping them on Files would look like the request was honoured.
    */
+  /**
+   * The step the edge strip asked for, until the reader moves on.
+   *
+   * It does two things and they are deliberately the same state: the row opens itself, and it is
+   * highlighted so the eye finds it in a feed that may be long. The highlight FADES — it exists to
+   * answer "where", and a marker that stays becomes part of the row.
+   */
+  const [focusStep, setFocusStep] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    if (focusStep === undefined) return
+    // Long enough to be found, short enough not to become furniture.
+    const t = setTimeout(() => setFocusStep(undefined), 4000)
+    return () => clearTimeout(t)
+  }, [focusStep])
+
   const askedAt = tabRequest?.at
   useEffect(() => {
     const t = tabRequest?.tab
     if (t === 'files' || t === 'docs' || t === 'live' || t === 'gallery' || t === 'skills'
-      || t === 'agents' || t === 'forks' || t === 'workflows' || t === 'mcps' || t === 'prs') setTab(t)
+      || t === 'agents' || t === 'forks' || t === 'workflows' || t === 'mcps' || t === 'prs' || t === 'tasks'
+      || (t === 'metrics' && metrics !== undefined)) setTab(t)
+    // A requested STEP comes with the tab: the edge strip names an action, so pressing it
+    // lands on that row rather than on the top of a feed to be searched. Set unconditionally,
+    // including to undefined, so a later request with no step clears the previous one — a
+    // highlight left over from an earlier press would point at the wrong line.
+    setFocusStep(tabRequest?.ref)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askedAt])
 
@@ -601,7 +655,11 @@ export function ArtifactsAside({
    * `loading` is the conversation's own signal, so the four counts derived from its turns wait on
    * it; the three tabs that fetch for themselves wait on their own answer.
    */
-  const tabs: { id: TabId; label: string; icon: React.ReactNode; count: number | null }[] = [
+  // `count` is OPTIONAL, and that is a third fact beside the other two: `null` is "nobody has
+  // asked yet", a number is what is there, and ABSENT is a tab that counts nothing — one
+  // session's own metrics is not a list. Without it the grid would print `—` under a tooltip
+  // saying "open the tab to count", which is a promise this tab can never keep.
+  const tabs: { id: TabId; label: string; icon: React.ReactNode; count?: number | null }[] = [
     { id: 'files', label: pt ? 'Arquivos' : 'Files', icon: <Files size={12} />, count: loading ? null : artifacts.length },
     { id: 'docs', label: pt ? 'Docs' : 'Docs', icon: <BookOpen size={12} />, count: loading ? null : docs.length },
     { id: 'live', label: 'Live', icon: <Activity size={12} />, count: loading ? null : feed.length },
@@ -641,6 +699,23 @@ export function ArtifactsAside({
     },
     { id: 'mcps', label: 'MCPs', icon: <Plug size={12} />, count: mcp === null ? null : mcp.servers.length },
     { id: 'prs', label: 'PRs', icon: <GitPullRequest size={12} />, count: prs === null ? null : prs.pulls.length },
+    // The task this session is filed under, and the form to file it somewhere new. The count is 1
+    // or 0 because a session belongs to at most one task — it is a badge, not a list.
+    {
+      id: 'tasks',
+      label: pt ? 'Tarefa' : 'Task',
+      icon: <ClipboardList size={12} />,
+      count: session?.task ? 1 : 0,
+    },
+    // LAST, and only when there is a record to read. `BarChart3` is the metrics card's own icon —
+    // this tab is where that card's "see everything" link lands, and one feature wears one glyph.
+    ...(metrics
+      ? [{
+          id: 'metrics' as const,
+          label: pt ? 'Métricas' : 'Metrics',
+          icon: <BarChart3 size={12} />,
+        }]
+      : []),
   ]
 
   /**
@@ -701,6 +776,8 @@ export function ArtifactsAside({
   const tabCell = (t: (typeof tabs)[number], forRuler: boolean) => {
     const on = !forRuler && tab === t.id
     return (
+      // NO projected box: the bar this sits in is `overflow: hidden`, which CLIPS the overlay — so
+      // the class would have quietly REDUCED the target it exists to preserve. Painted instead.
       <button
         key={t.id}
         {...(forRuler ? { 'data-tab-id': t.id, tabIndex: -1 } : { role: 'tab', 'aria-selected': on })}
@@ -712,14 +789,14 @@ export function ArtifactsAside({
           background: on ? 'var(--bg-elevated)' : 'transparent',
           color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
           // 44px is the MOBILE number; applying it on desktop turns the bar into a row of buttons.
-          minHeight: isMobile ? 44 : undefined, flexShrink: 0, whiteSpace: 'nowrap',
+          flexShrink: 0, whiteSpace: 'nowrap',
         }}
       >
         {t.icon}
         {t.label}
         {/* THE COUNTS STAY ON THE BAR. `Subagentes 64` is what says what is behind a tab without
             opening it, and it is the whole reason this design was chosen over a vertical rail. */}
-        {t.count !== null && t.count > 0 && (
+        {typeof t.count === 'number' && t.count > 0 && (
           <span style={{ fontSize: 10, opacity: 0.7, fontVariantNumeric: 'tabular-nums' }}>{t.count}</span>
         )}
         {/* One dot per tab that has something RUNNING behind it — the reason to look now. */}
@@ -741,7 +818,7 @@ export function ArtifactsAside({
       }}>
         {onBar.map(t => tabCell(t, false))}
         {split.overflow && (
-          <button
+          <button className="ag-tap"
             ref={gridBtnRef}
             onClick={() => setGridOpen(v => !v)}
             aria-expanded={gridOpen}
@@ -751,7 +828,6 @@ export function ArtifactsAside({
               display: 'inline-flex', alignItems: 'center', gap: 5, marginLeft: 'auto',
               padding: '4px 9px', borderRadius: 7, cursor: 'pointer', fontFamily: 'inherit',
               fontSize: 11.5, fontWeight: 700, flexShrink: 0, whiteSpace: 'nowrap',
-              minHeight: isMobile ? 44 : undefined,
               // A real control, not a placeholder. It was a dashed outline in the tertiary colour
               // and read as the disabled remains of something — the same thing that made the MCP
               // tab's add button disappear into the cards under it.
@@ -1112,6 +1188,11 @@ export function ArtifactsAside({
         {feed.map((e, i) => (
           <EventRow
             key={i} e={e} pt={pt} now={now} sessionId={sessionId}
+            // THE ROW THE STRIP ASKED FOR. `EventRow` has answered `focused` since it was written —
+            // it opens itself, scrolls into view and flashes — and nothing ever passed it, so
+            // `openArtifacts('live', hint.ref)` landed at the top of a feed to be searched. The
+            // state was computed and faded on a timer the whole time; only this line was missing.
+            focused={e.ref !== undefined && isFocusedRow(e.ref, focusStep)}
             // A WROTE row is a link to the file it names. Only when that file is actually in the
             // Files list: the feed shows every write the transcript recorded, while Files shows the
             // ones still readable on disk, and offering to open a deleted file would be a row whose
@@ -1253,13 +1334,13 @@ export function ArtifactsAside({
                 }}>
                   {([['md', pt ? 'Formatado' : 'Formatted'], ['text', pt ? 'Texto' : 'Text']] as const)
                     .map(([id, label]) => (
-                      <button
+                      <button className="ag-tap"
                         key={id}
                         role="tab"
                         aria-selected={skillFormat === id}
                         onClick={() => chooseSkillFormat(id)}
                         style={{
-                          minHeight: isMobile ? 44 : 24, padding: '0 10px', borderRadius: 6,
+                          minHeight: 24, padding: '0 10px', borderRadius: 6,
                           border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
                           background: skillFormat === id ? 'var(--bg-elevated)' : 'transparent',
                           color: skillFormat === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
@@ -1356,30 +1437,29 @@ export function ArtifactsAside({
                   {skillsNote}
                 </p>
               )}
+              {/*
+                * A REFERENCE NO ROW CARRIES IS SAID, never swallowed. The chip promised to show
+                * which skill was used; a tab that opens and highlights nothing is indistinguishable
+                * from a button that did not work. It happens for real — a skill loaded from a
+                * directory this machine no longer lists, or a list that has not arrived yet.
+                */}
+              {focusStep !== undefined && !rowsCarry(skills.map(sk => sk.name), focusStep) && (
+                <p style={{
+                  margin: '0 0 8px', padding: '7px 10px', borderRadius: 8, fontSize: 11,
+                  lineHeight: 1.5, color: 'var(--text-secondary)',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                }}>
+                  {focusMissNotice(focusStep, pt)}
+                </p>
+              )}
               {skillGroups.map(group => (
                 <Band key={group.key || '_own'} label={`${group.label} · ${group.skills.length}`}>
                   {group.skills.map(sk => (
-                    <button
-                      key={sk.name}
-                      onClick={() => setOpenSkill(sk.name)}
-                      style={{
-                        display: 'block', width: '100%', textAlign: 'left',
-                        padding: '8px 10px', marginBottom: 6, borderRadius: 9, cursor: 'pointer',
-                        background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                        fontFamily: 'inherit',
-                      }}
-                    >
-                      <span style={{
-                        display: 'block', fontSize: 12, fontWeight: 650, color: 'var(--text-primary)',
-                        fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-                      }}>/{shortName(sk)}</span>
-                      {sk.description && (
-                        <span style={{
-                          display: 'block', marginTop: 3, fontSize: 11, lineHeight: 1.5,
-                          color: 'var(--text-tertiary)',
-                        }}>{sk.description}</span>
-                      )}
-                    </button>
+                    <SkillButton
+                      key={sk.name} sk={sk} label={shortName(sk)}
+                      focused={isFocusedRow(sk.name, focusStep)}
+                      onOpen={() => setOpenSkill(sk.name)}
+                    />
                   ))}
                 </Band>
               ))}
@@ -1419,6 +1499,27 @@ export function ArtifactsAside({
       en: 'gh answered with an error.',
     },
   }
+
+  /**
+   * THIS SESSION'S FULL METRICS — the same two panels the dashboard's dialog draws.
+   *
+   * It reads the STORE's record for the conversation, not the transcript, which is why it is
+   * offered even when the conversation itself cannot be read: those are different sources, and a
+   * harness that refuses one has not refused the other. The head loses its own "Session details"
+   * title (`title={false}`) — the tab that was pressed to get here already said it.
+   */
+  const metricsBody = () => (
+    <div style={{ overflowY: 'auto', overscrollBehavior: 'contain', minHeight: 0, flex: 1 }}>
+      {metrics && (
+        <>
+          <div style={{ padding: '12px 14px 0' }}>
+            <SessionDrilldownHead session={metrics.session} lang={metrics.lang} title={false} />
+          </div>
+          <SessionDrilldownBody {...metrics} />
+        </>
+      )}
+    </div>
+  )
 
   const prsBody = () => (
     <div style={{ padding: '10px 12px', overflowY: 'auto', overscrollBehavior: 'contain', minHeight: 0, flex: 1 }}>
@@ -1548,7 +1649,21 @@ export function ArtifactsAside({
           {/* The REFUSAL outranks every tab: there is no list, feed or gallery to be empty when
               the conversation cannot be read at all, and `body()` is where that one sentence
               lives. */}
-          {unavailable ? body()
+          {/* The TASKS tab outranks the refusal: it is about the board, not about reading this
+              conversation, so a session whose transcript cannot be read can still be filed. */}
+          {tab === 'tasks' && session ? (
+            <div style={{ overflowY: 'auto', minHeight: 0 }}>
+              <SessionTasksTab
+                session={session}
+                lang={lang}
+                {...(onOpenTask ? { onOpenTask } : {})}
+                {...(onTaskChanged ? { onChanged: onTaskChanged } : {})}
+              />
+            </div>
+          ) : tab === 'metrics' && metrics ? metricsBody()
+            /* Like the tasks tab, and for the same reason: these figures come from the STORE, not
+               from the transcript, so a conversation this panel cannot READ still has metrics. */
+            : unavailable ? body()
             : tab === 'live' ? liveBody()
             : tab === 'gallery' ? galleryBody()
             : tab === 'skills' ? skillsBody()
@@ -1713,15 +1828,77 @@ function StepBlock({ label, text, tone }: { label: string; text: string; tone?: 
   )
 }
 
-function EventRow({ e, pt, now, onOpen, status, sessionId, agentId }: {
+/**
+ * ONE SKILL, and the row a note's chip can point AT.
+ *
+ * A component rather than the inline `<button>` it replaced, for one reason: a row that scrolls
+ * itself into view needs a ref and an effect, and neither can live inside a `.map`. The behaviour is
+ * `EventRow`'s, deliberately — same flash (`ROW_FLASH`), same `scrollIntoView`, because "the one you
+ * asked for" must not look like two different things in two tabs of one panel.
+ */
+function SkillButton({ sk, label, focused, onOpen }: {
+  sk: { name: string; description?: string }
+  label: string
+  focused: boolean
+  onOpen: () => void
+}) {
+  const ref = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    // `nearest` and not `center`: the row is often already on screen, and yanking a list that did
+    // not need to move is its own kind of lost place.
+    if (focused) ref.current?.scrollIntoView({ block: 'nearest' })
+  }, [focused])
+  return (
+    <button
+      ref={ref}
+      onClick={onOpen}
+      style={{
+        display: 'block', width: '100%', textAlign: 'left',
+        padding: '8px 10px', marginBottom: 6, borderRadius: 9, cursor: 'pointer',
+        background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+        fontFamily: 'inherit',
+        ...(focused ? { animation: ROW_FLASH } : {}),
+      }}
+    >
+      <span style={{
+        display: 'block', fontSize: 12, fontWeight: 650, color: 'var(--text-primary)',
+        fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+      }}>/{label}</span>
+      {sk.description && (
+        <span style={{
+          display: 'block', marginTop: 3, fontSize: 11, lineHeight: 1.5,
+          color: 'var(--text-tertiary)',
+        }}>{sk.description}</span>
+      )}
+    </button>
+  )
+}
+
+function EventRow({ e, pt, now, onOpen, status, sessionId, agentId, focused }: {
   e: LiveEvent; pt: boolean; now: number; onOpen?: () => void; status?: WriteStatus
   sessionId: string
   /** Set inside a SUBAGENT's activity: its refs live in its own transcript, not the parent's. */
   agentId?: string
+  /** The edge strip pointed at THIS row: it opens itself and wears a marker until it fades. */
+  focused?: boolean
 }) {
   const isMobile = useIsMobile()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(focused === true)
   const openable = stepOpenable(e)
+  // It may become the pointed-at row after it was drawn — the strip is pressed while the feed is
+  // already on screen. Opening then is the same gesture one render later; it never CLOSES anything,
+  // so a row the reader shut stays shut.
+  const wasFocused = useRef(focused === true)
+  useEffect(() => {
+    if (focused === true && !wasFocused.current) setOpen(true)
+    wasFocused.current = focused === true
+  }, [focused])
+  /** Brings the pointed-at row into view — `nearest`, never `smooth`: the feed follows its own tail
+   *  and a smooth scroll racing that leaves the box drifting. */
+  const rowRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (focused === true) rowRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [focused])
   const detail = useStepDetail(sessionId, e, open, pt, agentId)
   const notice = detail ? stepNotice(detail, pt) : null
   const meta: Record<LiveEvent['kind'], { icon: React.ReactNode; color: string; label: string }> = {
@@ -1730,6 +1907,9 @@ function EventRow({ e, pt, now, onOpen, status, sessionId, agentId }: {
     ran: { icon: <Terminal size={11} />, color: 'var(--text-secondary)', label: pt ? 'rodou' : 'ran' },
     thought: { icon: <Brain size={11} />, color: '#a78bfa', label: pt ? 'pensou' : 'thought' },
     delegated: { icon: <Send size={11} />, color: '#22c55e', label: pt ? 'delegou' : 'delegated' },
+    // Anything this feed has no verb of its own for. An MCP call is the common case, and it is
+    // named rather than dropped — see `toolDisplayName`.
+    used: { icon: <Plug size={11} />, color: 'var(--text-tertiary)', label: pt ? 'usou' : 'used' },
   }
   const m = meta[e.kind]
   const mono = e.kind === 'wrote' || e.kind === 'read' || e.kind === 'ran'
@@ -1744,7 +1924,14 @@ function EventRow({ e, pt, now, onOpen, status, sessionId, agentId }: {
    */
   const Tag = openable ? 'button' : 'div'
   return (
-    <div style={{ borderRadius: 7, background: open ? 'var(--bg-elevated)' : 'transparent' }}>
+    <div
+      ref={rowRef}
+      style={{
+        borderRadius: 7,
+        background: open ? 'var(--bg-elevated)' : 'transparent',
+        ...(focused === true ? { animation: ROW_FLASH } : {}),
+      }}
+    >
     <div style={{ display: 'flex', alignItems: 'flex-start' }}>
     <Tag
       {...(openable ? {
@@ -1809,13 +1996,13 @@ function EventRow({ e, pt, now, onOpen, status, sessionId, agentId }: {
     {/* Take me to the FILE — the other question this row can answer, and only where the file is
         actually in the Files list. */}
     {onOpen && (
-      <button
+      <button className="ag-tap-icon"
         onClick={onOpen}
         title={pt ? 'Abrir o arquivo' : 'Open the file'}
         aria-label={pt ? 'Abrir o arquivo' : 'Open the file'}
         style={{
           flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          width: isMobile ? 44 : 24, height: isMobile ? 44 : 24, margin: '4px 4px 0 0',
+          width: 24, height: 24, margin: '4px 4px 0 0',
           borderRadius: 6, padding: 0,
           // THE TOUCH TARGET GREW AND THE ICON DID NOT. At 44px this was an 11px tertiary glyph in
           // an empty square — present, hit-testable, and invisible on a phone: reported as "só
@@ -2313,6 +2500,16 @@ function SubagentCard({ row, pt, now, onOpen }: {
         )}
       </div>
       <style>{`@keyframes ag-agent-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
+        /* "It is here." A marker that ENDS: three beats and gone. A highlight that stays becomes
+           part of the row, and then it is pointing at nothing. Background and a ring, never a
+           colour on the text — the row still has to be readable while it is being pointed at. */
+        @keyframes ag-row-flash {
+          0%, 100% { background: transparent; box-shadow: 0 0 0 0 transparent }
+          15%, 55% {
+            background: color-mix(in srgb, var(--anthropic-orange) 20%, transparent);
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--anthropic-orange) 55%, transparent)
+          }
+        }
         /* The line being executed. A BACKGROUND pulse, not an opacity one: the text must stay
            readable through the whole cycle — a command you cannot read while it runs is the one
            moment you most want to read it. Soft on purpose; it sits under a monospace block. */
@@ -2464,6 +2661,50 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
   const [editing, setEditing] = useState<McpEntry | null>(null)
   const scopes = offerableScopes(cwd)
 
+  /**
+   * DOES IT ANSWER? — per server, on a press.
+   *
+   * The tab said whether a PROCESS was up (`running` / `idle`), and `idle` is the normal state of a
+   * perfectly good server nothing happens to be using — which is also exactly what a broken one
+   * looks like. Telling those two apart was impossible from this screen, and the only way to find
+   * out was to start a session and see whether the tools were there. "Fico no escuro e não sei os
+   * que estão disponíveis."
+   *
+   * NOT a connection, and the words never say it is: agentistics does not run MCP servers, Claude
+   * Code does, once, at session start. This starts the configured command, speaks the protocol's
+   * opening handshake, and reports what came back.
+   *
+   * Keyed by `scope:name` because one name can be configured at two scopes and they are two
+   * different servers with two different answers.
+   */
+  const [checks, setChecks] = useState<Record<string, { outcome: string; serverName?: string; exitCode?: number } | 'running'>>({})
+  const check = async (m: { name: string; scope: string }) => {
+    const key = `${m.scope}:${m.name}`
+    setChecks(c => ({ ...c, [key]: 'running' }))
+    try {
+      const res = await fetch('/api/mcp/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: m.name, scope: m.scope, ...(cwd ? { projectPath: cwd } : {}) }),
+      })
+      const out = await res.json() as { ok?: boolean; outcome?: string; handshake?: { serverName?: string }; exitCode?: number }
+      setChecks(c => ({
+        ...c,
+        [key]: out.ok && out.outcome
+          ? {
+            outcome: out.outcome,
+            ...(out.handshake?.serverName ? { serverName: out.handshake.serverName } : {}),
+            ...(out.exitCode !== undefined ? { exitCode: out.exitCode } : {}),
+          }
+          // A refused or unreachable ROUTE is not a verdict about the server, and must not be shown
+          // as one — the profile can forbid this entirely.
+          : { outcome: 'unavailable' },
+      }))
+    } catch {
+      setChecks(c => ({ ...c, [key]: { outcome: 'unavailable' } }))
+    }
+  }
+
   const write = async (path: string, body: Record<string, unknown>, row?: string) => {
     setBusy(true)
     setWorking(row ?? null)
@@ -2479,6 +2720,23 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
         setSaid({ tone: 'ok', text: (out.names ?? []).join(', ') })
         setPaste(''); setName(''); setAdding(false); setEditing(null)
         onChanged()
+        /**
+         * CHECKED AT THE ONE MOMENT SOMEBODY IS LOOKING — right after they added it.
+         *
+         * Asked for: "ao adicionar ele subir o mcp caso seja um mcp local ou tentar uma conexão,
+         * pq daí eu fico no escuro". Adding wrote a configuration and said nothing about whether it
+         * works, and the answer arrived a session later, if at all.
+         *
+         * Only here, and never while merely LISTING: a tab that started every configured server on
+         * load would be spawning processes nobody asked for, every time it was opened. One explicit
+         * act, one check.
+         *
+         * `install` is the only path that gets it — a REMOVE has nothing to check, and an EDIT
+         * leaves the row on screen with its own button.
+         */
+        if (path === '/api/mcp/install') {
+          for (const n of out.names ?? []) void check({ name: n, scope })
+        }
       } else {
         // The SERVER's own sentence, verbatim — including the harness command's own error, which
         // says far more about a refused config than any wording invented here.
@@ -2513,6 +2771,8 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
         <McpRow
           key={`${s.scope}:${s.name}`} entry={s} pt={pt} canWrite={list.canWrite} busy={busy}
           working={working === `${s.scope}:${s.name}`}
+          check={checks[`${s.scope}:${s.name}`] ?? null}
+          onCheck={() => void check(s)}
           onRemove={() => setRemoving(s)}
           onEdit={() => { setEditing(s); setSaid(null) }}
         />
@@ -2579,11 +2839,37 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
             border: '1px solid var(--border-subtle)',
           }}
         >
+          {/* THE THREE SHAPES, SHOWN. This said them in prose — "the whole block, one named entry,
+              or just the config" — and was reported as not knowing which to use, with two of the
+              three pasted side by side to ask which was right. Both were. A JSON shape is something
+              you recognise by SEEING it; a sentence describing one is a sentence you have to
+              translate into the thing before you can compare it with what is on your clipboard.
+              `parseMcpPaste` accepts all three and has since it was written — this is only the
+              screen catching up with what the parser already does. */}
           <p style={{ margin: 0, fontSize: 10.5, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>
             {pt
-              ? 'Cole o JSON do servidor — o bloco `mcpServers` inteiro, uma entrada nomeada, ou só a configuração (aí o nome é obrigatório).'
-              : 'Paste the server’s JSON — the whole `mcpServers` block, one named entry, or just the config (then the name is required).'}
+              ? 'Cole o JSON do servidor. Qualquer um destes três funciona:'
+              : 'Paste the server’s JSON. Any of these three works:'}
           </p>
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: 5,
+            padding: '6px 8px', borderRadius: 6,
+            background: 'var(--bg-base)', border: '1px solid var(--border-subtle)',
+          }}>
+            {([
+              ['{"mcpServers": {"serena": {…}}}', pt ? 'o bloco inteiro, como vem no README' : 'the whole block, as a README gives it'],
+              ['{"serena": {…}}', pt ? 'só a entrada nomeada' : 'just the named entry'],
+              ['{"command": "serena", "args": […]}', pt ? 'só a configuração — aí o Nome abaixo é obrigatório' : 'just the config — then the Name below is required'],
+            ] as const).map(([shape, what]) => (
+              <div key={shape} style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                <code style={{
+                  fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 10.5,
+                  color: 'var(--text-secondary)', overflowWrap: 'anywhere',
+                }}>{shape}</code>
+                <span style={{ fontSize: 10, lineHeight: 1.4, color: 'var(--text-tertiary)' }}>{what}</span>
+              </div>
+            ))}
+          </div>
           <textarea
             value={paste}
             onChange={e => setPaste(e.target.value)}
@@ -2640,12 +2926,12 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
             )}
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button
+            <button className="ag-tap"
               type="submit"
               disabled={busy || paste.trim() === ''}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 7,
-                minHeight: isMobile ? 44 : undefined, padding: isMobile ? '0 14px' : '5px 11px',
+                padding: isMobile ? '6px 14px' : '5px 11px',
                 fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
                 cursor: busy || paste.trim() === '' ? 'default' : 'pointer',
                 opacity: busy || paste.trim() === '' ? 0.5 : 1,
@@ -2654,11 +2940,11 @@ function McpTab({ lang, list, error, cwd, onChanged }: {
             >
               <Plus size={12} /> {busy ? (pt ? 'Adicionando…' : 'Adding…') : (pt ? 'Adicionar' : 'Add')}
             </button>
-            <button
+            <button className="ag-tap"
               type="button"
               onClick={() => { setAdding(false); setSaid(null) }}
               style={{
-                minHeight: isMobile ? 44 : undefined, padding: isMobile ? '0 14px' : '5px 11px',
+                padding: isMobile ? '6px 14px' : '5px 11px',
                 borderRadius: 7, fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
                 cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg-card)',
                 color: 'var(--text-secondary)',
@@ -2736,12 +3022,12 @@ function McpEditor({ entry, pt, busy, onCancel, onApply }: {
           : 'Saving removes and re-adds, because that is how `claude mcp` changes a server. If the second step fails, the current version is restored.'}
       </p>
       <div style={{ display: 'flex', gap: 6 }}>
-        <button
+        <button className="ag-tap"
           onClick={() => onApply(draft)}
           disabled={busy || !changed || draft.trim() === ''}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 7,
-            minHeight: isMobile ? 44 : 30, padding: isMobile ? '0 14px' : '0 12px',
+            minHeight: 30, padding: isMobile ? '6px 14px' : '0 12px',
             fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700,
             cursor: busy || !changed ? 'default' : 'pointer', opacity: busy || !changed ? 0.5 : 1,
             border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange)', color: '#fff',
@@ -2750,11 +3036,11 @@ function McpEditor({ entry, pt, busy, onCancel, onApply }: {
           {busy ? <Spinner size={12} /> : null}
           {busy ? (pt ? 'Salvando…' : 'Saving…') : (pt ? 'Salvar' : 'Save')}
         </button>
-        <button
+        <button className="ag-tap"
           onClick={onCancel}
           disabled={busy}
           style={{
-            minHeight: isMobile ? 44 : 30, padding: isMobile ? '0 14px' : '0 12px', borderRadius: 7,
+            minHeight: 30, padding: isMobile ? '6px 14px' : '0 12px', borderRadius: 7,
             fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, cursor: busy ? 'default' : 'pointer',
             border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-secondary)',
           }}
@@ -2765,10 +3051,13 @@ function McpEditor({ entry, pt, busy, onCancel, onApply }: {
 }
 
 /** One configured server: what it is, where it is configured, and what it is doing right now. */
-function McpRow({ entry, pt, canWrite, busy, working, onRemove, onEdit }: {
+function McpRow({ entry, pt, canWrite, busy, working, check, onCheck, onRemove, onEdit }: {
   entry: McpEntry; pt: boolean; canWrite: boolean; busy: boolean
   /** This row is mid-write. A removal takes a second or two and must not look inert. */
   working: boolean
+  /** The last check's verdict, `'running'` while one is in flight, `null` if never asked. */
+  check: { outcome: string; serverName?: string; exitCode?: number } | 'running' | null
+  onCheck: () => void
   onRemove: () => void
   onEdit: () => void
 }) {
@@ -2799,13 +3088,18 @@ function McpRow({ entry, pt, canWrite, busy, working, onRemove, onEdit }: {
               aria-label={pt ? 'Editar' : 'Edit'}
               style={{
                 flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: isMobile ? 44 : 22, height: isMobile ? 44 : 22, borderRadius: 6, padding: 0,
+                width: 22, height: 22, borderRadius: 6, padding: 0,
                 cursor: busy ? 'default' : 'pointer',
                 border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-tertiary)',
               }}
             >
               <Pencil size={11} />
             </button>
+            {/* NO `.ag-tap-icon` on this pair, and the exception is the point: Edit and Remove are
+                22px with a 6px gap, so a 44px box around either reaches ~5px into the other and
+                paints on top of it. On a destructive neighbour that is a mis-tap that runs
+                `claude mcp remove`. Where a control needs 44px and its row has no room, the answer
+                is painted height — the class is not a way to have both. */}
             <button
               onClick={onRemove}
               disabled={busy}
@@ -2813,7 +3107,7 @@ function McpRow({ entry, pt, canWrite, busy, working, onRemove, onEdit }: {
               aria-label={pt ? 'Remover' : 'Remove'}
               style={{
                 flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                width: isMobile ? 44 : 22, height: isMobile ? 44 : 22, borderRadius: 6, padding: 0,
+                width: 22, height: 22, borderRadius: 6, padding: 0,
                 cursor: busy ? 'default' : 'pointer',
                 border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-tertiary)',
               }}
@@ -2824,6 +3118,34 @@ function McpRow({ entry, pt, canWrite, busy, working, onRemove, onEdit }: {
             </button>
           </>
         )}
+      </div>
+      {/* DOES IT ANSWER? The row already says whether a PROCESS is up, and `idle` is the normal
+          state of a good server nothing is using — which is also what a broken one looks like.
+          This is what tells those two apart, and it is a CHECK, not a connection: agentistics does
+          not run MCP servers, Claude Code does, once, when a session starts. */}
+      <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+        <button className="ag-tap"
+          onClick={onCheck}
+          disabled={check === 'running'}
+          style={{
+            flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5,
+            minHeight: 22, padding: isMobile ? '6px 10px' : '0 7px', borderRadius: 6,
+            cursor: check === 'running' ? 'default' : 'pointer',
+            border: '1px solid var(--border-subtle)', background: 'transparent',
+            color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 10.5,
+          }}
+        >
+          {check === 'running' ? <Spinner size={11} /> : <Plug size={11} />}
+          {pt ? 'Testar' : 'Check'}
+        </button>
+        {check !== null && check !== 'running' && (() => {
+          const v = mcpCheckText(check, pt)
+          return (
+            <span style={{ fontSize: 10.5, lineHeight: 1.45, color: v.color, minWidth: 0 }}>
+              {v.text}
+            </span>
+          )
+        })()}
       </div>
       {/* WHY the status says what it says — the sentence, never a colour alone. */}
       {run.detail && (

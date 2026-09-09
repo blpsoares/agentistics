@@ -26,11 +26,24 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, Check, FolderGit2, Folder, Loader, Paperclip, Search, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, Check, ClipboardList, FolderClock, FolderGit2, Folder, Loader, Paperclip, Search, X } from 'lucide-react'
+import { projectKind, type ProjectKind } from '@agentistics/core'
+import {
+  KIND_TABS, SEARCH_DEBOUNCE_MS, kindCount, kindEmpty, kindHint, kindLabel, kindMore, kindMoreText,
+  type ProjectTab,
+} from '../../lib/projectTabs'
+import { attachmentRoom, MAX_ATTACHMENTS, planPaste } from '../../lib/pastePlan'
+import { Field, Muted, inputStyle } from './formBits'
 import { HARNESS_COLORS, HARNESS_LABELS } from '../../lib/harness'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { effortColor, effortSteps } from '../../lib/effortScale'
 import { HarnessMark } from './HarnessMark'
+import { TaskPicker } from '../tasks/TaskPicker'
+import { boardCopy } from '../tasks/copy'
+import { useFleet } from '../../lib/fleet'
+import { attachSession, useTaskList, type TaskDetail } from '../../lib/tasks'
+import { BlockedSubtaskResolve } from '../tasks/BlockedSubtaskResolve'
+import { suggestDelivery } from '../../lib/taskSuggest'
 import {
   STEP_ORDER, clearForHarness, modelDisplay, nextStep, prevStep, stepReady, unsetAnswer,
   visibleQuestions, type MissingAnswer, type StepId, type WizardDraft, type WizardHarness,
@@ -70,23 +83,127 @@ export interface NewSessionModalProps {
   lang: 'pt' | 'en'
   onClose: () => void
   /** Called with the new session's id when one starts, so the page can select it immediately. */
-  onStarted: (id?: string) => void
+  /**
+   * The session was started. `started` describes it well enough for the caller to say so while the
+   * row is still on its way — see `SessionCreating`; the fleet does not hold it yet, so nothing
+   * downstream can look these up.
+   */
+  onStarted: (id?: string, started?: { harness?: string; label?: string }) => void
+  /**
+   * Pre-fill the task field.
+   *
+   * Set by the task wizard, which creates the task first and hands the title over: the one moment
+   * attribution is free is the moment the session is started, and asking for it twice is how a
+   * field gets left blank.
+   */
+  initialTask?: string
 }
 
-export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalProps) {
+export function NewSessionModal({ lang, onClose, onStarted, initialTask }: NewSessionModalProps) {
   const pt = lang === 'pt'
   const [harnesses, setHarnesses] = useState<HarnessOption[] | null>(null)
   const [projects, setProjects] = useState<ProjectOption[]>([])
-  const [tasks, setTasks] = useState<string[]>([])
+  /**
+   * How many places of each kind MATCHED — which is not how many rows came back.
+   *
+   * The server caps its answer per kind so a tab can never be emptied by another kind's budget, and
+   * the tabs then counted the rows: `Repositories 12 · Projects 12 · Folders 12` on a machine with
+   * twenty repositories. `undefined` means this server does not say, and the tabs fall back to
+   * counting rows rather than to a guess.
+   */
+  const [projectTotals, setProjectTotals] = useState<Record<ProjectKind, number> | undefined>(undefined)
   const [query, setQuery] = useState('')
+  /**
+   * The query the SEARCH is actually run with, one debounce behind the field.
+   *
+   * The field itself stays uncontrolled-fast — every keystroke shows immediately — while the fetch
+   * waits for a pause. Before this, every character fired a full `/api/fleet/new`, which rebuilds
+   * the harness list AND reads every harness's settings files AND walks `$HOME` when the 60s cache
+   * has expired: measured at 400ms cold, so a fast typist watched the list arrive for a prefix they
+   * had already finished typing. That is the "not in real time" half of the report.
+   */
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  /** Which kind of place the list is showing. `all` is the default — see `projectKind`. */
+  const [kindTab, setKindTab] = useState<ProjectTab>('all')
+  /** A search is in flight for a query the list has not caught up with yet. */
+  const [searching, setSearching] = useState(false)
 
   const [harness, setHarness] = useState<HarnessOption | null>(null)
   const [cwd, setCwd] = useState('')
-  const [task, setTask] = useState('')
+  const [task, setTask] = useState(initialTask ?? '')
+  /**
+   * The exact SUBTASK this session will be filed under, once it exists — set only by the picker,
+   * never by the folder suggestion below (which only ever proposes a delivery TITLE, and asking a
+   * suggestion to also pick a subtask would be asking it to answer a question it never asked).
+   * `task` stays the free-text label sent at spawn either way — this is the extra, exact half that
+   * lets the attach happen automatically once the session is created.
+   */
+  const [subtaskTarget, setSubtaskTarget] = useState<{ taskId: string; subtaskId: string } | null>(null)
+  /** Set when that automatic attach comes back refused because the subtask is still blocked. */
+  const [subtaskBlocked, setSubtaskBlocked] = useState<
+    { taskId: string; subtaskId: string; blockedBy: string[]; sessionId: string } | null
+  >(null)
+  /** The blocked delivery's own subtasks/sessions, fetched once for `BlockedSubtaskResolve`. */
+  const [blockedDetail, setBlockedDetail] = useState<TaskDetail | null>(null)
+  /** Open when the delivery picker is up. */
+  const [pickingTask, setPickingTask] = useState(false)
+  /**
+   * The suggestion has been dismissed for this spawn.
+   *
+   * Kept apart from `task === ''`: clearing must STAY cleared, and without this the effect below
+   * would helpfully put the suggestion back the moment the field went empty — a field that refuses
+   * to be emptied is worse than one that was never filled.
+   */
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false)
+  /** True while the value in the field is the one the machine proposed, not one a person picked. */
+  const [taskWasSuggested, setTaskWasSuggested] = useState(false)
   const [model, setModel] = useState('')
   const [effort, setEffort] = useState('')
   const [prompt, setPrompt] = useState('')
   const [label, setLabel] = useState('')
+
+  /**
+   * The delivery this session probably belongs to, from the folder that is selected RIGHT NOW.
+   *
+   * Both reads are ones the app already makes (the 5s refcounted fleet poll and the board's own
+   * list), so this costs no request of its own. `suggestDelivery` is pure and says nothing when the
+   * evidence is absent or points two ways — see its own note.
+   */
+  const isMobile = useIsMobile()
+  const { fleet } = useFleet(lang)
+  const { rows: taskRows } = useTaskList()
+  const suggestion = useMemo(
+    () => (cwd && taskRows
+      ? suggestDelivery({
+        cwd,
+        sessions: fleet.rows,
+        tasks: (taskRows ?? []).map(r => r.task),
+      })
+      : null),
+    [cwd, fleet.rows, taskRows],
+  )
+
+  /**
+   * Changing the FOLDER re-arms the suggestion, because a dismissal was about the folder that was
+   * selected when it was made. A person's own PICK survives it — the effect below refuses to write
+   * over a value they chose — so this only ever revives a proposal, never replaces an answer.
+   */
+  useEffect(() => {
+    setSuggestionDismissed(false)
+  }, [cwd])
+
+  /**
+   * Fill the field FROM the suggestion — never over a person's own choice, and never again once
+   * they have cleared it for this folder.
+   */
+  useEffect(() => {
+    if (suggestionDismissed) return
+    if (task && !taskWasSuggested) return
+    const next = suggestion?.title ?? ''
+    if (next === task) return
+    setTask(next)
+    setTaskWasSuggested(next !== '')
+  }, [suggestion, suggestionDismissed, task, taskWasSuggested])
 
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -110,25 +227,66 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  /**
+   * The field runs ahead; the search follows after a pause.
+   *
+   * `SEARCH_DEBOUNCE_MS` is short enough to read as immediate and long enough that typing a word is
+   * one request rather than one per letter. The FIRST value is applied with no wait, so opening the
+   * wizard does not sit empty for a fifth of a second.
+   */
+  useEffect(() => {
+    if (query === debouncedQuery) return
+    setSearching(true)
+    const t = window.setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(t)
+  }, [query, debouncedQuery])
+
   useEffect(() => {
     let alive = true
     const load = async () => {
       try {
-        const res = await fetch(`/api/fleet/new?lang=${lang}&q=${encodeURIComponent(query)}`)
+        const res = await fetch(`/api/fleet/new?lang=${lang}&q=${encodeURIComponent(debouncedQuery)}`)
         if (!res.ok || !alive) return
         const json = await res.json() as {
           harnesses: HarnessOption[]; projects: ProjectOption[]; tasks: string[]
+          projectTotals?: Record<ProjectKind, number>
         }
+        if (!alive) return
         setHarnesses(json.harnesses)
         setProjects(json.projects)
-        setTasks(json.tasks)
+        setProjectTotals(json.projectTotals)
         // Pre-select the only assistant there is. A one-item picker is a question with one answer.
         setHarness(h => h ?? (json.harnesses.length === 1 ? json.harnesses[0]! : null))
-      } catch { /* transient — the picker keeps what it had */ }
+      } catch {
+        /* transient — the picker keeps what it had, which is better than an empty list */
+      } finally {
+        if (alive) setSearching(false)
+      }
     }
     void load()
     return () => { alive = false }
-  }, [lang, query])
+  }, [lang, debouncedQuery])
+
+  /**
+   * The rows, split by KIND, and the counts the tabs carry.
+   *
+   * `projectKind` is `@agentistics/core`'s — the same function the server caps its results with, so
+   * a row can never be counted under one kind here and budgeted under another there.
+   */
+  const byKind = useMemo(() => {
+    const out: Record<ProjectKind, ProjectOption[]> = { repo: [], project: [], folder: [] }
+    for (const p of projects) out[projectKind({ source: p.source, remote: p.repo })].push(p)
+    return out
+  }, [projects])
+
+  /** What the list is showing. `all` keeps the server's ranking, which is the useful default. */
+  const shownProjects = kindTab === 'all' ? projects : byKind[kindTab]
+  /** Whether rows are being held back, and how many — `null` whenever that cannot be known. */
+  const shownMore = kindMore(
+    shownProjects.length,
+    projectTotals ? kindCount(kindTab, shownProjects.length, projectTotals) : undefined,
+    shownProjects.length > 0,
+  )
 
   // Reset the answers a DIFFERENT assistant does not accept. Carrying `effort: 'high'` across to a
   // harness whose set does not contain it would send a flag the CLI rejects at spawn.
@@ -252,8 +410,17 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
    * assistant would be told to read a file that is not there — a failure the person cannot see and
    * the session cannot explain.
    */
-  async function pick(list: FileList | null): Promise<void> {
-    const files = Array.from(list ?? [])
+  async function pick(list: FileList | readonly File[] | null): Promise<void> {
+    const picked = Array.from(list ?? [])
+    if (picked.length === 0) return
+    // The same cap the session composer applies, from the same module — a wizard that accepts
+    // fifteen and a composer that accepts ten are two rules for one act.
+    const files = picked.slice(0, attachmentRoom(attachments.length))
+    if (files.length < picked.length) {
+      setNotice(pt
+        ? `No máximo ${MAX_ATTACHMENTS} anexos.`
+        : `At most ${MAX_ATTACHMENTS} attachments.`)
+    }
     if (files.length === 0) return
     setUploading(true)
     for (const file of files) {
@@ -273,6 +440,36 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
     }
     setUploading(false)
     if (fileRef.current) fileRef.current.value = ''
+  }
+
+  /**
+   * PASTE INTO THE MESSAGE, files included — reported as "let me ctrl+V a file here".
+   *
+   * `planPaste` is the session composer's own decision, unchanged and shared: a paste carrying
+   * FILES becomes attachments, ordinary text falls through to the field (which handles the caret
+   * and the undo stack better than any manual insert), and a very large block of text is attached
+   * as a file instead. That last one matters here for the same reason it matters there — several
+   * harnesses take their first prompt by having it TYPED into a pane (see `spawn-spec.ts`), so a
+   * 4.000-line paste is not a message.
+   *
+   * The button stays: a paste is the shortcut, never the only way in.
+   */
+  function onPastePrompt(e: React.ClipboardEvent<HTMLTextAreaElement>): void {
+    const plan = planPaste({
+      files: Array.from(e.clipboardData.files),
+      text: e.clipboardData.getData('text/plain'),
+      existing: attachments.length,
+    })
+    // An ordinary paste is left alone — the textarea does it better than we would.
+    if (plan.kind === 'text') return
+    e.preventDefault()
+    if (plan.kind === 'files') { void pick(plan.files); return }
+    if (plan.kind === 'textFile') {
+      void pick([new File([plan.text], plan.name, { type: 'text/plain' })])
+      setNotice(pt
+        ? 'O texto colado era grande demais para a primeira mensagem, então foi anexado como arquivo.'
+        : 'The pasted text was too large for a first message, so it was attached as a file.')
+    }
   }
 
   /**
@@ -320,7 +517,7 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
           choice nobody was allowed to make. */}
       <ReviewRow label={pt ? 'Título' : 'Title'} value={label || null} />
       <ReviewRow label={pt ? 'Onde' : 'Where'} value={cwd || null} mono />
-      <ReviewRow label={pt ? 'Tarefa' : 'Task'} value={task || null}
+      <ReviewRow label={pt ? 'Entrega' : 'Delivery'} value={task || null}
         muted={task === '' ? (pt ? 'Nenhuma' : 'None') : undefined} />
       <ReviewRow label={pt ? 'Primeira mensagem' : 'First message'} value={prompt || null}
         muted={prompt === '' ? (pt ? 'Nenhuma — a sessão abre esperando você' : 'None — the session opens waiting for you') : undefined} />
@@ -375,8 +572,36 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
       if (json.ok) {
         // Still `busy` — the button keeps saying it is working, because it is.
         if (json.id) await waitForRow(json.id)
-        setBusy(false)
-        onStarted(json.id)
+
+        const finish = () => {
+          setBusy(false)
+          onStarted(json.id, {
+            ...(harness ? { harness: harness.id } : {}),
+            ...(label ? { label } : {}),
+          })
+        }
+
+        // The session EXISTS now, so this is the true first moment its filing can actually be
+        // attempted — a subtask picked a minute ago may have been blocked all along, or someone
+        // else may have filed the last open one under it in between. Never retried silently: the
+        // person picked a SPECIFIC subtask, and filing under a different one because that is what
+        // was free would be a session filed somewhere nobody chose.
+        if (subtaskTarget && json.id) {
+          const { taskId, subtaskId } = subtaskTarget
+          const result = await attachSession(taskId, json.id, subtaskId)
+          if (!result.ok && result.reason === 'blocked') {
+            const detailRes = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`).catch(() => null)
+            const body = detailRes?.ok ? await detailRes.json() as { task: TaskDetail } : null
+            setBlockedDetail(body?.task ?? null)
+            setSubtaskBlocked({ taskId, subtaskId, blockedBy: result.blockedBy ?? [], sessionId: json.id })
+            // The session already exists and is left UNFILED while this is open — it is not lost,
+            // it is one `SessionFiling` click away, and finishing the wizard is not held hostage by
+            // a question about a piece of work that is not this session's own.
+            setBusy(false)
+            return
+          }
+        }
+        finish()
         return
       }
       setBusy(false)
@@ -385,6 +610,38 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
       setBusy(false)
       setNotice(pt ? 'Erro de rede ao falar com esta máquina.' : 'Network error talking to this machine.')
     }
+  }
+
+  // Replaces the wizard outright, exactly as `SessionFiling` does for the same reason: the
+  // session this is about already EXISTS by the time this can appear, so the form behind it has
+  // nothing left to ask, and stacking two fixed overlays would double the scrim.
+  if (subtaskBlocked) {
+    const finish = () => {
+      setSubtaskBlocked(null)
+      onStarted(subtaskBlocked.sessionId, {
+        ...(harness ? { harness: harness.id } : {}),
+        ...(label ? { label } : {}),
+      })
+    }
+    return (
+      <BlockedSubtaskResolve
+        taskId={subtaskBlocked.taskId}
+        blockedSubtaskTitle={blockedDetail?.subtasks.find(s => s.id === subtaskBlocked.subtaskId)?.title ?? ''}
+        blockedBy={subtaskBlocked.blockedBy}
+        subtasks={blockedDetail?.subtasks ?? []}
+        sessions={blockedDetail?.sessions ?? []}
+        lang={lang}
+        // Declining to resolve it does not undo the session — it was created a moment ago and
+        // stays exactly as unfiled as any session started outside this wizard, one `SessionFiling`
+        // click away from the same subtask once it is free.
+        onCancel={finish}
+        onResolved={async () => {
+          const { taskId, subtaskId } = subtaskBlocked
+          await attachSession(taskId, subtaskBlocked.sessionId, subtaskId)
+          finish()
+        }}
+      />
+    )
   }
 
   return (
@@ -607,7 +864,7 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
           </Field>
           </>)}
 
-          {/* STEP 2 — WHERE. The directory, and the task that files this session with its
+          {/* STEP 2 — WHERE. The directory, and the delivery that files this session with its
               siblings. Both are about the WORK rather than about the assistant. */}
           {step === 'where' && (<>
           <Field label={pt ? 'Onde' : 'Where'}>
@@ -619,17 +876,82 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
               <input
                 value={query}
                 onChange={e => setQuery(e.target.value)}
-                placeholder={pt ? 'Buscar projeto ou pasta…' : 'Search project or folder…'}
+                placeholder={pt ? 'Buscar repositório, projeto ou pasta…' : 'Search repository, project or folder…'}
                 style={inputStyle}
               />
+              {/* THE SEARCH SAYS IT IS RUNNING. The field answers instantly and the list follows a
+                  debounce behind it, so without this the two disagree for a moment and the list
+                  reads as stale rather than as catching up. */}
+              {searching && (
+                <Loader size={13} className="ag-working-spin" style={{
+                  position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+                  color: 'var(--text-tertiary)', pointerEvents: 'none',
+                }} />
+              )}
             </div>
+
+            {/* THE THREE KINDS, AND ALL. A repository, a project and a plain folder were one list
+                separated by an icon; the tabs are the division said in words, and the counts are
+                what make an empty tab readable as "nothing of this kind matched" rather than as a
+                broken filter. `projectKind` is `@agentistics/core`'s, so these buckets and the
+                server's per-kind budget can never disagree about what a row is.
+                All is the default and keeps the server's own ranking — the tabs FILTER it, they
+                never re-order it. */}
+            <div role="tablist" style={{
+              display: 'flex', gap: 3, marginBottom: 8, padding: 3, borderRadius: 9,
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+            }}>
+              {KIND_TABS.map(id => {
+                const on = kindTab === id
+                const n = kindCount(id, id === 'all' ? projects.length : byKind[id].length, projectTotals)
+                return (
+                  <button
+                    key={id}
+                    role="tab"
+                    aria-selected={on}
+                    onClick={() => setKindTab(id)}
+                    style={{
+                      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      gap: 5, minHeight: 30, borderRadius: 7, border: 'none', cursor: 'pointer',
+                      background: on ? 'var(--bg-surface)' : 'transparent',
+                      color: on ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                      fontFamily: 'inherit', fontSize: 11.5, fontWeight: on ? 650 : 500,
+                      minWidth: 0,
+                    }}
+                  >
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {kindLabel(id, pt)}
+                    </span>
+                    {/* The count is DIMMED and never coloured: it is a size, not a state. */}
+                    <span style={{ fontSize: 10, color: 'var(--text-tertiary)', flexShrink: 0 }}>{n}</span>
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* WHAT THIS TAB HOLDS, in a sentence. The tab names the kind and this says what the
+                kind IS — which is the whole of the report: an icon separated a repository from a
+                folder and nothing on screen ever said what the difference was. */}
+            <p style={{
+              margin: '0 0 8px', fontSize: 10.5, lineHeight: 1.45, color: 'var(--text-tertiary)',
+            }}>
+              {kindHint(kindTab, pt)}
+              {/* AND HOW MANY OF THEM ARE ON SCREEN. The tab now carries the true total, so
+                  without this line a tab reading 21 over a list of 12 looks like a broken list
+                  rather than a capped one — and the way to reach the other nine is to type. */}
+              {shownMore && <> {kindMoreText(shownMore, pt)}</>}
+            </p>
+
             <div style={{
               maxHeight: 190, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4,
               border: '1px solid var(--border-subtle)', borderRadius: 10, padding: 6,
             }}>
-              {projects.length === 0 ? (
-                <Muted text={pt ? 'Nenhuma pasta encontrada.' : 'No folder found.'} />
-              ) : projects.map(p => {
+              {shownProjects.length === 0 ? (
+                /* A SENTENCE PER REASON. "Nothing matched this search" and "nothing of this kind is
+                   here" send a reader to two different actions — clear the box, or switch tab —
+                   and one shared empty box would name neither. */
+                <Muted text={kindEmpty(kindTab, query, projects.length > 0, pt)} />
+              ) : shownProjects.map(p => {
                 const on = cwd === p.path
                 return (
                   <button
@@ -642,11 +964,17 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
                       color: 'var(--text-primary)', cursor: 'pointer', fontFamily: 'inherit',
                     }}
                   >
-                    {/* A repository and a plain directory are different things, and the mark says
-                        which. Read from the store's own answer, never guessed from the path. */}
-                    {p.repo
-                      ? <FolderGit2 size={15} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
-                      : <Folder size={15} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />}
+                    {/* THE MARK IS THE KIND, and it is the same `projectKind` the tabs file by —
+                        so the icon and the tab a row sits under can never say different things.
+                        It used to be `p.repo ? git : folder`, which drew a repository the home walk
+                        found as a plain folder: that one has a `.git` and no RECORDED remote, and
+                        the absence of a remote is not the absence of a repository. */}
+                    {(() => {
+                      const kind = projectKind({ source: p.source, remote: p.repo })
+                      if (kind === 'repo') return <FolderGit2 size={15} style={{ color: 'var(--accent-purple)', flexShrink: 0 }} />
+                      if (kind === 'project') return <FolderClock size={15} style={{ color: 'var(--anthropic-orange)', flexShrink: 0 }} />
+                      return <Folder size={15} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                    })()}
                     <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <span style={{ fontSize: 12.5, fontWeight: on ? 650 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {p.label}
@@ -661,28 +989,106 @@ export function NewSessionModal({ lang, onClose, onStarted }: NewSessionModalPro
             </div>
           </Field>
 
-          <Field label={pt ? 'Tarefa (opcional)' : 'Task (optional)'} hint={pt
+          {/*
+            * The delivery. This is the PRIMARY door for filing a session: the field is here, filled
+            * in, before the session exists — every other surface is a repair afterwards.
+            *
+            * It is a PICKER and not a text field. It used to be an input with a datalist, which
+            * meant typing "ALM Board" where "ALM board" existed created a SECOND delivery with the
+            * metrics split between the two and nothing on screen saying so. The row menu had
+            * already been fixed this way; the form that files most sessions had not.
+            */}
+          <Field label={pt ? 'Entrega (opcional)' : 'Delivery (optional)'} hint={pt
             ? 'Agrupa várias sessões como um trabalho só, e é o que permite reabrir todas de uma vez.'
             : 'Groups several sessions as one piece of work, and is what lets you reopen them all at once.'}>
-            <input
-              value={task}
-              onChange={e => setTask(e.target.value)}
-              list="agentistics-tasks"
-              placeholder={pt ? 'Nova ou existente…' : 'New or existing…'}
-              style={{ ...inputStyle, paddingLeft: 12 }}
-            />
-            <datalist id="agentistics-tasks">
-              {tasks.map(t => <option key={t} value={t} />)}
-            </datalist>
+            <button
+              type="button"
+              onClick={() => setPickingTask(true)}
+              style={{
+                ...inputStyle, paddingLeft: 12, display: 'flex', alignItems: 'center', gap: 8,
+                textAlign: 'left', cursor: 'pointer',
+                color: task ? 'var(--text-primary)' : 'var(--text-tertiary)',
+              }}
+            >
+              <ClipboardList size={14} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {task || (pt ? 'Nenhuma — escolher ou criar…' : 'None — pick or create…')}
+              </span>
+              <ChevronDown size={14} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+            </button>
+            {/*
+              * The reason, and the way out. A field that fills itself in without saying why is a
+              * field nobody trusts, and one that cannot be emptied is worse than one that was never
+              * filled — so the sentence and the [×] always travel together.
+              */}
+            {taskWasSuggested && suggestion && task === suggestion.title && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6, marginTop: 6,
+                fontSize: 11, color: 'var(--text-tertiary)',
+              }}>
+                <span style={{ flex: 1 }}>
+                  {pt
+                    ? `sugerida: ${suggestion.sameFolder} ${suggestion.sameFolder === 1 ? 'sessão desta pasta está' : 'sessões desta pasta estão'} nesta entrega`
+                    : `suggested: ${suggestion.sameFolder} session${suggestion.sameFolder === 1 ? '' : 's'} in this folder ${suggestion.sameFolder === 1 ? 'is' : 'are'} filed here`}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTask(''); setSubtaskTarget(null)
+                    setTaskWasSuggested(false); setSuggestionDismissed(true)
+                  }}
+                  title={pt ? 'Não usar a sugestão' : 'Do not use the suggestion'}
+                  // `.ag-tap-icon` PROJECTS the 44px a finger needs around a 22px glyph, rather
+                  // than painting a 44x44 box three times the size of what is in it.
+                  className="ag-tap-icon"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 22, height: 22, flexShrink: 0,
+                    background: 'transparent', border: 'none', borderRadius: 4,
+                    color: 'var(--text-tertiary)', cursor: 'pointer',
+                  }}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
           </Field>
+
+          {pickingTask && (
+            <TaskPicker
+              title={boardCopy(lang).fileUnder}
+              lang={lang}
+              onPick={pick => {
+                setTask(pick.taskTitle)
+                setSubtaskTarget({ taskId: pick.taskId, subtaskId: pick.subtaskId })
+                // A person chose it, so the effect above must stop proposing over the top of it.
+                setTaskWasSuggested(false)
+                setSuggestionDismissed(true)
+                setPickingTask(false)
+              }}
+              onClose={() => setPickingTask(false)}
+            />
+          )}
           </>)}
 
           {/* STEP 3 — WHAT. The first message, and the files it points at. */}
           {step === 'message' && (<>
-          <Field label={pt ? 'Primeira mensagem (opcional)' : 'First message (optional)'}>
+          <Field
+            label={pt ? 'Primeira mensagem (opcional)' : 'First message (optional)'}
+            hint={pt
+              ? 'Cole (Ctrl+V) ou arraste arquivos aqui para anexá-los.'
+              : 'Paste (Ctrl+V) or drop files here to attach them.'}
+          >
             <textarea
               value={prompt}
               onChange={e => setPrompt(e.target.value)}
+              onPaste={onPastePrompt}
+              onDragOver={e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault() }}
+              onDrop={e => {
+                if (e.dataTransfer.files.length === 0) return
+                e.preventDefault()
+                void pick(e.dataTransfer.files)
+              }}
               rows={3}
               placeholder={pt ? 'O que a sessão deve fazer…' : 'What the session should do…'}
               style={{ ...inputStyle, paddingLeft: 12, resize: 'vertical', minHeight: 68 }}
@@ -982,32 +1388,4 @@ function ModelId({ id }: { id: string }) {
   )
 }
 
-const inputStyle: React.CSSProperties = {
-  width: '100%', boxSizing: 'border-box',
-  padding: '9px 12px 9px 30px', borderRadius: 9,
-  border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
-  color: 'var(--text-primary)', fontFamily: 'inherit', fontSize: 13, outline: 'none',
-}
 
-function Field({ label, hint, children }: {
-  label: string; hint?: string; children: React.ReactNode
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-      <span style={{
-        fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
-        color: 'var(--text-tertiary)',
-      }}>
-        {label}
-      </span>
-      {children}
-      {hint && (
-        <span style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>{hint}</span>
-      )}
-    </div>
-  )
-}
-
-function Muted({ text }: { text: string }) {
-  return <p style={{ margin: 0, padding: '6px 4px', fontSize: 12, lineHeight: 1.5, color: 'var(--text-tertiary)' }}>{text}</p>
-}

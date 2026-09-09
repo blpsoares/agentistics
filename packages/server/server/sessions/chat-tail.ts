@@ -24,22 +24,30 @@ import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { PROJECTS_DIR } from '../config'
 import { UUID_RE } from '../git'
-import { isHumanUserEntry } from '../jsonl'
+import { isUserRoleMessage } from '../jsonl'
 import { commandSummary, hasUnreadableWrite, shellWrites } from './shell-writes'
 import { classifyUserEntry, type UserEntry } from './chat-envelope'
 import type { ChatTurn } from './chat-turn'
 import { MAX_TAIL_BYTES, TAIL_BYTES, readTailBytes, windowLines } from './transcript-window'
+import { createTranscriptPathMemo, resolveMemoizedPath } from './transcript-path-memo'
 
 // The turn shape now lives in `chat-turn.ts` — every harness reader produces it, and this module
 // is only one of them. Re-exported so nothing that already imports it from here has to move.
 export type { ChatTurn } from './chat-turn'
 
-/** Resolved paths and one-time-scan misses, keyed by conversation id. Never re-scanned once known. */
-const pathCache = new Map<string, string | null>()
+/**
+ * Where each conversation's transcript is — POSITIVES forever, misses only briefly.
+ *
+ * A `null` used to be cached here for the life of the process, and a session created from the
+ * wizard has no transcript for the first seconds of its life: the chat view's first poll landed
+ * inside that window and the conversation was unreadable until the server restarted. See
+ * `transcript-path-memo.ts`.
+ */
+const pathMemo = createTranscriptPathMemo()
 
 /** Reset the memo. Tests only. */
 export function forgetChatTailPaths(): void {
-  pathCache.clear()
+  pathMemo.clear()
 }
 
 function encodeProjectDir(cwd: string): string {
@@ -64,8 +72,15 @@ async function scanForTranscript(sessionId: string, projectsDir: string): Promis
 /**
  * The absolute path to a live Claude conversation's transcript, or `null` when it cannot be found.
  *
- * `null` is cached too — a session whose directory encoding is ambiguous costs one scan, not one
- * scan per poll for the rest of its life.
+ * TWO COSTS, and only the expensive one is memoized. The DIRECT path — the session's own cwd,
+ * encoded — is a single `stat`, and it is where a transcript actually is; it is checked on EVERY
+ * call, so a session whose file did not exist a moment ago is readable the moment it does. The
+ * SCAN (a `readdir` plus a `stat` per project directory, 281 of them on a real machine) is the one
+ * a miss must not be allowed to repeat every poll, and `transcript-path-memo.ts` is what bounds it.
+ *
+ * Caching the `null` itself is what broke: a session created from the wizard has no transcript
+ * until it first says something, the chat view's first poll lands inside that window, and the
+ * conversation was then unreadable for the life of the server process.
  *
  * `projectsDir` defaults to the real `PROJECTS_DIR` and is overridable only so tests can point it
  * at a fixture tree without needing a subprocess — `config.ts`'s constants are fixed at import
@@ -75,15 +90,21 @@ export async function resolveChatTranscriptPath(
   cwd: string,
   sessionId: string,
   projectsDir: string = PROJECTS_DIR,
+  now: number = Date.now(),
 ): Promise<string | null> {
   if (!UUID_RE.test(sessionId)) return null
-  const cached = pathCache.get(sessionId)
-  if (cached !== undefined) return cached
-
-  const direct = join(projectsDir, encodeProjectDir(cwd), `${sessionId}.jsonl`)
-  const resolved = (await exists(direct)) ? direct : await scanForTranscript(sessionId, projectsDir)
-  pathCache.set(sessionId, resolved)
-  return resolved
+  // The remembered path is VERIFIED before it is answered — Claude Code re-files a transcript under
+  // the project directory of the session's CURRENT cwd, and deletes it outright after 30 days. See
+  // `resolveMemoizedPath`, which is where all three resolvers' shared shape lives.
+  return resolveMemoizedPath(pathMemo, sessionId, {
+    exists,
+    direct: async () => {
+      const p = join(projectsDir, encodeProjectDir(cwd), `${sessionId}.jsonl`)
+      return await exists(p) ? p : null
+    },
+    scan: () => scanForTranscript(sessionId, projectsDir),
+    now,
+  })
 }
 
 interface Cached {
@@ -102,11 +123,18 @@ export function forgetChatTailContent(): void {
 /**
  * What a `user` entry actually is — the person, the harness, or neither.
  *
- * `isHumanUserEntry` only excludes a pure `tool_result`; every other envelope the harness writes
- * under this role reached the pane as the user's own message. `chat-envelope.ts` is the split.
+ * `isUserRoleMessage` only excludes a pure `tool_result`; every other envelope the harness writes
+ * under this role reached the pane as the user's own message, and `chat-envelope.ts` is what splits
+ * those into a person's text and a system NOTE.
+ *
+ * It used to gate on `isHumanUserEntry`, which asks a DIFFERENT question — did a person take a
+ * turn — and grew an `isMeta`/`isCompactSummary` exclusion for the round counter. That silently
+ * emptied the chat of every system note: an injected entry was dropped HERE, before
+ * `classifyUserEntry` could ever name it, so no skill load, no attached image and no message from
+ * another session was drawn at all. Two questions need two predicates; see `jsonl.ts`.
  */
 function extractUserEntry(e: Record<string, unknown>): UserEntry | null {
-  if (!isHumanUserEntry(e)) return null
+  if (!isUserRoleMessage(e)) return null
   const msgContent = (e.message as Record<string, unknown> | undefined)?.content
   let raw: string | undefined
   if (typeof msgContent === 'string') raw = msgContent
@@ -244,7 +272,12 @@ function queuedPromptText(prompt: unknown): string | null {
 function userTurn(entry: UserEntry): ChatTurn {
   return entry.kind === 'person'
     ? { role: 'user', text: entry.text }
-    : { role: 'user', text: entry.note, system: entry.note }
+    : {
+        role: 'user',
+        text: entry.note,
+        system: entry.note,
+        ...(entry.noteRef ? { systemRef: entry.noteRef } : {}),
+      }
 }
 
 function extractAssistantText(e: Record<string, unknown>): string | null {

@@ -97,6 +97,9 @@ export interface SpawnRequest {
   effort?: string
   label?: string
   task?: string
+  /** See `ManagedSession.taskId`: recorded at spawn, the one moment it is a fact. */
+  taskId?: string
+  attemptId?: string
 }
 
 /**
@@ -233,6 +236,30 @@ export interface ManagedSession {
    */
   task?: string
   /**
+   * The Task and Attempt this session was started under — see `task-model.ts`.
+   *
+   * Stamped at SPAWN, the one moment the association is a fact rather than a guess, and carried by
+   * every path that mints a new managedId for the same work: resume, attach, takeover, openTask,
+   * adoption. The same discipline `conversationId` follows, for the same reason — a session filed
+   * under the wrong task makes every number wrong without looking wrong.
+   *
+   * `task` (the free-text name) stays beside these and keeps working, and a name typed before this
+   * existed resolves through `legacyTaskId`.
+   */
+  taskId?: string
+  /**
+   * The SUBTASK this session is filed under, when it is filed under one.
+   *
+   * **A session is filed under a task OR under one of its subtasks, never both.** `task-attach.ts`
+   * is the only thing that decides the pair, and the invariant it keeps is that a set `subtaskId`
+   * means `taskId` is that subtask's OWN task. The parent is stored all the same, because the
+   * delivery's cost must keep including the work — direct sessions plus every subtask's IS the
+   * delivery — but the two are ONE attachment read through `filedUnder`, never two. Reading them
+   * as two is the double-count that rule exists to prevent.
+   */
+  subtaskId?: string
+  attemptId?: string
+  /**
    * The last time this session was OBSERVED ALIVE, epoch ms — stamped at creation, then refreshed by
    * the poller's heartbeat for every session the backend reports as running.
    *
@@ -268,6 +295,15 @@ export interface ManagedSession {
    * the same one, and the fleet came back with a single session listed three times under one name.
    */
   conversationId?: string
+  /**
+   * HOW `conversationId` was established — see `LinkProvenance` in `task-model.ts`.
+   *
+   * `assigned` the CLI was handed the id at spawn; `observed` the poller claimed it at first
+   * sighting. A rollup must be able to tell them apart, and on the record alone they look
+   * identical. A MISSING value reads as `assigned`: every link written before this field existed
+   * was one.
+   */
+  conversationLink?: 'assigned' | 'observed'
   /**
    * The repository this session's directory belonged to WHEN IT STARTED.
    *
@@ -401,14 +437,7 @@ export interface SessionBackend {
    * poll and the keystroke is an ordinary outcome, not an error to crash a caller with.
    */
   sendText(id: string, text: string): Promise<boolean>
-  /**
-   * Pick a numbered option and write into the FIELD it opens — see the tmux implementation.
-   *
-   * One call rather than three, because the wait between the keystrokes is the whole point: sent as
-   * a burst, the option's digit lands inside the field it just opened.
-   */
-  sendChoiceText?(id: string, key: string, text: string): Promise<boolean>
-  /**
+    /**
    * Type literal text into the session WITHOUT submitting — the first half of `sendText`, exposed on
    * its own for the browser's key-by-key write channel (`input-web.ts`), where an implicit `Enter`
    * would turn every keystroke into a submitted turn.
@@ -417,6 +446,34 @@ export interface SessionBackend {
    * this exposes an existing path rather than adding a mechanism. `false` when the backend could not
    * deliver it; never a throw, for the same reason as `sendText`.
    */
+  /**
+   * Answer a dialog's FREE-TEXT option: the digit, a look at what it did, then the words.
+   *
+   * One call and not three because `writeToPane` locks per pane — three locked calls leave two gaps
+   * another writer can land in. `opened` is the caller's: whether a field appeared needs the
+   * harness's rules and its dialog parser, and it runs inside the lock. `no-field` means the digit
+   * did not open one, so nothing further was typed.
+   */
+  sendChoiceText?(
+    id: string, key: string, text: string, opened: (frame: string[]) => boolean,
+  ): Promise<'sent' | 'no-field' | 'failed'>
+  /**
+   * Answer a NUMBERLESS dialog: move the cursor onto the row, LOOK, and only then confirm.
+   *
+   * There is no digit to type on claude's trust prompt (`❯ No, exit` / `  Yes, I trust this
+   * folder`), so the only way to reach the other row is to move onto it — and a count of arrow
+   * presses is an assumption about a widget nobody has driven in that exact dialog. `landed` is the
+   * caller's check, run on the frame AFTER the moves and BEFORE the confirm: it answers "is the
+   * highlighted row the one the person picked". `wrong-row` means it was not, and NOTHING was
+   * confirmed — the dialog is left exactly as it was found, which is the one outcome that is always
+   * recoverable.
+   *
+   * One call and not three for the same reason `sendChoiceText` is one: `writeToPane` locks per
+   * pane, and three locked calls leave two gaps another writer can land in.
+   */
+  sendMoveChoice?(
+    id: string, keys: readonly string[], confirmKey: string, landed: (frame: string[]) => boolean,
+  ): Promise<'sent' | 'wrong-row' | 'failed'>
   sendTextRaw(id: string, text: string): Promise<boolean>
   /**
    * Press ONE named key — the backend's own vocabulary (`Enter`, `Escape`).

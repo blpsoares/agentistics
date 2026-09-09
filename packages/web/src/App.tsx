@@ -12,11 +12,11 @@ import {
   PanelLeft, RefreshCw, Server, Settings, Shield, ShieldCheck,
   SlidersHorizontal, Sparkles, Sun, Tag as TagIcon, Target, TerminalSquare,
   TrendingUp, Trophy, Users, Wrench, X, Zap,
-  ZoomIn,
+  ZoomIn, ClipboardList,
 } from 'lucide-react'
 import { useData, useDerivedStats, LIVE_INTERVAL_OPTIONS, LIVE_INTERVAL_OPTIONS_RISKY } from './hooks/useData'
 import { usePlanBasis } from './hooks/usePlanBasis'
-import { planScopeHarnesses, planScopeNote } from './lib/costBasis'
+import { planScopeHarnesses, planScopeNote, sessionPlanFactor } from './lib/costBasis'
 import { bootLoading } from './lib/bootPhase'
 import { DEFAULT_CARD_ORDER, migrateCardOrder, type CardId } from './lib/cardOrder'
 import { BillingIntroModal } from './components/BillingIntroModal'
@@ -38,6 +38,9 @@ import { ModelBreakdown } from './components/ModelBreakdown'
 import { ProjectsList } from './components/ProjectsList'
 import { FiltersBar } from './components/FiltersBar'
 import { NotificationToasts } from './components/NotificationToasts'
+import { BetaTag } from './components/BetaTag'
+import { KeyboardProbe, keyboardProbeOn } from './components/KeyboardProbe'
+import { shouldResetDocumentScroll } from './lib/viewportReset'
 import { MagnifierLayer } from './components/a11y/MagnifierLayer'
 import { HideLensesButton } from './components/a11y/HideLensesButton'
 import { MagnifierButton } from './components/a11y/MagnifierButton'
@@ -66,8 +69,8 @@ import { TeamLogin } from './components/TeamLogin'
 import { Login } from './components/Login'
 import { ModeSwitch } from './components/nav/ModeSwitch'
 import { TopBar } from './components/nav/TopBar'
-import { COST_BASIS_W, FULL_BAR_W, headerFit, stripPadding } from './lib/headerFit'
-import { toggleArtifacts, useArtifacts } from './lib/artifactsStore'
+import { COST_BASIS_W, FULL_BAR_W, MIN_BAR_W, headerFit, stripPadding } from './lib/headerFit'
+import { openArtifacts, toggleArtifacts, useArtifacts } from './lib/artifactsStore'
 import { SessionsAside } from './components/nav/SessionsAside'
 import { SessionsRail } from './components/nav/SessionsRail'
 import { getPinnedIds } from './lib/pinnedSessions'
@@ -98,7 +101,7 @@ import { CentralSessions } from './components/sessions/CentralSessions'
 // filter row in the strip and the body under it have to move together at every width.
 import { PAGE_INSET, PAGE_MAX_WIDTH } from './components/sessions/FleetOverview'
 import { setFleetSourceCentral } from './lib/fleet'
-import { sessionPath } from './lib/sessionRoute'
+import { reopenedSessionRoute, sessionPath } from './lib/sessionRoute'
 import { SessionStatsMenu } from './components/sessions/SessionStatsMenu'
 
 /**
@@ -140,6 +143,8 @@ interface TeamSessionState {
    *  Undefined on an older server, which had no switch — treated as "the capability decides",
    *  so upgrading the web ahead of the server never hides a chat that still works. */
   chatEnabled?: boolean
+  /** The same, for `/api/shell/*`. Undefined reads as OFF — see `AppContext.shellEnabled`. */
+  shellEnabled?: boolean
 }
 
 export interface IamAccount { id: string; name: string; email: string; role: 'owner' | 'member'; memberships: { teamId: string; role: 'manager' | 'user' }[]; mustChangePassword: boolean }
@@ -711,7 +716,11 @@ function MobileBottomNav({
   const primary = [
     { to: '/',         labelPt: 'Home',       labelEn: 'Home',      icon: Home },
     { to: '/costs',    labelPt: 'Custos',     labelEn: 'Costs',     icon: DollarSign },
-    { to: '/projects', labelPt: 'Projetos',   labelEn: 'Projects',  icon: FolderOpen },
+    // Repositories took the slot Projects held. It is the page that now answers "which projects" —
+    // the repository is the key that survives a different path on every machine — so somebody
+    // reaching for the old tile lands where the information actually is. It leaves the "More"
+    // sheet by the same move: one destination, one place to press it.
+    { to: '/repositories', labelPt: 'Repositórios', labelEn: 'Repositories', icon: GitBranch },
     { to: '/tools',    labelPt: 'Tools',      labelEn: 'Tools',     icon: Wrench },
   ] as const
 
@@ -725,18 +734,23 @@ function MobileBottomNav({
     active?: boolean
     accent?: boolean
     badge?: string
+    /** See the desktop rail: the two navs mark the same features, or one of them lies. */
+    beta?: boolean
   }
   // The switch's badge, from the SHARED fleet poll (see lib/fleet.ts) — no extra request.
   const { fleet: mobileFleet } = useFleet(lang === 'pt' ? 'pt' : 'en')
   const attention = mobileFleet.attention
 
   const navTiles: Tile[] = [
-    { key: 'repositories', label: pt ? 'Repositórios' : 'Repositories', icon: GitBranch, onClick: () => { closeSheet(); navigate('/repositories') }, active: location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo') },
+    // Repositories is NOT here: it is a fixed slot in the bar now (see `primary`). A destination
+    // in both places is the same feature marked twice, and the sheet is where the ones that did
+    // not fit live.
     // Members/machines only exist on a central — a solo machine has exactly one of each.
     ...(isCentral
       ? [{ key: 'members', label: pt ? 'Membros' : 'Members', icon: Users, onClick: () => { closeSheet(); navigate('/members') }, active: location.pathname.startsWith('/members') } as Tile]
       : []),
     { key: 'top', label: pt ? 'Top' : 'Top', icon: Trophy, onClick: () => { closeSheet(); navigate('/top') }, active: location.pathname.startsWith('/top') },
+    { key: 'tasks', label: 'Entregas', icon: ClipboardList, onClick: () => { closeSheet(); navigate('/tasks') }, active: location.pathname.startsWith('/tasks'), beta: true },
     { key: 'tags', label: 'Tags', icon: TagIcon, onClick: () => { closeSheet(); navigate('/tags') }, active: location.pathname.startsWith('/tags') },
     { key: 'custom', label: pt ? 'Personalizado' : 'Custom', icon: Layers, onClick: () => { closeSheet(); navigate('/custom') }, active: location.pathname.startsWith('/custom') },
     { key: 'export', label: pt ? 'Exportar' : 'Export', icon: FileDown, onClick: () => { closeSheet(); navigate('/export') }, active: location.pathname.startsWith('/export') },
@@ -910,6 +924,8 @@ function MobileBottomNav({
               >
                 <Icon size={19} strokeWidth={1.8} />
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{tile.label}</span>
+                {/* Top-LEFT, so it cannot collide with the count badge on the right. */}
+                {tile.beta && <BetaTag what={tile.label} style={{ position: 'absolute', top: 4, left: 5 }} />}
                 {tile.badge && (
                   <span style={{
                     position: 'absolute', top: 4, right: 5,
@@ -947,7 +963,12 @@ function MobileBottomNav({
         {primary.map(tab => {
           const active = tab.to === '/'
             ? location.pathname === '/'
-            : location.pathname.startsWith(tab.to)
+            // A repo's own page is `/repo/:id`, not a child of `/repositories` — the tile it was
+            // promoted from already knew that, and the bar has to know it too or the section it is
+            // in stops marking itself the moment you open a repository.
+            : tab.to === '/repositories'
+              ? location.pathname.startsWith('/repositories') || location.pathname.startsWith('/repo')
+              : location.pathname.startsWith(tab.to)
           const Icon = tab.icon
           return (
             <NavLink
@@ -1096,14 +1117,21 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
   // A resize in progress. Only used to suspend the collapse animation — see the aside's `transition`.
   const [dragging, setDragging] = useState(false)
 
-  const items: { to: string; labelPt: string; labelEn: string; icon: React.ReactNode }[] = [
+  const items: {
+    to: string; labelPt: string; labelEn: string; icon: React.ReactNode
+    /** Still being tried out — see `BetaTag`. Marked HERE so the rail and the sheet agree. */
+    beta?: boolean
+  }[] = [
     { to: '/',          labelPt: 'Home',         labelEn: 'Home',         icon: <Home size={17} /> },
     { to: '/costs',     labelPt: 'Custos',       labelEn: 'Costs',        icon: <DollarSign size={17} /> },
     { to: '/top',       labelPt: 'Top de uso',   labelEn: 'Top usage',    icon: <Trophy size={17} /> },
-    { to: '/projects',  labelPt: 'Projetos',     labelEn: 'Projects',     icon: <FolderOpen size={17} /> },
+    // No Projects entry. Its two panels — top projects and languages — are on Home, and the
+    // repository is the dimension that survives a different path on every machine, so what the
+    // page answered is answered by Repositories. `/projects` redirects there (see `AppRouter`).
     { to: '/repositories', labelPt: 'Repositórios', labelEn: 'Repositories', icon: <GitBranch size={17} /> },
     // Members/machines only exist on a central — a solo machine has exactly one of each.
     ...(isCentral ? [{ to: '/members', labelPt: 'Membros', labelEn: 'Members', icon: <Users size={17} /> }] : []),
+    { to: '/tasks',     labelPt: 'Entregas',     labelEn: 'Deliveries',   icon: <ClipboardList size={17} />, beta: true },
     { to: '/tags',      labelPt: 'Tags',         labelEn: 'Tags',         icon: <TagIcon size={17} /> },
     { to: '/tools',     labelPt: 'Ferramentas',  labelEn: 'Tools',        icon: <Wrench size={17} /> },
     { to: '/custom',    labelPt: 'Personalizado',labelEn: 'Custom',       icon: <Layers size={17} /> },
@@ -1195,6 +1223,9 @@ function SideNav({ lang, harnesses, isCentral, hasWorkflows, collapsed, width, o
               >
                 <span style={{ flexShrink: 0, display: 'flex' }}>{item.icon}</span>
                 {!collapsed && label}
+                {/* Collapsed, the rail has no room for the word — a dot in the same colour carries
+                    it, and the tooltip says what it means. Never colour alone anywhere it fits. */}
+                {item.beta && <BetaTag what={label} compact={collapsed} style={collapsed ? { marginLeft: 2 } : { marginLeft: 'auto' }} />}
               </NavLink>
             </CollapsedTip>
           )
@@ -1592,6 +1623,9 @@ export default function AppLayout() {
    *
    * Every other page keeps the window as its scroller, and nothing here changes that.
    */
+  // Read once — a query string does not change under the app.
+  const [probeOn] = useState(keyboardProbeOn)
+
   const lockViewport = isMobile && inSessionsWorkspace
   useEffect(() => {
     if (!lockViewport) return
@@ -1644,6 +1678,36 @@ export default function AppLayout() {
       if (!editable(ev.target)) return
       before = { page: window.scrollY, scrollers: snapshot(ev.target as HTMLElement) }
     }
+    /**
+     * LETTING GO OF THE FIELD IS PART OF PUTTING THE PAGE BACK, and it is the half that was missing.
+     *
+     * There are THREE quantities that can hold this displacement and the restore below knows two of
+     * them: the document scroll, an inner scroller — and `visualViewport.offsetTop`, the visual
+     * viewport panned inside the layout viewport. Nothing in a page can write that third one.
+     * `window.scrollTo` does not reach it, and neither did any of the six attempts before this,
+     * every one of which moved a box or a scroll.
+     *
+     * iOS holds that pan WHILE A FIELD IS FOCUSED, to keep the caret visible. The accessory bar's ✓
+     * — the control this was reported with — hides the keyboard and LEAVES THE FIELD FOCUSED, which
+     * this effect's own note already records as the reason `focusout` could not be the trigger. So
+     * the pan is held with no keyboard under it, and every scroll the restore performs is correct
+     * and changes nothing anyone can see.
+     *
+     * Blurring releases it. It costs nothing on the other three dismissals — a tap outside and the
+     * ⌄ have already blurred, and a send blurs itself — and it costs nothing that a person wanted
+     * kept: the keyboard is gone, so there is nothing to type into, and the draft is React state
+     * rather than the field's own value.
+     *
+     * IT IS CALLED FROM THE VIEWPORT PATH ONLY, never from `focusout`, and that is not a detail.
+     * `focusout` fires when focus moves from one field to ANOTHER with the keyboard still up, and
+     * the browser's order there is blur, focusout, focus, focusin — so a release scheduled by
+     * `focusout` runs after the focus has landed and would blur the field somebody just moved into.
+     * The band growing back cannot mean that: while the keyboard is up it never grows.
+     */
+    const release = () => {
+      const el = document.activeElement
+      if (editable(el)) (el as HTMLElement).blur()
+    }
     const restore = () => {
       const was = before
       if (was === null) return
@@ -1684,6 +1748,11 @@ export default function AppLayout() {
       if (h >= tallest) tallest = h
       if (!wasCovered) return
       wasCovered = false
+      // FIRST let go of the field, THEN put the scroll back. In that order: while iOS is holding
+      // the visual viewport panned to a caret, the scroll writes below are correct and invisible.
+      // Once per dismissal, because this branch is reached once — `wasCovered` has just been
+      // cleared, and the blur's own `focusout` cannot come back through here.
+      release()
       // Repeated across the dismissal animation rather than fired once: iOS keeps adjusting during
       // it, so a single write lands mid-animation and is overwritten a frame later. Each repeat is
       // a no-op once the value is already back.
@@ -1696,15 +1765,57 @@ export default function AppLayout() {
       if (!editable(ev.target)) return
       for (const ms of [0, 120, 300, 600]) window.setTimeout(restore, ms)
     }
+    /**
+     * THE INVARIANT, and it is what makes this survive a signal that never arrives.
+     *
+     * Everything above waits for the keyboard to ANNOUNCE its departure, and the announcement is
+     * the weak part: `focusout` does not fire on the accessory bar's ✓, and a page running as an
+     * INSTALLED APP can have its layout viewport resized instead — in which case
+     * `visualViewport.height` never shrinks against `tallest`, `wasCovered` is never set, and the
+     * restore above is never reached at all. Reported as "o input continua flutuando e acredito que
+     * vai continuar", together with the bottom bar floating on the list and BOTH coming right after
+     * leaving the route and returning. One displacement, two symptoms, cured by a remount: that is
+     * `#root` sitting at `-scrollY`.
+     *
+     * This screen cannot scroll — a `100dvh` column whose panes scroll inside themselves — so
+     * whenever nothing is being typed into, `scrollY` must be 0. `shouldResetDocumentScroll` holds
+     * the three guards; this only asks, on whichever signals do arrive, and again a moment later
+     * because iOS keeps adjusting through a dismissal.
+     */
+    const settle = () => {
+      const el = document.documentElement
+      if (!shouldResetDocumentScroll({
+        scrollY: window.scrollY,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        editableFocused: editable(document.activeElement),
+      })) return
+      window.scrollTo(0, 0)
+    }
+    const settleSoon = () => { for (const ms of [0, 160, 420, 900]) window.setTimeout(settle, ms) }
+
     window.addEventListener('focusin', onIn)
     window.addEventListener('focusout', onOut)
+    window.addEventListener('focusout', settleSoon)
+    // `scroll` is the one signal that always arrives when the thing this fixes has happened.
+    window.addEventListener('scroll', settle, { passive: true })
     vv?.addEventListener('resize', onViewport)
+    vv?.addEventListener('resize', settleSoon)
+    vv?.addEventListener('scroll', settle)
     window.addEventListener('resize', onViewport)
+    window.addEventListener('orientationchange', settleSoon)
+    // Once on arrival too: the route can be entered with the document already displaced.
+    settleSoon()
     return () => {
       window.removeEventListener('focusin', onIn)
       window.removeEventListener('focusout', onOut)
+      window.removeEventListener('focusout', settleSoon)
+      window.removeEventListener('scroll', settle)
       vv?.removeEventListener('resize', onViewport)
+      vv?.removeEventListener('resize', settleSoon)
+      vv?.removeEventListener('scroll', settle)
       window.removeEventListener('resize', onViewport)
+      window.removeEventListener('orientationchange', settleSoon)
     }
   }, [lockViewport])
 
@@ -1810,6 +1921,10 @@ export default function AppLayout() {
     ? headerFleet.rows.find(r => r.id === selectedSessionId || r.conversationId === selectedSessionId)
     : undefined
   const selectedSessionRow = selectedFleetSession ? headerFleetIndex.get(selectedFleetSession.id) : undefined
+  /** The store's record for the open conversation — the metrics card, and the link into its tab. */
+  const headerSessionMeta = selectedFleetSession?.conversationId !== undefined
+    ? data?.sessions?.find(x => x.session_id === selectedFleetSession.conversationId)
+    : undefined
   // The Chat/Terminal choice lives in the URL (`?view=`) rather than in state here or in
   // `SessionPanel`, so the ONE control (now in this shared header) and the ONE reader (the panel,
   // still deciding which component to mount) can never disagree about which view is showing without
@@ -2894,6 +3009,7 @@ export default function AppLayout() {
     harnesses: data.harnesses,
     isCentral,
     capabilities: teamSession?.capabilities,
+    shellEnabled: teamSession?.shellEnabled === true,
     me: iam?.account,
     teams: teamsList,
     machines: machinesList,
@@ -2964,7 +3080,12 @@ export default function AppLayout() {
           as dead. A clipping ancestor cannot tell a popover from an overflowing row. The overlap is
           prevented where it is caused instead: `headerFit` collapses the date block before the row
           can outgrow this slot, and the bar's own root is capped at 100%. */}
-      <div ref={setFilterSlotEl} style={{ flex: 1, minWidth: 90, display: 'flex', justifyContent: 'center' }}>
+      {/* THE FLOOR IS THE NARROWEST TIER'S OWN WIDTH — `MIN_BAR_W`, not a number typed here. It was
+          `minWidth: 90`, 122px under it, so on a tablet the strip went on taking width after
+          `headerFit` had run out of tiers: the bar cannot wrap and cannot clip, so its controls
+          crushed together and the `+` ended up welded to the button beside it. Below this the TITLE
+          gives instead, and a title ellipsises. */}
+      <div ref={setFilterSlotEl} style={{ flex: 1, minWidth: MIN_BAR_W, display: 'flex', justifyContent: 'center' }}>
         <FiltersBar
           inline
           dateCompact={stripFit.date === 'compact'}
@@ -3078,12 +3199,17 @@ export default function AppLayout() {
         <SessionStatsMenu
           harness={selectedFleetSession.harness}
           sessionId={selectedFleetSession.conversationId ?? selectedFleetSession.id}
-          meta={selectedFleetSession.conversationId
-            ? data?.sessions?.find(x => x.session_id === selectedFleetSession.conversationId)
-            : undefined}
+          meta={headerSessionMeta}
           lang={lang === 'pt' ? 'pt' : 'en'}
           currency={currency}
           brlRate={brlRate}
+          costBasis={costBasis}
+          planFactor={sessionPlanFactor(planBasis.basis, selectedFleetSession.harness)}
+          /* THE FULL READING opens as a TAB in the right aside (`SessionsPage` supplies it),
+             not as a second dialog over the session. Withheld when the store has no record —
+             the same fact that decides whether that tab exists at all, read here from the same
+             lookup so the link and the tab can never disagree. */
+          {...(headerSessionMeta ? { onOpenFull: () => openArtifacts('metrics') } : {})}
           {...(selectedFleetSession.model ? { startedModel: selectedFleetSession.model } : {})}
           {...(selectedFleetSession.effort ? { startedEffort: selectedFleetSession.effort } : {})}
         />
@@ -3124,8 +3250,16 @@ export default function AppLayout() {
           lang={lang === 'pt' ? 'pt' : 'en'}
           act={headerFleetAct}
           onGone={() => navigate('/sessions')}
-          // A reopen mints a NEW session; going to it is what makes the verb visibly do something.
-          onOpened={id => navigate(sessionPath(id))}
+          // A reopen mints a NEW session; going to it is what makes the verb visibly do something
+          // — WITH the state that says it is on its way, or the page shows the fleet overview
+          // until the next poll carries the new row. See `reopenedSessionRoute`.
+          onOpened={id => {
+            const r = reopenedSessionRoute(id, {
+              harness: selectedSessionRow.harness,
+              title: selectedSessionRow.title,
+            })
+            navigate(r.path, r.options)
+          }}
         />
       )}
     </div>
@@ -3158,7 +3292,8 @@ export default function AppLayout() {
           `paddingLeft` is the action cluster's own width, mirrored on this side so the filters land
           on the STRIP's centre line rather than the centre of what is left beside them. */}
       <div ref={setFilterSlotEl} style={{
-        flex: 1, minWidth: 90, display: 'flex', justifyContent: 'center',
+        // The same floor, for the same reason — see the sessions strip's note.
+        flex: 1, minWidth: MIN_BAR_W, display: 'flex', justifyContent: 'center',
         paddingLeft: stripPad, boxSizing: 'border-box',
       }}>
         <FiltersBar
@@ -4126,6 +4261,13 @@ export default function AppLayout() {
 
       {/* Global notification toasts (auto-dismiss with an exit animation; history in the bell) */}
       <NotificationToasts lang={lang} />
+
+      {/* THE KEYBOARD PROBE, and only when the URL asks for it (`?kbdebug=1`). It reads the three
+          quantities that can hold the iOS displacement — the document scroll, the visual viewport's
+          own offset and `#root`'s edge — because six attempts at that bug were reasoned from the
+          code and none of them from a measurement, on a machine with no iOS device. It comes out
+          the day the question is answered. */}
+      {probeOn && <KeyboardProbe pt={lang === 'pt'} />}
 
       {/* Accessibility magnifiers — a portal appended to document.body, outside #root. */}
       <MagnifierLayer ctx={appCtx} hasHeaderSlot={headerHostsMagnifier} />

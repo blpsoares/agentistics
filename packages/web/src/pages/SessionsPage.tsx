@@ -18,12 +18,18 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import { ChevronLeft, FileText, MessagesSquare, Plus, TerminalSquare } from 'lucide-react'
 import type { AppContext } from '../lib/app-context'
 import { useFleet, useFleetIndex, type FleetActionId } from '../lib/fleet'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { FleetOverview } from '../components/sessions/FleetOverview'
+import { SessionCreating } from '../components/sessions/SessionCreating'
+
+// How long a navigation may keep claiming its session is still coming is `ARRIVAL_WAIT_MS` in
+// `lib/sessionRoute.ts`, beside the rest of the arrival rule. It lived here as `CREATE_WAIT_MS`
+// while creating was the only thing that could announce a session; a reopen announces one too, and
+// two constants for one budget is two answers.
 import { SessionStatsMenu } from '../components/sessions/SessionStatsMenu'
 import { MagnifierButton } from '../components/a11y/MagnifierButton'
 import { HideLensesButton } from '../components/a11y/HideLensesButton'
@@ -33,6 +39,7 @@ import {
   type ArtifactLayout,
 } from '../lib/artifactLayout'
 import { closeArtifacts, openArtifacts, setArtifactCount, useArtifacts } from '../lib/artifactsStore'
+import type { SessionDrilldownProps } from '../components/SessionDrilldown'
 import type { Artifact } from '../lib/sessionArtifacts'
 import { liveEvents, type LiveTurn } from '../lib/artifactTabs'
 import { FiltersBar } from '../components/FiltersBar'
@@ -41,7 +48,10 @@ import { SessionsAside } from '../components/nav/SessionsAside'
 import { SessionActions } from '../components/sessions/SessionActions'
 import { filterFleet } from '../lib/fleetFilter'
 import { FiltersSheet } from '../components/sessions/FiltersSheet'
-import { sessionPath } from '../lib/sessionRoute'
+import {
+  arrivalFor, reopenedSessionRoute, sessionPath, stillArriving, type SessionArrival,
+} from '../lib/sessionRoute'
+import { sessionPlanFactor } from '../lib/costBasis'
 
 /** The dimensions a live fleet row can be narrowed by — the same set on both layouts. */
 const FLEET_FILTER_DIMS: Array<'harnesses' | 'repos' | 'projects' | 'models'> =
@@ -76,7 +86,7 @@ export default function SessionsPage() {
 
   // Never on a central: it aggregates many machines and hosts none of their sessions, so the only
   // fleet it could read is its own box's, drawn under someone else's rows.
-  const { fleet, loading, unsupported: pollUnsupported, stale, act } = useFleet(pt ? 'pt' : 'en')
+  const { fleet, loading, unsupported: pollUnsupported, stale, act, refresh } = useFleet(pt ? 'pt' : 'en')
   /**
    * A CENTRAL cannot list a fleet, and must SAY so.
    *
@@ -101,6 +111,99 @@ export default function SessionsPage() {
   const selected = sessionId === undefined
     ? undefined
     : fleet.rows.find(r => r.id === sessionId || r.conversationId === sessionId)
+
+  /**
+   * WHERE A REOPEN LANDS — one place, for all three controls on this page that can perform one.
+   *
+   * A reopen mints a new managed row and RETIRES the one it was asked about, so staying on the id
+   * in the URL leaves the reader on a session the next poll drops. The state it carries is what
+   * makes the wait a wait instead of the fleet overview; the row it came FROM is what names it.
+   */
+  const goToReopened = (id: string) => {
+    const r = reopenedSessionRoute(id, selected
+      ? { harness: selected.harness, title: selected.title }
+      : undefined)
+    navigate(r.path, r.options)
+  }
+
+  /**
+   * THE STORE'S RECORD for the open conversation — read ONCE, for the two surfaces that show it.
+   *
+   * The metrics card in the bar and the aside's METRICS tab are the small reading and the full one
+   * of the same thing, so they must never be looked up apart: the card's link is what opens the
+   * tab, and a card offering a link to a tab that does not exist is the dead control this product
+   * refuses everywhere. `undefined` means the store has not seen this conversation yet, and then
+   * BOTH are absent.
+   *
+   * By CONVERSATION id, never the managed one: a row is reopened under a new managed id and keeps
+   * its conversation, which is what the record is keyed on.
+   */
+  const selectedMeta = selected?.conversationId !== undefined
+    ? data?.sessions?.find(x => x.session_id === selected.conversationId)
+    : undefined
+  const sessionMetrics: SessionDrilldownProps | undefined = selectedMeta && data
+    ? {
+        session: selectedMeta,
+        globalModelUsage: data.statsCache?.modelUsage ?? {},
+        currency,
+        brlRate,
+        lang: pt ? 'pt' : 'en',
+        ...(data.workflows ? { workflows: data.workflows } : {}),
+      }
+    : undefined
+
+  /**
+   * A SESSION THAT IS ON ITS WAY IS NOT A SESSION THAT IS MISSING.
+   *
+   * `NewSessionModal` navigates here the moment the spawn returns, and this browser's fleet does
+   * not hold the row until its next poll — so `selected` is undefined and this page fell through
+   * to its "nothing selected" branch, which is the fleet OVERVIEW. Creating a session therefore
+   * flashed the metrics screen and jumped to the session a poll later. The overview was not wrong
+   * about anything; it was answering a question nobody had asked.
+   *
+   * The router state is what tells the two apart, and it is BOUNDED: past the budget this stops
+   * claiming the session is coming and the page says what it has always said — that the id names
+   * nothing here. A loader with no end is the worse failure, because it cannot be told from a
+   * session that simply never started.
+   */
+  /**
+   * THE BUDGET BELONGS TO THE ID, NOT TO THE MOUNT — `sessionRoute.ts` carries the whole account.
+   *
+   * `creatingSince` was a `useState` taken once and never reset, so it measured from the moment the
+   * PAGE was opened. Creating from the overview remounts this page (`sessions` and
+   * `sessions/:sessionId` are different `<Route>`s), which is why it always looked right. A REOPEN
+   * is `/sessions/A` -> `/sessions/B`: the same route, no remount, the stamp long spent — so the
+   * guard did nothing and the fleet overview showed for the whole poll interval.
+   *
+   * Set during RENDER rather than in an effect: this is state derived from the URL, and an effect
+   * would paint the overview for one frame before correcting itself, which is the flash being
+   * fixed. `arrivalFor` returns the previous record unchanged for the same id, so it settles at
+   * once instead of looping.
+   */
+  const creatingState = (useLocation().state as { creating?: { harness?: string; label?: string } } | null)?.creating
+  const [arrival, setArrival] = useState<SessionArrival | null>(null)
+  const nextArrival = arrivalFor(arrival, sessionId, creatingState !== undefined, Date.now())
+  if (nextArrival !== arrival) setArrival(nextArrival)
+  const arriving = stillArriving(nextArrival, sessionId, Date.now())
+  const creating = arriving && selected === undefined
+  /**
+   * ONE FRAME, and only so the finish is real.
+   *
+   * The bar can only reach 100 and turn orange on `ready`, and `ready` is the row arriving — which
+   * is the same instant this page would swap in the session. Handing over on the next animation
+   * frame lets that state be painted instead of existing only in the types. It is a frame, not a
+   * beat: nothing here is watched to the end, and showing the session fast is the whole point.
+   */
+  // Keyed on the ARRIVAL, for the reason the budget is: a `useState(false)` flipped once per mount
+  // stayed true for every later arrival on the same page, so only the first one got a finish frame.
+  const [handedOver, setHandedOver] = useState<string | null>(null)
+  const finishing = arriving && selected !== undefined && handedOver !== nextArrival?.id
+  const arrivingId = nextArrival?.id
+  useEffect(() => {
+    if (!finishing) return
+    const raf = requestAnimationFrame(() => setHandedOver(arrivingId ?? null))
+    return () => cancelAnimationFrame(raf)
+  }, [finishing, arrivingId])
 
   // The Chat/Terminal choice, in the URL — the SAME `?view=` the shared header in `App.tsx` reads
   // and writes on desktop. Independent `useSearchParams()` calls on the one search string, not a
@@ -335,7 +438,12 @@ export default function SessionsPage() {
     <button
       // LIVE, not wherever the panel was last left: this control says the harness is running
       // something, so the answer to pressing it is the feed of what it is doing.
-      onClick={() => openArtifacts('live')}
+      // LIVE, and ON THE ACTION IT NAMES. Landing on the top of the feed made the strip a
+      // navigation control rather than an answer: it says "running bun test", and the row saying
+      // so is somewhere in a list the reader then has to search. `hint.ref` is absent for an event
+      // with no step behind it (reasoning carries its own text), and then this opens the feed
+      // exactly as it did before.
+      onClick={() => openArtifacts('live', hint.ref)}
       title={`${HINT_VERB[hint.kind]} · ${hint.text}`}
       style={{
         // THIRD PLACE, and the first two were both wrong for the same reason: it FLOATED.
@@ -393,6 +501,20 @@ export default function SessionsPage() {
       unlistedWrites={artifactsUnlisted}
       turns={artifactTurns}
       tabRequest={art.tabRequest}
+      // The session itself, for the TASKS tab: what it is filed under, and the composer that files
+      // it somewhere new without leaving the session you are sitting in.
+      session={{
+        id: selected.id,
+        title: selected.title,
+        harness: selected.harness,
+        ...(selected.task ? { task: selected.task } : {}),
+      }}
+      onOpenTask={taskId => navigate(`/tasks/${encodeURIComponent(taskId)}`)}
+      // The badge on the row is the fleet's; re-poll so it agrees with what the tab just did.
+      onTaskChanged={refresh}
+      // See `sessionMetrics`: present exactly when the store has a record, which is the same fact
+      // that decides whether the metrics card offers its link.
+      {...(sessionMetrics ? { metrics: sessionMetrics } : {})}
       onClose={closeArtifacts}
     />
   )
@@ -407,13 +529,15 @@ export default function SessionsPage() {
       onGone={() => navigate('/sessions')}
       // Follow a reopen to the row it created. Without it the panel keeps an id the fleet no longer
       // carries — see `SessionPanel`'s own `onOpened`.
-      onOpened={id => navigate(sessionPath(id))}
+      onOpened={goToReopened}
       // CONTROLLED on both layouts now. Passing `onViewChange` is what suppresses SessionPanel's
       // own header, and mobile draws the same three things in the row that already holds the back
       // button — one bar instead of two stacked ones saying overlapping things.
       view={sessionView}
       onViewChange={setSessionView}
       onArtifacts={onArtifacts}
+      // The capability AND the user's switch, as the server reports them. Absent reads as OFF.
+      shellEnabled={ctx.shellEnabled === true}
     />
   )
 
@@ -539,7 +663,23 @@ export default function SessionsPage() {
   // Mobile: one column at a time.
   // ---------------------------------------------------------------------------
   if (isMobile) {
-    if (panel && selected) {
+    // A session that is on its way owns the whole surface — before the panel branch, because
+  // `finishing` is the one moment BOTH are true, and before the overview branch, which is the
+  // metrics screen this replaced. One rule, both layouts: the loader is the same on a phone.
+  if (creating || finishing) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+        <SessionCreating
+          lang={pt ? 'pt' : 'en'}
+          ready={finishing}
+          {...(creatingState?.harness ? { harness: creatingState.harness } : {})}
+          {...(creatingState?.label ? { label: creatingState.label } : {})}
+        />
+      </div>
+    )
+  }
+
+  if (panel && selected) {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           {/* ONE bar. It used to be two: this back row, and SessionPanel's own header directly
@@ -588,95 +728,40 @@ export default function SessionsPage() {
               </span>
             </div>
 
-            {/* The same filter icon the list carries. This bar is the whole of this screen's
-                chrome, so the filters have to be reachable from it too — the list you go back to
-                is the thing they narrow. */}
-            {filterButton}
+            {/* ONLY THE TITLE AND THE METRICS, and that is the whole of this bar's rule.
+                It carried the back arrow, `+ Filtro` with its word and badge, the view toggle, the
+                metrics with their percentage, the panel button and the verbs — about 382px of a
+                390px screen. The title block is `flex: 1, minWidth: 0`, so it was squeezed to
+                nothing and the one thing saying WHICH session you are looking at was not on screen.
+
+                Everything that is not the title or the metrics moved into the verbs' OWN menu —
+                not a second popover beside it, which would be the same accumulation rearranged.
+                The METRICS stay out here because the context percentage is read at a GLANCE and
+                changes what you do next: a conversation near its window is one to finish rather
+                than extend, and a figure you have to open a menu for is a figure nobody watches.
+                The view toggle went in with the rest: asked for directly, after it had been left
+                out here on the argument that two taps per switch was too many. */}
             {magnifierButton}
-
-            {/* Icons only — the words "Chat" and "Terminal" beside a title on a 390px screen push
-                the title to about six characters. The `aria-label` carries the name. */}
-            {/* Not on a central — see the same gate in App.tsx's strip. The conversation is not
-                relayed, so a Chat tab there cannot do what it says. */}
-            {!isCentral && selected.conversationBlind === undefined && (
-              <div role="tablist" style={{
-                display: 'flex', gap: 2, padding: 2, borderRadius: 9, flexShrink: 0,
-                background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-              }}>
-                {([
-                  ['chat', <MessagesSquare key="c" size={15} />, pt ? 'Conversa' : 'Chat'],
-                  ['terminal', <TerminalSquare key="t" size={15} />, 'Terminal'],
-                ] as const).map(([id, icon, label]) => (
-                  <button
-                    key={id}
-                    role="tab"
-                    aria-selected={sessionView === id}
-                    aria-label={label}
-                    onClick={() => setSessionView(id)}
-                    style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      // 44px, the mobile figure this repo holds everything else to. They were
-                      // 38x34 — under the rule, in the one bar this screen has, on the control
-                      // that switches between its two halves.
-                      width: 44, height: 40, borderRadius: 7, border: 'none', cursor: 'pointer',
-                      background: sessionView === id ? 'var(--bg-surface)' : 'transparent',
-                      color: sessionView === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
-                    }}
-                  >
-                    {icon}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* WHAT THIS CONVERSATION HAS SPENT — the same control the desktop strip carries, and it
-                was simply not on this bar: the strip that hosts it is `!isMobile`, so a phone had no
-                way to see a session's tokens, cost, model or context gauge at all. The button is
-                already the compact one (an icon, plus the context percentage when there is one),
-                which is why it fits here beside five other controls; `compact` only asks it for the
-                44px target this bar holds everything else to. */}
+            {/* THE ONE CONTROL THAT STAYS BESIDE THE TITLE. Its own button, its own percentage —
+                the figure is the reason it is out here rather than in the menu. */}
             {selected.conversationId !== undefined && (
               <SessionStatsMenu
                 harness={selected.harness}
                 sessionId={selected.conversationId}
-                meta={data?.sessions?.find(x => x.session_id === selected.conversationId)}
+                meta={selectedMeta}
                 lang={pt ? 'pt' : 'en'}
                 currency={currency}
                 brlRate={brlRate}
+                costBasis={ctx.costBasis}
+                planFactor={sessionPlanFactor(ctx.planBasis.basis, selected.harness)}
                 touch
+                // The full reading is a TAB in the aside, not a second dialog over the session —
+                // withheld when there is no record, exactly as the tab is.
+                {...(sessionMetrics ? { onOpenFull: () => openArtifacts('metrics') } : {})}
                 {...(selected.model ? { startedModel: selected.model } : {})}
                 {...(selected.effort ? { startedEffort: selected.effort } : {})}
               />
             )}
-
-            {/* THE RIGHT ASIDE, reachable at all.
-                Everything in it — files, docs, the live feed, the gallery, skills, MCPs, subagents,
-                the PRs — was built on the desktop and had no way in on a phone, which is the whole
-                of "essas features nao foram pensadas pro mobile e sao features que precisam estar
-                presentes la". `resolveArtifactLayout` has ALWAYS answered `fullscreen` for a phone;
-                nothing was rendering it. So this opens the very same panel, not a reduced one.
-
-                The count rides the button, because it is the reason to press it: a panel that might
-                be empty is one people stop opening. */}
-            <button
-              onClick={() => (art.open ? closeArtifacts() : openArtifacts())}
-              aria-label={pt ? 'Conteúdos da sessão' : 'Session contents'}
-              aria-expanded={art.open}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                width: 44, height: 44, flexShrink: 0, border: 'none', background: 'transparent',
-                color: art.open ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
-                cursor: 'pointer',
-              }}
-            >
-              {/* THE DESKTOP'S ICON, and the desktop's reasoning with it: a panel glyph says
-                  "something opens here" and leaves the reader to find out what, while `FileText`
-                  names what the panel opens on nine times out of ten. And NO count — it counts
-                  everything the session ever touched, past fifty on an ordinary afternoon, and a
-                  figure nobody acts on is furniture with a number on it. Two layouts wearing two
-                  icons for one panel is the same feature learnt twice. */}
-              <FileText size={18} />
-            </button>
 
             {rowIndex.get(selected.id) && (
               <SessionActions
@@ -684,7 +769,68 @@ export default function SessionsPage() {
                 lang={pt ? 'pt' : 'en'}
                 act={act}
                 onGone={() => navigate('/sessions')}
-                onOpened={id => navigate(sessionPath(id))}
+                onOpened={goToReopened}
+                /* THE VIEW SWITCH, AS THE SWITCH IT IS. It came off the bar and was briefly two
+                   rows in this list, which is a different statement: two rows read as two things
+                   you could pick, while a segmented control says they are ALTERNATIVES and which
+                   one you are in. It is the same control the bar carried, with its labels back —
+                   there is room for words in a 240px menu and there was none in a 390px bar.
+                   Absent for a harness that can never name its conversation, exactly as before. */
+                /* `!isCentral` is dev's gate, kept: on a central the conversation is not relayed, so a
+                   Chat tab there cannot do what it says. It moves with the control. */
+                {...(!isCentral && selected.conversationBlind === undefined ? {
+                  extraTop: (close: () => void) => (
+                    <div role="tablist" style={{
+                      display: 'flex', gap: 3, padding: 3, borderRadius: 10,
+                      background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                    }}>
+                      {([
+                        ['chat', pt ? 'Conversa' : 'Chat', <MessagesSquare key="c" size={15} />],
+                        ['terminal', 'Terminal', <TerminalSquare key="t" size={15} />],
+                      ] as const).map(([id, label, icon]) => (
+                        <button
+                          key={id}
+                          role="tab"
+                          aria-selected={sessionView === id}
+                          onClick={() => { setSessionView(id); close() }}
+                          style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                            // 44px, the figure this repo holds every mobile target to — and this
+                            // menu is opened with a thumb.
+                            flex: 1, minHeight: 44, borderRadius: 8, border: 'none',
+                            cursor: 'pointer', minWidth: 0,
+                            background: sessionView === id ? 'var(--bg-surface)' : 'transparent',
+                            color: sessionView === id ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+                            fontFamily: 'inherit', fontSize: 12.5,
+                            fontWeight: sessionView === id ? 650 : 400,
+                          }}
+                        >
+                          {icon}
+                          <span style={{
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>{label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ),
+                } : {})}
+                extra={[
+                  {
+                    id: 'filters',
+                    label: pt ? 'Filtros' : 'Filters',
+                    icon: <Plus size={15} />,
+                    ...(filterCount > 0 ? { badge: String(filterCount) } : {}),
+                    on: filterCount > 0,
+                    onSelect: () => setSheetOpen(true),
+                  },
+                  {
+                    id: 'artifacts',
+                    label: pt ? 'Conteúdos da sessão' : 'Session contents',
+                    icon: <FileText size={15} />,
+                    on: art.open,
+                    onSelect: () => (art.open ? closeArtifacts() : openArtifacts()),
+                  },
+                ]}
               />
             )}
           </div>
@@ -795,6 +941,7 @@ export default function SessionsPage() {
                 unsupported={unsupported}
                 heatmap={derived.heatmapData}
                 heatmapByHarness={derived.heatmapByHarness}
+                baseline={fleet.baseline}
                 {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
               />
             </div>
@@ -830,7 +977,20 @@ export default function SessionsPage() {
     if ((artLayout.layout === 'closed' && !asideAlive) || !artifactsPane) {
       // The panel is shut. The marker rides the right edge of the session, which is where the panel
       // it opens will appear — so the control and its result are in the same place.
-      return edgeMarker === null ? panel : (
+      // THE WRAPPER IS UNCONDITIONAL, and that is a focus bug rather than a style.
+      //
+      // It used to be `edgeMarker === null ? panel : <div>{edgeMarker}{panel}</div>`. React
+      // reconciles by POSITION: swapping the root between `panel` and a div CONTAINING it changes
+      // the shape of the tree, so the whole panel is unmounted and a new one mounted — every DOM
+      // node recreated, the composer's textarea among them. Typing while a session worked lost the
+      // caret the moment the strip appeared, and lost it AGAIN when it went away, which is exactly
+      // how it was reported: "quando essa barra aparece ele desfoca e quando ela some o input
+      // tambem desfoca".
+      //
+      // Rendering the wrapper always keeps `panel` at the same position under the same parent, so it
+      // survives the strip coming and going. `{null}` occupies the slot without drawing anything,
+      // which is what makes the two cases the same SHAPE.
+      return (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           {edgeMarker}
           {panel}
@@ -951,6 +1111,7 @@ export default function SessionsPage() {
           unsupported={unsupported}
           heatmap={derived.heatmapData}
           heatmapByHarness={derived.heatmapByHarness}
+          baseline={fleet.baseline}
           {...(fleet.unavailable ? { unavailable: fleet.unavailable } : {})}
         />
       </div>

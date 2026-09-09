@@ -11,6 +11,7 @@
  * the same defect `liveEmptyNotice` exists to prevent on the dashboard.
  */
 
+import type { HarnessId } from '@agentistics/core'
 import { createLimiter } from '../utils'
 import type { HarnessProcess } from '../live-sessions'
 import { rulesFor } from './attention-rules'
@@ -20,9 +21,13 @@ import { EMPTY_CONFIRM_MEMORY, confirmActivities, type ConfirmMemory } from './a
 import type { ChatTurn } from './chat-turn'
 import { transcriptReaderFor } from './harness-transcript'
 import { markFleetPhase } from './fleet-profile'
-import { parseDialogOptions, type DialogOption } from './dialog-choice'
+import { readDialog, type DialogOption, type DialogUnreadable } from './dialog-choice'
+import { readsMarkerSelect } from './approval-spec'
 // Taking a running session back when its registry record is gone. See `session-adopt.ts`.
 import { planAdoptions } from './session-adopt'
+// The claim for harnesses that cannot be handed a conversation id. See `task-attribution.ts`.
+import { planFirstSightingClaims } from './task-attribution'
+import { HARNESS_PROCESS_LOGS } from './harness-session-file'
 import { loadConversations, type Conversation } from './conversations'
 import { HEARTBEAT_MS, planCrashGroup, type CrashGroup } from './crash-group'
 import { emptyHarnessSessionIndex, type HarnessSessionIndex } from './harness-sessions'
@@ -126,7 +131,23 @@ export function createSessionsPoller(o: {
    * sessions of one repository apart — the guess that once reopened three rows onto one
    * conversation.
    */
-  recordConversation?: (id: string, conversationId: string) => Promise<unknown>
+  recordConversation?: (
+    id: string,
+    conversationId: string,
+    /**
+     * HOW the link was established — see `ManagedSession.conversationLink`. `assigned` for the
+     * harness's own exact record; `observed` for a first-sighting claim. One writer, told which
+     * kind: a second path to this field is a second place for the two to disagree.
+     */
+    link: 'assigned' | 'observed',
+  ) => Promise<unknown>
+  /**
+   * The conversation the process behind one of our panes is writing, from the log that process
+   * holds open. `null` whenever nothing can say — see `process-conversation.ts`.
+   *
+   * Injected like every other read here, so the poller stays testable without a `/proc`.
+   */
+  readProcessConversation?: (harness: HarnessId, pid: number) => Promise<string | null>
   /**
    * Persist the name a managed row was given INSIDE the harness (`/rename`), so the title survives
    * the process.
@@ -254,6 +275,15 @@ export function createSessionsPoller(o: {
       /** The harness mode each running session is in — see `mode-spec.ts`. */
       const modes = new Map<string, { id: string; label: string }>()
       const dialogOptions = new Map<string, DialogOption[]>()
+      const dialogSelect = new Map<string, 'numbered' | 'marker'>()
+      /*
+       * WHY THE REFUSAL IS CARRIED AND NOT JUST THE OPTIONS.
+       *
+       * An empty option list means two opposite things — "there is no menu" and "there IS a menu
+       * and it could not be read" — and the second one must never reach a confirm button. Carrying
+       * only the options threw that distinction away at the source. See `readDialog`.
+       */
+      const dialogUnreadable = new Map<string, DialogUnreadable>()
       const chatTails = new Map<string, ChatTurn[]>()
 
       const captureStart = performance.now()
@@ -328,8 +358,12 @@ export function createSessionsPoller(o: {
           // Read from the SAME frame that decided the state, so what is offered and what the state
           // says can never describe different moments. Empty when the screen cannot be parsed with
           // confidence, which the UI reports rather than papering over.
-          const options = parseDialogOptions(frame)
-          if (options.length > 0) dialogOptions.set(r.id, options)
+          const dialog = readDialog(frame, { marker: readsMarkerSelect(harness) })
+          if (dialog.options.length > 0) dialogOptions.set(r.id, dialog.options)
+          // From the SAME read as the options: how they are picked is a fact about this frame, and
+          // deriving it again downstream is how a numberless dialog gets offered a digit.
+          if (dialog.select) dialogSelect.set(r.id, dialog.select)
+          if (dialog.kind === 'unreadable') dialogUnreadable.set(r.id, dialog.reason!)
         }
       })))
       markFleetPhase(`poll: capture+chatTail x${reconciled.length} (concurrency ${CAPTURE_CONCURRENCY})`, captureStart)
@@ -353,10 +387,74 @@ export function createSessionsPoller(o: {
           const exact = harnessSessions.byManagedId.get(m.id)?.sessionId
           if (!exact || m.conversationId === exact) continue
           recordConvWrites++
-          await o.recordConversation(m.id, exact).catch(() => undefined)
+          await o.recordConversation(m.id, exact, 'assigned').catch(() => undefined)
         }
       }
       markFleetPhase(`poll: recordConversation x${recordConvWrites}`, recordConvStart)
+
+      // The pane pids, read ONCE for the two things below that need them: the per-process
+      // conversation link, and the hardware sample further down. Two `tmux list-panes` calls a poll
+      // for one answer is a second place for them to disagree about which pid is which row.
+      const panePids = await o.backend.listPanePids?.().catch(() => new Map<string, number>())
+
+      // The OTHER exact link: the conversation named in the log the harness's own process holds
+      // OPEN (`HARNESS_PROCESS_LOGS` — antigravity only today; see `agy-conversation.ts` for why
+      // that harness has neither an assign flag nor a session record, and why even the
+      // harness-and-directory fallback is closed for a session agentop started).
+      //
+      // Recorded as `assigned` rather than `observed`: this is the harness's own statement about
+      // the conversation it created, read out of the process WE spawned into WE own's pane — not
+      // the first-sighting claim below, which infers from time and directory and refuses on any
+      // ambiguity. Asked only of a row with NO link yet, and only for a harness that has an entry,
+      // so it costs one `/proc` sweep per unlinked agy session and nothing at all on a fleet
+      // without one.
+      const procLinkStart = performance.now()
+      let procLinkWrites = 0
+      if (o.recordConversation && o.readProcessConversation) {
+        for (const m of registry) {
+          if (m.conversationId || !HARNESS_PROCESS_LOGS[m.harness]) continue
+          const pid = panePids?.get(m.id)
+          if (!pid) continue
+          const found = await o.readProcessConversation(m.harness, pid).catch(() => null)
+          if (!found) continue
+          procLinkWrites++
+          await o.recordConversation(m.id, found, 'assigned').catch(() => undefined)
+        }
+      }
+      markFleetPhase(`poll: processConversation x${procLinkWrites}`, procLinkStart)
+
+      // The conversation link for the harnesses no `assignId` can be given (codex, kimi,
+      // antigravity, gemini): claimed ONCE, at first sighting, and refused on any ambiguity. Written
+      // through the same `recordConversation` as the exact link above, because a second path to one
+      // field is a second place for the two to disagree. See `task-attribution.ts` — rows already
+      // carrying a link are skipped there, so this too writes once per session, not once per poll.
+      const claimStart = performance.now()
+      let claimWrites = 0
+      if (o.recordConversation) {
+        const plan = planFirstSightingClaims({
+          rows: registry.map(m => ({
+            id: m.id,
+            harness: m.harness,
+            cwd: m.cwd,
+            spawnedMs: Date.parse(m.createdAt) || 0,
+            ...(m.conversationId ? { conversationId: m.conversationId } : {}),
+          })),
+          candidates: conversations.map(c => ({
+            sessionId: c.sessionId,
+            harness: c.harness,
+            cwd: c.cwd,
+            startedMs: c.startedMs,
+          })),
+          claimed: new Set(
+            registry.map(m => m.conversationId).filter((v): v is string => Boolean(v)),
+          ),
+        })
+        for (const claim of plan.claims) {
+          claimWrites++
+          await o.recordConversation(claim.rowId, claim.sessionId, 'observed').catch(() => undefined)
+        }
+      }
+      markFleetPhase(`poll: firstSightingClaims x${claimWrites}`, claimStart)
 
       // The `/rename` name, captured WHILE there is still a harness file to read it from, so the
       // title outlives the process. Only a name a PERSON typed (`chosenName` drops the harness's own
@@ -383,7 +481,6 @@ export function createSessionsPoller(o: {
       const sessionHardware = new Map<string, { pid?: number; cpuPercent?: number | null; rssBytes?: number | null }>()
       const procStatStart = performance.now()
       if (canReadProc) {
-        const panePids = await o.backend.listPanePids?.().catch(() => new Map<string, number>())
         for (const r of reconciled) {
           const own = harnessSessions.byManagedId.get(r.id)
           const harness = r.managed?.harness
@@ -431,6 +528,8 @@ export function createSessionsPoller(o: {
         approvals,
         modes,
         dialogOptions,
+        dialogSelect,
+        dialogUnreadable,
         processes,
         conversations,
         harnessSessions,

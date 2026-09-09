@@ -21,18 +21,14 @@ describe('the reader registry', () => {
       .toEqual(['antigravity', 'claude', 'codex', 'copilot', 'gemini', 'kimi'])
   })
 
-  it('GEMINI is the one null, and it is a LINK fact rather than a missing reader', () => {
-    // A reader is only ever offered a conversationId, and gemini has neither `assignId` nor a
-    // `resume` that takes one — so a gemini row can never carry one and an entry here would be
-    // unreachable code. `conversationBlind` already says so on the row.
-    expect(transcriptReaderFor('gemini')).toBeNull()
-  })
-
-  it('every harness that CAN carry an exact conversation id has a reader', () => {
-    // The five with `assignId` or `resume` in `spawn-spec.ts`. If one of these goes null, a row
-    // that knows exactly which conversation it is in stops being readable.
-    for (const h of ['claude', 'codex', 'copilot', 'kimi', 'antigravity'] as const) {
-      expect(transcriptReaderFor(h)).not.toBeNull()
+  it('has no nulls left — gemini was the last, and its reason was the LINK', () => {
+    // It read `expect(transcriptReaderFor('gemini')).toBeNull()` for as long as a gemini row could
+    // not carry a conversation id: no `assignId`, and a `--resume` that takes "latest" or an index.
+    // `planFirstSightingClaims` includes gemini deliberately and claims the SYNTHETIC id the store
+    // is already keyed on, which names the chat file directly — so the entry stopped being
+    // unreachable code and became a reader. A null here is now a gap, not a finding.
+    for (const h of ['claude', 'codex', 'copilot', 'kimi', 'antigravity', 'gemini'] as const) {
+      expect(transcriptReaderFor(h), h).not.toBeNull()
     }
   })
 
@@ -295,3 +291,48 @@ describe('the window says it is a window, on every harness', () => {
     }
   })
 })
+
+/**
+ * EVERY HARNESS WHOSE RESOLVER MEMOIZES: a session's transcript does not exist until the
+ * conversation first says something, so the first poll after a spawn always misses — and a miss
+ * remembered for the life of the process makes that conversation unreadable for the life of the
+ * process. Reported on a claude session started from the wizard; codex and kimi memoize the same
+ * way and would fail the same way. Antigravity and copilot re-check their two paths on every call
+ * and are immune by construction, which is why they are absent here.
+ */
+describe('a transcript that appears AFTER the first miss', () => {
+  const ID = '99999999-8888-4777-8666-555555555555'
+
+  it('codex: is found once the rollout is written', async () => {
+    forgetCodexTranscriptPaths()
+    const root = await mkdtemp(join(tmpdir(), 'codex-late-'))
+    const at = 5_000_000
+    expect(await resolveCodexTranscript({ conversationId: ID }, root, at)).toBeNull()
+
+    const dir = join(root, '2026', '09', '08')
+    await mkdir(dir, { recursive: true })
+    const file = join(dir, `rollout-2026-09-08T10-00-00-${ID}.jsonl`)
+    await writeFile(file, '')
+
+    // Inside the TTL the scan is deliberately not repeated; past it, the file is found.
+    expect(await resolveCodexTranscript({ conversationId: ID }, root, at + 1_000)).toBeNull()
+    expect(await resolveCodexTranscript({ conversationId: ID }, root, at + 31_000)).toBe(file)
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('kimi: is found once the wire is written', async () => {
+    forgetKimiTranscriptPaths()
+    const root = await mkdtemp(join(tmpdir(), 'kimi-late-'))
+    const at = 5_000_000
+    expect(await resolveKimiTranscript({ conversationId: ID }, root, at)).toBeNull()
+
+    const dir = join(root, 'wd_x', `session_${ID}`, 'agents', 'main')
+    await mkdir(dir, { recursive: true })
+    const wire = join(dir, 'wire.jsonl')
+    await writeFile(wire, '')
+
+    expect(await resolveKimiTranscript({ conversationId: ID }, root, at + 31_000)).toBe(wire)
+    await rm(root, { recursive: true, force: true })
+  })
+})
+

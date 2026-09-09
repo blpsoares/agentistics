@@ -142,7 +142,7 @@ test asserting exactly that (`auth-principal.test.ts`, `stepup.test.ts`).
 | **Step-up** (`stepup.ts`) | requires fresh proof for destructive operations | protect non-destructive reads; a stolen cookie can still read everything in scope |
 | **CSRF** (`csrf.ts`) | rejects unsafe methods that carry a cookie without same-origin provenance | apply to Bearer clients, which carry no cookie and are exempt by definition |
 | **CORS** (`cors.ts`) | exact-match allowlist; no ACAO at all for an unknown origin | matter to non-browser clients, which ignore CORS entirely |
-| **CSP / headers** (`security-headers.ts`) | no inline script, `frame-ancestors 'none'`, HSTS under TLS, `no-store` on `/api` | prevent an XSS — it reduces what one can do |
+| **CSP / headers** (`security-headers.ts`) | no inline script, `frame-ancestors 'none'`, HSTS under TLS, `no-store` on `/api`, every capability denied but `microphone=(self)` | prevent an XSS — it reduces what one can do |
 | **Team scoping** (`team-scope.ts`) | filters sessions, projects, caches and presence to the principal's teams plus machines they own | apply to routes that do not go through it; new data routes must opt in |
 | **Audit log** (`audit.ts`) | append-only, 180-day TTL, secret-shaped fields redacted before write | prevent anything — it is how you find out |
 | **Resource limits** (`limits.ts`) | byte-counted bodies abandoned mid-stream, SSE cap, outbound timeouts | bound memory used by a legitimate large aggregation |
@@ -234,6 +234,37 @@ than this:**
    `otel-watcher.ts`'s OTLP export. Blocking (or failing to allowlist) a repo on a member
    connection does not stop that repo's GitHub Actions runs or OTel metrics from reaching the same
    central by a different path.
+
+### 8.0a What a shared session document carries — the compaction figures and the skill names
+
+`TeamSessionDoc` is `Omit<SessionMeta, …>`, so a field added to `SessionMeta` travels to a central
+by default and is stored in Mongo. Two were added with the behaviour baseline
+(`packages/core/src/session-profile.ts`) and the decision is recorded here rather than left to be
+discovered later:
+
+- **`compact_count` / `compact_ms` / `compact_dropped_tokens`** — counts and durations. They carry
+  no text and describe the *shape* of a conversation, exactly as `user_message_count` and
+  `tool_errors` already do. Shared.
+- **`skill_uses`** — a map of skill NAME to a count (`superpowers:brainstorming: 2`). This is the
+  one that needed a decision, because a skill name can be private: a skill is a file in
+  `~/.claude/skills/` or a plugin, and a house style names them after internal systems
+  (`acme-deploy:rollback`). It is **not** free text and not chat — it cannot carry a pasted
+  credential, which is what `redactSecrets` exists for — but it does name a tool the user chose to
+  install.
+
+**The judgement: shared, and bounded by the same rules as everything else.** A skill name is
+metadata about the machine's own tooling, of the same order as `model`, `languages` and the tool
+names already in `tool_counts` — which have always travelled and which name MCP servers
+(`mcp__<server>__<tool>`) with the same specificity. It is subject to the per-connection sharing
+rules like any other part of the session: a session in a withheld repository or project does not
+reach that central at all, so a project's skills go with it. **Nothing on the central reads either
+field** — no view, aggregate or export shows them today; they travel because the document is
+whole, and they are there for a machine's own profile if the surface ever moves.
+
+**If that is the wrong trade for a deployment, the lever is the sharing rules, not a redactor.**
+`redactSecrets` is deliberately precise and value-shaped (see the team-mode rules in CLAUDE.md); a
+rule that ate skill names would be a rule about a field, which is a different mechanism and would
+have to be a declared per-connection option rather than a silent scrub.
 
 ### 8.1 Rules are per machine, and how a machine finds out
 
@@ -489,15 +520,21 @@ a rule. `performMachineAction` now resolves the target through the same predicat
 through, and refuses an id it cannot resolve — an unresolvable target has no directory to judge,
 and passing it through would leave every verb reachable by naming an id the fleet does not list.
 
-**The task verbs are refused entirely while anything is withheld.** `openTask` acts on the piece of
-WORK a row is filed under, expanding across the whole registry, and a task routinely spans
-repositories — so on a restricted connection it reached sessions the central was never shown,
-started assistants in their directories and reported how many. Refusing only when a task provably
-spans a withheld row would answer, one visible row at a time, "does this one share work with the
-hidden half" — an oracle, and the same correlation §8 exists to deny. So the verbs are refused for
-every restricted connection and are absent from the relayed rows; the refusal names no repository
-and no count, disclosing nothing beyond the machine-level `withheld` figure the reply already
-carries. Open or finish the task on the machine itself.
+**The task verbs no longer exist.** `openTask` acted on the piece of WORK a row was filed under,
+expanding across the whole registry, and a task routinely spans repositories — so on a restricted
+connection it reached sessions the central was never shown, started assistants in their directories
+and reported how many. It was refused for every restricted connection rather than only when a task
+provably spanned a withheld row, because the narrower check answers, one visible row at a time,
+"does this one share work with the hidden half" — an oracle, and the same correlation §8 exists to
+deny.
+
+Both `openTask` and `finishTask` are now absent from `FleetActionId` and from
+`REMOTE_SCREENLESS_ACTIONS`. That list is CLOSED — an action it does not name is refused — so the
+protection is structural rather than guarded, and it applies to an unrestricted connection too,
+which the old guard never covered. Finishing a delivery is asked when its session is stopped, on
+the machine, and written through the board's own API; reopening a whole task is `agentop session
+open`. **A future verb whose subject is a TASK rather than a ROW must restore that refusal before
+it joins the list.**
 
 **The stated non-guarantee.** Whoever runs the central administers machines and can re-assign one
 to another account. This switch is what stops session access being on without its owner choosing

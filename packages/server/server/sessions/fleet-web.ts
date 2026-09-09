@@ -16,21 +16,24 @@
  * host per request would fire one per poll.
  */
 
-import type { HarnessId } from '@agentistics/core'
+import type { HarnessId, ProjectKind } from '@agentistics/core'
 import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import { recordPrompt } from './pending-prompts'
 import { conversationOfRow } from './row-conversation'
 import { controlStrings } from '@agentistics/tui/control/i18n'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
-import { sessionRunning } from '@agentistics/tui/control/session-dimensions' 
+import type { ProjectSearchResult } from '@agentistics/tui/control'
+import { sessionRunning } from '@agentistics/tui/control/session-dimensions'
 import { fleetRow, type FleetActionRequest, type FleetRow } from './fleet-row'
 import { planFleetSpawn, type FleetSpawnBody } from './fleet-spawn'
 import { arrangeFleet, type FleetArrangement, type FleetViewRequest } from './fleet-arrange'
 import { markFleetPhase, timeFleetPhase } from './fleet-profile'
+import { cachedBaseline } from './fleet-baseline'
+import { loadConsolidated } from '../consolidate'
 import { readHarnessSkills, skillsReason, type HarnessSkill } from './harness-skills'
-import { modelsFor, type ModelOption } from '@agentistics/core'
-import { artifactPathsFromTurns } from './artifact-file'
+import { modelsFor, type ModelOption, type Baseline } from '@agentistics/core'
+import { artifactPathsFromTurns, type AllowedArtifact } from './artifact-file'
 import type { ArtifactResponse } from './artifact-web'
 
 // The REQUEST shape lives in the leaf `fleet-row.ts` so `index.ts` can name it without naming
@@ -65,7 +68,13 @@ export interface FleetPayload {
   tasks: string[]
   /** The tasks the user marked FINISHED — a statement about the work, not about any session. */
   finishedTasks?: string[]
-  /** How many sessions FELL together, when some did — the "reopen what fell" offer. */
+  /**
+   * The fall: how many, and when.
+   *
+   * WHICH rows is not repeated here — they are in `sessions`, each marked `fell`, and shipping the
+   * set twice is two things that can disagree about it. The count is what a summary line needs; the
+   * marks are what a list somebody ticks needs.
+   */
   fell?: { count: number; atMs: number }
   /**
    * The same fleet, ARRANGED as the caller asked (`fleet-arrange.ts`).
@@ -75,6 +84,8 @@ export interface FleetPayload {
    * find one id.
    */
   view?: FleetArrangement
+  /** This machine's 30-day behaviour baseline. Absent when the store could not be read at all. */
+  baseline?: Baseline
 }
 
 
@@ -183,6 +194,11 @@ export async function readFleet(lang: CliLang, view?: FleetViewRequest): Promise
     const fleet = await timeFleetPhase('readFleet: host.sessions()', () => host.sessions!())
     const tasks = host.sessionTasks ? await host.sessionTasks().catch(() => []) : []
     const finishedTasks = fleet.finishedTasks ?? []
+    // A failed store read costs freshness, never the fleet: the fleet is what this route is for.
+    const baseline = await cachedBaseline(
+      async () => [...(await loadConsolidated()).values()],
+      Date.now(),
+    ).catch(() => undefined)
     return {
       sessions: fleet.sessions.map(row => fleetRow(row, s)),
       rows: fleet.sessions,
@@ -197,6 +213,7 @@ export async function readFleet(lang: CliLang, view?: FleetViewRequest): Promise
       // paying for a grouping nobody reads on every five-second poll is the kind of cost that never
       // shows up in one profile and always shows up in a battery.
       ...(view ? { view: arrangeFleet(fleet.sessions, view, s, finishedTasks) } : {}),
+      ...(baseline ? { baseline } : {}),
     }
   } catch (e) {
     return {
@@ -227,6 +244,19 @@ export async function runFleetAction(
   const s = controlStrings(lang)
   const host = await hostFor(lang)
   const text = (req.text ?? '').trim()
+  /*
+   * `ids` ARRIVES FROM A BROWSER, so its SHAPE is checked here and nowhere else.
+   *
+   * The route reads the whole body as a `FleetActionRequest`; a declared type is not a parse. A
+   * bare string would iterate as CHARACTERS in the group planners, quietly turning one id into
+   * dozens of one-letter ones — the planners would reject every one of them, so the failure is a
+   * confusing report rather than an unsafe act, but a confusing report is what people file bugs
+   * about. `undefined` survives as `undefined`: for `reopenFell` that means THE WHOLE GROUP, and
+   * collapsing it into an empty array would silently turn "reopen them all" into "reopen nothing".
+   */
+  const ids = Array.isArray(req.ids)
+    ? req.ids.filter((v): v is string => typeof v === 'string' && v.length > 0)
+    : undefined
 
   switch (req.action) {
     case 'approve':
@@ -283,34 +313,40 @@ export async function runFleetAction(
       if (!host.interruptSession) return { ok: false, message: s.sessionsNoHost }
       return await host.interruptSession(req.id)
     }
-    // Acts on the GROUP that fell together, not on a row — the caller names nothing, and the
-    // cockpit's own `task-reopen` arithmetic decides which sessions were in it. A caller that could
-    // pass a list could resurrect anything on this machine.
+    /**
+     * Acts on the GROUP that fell together, not on a row. `ids` can only NARROW that group: the
+     * server computes it with `planCrashGroup` and `selectFell` intersects, so a caller naming
+     * arbitrary ids resurrects nothing — which is what the older "the caller names nothing" rule
+     * was protecting, kept by construction rather than by refusing to listen.
+     *
+     * ABSENT is the whole group (the cockpit's `R`); an EMPTY ARRAY is nothing. Never collapsed.
+     */
     case 'reopenFell':
       if (!host.reopenFell) return { ok: false, message: s.sessionsNoHost }
-      return await host.reopenFell()
+      return await host.reopenFell(ids)
+    /**
+     * ONE PROMPT, SEVERAL SESSIONS. The ids narrow the fleet's own live rows, and every send still
+     * goes through `promptSession`, which re-reads that session's screen as it types — see
+     * `broadcastPrompt`. Nothing here bypasses a single-session rule.
+     */
+    case 'broadcast':
+      if (!host.broadcastPrompt) return { ok: false, message: s.sessionsNoHost }
+      return await host.broadcastPrompt(ids ?? [], text)
     // The one action whose subject is a NAME rather than a row: a task is not a session.
     case 'deleteTask':
       if (!host.deleteTask) return { ok: false, message: s.sessionsNoHost }
       if (!text) return { ok: false, message: s.taskNone }
       return await host.deleteTask(text)
-    // The two TASK verbs act on the piece of WORK the row is filed under, never on a task named in
-    // the request: a caller that could pass its own string could reopen every session of any task
-    // on this machine. The row is looked up in the fleet and its own `task` is what is used.
-    case 'openTask':
-    case 'finishTask': {
-      if (!host.openTask || !host.finishTask || !host.sessions) {
-        return { ok: false, message: s.sessionsNoHost }
-      }
-      const fleet = await host.sessions()
-      const task = fleet.sessions.find(r => r.id === req.id)?.task
-      if (!task) return { ok: false, message: s.taskNone }
-      if (req.action === 'openTask') return await host.openTask(task)
-      // A TOGGLE, read from the snapshot rather than from the request: "finish" and "unfinish" are
-      // the same switch, and letting the browser state which way it goes is how a page one poll
-      // behind marks a task finished that somebody had just reopened.
-      return await host.finishTask(task, !(fleet.finishedTasks ?? []).includes(task))
-    }
+    /*
+     * The two TASK verbs — `openTask` and `finishTask` — used to be handled here and are GONE from
+     * the wire entirely, not merely hidden. They were standing verbs about a DELIVERY on a row
+     * about a SESSION, and the browser now answers both questions where they belong: finishing is
+     * asked at the moment a session is STOPPED and written through `/api/tasks`, which is where a
+     * delivery's status lives; reopening a whole task is `agentop session open`.
+     *
+     * Removing the ids rather than the buttons is what makes it true: a hidden button is not a
+     * closed door, and this route is reachable from a central's relay.
+     */
     case 'resume': {
       if (!host.resumeSession || !host.sessions) return { ok: false, message: s.sessionsNoHost }
       // Read from the fleet rather than trusted from the browser: the reopen target is a
@@ -579,6 +615,12 @@ export async function readFleetPullRequests(
 }
 
 /** The questions a start EARNS, and the places it could happen — the wizard, as data. */
+/** What a search that could not run answers: no rows, and no claim about how many there are. */
+const EMPTY_PROJECT_SEARCH: ProjectSearchResult = {
+  options: [],
+  totals: { repo: 0, project: 0, folder: 0 },
+}
+
 export interface FleetNewOptions {
   /**
    * Derived by the host from the spawn specs, so a harness with no spec is ABSENT rather than
@@ -611,8 +653,16 @@ export interface FleetNewOptions {
     /** The effort used when none is passed, under exactly `defaultModel`'s rule. */
     defaultEffort?: string
   }[]
-  /** Ranked places, from the LOCAL store — so the picker answers with no network and a cold cache. */
+  /** Ranked places, from the LOCAL store — so the picker answers with no network and a cold cache.
+   *  CAPPED per kind: what fits on screen, never how many there are. See `projectTotals`. */
   projects: { path: string; label: string; repo?: string; detail: string; source: string }[]
+  /**
+   * How many places of each kind MATCHED, before the cap — the number the tabs carry.
+   *
+   * Optional so a client reading an older central still parses; absent means "this server does not
+   * say", and the wizard then counts its rows and stops claiming a total it cannot know.
+   */
+  projectTotals?: Record<ProjectKind, number>
   /** The tasks that already exist here, so filing the new session is a pick, not a spelling test. */
   tasks: string[]
   /**
@@ -637,7 +687,9 @@ export async function readNewOptions(lang: CliLang, query: string): Promise<Flee
     type Defaults = Awaited<ReturnType<typeof readHarnessDefaults>>
     const [harnesses, projects, tasks] = await Promise.all([
       host.startableHarnesses(),
-      host.searchProjects ? host.searchProjects(query).catch(() => []) : Promise.resolve([]),
+      host.searchProjects
+        ? host.searchProjects(query).catch(() => EMPTY_PROJECT_SEARCH)
+        : Promise.resolve(EMPTY_PROJECT_SEARCH),
       host.sessionTasks ? host.sessionTasks().catch(() => []) : Promise.resolve([]),
     ])
     // What each CLI will actually do here with no flags, read from THIS MACHINE's own settings
@@ -666,13 +718,21 @@ export async function readNewOptions(lang: CliLang, query: string): Promise<Flee
           ...(defaultEffort ? { defaultEffort } : {}),
         }
       }),
-      projects: projects.map(p => ({
+      projects: projects.options.map(p => ({
         path: p.path,
         label: p.label,
         ...(p.repo ? { repo: p.repo } : {}),
         detail: p.detail,
         source: p.source,
       })),
+      /**
+       * HOW MANY of each kind matched, which is NOT how many rows came back.
+       *
+       * The rows are capped per kind so a tab can never be emptied by another kind's budget; the
+       * tabs then counted the rows and read `12 · 12 · 12` on a machine with twenty repositories.
+       * A cap shown as a count is a number that can never be anything but the cap.
+       */
+      projectTotals: projects.totals,
       tasks,
     }
   } catch (e) {
@@ -849,16 +909,31 @@ export async function readFleetArtifactMedia(
   const { readSessionChat } = await import('./chat-web')
   const chat = await readSessionChat(host, lang, row.id)
   const { resolveArtifactPath } = await import('./artifact-list')
-  const raw = artifactPathsFromTurns(chat.turns)
-  const allowed = [...new Set(raw.flatMap(p => {
-    const r = resolveArtifactPath(p, row.cwd!)
-    return r ? [p, r] : [p]
-  }))]
-  const asked = resolveArtifactPath(path, row.cwd) ?? path
+  const { realpath } = await import('node:fs/promises')
+  const real = async (p: string): Promise<string | null> => {
+    try { return await realpath(p) } catch { return null }
+  }
+  /**
+   * RESOLVED, LIKE THE TEXT ROUTE. This used to hand `planArtifactRead` lexical paths — the same
+   * string as both `named` and `real` — which is exactly the shape that turns the escape gate off:
+   * a file inside the cwd that is a link to somewhere else was served without anything following
+   * the link. The pure module now takes both forms per entry so a caller cannot make that mistake
+   * silently; this is the caller that was making it.
+   */
+  const cwdReal = await real(row.cwd)
+  if (cwdReal === null) {
+    return { ok: false, status: 404, message: pt ? 'Não é um arquivo.' : 'Not a file.' }
+  }
   const { planArtifactRead } = await import('./artifact-file')
-  const plan = planArtifactRead({
-    path: allowed.includes(path) ? asked : path, cwd: row.cwd, allowed,
-  })
+  const allowed: AllowedArtifact[] = []
+  for (const raw of artifactPathsFromTurns(chat.turns)) {
+    const named = resolveArtifactPath(raw, cwdReal)
+    if (!named) continue
+    const r = await real(raw)
+    if (r !== null) allowed.push({ named, real: r })
+  }
+  const askedReal = await real(resolveArtifactPath(path, cwdReal) ?? path)
+  const plan = planArtifactRead({ path: askedReal ?? '', cwd: cwdReal, allowed })
   if (!plan.ok) {
     return {
       ok: false, status: 403,

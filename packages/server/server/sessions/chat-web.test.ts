@@ -60,18 +60,21 @@ test('an unknown id still reports that the session left this machine, never an e
  * pane with no sentence on it. The link was never the problem; there was no reader.
  */
 test('a harness nobody has written a reader for is refused in words, and NAMED', async () => {
-  // Gemini is the only one, and permanently: it can never carry a conversation id (no `assignId`,
-  // and its `--resume` takes "latest" or an index) — see `harness-transcript.ts`.
-  const out = await readSessionChat(hostWith('waiting', 'gemini'), 'en', 'sess1')
+  // NO SHIPPED HARNESS EXERCISES THIS TODAY — gemini was the last `null` and now has a reader —
+  // and the path must stay tested regardless: it is what the NEXT harness falls into on the day
+  // its id is added and its reader is not. The cast is the point of the test, not a shortcut
+  // around the types: it stands in for that harness. Deleting this with the last null would leave
+  // the blank-pane defect this whole refusal exists to prevent untested until it recurred.
+  const out = await readSessionChat(hostWith('waiting', 'quokka' as never), 'en', 'sess1')
   expect(out.turns).toEqual([])
-  expect(out.unavailable).toContain('gemini')
+  expect(out.unavailable).toContain('quokka')
 })
 
 test('a harness that HAS a reader falls through to the transcript rules, not to that refusal', async () => {
   // Each of these resolves against its own store, where this id does not exist — so it must land
   // on the live/not-yet branch, exactly as claude does, and NOT on "no reader". This test is what
   // failed when codex gained a reader, which is the point: adding one is visible here.
-  for (const harness of ['antigravity', 'codex', 'copilot', 'kimi'] as const) {
+  for (const harness of ['antigravity', 'codex', 'copilot', 'kimi', 'gemini'] as const) {
     const out = await readSessionChat(hostWith('waiting', harness), 'en', 'sess1')
     expect(out.unavailable).toBeUndefined()
     expect(out.live).toBe(true)
@@ -81,4 +84,37 @@ test('a harness that HAS a reader falls through to the transcript rules, not to 
 test('a row whose harness the registry has forgotten says THAT, not "we cannot read \'\'"', async () => {
   const out = await readSessionChat(hostWith('waiting', ''), 'en', 'sess1')
   expect(out.unavailable).toContain('which assistant')
+})
+
+/**
+ * THE LAST STEP AT WHICH A BLANK PANE WAS STILL POSSIBLE.
+ *
+ * The link and the format are refused in words above. A transcript that RESOLVED and then failed to
+ * read was not: the catch flattened it into `turns: []`, and on a live session that carries no
+ * `unavailable` — so the view drew "This conversation has no messages yet" over a conversation that
+ * was entirely on disk. Reported 2026-09-08, reached through the stale path memo (fixed in
+ * `transcript-path-memo.ts`); this is the guard that makes the NEXT cause say something.
+ */
+test('a transcript that resolves but cannot be READ is refused in words, never as an empty chat', async () => {
+  const brokenReader = () => ({
+    resolve: async () => '/some/found/transcript.jsonl',
+    read: async () => { throw new Error('EISDIR') },
+    readRecent: async () => ({ turns: [], older: false }),
+  })
+  const out = await readSessionChat(hostWith('waiting'), 'en', 'sess1', brokenReader as never)
+  expect(out.turns).toEqual([])
+  expect(out.live).toBe(true)
+  expect(out.unavailable).toContain('could not be read')
+})
+
+test('a reader that resolves and reads fine still carries no refusal', async () => {
+  // The guard must not fire on the ordinary path: an empty conversation stays empty and keeps the
+  // composer, which is what the first test in this file exists to protect.
+  const okReader = () => ({
+    resolve: async () => '/some/found/transcript.jsonl',
+    read: async () => ({ turns: [], older: false }),
+    readRecent: async () => ({ turns: [], older: false }),
+  })
+  const out = await readSessionChat(hostWith('waiting'), 'en', 'sess1', okReader as never)
+  expect(out.unavailable).toBeUndefined()
 })

@@ -111,6 +111,11 @@ describe('routeCapability', () => {
     expect(routeCapability('/api/mcpanything')).toBeNull()
   })
 
+  it('maps /api/mcp/check and /api/mcp/tools to localShell, not the mcpAdmin prefix — reading config and RUNNING a server are different powers', () => {
+    expect(routeCapability('/api/mcp/check')).toBe('localShell')
+    expect(routeCapability('/api/mcp/tools')).toBe('localShell')
+  })
+
   it('returns null for ordinary metric routes', () => {
     expect(routeCapability('/api/data')).toBeNull()
     expect(routeCapability('/api/tags/abc')).toBeNull()
@@ -168,4 +173,26 @@ test('/api/live-sessions is deliberately NOT blanket-guarded, and the reason is 
   expect(src.match(/import\('\.\/live-sessions'\)/g)?.length).toBe(1)
   const helper = src.slice(src.indexOf('async function readLocalLiveSnapshot'))
   expect(helper.indexOf('CAPS.localProcesses')).toBeLessThan(helper.indexOf("import('./live-sessions')"))
+})
+
+test('THE UTILITY SHELL rides localShell, by prefix', () => {
+  // It spawns `$SHELL` on the host in a directory of the caller's session and types whatever
+  // arrives into it — more powerful than `/api/fleet` itself, which at least only ever runs a
+  // named assistant CLI.
+  expect(routeCapability('/api/shell/open')).toBe('localShell')
+  expect(routeCapability('/api/shell/list')).toBe('localShell')
+  expect(routeCapability('/api/shell/close')).toBe('localShell')
+})
+
+test('a shell route nobody has written yet is guarded by having been ADDED', () => {
+  // A prefix and not three names, for the reason the fleet entry gives: a route that is not
+  // registered here is assumed harmless, so the next one must be guarded by existing under the
+  // prefix, never by somebody remembering a second table.
+  expect(routeCapability('/api/shell/not-written-yet')).toBe('localShell')
+})
+
+test('the prefix does not swallow a neighbouring path', () => {
+  // `/api/shells-of-someone-else` is not under `/api/shell`, and a prefix that matched it would be
+  // guarding a route nobody registered — which reads as security and is an accident.
+  expect(routeCapability('/api/shellfish')).toBeNull()
 })

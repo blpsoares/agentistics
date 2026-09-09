@@ -15,19 +15,25 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Clock, Pin, PinOff, Plus, Search, X } from 'lucide-react'
+import { Clock, Pin, PinOff, Plus, RotateCcw, Search, Send, X } from 'lucide-react'
 import type { Filters } from '@agentistics/core'
 import {
-  ACTIVE_STATES, DEFAULT_ORDER, filterSessions, sessionNotify, sortSessions,
-  type ControlSession,
+  ACTIVE_STATES, filterSessions, sessionNotify,
+  type ControlSession, type SessionGroup,
 } from '@agentistics/tui/control/session-fleet'
+import { projectGroups, showsProjectHeadings } from '../../lib/fleetGroups'
 import { rowSelected } from '../../lib/fleetSelection'
 import { filterFleet, ignoredDimensions } from '../../lib/fleetFilter'
 import { NewSessionModal } from '../sessions/NewSessionModal'
+import { SessionPickModal } from '../sessions/SessionPickModal'
+import { buildPickRows } from '../../lib/sessionPick'
 import { rowMenuEntries, type RowVerb } from '../../lib/rowMenu'
 import { SessionRowMenu } from '../sessions/SessionRowMenu'
+import { SessionFiling } from '../tasks/SessionFiling'
+import { boardCopy } from '../tasks/copy'
+import { attachSession, detachSession } from '../../lib/tasks'
 import { SessionFacts } from '../sessions/SessionFacts'
-import { sessionPath } from '../../lib/sessionRoute'
+import { reopenedSessionRoute, sessionPath } from '../../lib/sessionRoute'
 import {
   MAX_PINNED, getPinnedIds, movePinnedSession, pinnedServerSnapshot, resolvePinnedRows,
   subscribePinnedSessions, togglePinnedSession,
@@ -86,9 +92,24 @@ export interface SessionsAsideProps {
    * Absent on a surface that cannot act (a central relaying a machine that has not granted the
    * screen/action switches yet): the menu is then not opened at all, rather than opened inert.
    */
-  rowsById?: Map<string, { verbs: RowVerb[] }>
+  rowsById?: Map<string, {
+    verbs: RowVerb[]
+    /** This row is one of the sessions the machine TOOK — see the server's `FleetRow.fell`. */
+    fell?: boolean
+    title?: string
+    project?: string
+    cwd?: string
+    /** Already localized by the server — the word the fleet list prints for this row's state. */
+    stateLabel?: string
+  }>
   /** Performs a verb. Absent exactly where `rowsById` is absent. */
-  act?: (req: { id: string; action: string; text?: string }) => Promise<{ ok: boolean; message: string; id?: string }>
+  act?: (req: {
+    id: string
+    action: string
+    text?: string
+    /** Narrows a GROUP verb (`reopenFell`, `broadcast`). Absent = the whole group. */
+    ids?: readonly string[]
+  }) => Promise<{ ok: boolean; message: string; id?: string }>
 }
 
 /** The colour a state is said in. `running` is its own token, not `success`, which reads teal. */
@@ -141,6 +162,36 @@ export function SessionsAside({
   const { sessionId } = useParams()
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
+  /** Which GROUP modal is open, if any. Both are the one picker — see `SessionPickModal`. */
+  const [picking, setPicking] = useState<'reopen' | 'send' | null>(null)
+  const [groupBusy, setGroupBusy] = useState(false)
+
+  /*
+   * THE TWO GROUP VERBS, derived from the rows the server already shaped.
+   *
+   * `fell` is the machine's own crash grouping (`crash-group.ts`), which errs toward EXCLUDING: a
+   * session with no evidence it was ever alive is never in it. We do not re-derive it here — a
+   * second implementation of "which sessions fell together" is exactly the defect this bridge
+   * exists to prevent.
+   *
+   * Who can receive a prompt is likewise the SERVER's answer, read off each row's own `prompt`
+   * verb: it is the same resolution the cockpit acts on, and it already accounts for a session
+   * that is not running and for one sitting on an open dialog (where a typed line goes into the
+   * dialog's filter and the submit takes the highlighted option).
+   */
+  const groupRows = useMemo(
+    // ONE ROW PER SESSION: `rowsById` is keyed TWICE per row on purpose (by its own id and by its
+    // conversation id, so one map answers a link carrying either), and iterating its values offered
+    // and counted every session that knows its conversation twice — reported as `Active 22` on a
+    // machine running 11. `buildPickRows` owns the dedupe and the rest of this arithmetic.
+    () => buildPickRows(rowsById ? rowsById.values() : [], pt),
+    [rowsById, pt],
+  )
+
+  const canAct = Boolean(act) && !hideNew
+  const showFell = canAct && groupRows.fellRows.length > 0
+  // One session is not a broadcast — the row's own composer is right there and says so better.
+  const showSend = canAct && groupRows.sendable > 1
   /**
    * The pinned set, from the module that already owns it.
    *
@@ -168,6 +219,8 @@ export function SessionsAside({
   const [dragOver, setDragOver] = useState<number | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; id: string; state: string; verbs: RowVerb[] } | null>(null)
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null)
+  /** The task picker, anchored where the menu was — see `pickMenuAction`. */
+  const [linking, setLinking] = useState<{ id: string; x: number; y: number } | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
 
@@ -178,6 +231,12 @@ export function SessionsAside({
   const pickMenuAction = (action: string) => {
     if (!menu) return
     const { id } = menu
+    if (action === 'link-task') {
+      // The picker is anchored where the menu was, so the gesture stays in one place on screen.
+      setLinking({ id, x: menu.x, y: menu.y })
+      setMenu(null)
+      return
+    }
     if (action === 'rename') {
       const target = rows.find(r => r.id === id)
       setRenaming({ id, title: target?.title ?? '' })
@@ -185,7 +244,17 @@ export function SessionsAside({
       return
     }
     if (!act) return
-    void act({ id, action }).then(out => setNotice(out.message))
+    void act({ id, action }).then(out => {
+      setNotice(out.message)
+      // A REOPEN LANDS SOMEWHERE, here too. It retires the row it was asked about, so a reader
+      // sitting on that row is left on an id the next poll drops — and this handler kept only the
+      // message. The row it came FROM names the wait; see `reopenedSessionRoute`.
+      if (out.ok && action === 'resume' && out.id) {
+        const from = rows.find(r => r.id === id)
+        const r = reopenedSessionRoute(out.id, from ? { harness: from.harness, title: from.title } : undefined)
+        navigate(r.path, r.options)
+      }
+    })
   }
 
   // The top bar's magnifier focuses this field. An event rather than a prop because the button and
@@ -238,94 +307,189 @@ export function SessionsAside({
    * is running, ranked by what needs you most, and everything else beneath it.
    *
    * `DEFAULT_ORDER` (`state`, via `sessionRank`) is the SAME ranking the terminal cockpit breaks
-   * ties on, so "sorted by status" means one thing in both places.
+   * ties on, so "sorted by status" means one thing in both places — `projectGroups` applies it
+   * inside each project band and orders the bands themselves by their most urgent member.
+   *
+   * Inside a band the rows are grouped BY PROJECT (`lib/fleetGroups.ts`), and a band holding one
+   * project draws no heading at all — see that module's header. On a machine whose whole fleet sits
+   * in one checkout this therefore looks exactly as it did.
    */
-  const bands = useMemo((): { label: string; rows: ControlSession[] }[] => {
+  const bands = useMemo((): { label: string; groups: SessionGroup[] }[] => {
     const rest = matched.filter(r => !pinned.has(pinKeyOf(r)))
     return [
-      { label: pt ? 'Ativas' : 'Active', rows: sortSessions(rest.filter(r => active.has(r.state)), DEFAULT_ORDER) },
+      { label: pt ? 'Ativas' : 'Active', groups: projectGroups(rest.filter(r => active.has(r.state)), lang) },
       // Never computed while activeOnly is on — those rows are the ones the switch is withholding,
       // not a second list to render beside it.
-      { label: pt ? 'Inativas' : 'Inactive', rows: activeOnly ? [] : sortSessions(rest.filter(r => !active.has(r.state)), DEFAULT_ORDER) },
+      { label: pt ? 'Inativas' : 'Inactive', groups: activeOnly ? [] : projectGroups(rest.filter(r => !active.has(r.state)), lang) },
     ]
-  }, [matched, pinned, active, activeOnly, pt])
+  }, [matched, pinned, active, activeOnly, pt, lang])
 
-  const total = bands.reduce((n, b) => n + b.rows.length, 0) + pinnedRows.length
+  const total = bands.reduce(
+    (n, b) => n + b.groups.reduce((m, g) => m + g.sessions.length, 0),
+    0,
+  ) + pinnedRows.length
   const filterCount = (filters.harnesses?.length ?? 0) + filters.projects.length
     + (filters.repos?.length ?? 0) + filters.models.length
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 10, paddingTop: 4 }}>
-      {!hideNew && (
-      <button
-        onClick={() => setCreating(true)}
-        style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-          margin: '0 2px', padding: '9px 12px', borderRadius: 9, cursor: 'pointer', minHeight: tap,
-          border: '1px dashed var(--border)', background: 'transparent',
-          color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600,
-        }}
-        onMouseEnter={e => {
-          e.currentTarget.style.borderColor = 'var(--anthropic-orange)'
-          e.currentTarget.style.color = 'var(--anthropic-orange)'
-        }}
-        onMouseLeave={e => {
-          e.currentTarget.style.borderColor = 'var(--border)'
-          e.currentTarget.style.color = 'var(--text-secondary)'
-        }}
-      >
-        <Plus size={14} />
-        {pt ? 'Nova sessão' : 'New session'}
-      </button>
+      {/*
+        * ONE ROW: the search, and the two standing verbs as icons beside it.
+        *
+        * Search is what the column is used for on every visit; starting a session and writing to
+        * several are things somebody does occasionally. Two full-width dashed buttons stacked above
+        * the field spent three rows of a 268px column on that ranking inverted — and those rows come
+        * straight out of the list, which is the thing being searched.
+        *
+        * An icon may not carry the meaning alone, so both keep `title` AND `aria-label` with the
+        * words they used to print. `+` is the one solid accent control in the aside because it is
+        * the only one that CREATES something; "send to several" stays quiet beside it. "Reopen what
+        * fell" is deliberately NOT here and keeps its full-width button below: it names a COUNT, and
+        * a count is not something an icon can say.
+        */}
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 6, padding: '0 2px', minHeight: tap }}>
+        <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex' }}>
+          <Search
+            size={13}
+            style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }}
+          />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder={pt ? 'Buscar sessão…' : 'Search sessions…'}
+            style={{
+              flex: 1, minWidth: 0, boxSizing: 'border-box',
+              padding: '9px 26px 9px 30px', borderRadius: 9,
+              border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+              color: 'var(--text-primary)', fontFamily: 'inherit',
+              // 16px on mobile or iOS Safari zooms the viewport; the global guard in index.css
+              // handles it, so this stays the desktop figure and is not overridden inline.
+              fontSize: 12.5, outline: 'none',
+            }}
+          />
+          {query !== '' && (
+            <button
+              onClick={() => setQuery('')}
+              aria-label={pt ? 'Limpar busca' : 'Clear search'}
+              style={{
+                position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+                display: 'flex', border: 'none', background: 'transparent',
+                color: 'var(--text-tertiary)', cursor: 'pointer', padding: 2,
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+        {!hideNew && (
+          <button
+            onClick={() => setCreating(true)}
+            aria-label={pt ? 'Nova sessão' : 'New session'}
+            title={pt ? 'Nova sessão' : 'New session'}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              width: tap ?? 34, padding: 0, borderRadius: 9, cursor: 'pointer',
+              border: '1px solid var(--anthropic-orange)', background: 'var(--anthropic-orange)',
+              color: '#141414', fontFamily: 'inherit',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(1.1)' }}
+            onMouseLeave={e => { e.currentTarget.style.filter = 'none' }}
+          >
+            <Plus size={17} />
+          </button>
+        )}
+        {showSend && (
+          <button
+            onClick={() => setPicking('send')}
+            aria-label={pt ? 'Enviar prompt em massa' : 'Send a prompt to several'}
+            title={pt ? 'Enviar prompt em massa' : 'Send a prompt to several'}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              width: tap ?? 34, padding: 0, borderRadius: 9, cursor: 'pointer',
+              border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+              color: 'var(--text-tertiary)', fontFamily: 'inherit',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.borderColor = 'var(--anthropic-orange)'
+              e.currentTarget.style.color = 'var(--anthropic-orange)'
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.borderColor = 'var(--border-subtle)'
+              e.currentTarget.style.color = 'var(--text-tertiary)'
+            }}
+          >
+            <Send size={14} />
+          </button>
+        )}
+      </div>
+
+      {/*
+        * THE GROUP VERBS, under "New session" because that is where starting work lives.
+        *
+        * "Reopen what fell" appears only when something DID fall, and it names the count: a button
+        * that is always there teaches nothing, and a bare "reopen" is a different promise from
+        * "reopen 6 sessions". Neither is offered on a surface that cannot act — a button whose only
+        * outcome is a refusal is a button that teaches the wrong thing.
+        */}
+      {showFell && (
+        <button
+          onClick={() => setPicking('reopen')}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+            margin: '0 2px', padding: '9px 12px', borderRadius: 9, cursor: 'pointer', minHeight: tap,
+            border: '1px solid var(--anthropic-orange)', background: 'rgba(232,146,90,0.08)',
+            color: 'var(--anthropic-orange)', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600,
+          }}
+        >
+          <RotateCcw size={14} />
+          {pt
+            ? (groupRows.fellRows.length === 1 ? 'Reabrir 1 sessão que caiu' : `Reabrir ${groupRows.fellRows.length} sessões que caíram`)
+            : (groupRows.fellRows.length === 1 ? 'Reopen 1 session that fell' : `Reopen ${groupRows.fellRows.length} sessions that fell`)}
+        </button>
+      )}
+
+      {picking && act && (
+        <SessionPickModal
+          kind={picking}
+          lang={lang}
+          rows={picking === 'reopen' ? groupRows.fellRows : groupRows.sendRows}
+          busy={groupBusy}
+          onClose={() => { if (!groupBusy) setPicking(null) }}
+          onConfirm={(ids, text) => {
+            setGroupBusy(true)
+            /*
+             * The GROUP is addressed, never a row: the id is the anchor the route needs and `ids`
+             * is what narrows it. Sending `ids` even when every row is ticked is deliberate — the
+             * fleet polls every five seconds, and "all of them" resolved on the server a moment
+             * later is not the list this person just read and agreed to.
+             */
+            void act({ id: ids[0] ?? '', action: picking === 'reopen' ? 'reopenFell' : 'broadcast', ids, ...(text ? { text } : {}) })
+              .then(out => { setNotice(out.message); setPicking(null) })
+              .finally(() => setGroupBusy(false))
+          }}
+        />
       )}
 
       {creating && (
         <NewSessionModal
           lang={lang}
           onClose={() => setCreating(false)}
-          onStarted={id => {
+          onStarted={(id, started) => {
             setCreating(false)
             // Straight into it. The row will arrive on the next poll; navigating now means the
             // panel is already open on it when it does.
-            if (id) navigate(sessionPath(id))
+            //
+            // The `creating` state travels WITH the navigation, and that is what stops the metrics
+            // screen flashing in between: this browser's fleet does not hold the row yet, so
+            // `SessionsPage` would fall through to its "nothing selected" branch — the overview —
+            // for exactly as long as it takes a poll to land. The state says "this id is on its
+            // way", so the page shows the creation loader instead of answering a question nobody
+            // asked. Router state and not a prop: the modal that knows this is unmounting.
+            if (id) navigate(sessionPath(id), { state: { creating: started ?? {} } })
           }}
         />
       )}
-
-      <div style={{ position: 'relative', padding: '0 2px' }}>
-        <Search
-          size={13}
-          style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)', pointerEvents: 'none' }}
-        />
-        <input
-          ref={searchRef}
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder={pt ? 'Buscar sessão…' : 'Search sessions…'}
-          style={{
-            width: '100%', boxSizing: 'border-box',
-            padding: '9px 26px 9px 30px', borderRadius: 9,
-            border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
-            color: 'var(--text-primary)', fontFamily: 'inherit',
-            // 16px on mobile or iOS Safari zooms the viewport; the global guard in index.css
-            // handles it, so this stays the desktop figure and is not overridden inline.
-            fontSize: 12.5, outline: 'none',
-          }}
-        />
-        {query !== '' && (
-          <button
-            onClick={() => setQuery('')}
-            aria-label={pt ? 'Limpar busca' : 'Clear search'}
-            style={{
-              position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
-              display: 'flex', border: 'none', background: 'transparent',
-              color: 'var(--text-tertiary)', cursor: 'pointer', padding: 2,
-            }}
-          >
-            <X size={12} />
-          </button>
-        )}
-      </div>
 
       {notice && (
         <p role="status" style={{
@@ -420,6 +584,8 @@ export function SessionsAside({
                     onMoveBy={d => movePinnedSession(i, i + d)}
                     {...(rowsById?.get(s.id) ? { verbs: rowsById.get(s.id)!.verbs } : {})}
                     onOpenMenu={(x, y, verbs) => openMenu(s, x, y, verbs)}
+                    onFile={(x, y) => setLinking({ id: s.id, x, y })}
+                    lang={lang}
                   />
                 </div>
               ))}
@@ -440,16 +606,36 @@ export function SessionsAside({
                 // The label is not unique — two dimensions can legitimately produce one word, and
                 // an empty band still holds its place in the order.
                 key={`${i}-${b.label}`}
-                label={b.label} rows={b.rows} pinned={pinned}
+                label={b.label} groups={b.groups} pinned={pinned}
                 sessionId={sessionId} tap={tap} onPin={flip}
                 onOpen={s => (onOpenRow ? onOpenRow(s) : navigate(sessionPath(s.id)))}
                 {...(rowsById ? { rowsById } : {})}
                 onOpenMenu={openMenu}
+                onFile={(s, x, y) => setLinking({ id: s.id, x, y })}
+                lang={lang}
               />
             ))}
           </>
         )}
       </div>
+
+      {linking && (
+        <SessionFiling
+          session={(() => {
+            const r = rows.find(x => x.id === linking.id)
+            return {
+              id: linking.id,
+              title: r?.title ?? linking.id,
+              ...(r?.harness ? { harness: r.harness } : {}),
+              ...(r?.task ? { task: r.task } : {}),
+            }
+          })()}
+          lang={lang}
+          onChanged={() => { setNotice(boardCopy(lang).filed) }}
+          onOpenTask={id => navigate(`/tasks/${encodeURIComponent(id)}`)}
+          onClose={() => setLinking(null)}
+        />
+      )}
 
       {/* The row's context menu (Task 6) — rename / stop / reopen, exactly the row's own verbs. */}
       {menu && (
@@ -539,9 +725,10 @@ export function SessionsAside({
 
 /** One band of the two-way (active/inactive) split. Absent when it would be empty — an empty
  *  band with a heading and no rows under it is a label pretending to be information. */
-function SessionBand({ label, rows, pinned, sessionId, tap, onPin, onOpen, rowsById, onOpenMenu }: {
+function SessionBand({ label, groups, pinned, sessionId, tap, onPin, onOpen, rowsById, onOpenMenu, onFile, lang }: {
   label: string
-  rows: readonly ControlSession[]
+  /** The band's rows, already grouped by project and ordered — see `lib/fleetGroups.ts`. */
+  groups: readonly SessionGroup[]
   pinned: ReadonlySet<string>
   sessionId?: string
   tap?: number
@@ -549,8 +736,15 @@ function SessionBand({ label, rows, pinned, sessionId, tap, onPin, onOpen, rowsB
   onOpen: (row: ControlSession) => void
   rowsById?: Map<string, { verbs: RowVerb[] }>
   onOpenMenu: (session: ControlSession, x: number, y: number, verbs: RowVerb[]) => void
+  /** File a row under a delivery — the visible half of the gesture the menu also offers. */
+  onFile: (session: ControlSession, x: number, y: number) => void
+  lang: 'pt' | 'en'
 }) {
-  if (rows.length === 0) return null
+  const count = groups.reduce((n, g) => n + g.sessions.length, 0)
+  if (count === 0) return null
+  // One project under this band names it twice — the band heading is directly above. See the rule
+  // in `fleetGroups.ts`; it is the same one the cockpit's cascade applies to its own root.
+  const headings = showsProjectHeadings(groups)
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{
@@ -559,23 +753,38 @@ function SessionBand({ label, rows, pinned, sessionId, tap, onPin, onOpen, rowsB
         textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-tertiary)',
       }}>
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
-        <span style={{ marginLeft: 'auto', fontWeight: 600, opacity: 0.75 }}>{rows.length}</span>
+        <span style={{ marginLeft: 'auto', fontWeight: 600, opacity: 0.75 }}>{count}</span>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {rows.map(s => (
-          <SessionRow
-            key={s.id}
-            session={s}
-            selected={rowSelected(s, sessionId)}
-            pinned={pinned.has(pinKeyOf(s))}
-            {...(tap ? { tap } : {})}
-            onPin={() => onPin(s)}
-            onOpen={() => onOpen(s)}
-            {...(rowsById?.get(s.id) ? { verbs: rowsById.get(s.id)!.verbs } : {})}
-            onOpenMenu={(x, y, verbs) => onOpenMenu(s, x, y, verbs)}
-          />
-        ))}
-      </div>
+      {groups.map(g => (
+        <div key={g.key} style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: headings ? 10 : 0 }}>
+          {headings && (
+            // Deliberately quieter than the band above it — lowercase, no letter-spacing — so the
+            // two headings read as a hierarchy rather than as two lists.
+            <div style={{
+              display: 'flex', alignItems: 'baseline', gap: 6, padding: '4px 9px 2px',
+              fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)',
+            }}>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.label}</span>
+              <span style={{ marginLeft: 'auto', opacity: 0.7 }}>{g.sessions.length}</span>
+            </div>
+          )}
+          {g.sessions.map(s => (
+            <SessionRow
+              key={s.id}
+              session={s}
+              selected={rowSelected(s, sessionId)}
+              pinned={pinned.has(pinKeyOf(s))}
+              {...(tap ? { tap } : {})}
+              onPin={() => onPin(s)}
+              onOpen={() => onOpen(s)}
+              {...(rowsById?.get(s.id) ? { verbs: rowsById.get(s.id)!.verbs } : {})}
+              onOpenMenu={(x, y, verbs) => onOpenMenu(s, x, y, verbs)}
+              onFile={(x, y) => onFile(s, x, y)}
+              lang={lang}
+            />
+          ))}
+        </div>
+      ))}
     </div>
   )
 }
@@ -631,7 +840,7 @@ function EmptyReason({
 }
 
 
-function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy, verbs, onOpenMenu }: {
+function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy, verbs, onOpenMenu, onFile, lang }: {
   session: ControlSession; selected: boolean
   /** Minimum row height on mobile — 44px, and undefined on desktop. */
   tap?: number
@@ -644,10 +853,15 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy, v
   verbs?: RowVerb[]
   /** Opens the context menu at a point, carrying the verbs it was opened with. */
   onOpenMenu?: (x: number, y: number, verbs: RowVerb[]) => void
+  /** File this row under a delivery — the visible half of the gesture the menu also offers. */
+  onFile?: (x: number, y: number) => void
+  lang?: 'pt' | 'en'
 }) {
   const wants = sessionNotify(session)
   const color = STATE_COLOR[session.state] ?? 'var(--text-tertiary)'
   const longPress = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Where the last pointer event landed, so a picker opened from inside the row is anchored. */
+  const lastPoint = useRef({ x: 0, y: 0 })
   const clearLongPress = () => {
     if (longPress.current !== null) { clearTimeout(longPress.current); longPress.current = null }
   }
@@ -677,6 +891,7 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy, v
         cursor: 'pointer', fontFamily: 'inherit', minWidth: 0,
         transition: 'background 0.15s',
       }}
+      onPointerDown={e => { lastPoint.current = { x: e.clientX, y: e.clientY } }}
       onMouseEnter={e => { if (!selected) e.currentTarget.style.background = 'var(--bg-elevated)' }}
       onMouseLeave={e => {
         if (!selected) e.currentTarget.style.background = STATE_WASH[session.state] ?? 'transparent'
@@ -720,7 +935,16 @@ function SessionRow({ session, selected, pinned, tap, onPin, onOpen, onMoveBy, v
           opacity: wants ? 1 : 0.55,
         }}
       />
-      <SessionFacts session={session} selected={selected} />
+      <SessionFacts
+        session={session}
+        selected={selected}
+        {...(lang ? { lang } : {})}
+        {...(onFile
+          // Anchored where the click landed, like the menu's own picker — the gesture stays where
+          // the reader's eye already is.
+          ? { onFile: () => onFile(lastPoint.current.x, lastPoint.current.y) }
+          : {})}
+      />
       {/* The assistant, NAMED. It was a 5px dot, which carries the fact in colour alone — and a
           colour is not a name. The model sits with it on the meta line below. */}
       {/* The pin lives on the row rather than in a menu: it is a one-click decision about the row

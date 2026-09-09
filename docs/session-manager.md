@@ -232,7 +232,26 @@ never inferred**: agentop hands the id to the CLI when it starts the session (`c
 `copilot --session-id`) or when it reopens one, so there is nothing left to guess. Claude also writes
 its own record while the process lives, which is read as well.
 
-For codex, kimi, gemini and antigravity no such link can exist — those CLIs invent an id and never
+**antigravity is linked a third way.** It has no assign flag — measured against agy 1.1.27 on
+2026-09-08, `agy --conversation <fresh-uuid>` answers `warning: conversation "…" not found` and then
+creates one under an id of its own — and it writes no session record. What it does do is open one
+log per process, `~/.gemini/antigravity-cli/log/cli-<YYYYMMDD_HHMMSS>.log`, **hold it open** for the
+life of that process, and write `Created conversation <uuid>` into it. So the chain *managed row →
+tmux pane pid → open file descriptor → log → conversation* is exact at every step, and agentop reads
+it (`agy-conversation.ts` for the rules, `process-conversation.ts` for the two reads).
+
+That route mattered more for agy than it would for anyone else, because for a session **agentop
+started** even the harness-and-directory fallback below is closed: the adapter takes a
+conversation's `project_path` from the global `history.jsonl`, and agy writes that file only for a
+prompt typed in its own UI — a session agentop starts is handed its first prompt as
+`--prompt-interactive`, so its record carries an empty `project_path` and is not a candidate for
+anything. Measured the same day: 15 of 38 agy conversations here had a directory recorded, and the
+23 without were exactly the ones agentop had opened. Its chat view was therefore permanently empty
+while its terminal worked perfectly. The limit worth stating: this is a `/proc` read, so off Linux
+there is no link and the chat view says "this session has no linked conversation yet", which is
+true.
+
+For codex, kimi and gemini no such link can exist — those CLIs invent an id and never
 report it — so the row says so rather than showing a guess. The fallback everything else uses matches
 by harness and directory, which gives *every* session of one repository the same conversation: good
 enough to offer a reopen you confirm by its title, not good enough to be presented as the conversation
@@ -401,9 +420,10 @@ A reader for its file format would be code nothing can reach. Its format is none
 `harness-transcript.ts` so the measurement is not spent twice: it is a patch log rather than one
 message per line.
 
-The same applies, per row, to any harness whose session was **started fresh** without an id —
-antigravity, codex and kimi only gain the link on a reopen, so a freshly spawned row of those three
-is blind until it is reopened, and says so.
+The same applies, per row, to any harness whose session was **started fresh** without an id.
+codex and kimi only gain the link on a reopen (or once the first-sighting claim can settle it), so a
+freshly spawned row of those two is blind until then, and says so. **antigravity is no longer one of
+them** — its per-process log names the conversation it created; see above.
 
 #### Three rules every reader follows
 
@@ -540,3 +560,134 @@ Four fixes that all come from the same place — a row must say what it IS, and 
   find, which is how two holders happen; a vanished lock now retries and an abandoned one is taken
   over by an atomic `rename`. Measured before and after over 600 concurrent writes: 31 losses in 150,
   then 0 in 600.
+
+## The per-session utility shell
+
+A real shell — a full PTY, so `vim`, `htop`, colours and `Ctrl+C` all work — opened in a session's
+own directory, for the person rather than for an assistant. Phase 1 is the server half: it can be
+opened, listed and closed through `/api/shell/*`, and it is verifiable with `curl` and `tmux` alone.
+
+### It is not a session, and that is structural
+
+A shell runs on its **own tmux socket** (`SHELL_SOCKET` = `agentop-shell`) and records itself in
+`~/.agentistics/shells.json` — never in `managed-sessions.json`. Both halves are load-bearing.
+
+On the fleet socket it would become a fleet row, silently: `idFromTmuxName` strips the `agentop-`
+prefix, so `parseTmuxList` keeps the session, and `reconcileSessions` then finds a running session
+the registry has no record of and calls it `unregistered` — the row `session-adopt.ts` describes as
+"visible and inert", filed under `GONE_PROJECT_KEY`, that no verb in the cockpit can act on.
+
+In the registry, each shell would join the pane walk `host.sessions()` performs every 5 s in four
+processes (~200 ms measured), be probed by `attention.ts` for dialog markers, take a `lastSeenMs`
+heartbeat, and count toward "N sessions waiting on you" — so an `htop` would read as a session
+needing a person.
+
+A naming convention would have worked and been one refactor away from breaking. A socket cannot
+break: `list-sessions -L agentop` cannot see another socket at all. `shell-isolation.test.ts`
+asserts it over the modules' own source, with comments stripped first — those modules are *required*
+to explain themselves in terms of the registry.
+
+### Two gates, and absent reads OFF
+
+- `CAPS.localShell` — the exposure profile's answer, already false outside `local`.
+- `preferences.shellEnabled` — the user's own switch, which may only ever NARROW.
+
+A raw shell is strictly more powerful than the chat, which `chat-gate.ts` already calls the most
+powerful thing this server does: the chat at least spawns a NAMED assistant CLI. So absent reads as
+OFF, it is a separate switch from `chatEnabled`, it is enforced in `index.ts` before the routes
+rather than only in the UI, and a central refuses outright.
+
+### A ceiling, never a timer
+
+`SHELL_CAP` is 8, stated once in `shell-spec.ts`. A TTL would kill the `bun test` that finished at
+minute 61 and whose output somebody wanted, at an hour nobody was watching, and it needs a timer
+running for the life of the process. A ceiling needs nothing running: one check, on open, and it
+only ever closes something at the instant somebody is asking for a new one.
+
+Records go one way (`reconcileShells`): a pane that is gone is dropped — typing `exit` is the
+ordinary death of a shell — and a pane with **no** record is not adopted, the exact opposite of
+`session-adopt.ts`, because a shell carries no name, task or conversation worth recovering.
+
+### The four refusals, and their order
+
+`no-tmux`, `no-cwd`, `cwd-missing`, `at-cap` — codes, rendered into sentences by the route so the
+deciding module stays language-free. The IMPOSSIBLE ones come before the merely FULL one: at the
+ceiling the caller asks the person to close a shell to make room, and asking somebody to destroy
+work to make room for an open that could never have succeeded is worse than saying no.
+
+A session whose directory is gone is refused by name — it never falls back to `$HOME`. Opening a
+shell somewhere other than where it was asked for is the same class of error as a confident `0` for
+a metric nobody can produce.
+
+### Seeing it and driving it — the two channels
+
+A shell has the same two channels a session has, and the browser reads and writes both with one
+implementation:
+
+| | session | shell |
+|---|---|---|
+| read | `GET /api/fleet/stream?id=` | `GET /api/shell/stream?id=` |
+| write | `WS /api/fleet/input?id=` | `WS /api/shell/input?id=` |
+
+Everything generic is shared — the frame shape (`terminal-stream.ts`), the one-loop-per-watched-pane
+hub with its dedup and its death handling (`terminal-hub.ts`), the serial write queue and its
+per-key acks (`input-channel.ts` / `input-protocol.ts`). What is **not** shared is the one rule each
+channel keeps: **scope**. `terminal-web.ts` and `input-web.ts` resolve an id against
+`managed-sessions.json`; `shell-stream-web.ts` and `shell-input-web.ts` resolve it against
+`shells.json`. Reusing the fleet's modules would have given a shell id the fleet's answer, and it
+would still have worked — so `shell-isolation.test.ts` asserts the absence of those imports over the
+modules' own source, and `shell-terminal.ts` (the pane I/O) takes its tmux runner injected so the
+socket discipline is provable without a tmux server.
+
+`Escape` joined `KEY_ALLOWLIST` for this, on both sides, and the reasoning is the line that set
+draws: Escape **cancels** and controls no process, so it belongs with the editing keys rather than
+with `C-z`. A soft keyboard has none at all, so without it there is no way out of `vim` from a
+phone; and a Claude Code permission dialog's own footer says `Esc to cancel`, which this channel
+could not reach for as long as the set excluded it.
+
+### The band, and the unwatch discipline
+
+The band is the **last** strip of the session panel, below the composer — the VS Code geometry —
+with a drag handle on its top edge that also answers the arrow keys. On mobile it is a full-screen
+sheet with a back control and the key strip `esc tab ctrl ↑ ↓ ← →`; `ctrl` is a **sticky modifier**,
+because a soft keyboard has no chord to hold, and a letter the channel would refuse yields nothing
+rather than composing a key that earns a `bad_key` ack.
+
+**The capture loop runs only while the band is open, this session is selected and the tab is
+visible** (`shellWatching`, pure). It is the only per-second cost the feature has — two tmux reads a
+second per watched pane — and it is the rule `terminal-web.ts` already states for the fleet's own
+channel: a surface that forgets to unwatch leaves a `capture-pane` loop running for a screen nobody
+can see. Handing `useTerminalStream` a `null` id is what drops the subscription; the server's hub
+then stops capturing as its last reader leaves.
+
+There is no arm/disarm here, unlike the fleet terminal's composer: **opening the shell is the
+consent**, and the server refused the whole route unless the capability and the switch both stood.
+
+### Verifying it
+
+```bash
+AGENTISTICS_DIR=/tmp/shell-check PORT=48291 WEB_PORT=48292 bun run packages/server/bin/cli.ts server
+
+curl -s -X POST localhost:48291/api/shell/open -d '{"sessionId":"<id>"}' \
+  -H 'Content-Type: application/json'      # {"error":"shell_disabled"} until the switch is on
+
+curl -s -X PUT localhost:48291/api/preferences -d '{"shellEnabled":true}' \
+  -H 'Content-Type: application/json'
+
+tmux -L agentop-shell ls    # the shell is here
+tmux -L agentop ls          # and never here
+```
+
+Measured on 2026-09-09: the switch refused before it was flipped; the shell opened in the row's own
+cwd; it appeared under `-L agentop-shell` and in neither `-L agentop` nor `/api/fleet`; the ninth
+open was refused in words; a pane killed outside agentop left no ghost record; and `close` named an
+unknown id instead of counting it closed.
+
+Measured again on 2026-09-09 for the two channels: the SSE stream carried the real pane, colours and
+all; a shell id on `/api/fleet/stream` and a fleet id on `/api/shell/stream` were both a clean 404,
+as was a fleet id on the shell's WS upgrade, and a cross-origin upgrade was 403; typing
+`echo …` + `Enter` over `WS /api/shell/input` acked `ok` and the output came back on the read
+channel, while `C-z` — outside the allowlist — acked `bad_key`. In the browser, counting
+EventSources: opening the band opened one stream and closed none, collapsing it closed one,
+re-opening opened a second, and backgrounding the tab closed it. At 390px `scrollWidth` equalled
+`innerWidth`, every control in the sheet measured 44x44, and the inputs computed to 16px.

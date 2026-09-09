@@ -88,6 +88,100 @@ const gitEnv = (): NodeJS.ProcessEnv => {
   return env
 }
 
+/**
+ * The commits of a directory inside a window, with their subjects — the EVIDENCE half of a task
+ * delivery (`task-evidence.ts` reads the PR references out of these messages).
+ *
+ * Separate from `getGitFileStats` / `getProjectGitStats`, which answer with COUNTS: a count cannot
+ * carry a subject, and the subject is where a PR reference lives.
+ *
+ * `--pretty=tformat:` and never `format:`. The latter omits the terminal newline on the LAST record,
+ * so a line-wise reader silently drops the OLDEST commit of every range — the same defect the
+ * release workflow's lint exists to prevent, in a different reader. NUL separates the fields
+ * because a commit subject may contain anything else.
+ */
+export async function getCommitsInWindow(
+  projectPath: string,
+  afterIso: string,
+  beforeIso: string,
+): Promise<Array<{ sha: string; message: string; atMs: number }>> {
+  if (!projectPath || !afterIso || !beforeIso) return []
+  try {
+    // Through the shared `git()` helper — `execFile`, no shell. It arrived on `dev` while this was
+    // being written and is strictly better here: these arguments carry ISO timestamps and a
+    // repository path, and a path with a quote in it was a broken command under the old
+    // string-interpolated `exec`.
+    const stdout = await git(
+      projectPath,
+      [
+        'log', `--after=${afterIso}`, `--before=${beforeIso}`,
+        '--pretty=tformat:%H%x00%cI%x00%s',
+      ],
+      { timeout: 5000, maxBuffer: 4 * 1024 * 1024 },
+    )
+    const out: Array<{ sha: string; message: string; atMs: number }> = []
+    for (const line of stdout.split('\n')) {
+      if (!line.trim()) continue
+      const [sha, iso, ...rest] = line.split('\u0000')
+      const atMs = Date.parse(iso ?? '')
+      if (!sha || !Number.isFinite(atMs)) continue
+      out.push({ sha, message: rest.join('\u0000'), atMs })
+    }
+    return out
+  } catch {
+    // Not a repository, no git, or a directory that is gone. Evidence is best effort: a delivery
+    // is not refused because its commits could not be read.
+    return []
+  }
+}
+
+/**
+ * The directories to ask about a SESSION's commits, best first.
+ *
+ * A session is filed under the directory it was OPENED in (`project_path`, the transcript's first
+ * `cwd`) and may have moved — into a git worktree, which is how this repository mandates concurrent
+ * work is done. A worktree is checked out on its own branch, so the main checkout's HEAD has never
+ * seen the commits made there and `git log` in the project answers with NOTHING. Reported as
+ * `Commits 2 · Lines +0 / −0 · Files 0` on a session card: a count of commits beside a confident
+ * zero of what they changed. Measured on the reporting machine — nothing in the checkout, +688/−66
+ * over 25 files in the worktree, for the very window that produced those two commits.
+ *
+ * It is the same distinction `sessionAtCwd` already makes for live-session detection, and it goes
+ * the same way: the two disagree precisely in the worktree case, and the more specific one is
+ * right. The project stays as a FALLBACK, for a session whose last directory is not a repository
+ * at all (a `cd /tmp`), and the list holds ONE entry whenever the session never moved — asking
+ * twice for the ordinary case is the git work this module's other tests exist to bound.
+ */
+export function sessionGitPaths(projectPath: string, currentCwd?: string): string[] {
+  const out: string[] = []
+  for (const p of [currentCwd, projectPath]) {
+    if (p && !out.includes(p)) out.push(p)
+  }
+  return out
+}
+
+/**
+ * What this SESSION's window changed, asked of the directory it was actually working in.
+ *
+ * One coherent answer from ONE directory — never a per-field max across two, which could take the
+ * lines from a worktree and the file count from the checkout and report a pair that never
+ * co-existed. The first directory that has anything to say wins.
+ */
+export async function getSessionFileStats(
+  projectPath: string,
+  currentCwd: string | undefined,
+  afterIso: string,
+  beforeIso: string,
+): Promise<{ linesAdded: number; linesRemoved: number; filesModified: number }> {
+  const empty = { linesAdded: 0, linesRemoved: 0, filesModified: 0 }
+  const paths = sessionGitPaths(projectPath, currentCwd)
+  for (const path of paths) {
+    const stats = await getGitFileStats(path, afterIso, beforeIso)
+    if (stats.filesModified > 0) return stats
+  }
+  return empty
+}
+
 export async function getGitFileStats(
   projectPath: string,
   afterIso: string,

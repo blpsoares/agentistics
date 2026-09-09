@@ -11,6 +11,7 @@ import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import type { MenuEntry } from '../../lib/rowMenu'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { BetaTag } from '../BetaTag'
 
 export interface SessionRowMenuProps {
   x: number
@@ -19,6 +20,14 @@ export interface SessionRowMenuProps {
   onPick: (action: string) => void
   onClose: () => void
 }
+
+/**
+ * The entries that belong to the delivery board rather than to the session itself.
+ *
+ * `openTask` and `finishTask` were here and are gone with the verbs — a delivery is finished when
+ * its session is STOPPED, which is where the question is asked now. Filing is what remains.
+ */
+const TASK_ENTRIES = new Set<string>(['link-task'])
 
 export function SessionRowMenu({ x, y, entries, onPick, onClose }: SessionRowMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
@@ -76,6 +85,9 @@ export function SessionRowMenu({ x, y, entries, onPick, onClose }: SessionRowMen
           onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent' }}
         >
           {e.label}
+          {/* Same rule as the three-dot menu: where the delivery board reaches into a session
+              surface, it says it is in beta. `link-task` is the entry that opens the picker. */}
+          {TASK_ENTRIES.has(e.action) && <BetaTag what="Tasks" style={{ marginLeft: 'auto' }} />}
         </button>
       ))}
       {/* A row with a refused verb says why here too, not only on hover: a tooltip is a fact only

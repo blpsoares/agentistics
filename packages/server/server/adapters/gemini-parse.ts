@@ -1,6 +1,6 @@
 import { canonicalTool, countGitCommands } from '../harness-activity'
 import type { SessionMeta, TurnEvent } from '@agentistics/core'
-import { activeMinutesOf } from '@agentistics/core'
+import { activeMinutesOf, charCount } from '@agentistics/core'
 
 /** Pure: parse a Gemini CLI chat file (rich JSON format or JSONL streaming format) into a
  *  normalized SessionMeta. Returns null when the content has no usable data.
@@ -65,6 +65,8 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
   const startTime = (parsed.startTime as string | undefined) ?? ''
   const lastUpdated = (parsed.lastUpdated as string | undefined) ?? ''
 
+  // Summed in the SAME branch that increments the count beside it — see `promptChars.ts`.
+  let userChars = 0, userCharMsgs = 0, assistantChars = 0, assistantCharMsgs = 0
   let userMessages = 0
   let assistantMessages = 0
   let inputTokens = 0
@@ -134,6 +136,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
 
         hasGenuineContent = true
         assistantMessages++
+        { const n = charCount(extractMessageText(msg)); if (n > 0) { assistantChars += n; assistantCharMsgs++ } }
 
         if (timestamp) {
           const h = new Date(timestamp).getHours()
@@ -144,6 +147,7 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
         if (isGenuineUserMessage(text)) {
           hasGenuineContent = true
           userMessages++
+          { const n = charCount(text); if (n > 0) { userChars += n; userCharMsgs++ } }
           if (turnEvent) turnEvent.userPrompt = true
 
           if (!firstPrompt && text) {
@@ -177,7 +181,11 @@ function parseRichJson(content: string, fallbackId: string, projectPath: string)
     duration_minutes: durationMinutes,
     active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
+    user_chars: userChars,
+    user_char_messages: userCharMsgs,
     assistant_message_count: assistantMessages,
+    assistant_chars: assistantChars,
+    assistant_char_messages: assistantCharMsgs,
     tool_counts: toolCounts,
     tool_output_tokens: {},
     agent_file_reads: {},
@@ -223,6 +231,23 @@ function parseJsonl(content: string, fallbackId: string, projectPath: string): S
   const seenIds = new Set<string>()
   const allMessages: Array<{ type: string; timestamp?: string; text?: string }> = []
 
+  // One message, from either source, counted once. `seenIds` spans BOTH: a resumed session's
+  // opening snapshot repeats turns that then arrive again as their own lines, and counting those
+  // twice would inflate every message count in the product.
+  const take = (msg: any): void => {
+    if (!msg || typeof msg !== 'object') return
+    const id = msg.id as string | undefined
+    if (id !== undefined) {
+      if (seenIds.has(id)) return
+      seenIds.add(id)
+    }
+    allMessages.push({
+      type: msg.type as string,
+      timestamp: msg.timestamp as string | undefined,
+      text: extractMessageText(msg),
+    })
+  }
+
   for (const raw of lines) {
     let parsed: any
     try { parsed = JSON.parse(raw) } catch { continue }
@@ -241,20 +266,26 @@ function parseJsonl(content: string, fallbackId: string, projectPath: string): S
     // MongoDB-style state op: {"$set": {"messages": [...]}}
     const messages = parsed['$set']?.messages
     if (Array.isArray(messages)) {
-      for (const msg of messages) {
-        const id = msg.id as string | undefined
-        const text = extractMessageText(msg)
-        if (id) {
-          if (!seenIds.has(id)) {
-            seenIds.add(id)
-            allMessages.push({ type: msg.type as string, timestamp: msg.timestamp as string | undefined, text })
-          }
-        } else {
-          // No id: always include (rare case)
-          allMessages.push({ type: msg.type as string, timestamp: msg.timestamp as string | undefined, text })
-        }
-      }
+      for (const msg of messages) take(msg)
+      continue
     }
+
+    // A `$set` that carries anything else is a PATCH of the session's own fields — the journal
+    // writes `{"$set":{"lastUpdated":…}}` after every turn — and a patch is not a message.
+    if (parsed['$set'] !== undefined) continue
+
+    // AN APPENDED MESSAGE RECORD, which is how the journal writes a turn today.
+    //
+    // The snapshot above is written ONCE, at the top of the file, and is EMPTY for a fresh session;
+    // every turn afterwards arrives as its own top-level line. Reading only the snapshot therefore
+    // collected nothing at all, `hasGenuineContent` stayed false, and the session was dropped as a
+    // bootstrap stub — measured 2026-09-08 on this machine, 27 of 34 chat files, and an adapter
+    // whose newest session was from 2026-04-10.
+    //
+    // `type` is what makes it a message rather than some future record shape: an unrecognised line
+    // is skipped, exactly as one that will not parse is, because inventing a turn is the expensive
+    // direction here — this count is what decides whether the session exists at all.
+    if (typeof parsed.type === 'string') take(parsed)
   }
 
   return buildJsonlSessionMeta({
@@ -281,6 +312,8 @@ interface JsonlParsedData {
 function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
   const { projectPath, startTime, endTime, messages } = data
 
+  // Summed in the SAME branch that increments the count beside it — see `promptChars.ts`.
+  let userChars = 0, userCharMsgs = 0, assistantChars = 0, assistantCharMsgs = 0
   let userMessages = 0
   let assistantMessages = 0
   const messageHours: number[] = []
@@ -288,6 +321,11 @@ function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
   let hasGenuineContent = false
   // Same reconstruction as parseRichJson — see computeActiveTime() / docs/harness-contract.md.
   const turnEvents: TurnEvent[] = []
+  // The session's LABEL. `sessionLabel()` falls back to `first_prompt` when a harness writes no
+  // title, and gemini writes none — so leaving this empty, as this path did, gives every gemini
+  // session a blank name in every list it appears in. Taken from the FIRST message that already
+  // passed `isGenuineUserMessage`, so an injected context block never becomes the title.
+  let firstPrompt = ''
 
   for (const msg of messages) {
     const isUser = msg.type === 'user'
@@ -304,10 +342,13 @@ function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
     if (isAssistant) {
       hasGenuineContent = true
       assistantMessages++
+      { const n = charCount(msg.text ?? ''); if (n > 0) { assistantChars += n; assistantCharMsgs++ } }
       counted = true
     } else if (isUser && isGenuineUserMessage(msg.text ?? '')) {
       hasGenuineContent = true
+      if (!firstPrompt) firstPrompt = (msg.text ?? '').trim()
       userMessages++
+      { const n = charCount(msg.text ?? ''); if (n > 0) { userChars += n; userCharMsgs++ } }
       if (turnEvent) turnEvent.userPrompt = true
       if (msg.timestamp) userMessageTimestamps.push(msg.timestamp)
       counted = true
@@ -333,7 +374,11 @@ function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
     duration_minutes: durationMinutes,
     active_minutes: activeMinutesOf(turnEvents),
     user_message_count: userMessages,
+    user_chars: userChars,
+    user_char_messages: userCharMsgs,
     assistant_message_count: assistantMessages,
+    assistant_chars: assistantChars,
+    assistant_char_messages: assistantCharMsgs,
     tool_counts: {},
     tool_output_tokens: {},
     agent_file_reads: {},
@@ -344,7 +389,7 @@ function buildJsonlSessionMeta(data: JsonlParsedData): SessionMeta | null {
     output_tokens: 0,
     cache_read_input_tokens: 0,
     cache_creation_input_tokens: 0,
-    first_prompt: '',
+    first_prompt: firstPrompt,
     user_interruptions: 0,
     user_response_times: [],
     tool_errors: 0,

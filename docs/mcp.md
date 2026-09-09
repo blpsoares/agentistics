@@ -384,6 +384,15 @@ Key design decisions:
 - **Auto-position algorithm** — `agentistics_build_layout` uses first-fit shelf packing on a 12-column grid, then `fillGaps` extends items that have empty space to their right (no right neighbour in the same row range)
 - **PDF links** — `agentistics_export_pdf` returns a `[label](pdf:URL)` markdown link; the Nay chat component detects the `pdf:` protocol and renders it as a download button
 
+## MCP Server Verification and Dashboard Integration
+
+The agentistics dashboard provides a dedicated MCP Management interface (in Settings / Live feed):
+- **Server Health Verification (`CHECKED`)**: Configured MCP servers are actively verified against their stdio or HTTP endpoints. A configured server is assigned a distinct `CHECKED` state when operational, distinguishing working servers from unverified configurations.
+- **Accepted Paste Formats**: The MCP paste drawer supports three distinct input shapes:
+  1. Full JSON config block (`{"mcpServers": ...}`).
+  2. Single server object (`{"command": "...", "args": [...]}`).
+  3. CLI command invocation string (`claude mcp add ...`).
+
 ## See also
 
 - [Nay chat](./nay.md) — how the built-in AI assistant uses these tools

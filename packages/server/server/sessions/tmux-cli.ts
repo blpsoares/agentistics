@@ -19,6 +19,23 @@ import type { BackendSession, PaneInfo } from './types'
 export const TMUX_SOCKET = 'agentop'
 export const SESSION_PREFIX = 'agentop-'
 
+/**
+ * The socket the per-session UTILITY SHELL runs on, and the reason it is not `TMUX_SOCKET`.
+ *
+ * A shell opened for a session is not a fleet row and must never become one. On the fleet socket it
+ * would be, and silently: `idFromTmuxName` strips `agentop-`, so `parseTmuxList` KEEPS the session,
+ * and `reconcileSessions` then finds a running session the registry has no record of and calls it
+ * `unregistered` — the row `session-adopt.ts` describes as "visible and inert", filed under
+ * `GONE_PROJECT_KEY`, that no verb in the cockpit can act on. It would also join the ~200 ms pane
+ * walk `host.sessions()` runs every 5 s in four processes.
+ *
+ * A naming convention would have worked and been one refactor from breaking. A socket cannot break:
+ * `list-sessions -L agentop` cannot see another socket at all. It is the same argument this module
+ * already makes at the top for keeping OUR sessions out of the USER's tmux, applied one level down
+ * to keep our shells out of our own fleet.
+ */
+export const SHELL_SOCKET = 'agentop-shell'
+
 export function tmuxName(id: string): string {
   return SESSION_PREFIX + id
 }
@@ -31,7 +48,9 @@ export function idFromTmuxName(name: string): string | null {
 export const LIST_FORMAT =
   '#{session_name}\t#{session_created}\t#{session_attached}\t#{pane_dead}\t#{session_activity}'
 
-const sock = (rest: string[]): string[] => ['-L', TMUX_SOCKET, ...rest]
+// The DEFAULT lives here and not on each builder's parameter, so a caller threading an optional
+// socket through can pass `undefined` and still get the fleet socket rather than `['-L', undefined]`.
+const sock = (rest: string[], socket: string = TMUX_SOCKET): string[] => ['-L', socket, ...rest]
 
 /**
  * The colour profile agentop applies to its tmux, resolved from THIS host's terminfo and the
@@ -90,13 +109,45 @@ export function resolveTruecolorTerm(env: { TERM?: string; COLORTERM?: string })
  * it inherits it. The client-side half — tmux actually forwarding RGB on attach — is the
  * `terminal-features` capability in `serverOptionsArgs`.
  */
-export function newSessionArgs(o: { id: string; cwd: string; argv: string[]; truecolor?: boolean }): string[] {
+/**
+ * THE SIZE A DETACHED PANE IS BORN AT — and the reason it is stated instead of defaulted.
+ *
+ * `tmux new-session -d` with no `-x`/`-y` creates an 80x24 pane (measured on 3.2a). Twenty-four
+ * rows is smaller than the dialogs these harnesses draw: a claude `AskUserQuestion` with four
+ * described options is comfortably past thirty. The top of such a dialog — its question, and
+ * option `1.` — is redrawn off the pane and never reaches `capture-pane`.
+ *
+ * Everything downstream then fails in a way that looks like a parser bug and is not one:
+ * `readDialog` cannot find its anchor, `approvalTail` shows a window that begins mid-sentence, and
+ * the card ends up unable to say what the session is asking. Reported with a screenshot of exactly
+ * that, from a session running in an 80x24 pane this module had created.
+ *
+ * It is invisible from the terminal, which is why it lasted: attaching resizes the pane to the
+ * client, so a person looking at the same dialog on attach sees all of it. Only the surfaces that
+ * never attach — the web dashboard, the VS Code panel, the cockpit — read the 24-row pane.
+ *
+ * Width is generous for the same reason rather than for its own: every column a description does
+ * not wrap into is a row the dialog does not need.
+ *
+ * No compatibility floor is added: `-x`/`-y` on `new-session` is tmux 2.9, older than the `-e` this
+ * same function already passes (3.2).
+ */
+export const PANE_COLS = 120
+export const PANE_ROWS = 50
+
+export function newSessionArgs(
+  o: { id: string; cwd: string; argv: string[]; truecolor?: boolean; socket?: string },
+): string[] {
   const env = o.truecolor ? ['-e', 'COLORTERM=truecolor'] : []
-  return sock(['new-session', '-d', '-s', tmuxName(o.id), '-c', o.cwd, ...env, '--', ...o.argv])
+  return sock([
+    'new-session', '-d', '-s', tmuxName(o.id),
+    '-x', String(PANE_COLS), '-y', String(PANE_ROWS),
+    '-c', o.cwd, ...env, '--', ...o.argv,
+  ], o.socket)
 }
 
-export function killSessionArgs(id: string): string[] {
-  return sock(['kill-session', '-t', tmuxName(id)])
+export function killSessionArgs(id: string, socket?: string): string[] {
+  return sock(['kill-session', '-t', tmuxName(id)], socket)
 }
 
 export function capturePaneArgs(id: string, lines: number): string[] {
@@ -113,8 +164,8 @@ export function capturePaneArgs(id: string, lines: number): string[] {
  * reads have opposite requirements, so they are two functions — the same reasoning that keeps
  * `sendKeysLiteralArgs` and `sendKeysNamedArgs` apart.
  */
-export function capturePaneAnsiArgs(id: string, lines: number): string[] {
-  return sock(['capture-pane', '-p', '-e', '-t', tmuxName(id), '-S', `-${lines}`])
+export function capturePaneAnsiArgs(id: string, lines: number, socket?: string): string[] {
+  return sock(['capture-pane', '-p', '-e', '-t', tmuxName(id), '-S', `-${lines}`], socket)
 }
 
 /**
@@ -128,8 +179,8 @@ export function capturePaneAnsiArgs(id: string, lines: number): string[] {
 export const PANE_INFO_FORMAT =
   '#{cursor_x}\t#{cursor_y}\t#{pane_width}\t#{pane_height}\t#{pane_dead}\t#{history_size}'
 
-export function paneInfoArgs(id: string): string[] {
-  return sock(['display-message', '-p', '-t', tmuxName(id), '-F', PANE_INFO_FORMAT])
+export function paneInfoArgs(id: string, socket?: string): string[] {
+  return sock(['display-message', '-p', '-t', tmuxName(id), '-F', PANE_INFO_FORMAT], socket)
 }
 
 /**
@@ -155,8 +206,8 @@ export function parsePaneInfo(stdout: string): PaneInfo | null {
 }
 
 /** `-l` sends the text literally, so a prompt containing `;` or `C-c` is typed, not interpreted. */
-export function sendKeysLiteralArgs(id: string, text: string): string[] {
-  return sock(['send-keys', '-t', tmuxName(id), '-l', text])
+export function sendKeysLiteralArgs(id: string, text: string, socket?: string): string[] {
+  return sock(['send-keys', '-t', tmuxName(id), '-l', text], socket)
 }
 
 /**
@@ -167,16 +218,16 @@ export function sendKeysLiteralArgs(id: string, text: string): string[] {
  * one because getting the two the wrong way round fails SILENTLY — `send-keys -l Enter` types the
  * five characters `E n t e r` into the assistant's prompt and reports success.
  */
-export function sendKeysNamedArgs(id: string, key: string): string[] {
-  return sock(['send-keys', '-t', tmuxName(id), key])
+export function sendKeysNamedArgs(id: string, key: string, socket?: string): string[] {
+  return sock(['send-keys', '-t', tmuxName(id), key], socket)
 }
 
-export function sendKeysEnterArgs(id: string): string[] {
-  return sendKeysNamedArgs(id, 'Enter')
+export function sendKeysEnterArgs(id: string, socket?: string): string[] {
+  return sendKeysNamedArgs(id, 'Enter', socket)
 }
 
-export function listSessionsArgs(): string[] {
-  return sock(['list-sessions', '-F', LIST_FORMAT])
+export function listSessionsArgs(socket?: string): string[] {
+  return sock(['list-sessions', '-F', LIST_FORMAT], socket)
 }
 
 /**
@@ -227,6 +278,11 @@ export function serverOptionsArgs(profile: TerminalProfile): string[][] {
   if (profile.truecolorTerm) {
     opts.push(sock(['set-option', '-ga', 'terminal-features', `,${profile.truecolorTerm}:RGB`]))
   }
+  // `-x`/`-y` sets the size at BIRTH; this is what it goes back to. With `window-size` at its
+  // default (`latest`) a pane follows the newest client, so the first attach resizes it to that
+  // terminal and the detach drops it to `default-size` — 80x24 again, and the dialog is unreadable
+  // from every surface once more. Set on OUR socket only, so no session of the user's is touched.
+  opts.push(sock(['set-option', '-g', 'default-size', `${PANE_COLS}x${PANE_ROWS}`]))
   opts.push(
     // Keeps a finished session listable, with its last frame still capturable — the `exited` state.
     sock(['set-option', '-g', 'remain-on-exit', 'on']),

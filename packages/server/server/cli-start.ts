@@ -65,6 +65,7 @@ import type {
   SpawnSessionRequest,
   SpawnSessionResult,
   ProjectOption,
+  ProjectSearchResult,
   ResumeSessionRequest,
   StartOption,
   BootOption,
@@ -85,9 +86,10 @@ import {
 import { readGithubSection } from './backup-routes'
 import { omittedSecrets } from './backup/backup-plan'
 import { formatBytes, layerTotal, retainedTotal } from './backup/backup-size'
-import { lastBackup, lastPerHarness, loadBackupHistory } from './backup/backup-store'
+import { lastBackup, lastPerHarness, lastBackupRun, loadBackupHistory } from './backup/backup-store'
 import { scheduleStatus } from './backup/schedule'
 import { loadConsolidated } from './consolidate'
+import { cachedBaseline } from './sessions/fleet-baseline'
 import { centralRuntimeChoices, centralStartPlan, runCentral, type CentralStartPlan } from './cli-central'
 import { flagFor, type CentralRuntimeId, type CentralRuntimeOption } from './central-runtime'
 import { onOutputLine, publishLines, streamCommand } from './cli-stream'
@@ -126,15 +128,23 @@ import { markFleetPhase, timeFleetPhase } from './sessions/fleet-profile'
 // rows from the same decision rather than mapping the fleet a second time.
 import { toControlSession } from './sessions/control-session'
 import { planTaskReopen, taskReopenSucceeded, type TaskReopenPlan } from './sessions/task-reopen'
-import { approvalFor, choiceKey, isFreeTextOption} from './sessions/approval-spec'
+import { approvalFor, choiceKey, fieldIsOpen, isFreeTextOption, readsMarkerSelect } from './sessions/approval-spec'
 // Carrying a rename through to the harness. Shared with `agentop session rename` — one gesture, one
 // implementation, for the reason `task-reopen.ts` exists.
 import { renameInHarness, renameMessage } from './sessions/rename'
-import { needsChoice, parseDialogOptions } from './sessions/dialog-choice'
+import { needsChoice, parseDialogOptions, readDialog } from './sessions/dialog-choice'
+import { answerFollowUp } from './sessions/answer-followup'
 import { liveTranscriptDeps, runTranscriptSearch } from './sessions/transcript-run'
 import { rulesFor } from './sessions/attention-rules'
 import { planCrashGroup, planFellOffer } from './sessions/crash-group'
+import { selectFell } from './sessions/fell-selection'
+import {
+  broadcastReport, planBroadcast, type BroadcastOutcome,
+} from './sessions/broadcast-plan'
+import { sessionRunning } from '@agentistics/tui/control/session-dimensions'
+import { controlStrings } from '@agentistics/tui/control/i18n'
 import { loadHarnessSessions } from './sessions/harness-sessions'
+import { readProcessConversation } from './sessions/process-conversation'
 import { idleServers, isServerCommand } from './idle-servers'
 import { planTaskDelete, taskDeleteIsNoop } from './sessions/task-delete'
 import { memoryBudget } from './sessions/memory-budget'
@@ -163,6 +173,14 @@ export type StartResult = number | 'foreground'
  * an open menu.
  */
 const SEND_CAPTURE_LINES = 60
+/**
+ * How long to let a pane react to a typed digit before reading it back.
+ *
+ * The same figure `backend-tmux.ts` uses between its own keystrokes (`SUBMIT_SETTLE_MS`), doubled:
+ * this read has to be right rather than quick, and reading a frame mid-repaint is how a dialog that
+ * did move gets reported as stuck.
+ */
+const ANSWER_SETTLE_MS = 240
 
 
 // ANSI, for the output this module still writes to the REAL terminal: the suspended commands,
@@ -1443,7 +1461,16 @@ async function ensureSessionsPoller(): Promise<SessionsPoller> {
     loadHarnessSessions,
     // Written once per session, not once per poll — the poller only calls this when the harness's
     // own record disagrees with the registry.
-    recordConversation: (id, conversationId) => patchSession(id, { conversationId }),
+    // The link kind travels WITH the id. Dropping it here would persist a first-sighting claim as
+    // though the CLI had been handed that conversation, which is the one thing the field exists to
+    // keep apart — see `ManagedSession.conversationLink`.
+    recordConversation: (id, conversationId, conversationLink) =>
+      patchSession(id, { conversationId, conversationLink }),
+    // The per-process log link — antigravity's only exact answer, and the reason its chat view was
+    // permanently empty while its terminal worked. Wired HERE and deliberately not on
+    // `cli-session.ts`'s poller: that one is a one-shot command and writes nothing, exactly as it
+    // takes no heartbeat.
+    readProcessConversation,
     // The `/rename` name, persisted so the title survives the process — same once-per-change
     // discipline. See `ManagedSession.harnessName` and `pickTitle`.
     recordHarnessName: (id, name, since) =>
@@ -1504,6 +1531,9 @@ async function spawnManaged(req: {
   effort?: string
   label?: string
   task?: string
+  /** See `ManagedSession.taskId`: recorded at spawn, the one moment it is a fact. */
+  taskId?: string
+  attemptId?: string
 }, s: CliStrings): Promise<SpawnSessionResult> {
   const backend = await resolveBackend()
   const blocked = await backend.unavailable()
@@ -1523,6 +1553,10 @@ async function spawnManaged(req: {
   if (!planned.ok) return { ok: false, message: explainSpawnError(planned.error, s) }
 
   const id = newSessionId()
+  // Stamped BEFORE the launch, for the reason `cli-session.ts` records at its own two spawn sites:
+  // `planFirstSightingClaims` asks whether a conversation began AFTER we spawned, and a timestamp
+  // taken once the call has returned can already be later than the conversation the child opened.
+  const spawnedAt = new Date().toISOString()
   try {
     await backend.spawn({
       id,
@@ -1542,7 +1576,7 @@ async function spawnManaged(req: {
     id,
     harness: req.harness,
     cwd: req.cwd,
-    createdAt: new Date().toISOString(),
+    createdAt: spawnedAt,
     // Stamped at birth, not left to the first heartbeat: a session started and lost inside the same
     // minute would otherwise carry no evidence it was ever alive, and would sit out the very crash
     // it was part of. See `crash-group.ts`.
@@ -1551,11 +1585,16 @@ async function spawnManaged(req: {
     ...(req.effort ? { effort: req.effort } : {}),
     ...(req.label ? { label: req.label } : {}),
     ...(req.task ? { task: req.task } : {}),
+    // Stamped at SPAWN — the one moment the association is a fact. See `ManagedSession.taskId`.
+    ...(req.taskId ? { taskId: req.taskId } : {}),
+    ...(req.attemptId ? { attemptId: req.attemptId } : {}),
     // Recorded at the one moment it is certain — the harness was just handed this id, or we asked
     // it to reopen this conversation. Without it a fresh session's link exists only while the
     // harness's own record does (`harness-sessions.ts`, claude alone), so a session started with
     // the cockpit closed had nothing to fall back on but the harness-and-directory guess.
-    ...(planned.plan.conversationId ? { conversationId: planned.plan.conversationId } : {}),
+    ...(planned.plan.conversationId
+      ? { conversationId: planned.plan.conversationId, conversationLink: 'assigned' as const }
+      : {}),
     // Which repository this directory is in, while the directory is provably there. See
     // `ManagedSession.repo`: a worktree removed later leaves a path that names nothing, and the
     // grouping fell through to its last path segment as though it were a project.
@@ -1774,6 +1813,37 @@ async function restorableSessions(fell: readonly ManagedSession[]): Promise<Rest
  * of that would be a button that approves the highlighted row. Only `suspend`-requiring actions
  * (`central.sh init`) need a real terminal, and the web host is never asked for one.
  */
+/**
+ * Wait until a just-reopened session is actually LISTENING — or give up and say so.
+ *
+ * `resumeSession` returns when the session has been STARTED, which is not the same thing: the
+ * harness still has to come up, and a prompt typed into a pane that is mid-boot goes nowhere while
+ * looking exactly like a delivery. The broadcast needs the stronger fact, so it polls the fleet for
+ * the row and waits for `sessionRunning`.
+ *
+ * It returns the id it FOUND, because a reopen mints a new row for the same conversation: writing
+ * to the id that was ticked would write to the record that was just retired.
+ *
+ * Bounded, and a timeout is an honest failure for that one session rather than a silent skip — the
+ * whole point of reopening was that the person asked for the message to reach it.
+ */
+const REOPEN_WAIT_MS = 20_000
+const REOPEN_POLL_MS = 700
+
+async function waitRunning(
+  id: string,
+  read: () => Promise<ControlSessions | undefined> | undefined,
+): Promise<string | null> {
+  const until = Date.now() + REOPEN_WAIT_MS
+  for (;;) {
+    const fleet = await read()
+    const row = fleet?.sessions.find(r => r.id === id)
+    if (row && sessionRunning(row)) return row.id
+    if (Date.now() >= until) return null
+    await new Promise(r => setTimeout(r, REOPEN_POLL_MS))
+  }
+}
+
 export function createControlHost(initialLang: CliLang, altScreen: Suspendable): StartHost {
   let lang = initialLang
   const S = () => cliStrings(lang)
@@ -2558,11 +2628,13 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
         }
       })
 
+      // What you can RESTORE from. Unchanged — see the same note in `backup-routes.ts`.
       const last = lastBackup(entries)
+      // The SCHEDULE asks when one last RAN, which a pruned file still answers — see `lastBackupRun`.
       const st = scheduleStatus({
         schedule: prefs.schedule, customHours: prefs.customHours,
         atHour: prefs.atHour, tzOffsetMinutes: new Date().getTimezoneOffset(),
-        lastAt: last?.at ?? null, nowMs: Date.now(),
+        lastAt: lastBackupRun(entries)?.at ?? null, nowMs: Date.now(),
         serverRunning: existsSync(join(AGENTISTICS_DATA_DIR, 'events-producer.json')),
       })
 
@@ -2750,6 +2822,16 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       // Read on every snapshot rather than cached: the toggle and the verb both write it, and a
       // stale copy would leave a task the user just finished still heading a live section.
       const finishedTasks = (await timeFleetPhase('sessions: readPreferences', readPreferences)).finishedTasks ?? []
+      // The 30-day behaviour baseline, computed by the same pure `cachedBaseline` over the same
+      // on-disk consolidate store that `/api/fleet` reads for the web sessions view — so the
+      // cockpit and the dashboard compute the same "typical" from the same facts. They are
+      // separate OS processes, each holding its own module-level cache (`fleet-baseline.ts`), not
+      // a shared one: agreement holds up to each process's own 5-minute TTL, not by construction.
+      // A failed store read costs freshness, never the fleet: the fleet is what this method is for.
+      const baseline = await timeFleetPhase(
+        'sessions: cachedBaseline',
+        () => cachedBaseline(async () => [...(await loadConsolidated()).values()], Date.now()),
+      ).catch(() => undefined)
       // Resolved per session and MEMOIZED by directory: a directory does not change repository, and
       // this poll runs every five seconds over the whole fleet — asking git three times per session
       // per tick would be a hundred processes a minute to learn the same thing. What the registry
@@ -2785,6 +2867,7 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
         ...(finishedTasks.length > 0 ? { finishedTasks } : {}),
         ...(detachHint ? { detachHint } : {}),
         ...(snap.unavailable ? { unavailable: snap.unavailable } : {}),
+        ...(baseline ? { baseline } : {}),
       }
     },
 
@@ -2931,6 +3014,19 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
         : { ok: false, message: s.sessRestoreFailed(skipped) }
     },
 
+    /**
+     * Finish a piece of work — asked when its session is STOPPED, which is the one moment somebody
+     * knows the answer. It used to be a standing verb on every filed row; see `session-verbs.ts`.
+     *
+     * It writes BOTH places a delivery can be finished. `finishedTasks` is the cockpit's own switch
+     * (it hides the task's sessions), and the BOARD is where a delivery's status actually lives —
+     * `markTask` on the way out. Writing only the first is how the cockpit came to call work
+     * finished that the board still drew in `To do`, and the board's own `markTask` has always
+     * mirrored the other way. One gesture, one resulting state, whichever surface asked.
+     *
+     * The board write is best-effort and never fails the action: a machine with no board store is
+     * still entitled to hide a finished task in its own cockpit.
+     */
     async finishTask(task: string, done: boolean): Promise<ActionResult> {
       const s = S()
       if (!task) return { ok: false, message: s.sessNoTask }
@@ -2939,6 +3035,10 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
         ? (current.includes(task) ? current : [...current, task])
         : current.filter(t => t !== task)
       await writePreferences({ finishedTasks: next })
+      if (done) {
+        const { markTask } = await import('./sessions/task-web')
+        await markTask(task, 'done', 'cockpit').catch(() => false)
+      }
       return { ok: true, message: done ? s.sessTaskFinished(task) : s.sessTaskReopened(task) }
     },
 
@@ -3131,25 +3231,14 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       return spawned
     },
 
-    /**
-     * Reopen every session of one task, detached.
+    /*
+     * `openTask` USED TO LIVE HERE, and it is deliberately gone.
      *
-     * The whole point of naming a task is getting its work back at once. Sessions whose conversation
-     * cannot be resolved are SKIPPED AND COUNTED — a partial reopen reported as a success would
-     * leave someone believing they had their whole task back when they did not.
+     * Reopening every session of a piece of work is a real thing to want and a poor thing to offer
+     * as a menu row two keys from `kill`: it spawns N live assistants, it was on every filed row,
+     * and it was pressed by accident. It survives as `agentop session open` — the same
+     * `task-reopen.ts` arithmetic, reached by typing the words — where it is a deliberate act.
      */
-    async openTask(task: string): Promise<ActionResult> {
-      const s = S()
-      const wanted = (await readRegistry()).filter(m => m.task === task)
-      if (wanted.length === 0) return { ok: false, message: s.sessTaskEmpty(task) }
-
-      // The DECISION is the pure `planTaskReopen`, and the PERFORMANCE is `reopenEntries` — shared
-      // with `reopenFell` below, which is the same gesture over a set chosen a different way.
-      const { plan, opened, skipped } = await reopenEntries(wanted, s)
-      return taskReopenSucceeded(plan, opened)
-        ? { ok: true, message: s.sessTaskOpened(task, opened, skipped, plan.heldElsewhere.length) }
-        : { ok: false, message: s.sessTaskNoneOpened(task, skipped) }
-    },
 
     /**
      * Reopen everything the machine took at once.
@@ -3159,7 +3248,7 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
      * registry read and one `tmux list-sessions`, and it is the difference between reopening what
      * fell and reopening what fell as of a moment ago.
      */
-    async reopenFell(): Promise<ActionResult> {
+    async reopenFell(ids?: readonly string[]): Promise<ActionResult> {
       const s = S()
       const backend = await resolveBackend()
       const blocked = await backend.unavailable()
@@ -3169,10 +3258,120 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       const group = planCrashGroup({ entries: await readRegistry(), backendIds })
       if (!group || group.entries.length === 0) return { ok: false, message: s.sessNoFell }
 
-      const { plan, opened, skipped } = await reopenEntries(group.entries, s)
+      /**
+       * `undefined` is the whole group; `[]` is nothing. The difference is the safety — see
+       * `selectFell`. An id the group does not hold is REPORTED rather than dropped: it means the
+       * caller is acting on a list that has moved, and a count that quietly shrinks is what makes
+       * somebody press again.
+       */
+      const { chosen, unknown } = selectFell(group.entries, ids ?? null)
+      if (chosen.length === 0) {
+        return { ok: false, message: unknown.length > 0 ? s.sessFellGone(unknown.length) : s.sessFellNonePicked }
+      }
+
+      const { plan, opened, skipped } = await reopenEntries(chosen, s)
       return taskReopenSucceeded(plan, opened)
-        ? { ok: true, message: s.sessFellOpened(opened, skipped, plan.heldElsewhere.length) }
-        : { ok: false, message: s.sessFellNoneOpened(skipped) }
+        ? { ok: true, message: s.sessFellOpened(opened, skipped + unknown.length, plan.heldElsewhere.length) }
+        : { ok: false, message: s.sessFellNoneOpened(skipped + unknown.length) }
+    },
+
+    /**
+     * ONE PROMPT, SEVERAL SESSIONS — and every one of them written the ordinary way.
+     *
+     * `promptSession` is called per session precisely because it RE-READS the screen at the moment
+     * it types. A session that was running when the browser drew its list may be sitting on a
+     * permission prompt now, where a typed sentence goes into the dialog's filter and the submit
+     * takes whatever is highlighted. Sending N lines from one poll-old belief would be the one
+     * gesture in this product able to answer a dozen dialogs at once.
+     *
+     * SEQUENTIAL, not parallel. Each send types into a tmux pane and waits for the pane to settle;
+     * `pane-writer.ts` serialises writes per pane, but the sessions here are different panes and
+     * would genuinely run at once — a dozen assistants all starting to work in the same instant is
+     * a load spike on the machine the user is sitting at. One at a time is also what makes the
+     * report readable in the order the list was shown.
+     */
+    async broadcastPrompt(ids: readonly string[], text: string): Promise<ActionResult> {
+      const s = S()
+      const backend = await resolveBackend()
+      const blocked = await backend.unavailable()
+      if (blocked) return { ok: false, message: blocked }
+
+      const fleet = await this.sessions?.()
+      const rows = fleet?.sessions ?? []
+      const plan = planBroadcast({
+        text,
+        ids,
+        rows: rows.map(r => ({
+          id: r.id,
+          title: r.title,
+          running: sessionRunning(r),
+          // The row's own knowledge of an open dialog. The HOST still re-reads at write time; this
+          // only keeps a doomed send out of the list before anything is typed.
+          blocked: (r.approvalLines?.length ?? 0) > 0,
+          // Read off the row's own reopen target, never inferred: it is absent exactly when the
+          // harness cannot reopen by id, and promising to write to a row nothing can resurrect is
+          // the failure this flag exists to avoid.
+          reopenable: Boolean(r.resume),
+        })),
+      })
+      if (!plan.ok) return { ok: false, message: s.sessBroadcastRefused(plan.reason, plan.skipped.length) }
+
+      const outcomes: BroadcastOutcome[] = []
+      let reopened = 0
+      for (const t of plan.targets) {
+        /*
+         * A CLOSED SESSION IS BROUGHT BACK BEFORE ANYTHING IS TYPED, and the reopen is CONFIRMED.
+         *
+         * `resumeSession` returns once it has started the session, not once the assistant is
+         * listening, so writing immediately would type into a pane that is still coming up — and
+         * reporting that as a send is worse than the skip this replaced. `waitRunning` polls the
+         * fleet until the row is actually running, and a reopen that never becomes real is reported
+         * as a failure for THAT session rather than silently prompting nothing.
+         */
+        if (t.needsReopen) {
+          // The reopen target is read from the FLEET, never composed here: it names a conversation
+          // and a directory, and the `resume` route makes the same read for the same reason.
+          const row = rows.find(r => r.id === t.id)
+          if (!row?.resume) {
+            outcomes.push({ id: t.id, title: t.title, ok: false, message: controlStrings(lang).sessionsReopenNone })
+            continue
+          }
+          const back = await this.resumeSession!({
+            sessionId: row.resume.sessionId,
+            harness: row.harness,
+            cwd: row.cwd,
+            label: row.named ? row.title : row.resume.title,
+            // DETACHED, always. A broadcast is a message to several sessions at once; taking the
+            // terminal for one of them is not something this gesture can mean.
+            attach: false,
+            ...(row.actionable ? { replaces: row.id } : {}),
+          })
+          if (!back.ok) {
+            outcomes.push({ id: t.id, title: t.title, ok: false, message: back.message })
+            continue
+          }
+          const live = await waitRunning(back.id ?? t.id, () => this.sessions?.())
+          if (!live) {
+            outcomes.push({ id: t.id, title: t.title, ok: false, message: s.sessBroadcastReopenSlow })
+            continue
+          }
+          reopened++
+          // The reopen mints a NEW row for the same conversation, so the prompt goes to that one.
+          const out = await this.promptSession!(live, text)
+          outcomes.push({ id: live, title: t.title, ok: out.ok, message: out.message })
+          continue
+        }
+        const out = await this.promptSession!(t.id, text)
+        outcomes.push({ id: t.id, title: t.title, ok: out.ok, message: out.message })
+      }
+      const report = broadcastReport(outcomes, plan.skipped)
+      return {
+        // ANY delivery is a success for the gesture; the sentence carries the rest. A broadcast
+        // where four of five landed is not a failure, and reporting it as one would send somebody
+        // to re-send to the four that already have it.
+        ok: report.sent > 0,
+        message: s.sessBroadcastDone(report.sent, report.failed, report.skipped.length, reopened),
+      }
     },
 
     /**
@@ -3239,7 +3438,51 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       }
 
       // What is on the screen RIGHT NOW, not what was drawn up to a poll ago.
-      const options = parseDialogOptions(frame)
+      const read = readDialog(frame, { marker: readsMarkerSelect(managed.harness) })
+      const options = read.options
+
+      /*
+       * A NUMBERLESS dialog is answered by MOVING onto the row, and it has its own branch because
+       * every step below assumes a digit exists. claude's trust prompt is the case:
+       *
+       *     ❯ No, exit
+       *       Yes, I trust this folder
+       *
+       * `readDialog` used to answer `none` there — no numbers, no menu — so the caller fell through
+       * to the bare confirm at the bottom of this function, which sends `Enter` and takes the
+       * HIGHLIGHTED row. The highlighted row is `No, exit`. Reported by a user who could only quit
+       * from the web and had to open the terminal to say yes.
+       */
+      if (read.select === 'marker' && needsChoice(options)) {
+        if (choice === undefined) return { ok: false, message: s.sessNeedsChoice(options.length) }
+        const picked = options.find(o => o.number === choice)
+        // The question CHANGED between being shown and being answered — same refusal as the
+        // numbered path, and for the same reason: an answer to a question that has moved on is
+        // wrong and invisible.
+        if (!picked) return { ok: false, message: s.sessChoiceGone }
+        const move = spec.move
+        // Nobody has driven this harness's select. A confirm key here would take the highlighted
+        // row, which is the defect this whole branch exists to remove.
+        if (!move || !backend.sendMoveChoice) {
+          return { ok: false, message: s.sessChooseUnknown(managed.harness) }
+        }
+        const from = options.findIndex(o => o.selected)
+        // No cursor on a list this parser said HAS one: the frame moved under us between the two
+        // reads. Refused rather than guessed from row zero, which would move the wrong distance.
+        if (from < 0) return { ok: false, message: s.sessChoiceGone }
+        const steps = (picked.number - 1) - from
+        const keys = Array.from({ length: Math.abs(steps) }, () => (steps > 0 ? move.down : move.up))
+        const out = await backend.sendMoveChoice(id, keys, spec.key, after => {
+          // The look, and it is deliberately about the LABEL rather than the position: a redraw
+          // that added or removed a row would leave the right index pointing at the wrong option.
+          const now = readDialog(after)
+          return now.select === 'marker' && now.options.find(o => o.selected)?.label === picked.label
+        })
+        if (out === 'wrong-row') return { ok: false, message: s.sessChoiceGone }
+        return out === 'sent'
+          ? { ok: true, message: s.sessAnswered(picked.label) }
+          : { ok: false, message: s.sessSendFailed(id) }
+      }
 
       if (needsChoice(options)) {
         // A numbered dialog is NEVER answered with a bare confirm. `Enter` takes whichever row is
@@ -3273,11 +3516,79 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
           const answer = (text ?? '').trim()
           if (!answer) return { ok: false, message: s.sessAnswerNeedsText }
           if (!backend.sendChoiceText) return { ok: false, message: s.sessChooseUnknown(managed.harness) }
-          return (await backend.sendChoiceText(id, key, answer))
+          /**
+           * DID THE FIELD ACTUALLY OPEN? The three steps used to run with nothing checked between
+           * them — digit, words, return — on the reasoning that the digit turns that row into a
+           * field, which is true of the dialog it was verified against.
+           *
+           * Where the digit only moves the HIGHLIGHT, that sequence is worse than the plain one it
+           * replaced: the words go wherever the session is listening and the Enter then submits the
+           * row that happens to be highlighted. So the frame is read back, and the signal is the
+           * option LIST — a field that has opened replaces it, while a highlight that merely moved
+           * leaves it exactly as it was (`submit`).
+           *
+           * The check is passed INTO the backend rather than run between three calls of our own,
+           * because `writeToPane` locks per pane: three locked calls leave two gaps another writer
+           * can land in, which is the collision `pane-writer.ts` exists to prevent — and its own
+           * note names this path as the harder version of it.
+           */
+          const out = await backend.sendChoiceText(id, key, answer, frame => {
+            const step = answerFollowUp({
+              stillAsking: rules.approval.some(re => re.test(frame.join('\n'))),
+              before: options, after: parseDialogOptions(frame), choice,
+            })
+            // TWO SIGNALS, and either one is positive evidence that a field is taking keys.
+            //
+            // The option list going away is one: a field that REPLACES the dialog leaves nothing
+            // for `parseDialogOptions` to recognise. That was the only signal, and on claude
+            // 2.1.263 it is never true — the field opens IN PLACE, the row keeps its label until
+            // something is typed, and the whole list stays put. Measured 2026-09-08; the result was
+            // that a field which HAD opened was reported as one that had not, and the answer was
+            // refused in words describing the opposite of what happened.
+            //
+            // The footer is the other, and it is the one that fires here (`approval-spec.ts`'s
+            // `fieldOpen`). `null` from it means nobody probed this harness — NOT that the field is
+            // shut — so it only ever adds evidence and never withdraws the list signal.
+            return step.kind === 'changed' || fieldIsOpen(managed.harness, frame) === true
+          })
+          if (out === 'no-field') return { ok: false, message: s.sessAnswerNoField(picked.label) }
+          return out === 'sent'
             ? { ok: true, message: s.sessAnswered(answer) }
             : { ok: false, message: s.sessSendFailed(id) }
         }
-        return (await backend.sendKey(id, key))
+        /**
+         * THE DIGIT IS NOT ALWAYS THE WHOLE ANSWER, and this reads the screen rather than assuming.
+         *
+         * On claude's PERMISSION PROMPT — `1. Yes / 2. Yes, always / 3. No`, the dialog this path
+         * was verified against — the digit selects AND submits. On a dialog where it only MOVES THE
+         * HIGHLIGHT nothing is submitted, tmux still reports the key delivered, and the question
+         * stays on screen forever while the card says it was answered. Reported as exactly that.
+         *
+         * A table saying "this dialog submits on the digit" is what must not be written: nobody has
+         * probed every dialog the harness draws (CLAUDE.md records three for claude and warns there
+         * is probably another), and a wrong entry sends a second keystroke into a dialog that has
+         * ALREADY CLOSED — landing on whatever the session put up next. That is the only error here
+         * that does damage.
+         *
+         * So the frame is READ BACK and `answerFollowUp` decides, with the option list as the
+         * guard: Enter is sent only when the SAME dialog is still up and the row we picked is the
+         * highlighted one. Everything else is reported in words.
+         */
+        if (!await backend.sendKey(id, key)) return { ok: false, message: s.sessSendFailed(id) }
+        await new Promise(r => setTimeout(r, ANSWER_SETTLE_MS))
+        const after = await backend.capture(id, SEND_CAPTURE_LINES).catch(() => [] as string[])
+        const stillAsking = rules.approval.some(re => re.test(after.join('\n')))
+        const next = answerFollowUp({
+          stillAsking, before: options, after: parseDialogOptions(after), choice,
+        })
+        if (next.kind === 'done') return { ok: true, message: s.sessAnswered(picked.label) }
+        if (next.kind === 'changed') {
+          return { ok: true, message: s.sessAnsweredNewQuestion(picked.label) }
+        }
+        if (next.kind === 'stuck') return { ok: false, message: s.sessAnswerStuck(picked.label) }
+        // `submit`: the same dialog, our row highlighted. Enter finishes what the digit began, and
+        // it can only act on the option that was chosen.
+        return (await backend.sendKey(id, 'Enter'))
           ? { ok: true, message: s.sessAnswered(picked.label) }
           : { ok: false, message: s.sessSendFailed(id) }
       }
@@ -3321,9 +3632,9 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       })
     },
 
-    async searchProjects(query: string): Promise<ProjectOption[]> {
+    async searchProjects(query: string): Promise<ProjectSearchResult> {
       const found = await findProjects(query, process.cwd())
-      return found.map(c => ({
+      return { totals: found.totals, options: found.rows.map(c => ({
         path: c.path,
         // Name and repo travel SEPARATELY: the picker aligns them into columns, and a pre-joined
         // label is one cell holding two facts that no column arithmetic can take apart again.
@@ -3331,7 +3642,7 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
         ...(c.remote ? { repo: repoShortName(c.remote) } : {}),
         detail: candidatePath(c, homedir()),
         source: c.source,
-      }))
+      })) }
     },
 
     /**

@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { Baseline } from '@agentistics/core'
 import type { ControlSession } from '@agentistics/tui/control/session-fleet'
 import { fleetSeedNotice, fleetStaleNotice } from './fleetStale'
 import { cacheIsUsable, stripVolatile } from './fleetCache'
@@ -26,15 +27,22 @@ import { parseRelayActResult } from './relayAct'
 /** Mirrors `SessionAction` in `@agentistics/tui/control/sessions`, minus the verbs a page cannot do. */
 export type FleetActionId =
   | 'resume' | 'approve' | 'prompt' | 'rename' | 'note' | 'task' | 'kill'
-  | 'openTask' | 'finishTask'
   /** Stop the current turn without ending the session. See the server's own union. */
   | 'interrupt'
   /** Advance the harness to its NEXT mode. It cycles; there is no key that picks one. */
   | 'cycleMode'
+  /**
+   * FLEET verbs — they act on a SET, not on the row whose `id` is in the request.
+   *
+   * `reopenFell` takes back what the machine took; `broadcast` types one prompt into several
+   * sessions. Both carry `ids`, and both can only ever NARROW a set the server itself computed —
+   * see `FleetActionRequest.ids`.
+   */
+  | 'reopenFell' | 'broadcast'
 
 /** The verbs this page can PERFORM. The rest are shown, dimmed, with their reason. */
 export const PERFORMABLE: ReadonlySet<FleetActionId> = new Set<FleetActionId>([
-  'resume', 'approve', 'prompt', 'rename', 'note', 'task', 'kill', 'openTask', 'finishTask',
+  'resume', 'approve', 'prompt', 'rename', 'note', 'task', 'kill',
 ])
 
 /** The verbs that take a line of text before they can run. */
@@ -60,6 +68,8 @@ export interface FleetRow {
   state: 'working' | 'waiting' | 'waiting-approval' | 'exited' | 'lost' | 'unknown' | 'closed'
   stateLabel: string
   actionable: boolean
+  /** This row is one of the sessions the machine TOOK — see the server's `FleetRow.fell`. */
+  fell?: boolean
   task?: string
   note?: string
   model?: string
@@ -74,6 +84,8 @@ export interface FleetRow {
   approvalBlind?: string
   approveBlind?: string
   chooseBlind?: string
+  /** A dialog agentop can see and cannot read. Renders as a refusal, never as a confirm button. */
+  dialogBlind?: string
   conversationBlind?: string
   attachCommand: string
   verbs: FleetVerb[]
@@ -81,6 +93,8 @@ export interface FleetRow {
 
 export interface FleetPayload {
   sessions: FleetRow[]
+  /** This machine's 30-day behaviour baseline — see `session-profile.ts`. */
+  baseline?: Baseline
   /**
    * The same rows unshaped, for `session-fleet.ts` to arrange.
    *
@@ -94,6 +108,13 @@ export interface FleetPayload {
   tasks: string[]
   /** Tasks the user marked finished. A statement about the work, not about any session's state. */
   finishedTasks: string[]
+  /**
+   * The last fall: how many sessions the machine took, and when.
+   *
+   * WHICH rows is not repeated here — they are in `sessions`, each marked `fell`. The count is what
+   * a summary line needs; the marks are what a list somebody ticks needs.
+   */
+  fell?: { count: number; atMs: number }
 }
 
 const EMPTY: FleetPayload = { sessions: [], rows: [], attention: 0, tasks: [], finishedTasks: [] }
@@ -127,6 +148,12 @@ export interface FleetState {
     action: FleetActionId
     text?: string
     choice?: number
+    /**
+     * The rows a GROUP verb acts on — `reopenFell` and `broadcast`. It can only ever NARROW the
+     * group the server already resolved: absent means "all of it", and an empty array means
+     * nothing, which is not the same thing and is never collapsed into it.
+     */
+    ids?: readonly string[]
   }) => Promise<{ ok: boolean; message: string; id?: string }>
 }
 
@@ -205,6 +232,31 @@ function emit(): void {
  */
 let pollCentral = false
 
+/**
+ * How long to wait before the follow-up read after an action.
+ *
+ * A verb that changes what the SCREEN says — cycling the harness's mode is the one this exists for
+ * — is answered by the server as soon as the keystroke is sent, but the row's words come from the
+ * next capture of the pane, and the harness has not redrawn its footer yet at that instant. One
+ * immediate read plus one a moment later covers both: the fast case where it already repainted,
+ * and the ordinary one where it needed a frame.
+ */
+const NUDGE_FOLLOWUP_MS = 450
+
+/**
+ * Read the fleet NOW instead of waiting out the interval.
+ *
+ * The poll is every `FLEET_POLL_MS`, which is right for watching and far too slow for a control
+ * somebody just pressed: cycling the mode left the chip showing the OLD mode for up to five
+ * seconds, so the button read as broken and people pressed it again. Nothing here invents the new
+ * state — it asks sooner. An optimistic label would be a guess about what the harness did with the
+ * keystroke, and this file does not guess.
+ */
+export function nudgeFleet(): void {
+  void pollOnce()
+  setTimeout(() => { void pollOnce() }, NUDGE_FOLLOWUP_MS)
+}
+
 export function setFleetSourceCentral(on: boolean): void {
   if (pollCentral === on) return
   pollCentral = on
@@ -243,6 +295,9 @@ async function pollCentralOnce(): Promise<void> {
       // FINISHED task is a statement the machine's own user made. Neither is invented here.
       tasks: [],
       finishedTasks: [],
+      // And no `baseline`, deliberately. It is THIS machine's own 30-day history, drawn under a
+      // heading that reads "your last 30 days" — attaching it over somebody else's fleet would put
+      // the operator's numbers under a sentence about the machine they are looking at.
     }
     snapFailures = 0
     snapLastOkMs = Date.now()
@@ -475,6 +530,12 @@ export function useFleet(lang: 'pt' | 'en', enabled = true): FleetState {
  * uuid handed to `claude --session-id`), the second is what a `closed` row — one read straight out
  * of the conversation store — is already named by. A managed row's own id is a tmux session name
  * and can never collide with a conversation id, so one map answers both without ambiguity.
+ *
+ * **It is a LOOKUP, and its `values()` are not the fleet.** A row that knows its conversation is in
+ * here TWICE, by design — so iterating this map counts those sessions twice. That shipped: the
+ * broadcast picker was built from `rowsById.values()` and offered `Active 22` on a machine running
+ * 11, over an `All` of 357 against a fleet of 329. Use `fleet.sessions`, or `buildPickRows`, which
+ * dedupes by id for exactly this reason.
  */
 export function fleetIndex(rows: readonly FleetRow[]): Map<string, FleetRow> {
   const map = new Map<string, FleetRow>()

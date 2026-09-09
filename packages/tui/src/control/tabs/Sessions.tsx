@@ -35,6 +35,7 @@ import { ACTION_SEP, actionAtColumn, fitActionRow } from '../chrome.ts'
 import { Divider } from '../Surface'
 import { PANE_MIN_ROWS, paneBadgeRoom, paneTitleRoom } from '../chrome.ts'
 import { Pane, paneBody, paneRows } from '../Pane'
+import { profileLines } from '../profile-lines'
 
 /** Columns a pane spends on its left edge: one of border, one of padding. */
 const PANE_EDGE_X = 2
@@ -93,6 +94,7 @@ import {
   taskCounts, projectCounts, sessionMetric, sessionContext, contextLevel,
   sessionHandle, worktreeName, sessionRunning,
   sessionAge, sessionKeyHelp, keyHelpColumn, keyHelpLines, closeCellWidth, canClose, CLOSE_CELL,
+  BULK_STOP_OFF, bulkStopToggle, bulkStopPick, stopTargets, type BulkStop,
   treeGuides, notifyCellWidth, sessionNotify,
   DEFAULT_ORDER, ACTIVE_STATES, OFF_STATE, type SessionOrder, type SessionLayout,
   cardGrid, cardPages, pageOfCard, cardBadges, cardLines, fitCardLines, cardStateCells, cardBand,
@@ -160,11 +162,14 @@ type Ask =
   | { kind: 'search' }
   /** The whole key list. Its own kind because it answers nothing and acts on nothing. */
   | { kind: 'keys' }
-  /** Finishing or reopening a TASK — the session is only how the task was named. */
-  | { kind: 'finishTask'; session: ControlSession }
+  /**
+   * Finishing a DELIVERY, asked right after its session was stopped — the one moment somebody
+   * knows the answer. It carries the task NAME rather than a session, because by the time it is
+   * asked the session it came from has already ended.
+   */
+  | { kind: 'finishTask'; task: string }
   | { kind: 'deleteTask'; name: string; count: number }
   | { kind: 'task'; session: ControlSession }
-  | { kind: 'openTask'; session: ControlSession }
   | { kind: 'resume'; session: ControlSession }
   | { kind: 'rename'; session: ControlSession }
   | { kind: 'note'; session: ControlSession }
@@ -188,7 +193,14 @@ type Ask =
   /** Sending prompt to multiple selected sessions. */
   | { kind: 'batchPrompt'; sessions: ControlSession[] }
   /** Killing multiple selected sessions. */
-  | { kind: 'batchKill'; sessions: ControlSession[] }
+  /**
+   * The bulk-stop confirmation — the sessions PICKED inside the mode, never the pinned ones.
+   *
+   * It replaced `batchKill`, which was armed by the pinned set: pinning a row is how you keep it,
+   * and `x` then offered to stop everything you had kept. The set this carries can only have been
+   * built inside a mode the person deliberately entered with `ctrl+x`.
+   */
+  | { kind: 'bulkStop'; sessions: ControlSession[] }
 
 /** How long the typing must settle before the disk is walked. */
 const TRANSCRIPT_DEBOUNCE_MS = 300
@@ -379,6 +391,16 @@ export function Sessions({
   const [marked, setMarked] = useState<ReadonlySet<string>>(
     () => new Set(migrateSessionFilters(view).marked),
   )
+  /**
+   * The bulk-stop mode and the rows picked inside it — EPHEMERAL, and deliberately so.
+   *
+   * It sits beside `marked` and shares nothing with it. `marked` is the pin: it goes through
+   * `storedFilters` into `preferences.json` on every change and comes back on the next run. This
+   * one is held here and nowhere else — no persist effect reads it, no host method is handed it,
+   * and `bulkStopToggle` empties it on the way out. A set of sessions armed for killing must not be
+   * something you can find still armed tomorrow morning.
+   */
+  const [bulk, setBulk] = useState<BulkStop>(BULK_STOP_OFF)
   /**
    * Whether the menu is folded away entirely, for when the list is what you came to read.
    *
@@ -837,19 +859,38 @@ export function Sessions({
     if (a === 'search') { setAsk({ kind: 'search' }); return }
     if (a === 'group') { setAsk({ kind: 'view' }); return }
 
-    // Batch actions when items are marked
+    /**
+     * What `x` stops — and the ONE thing it may never be: the pinned set.
+     *
+     * Pinning is a keeping gesture. It persists, it lifts the row into its own band, and people use
+     * it to find a row again — so an `x` that read that set turned "keep these four" into "offer to
+     * kill these four", which is what this journey was reported as. `stopTargets` is not even given
+     * the pinned set: outside the mode it can only answer with the row under the cursor, and the
+     * plural answer exists only inside the mode `ctrl+x` opens.
+     */
+    if (a === 'kill') {
+      const stoppable = (fleet?.sessions ?? []).filter(canClose)
+      const targets = stopTargets({
+        bulk, cursor: selected?.id, stoppable: stoppable.map(sess => sess.id),
+      })
+      if (targets?.kind === 'many') {
+        const picked = new Set(targets.ids)
+        setAsk({ kind: 'bulkStop', sessions: stoppable.filter(sess => picked.has(sess.id)) })
+        return
+      }
+      // Nothing picked inside the mode means nothing happens — the row under the cursor is NOT a
+      // fallback there, or the mode would kill something the person never selected.
+      if (bulk.on) return
+      // Outside it, `actOn` owns the single-row question, including the refusal that names why a
+      // row cannot be stopped.
+    }
+
+    // Batch actions when rows are pinned. Kill is deliberately NOT among them — see above.
     if (marked.size > 0) {
       const markedList = (fleet?.sessions ?? []).filter(sess => marked.has(sess.id))
       if (a === 'prompt') {
         setAsk({ kind: 'batchPrompt', sessions: markedList })
         return
-      }
-      if (a === 'kill') {
-        const activeMarked = markedList.filter(sess => sess.state === 'working' || sess.state === 'waiting' || sess.state === 'waiting-approval')
-        if (activeMarked.length > 0) {
-          setAsk({ kind: 'batchKill', sessions: activeMarked })
-          return
-        }
       }
       if (a === 'reopenFell' || a === 'resume') {
         const openSessions = markedList.filter(sess => sess.state === 'working' || sess.state === 'waiting' || sess.state === 'waiting-approval')
@@ -880,10 +921,6 @@ export function Sessions({
     if (!selected) return
     if (a === 'attach') return actOn('attach')
     if (a === 'resume') { setAsk({ kind: 'resume', session: selected }); return }
-    if (a === 'openTask') { setAsk({ kind: 'openTask', session: selected }); return }
-    // Asked rather than done: finishing is a statement about a whole piece of work, and the
-    // confirmation is where the screen says what happens to its sessions.
-    if (a === 'finishTask') { setAsk({ kind: 'finishTask', session: selected }); return }
     // Refused in words rather than by a key that does nothing: pressing `y` on a session that is
     // working is a reasonable thing to try, and the answer is "it is not asking anything", which is
     // information. Two different refusals, because they are two different facts — the harness's
@@ -895,12 +932,15 @@ export function Sessions({
       // A dialog whose options are readable but unpickable is a refusal that NAMES why and points
       // at attaching, which works — so it opens the question rather than swallowing the keypress.
       if ((selected.dialogOptions?.length ?? 0) > 1) return actOn('approve')
-      const why = selected.approveBlind ?? s.sessionsNotAsking
+      // `sessionsNotAsking` is a CLAIM ABOUT THE SESSION and it is false here: a row with a
+      // `dialogBlind` is asking something agentop could not read. Saying "not asking anything"
+      // sends somebody away from a question that is genuinely waiting on them.
+      const why = selected.dialogBlind ?? selected.approveBlind ?? s.sessionsNotAsking
       void run(async () => ({ ok: false, message: why }))
       return
     }
     return actOn(a)
-  }, [host, grouping, selected, fleet?.fell, run, s])
+  }, [host, grouping, selected, fleet?.fell, fleet?.sessions, marked, bulk, run, s, onRefreshFleet])
 
   // Only the kinds that NAME a session. `reopenFell` is a fleet question and is handled in
   // `runAction`; routing it through here would hand it a row it must not act on.
@@ -996,6 +1036,9 @@ export function Sessions({
     setHideDetail(false)
     setLayout(DEFAULT_SESSION_VIEW.layout ?? 'list')
     setMarked(new Set(DEFAULT_MARKED))
+    // The mode is an arming state, not an arrangement — `ctrl+r` puts the screen back to how it
+    // opens, and it does not open armed.
+    setBulk(BULK_STOP_OFF)
     setQuery('')
     toTop()
   }, [toTop])
@@ -1063,6 +1106,23 @@ export function Sessions({
     if (input >= '1' && input <= '9') {
       const n = Number(input) - 1
       if (n < sections.length) { setMenuHidden(false); gotoSection(n); return }
+    }
+
+    // `ctrl+x` is the door to the bulk-stop mode, IN and OUT, and it is answered BEFORE the menu
+    // gets the keyboard — the menu's own `x` deletes a task, and a chord that meant one thing on the
+    // list and another in the menu is exactly the collision this journey exists to remove.
+    //
+    // The same chord both ways rather than `esc` on the way out: `esc` here already drops the
+    // search, then the project, then the task, so a key that both un-narrows the list and disarms a
+    // selection would do the wrong one of the two at the moment it matters most. See
+    // `bulkStopToggle`.
+    if (key.ctrl && input === 'x') {
+      setBulk(bulkStopToggle)
+      // The mode selects LIST rows, so it hands the keyboard back to the list rather than leaving
+      // it in a menu where `space` means nothing.
+      setFocus('list')
+      setActionsFocused(false)
+      return
     }
 
     if (focus === 'aside' && cockpit.aside > 0) {
@@ -1186,8 +1246,14 @@ export function Sessions({
     if (key.ctrl && input === 'g') { setLayout(l => (l === 'list' ? 'cards' : 'list')); return }
     // The HIGHLIGHTER. `space` because it is the mark key of every list that has one, and because
     // it is the only unclaimed key on this screen that a person reaches for without being told.
+    //
+    // It answers TWO questions, and which one depends on a mode the screen announces in its own
+    // title: inside the bulk-stop mode it picks a row to be STOPPED, outside it pins. The key did
+    // not move — pinning is still `space`, which is what people already have in their fingers —
+    // and the second meaning is only reachable from a chord somebody typed on purpose.
     if (input === ' ') {
       if (!selected) return
+      if (bulk.on) { setBulk(b => bulkStopPick(b, selected.id)); return }
       setMarked(prev => {
         const next = new Set(prev)
         if (next.has(selected.id)) next.delete(selected.id)
@@ -1209,10 +1275,9 @@ export function Sessions({
     // The note is `m` for memo: `t` belongs to the TASK, which is the verb people reach for it with.
     if (input === 'm') return runAction('note')
     if (input === 't') return runAction('task')
-    // The capitals act on the whole TASK rather than on the row, which is the one thing worth making
-    // people reach for a shift key to say.
-    if (input === 'T') return runAction('openTask')
-    if (input === 'F') return runAction('finishTask')
+    // `T` and `F` are GONE with the verbs they ran — see `session-verbs.ts`. Reopening a whole task
+    // is `agentop session open`, and finishing one is now asked at the moment a session is stopped,
+    // where somebody actually knows the answer.
     // Attaching has its OWN key because `enter` deliberately does not do it any more: enter opens
     // the menu, which is what made every other verb reachable, and the cost of that was three
     // keystrokes for the thing this screen is most often opened to do.
@@ -1377,7 +1442,11 @@ export function Sessions({
             // you are reading must not also be the way out of it.
             capture: false,
             claimArrows: true,
-            hints: [
+            hints: bulk.on
+              // While the mode is on the footer says ONLY the three keys the mode answers. A strip
+              // of ordinary verbs under a red list would be the footer contradicting the screen.
+              ? [s.keySessionsStopPick, s.keySessionsStopRun, s.keySessionsStopLeave, s.keyMove]
+              : [
               s.keyQuit, s.keyTabsAlt, s.keySessionsActions, s.keyAsideSection,
               s.keySessionsAttach, s.keyMove,
               // Named only where the key actually does something on the selected row. The footer is
@@ -1395,7 +1464,8 @@ export function Sessions({
             ],
           })
   }, [isActive, onChrome, s, ask, actionsFocused, focus, cockpit.aside, grouping,
-      selected?.canApprove, selected?.canChoose, canPrompt, menuHidden, restoring, asideList, asideRow])
+      selected?.canApprove, selected?.canChoose, canPrompt, menuHidden, restoring, asideList, asideRow,
+      bulk.on])
 
   usePointer(p => {
     const wheel = wheelDelta(p.button)
@@ -1831,12 +1901,23 @@ export function Sessions({
       ) : null}
 
       <Pane
-        title={s.tabsShort.sessions}
+        // The TITLE says the mode, because the title is the one part of this pane drawn at every
+        // width and every height. The banner below it is dropped on a short terminal along with the
+        // summary row it replaces, and a mode you can be in without the screen saying so is exactly
+        // the state this design exists to make impossible.
+        title={bulk.on ? s.sessionsPaneStopMode : s.tabsShort.sessions}
         focused={focus === 'list' && !actionsFocused}
         width={cockpit.list}
         height={cockpit.band}
       >
-      {cockpit.summary ? (
+      {bulk.on && cockpit.summary ? (
+        // In PLACE of the summary, not above it: the mode costs no extra row, so a frame that fit
+        // before still fits. Red, and it names every key that works while it is on — the person who
+        // walked away and came back reads what to do rather than remembering what they pressed.
+        <Text color={COLORS.danger} bold wrap="truncate">
+          {truncate(s.sessionsStopBanner(bulk.picks.size), listBody)}
+        </Text>
+      ) : cockpit.summary ? (
         <SummaryRow
           fleet={fleet}
           grouping={grouping}
@@ -1891,10 +1972,27 @@ export function Sessions({
         // turned into `lost` rows are still there, still named and still reopenable, so "no
         // sessions" would be false — and a blank pane under a strict filter is indistinguishable
         // from a broken one.
-        <Text dimColor wrap="truncate">
-          {fleet.unavailable ? ''
-            : truncate(emptyReason, listBody)}
-        </Text>
+        //
+        // The behaviour profile fills the space an empty list leaves dead — BELOW that sentence,
+        // never instead of it. Sliced to the rows this pane actually has: an Ink screen that
+        // overflows its `height` is composited over the rows below it, not clipped, and the
+        // sentence above already spends one row of the same budget.
+        <Box flexDirection="column" flexShrink={0}>
+          <Text dimColor wrap="truncate">
+            {fleet.unavailable ? ''
+              : truncate(emptyReason, listBody)}
+          </Text>
+          {/* A failed poll can still hand back a baseline — the store read that builds it sits on
+              a path with no early return before `unavailable` is checked. So the profile is gated
+              on the SAME condition as the sentence above it, not on `baseline` alone: rendering it
+              under a blanked sentence is the exact thing that sentence's own blanking exists to
+              prevent. */}
+          {fleet.unavailable ? null : profileLines(fleet.baseline, listBody, s)
+            .slice(0, Math.max(0, cockpit.listRows - 1))
+            .map((line, i) => (
+              <Text key={i} dimColor>{line}</Text>
+            ))}
+        </Box>
       ) : grid && page ? (
         <Box flexDirection="column" width={cardsBody} flexShrink={0}>
           {/* One band per group, and the air to the right of a short group is DELIBERATE: it is
@@ -1920,6 +2018,7 @@ export function Sessions({
                       headed={headed}
                       selected={selected?.id === card.id}
                       marked={marked.has(card.id)}
+                      stopping={bulk.picks.has(card.id)}
                       width={grid.cardWidth}
                       height={b.height}
                       words={cardWords}
@@ -1973,6 +2072,7 @@ export function Sessions({
                 session={row.session}
                 selected={selected?.id === row.session.id}
                 marked={marked.has(row.session.id)}
+                stopping={bulk.picks.has(row.session.id)}
                 notify={notifyWidth}
                 ages={ages}
                 columns={columns}
@@ -2033,9 +2133,9 @@ export function Sessions({
               rows={paneRows(cockpit.detail)}
               fellAgo={fellAgo}
               onClose={() => setAsk(null)}
-              onRun={(fn, label) => {
+              onRun={(fn, label, then) => {
                 setAsk(null)
-                void run(fn, label).then(onRefreshFleet)
+                void run(fn, label).then(onRefreshFleet).then(() => then?.())
               }}
               host={host}
               query={query}
@@ -2045,6 +2145,10 @@ export function Sessions({
               // is the best match to look at anyway.
               onQuery={q => { setQuery(q); toTop() }}
               fleet={fleet}
+              // The mode ENDS with the act it exists for. Nobody has to remember a second keystroke
+              // to disarm, which is the state this screen must never leave a person in.
+              onStopped={() => setBulk(BULK_STOP_OFF)}
+              onAskFinish={task => setAsk({ kind: 'finishTask', task })}
             />
           ) : (
             <Detail lines={detail} width={paneBody(width)} rows={paneRows(cockpit.detail)} />
@@ -2202,13 +2306,22 @@ function SummaryRow({
   )
 }
 
-function SessionRowView({ session, selected, marked, notify, ages, columns, width, closeCell }: {
+function SessionRowView({ session, selected, marked, stopping, notify, ages, columns, width, closeCell }: {
   session: ControlSession
   selected: boolean
   /** Already-localized ages by session id — this component owns no clock and no strings. */
   ages: ReadonlyMap<string, string>
-  /** The user's own highlight. Survives re-sorting, and outlives the cursor moving away. */
+  /** PINNED: the user's own highlight. Survives re-sorting, and outlives the cursor moving away. */
   marked: boolean
+  /**
+   * Picked to be STOPPED, inside the bulk-stop mode. Ephemeral, and it OUTRANKS `marked` on screen.
+   *
+   * A row can be both, and when it is, the destructive state is the one that shows. A pin drawn
+   * over a row that is about to be killed would be the harmless state hiding the dangerous one,
+   * which is the whole failure this journey is about — so the glyph, the colour and the weight all
+   * come from here first.
+   */
+  stopping: boolean
   /** Columns the notification dot takes — `0` when nothing on screen is waiting. */
   notify: number
   columns: SessionColumns
@@ -2229,7 +2342,11 @@ function SessionRowView({ session, selected, marked, notify, ages, columns, widt
           on purpose — the accent means focus everywhere else in this app, and a highlight that
           wore it would read as "this is selected" on four rows at once. */}
       <Text color={selected ? COLORS.info : undefined} underline={selected}>{selected ? '❯' : ' '}</Text>
-      <Text color={marked ? COLORS.info : undefined} bold={marked}>{marked ? '▌' : ' '}</Text>
+      {/* One cell, three answers, in the order of consequence: picked to be stopped (a red ✕),
+          pinned (a blue bar), neither. `stopping` leads on purpose — see the prop. */}
+      <Text color={stopping ? COLORS.danger : marked ? COLORS.info : undefined} bold={stopping || marked}>
+        {stopping ? '✕' : marked ? '▌' : ' '}
+      </Text>
       {/* The NOTIFICATION. Three cells rather than one, because the row you are on, the row you
           marked and the row that needs you are three facts that can all be true at once — and the
           one that must survive is this, since it is the only one the machine is telling YOU. It
@@ -2270,9 +2387,9 @@ function SessionRowView({ session, selected, marked, notify, ages, columns, widt
       </Text>
       {columns.title > 0 ? (
         <Text
-          color={selected ? COLORS.info : marked ? COLORS.info : undefined}
+          color={stopping ? COLORS.danger : selected ? COLORS.info : marked ? COLORS.info : undefined}
           underline={selected}
-          bold={selected || marked}
+          bold={selected || marked || stopping}
         >
           {gap + padCell(session.title, columns.title)}
         </Text>
@@ -2493,7 +2610,7 @@ function GroupHeading({ band, width }: {
  * The lines come from the pure `cardLines`, cut from the bottom by `fitCardLines`, so what the card
  * gives up on a short terminal is decided in one place and tested there.
  */
-function SessionCard({ session, group, headed, selected, marked, width, height, words }: {
+function SessionCard({ session, group, headed, selected, marked, stopping, width, height, words }: {
   session: ControlSession
   /** The group this card belongs to — the heading's own words, or the project when there is none. */
   group: string
@@ -2501,6 +2618,8 @@ function SessionCard({ session, group, headed, selected, marked, width, height, 
   headed: boolean
   selected: boolean
   marked: boolean
+  /** Picked to be stopped. Outranks `marked` here for the same reason it does on a row. */
+  stopping: boolean
   width: number
   height: number
   /** The already-localized words, composed once by the screen — see `cardWords`. */
@@ -2531,6 +2650,7 @@ function SessionCard({ session, group, headed, selected, marked, width, height, 
           width={inner}
           labelWidth={cardLabelWidth(lines, inner)}
           marked={marked}
+          stopping={stopping}
           selected={selected}
           stateColor={STATE_COLOR[session.state]}
           bold={session.state === 'waiting-approval'}
@@ -2549,12 +2669,13 @@ function SessionCard({ session, group, headed, selected, marked, width, height, 
  * assistant is saying) take no indent: they are the card's headline, and pushing them right to line
  * up with a label they do not have would spend the width for nothing.
  */
-function CardLineView({ line, width, labelWidth, marked, selected, stateColor, bold }: {
+function CardLineView({ line, width, labelWidth, marked, stopping, selected, stateColor, bold }: {
   line: CardLine
   width: number
   /** Columns the label column takes, or `0` to draw no labels at all. */
   labelWidth: number
   marked: boolean
+  stopping: boolean
   selected: boolean
   stateColor: string | undefined
   bold: boolean
@@ -2570,7 +2691,11 @@ function CardLineView({ line, width, labelWidth, marked, selected, stateColor, b
   }
   if (line.kind === 'title') {
     return (
-      <Text wrap="truncate" color={selected ? SESSION_FOCUS_ACCENT : marked ? COLORS.info : undefined} bold>
+      <Text
+        wrap="truncate"
+        color={stopping ? COLORS.danger : selected ? SESSION_FOCUS_ACCENT : marked ? COLORS.info : undefined}
+        bold
+      >
         {truncate(line.text, width)}
       </Text>
     )
@@ -2668,7 +2793,8 @@ function Detail({ lines, width, rows }: {
  * read at the moment the user is deciding, and the row being acted on stays visible above.
  */
 function Question({
-  ask, strings: s, width, rows, fellAgo, onClose, onRun, host, query, onQuery, fleet,
+  ask, strings: s, width, rows, fellAgo, onClose, onRun, onAskFinish, host, query, onQuery, fleet,
+  onStopped,
 }: {
   /** Never `new` — the wizard takes the whole screen and is rendered before this is reached. */
   ask: Exclude<Ask, { kind: 'new' } | { kind: 'view' } | { kind: 'keys' }>
@@ -2679,12 +2805,24 @@ function Question({
   /** How long ago the fall was, already localized. Absent when nothing fell. */
   fellAgo?: string
   onClose: () => void
-  onRun: (fn: () => Promise<ActionResult>, label?: string) => void
+  /**
+   * Run an action and close the question.
+   *
+   * `then` is the FOLLOW-UP question, asked once the action has actually run — the only caller is
+   * stopping a session that is filed under a delivery, which asks whether the delivery is finished.
+   * It is a callback rather than a second `Ask` shape because the follow-up is a decision about
+   * what just happened, and the parent owns the question state.
+   */
+  onRun: (fn: () => Promise<ActionResult>, label?: string, then?: () => void) => void
   host: ControlHost
   query: string
   onQuery: (q: string) => void
   /** Needed to say how many sessions a task actually has — the confirmation used to say zero. */
   fleet: ControlSessions | null | undefined
+  /** Called once the bulk stop actually runs, so the mode closes itself behind it. */
+  onStopped: () => void
+  /** Ask about a DELIVERY once its session has been stopped — see `onRun`'s `then`. */
+  onAskFinish: (task: string) => void
 }) {
   if (ask.kind === 'search') {
     return (
@@ -2772,16 +2910,25 @@ function Question({
     )
   }
 
-  if (ask.kind === 'batchKill') {
+  if (ask.kind === 'bulkStop') {
     return (
       <ConfirmPrompt
-        label={`Deseja encerrar as ${ask.sessions.length} sessões ativas selecionadas?`}
+        // The COUNT is the question: these are rows picked one at a time inside a mode, and a
+        // confirmation that did not say how many were picked would be asking for a blank yes. It is
+        // localized now — it used to be a Portuguese sentence hard-coded into an English screen.
+        label={s.sessionsStopManyConfirm(ask.sessions.length)}
         yesLabel={s.yes}
         noLabel={s.no}
         width={width}
         onCancel={onClose}
         onAnswer={(yes: boolean) => {
           if (!yes) return onClose()
+          // The mode closes on the YES, ahead of everything else — before the host is even asked
+          // whether it can stop anything. Leaving a person on a red list with a live `x` because
+          // the host turned out to have no `killSession` is the one way out of this mode that must
+          // not exist. Declining, by contrast, KEEPS the selection: you said no to the question,
+          // not to the four rows you spent a minute picking.
+          onStopped()
           const kill = host.killSession
           if (!kill) return onClose()
           onRun(async () => {
@@ -2813,6 +2960,35 @@ function Question({
           const name = ask.name
           onClose()
           onRun(() => del.call(host, name), s.actSessions.deleteTask)
+        }}
+      />
+    )
+  }
+
+  if (ask.kind === 'finishTask') {
+    const task = ask.task
+    const mine = (fleet?.sessions ?? []).filter(v => v.task === task)
+    // Counted separately and stated separately. "N sessions" alone does not tell you whether any of
+    // them is an assistant currently burning tokens, and that is the fact somebody is worried about
+    // when they hesitate over this button.
+    const running = mine.filter(sessionRunning).length
+    return (
+      <ConfirmPrompt
+        // The question states what finishing ACTUALLY does — mark the task, hide its sessions
+        // behind a switch — and says outright that nothing is stopped. It must not describe
+        // something the code does not do: a warning that claims to end everything, over an action
+        // that ends nothing, is worse than no warning, because it teaches people that the warnings
+        // on this screen can be ignored.
+        label={s.sessionsFinishConfirm(task, mine.length, running)}
+        yesLabel={s.yes}
+        noLabel={s.no}
+        width={width}
+        height={rows}
+        onCancel={onClose}
+        onAnswer={(yes: boolean) => {
+          const finish = host.finishTask
+          if (!yes || !finish) return onClose()
+          onRun(() => finish.call(host, task, true), s.actSessions.finishTask)
         }}
       />
     )
@@ -2860,7 +3036,10 @@ function Question({
                 off at "nobody has verified how to pick an option on ge…" tells nobody anything.
                 Bounded so it cannot grow over the rows the pane was given. */}
             <WrappedText
-              text={session.chooseBlind ?? s.sessionsChooseBlind}
+              // `dialogBlind` FIRST: "nobody verified how to pick an option here" and "the dialog
+              // is taller than agentop can read" are different facts with different remedies, and
+              // the generic string states the wrong one confidently.
+              text={session.dialogBlind ?? session.chooseBlind ?? s.sessionsChooseBlind}
               width={width}
               maxRows={Math.max(1, rows - preview.length - 2)}
             />
@@ -2950,6 +3129,22 @@ function Question({
           if (!yes) return onClose()
           const kill = host.killSession
           if (!kill) return onClose()
+          const task = session.task
+          /**
+           * STOPPING IS WHEN SOMEBODY KNOWS WHETHER THE WORK IS DONE.
+           *
+           * `finishTask` used to be a standing verb on the row (`F`), which meant it was offered at
+           * every moment except the one where the answer is in the reader's head — so deliveries
+           * stayed open long after their last session ended. It is now asked HERE, and only when
+           * this session is filed under something.
+           *
+           * The kill is not held up by the question: it runs first and the delivery is asked about
+           * after, so an answer nobody gives leaves the session stopped rather than running.
+           */
+          if (task && !(fleet?.finishedTasks ?? []).includes(task)) {
+            onRun(() => kill.call(host, session.id), s.actSessions.kill, () => onAskFinish(task))
+            return
+          }
           onRun(() => kill.call(host, session.id), s.actSessions.kill)
         }}
       />
@@ -2984,61 +3179,6 @@ function Question({
             ...(session.actionable ? { replaces: session.id } : {}),
             attach: false,
           }).then(r => ({ ok: r.ok, message: r.message })), s.actSessions.resume)
-        }}
-      />
-    )
-  }
-
-  if (ask.kind === 'openTask') {
-    const task = session.task ?? ''
-    // Counted from the fleet rather than passed as a literal `0`, which is what it was — the
-    // question offered to reopen "all 0 sessions" of a task that plainly had some, which is the
-    // kind of number that makes a person stop trusting every other number on the screen.
-    const count = (fleet?.sessions ?? []).filter(v => v.task === task).length
-    return (
-      <ConfirmPrompt
-        label={s.sessionsOpenTaskConfirm(task, count)}
-        yesLabel={s.yes}
-        noLabel={s.no}
-        width={width}
-        onCancel={onClose}
-        onAnswer={(yes: boolean) => {
-          const open = host.openTask
-          if (!yes || !open) return onClose()
-          onRun(() => open.call(host, task), s.actSessions.openTask)
-        }}
-      />
-    )
-  }
-
-  if (ask.kind === 'finishTask') {
-    const task = session.task ?? ''
-    const already = (fleet?.finishedTasks ?? []).includes(task)
-    const mine = (fleet?.sessions ?? []).filter(v => v.task === task)
-    const count = mine.length
-    // Counted separately and stated separately. "N sessions" alone does not tell you whether any of
-    // them is an assistant currently burning tokens, and that is the fact somebody is worried about
-    // when they hesitate over this button.
-    const running = mine.filter(sessionRunning).length
-    return (
-      <ConfirmPrompt
-        // The question states what finishing ACTUALLY does — mark the task, hide its sessions
-        // behind a switch — and says outright that nothing is stopped. It must not describe
-        // something the code does not do: a warning that claims to end everything, over an action
-        // that ends nothing, is worse than no warning, because it teaches people that the warnings
-        // on this screen can be ignored.
-        label={already
-          ? s.sessionsReopenConfirm(task)
-          : s.sessionsFinishConfirm(task, count, running)}
-        yesLabel={s.yes}
-        noLabel={s.no}
-        width={width}
-        height={rows}
-        onCancel={onClose}
-        onAnswer={(yes: boolean) => {
-          const finish = host.finishTask
-          if (!yes || !finish) return onClose()
-          onRun(() => finish.call(host, task, !already), s.actSessions.finishTask)
         }}
       />
     )

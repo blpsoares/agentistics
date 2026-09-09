@@ -214,12 +214,14 @@ async function scanProjectDir(
         extraSessions.push(session)
       } else if (metaEntry && (!metaEntry.model || metaEntry.active_minutes === undefined
         || metaEntry.context_tokens === undefined
+        || metaEntry.compact_count === undefined
+        || metaEntry.skill_uses === undefined
         || (metaEntry.uses_task_agent && !metaEntry.agentMetrics))) {
-        // Meta session — model, active time and agent metrics all come from the
-        // transcript (Claude's own session-meta files carry none of the three), and all
-        // three are cached as one unit keyed on the file's version. Wall-clock duration
-        // is in the meta file; per-turn active time only exists here, so it has to be
-        // computed or the metric is blank for the path that serves MOST Claude sessions.
+        // Meta session — model, active time, agent metrics, compaction and skill uses all come from
+        // the transcript (Claude's own session-meta files carry none of them), and all five are
+        // cached as one unit keyed on the file's version. Wall-clock duration is in the meta file;
+        // per-turn active time only exists here, so it has to be computed or the metric is blank for
+        // the path that serves MOST Claude sessions.
         await fileLimit(async () => {
           const needsModel = !metaEntry.model
           const needsAgentMetrics = metaEntry.uses_task_agent && !metaEntry.agentMetrics
@@ -228,7 +230,16 @@ async function scanProjectDir(
           // context reading, and this path serves MOST Claude sessions — a gauge computed only
           // inside `parseSessionJsonl` would be blank on nearly every row it exists for.
           const needsContext = metaEntry.context_tokens === undefined
-          if (!needsModel && !needsAgentMetrics && !needsActive && !needsContext) return
+          // `compact_count` and `skill_uses` are the same story: `parseSessionJsonl` fills them only
+          // when it reads the session's OWN transcript (`source === 'jsonl'`), and a meta-backed
+          // session never takes that path once it ages past Claude's cleanup window into
+          // `session-meta`. Gating on `undefined` (never on `!metaEntry.compact_count`, which `0`
+          // would trip) matches the field's own rule: presence IS the record of a real read, so a
+          // session already carrying `compact_count: 0` must not be enriched again.
+          const needsCompaction = metaEntry.compact_count === undefined
+          const needsSkills = metaEntry.skill_uses === undefined
+          if (!needsModel && !needsAgentMetrics && !needsActive && !needsContext
+            && !needsCompaction && !needsSkills) return
 
           const enriched = await cachedEnrich(cache, filePath, metaEntry.model ?? '')
           if (!enriched) return
@@ -240,6 +251,17 @@ async function scanProjectDir(
           // existing meta value is not the same as not writing.
           if (needsContext && enriched.contextTokens !== null) metaEntry.context_tokens = enriched.contextTokens
           if (needsAgentMetrics && enriched.agentMetrics) metaEntry.agentMetrics = enriched.agentMetrics
+          if (needsCompaction) {
+            // `0` is written unconditionally, matching `parseSessionJsonl`'s own rule — the whole
+            // point of the fix this branch exists for was that presence must mean "read", not
+            // "read and found something".
+            metaEntry.compact_count = enriched.compact.count
+            metaEntry.compact_ms = enriched.compact.ms
+            if (enriched.compact.droppedTokens !== undefined) {
+              metaEntry.compact_dropped_tokens = enriched.compact.droppedTokens
+            }
+          }
+          if (needsSkills) metaEntry.skill_uses = enriched.skillUses
         })
       }
       return
@@ -547,7 +569,7 @@ export async function buildApiResponse(): Promise<ApiResponse> {
  *  Fills gaps left by Claude Code's own stats-cache updater (e.g. activity from today
  *  that hasn't been rolled into ~/.claude/stats-cache.json yet). Only sessions whose
  *  model starts with `claude-` are counted (skips `<synthetic>` and other sentinels). */
-function supplementStatsCache(statsCache: StatsCache, sessions: SessionMeta[]): void {
+export function supplementStatsCache(statsCache: StatsCache, sessions: SessionMeta[]): void {
   if (sessions.length === 0) return
   const lastComputed = statsCache.lastComputedDate ?? ''
 
@@ -559,35 +581,95 @@ function supplementStatsCache(statsCache: StatsCache, sessions: SessionMeta[]): 
     if (!s.start_time) continue
     // `sessionDay`, not `.slice`: an adapter that wrote the wrong shape must not be able to throw
     // here and take the whole API response with it. See sessionDay.
-    const day = sessionDay(s.start_time)
-    if (!day) continue
-    if (lastComputed && day <= lastComputed) continue
+    const startDay = sessionDay(s.start_time)
+    if (!startDay) continue
 
-    const da = dailyActivity.get(day) ?? { messageCount: 0, sessionCount: 0, toolCallCount: 0 }
-    da.messageCount += (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
-    da.sessionCount += 1
-    da.toolCallCount += Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
-    dailyActivity.set(day, da)
+    /**
+     * A DAY THE SESSION WORKED, NOT THE DAY IT STARTED — and its LIFETIME totals are not one day's.
+     *
+     * This filed every counter a session ever accumulated under the day it BEGAN. A conversation
+     * opened on Tuesday and still running on Sunday put six days of tokens on Tuesday and NOTHING
+     * on the five days after it, so the daily series was wrong in both directions at once.
+     *
+     * Measured on this machine, against the same sessions' own per-day records:
+     *
+     *   2026-09-03   cache said 3,89 B   really 1,26 B    3x too much
+     *   2026-09-06   cache said    64 M  really 1,83 B   28x too little
+     *   2026-09-07   cache said   550 M  really 1,77 B    3x too little
+     *
+     * And it is not a corner: this supplement covers every day after `lastComputedDate`, which on
+     * that machine is 2026-07-19 — seven weeks of the dashboard's day series.
+     *
+     * The front end already learned this rule twice, for the date FILTER and for the activity
+     * calendar, whose own note says it in these words: "A calendar of when work BEGAN is not a
+     * calendar of when work happened." `SessionMeta.daily` is what both of them read. This is the
+     * third place, and the one the other two were compensating for.
+     *
+     * A session with NO `daily` keeps the old treatment, for the reason it is kept everywhere else:
+     * it cannot be split, and inventing a spread for it would be worse than filing it where it
+     * began.
+     */
+    const daily = s.daily
+    const lifeMsgs = (s.user_message_count ?? 0) + (s.assistant_message_count ?? 0)
+    const lifeTools = Object.values(s.tool_counts ?? {}).reduce((a, b) => a + b, 0)
+    const days: { day: string; msgs: number; tools: number; inp: number; out: number; cr: number; cw: number }[] = []
+    if (daily) {
+      for (const [day, u] of Object.entries(daily)) {
+        const msgs = u.messages ?? 0
+        const inp = u.input_tokens ?? 0
+        const out = u.output_tokens ?? 0
+        const cr = u.cache_read_input_tokens ?? 0
+        const cw = u.cache_creation_input_tokens ?? 0
+        // A day the session merely EXISTED through, with no turn on it, is not activity — the same
+        // rule the calendar applies, so the two cannot disagree about which days it was alive on.
+        if (msgs <= 0 && inp <= 0 && out <= 0 && cr <= 0 && cw <= 0) continue
+        days.push({
+          day, msgs, inp, out, cr, cw,
+          // Tool calls are NOT recorded per day, so this is an apportionment by that day's share of
+          // the session's messages — stated rather than passed off as a measurement, and the same
+          // treatment the calendar already gives it for the same reason.
+          tools: lifeMsgs > 0 ? Math.round((msgs / lifeMsgs) * lifeTools) : 0,
+        })
+      }
+    }
+    if (days.length === 0) {
+      days.push({
+        day: startDay, msgs: lifeMsgs, tools: lifeTools,
+        inp: s.input_tokens ?? 0, out: s.output_tokens ?? 0,
+        cr: s.cache_read_input_tokens ?? 0, cw: s.cache_creation_input_tokens ?? 0,
+      })
+    }
 
-    const model = s.model
-    if (!model || !model.startsWith('claude-')) continue
-    const inp = s.input_tokens ?? 0
-    const out = s.output_tokens ?? 0
-    const cr  = s.cache_read_input_tokens ?? 0
-    const cw  = s.cache_creation_input_tokens ?? 0
-    const total = inp + out + cr + cw
-    if (total === 0) continue
+    for (const d of days) {
+      // The watermark is per DAY, as it always was: a session that started before it but worked
+      // after contributes only the days Claude's own updater has not rolled up yet.
+      if (lastComputed && d.day <= lastComputed) continue
 
-    const byModel = dailyModel.get(day) ?? new Map<string, number>()
-    byModel.set(model, (byModel.get(model) ?? 0) + total)
-    dailyModel.set(day, byModel)
+      const da = dailyActivity.get(d.day) ?? { messageCount: 0, sessionCount: 0, toolCallCount: 0 }
+      da.messageCount += d.msgs
+      // ONE PER DAY IT WORKED. "Sessions that day" is how many conversations were alive then, which
+      // is the question the number answers; counting each only on its first day is what made a week
+      // of work look like a single spike.
+      da.sessionCount += 1
+      da.toolCallCount += d.tools
+      dailyActivity.set(d.day, da)
 
-    const mt = modelTotals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-    mt.input     += inp
-    mt.output    += out
-    mt.cacheRead += cr
-    mt.cacheWrite += cw
-    modelTotals.set(model, mt)
+      const model = s.model
+      if (!model || !model.startsWith('claude-')) continue
+      const total = d.inp + d.out + d.cr + d.cw
+      if (total === 0) continue
+
+      const byModel = dailyModel.get(d.day) ?? new Map<string, number>()
+      byModel.set(model, (byModel.get(model) ?? 0) + total)
+      dailyModel.set(d.day, byModel)
+
+      const mt = modelTotals.get(model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      mt.input     += d.inp
+      mt.output    += d.out
+      mt.cacheRead += d.cr
+      mt.cacheWrite += d.cw
+      modelTotals.set(model, mt)
+    }
   }
 
   if (dailyActivity.size === 0 && dailyModel.size === 0 && modelTotals.size === 0) return

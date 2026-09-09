@@ -69,6 +69,33 @@ export interface HarnessCapabilities {
    * whose only token report is a cumulative one written at shutdown, does not.
    */
   contextWindow: boolean
+  /**
+   * The harness records when it compacted the conversation, so `compact_count` can be filled.
+   * Claude Code writes a `compact_boundary` system line with a `compactMetadata` block; no other
+   * harness has an equivalent marker, so the profile's compaction figures are absent there rather
+   * than zero.
+   */
+  compaction: boolean
+  /**
+   * The harness records SKILL invocations by name, so `SessionMeta.skill_uses` can be filled.
+   * Claude Code writes a `Skill` tool_use whose `input.skill` names the skill; no other harness
+   * has the concept at all, so `skills` there is absent rather than an empty map — a `{}` would
+   * enter the profile's denominator as "this session invoked none", which is a measurement nobody
+   * took.
+   */
+  skills: boolean
+  /**
+   * The harness names an MCP tool as `mcp__<server>__<tool>`, so the SERVER can be read back off
+   * `tool_counts` — which is what the profile's `mcpServers` metric counts.
+   *
+   * This is narrower than `tools`, which is `true` everywhere: recording the tool is not the same
+   * as recording whose server it was. Antigravity writes `mcp_` with ONE underscore and
+   * `call_mcp_tool`, and Copilot keeps MCP names in `mcp_tool_names` and never a server; codex and
+   * gemini record no MCP tool at all (`uses_mcp` is hardcoded `false` in both parsers). Counting
+   * `mcp__`-prefixed keys on any of them yields a confident `0` for a question that was never
+   * asked.
+   */
+  mcpServers: boolean
 }
 
 /** Single source of truth for which metrics each harness can produce.
@@ -79,16 +106,16 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   //   codex   → `task_complete`.duration_ms (measured by Codex itself)
   //   copilot → `assistant.turn_start` → `assistant.turn_end` brackets
   //   gemini / antigravity / kimi → reconstructed from per-message timestamps (no measured field)
-  claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true,  dynamicWorkflows: true,  activeTime: true,  contextWindow: true },
-  codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true,  contextWindow: true },
+  claude:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: true,  gitLines: true,  dynamicWorkflows: true,  activeTime: true,  contextWindow: true,  compaction: true,  skills: true,  mcpServers: true },
+  codex:   { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true,  contextWindow: true,  compaction: false, skills: false, mcpServers: false },
   // Gemini's chat files carry `toolCalls: [{ name, args }]` per message, and a shell call puts its
   // command in `args.command` — so tools and commits are real. `gitLines` stays false: the calls
   // name the file they touched but carry no diff counters.
-  gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true,  contextWindow: false },
+  gemini:  { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true,  contextWindow: false, compaction: false, skills: false, mcpServers: false },
   // `tools` was false while `tool.execution_start` had been carrying the tool name and its
   // arguments all along — the flag was out of date, not the data missing. Verified against a real
   // events.jsonl before flipping it.
-  copilot: { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: true,  dynamicWorkflows: false, activeTime: true,  contextWindow: false },
+  copilot: { tokens: true,  cost: true,  model: true,  tools: true,  agents: false, gitLines: true,  dynamicWorkflows: false, activeTime: true,  contextWindow: false, compaction: false, skills: false, mcpServers: false },
   // Antigravity (agy): tokens + model come from the `gen_metadata` protobuf blobs in
   // ~/.gemini/antigravity-cli/conversations/<id>.db (decoded by adapters/antigravity-protobuf.ts)
   // and cost is derived from them via calcCost().
@@ -99,7 +126,7 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   // exactly the misleading-zero this flag exists to prevent, so the UI shows N/A instead. The
   // per-session lines_added / lines_removed fields are still populated (and files_modified, which
   // this flag does NOT gate, stays real).
-  antigravity: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true, contextWindow: true },
+  antigravity: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true, contextWindow: true, compaction: false, skills: false, mcpServers: false },
   // Kimi Code CLI. Tokens and model are real (usage.record events in each agent's wire.jsonl).
   // Kimi ROUTES to other providers and stamps the provider's own model on each usage record
   // (`google/gemini-3.5-flash-lite`), so in practice the model is one MODEL_PRICING already knows
@@ -107,9 +134,12 @@ export const HARNESS_CAPABILITIES: Record<HarnessId, HarnessCapabilities> = {
   // any unknown id on any harness they would take the shared fallback price, so add them here when
   // Moonshot publishes verified rates. `gitLines` is false because Kimi records the Edit/Write
   // strings but no diff counters.
+  // `mcpServers` is TRUE here and nowhere but claude: kimi-parse records an MCP call under its own
+  // `mcp__<server>__<tool>` name in `tool_counts` (verified on real data — `mcp__db__query`), which
+  // is the one shape the server can be read back out of.
   // Kimi's wire carries `tool.call` with `args`, and its own tool schema declares Bash's
   // `command` — so tools and commits are both real, read from what it actually ran.
-  kimi: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true, contextWindow: true },
+  kimi: { tokens: true, cost: true, model: true, tools: true, agents: false, gitLines: false, dynamicWorkflows: false, activeTime: true, contextWindow: true, compaction: false, skills: false, mcpServers: true },
 }
 
 /** Display order for harness lists, and the single source of truth for "every harness".
@@ -133,6 +163,23 @@ export interface SessionDayUsage {
   cache_creation_input_tokens: number
   /** Messages of BOTH roles, matching `dailyActivity.messageCount`. */
   messages: number
+  /**
+   * WHEN, on this day: hour of the LOCAL clock -> how many of `message_hours`' entries fell in it.
+   *
+   * The same bucket rule and the same population as `message_hours` (every timestamped line, both
+   * roles), which is what lets a sliced session's `message_hours` be REBUILT from these — see
+   * `expandHours`. It is deliberately not derived from `messages`: that counter has its own
+   * population, and a chart built from one field's total split by another field's shape is an
+   * apportionment, not a measurement.
+   *
+   * It exists because `message_hours` carries no day, so under a date filter a conversation open
+   * since Tuesday put every hour it had ever run in into today's chart — measured as bars across
+   * all 24 hours for someone who had started at 8am.
+   *
+   * Optional: records written before the field existed have none, and absent means NOT RECORDED,
+   * never "no activity".
+   */
+  hours?: Record<string, number>
 }
 
 export interface SessionMeta {
@@ -155,7 +202,22 @@ export interface SessionMeta {
    *  already deleted, or a harness with `activeTime: false`); the UI shows "—", never a guess. */
   active_minutes?: number
   user_message_count: number
+  /**
+   * Characters the PERSON wrote, summed — and the count of messages they came from.
+   *
+   * The SUM and not an average (averaging averages weighs a 1-prompt session like an 80-prompt
+   * one), and its own denominator rather than `user_message_count`: see `promptChars.ts`, where the
+   * measurement that forced that is written down. Both optional, because every record written
+   * before this existed lacks them and an absent value is N/A rather than a session of empty
+   * prompts.
+   */
+  user_chars?: number
+  /** How many messages those characters came from. The denominator, written in the same statement. */
+  user_char_messages?: number
   assistant_message_count: number
+  /** The same, for what the ASSISTANT wrote. */
+  assistant_chars?: number
+  assistant_char_messages?: number
   tool_counts: Record<string, number>
   tool_output_tokens: Record<string, number>
   agent_file_reads: Record<string, number>
@@ -207,6 +269,26 @@ export interface SessionMeta {
    * harness, where `resolveContextWindow(model)` answers instead.
    */
   context_window?: number
+  /**
+   * WHAT COMPACTION COST THIS SESSION. Claude-only — gated by `HARNESS_CAPABILITIES.compaction`.
+   *
+   * **`0` IS A REAL ANSWER AND IS WRITTEN AS ONE.** `parseSessionJsonl` stamps `compact_count` and
+   * `compact_ms` whenever it read THIS session's own transcript, so absent means "no transcript was
+   * read for this session" and nothing else. That distinction is the whole denominator of
+   * `session-profile.ts`: while the producer wrote the field only above zero, `n` could never
+   * exceed `nonZero` and the median of a rare event was always at least 1.
+   *
+   * `compact_dropped_tokens` is the LAST cumulative reading, not a sum of them, and STAYS absent
+   * when no record reported one — a `0` there would claim a session that compacted five times
+   * dropped nothing. See `compactsFromClaudeJsonl`.
+   */
+  compact_count?: number
+  compact_ms?: number
+  compact_dropped_tokens?: number
+  /** Skill invocations by name (`superpowers:brainstorming`), from the `Skill` tool_use.
+   *  Gated by `HARNESS_CAPABILITIES.skills`. `{}` is a real answer ("this session invoked none")
+   *  and is written whenever the session's own transcript was read; absent means it was not. */
+  skill_uses?: Record<string, number>
   first_prompt: string
   /** Human-readable session title. Claude writes an `ai-title` (or legacy `summary`) line into
    *  the transcript; we surface it as the session's display name. Falls back to `first_prompt`
@@ -394,6 +476,21 @@ export interface WorkflowRun {
     agentCount: number; tokensIn: number; tokensOut: number; costUSD: number
     durationMs: number; toolUses: number; cacheRead?: number; cacheWrite?: number
   }
+}
+
+/**
+ * One attachment agentop typed into a session's pane, and when.
+ *
+ * The record exists so a `[Image #4]` marker can find its file again: a harness that is mid-turn
+ * queues an arriving message and substitutes markers for its images, so the PATH that normally
+ * survives into the transcript is gone. The file is still on disk — this says which session it went
+ * to. See `sessions/attachment-log.ts` (the record) and `lib/attachmentPreview.ts` (the rule).
+ */
+export interface AttachmentSend {
+  sessionId: string
+  /** When agentop wrote the file, which is within a second of typing its path. */
+  atMs: number
+  path: string
 }
 
 export interface PriceEntry {

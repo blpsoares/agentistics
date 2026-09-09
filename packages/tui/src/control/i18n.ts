@@ -7,9 +7,33 @@
  * about: tab names, key hints, empty states, the words on this app's own screens.
  */
 
+import type { ProfileMetric } from '@agentistics/core'
 import type { CliLang } from './lang'
 import { dimensionWordBook, type DimensionWordBook, type SessionDimensionId, type SessionGroupingId } from './session-dimensions'
 import type { BackupLayer, BackupScheduleId, TabId, TeamMode } from './types'
+
+/**
+ * A profile metric's label, in both languages.
+ *
+ * `Record<ProfileMetric, string>` and NOT a `Record<string, string>` with a `?? key` fallback: a
+ * seventh metric must fail the BUILD here, not print `activeMinutes` to somebody reading a panel.
+ *
+ * EXPORTED so `ProfilePanel.tsx` — the web panel's OWN copy of this same map — can be cross-checked
+ * against it: nothing else keeps a translator who updates one from forgetting its twin, since the
+ * two are separately-typed literals in separate packages and TypeScript checks each one only
+ * against `ProfileMetric` itself, never against each other.
+ */
+export const PROFILE_METRIC_EN: Record<ProfileMetric, string> = {
+  messages: 'messages', activeMinutes: 'active minutes', compacts: 'compacts',
+  skills: 'skills', mcpServers: 'MCP servers', subagents: 'subagents',
+  tokens: 'tokens', toolErrors: 'tool errors',
+}
+
+export const PROFILE_METRIC_PT: Record<ProfileMetric, string> = {
+  messages: 'mensagens', activeMinutes: 'minutos ativos', compacts: 'compacts',
+  skills: 'skills', mcpServers: 'servidores MCP', subagents: 'subagentes',
+  tokens: 'tokens', toolErrors: 'erros de ferramenta',
+}
 
 export interface ControlStrings {
   tagline: string
@@ -214,6 +238,10 @@ export interface ControlStrings {
   sessionsLoading: string
   /** Said when the host does not implement the fleet at all — not the same as an empty fleet. */
   sessionsUnsupported: string
+  /** The heading over the behaviour profile drawn under the empty-state sentence. */
+  profileHeading: (days: number, sessions: number) => string
+  /** A profile metric's own label. Total over `ProfileMetric` — there is no fallback. */
+  profileMetric: (key: ProfileMetric) => string
   /** The summary row: "3 sessions · 1 waiting on you". */
   /**
    * How many rows are ON SCREEN, and out of how many the machine has.
@@ -256,8 +284,20 @@ export interface ControlStrings {
   sessionsGroupings: Record<SessionGroupingId, string>
   /** What each dimension's 'no value' bucket is called. Same reason it is a `Record`. */
   sessionsUnfiled: Record<SessionDimensionId, string>
-  /** The band of rows the user MARKED — the filled side of the `marked` dimension. */
+  /** The band of rows the user PINNED — the filled side of the `marked` dimension. */
   sessionsMarkedBand: string
+  /**
+   * The list pane's title while the bulk-stop mode is on.
+   *
+   * The title rather than only a banner, because the title is the one part of this pane that is
+   * drawn at every width and every height: a mode you can be in without the screen saying so is the
+   * defect this replaces, and a announcement that the narrow layout drops would reintroduce it.
+   */
+  sessionsPaneStopMode: string
+  /** The banner over the list while the mode is on: what is picked, and every key that works. */
+  sessionsStopBanner: (picked: number) => string
+  /** The confirmation for stopping the PICKED set. It states the count, because the count is the act. */
+  sessionsStopManyConfirm: (n: number) => string
   /** Stop the current turn without ending the session — the web's own verb. See `fleet-row.ts`. */
   sessionsInterrupt: string
   /** Why it is off: nothing is running to stop. */
@@ -309,8 +349,8 @@ export interface ControlStrings {
   sessionsKeyWhat: {
     move: string; open: string; attach: string; menu: string; section: string
     newSession: string; search: string; clear: string; kill: string; rename: string
-    note: string; task: string; mark: string; onlyActive: string
-    openTask: string; finishTask: string; recent: string; cascade: string
+    note: string; task: string; mark: string; onlyActive: string; bulkStop: string
+    recent: string; cascade: string
     group: string; layout: string; detail: string; menuFold: string
     reset: string
     tabs: string; help: string; quit: string
@@ -461,7 +501,6 @@ export interface ControlStrings {
     approve: string
     prompt: string
     kill: string
-    openTask: string
     reopenFell: string
     finishTask: string
     /** Removing a task NAME — the sessions under it survive, unfiled. */
@@ -535,6 +574,10 @@ export interface ControlStrings {
   keySessionsActive: string
   keySessionsDetail: string
   keySessionsMark: string
+  /** Footer hints that stand in for the ordinary ones while the bulk-stop mode is on. */
+  keySessionsStopPick: string
+  keySessionsStopRun: string
+  keySessionsStopLeave: string
   keySessionsClosed: string
   keySessionsNoTask: string
   /** How to change screen where the arrows belong to the screen itself. */
@@ -894,6 +937,8 @@ const EN: ControlStrings = {
   sessionsEmptyFiltered: 'nothing matches · esc clears the filter',
   sessionsLoading: 'reading…',
   sessionsUnsupported: 'session management is not available on this machine.',
+  profileHeading: (days, sessions) => `Your last ${days} days · ${sessions} sessions`,
+  profileMetric: key => PROFILE_METRIC_EN[key],
   // `N of M sessions` read as "N of your M open sessions", which is not what either number is: the
   // second is every session this machine KNOWS, closed conversations and lost rows included, and
   // the first is only what the current view draws. Two counts of different kinds joined by "of" is
@@ -923,7 +968,7 @@ const EN: ControlStrings = {
     model: 'model',
     project: 'project',
     status: 'state',
-    marked: 'marked',
+    marked: 'pinned',
   },
   sessionsUnfiled: {
     day: 'no date recorded',
@@ -935,9 +980,14 @@ const EN: ControlStrings = {
     // Unreachable in practice — every row wears a state — but a bucket without a name is a heading
     // the screen cannot draw, so it is named rather than left to render blank.
     status: 'state unrecorded',
-    marked: 'not marked',
+    marked: 'not pinned',
   },
-  sessionsMarkedBand: 'marked',
+  sessionsMarkedBand: 'pinned',
+  sessionsPaneStopMode: 'sessions · STOP MODE',
+  sessionsStopBanner: (picked: number) =>
+    `STOP MODE · ${picked} selected to stop · space selects · x stops them · ctrl+x leaves`,
+  sessionsStopManyConfirm: (n: number) =>
+    `Stop the ${n} selected session${n === 1 ? '' : 's'}? The assistant running in each is ended.`,
   sessionsInterrupt: 'Stop what it is doing',
   sessionsInterruptIdle: 'Nothing is running right now, so there is nothing to stop.',
   sessionsExternalRow: 'This session was started outside agentop, so nothing here can act on it.',
@@ -1004,11 +1054,10 @@ const EN: ControlStrings = {
     rename: 'rename it',
     note: 'write a note on it',
     task: 'file it under a task',
-    openTask: 'open every session of its task',
-    finishTask: 'mark its task finished',
     recent: 'the last conversations, newest first, ungrouped',
     cascade: 'cascade the rows by directory',
-    mark: 'mark this row, and keep it marked',
+    mark: 'pin this row, and keep it pinned',
+    bulkStop: 'stop several at once — space selects, x stops them, ctrl+x leaves',
     onlyActive: 'show what is not running too — closed, ended and lost',
     layout: 'list or cards',
     group: 'change the grouping',
@@ -1035,10 +1084,13 @@ const EN: ControlStrings = {
   sessionsReopenConfirm: task => `Reopen "${task}"?`,
   sessionsFellWord: 'fell together',
   sessionsFellNote: (count, ago) =>
-    `${count} session${count === 1 ? '' : 's'} fell ${ago} — R reopens them`,
+    `${count} session${count === 1 ? '' : 's'} ${count === 1 ? 'was' : 'were'} open when the machine `
+    + `stopped ${ago} — press R to bring ${count === 1 ? 'it' : 'them'} back`,
   sessionsFellConfirm: (count, ago) =>
-    `Reopen the ${count} session${count === 1 ? '' : 's'} that fell ${ago}? `
-    + 'Each comes back as a new session resuming its own conversation; anything still running is left alone.',
+    `Bring back the ${count} session${count === 1 ? '' : 's'} that ${count === 1 ? 'was' : 'were'} open `
+    + `when the machine stopped ${ago}? `
+    + 'Each resumes its own conversation where it left off, under a new session; '
+    + 'anything still running is left alone.',
   sessionsDeleteTaskAsk: (task, count) => count === 0
     ? `Remove the task "${task}"? No session is filed under it.`
     : `Remove the task "${task}"? The ${count} session${count === 1 ? '' : 's'} filed under it `
@@ -1146,7 +1198,6 @@ const EN: ControlStrings = {
     note: 'Note',
     task: 'Task',
     kill: 'Stop session',
-    openTask: 'Open whole task',
     reopenFell: 'Reopen what fell',
     finishTask: 'Finish task',
     deleteTask: 'Delete task',
@@ -1190,7 +1241,10 @@ const EN: ControlStrings = {
   sessionsHideClosed: 'closed: hidden',
   keySessionsActive: 'c only active',
   keySessionsDetail: 'd detail',
-  keySessionsMark: 'space mark',
+  keySessionsMark: 'space pin',
+  keySessionsStopPick: 'space select',
+  keySessionsStopRun: 'x stop selected',
+  keySessionsStopLeave: 'ctrl+x leave',
   keySessionsClosed: 'c closed',
   keySessionsNoTask: 'u unfiled',
   keyTabsAlt: '[ ] screens',
@@ -1465,6 +1519,8 @@ const PT: ControlStrings = {
   sessionsEmptyFiltered: 'nada corresponde · esc limpa o filtro',
   sessionsLoading: 'lendo…',
   sessionsUnsupported: 'gerenciamento de sessões não está disponível nesta máquina.',
+  profileHeading: (days, sessions) => `Seus últimos ${days} dias · ${sessions} sessões`,
+  profileMetric: key => PROFILE_METRIC_PT[key],
   // Ver a nota na versão em inglês: dois números de espécies diferentes ligados por "de" são lidos
   // como um só, e o medidor de memória do cabeçalho (`ram 4/18`) está na mesma tela.
   sessionsCount: (shown: number, total: number) => (shown === total
@@ -1490,7 +1546,7 @@ const PT: ControlStrings = {
     model: 'modelo',
     project: 'projeto',
     status: 'estado',
-    marked: 'marcadas',
+    marked: 'fixadas',
   },
   sessionsUnfiled: {
     day: 'sem data registrada',
@@ -1500,9 +1556,17 @@ const PT: ControlStrings = {
     task: 'sem tarefa',
     repo: 'sem repositório',
     status: 'estado não registrado',
-    marked: 'não marcadas',
+    marked: 'não fixadas',
   },
-  sessionsMarkedBand: 'marcadas',
+  sessionsMarkedBand: 'fixadas',
+  sessionsPaneStopMode: 'sessões · MODO ENCERRAR',
+  sessionsStopBanner: (picked: number) =>
+    `MODO ENCERRAR · ${picked} selecionada${picked === 1 ? '' : 's'}`
+    + ' · espaço seleciona · x encerra · ctrl+x sai',
+  sessionsStopManyConfirm: (n: number) =>
+    (n === 1
+      ? 'Encerrar a 1 sessão selecionada? O assistente que roda nela é finalizado.'
+      : `Encerrar as ${n} sessões selecionadas? O assistente que roda em cada uma é finalizado.`),
   sessionsInterrupt: 'Parar o que está fazendo',
   sessionsInterruptIdle: 'Nada está rodando agora, então não há o que parar.',
   sessionsExternalRow: 'Esta sessão foi iniciada fora do agentop, então nada aqui age sobre ela.',
@@ -1561,11 +1625,10 @@ const PT: ControlStrings = {
     rename: 'renomeia',
     note: 'escreve uma nota nela',
     task: 'arquiva sob uma tarefa',
-    openTask: 'abre todas as sessões da tarefa dela',
-    finishTask: 'marca a tarefa dela como finalizada',
     recent: 'as últimas conversas, mais recentes primeiro, sem agrupamento',
     cascade: 'exibe em cascata por diretório',
-    mark: 'marca esta linha, e mantém marcada',
+    mark: 'fixa esta linha, e mantém fixada',
+    bulkStop: 'encerra várias de uma vez — espaço seleciona, x encerra, ctrl+x sai',
     onlyActive: 'mostra também o que não está rodando — fechadas, encerradas e perdidas',
     layout: 'lista ou cards',
     group: 'muda o agrupamento',
@@ -1589,12 +1652,15 @@ const PT: ControlStrings = {
   sessionsReopenConfirm: task => `Reabrir "${task}"?`,
   sessionsFellWord: 'caíram juntas',
   sessionsFellNote: (count, ago) =>
-    (count === 1 ? `1 sessão caiu ${ago} — R reabre` : `${count} sessões caíram ${ago} — R reabre todas`),
+    (count === 1
+      ? `1 sessão estava aberta quando a máquina parou ${ago} — R traz de volta`
+      : `${count} sessões estavam abertas quando a máquina parou ${ago} — R traz todas de volta`),
   sessionsFellConfirm: (count, ago) =>
     (count === 1
-      ? `Reabrir a sessão que caiu ${ago}? `
-      : `Reabrir as ${count} sessões que caíram ${ago}? `)
-    + 'Cada uma volta como uma sessão nova retomando a própria conversa; o que ainda estiver rodando fica como está.',
+      ? `Trazer de volta a sessão que estava aberta quando a máquina parou ${ago}? `
+      : `Trazer de volta as ${count} sessões que estavam abertas quando a máquina parou ${ago}? `)
+    + 'Cada uma retoma a própria conversa de onde parou, sob uma sessão nova; '
+    + 'o que ainda estiver rodando fica como está.',
   sessionsDeleteTaskAsk: (task, count) => count === 0
     ? `Remover a tarefa "${task}"? Nenhuma sessão está sob ela.`
     : `Remover a tarefa "${task}"? ${count === 1 ? 'A sessão' : `As ${count} sessões`} sob ela `
@@ -1701,7 +1767,6 @@ const PT: ControlStrings = {
     note: 'Nota',
     task: 'Tarefa',
     kill: 'Encerrar sessão',
-    openTask: 'Abrir tarefa toda',
     reopenFell: 'Reabrir o que caiu',
     finishTask: 'Finalizar tarefa',
     deleteTask: 'Apagar tarefa',
@@ -1745,7 +1810,10 @@ const PT: ControlStrings = {
   sessionsHideClosed: 'fechadas: ocultas',
   keySessionsActive: 'c só ativas',
   keySessionsDetail: 'd detalhe',
-  keySessionsMark: 'space marcar',
+  keySessionsMark: 'space fixar',
+  keySessionsStopPick: 'space selecionar',
+  keySessionsStopRun: 'x encerrar selecionadas',
+  keySessionsStopLeave: 'ctrl+x sair',
   keySessionsClosed: 'c fechadas',
   keySessionsNoTask: 'u sem tarefa',
   keyTabsAlt: '[ ] telas',

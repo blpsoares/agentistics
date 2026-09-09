@@ -183,6 +183,25 @@ for i = 0, 1, 2, ..., 365:
 
 This means: if you haven't worked yet today, the streak still counts from yesterday. You are not penalized for opening the dashboard before your first commit of the day.
 
+## Activity trend (Worked-Day attribution)
+
+The daily activity series counts a session on the day it **WORKED** (was active and emitted messages or tool calls), rather than the day it was initially created. For long-running sessions spanning multiple days, token usage and activity are attributed to the active days where work occurred.
+
+## Prompt and answer length metrics
+
+Each session records character and token length metrics for the prompt and generated answer:
+- `prompt_chars` / `prompt_tokens` — Character and token count of user prompts.
+- `answer_chars` / `answer_tokens` — Character and token count of assistant outputs.
+
+These metrics power session profile analysis, helping identify prompt verbosity and answer density across harnesses and repositories.
+
+## ALM Subtask metric aggregations
+
+Metrics on the ALM Board (`/tasks`) are aggregated at the **Subtask** level:
+- Subtasks own their constituent sessions and deliveries.
+- Token totals, API-equivalent costs, file modifications, and duration are summed across all sessions linked to a subtask.
+- Deduplication ensures that unique conversations and repositories are counted once per subtask headline, even when multiple session rows reference the same underlying conversation.
+
 ## Session duration
 
 ```

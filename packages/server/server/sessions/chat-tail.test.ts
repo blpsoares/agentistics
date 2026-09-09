@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { mkdtemp, mkdir, rm, writeFile, utimes } from 'node:fs/promises'
+import { mkdtemp, mkdir, rename, rm, writeFile, utimes } from 'node:fs/promises'
 import {
   forgetChatTailContent, forgetChatTailPaths, readChatWindow, readRecentChatTurns,
   resolveChatTranscriptPath,
@@ -448,5 +448,133 @@ describe('the tool call carries the id its step is opened with', () => {
     const call = turns.flatMap(t => t.tools ?? [])[0]
     expect(call?.name).toBe('Bash')
     expect(call?.ref).toBeUndefined()
+  })
+})
+
+/**
+ * THE REPORTED CASE — a session created from the wizard was un-chattable for the life of the
+ * server process.
+ *
+ * A harness writes a conversation's transcript when the conversation first SAYS something, so a
+ * session agentop has just started has no file for its first seconds. The chat view's very first
+ * poll lands inside that window, and the `null` it got back used to be cached by conversation id
+ * forever: the step-3 prompt never appeared, every later message sat at "delivered to the session
+ * — not read yet", and no reply ever arrived, while the terminal tab — which reads the pane, not
+ * the transcript — showed the whole conversation.
+ */
+describe('a transcript that does not exist YET', () => {
+  const CWD = '/home/u/proj'
+  let root: string
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'chat-tail-late-'))
+    forgetChatTailPaths(); forgetChatTailContent()
+  })
+  afterEach(async () => { await rm(root, { recursive: true, force: true }) })
+
+  test('is found the moment it appears, not after a restart', async () => {
+    // The first poll: nothing on disk.
+    expect(await resolveChatTranscriptPath(CWD, SESSION_ID, root)).toBe(null)
+
+    // The session says its first thing and the harness writes the file.
+    const dir = join(root, '-home-u-proj')
+    await mkdir(dir, { recursive: true })
+    const file = join(dir, `${SESSION_ID}.jsonl`)
+    await writeFile(file, line({ type: 'user', message: { content: 'oi' } }) + '\n')
+
+    // The next poll finds it. Before the fix this returned the remembered `null` forever.
+    expect(await resolveChatTranscriptPath(CWD, SESSION_ID, root)).toBe(file)
+  })
+
+  test('a miss does not spend the whole-tree SCAN on every poll', async () => {
+    // The reason the `null` was cached at all. The direct path is one `stat` and is always
+    // checked; the scan is a readdir plus a stat per project, and stays paced by the miss TTL.
+    const other = join(root, '-somewhere-else')
+    await mkdir(other, { recursive: true })
+    const now = 1_000_000
+    expect(await resolveChatTranscriptPath(CWD, SESSION_ID, root, now)).toBe(null)
+
+    // Inside the TTL the answer is still null — and the file placed OUTSIDE the direct path is
+    // deliberately not found yet, which is what proves the scan was skipped.
+    const stray = join(other, `${SESSION_ID}.jsonl`)
+    await writeFile(stray, line({ type: 'user', message: { content: 'oi' } }) + '\n')
+    expect(await resolveChatTranscriptPath(CWD, SESSION_ID, root, now + 1000)).toBe(null)
+
+    // Past it, the scan runs again and finds it.
+    expect(await resolveChatTranscriptPath(CWD, SESSION_ID, root, now + 31_000)).toBe(stray)
+  })
+
+  test('a path once found is not re-scanned for WHILE IT IS STILL THERE', async () => {
+    const dir = join(root, '-home-u-proj')
+    await mkdir(dir, { recursive: true })
+    const file = join(dir, `${SESSION_ID}.jsonl`)
+    await writeFile(file, line({ type: 'user', message: { content: 'oi' } }) + '\n')
+    expect(await resolveChatTranscriptPath(CWD, SESSION_ID, root)).toBe(file)
+    expect(await resolveChatTranscriptPath(CWD, SESSION_ID, root)).toBe(file)
+  })
+
+  test('THE REPORTED CASE: the transcript MOVED, and the memo must not go on answering the old path', async () => {
+    // This test used to assert the opposite, in these words: "removing the tree does not un-answer
+    // it: a transcript does not move". It does. Claude Code files a transcript under the project
+    // directory derived from the session's CURRENT cwd, so a session whose cwd changes has its
+    // `<id>.jsonl` re-filed elsewhere — measured 2026-09-08 on a live 2.4 MB conversation. The
+    // stale answer then failed every read, `chat-web.ts` turned that into `turns: []`, and because
+    // the session was live it carried no refusal: the panel said "This conversation has no messages
+    // yet" over a full transcript, and the user stopped receiving replies altogether.
+    const here = join(root, '-home-u-proj')
+    await mkdir(here, { recursive: true })
+    const first = join(here, `${SESSION_ID}.jsonl`)
+    await writeFile(first, line({ type: 'user', message: { content: 'oi' } }) + '\n')
+    expect(await resolveChatTranscriptPath(CWD, SESSION_ID, root)).toBe(first)
+
+    // The cwd changed under the session: same conversation, another project directory.
+    const there = join(root, '-home-u-proj--worktrees-x')
+    await mkdir(there, { recursive: true })
+    const moved = join(there, `${SESSION_ID}.jsonl`)
+    await rename(first, moved)
+
+    expect(await resolveChatTranscriptPath(CWD, SESSION_ID, root)).toBe(moved)
+  })
+
+  test('THE DELETION CASE: a transcript Claude Code cleaned up stops being answered', async () => {
+    // No cwd change needed. Claude Code deletes transcripts older than `cleanupPeriodDays` (30 by
+    // default) on every startup, so a long-lived server holds a path to a file removed under it.
+    const dir = join(root, '-home-u-proj')
+    await mkdir(dir, { recursive: true })
+    const file = join(dir, `${SESSION_ID}.jsonl`)
+    await writeFile(file, line({ type: 'user', message: { content: 'oi' } }) + '\n')
+    expect(await resolveChatTranscriptPath(CWD, SESSION_ID, root)).toBe(file)
+    await rm(root, { recursive: true, force: true })
+    expect(await resolveChatTranscriptPath(CWD, SESSION_ID, root)).toBe(null)
+  })
+})
+
+
+describe('a system note carries WHICH thing it is about, where the body named one', () => {
+  let root: string
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'chat-tail-ref-')); forgetChatTailContent() })
+  afterEach(async () => { await rm(root, { recursive: true, force: true }) })
+
+  async function turnsOf(text: string) {
+    const file = join(root, 'x.jsonl')
+    await writeFile(file, line({ type: 'user', isMeta: true, message: { content: text } }) + '\n')
+    forgetChatTailContent()
+    return (await readChatWindow(file, 10)).turns
+  }
+
+  test('a skill load reaches the browser naming the skill', async () => {
+    // Without this the chip opens the skills tab and lands at the top of a list to be searched —
+    // the limitation CLAUDE.md records. The identity was in the body all along.
+    const [turn] = await turnsOf(
+      'Base directory for this skill: /home/u/.claude/plugins/cache/superpowers-dev/superpowers/6.0.2/skills/brainstorming',
+    )
+    expect(turn?.system).toBe('a skill was loaded')
+    expect(turn?.systemRef).toBe('superpowers:brainstorming')
+  })
+
+  test('a note that names nothing carries no reference at all', async () => {
+    const [turn] = await turnsOf('Continue from where you left off.')
+    expect(turn?.system).toBe('the session was resumed')
+    expect(turn?.systemRef).toBeUndefined()
   })
 })

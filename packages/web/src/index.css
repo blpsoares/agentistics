@@ -119,6 +119,19 @@
   scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
 }
 
+/*
+ * Form controls do NOT inherit `font-family` from `body` — the UA stylesheet gives them the system
+ * font. Without this line every `button`, `input`, `select` and `table` in the app renders in a
+ * different typeface from the text beside it, which is what makes a screen look assembled rather
+ * than designed. Found on the task board, but it was never scoped to it.
+ *
+ * `font-size` is deliberately NOT inherited here: the mobile 16px guard below depends on inputs
+ * carrying their own size, and several controls are intentionally smaller than body text.
+ */
+button, input, textarea, select, table {
+  font-family: inherit;
+}
+
 html, body {
   height: 100%;
   background: var(--bg-base);
@@ -288,6 +301,99 @@ html.ag-viewport-locked > body {
   .ag-settings button.ag-switch {
     min-height: 0;
   }
+  /* A chip on a settings page opts out of the sweep above the same way, and takes its target from
+     `.ag-tap` below instead. */
+  .ag-settings button.ag-tap,
+  .ag-settings button.ag-tap-icon {
+    min-height: 0;
+  }
+}
+
+/* --- .ag-stat-value: the KPI figure's fallback size ------------------------------------------
+   `StatTile` states the figure as `min(18px, N cqi)`, which self-corrects to the tile's real
+   width. A browser that does not know `cqi` drops that whole declaration — this is what it lands
+   on, and it is the same 18px the `min()` caps at. Never remove it in favour of the inline value:
+   an inline style that the browser rejects leaves NO font-size at all. */
+.ag-stat-value { font-size: 18px; }
+
+/* --- .ag-tap / .ag-tap-icon: a 44px touch target that costs the layout no height ---------------
+   A chip is small ON PURPOSE: 11px of label inside a `border-radius: 999` pill. Give it
+   `min-height: 44px` and it stops being a chip — at ~62px wide it comes out an ELLIPSE, and a row
+   of them reads as a row of eggs rather than as a filter. That is the whole of the "the UI is
+   chubby" report: the rule was right (a finger needs 44px) and the way it was paid was wrong — the
+   PAINTED control grew.
+
+   So the paint and the target are separated. The control keeps its natural height and the class
+   projects an invisible 44px box centred on it, which is what the finger actually hits. `::after`
+   is a child of the control, so the press lands on the control's own handler; there is no listener
+   and no wrapper element of our own.
+
+   `.ag-tap` expands VERTICALLY ONLY (`left: 0; right: 0`), so a chip can never steal the tap of the
+   chip beside it in its row. `.ag-tap-icon` is for an icon-only button, which is narrow on both
+   axes and has to grow on both — use it only where the button has real space around it. Both live
+   inside the mobile query: a mouse-driven layout is untouched.
+
+   THE OVERLAP IS BOUNDED BY THE CONTAINER, not waved away. "A pixel or two" was written here and
+   was wrong: a menu of 26px options with `gap: 2` gets a 7px overlap on each side, so the bottom
+   band of every row selects the row BELOW it — and where the neighbour is destructive (an
+   `Edit`/`Remove` pair 6px apart) that is a mis-tap that deletes something.
+
+   So the growth is `--ag-tap-grow`, and a container that cannot afford it SAYS SO by setting the
+   property — `0` for a tight list, so its rows keep exactly their painted target and steal
+   nothing. The default is deliberately small enough to sit inside an ordinary 12-16px gap. Where a
+   control needs the full 44px and its container has no room, the answer is painted height, not a
+   box over the neighbour: `.ag-tap` is not a way to have both.
+
+   Use it for CHIPS, PILLS, TOGGLES and ICON-ONLY buttons: controls whose smallness is their
+   meaning. A dialog's "Save", a menu row, a primary action SHOULD be 44px of paint, and keep it.
+   Do not put it on anything containing its own interactive child (an input, a nested link): the
+   overlay sits above the content and would take that child's clicks. */
+@media (max-width: 767px) {
+  /* How far past its own box a tap overlay may reach, per side. A container with a tighter gap
+     than twice this MUST set it lower (`--ag-tap-grow: 0` for a list that is nearly flush), and a
+     container with room may raise it. */
+  .ag-tap, .ag-tap-icon { position: relative; --ag-tap-grow: 7px; }
+  .ag-tap::after, .ag-tap-icon::after {
+    content: '';
+    position: absolute;
+    top: calc(0px - var(--ag-tap-grow));
+    bottom: calc(0px - var(--ag-tap-grow));
+  }
+  .ag-tap::after { left: 0; right: 0; }
+  .ag-tap-icon::after { left: calc(0px - var(--ag-tap-grow)); right: calc(0px - var(--ag-tap-grow)); }
+}
+
+/* ── The focus ring ──────────────────────────────────────────────────────────
+   NOTHING IN THIS APP FOCUSES WHITE. Asked for directly, and the browser is what does it: with no
+   `outline` of our own the UA default applies, and Chrome's `outline: auto` on a dark surface draws
+   a WHITE ring — the one colour this product uses nowhere else, on every button, input, link and
+   tab stop in the application.
+
+   `:focus-visible` and not `:focus`, so a MOUSE click never draws a ring while a keyboard tab
+   always does — which is the whole reason the pseudo-class exists, and why replacing the outline
+   outright (`outline: none`) is not an option: it would leave a keyboard user with no idea where
+   they are, which is worse than the wrong colour.
+
+   The ring is drawn with `outline` rather than `box-shadow` on purpose: an outline follows
+   `border-radius`, costs no layout, and cannot be clipped by an ancestor's `overflow` the way a
+   shadow is — and several of these controls live inside scrolling boxes.
+
+   `outline-offset` keeps it off the control's own border so a bordered input does not read as
+   having two borders. Anything wanting a different ring overrides it AFTER this rule; nothing here
+   sets a colour on `:focus` alone, so nothing is competing with it. */
+:focus-visible {
+  outline: 2px solid var(--anthropic-orange);
+  outline-offset: 2px;
+  /* Removes the UA's own ring where a browser draws BOTH (Safari keeps its default alongside a
+     custom outline on some form controls). */
+  -webkit-focus-ring-color: var(--anthropic-orange);
+}
+
+/* An element that is already ORANGE gets the ring in the text colour instead: an orange ring two
+   pixels off an orange button is invisible, which is the same failure as the white one seen from
+   the other side. */
+.ag-focus-invert:focus-visible {
+  outline-color: var(--text-primary);
 }
 
 /* iOS zoom guard.
@@ -470,6 +576,38 @@ html.ag-viewport-locked > body {
 /* A task list is a list of states, not of bullets. */
 .ag-chat-md li:has(> input[type="checkbox"]) { list-style: none; margin-left: -18px; }
 .ag-chat-md input[type="checkbox"] { margin-right: 7px; accent-color: var(--anthropic-orange); }
+
+/*
+ * THE APP'S ACCENT, ON EVERY NATIVE CONTROL THAT HAS ONE.
+ *
+ * A range, a checkbox and a radio each paint themselves with the user agent's own accent unless
+ * told otherwise, and on a dark theme that is a violet which belongs to no part of this product.
+ * Reported on the accessibility lens, whose five sliders sat purple beside its own orange buttons.
+ *
+ * Measured before writing this: 10 range inputs in the app and ONE of them set the colour, inline.
+ * Nine were the browser's. A rule per control is a rule nine people have to remember, which is why
+ * this is one selector instead — a new slider is correct by existing.
+ *
+ * `accent-color` and nothing else: it is the one property that recolours a native control without
+ * replacing it, so the thumb, the track and the focus ring stay the platform's — which is what an
+ * ACCESSIBILITY surface most needs to keep.
+ */
+input[type="range"],
+input[type="checkbox"],
+input[type="radio"] { accent-color: var(--anthropic-orange); }
+
+/* THE CARET IS THE PRODUCT'S COLOUR TOO.
+ *
+ * The blinking bar in a text field is drawn by the browser in its own foreground colour — white on
+ * this dark theme — and it is the one piece of chrome the eye is looking straight at while typing.
+ * One selector rather than a rule per field, for the same reason the accent block above is one: a
+ * new input is correct by existing, and a caret that is orange in the composer and white in the
+ * search box is the kind of inconsistency nobody can point at and everybody sees.
+ *
+ * `caret-color` only — the text, the selection and the focus ring are untouched. */
+input,
+textarea,
+[contenteditable] { caret-color: var(--anthropic-orange); }
 
 .ag-chat-md a { color: var(--anthropic-orange); text-decoration: none; }
 .ag-chat-md a:hover { text-decoration: underline; }
@@ -709,8 +847,20 @@ button:focus-within .ag-row-pin,
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  backdrop-filter: blur(14px);
+  /* PREFIXED FIRST, STANDARD LAST — the same order `mask-image` already uses three lines down,
+     and the order that matters here for a reason neither browser support NOR this file's own
+     `@supports` fallback covers: esbuild's CSS minifier (Vite's production build) canonicalises a
+     {prefixed, standard} pair that share one value, and with the standard property declared FIRST
+     it kept only `-webkit-backdrop-filter` and DROPPED `backdrop-filter` outright — verified by
+     fetching the shipped `assets/index-*.css` byte for byte. Chromium does not treat the bare
+     `-webkit-` alias as sufficient on its own (`getComputedStyle` reported `backdropFilter: 'none'`
+     against a live build), so the whole ground rendered as the SOLID `@supports not (...)`
+     fallback below on every ordinary Chrome tab, never the blurred one — reported as a flat dark
+     bar sitting over the last messages. Swapping the order does not change what either browser or
+     minifier is allowed to do; it changes which of two identical declarations survives the pass
+     that only keeps one. */
   -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
   /* Plain first, so a browser without `color-mix` still gets the fade rather than no ground. */
   background: linear-gradient(to bottom, transparent 0%, var(--bg-base) 100%);
   background: linear-gradient(

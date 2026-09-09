@@ -281,8 +281,38 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          accepts a UUID and is deliberately EXCLUDED: its id in this product is
   │                          synthetic (`${dir}/${file}`), so a recorded UUID would resolve to
   │                          nothing while LOOKING like an exact link. Where no link can ever exist
-  │                          (codex, kimi, gemini, agy) `conversationLinkable` is false and the row
-  │                          SAYS so. And a row that knows its conversation never falls back to the
+  │                          (codex, kimi, gemini) `conversationLinkable` is false and the row
+  │                          SAYS so. **AGY IS NO LONGER ONE OF THEM.** It has no assign flag —
+  │                          measured against agy 1.1.27 on 2026-09-08, `agy --conversation
+  │                          <fresh-uuid>` answers `warning: conversation "…" not found` and creates
+  │                          one under an id of its OWN — and no session record; and the
+  │                          harness-and-directory fallback is closed for it IN PARTICULAR, because
+  │                          the adapter takes `project_path` from the GLOBAL `history.jsonl` and agy
+  │                          writes that file only for a prompt TYPED IN ITS UI. A session agentop
+  │                          starts is handed its first prompt as `--prompt-interactive`, so its store
+  │                          record carries `project_path: ""`, `loadConversations` drops it, and even
+  │                          `planFirstSightingClaims` never sees it as a candidate. Measured the same
+  │                          day: 15 of 38 agy conversations had a cwd, and the 23 without were
+  │                          exactly the ones agentop had opened — so EVERY agy session agentop
+  │                          started was unlinkable BY CONSTRUCTION, and its chat view was
+  │                          permanently empty while its terminal worked perfectly. The THIRD route
+  │                          is `HARNESS_PROCESS_LOGS` (pure `agy-conversation.ts` + IO
+  │                          `process-conversation.ts`): agy opens
+  │                          `~/.gemini/antigravity-cli/log/cli-<YYYYMMDD_HHMMSS>.log` per process and
+  │                          HOLDS IT OPEN (verified in `/proc/<pid>/fd` of a live agy under tmux),
+  │                          writing `Created conversation <uuid>` into it — so the chain `managed row
+  │                          -> tmux pane pid -> open fd -> log -> conversation` is exact at every
+  │                          step. It is its OWN table beside `HARNESS_SESSION_SOURCES` rather than a
+  │                          widening of it: "a JSON file per session keyed by pid" and "the process's
+  │                          own open log, read by regex" share no rule but the question they answer.
+  │                          LAST wins on several `Created` lines (one process can open a second
+  │                          conversation, and the one it is writing is the newest); a
+  │                          `getConversationDetail: found conversation` line is a LOOKUP and never a
+  │                          creation; two DISTINCT logs on one process REFUSE. Recorded as
+  │                          `assigned`, not `observed` — it is the harness's own statement, not the
+  │                          time-and-directory claim. STATED LIMIT: it is a `/proc` read, so off
+  │                          Linux there is no link and `chat-web.ts` says "this session has no linked
+  │                          conversation yet", which is true.
   │                          guess even when the store has not caught up: "not yet" and "some other
   │                          conversation in this directory" are different answers.
   │                          **A MANAGED row now carries the conversation's metrics too** — tokens,
@@ -423,6 +453,76 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          row and `SessionsPage` hides the chat tab. Its format WAS measured and
   │                          the finding is recorded in `harness-transcript.ts` so nobody spends it
   │                          twice: a patch log, not one message per line. See docs/session-manager.md
+  │                          **THE PER-SESSION UTILITY SHELL is not a session, and the separation
+  │                          is structural** (`shell-spec.ts` / `shell-gate.ts` / `shell-store.ts` /
+  │                          `shell-backend.ts` / `shell-web.ts` / `shell-terminal.ts` /
+  │                          `shell-stream-web.ts` / `shell-input-web.ts`). It is a PTY in a
+  │                          session's own directory, opened for the PERSON — `$SHELL` bare, no
+  │                          `-l`, because tmux already gives the pane a tty and a login flag would
+  │                          read a different set of rc files from the panes `agentop session`
+  │                          opens. It runs on its OWN tmux socket (`SHELL_SOCKET`,
+  │                          `agentop-shell`) and records itself in `~/.agentistics/shells.json`,
+  │                          never in the registry, and BOTH halves of that are load-bearing: on the
+  │                          fleet socket `idFromTmuxName` strips the `agentop-` prefix, so
+  │                          `parseTmuxList` KEEPS the session and `reconcileSessions` reports it as
+  │                          an `unregistered` row — "visible and inert", filed under
+  │                          `GONE_PROJECT_KEY`, beyond every verb — while in the registry each
+  │                          shell would join the ~200 ms pane walk `host.sessions()` runs every 5 s
+  │                          in four processes, be probed by `attention.ts` for dialog markers, take
+  │                          a `lastSeenMs` heartbeat, and count toward "N sessions waiting on you",
+  │                          so an `htop` would read as a session needing a person. A naming
+  │                          convention would have worked and been one refactor from breaking; a
+  │                          socket cannot break, and `shell-isolation.test.ts` asserts all of it
+  │                          over the module SOURCE (comments stripped first — these modules are
+  │                          REQUIRED to explain themselves in terms of the registry). **Two gates,
+  │                          and absent reads OFF**: `CAPS.localShell` decides the security answer
+  │                          and `preferences.shellEnabled` may only ever NARROW it — a raw shell is
+  │                          strictly more powerful than the chat `chat-gate.ts` already calls the
+  │                          most powerful thing this server does, because the chat at least runs a
+  │                          NAMED assistant CLI. Enforced in `index.ts` before the routes, not only
+  │                          in the UI, and a CENTRAL refuses outright. **Lifetime is a CEILING
+  │                          (`SHELL_CAP` = 8) and never a timer**: a TTL kills the `bun test` that
+  │                          finished at minute 61 at an hour nobody was watching and needs a timer
+  │                          running forever, while a ceiling is one check on open and only ever
+  │                          closes something at the instant somebody asks for a new one. Records go
+  │                          ONE WAY (`reconcileShells`): a pane that is gone is dropped — `exit` is
+  │                          the ordinary death — and a pane with no record is NOT adopted, the
+  │                          exact opposite of `session-adopt.ts`, because a shell carries no name,
+  │                          task or conversation worth recovering. The four refusals are CODES
+  │                          rendered by the route (`no-tmux` / `no-cwd` / `cwd-missing` /
+  │                          `at-cap`), ordered so the IMPOSSIBLE ones come before the merely FULL
+  │                          one: asking somebody to destroy work to make room for an open that
+  │                          could never have succeeded is worse than saying no. Verified end to
+  │                          end on 2026-09-09 — the switch refused before it was flipped, the
+  │                          shell opened in the row's own cwd, it appeared under `-L agentop-shell`
+  │                          and NOT under `-L agentop` nor anywhere in `/api/fleet`, the ninth open
+  │                          was refused in words, a pane killed outside agentop left no ghost, and
+  │                          `close` named an unknown id instead of counting it closed.
+  │                          **SEEING IT AND DRIVING IT is the fleet's own two channels, pointed at
+  │                          the other store** — `GET /api/shell/stream` sends the very frames
+  │                          `/api/fleet/stream` sends and `WS /api/shell/input` speaks the very
+  │                          protocol `/api/fleet/input` speaks, so the browser has ONE reader and
+  │                          ONE writer. The frame shape, the one-loop-per-watched-pane hub and the
+  │                          serial ack queue are all shared; what is NOT shared is the one rule
+  │                          each channel keeps, the SCOPE. `terminal-web.ts` / `input-web.ts`
+  │                          resolve an id against `managed-sessions.json` and the shell pair
+  │                          resolves it against `shells.json` — reusing the fleet's modules would
+  │                          have given a shell id the fleet's answer AND STILL WORKED, so
+  │                          `shell-isolation.test.ts` asserts those imports are absent over the
+  │                          source. `Escape` joined `KEY_ALLOWLIST` for the mobile key strip, on
+  │                          both sides: it CANCELS and controls no process, which is the line that
+  │                          set draws, and without it there is no leaving `vim` from a phone and a
+  │                          permission dialog's own `Esc to cancel` was unreachable. **The CAPTURE
+  │                          RUNS ONLY while the band is open, the session selected and the tab
+  │                          visible** (`shellWatching`, pure) — the only per-second cost the
+  │                          feature has, and the rule `terminal-web.ts` already states for the
+  │                          fleet. There is no arm/disarm: OPENING the shell is the consent.
+  │                          The honesty line takes a SUBJECT (`terminalStatus(state, lang,
+  │                          'shell')`), because "the agent's current screen" over a shell the
+  │                          person opened themselves is simply false — it was on a 390px screen
+  │                          before the parameter existed, beside a path whose leading `~` had been
+  │                          moved to the END by `direction: rtl` (`eu/freelas/Proj/~`, which reads
+  │                          as a folder called `~`; the trim is computed now, `shellWhere`).
   ├── cli-start.ts         → the control center's HOST (`ControlHost`): service detection, start/stop/restart, connect/disconnect, boot service, archive consent, language — every action returns an already-localized `ActionResult` instead of printing
   ├── cli-stream.ts        → the control center's OUTPUT CHANNEL: subscribers + `streamCommand` (both pipes captured, never `inherit`) → lines via the pure `@agentistics/tui/control/stream`
   ├── cli-ui.ts            → dependency-free arrow-key select/confirm/input/pause + clearScreen (bundles clean into the binary; no node_modules to resolve)
@@ -574,6 +674,14 @@ packages/server/server/          — server-side modules (never bundled by Vite)
   │                          may approve anything for anyone. `events-frontier.test.ts` asserts it
   │                          over the module SOURCE, so a field named `action` or an imperative
   │                          sentence fails the build. See docs/session-events.md
+  ├── sessions/fleet-baseline.ts → the IO boundary in front of the pure `session-profile.ts`: read
+  │                          the consolidate store, compute the baseline, hold it for 5 minutes and
+  │                          share the SCAN IN FLIGHT. `/api/fleet` is polled every five seconds by
+  │                          the dashboard, the cockpit and the VS Code extension, so a TTL alone
+  │                          bounds how OFTEN the directory scan runs and nothing bounded how many
+  │                          ran at once. A store that cannot be read costs freshness, never the
+  │                          profile on screen — the previous answer is kept, the same rule the
+  │                          sessions poller applies to a failed poll
   ├── team-tokens.ts       → mint / rotate / revoke / validate tokens (stored as sha256 hashes only)
   ├── rotate-identity.ts   → **pure**: what a TOKEN ROTATION carries. `memberId = sha256(token)`, so rotating renames the machine in every collection keyed by that id — this module holds the ENUMERATION (`tokens`, `sessions`, `memberStats`, `workflows`, `machineKeys` and a tag's `machine` sources all migrate; `audit.targetId` is left as written, because an audit records what was true then; CI sessions are keyed by `ciMemberId(remote)` = `repo:<remote>` and move nothing; the member side's per-connection state is named by the LOCAL connection id and is reconciled by the sync fingerprint). **Any new collection keyed by a machine id must be added here or a rotation silently strands it — that is the same bug three times already.** `planEnvelopeRotation` is the mailbox decision and has NO re-address option: the routing is the GCM AAD, so mail addressed to the old id yields `recipient_mismatch` for anyone (dropped, and counted in the audit as a LOSS) while mail SENT by it still opens exactly as sealed (kept — re-stamping the sender would destroy it). `retargetMachineSources` matches on the source TYPE as well as the value, so an `account` id that happens to read the same is never dragged along. **Sibling pins are deliberately not carried**: to a sibling the rotated machine is new, is pinned on first sight and is ANNOUNCED — continuity would need a claim the central can forge (a "formerly" field, or "same public key", which a central can copy onto an invented machine), and the announcement is the one control against a fabricated peer
   ├── mongo-dates.ts       → **the date boundary**: BSON `Date` in Mongo, ISO string on the wire. Pure toBsonDate/fromBsonDate(+OrNull)/toBsonDates/fromBsonDates + `DATE_FIELDS` (every stored timestamp, by collection) + `migrateStringDatesToBson()` (idempotent, runs at boot; also `scripts/migrate-mongo-dates.ts`)
@@ -656,7 +764,6 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   │   ├── HomePage.tsx          → main dashboard (KPIs, charts, sessions)
   │   ├── CustomPage.tsx        → custom layout builder (/custom route)
   │   ├── CostsPage.tsx         → cost deep-dive page
-  │   ├── ProjectsPage.tsx      → projects overview page
   │   ├── RepositoriesPage.tsx  → repositories overview (/repositories): cards grouped by normalized git remote (RepositoriesList) so the same repo unifies across devs/paths/machines. **Only repos WITH a remote are shown by default** — remote-less sessions can't be attributed to a repo (and would split the same repo's metrics across machines), so they're hidden behind an "Unlinked · N" toggle. Links to /repo/:id
   │   ├── RepoDetailPage.tsx    → per-repo detail (/repo/:id): scopes a repo via an overridden `repos` filter (no global filter mutation) + tabs Overview/Members/Actions/Sessions/Dynamic Workflows. The "Actions" tab shows only when the repo has CI sessions; the "Dynamic Workflows" tab shows only when the repo has workflow runs from a `dynamicWorkflows`-capable harness, and renders each run as a step-by-step timeline (phases → agents) with a harness badge, and offers an "All / By session" view toggle that groups runs per session (see `lib/workflowSteps.ts` `buildWorkflowSteps` + `groupRunsBySession`)
   │   ├── ActionsPage.tsx       → /repositories/actions: all CI-runner sessions (SessionMeta.ci) grouped by repo — the GitHub Actions submenu of Repositories
@@ -666,6 +773,26 @@ packages/web/src/ (React + Vite, port 47292 in dev)
   │   ├── HarnessPage.tsx       → generic per-harness dashboard at /h/:harness (validates param; sets harness filter; tab bar: "Overview" = dashboard, "Data & sources" = HarnessInfoPanel); replaced the old hardcoded CodexPage
   │   └── ComparePage.tsx       → unified side-by-side comparison at /compare (per-harness colors; N/A for incapable metrics; sessions/messages/tokens/cost + comparatives: usage-by-hour with peak hour, busiest day-of-week, activity-over-time sparkline, peak token day / peak session cost)
   └── components/               → UI (charts, cards, heatmap, modals, PDF export)
+      ├── SessionDrilldown.tsx  → **everything the store knows about ONE conversation**, as a HEAD
+      │                          (what the session is) and a BODY (what it spent). Two surfaces draw
+      │                          it: `SessionDrilldownModal` (a centred dialog, for the dashboard's
+      │                          session lists — Home's "who leads" board, a repo's Actions tab, a
+      │                          custom layout: pages with no aside to open into) and the sessions
+      │                          workspace's **Metrics** tab in the right aside, reached from the
+      │                          metrics card's own "see everything in the panel" link, where the
+      │                          figures sit beside the conversation they are about. **The layout
+      │                          follows the COLUMN, not the viewport**: the dense grids were
+      │                          switched on `useIsMobile()`, which is right for a dialog that is
+      │                          either 980px or the whole phone and wrong for a panel the reader
+      │                          drags between 280 and 900px, so the body MEASURES ITSELF
+      │                          (`NARROW_AT`) and `isMobile` answers only for the frame before the
+      │                          measurement lands. The tab is ABSENT when the store has no record
+      │                          of the conversation, and the LINK is withheld on the same fact —
+      │                          a link into a tab that does not exist is the dead control this
+      │                          product refuses everywhere. There is no `/projects` page: its two
+      │                          panels (top projects, languages) are on Home, sessions are the
+      │                          sessions workspace's, and the dimension the page was really asked
+      │                          for is the REPOSITORY — `/projects` redirects to `/repositories`
       ├── HarnessInfoPanel.tsx  → inline panel explaining each harness's data sources / what's captured / what's missing (and why) / caveats; driven by HARNESS_INFO in lib/harness.ts
       ├── PreferencesModal.tsx  → unified Settings modal with tabs: Preferences / Live / Install (Environment tab removed)
       ├── TeamLogin.tsx / TeamMembers.tsx / TeamSettings.tsx → central: password login, members panel (mint/rotate/revoke/rename + presence), team settings (interval/express, offline-data policy)
@@ -677,6 +804,24 @@ packages/web/src/ (React + Vite, port 47292 in dev)
 
 packages/core/src/              — shared across server + web + mcp (import as @agentistics/core)
   ├── types.ts              → all shared types + pricing functions (single source of truth)
+  ├── session-profile.ts    → **pure**: `profileOf(sessions, now)` — what THIS machine's sessions
+  │                          usually look like over 30 days, so a suggestion is read against a
+  │                          measurement instead of an invented threshold. Median beside mean
+  │                          (measured over 692 sessions: median 30, mean 92 — the mean describes
+  │                          no session anybody has). **`n` IS PER METRIC and it is the whole
+  │                          feature**: a reader returns `undefined` when the session COULD NOT
+  │                          answer — its harness cannot produce the metric (`HARNESS_CAPABILITIES`,
+  │                          read here rather than inferred from a field being absent) or no
+  │                          transcript was read for it — and a real number, **`0` included**, when
+  │                          it was read and the answer is none. Both halves have to hold: while
+  │                          `jsonl.ts` wrote `compact_count` only above zero, every `n` equalled
+  │                          its `nonZero` and the panel printed `compacts: 2 (n=23)` beside
+  │                          `messages: 2 (n=479)` — a rare event reported as typical, when 23 of
+  │                          479 sessions compacted at all. `subagents` keys off `_source ===
+  │                          'jsonl'` because `agentMetrics` is absent both when nothing ran and
+  │                          when nothing was measured. Receives `now`; the day rule is UTC
+  │                          (`start_time.slice(0,10)`), the one `tagSessionDay` and the billing
+  │                          basis use
   ├── format.ts             → shared display helpers: fmt(), fmtCost(), fmtDuration()
   ├── i18n.ts               → PT/EN translations
   ├── otel.ts               → OpenTelemetry helpers
@@ -772,9 +917,63 @@ the list by itself the first time it appears in a session, with no code change. 
 from `resolveProvider`, because a provider is a billing entity and a harness is not: Codex and
 Copilot both run OpenAI models, Antigravity runs Google's and Anthropic's.
 
+### One billed response is counted ONCE, and a round is a PERSON's turn
+
+Three defects found on 2026-09-08 by recounting real transcripts by hand and comparing — not by
+reading the code, which looked right in all three places. Each is now a named rule with a test.
+
+- **`usage-dedupe.ts`: Claude Code writes an assistant turn as SEVERAL lines** when its content has
+  several blocks (text, then a `tool_use`), and every line repeats the SAME `message.usage`.
+  `jsonl.ts` and `subagent-parse.ts` both summed per LINE. Measured: session 4c3a96ac had 148 usage
+  lines over **79 distinct `message.id`s**, every repeat byte-identical, and the stored figure
+  matched the per-line sum EXACTLY (17.845.286 against a true 10.381.785). Three sessions, 60-90 %
+  over; three subagent transcripts, 77-83 % over. **The key is `message.id`** — Anthropic's id for
+  one API response, and one response is one billing event. LAST wins per id (identical in every
+  sample; if a partial is ever written before the final one, the last is the complete one), and a
+  record with NO id is always counted: what cannot be shown to be a duplicate is not one. Same trap
+  as Kimi's `usage.record`/`step.end` and agy's request/execution — **when a transcript states one
+  fact in two places, decide which one you count.**
+- **`isHumanUserEntry` now refuses `isMeta` and `isCompactSummary`.** Those are entries the HARNESS
+  wrote under the user's role — the `<local-command-caveat>` block and the "this session is being
+  continued…" compaction summary. It counted them as rounds AND as turn boundaries, so a session
+  that ran 22 local commands reported **65 rounds for 43 messages**, and active time moved by −41 %
+  to +11 % once the boundaries were the person's turns only. `sessionLabel` already stripped these
+  wrappers out of `first_prompt`, so the product held two readings of one entry. NOTE the knock-on:
+  `!isHumanUserEntry(e)` no longer implies "has a content ARRAY", and the tool-error loop's
+  `contentArr!` threw on the first local command until it was guarded.
+- **`sessionCostUSD` priced every session at the FALLBACK rate.** It called `calcCost(u, '')` while
+  its own docstring said the fallback was only for a session with no model. Measured over 596
+  Claude sessions: **$19.685 against a true $30.306, 54 % under**. Opus read low, haiku read high.
+  It survived because it under-reported money — the reassuring direction — and because the token
+  over-count above pushed the other way, so the product of two defects looked plausible.
+
+**The store must be REBUILT for a correction to reach a screen**: `~/.agentistics/sessions/**` holds
+the computed `SessionMeta`, so a parser fix changes nothing until the next `buildApiResponse` writes
+it back.
+
 ### N/A vs real 0 — `HARNESS_CAPABILITIES`
 
 `HARNESS_CAPABILITIES` in `@agentistics/core` (`packages/core/src/types.ts`) is the single source of truth for which metrics each harness can produce. When a capability flag is `false`, the frontend renders "N/A" via the `NAtag` component + `capable(harness, metric)` helper (re-exported from `lib/harness.ts`), rather than showing a misleading 0. Current limitations: Codex and Gemini do not produce agent metrics or git line counts. **Antigravity produces `tokens`/`cost`/`model`** (decoded from the `gen_metadata` protobuf in `~/.gemini/antigravity-cli/conversations/<id>.db`, cost via the standard pricing table) and `gitLines` (edit deltas computed from the transcript's edit payloads, not `git diff`); it has `agents: false` because an `invoke_subagent` child is its own conversation, not an agent invocation on the parent. `dynamicWorkflows` (runs of the multi-agent orchestration Workflow tool) is `true` only for `claude` — it gates the repo-detail "Dynamic Workflows" tab.
+
+**Three flags gate the behaviour baseline** (`packages/core/src/session-profile.ts`), and each is
+narrower than it first looks:
+- **`compaction`** — the harness records when it compacted the conversation, so `compact_count`
+  can be filled. Claude Code writes a `compact_boundary` system line with a `compactMetadata`
+  block; no other harness has an equivalent marker, so `true` for `claude` alone.
+- **`skills`** — the harness records SKILL invocations by name (Claude's `Skill` tool_use, whose
+  `input.skill` names it). `true` for `claude` alone; nowhere else has the concept.
+- **`mcpServers`** — the harness names an MCP tool `mcp__<server>__<tool>`, so the SERVER can be
+  read back off `tool_counts`. **Narrower than `tools`, which is `true` everywhere**: recording the
+  tool is not recording whose server it was. `true` for `claude` and `kimi` (measured:
+  `mcp__db__query` in kimi's own `tool_counts`); Antigravity writes `mcp_` with ONE underscore and
+  `call_mcp_tool`, Copilot keeps MCP names in a separate `mcp_tool_names` and never a server, and
+  codex and gemini record no MCP tool at all.
+
+**A capability gates the DENOMINATOR, not only a rendering.** `session-profile.ts`'s `n` counts the
+sessions that COULD have answered a metric, so a reader that returns a number for a harness that
+cannot produce one puts that harness into the sample. `mcpServers` did exactly that before the flag
+existed — `Object.keys(tool_counts).filter(mcp__).length` always yields a number — and the row read
+`MCP servers: 0 (n=479)`: a confident claim about a population most of which was never asked.
 
 ### The context gauge — a LEVEL, and a window that is never guessed
 
@@ -913,9 +1112,42 @@ pricing table — the adapter strips the provider prefix so the table can key on
 `kimi-*` ids are not in `MODEL_PRICING` yet and would take the shared fallback rate like any unknown
 id; add them when verified rates are published.
 
-### Gemini caveat — bootstrap stubs vs. real sessions
+### Gemini caveat — bootstrap stubs, and the journal shape that hid three months of sessions
 
-Gemini CLI writes `~/.gemini/tmp/<project>/chats/*.jsonl` files but many are bootstrap-only stubs with no real conversation content. The Gemini parser (`adapters/gemini-parse.ts`) filters these out — only chats containing a genuine user message or model response are counted. Gemini's local files do not carry token/cost data; real Gemini token metrics would require OTel integration (Phase 3).
+Gemini CLI writes `~/.gemini/tmp/<project>/chats/*.jsonl` files but many are bootstrap-only stubs with no real conversation content. The Gemini parser (`adapters/gemini-parse.ts`) filters these out — only chats containing a genuine user message or model response are counted.
+
+**A TURN IS APPENDED AS ITS OWN LINE, and reading only the snapshot dropped almost every session.**
+The journal is: a HEADER (`{sessionId, projectHash, startTime, lastUpdated, kind}`), then a SEED —
+`{"$set":{"messages":[…]}}`, written once near the top and **empty for a fresh session** — then each
+turn as its own top-level record `{id, timestamp, type, content, model?}`, with
+`{"$set":{"lastUpdated":…}}` patches after every one. `parseJsonl` collected messages **only** from
+`$set.messages`, so a fresh session yielded zero, `hasGenuineContent` stayed false, and the whole
+session was discarded as a bootstrap stub. Measured 2026-09-08: of 34 chat files, 7 carried
+`$set.messages` and **27 did not**; the adapter's newest session was from **2026-04-10**, so months
+of gemini work were missing from every surface in the product — the dashboard, Compare, the costs,
+the session list — not only from the chat view. Both sources are now read through one `id`-keyed
+gate, because a resumed session's seed repeats turns that then arrive again as their own lines and
+counting them twice would inflate every message count. `buildJsonlSessionMeta` also filled
+`first_prompt`, which it had hardcoded to `''`: `sessionLabel()` falls back to it and gemini writes
+no title, so every gemini session was listed with a blank name.
+
+**Gemini HAS a chat reader** (`sessions/gemini-chat.ts`, pure). It was `null` in
+`HARNESS_TRANSCRIPTS` for a long time and the reason was a LINK fact, not a format one — a reader is
+only ever offered a `conversationId`, and gemini has no `assignId` and no id-taking `resume`. What
+made it reachable is that `planFirstSightingClaims` deliberately includes gemini and claims the
+**synthetic** id the store is already keyed on (`${dirName}/${fileBase}`), which is not a UUID
+resolving to nothing but the chat file's own path. That id is therefore treated as untrusted input
+by `resolve`: exactly two segments, no traversal, or it answers `null`. `info` and `error` records
+are the harness talking about itself and are dropped rather than given a speaker, and the
+`<session_context>` block gemini writes under the USER role is injected context, not something the
+person said.
+
+**Tokens are NOT yet read for gemini, and that is now a decision rather than an absence.** The
+appended `gemini` records carry `tokens{input,output,cached,…}` and `model` — visible in the same
+files this parser now reads — so `HARNESS_CAPABILITIES.tokens`/`cost` COULD be flipped. They have
+not been, because turning them on changes money on every cost surface in the product and needs its
+own verification against a bill, exactly as `antigravity-protobuf.ts`'s header records for agy. Do
+it deliberately, with the reconciliation written down; do not flip it as a side effect. Gemini's local files do not carry token/cost data; real Gemini token metrics would require OTel integration (Phase 3).
 
 ### Compare page — `computeHarnessSummaries`
 
@@ -1020,6 +1252,20 @@ The display **name is set by the central** on the minted token — there is no n
 ### Team-mode rules
 
 - **Members never push chat** — only computed metrics + statsCache; raw chat is on-demand over the WebSocket. The ONE exception is `first_prompt` / `title`, which are chat-derived and DO travel; they are scrubbed by `redactSecrets` (`@agentistics/core`, `redact.ts`) at **two** boundaries: `selectDeltas` on the member (so a pasted credential never crosses the wire) and `toTeamDoc` on the central (because a central cannot assume its members run current code — in a mixed-version fleet the machine on the old build is exactly the one that leaks). The redactor is deliberately PRECISE, not exhaustive: `first_prompt` labels every session in the UI, so a rule that also ate `input_tokens=123` would make labels useless and get switched off. Generic `key=value` rules are guarded by a value-shape test; when in doubt it leaves text alone. It is a safety net for the accidental paste — **never a substitute for rotating a leaked credential**.
+- **The compaction figures and `skill_uses` DO travel, and that is a recorded decision.**
+  `TeamSessionDoc` is `Omit<SessionMeta, …>`, so a field added to `SessionMeta` reaches a central
+  and Mongo by default — `compact_count`/`compact_ms`/`compact_dropped_tokens` are counts and
+  durations describing the SHAPE of a conversation (the same order of thing as
+  `user_message_count`), and `skill_uses` names the skills a session invoked. The name is the half
+  worth thinking about, because a house skill can be named after an internal system; it is
+  accepted as metadata about the machine's own tooling, of the same order as `model`, `languages`
+  and the `mcp__<server>__<tool>` keys `tool_counts` has always carried, and it is bounded by the
+  per-connection sharing rules like every other part of the document — a session in a withheld
+  repository never reaches that central at all. **Nothing on the central reads either field**
+  today; they travel because the document is whole. `redactSecrets` does not touch them and must
+  not be extended to: it is a value-shaped net for a pasted credential, and withholding a whole
+  field is a per-connection RULE, not a scrub. See
+  [docs/security.md](docs/security.md#80a-what-a-shared-session-document-carries--the-compaction-figures-and-the-skill-names).
 - **Tokens are stored only as sha256 hashes** (`team-tokens.ts`) and never logged; the central's session-cookie secret is **separate** from the dashboard password; auth compares are constant-time.
 - **Non-Claude team metrics still come from per-session sums** — `stats-cache.json` remains Claude-only, on the central too (Compare-page Claude totals match the dashboard).
 - **The member's deep Claude history exists ONLY aggregated** (`AppData.userStatsCaches`, keyed by
@@ -1095,15 +1341,16 @@ harness working here must not break.
   halves now resolve through the one `sharedCwd` helper, and an id the machine cannot find is
   refused for the same reason a row with no `cwd` is: the rule names directories, and an
   unresolvable target has none to judge.
-- **The TASK verbs are refused outright on a RESTRICTED connection.** `openTask` expands to every
-  session filed under the row's task, over the whole registry, and a task routinely spans
-  repositories — so pressing it on a VISIBLE row spawned live assistants inside a withheld
-  directory and answered with a count of them. Refusing only when the task provably spans a
-  withheld row would be an ORACLE: repeated over the visible rows it maps which of them share work
-  with the hidden half, which is the same correlation as counting a hidden project's sessions. The
-  blunt refusal discloses nothing the reply does not already carry (`withheld` is a machine-level
-  count), and the verbs are dropped from the relayed row too — offering one the machine will refuse
-  is the control-that-reads-as-broken this file argues against everywhere else.
+- **The TASK verbs no longer exist, and their dedicated refusal is gone with them.** `openTask`
+  expanded to every session filed under the row's task, over the whole registry, and a task
+  routinely spans repositories — so pressing it on a VISIBLE row spawned live assistants inside a
+  withheld directory and answered with a count of them. `machine-fleet.ts` carried a blunt refusal
+  for every restricted connection (refusing only when the task provably spans a withheld row would
+  be an ORACLE: repeated over the visible rows it maps which of them share work with the hidden
+  half). Both verbs are now absent from `FleetActionId` and from `REMOTE_SCREENLESS_ACTIONS`, which
+  is CLOSED — so the property is structural rather than guarded, and it holds for an unrestricted
+  connection too, which the old guard never covered. **Any future verb whose subject is a TASK
+  rather than a ROW needs that refusal back before it joins the list.**
 - **Consent is ORTHOGONAL to the sharing rules, and that is the trap.** The two switches are
   machine-wide; turning on "manage my sessions" says nothing about WHICH sessions, so without the
   rule check above it silently re-opened the act surface over every withheld repository.
@@ -1383,9 +1630,14 @@ The numbers moved to `~/.claude/projects/<project>/<session-id>/subagents/agent-
 | `costUSD` | `calcCost()` per model of the subagent's own turns |
 | `status` | `toolUseResult.status` (`failed` → `failed`, anything else → `completed`) |
 
-### What is NOT available for Skills and Tasks
+### What is available for Skills, and what is not for Tasks
 
-- **Skills** (`/commit`, `/review-pr`, etc.) are not recorded as individual tool_use events in the JSONL — only a `skill_listing` attachment appears. Skill invocations can only be inferred indirectly from subsequent tool calls.
+- **Skills ARE recorded** — as a `Skill` tool_use whose `input.skill` names the invoked skill
+  (`superpowers:brainstorming`, `artifact-design`, …). Measured 2026-09-08 on one machine: 103
+  invocations of 26 distinct skills across 57 sessions. This entry previously said the opposite —
+  that only a `skill_listing` attachment appeared and invocations could be inferred indirectly — and
+  that was true before the `Skill` tool existed. It is the reason no adapter counts them yet, not a
+  statement that they cannot be counted.
 - **Tasks** (`TaskCreate`/`TaskUpdate`) have subject/description/status but no token or duration data.
 
 ---
@@ -1736,11 +1988,42 @@ packages/tui/scripts/preview.tsx   dev tool: render ONE control-center frame to 
   message alone: the word is beside it. `COLORS.running` (#22c55e) is its own token rather than
   `success` (#10b981), which reads as teal on a terminal and sits within a hair of
   `HARNESS_COLOR.codex`. The verbs are **`n`** new, **`r`** rename, **`m`** note (memo — `t` belongs
-  to the TASK), **`t`** task, **`T`** open the whole task, **`F`** finish it, **`a`** approve (`y`
+  to the TASK), **`t`** task, **`a`** approve (`y`
   kept as the alias every yes/no prompt taught), **`c`** show what is not running (`l`/`e` aliases),
   **`C`** the last conversations flat and by recency, **`h`** the key reference. They were handed
   out in the order they were written — `a` started a session, `n` renamed one, `t` wrote a note — so
   the only way to learn one was to read the list.
+- **`T` and `F` are GONE, and so are the verbs they ran.** "Open the whole task" and "finish task"
+  were standing verbs about a DELIVERY on a row about a SESSION, offered on every filed row — so
+  they were pressed by accident, and the one that mattered was a switch somebody had to remember to
+  flip, which left deliveries open long after their last session ended. **Finishing is now asked
+  when a session is STOPPED**, which is the one moment the answer is in the reader's head: the kill
+  runs first and the delivery is asked about after, so an answer nobody gives leaves the session
+  stopped rather than running. `host.finishTask` writes BOTH places a delivery can be finished —
+  `preferences.finishedTasks` (the cockpit's own hide switch) and the BOARD, through `markTask` —
+  because writing only the first is how the cockpit came to call work finished that the board still
+  drew in `To do`. Reopening a whole task survives as `agentop session open`, where it is a
+  deliberate act rather than a menu row two keys from `kill`.
+- **PINNING a row and PICKING one to kill are two gestures, and they share no state.** `space` in
+  normal mode PINS — the word on screen is `pinned` / `fixada` everywhere a person reads it (the
+  band, its "not" side, the grouping, the key reference), while the stored field keeps its
+  `marked` name so no pin already on disk is dropped. Pinning persists, lifts the row into its own
+  band, and is a KEEPING gesture. `x` therefore acts on the ROW UNDER THE CURSOR and nothing else:
+  it used to offer to stop "the N marked sessions", so the gesture for keeping four rows armed a
+  mass deletion and the confirmation used the harmless word for it. Killing several is its own
+  mode — `ctrl+x` in and out, `space` selects inside it, `x` stops the selected ones and LEAVES the
+  mode by itself, so nobody is left armed without knowing. Rules that must hold:
+  `stopTargets` (`sessions.ts`, pure) is not given the pinned set at all, so the normal-mode answer
+  cannot become a plural however the caller is wired; the selection is EPHEMERAL and
+  `storedFilters` has no field for it, because a set of sessions armed for killing must not be
+  findable still armed tomorrow morning; a selected row is `COLORS.danger` with a `✕`, and on a row
+  that is BOTH pinned and selected the destructive state wins — the harmless one may never hide it;
+  and the mode is announced in the pane TITLE as well as the banner, because the banner is dropped
+  with the summary row on a short terminal and a mode you can be in without the screen saying so is
+  the defect this replaces. `ctrl+x` is answered BEFORE the menu gets the keyboard: the menu's own
+  `x` deletes a task. Leaving is `ctrl+x` and deliberately NOT `esc` — `esc` here already drops the
+  search, then the project, then the task, so one key would have to pick between un-narrowing the
+  list and disarming a selection at the exact moment that choice matters.
 - **The header's central pill is `● machine · account · Nms`, and only when there IS a central.**
   The dot is the one coloured thing in it and its STATE is the host's decision
   (`ControlStatus.linkState`, from `/api/team/status`'s `errKind` + `lastSuccessAt`): `unauthorized`
@@ -1936,6 +2219,92 @@ packages/vscode/src/
   uses, so the two can never disagree about one day. No rate means DOLLARS, never a converted figure
   invented from a guess.
 
+## The task board (ALM) — `/tasks`, and the orchestration surface on top of it
+
+What each piece of work COST, in how many rounds and across how many sessions — and, once several
+agents are driving it, which of them may pick up what. Full write-up in
+`docs/superpowers/specs/2026-09-05-task-measurement-design.md`; these are the invariants.
+
+```
+packages/server/server/sessions/
+  task-model.ts     Task / Attempt / Subtask / TaskFile / TaskClaim / TaskEvent + the legacy migration
+  task-store.ts     the JSON book, one writer per process + the cross-process file lock
+  task-attribution.ts  first-sighting claim (refuses on ambiguity)
+  task-rollup.ts    cost / rounds / tokens with PROVENANCE — never a confident 0
+  task-next.ts      PURE: readiness, the lease, convergence
+  task-rank.ts      PURE: hand order as a fractional-index string
+  task-report.ts / task-overview.ts / task-stats.ts / task-evidence.ts / task-filter.ts
+  task-web.ts       the ONE door /api/tasks, the CLI and the MCP all come through
+packages/core/src/taskSort.ts   PURE: the ordering BOTH the table and the kanban use
+packages/web/src/components/tasks/   board.ts (vocabulary) · TaskTable · TaskBoard · AgentsView ·
+                                     BoardArrange · SubtaskTable · TaskFiles · SessionPicker ·
+                                     TaskPicker · NewTaskWizard · boardPrefs (localStorage)
+```
+
+- **A TASK is measured through its SESSIONS, never on its own.** Cost, rounds, tokens and harness
+  all come from the sessions filed under it; a subtask carries status/owner/dates/session and
+  deliberately NO rollup, because a second smaller one would double-count the same sessions or
+  invent a split nobody recorded.
+- **`null` is not zero, anywhere.** A task nobody could price sorts LAST in both directions — an
+  ascending "cost" sort that puts unpriced work at the top is the confident zero this repo refuses
+  for harness capabilities, applied to a board.
+- **ONE ordering** (`@agentistics/core/taskSort.ts`), read by the table's headers and the kanban's
+  picker. Every sort is TOTAL (rank → creation → id) so nothing reshuffles on a re-render. Manual
+  order is a STRING (`task-rank.ts`): a drop is one write, not a renumbering of the column, which on
+  a JSON book several processes read-modify-write is also the difference between a race and none.
+- **A drop between columns is a STATUS change; inside one it is a reorder.** One gesture, one write
+  — the other order leaves a card in a column its status does not name when the second write fails.
+- **A CLAIM is a LEASE, not a lock**, and it is decided inside the store's lock so two agents asking
+  in the same millisecond cannot both be told yes. It EXPIRES (30 min, refreshed by re-claiming), an
+  unparseable expiry reads as EXPIRED rather than as forever, and a refusal NAMES the holder and the
+  moment their lease ends. `takeover`/`force` are for a PERSON overriding on purpose. An expired
+  lease is said in words — the task is available again, and a card that merely stopped naming a
+  holder reads as one nobody ever took.
+- **`task_next` answers with the WITHHELD tasks too, and why.** An agent told "nothing" cannot tell
+  "it is all done" from "it is all blocked", and re-dispatches forever. `boardProgress.settled` is
+  deliberately two facts: nothing to hand out AND nothing in flight.
+- **A claim and a live session are different things and are drawn apart.** A claim is a statement
+  somebody made; a session is something `/proc` and tmux observed this second. Conflating them lets
+  "an agent said it would" read as "an agent is".
+- **Absent priority is `none`** — "nobody has said" — never `medium`. A board full of a default
+  nobody chose is a board where priority means nothing. An overdue date is red and NEVER on a closed
+  task: finished work cannot be late.
+- **`blocked` is REFUSED without a reason or a blocking task** (422, `blocked_needs_reason`),
+  checked in `markTask` so it binds the browser, the CLI and the MCP alike. It is the one status
+  that names a problem somebody has to go and solve, and the queue reports it as withheld — without
+  a why that report is "you cannot have this" with no way forward. The reason is CLEARED when the
+  task leaves `blocked` and kept in the activity log.
+- **`taskProgress` (core) is the only place a percentage is computed**, and it rounds DOWN: a bar
+  that reads 100% while a subtask is open is the one error this figure cannot afford. A task with no
+  subtasks draws NO bar rather than an empty one — "nobody broke this up" is not "nothing is done".
+- **A WIP limit WARNS, it never blocks.** A board that refuses a drop teaches people to route around
+  it instead of looking at it.
+- **The board's arrangement is `localStorage`, not `/api/preferences`** (`boardPrefs.ts`): on a
+  central that file is shared by everyone signed in, and one person's folded groups would fold them
+  for the whole team. Every read and write is guarded — a private window makes the accessor itself
+  throw.
+- **A comment's pasted image becomes a real task FILE plus a REFERENCE** (`commentBody.ts`,
+  `![name](file:<id>)`, by id — two screenshots pasted in the same second share a minted name). A
+  reference whose file was deleted renders as its NAME in plain text: never a broken image, never
+  silence.
+- **The activity log is board-wide and capped** (2000, oldest dropped). Per-task arrays would put
+  the cap per task in a file read on every poll.
+- **A task belongs to a REPOSITORY through its sessions, and the list row says which** — `repos` on
+  `TaskListRow` (`reposOfRows`, pure) is the distinct `git_remote` of the task's sessions, read off
+  the metas the caller passed, which are the SCOPED ones on every surface that filters. Never
+  `Task.repo`: that is inherited once at creation, and a second source for the same question is a
+  second answer. `''` is the "no linked repository" bucket, a real value here as in
+  `sessionInScope`. It is what the Repositories page's **Tasks** tab selects on (`tasksOfRepo` /
+  `repoTaskTotals`, `web/src/lib/repoTasks.ts`), so a delivery spanning two repositories appears
+  under both and counts on each side only what it spent there. That tab is a READ view — every verb
+  goes to `/tasks/:id`, because a second controller for one gesture is the bug `task-reopen.ts`
+  exists to have fixed once — and it counts `sessionsLinked`, never `sessionsUsed`: a row with no
+  conversation link named no repository and contributed no numbers, so counting it would place a
+  session in a repository nothing observed it in.
+- **New `/api/tasks` sub-routes ride the existing `capability-guard.ts` entries** (`/api/tasks`,
+  `/api/task-files` → `localShell`). `GET /api/tasks/next` and `/api/tasks/activity` are matched
+  BEFORE the generic `<ref>` GET, or they resolve as task references and 404.
+
 ## What each surface is CALLED
 
 Four front doors, and a person saying "the sessions screen" has to land on exactly one of them.
@@ -2055,6 +2424,26 @@ harness must not break.
     the page body.
   - New pages need their nav entry in **both** the desktop `SideNav` `items` array **and** the
     `MobileBottomNav` `navTiles` array in `App.tsx` — adding only the first hides the page on a phone.
+- **A REOPEN LANDS SOMEWHERE, and the wait belongs to the ID.** Reopening retires the row it was
+  asked about and mints a new one, so the id in the URL stops naming anything the instant it
+  succeeds. `lib/sessionRoute.ts` is the ONE place both halves live — `reopenedSessionRoute` (the
+  path plus the state that says the row is coming) and `arrivalFor` / `stillArriving` (the budget),
+  all pure and tested. Two rules, each of which was a real defect:
+  **(a) EVERY surface that can reopen must follow the new id.** Four can: the row menu
+  (`SessionActions.onOpened`), the composer's own Reopen button (`SessionChat.onReopened`), the
+  aside's row handler, and the header's menu. Two of them kept only the message, on the written
+  belief that "the page follows it there" — nothing followed it, `collapseSupersededSessions`
+  dropped the retired row on the next poll, and the page fell through to the fleet OVERVIEW
+  permanently. Reported as "reabro uma sessão e ele me joga pra tela de sessions". `SessionChat`
+  still does not navigate — it reports the id and the PAGE decides, which is why the callback is
+  the same one the row menu already gets: two Reopen buttons on one screen must land in one place.
+  **(b) THE "IT IS ON ITS WAY" BUDGET MUST BE KEYED ON THE ID, NEVER ON THE MOUNT.** It was a
+  `useState(() => Date.now())` taken once, so it measured from when the PAGE was opened. Creating
+  from the overview remounts the page (`sessions` and `sessions/:sessionId` are different
+  `<Route>`s), which is why it always looked right; a reopen is `/sessions/A` -> `/sessions/B`, the
+  same route, no remount, the stamp long spent — so even a correctly-navigating reopen showed the
+  overview for the whole poll interval. `handedOver` had the same shape and the same bug: flipped
+  once per mount, only the FIRST arrival ever got its finish frame.
 - **A DATE FILTER IS ANSWERED BY `SessionMeta.daily`, AND AN UNBOUNDED RANGE IS ANSWERED FROM THE
   OTHER SIDE.** A session is a SPAN whose four counters are LIFETIME totals, so filing it on the day
   it STARTED empties "today" for anyone whose session has been open since Tuesday, and filing it on
@@ -2073,6 +2462,162 @@ harness must not break.
   complete. `Today` is its own preset ("only today, in progress") and is not the calendar's "today"
   ("up to today"); both end at the END of the day, so a session a few seconds ahead of the browser's
   clock is not excluded.
+  **THE HOUR CHART IS CUT THE SAME WAY, and it needed its own field to be cuttable at all.**
+  `message_hours` is a LIFETIME array of hour-of-day values carrying no day, so it survived every
+  cut `sliceSession` made around it: with `Today` selected on a real machine the "Usage by hour"
+  chart drew bars in ALL 24 HOURS for someone who had started at 8am, totalling 33.427 against the
+  4.905 messages the card above it reported under the same filter. `SessionDayUsage.hours` is the
+  measurement (hour of the LOCAL clock -> count, written in `jsonl.ts` at the same line that pushes
+  to `message_hours`, so the two can never disagree), `sliceSession` sums it and `expandHours`
+  rebuilds the array — which is what lets the chart, the PDF export and the drilldown read the
+  range's hours without any of them knowing a range exists. `user_message_timestamps` is FILTERED
+  rather than rebuilt: those are instants and carry their own day. A session whose days carry no
+  `hours` (a record written before the field existed) KEEPS its lifetime array, the same rule a
+  session with no `daily` already had — a record that cannot be split is not one that did nothing.
+  **The remaining artefact is the UTC day itself, and it is deliberate**: a `daily` key is a UTC day
+  while an hour bucket is local, so at UTC-3 `Today` legitimately includes the previous evening's
+  21:00-23:59. Every other figure under that filter has the same boundary; giving the chart alone a
+  local day would make it disagree with the cost and the messages beside it, and no day-granular
+  split can express a local day for a non-UTC zone.
+- **A SYSTEM NOTE SAYS WHAT IT MEANS, AND GOES WHERE ITS ACTION IS — OR SAYS SO.** A note is the
+  harness acting under the user's role: `chat-envelope.ts` names the KIND in one phrase and drops
+  the BODY, which is right (a `system-reminder` is a page of text nobody wants in a chat) and
+  leaves a chip whose whole content is a label about something the reader can neither see nor
+  reach — reported as "nunca sei o que eles significam". `web/src/lib/chatNote.ts` (pure) is ONE
+  ROW PER NOTE carrying all three answers together — the Portuguese, the one-sentence explanation,
+  and the aside `tab` where its action is. One table and not three, because a note that gained a
+  translation without anyone deciding whether it leads anywhere is the silent half-answer this
+  replaces; `chatNote.test.ts` greps the server's own sources and fails the build when a note can
+  be emitted that this table does not carry — the gap the old `SYSTEM_NOTE_PT` fell into when five
+  readers arrived with notes of their own. **TWO SHAPES, deliberately different**: a note with a
+  destination is a button wearing an arrow that calls `openArtifacts(tab, ref)` — the same call the
+  edge strip makes, so it opens the ASIDE and never a full screen — and a note with nowhere to go
+  tells you instead, on tap as well as hover, because a phone has no hover. One appearance for both
+  would make half the chips silently inert. **`tab` is NOT filled in wherever it would fit**:
+  `command output` would point at the `live` feed, hundreds of rows deep, with no step id on the
+  turn to land on, and the click would arrive at the top of a list to be searched — which the edge
+  strip's own comment already calls a navigation control rather than an answer. Those explain and do
+  not navigate.
+  **A NOTE THAT CAN NAME THE THING CARRIES IT** (`ChatTurn.systemRef`), and until it did, a chip
+  that navigated still landed on a list to be hunted. The body knew: measured on real transcripts, a
+  skill load carries `Base directory for this skill: <dir>` and a re-invocation carries
+  `(Re-invocation of /<invocation-name> — …`. The BODY stays dropped; only the identity is kept, and
+  it is kept in the form the panel LISTS — `HarnessSkill.name`, prefix and all — through the pure
+  `skillNameFromDir`, which reads the layout off the `SkillSource` the harness already declares
+  rather than re-deriving it. `skill-source.ts` exists for exactly that: `chat-envelope.ts` is a
+  zero-import pure parser and importing the skills READER would have dragged `HOME_DIR` and the
+  whole of `config.ts` into it. A directory matching no declared source yields NO reference rather
+  than its basename — a basename looks like an answer and matches no row. **The aside's focus
+  machinery was already complete and disconnected**: `openArtifacts` has always taken a `ref`,
+  `EventRow` has always answered `focused` by opening itself, scrolling into view and flashing, and
+  the state was computed and faded on a timer — nothing ever passed the prop, so the live feed's own
+  `openArtifacts('live', hint.ref)` landed at the top of the feed too. Both lists are wired now,
+  through the pure `noteFocus.ts`: `ROW_FLASH` is one constant so two tabs cannot disagree about
+  what "the one you asked for" looks like, an ABSENT reference focuses nothing, and a reference NO
+  row carries is SAID in words — a tab that opens and highlights nothing is indistinguishable from a
+  button that did not work. The highlight FADES (4 s), because it answers "which one" and a marker
+  that stays becomes part of the row; re-pressing the same chip re-arms it, since the request is
+  keyed on its own `at`.
+- **A TRANSCRIPT THAT IS NOT THERE YET IS NOT A TRANSCRIPT THAT IS NOWHERE.** Three resolvers
+  memoized their answer by conversation id — the found path AND the `null` — so an unresolvable id
+  cost one scan instead of one per poll. The intent is right; caching the `null` was not. **A
+  harness writes a conversation's transcript when the conversation first says something**, so a
+  session agentop has just started has no file for its first seconds, the chat view's very first
+  poll lands inside that window, and the miss was then handed to every later poll FOR THE LIFE OF
+  THE SERVER PROCESS. Reported on a session created from the wizard: the step-3 prompt never
+  appeared, the next message sat at `delivered to the session — not read yet` for eight minutes,
+  and no reply ever arrived — while the terminal tab, which reads the pane and not the transcript,
+  showed the whole conversation. Confirmed by the clock: the chat came back only because the server
+  was restarted 13 minutes later, which is the only thing that clears a per-process memo.
+  `transcript-path-memo.ts` (pure) is the one rule now — **a miss expires**
+  (`TRANSCRIPT_MISS_TTL_MS`), the same shape and the same reason as `repo-facts.ts`'s negative TTL,
+  and **a found path is remembered until it stops being there**. That second half used to read "a
+  found path is remembered forever (a transcript does not move)", and **a transcript moves**: Claude
+  Code files it under the project directory derived from the session's CURRENT cwd, so a session
+  whose cwd changes has its `<id>.jsonl` re-filed elsewhere — measured 2026-09-08 on a live 2.4 MB
+  conversation that left `-home-mithrandir-agentistics/` for `…--claude-worktrees-session-shell/`.
+  The remembered path then failed every read, `chat-web.ts` turned that into `turns: []`, and on a
+  LIVE session that carries no `unavailable` — so the panel drew **"This conversation has no
+  messages yet" over a full transcript** and the user stopped receiving replies entirely, with the
+  terminal tab the only way to read anything. **A cwd change is not the only route and not the
+  common one**: Claude Code deletes transcripts older than `cleanupPeriodDays` (30 by default) on
+  every startup, which fails identically. The scan that finds the file in its new home was already
+  written and already correct; it was never reached, because the memo answered first. So
+  `resolveMemoizedPath` VERIFIES before answering, forgets a path that is gone, and — because
+  `remember` clears any miss — scans on that same call. It is also the ONE place the
+  remembered → direct → scanned shape lives; it was written by hand in all three resolvers, so this
+  was the same bug three times. Beside it, `chat-web.ts` now REFUSES IN WORDS when a transcript
+  resolves and the READ fails, which was the last step at which a blank pane was still possible.
+  And the two costs are separated: Claude's DIRECT
+  path is one `stat` and is checked on EVERY call, so a new session is readable the moment its file
+  appears, while only the SCAN (a `readdir` plus a `stat` per project — 281 of them on a real
+  machine) is paced by the TTL. **claude, codex and kimi** memoized and are fixed; **antigravity,
+  copilot and gemini** need no memo — each computes or checks its two candidate paths on every call
+  — and are immune by construction. A new reader that needs a DIRECTORY LISTING to find its file
+  needs this memo, and needs it this way round.
+- **A CHECK THAT CANNOT ANSWER MUST SAY SO, NOT RETURN THE CONVENIENT ANSWER.** `sendTextTo` types a
+  prompt and sends `Enter`, and `submit-check.ts` exists because tmux's exit code says the keys were
+  WRITTEN and nothing about the harness having acted on them. Its test was `frameChanged` over the
+  whole pane — "what a submit reliably does is change the frame: the input empties" — which is true
+  of a STILL pane and meaningless on a BUSY one: a session mid-turn advances its spinner glyph, its
+  elapsed timers and its token counter on its own. Measured 2026-09-08 on a live pane, two captures
+  200 ms apart with NOTHING sent between them, three lines differed. So the check returned `true` on
+  the first 60 ms poll of every send to a working session, the bounded retry NEVER fired, and a
+  swallowed return was reported as delivered — the composer cleared and the row said "delivered · it
+  reads this when its turn ends" over a prompt still in the harness's input box, found there with 36
+  minutes on the clock. **That is the worst place to lose the retry**: a busy session is exactly
+  where the return is at risk (the input arrives as one burst, the harness reads it as a paste, and
+  a return landing inside that burst is a newline) and also the only place a successful submit shows
+  nothing, because the message goes to a queue rather than starting a turn. So the pane is ASKED
+  whether it animates — two captures before the return, nothing sent between — and `needsSecondReturn`
+  resolves every case it cannot settle TOWARD the keystroke: a redundant return on an emptied input
+  does nothing, a missing one strands a message until somebody opens the terminal. A still pane keeps
+  the old behaviour exactly.
+- **A SESSION'S GIT STATS ARE READ WHERE IT WORKED, NOT WHERE IT IS FILED.** `project_path` is the
+  transcript's FIRST cwd — the project the session belongs to — and `current_cwd` is where it ended
+  up. They differ exactly in the git-WORKTREE case this file mandates for concurrent work, and a
+  worktree sits on a branch the main checkout's HEAD has never seen: `git log` in the project
+  answers with nothing, so the session card read `Commits 2 · Lines +0 / −0 · Files 0` — a count of
+  commits beside a confident zero of what they changed. Measured on the reporting machine: nothing
+  in the checkout, **+688 / −66 over 25 files** in the worktree, for the very window that produced
+  those commits. `sessionGitPaths` (pure) asks where the session ENDED first and keeps the project
+  as the FALLBACK (a session whose last directory is not a repository at all), and holds ONE entry
+  whenever the session never moved — asking twice for the ordinary case is the git work
+  `git-stats.test.ts` exists to bound. `getSessionFileStats` takes the first directory that has
+  anything to say and never a per-field max across two, which could report lines from the worktree
+  beside a file count from the checkout: a pair that never co-existed. Same distinction
+  `sessionAtCwd` already makes for live-session detection.
+- **THE SESSION CARD'S BASIS TOGGLE IS LOCAL, AND IT IS ABSENT WHEN NO PLAN COVERS THE HARNESS.**
+  `SessionStatsMenu` opens on the DASHBOARD's `costBasis` and can be switched to the other basis to
+  read one session — re-seeded from the global on every open, changing nothing global, so closing
+  the card is what puts it back because nothing was ever moved. The factor is
+  `sessionPlanFactor(planBasis.basis, harness)` — **per harness, never the aggregate**: a session is
+  one harness's spend, and rescaling it by a factor that also covers a subscription paying for
+  something else allocates it against a plan it has nothing to do with (same rule
+  `AgentMetricsPanel` follows). A `null` factor removes the TOGGLE rather than leaving a Plan button
+  whose one outcome is "no registered plan". The row's key is `costBasisLabel`, which follows the
+  basis ACTUALLY applied — `viewCost` hands back the API figure flagged when it cannot produce a
+  plan one, and labelling that "plan" would put a real API cost under the user's subscription. Both
+  money figures in the card (the session's and its subagents') move together: two bases in one card
+  is a card that cannot be added up.
+- **`fleetIndex` IS A LOOKUP, AND ITS `values()` ARE NOT THE FLEET.** It keys every row TWICE on
+  purpose — by its own id and by its conversation id, so one map answers a link carrying either —
+  so a session that knows its conversation is in it twice. The broadcast picker was built by
+  iterating that map and offered `Active 22` on a machine running 11 (8 `waiting` + 3 `working`),
+  over an `All` of 357 against a fleet of 329: every session with a conversation link was listed
+  twice and counted twice, on a button that writes into live assistants. `buildPickRows`
+  (`web/src/lib/sessionPick.ts`, pure) now owns both picker lists and DEDUPES BY ID — deliberately
+  there rather than at the one caller, because the map is correct as a lookup and the next caller to
+  iterate it would hit the same thing.
+- **A COUNT IS WHAT MATCHED, NEVER WHAT A CAP RETURNED.** The new-session wizard's tabs read
+  `Repositories 12 · Projects 12 · Folders 12` on a machine holding 237 / 211 / 5.284 — they were
+  counting the rows they had been handed, and `PROJECTS_PER_KIND` is 12, so every tab showed the cap
+  whatever the machine held and whatever was typed. `findProjects` returns `{rows, totals}` (the
+  totals from the pure `countPerKind`, over the SAME `kindOf` the cap is applied with, so a row can
+  never be counted under one kind and budgeted under another), `/api/fleet/new` carries
+  `projectTotals`, and `kindCount` / `kindMore` (`web/src/lib/projectTabs.ts`) put the true total on
+  the tab plus "Showing 12 of 237" under the list. `projectTotals` is OPTIONAL on the wire: absent
+  means an older server did not say, and the tabs then count their rows and claim nothing more.
 - **A tag may be pinned to a PERIOD** (`TagDoc.window`, inclusive `yyyy-MM-dd`, each end independently
   optional) — that is what makes a tag answer "I ran harness X on this project from the 4th to the
   18th; what did it cost?" instead of only "these sources, all time". It is an AND on top of the
@@ -2191,7 +2736,7 @@ harness must not break.
   missing from `embed-dist.ts`'s `TEXT_EXTS`, arrived base64 and skipped the rewrite in silence.
 - **Mobile / responsive UI** — the whole dashboard is responsive; gate mobile-only branches on the `useIsMobile()` hook (`packages/web/src/hooks/useIsMobile.ts`, `MOBILE_BREAKPOINT = 768`). Conventions:
   - **Sticky header** holds everything needed for interaction. On mobile the header shows only the logo; the lang/theme/export/settings/health/live/refresh controls are **not** in the top row — they live in the bottom-nav "More" sheet (see below). Desktop keeps the full action row.
-  - **`MobileBottomNav`** (in `App.tsx`) is the only mobile chrome: 4 primary tabs (Home/Costs/Projects/Tools) + a **"More" bottom sheet rendered as a 3-column grid of square tiles** (Custom / Export / Compare when >1 harness, plus the moved actions: Live toggle w/ interval badge, Refresh, Settings, Warnings w/ issue count). The More button shows a dot when health warnings exist. The sheet slides in via a `transform` transition. Do not move these actions back into the top header on mobile, and keep the tiles compact (no square `aspect-ratio`).
+  - **`MobileBottomNav`** (in `App.tsx`) is the only mobile chrome: 4 primary tabs (Home/Costs/Repositories/Tools) + a **"More" bottom sheet rendered as a 3-column grid of square tiles** (Custom / Export / Compare when >1 harness, plus the moved actions: Live toggle w/ interval badge, Refresh, Settings, Warnings w/ issue count). The More button shows a dot when health warnings exist. The sheet slides in via a `transform` transition. Do not move these actions back into the top header on mobile, and keep the tiles compact (no square `aspect-ratio`).
   - **Collapsible filter bar**: on mobile the full `FiltersBar` (harness chips + date/projects/models) sits in the sticky header and can be minimized to a slim "Filters" row (with an active-filter count badge) via `filtersCollapsed`. The open/close is animated with a `grid-template-rows: 0fr↔1fr` transition. The animation wrapper needs `overflow: hidden`, which would clip the Models popover — so it's only clipped while animating/collapsed (`filtersClip` + `onTransitionEnd`), then switches to `visible`.
   - **`FiltersBar` `compact` prop** (used on mobile): hides the vestigial vertical dividers and tightens padding. On mobile the controls also stretch to fill each row (date presets `flex:1`, custom range full-width, the ＋ Filtro button full-width).
   - **`FiltersBar` "＋ Filtro" model**: the top bar shows only the date presets + custom range + a single dashed **＋ Filtro** button (with an active-dimension count badge). It opens a menu of the *available* dimensions (Members/Harnesses/Presence shown only on central-with-data; Repos only when a repo dimension exists; Projects/Models when present); picking one opens that dimension's inline value picker (Projects opens the full `ProjectsModal`). The selected values are NOT shown in the top bar — they render in the animated per-category chip rows below (`AnimatedRow`/`ChipRow`/`FilterChip`, one row per dimension incl. Presence). Do not re-add always-visible dimension dropdowns to the top bar.

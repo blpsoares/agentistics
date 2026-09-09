@@ -57,6 +57,7 @@ async function readLocalLiveSnapshot(sessions: SessionMeta[]): Promise<{
 import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
 import { CAPS, PROFILE } from './exposure'
 import { chatAllowed } from './chat-gate'
+import { shellAllowed } from './sessions/shell-gate'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
 import { corsHeadersFor } from './cors'
@@ -81,6 +82,13 @@ import {
   openInputSocket, onInputMessage, closeInputSocket,
   createInputState, inputSessionExists, inputAtCapacity, type FleetInputState,
 } from './sessions/input-web'
+// The utility shell's own WS write channel. Its graph is the shell store plus the two pure input
+// modules — no registry, no session-view — so it is statically importable for the same reason
+// `input-web` is, and its handlers must be reachable synchronously from `_wsHandlers`.
+import {
+  openShellInputSocket, onShellInputMessage, closeShellInputSocket,
+  createShellInputState, shellInputExists, shellInputAtCapacity, type ShellInputState,
+} from './sessions/shell-input-web'
 import { wsInputOriginOk } from './sessions/input-protocol'
 // Type only: the module itself reaches `cli-start` → `@agentistics/tui/control` → Ink, and is
 // loaded by dynamic import inside the two /api/fleet handlers.
@@ -335,25 +343,35 @@ ensureClaudeChat().catch(err => console.warn('[claude-chat] failed to initialize
 // Bun HTTP server
 // ---------------------------------------------------------------------------
 
-// Two kinds of socket ride these handlers: the member↔central reverse channel (`isAgent`) and the
-// browser's live-terminal WRITE channel (`fleetInput`). They are disjoint — an agent socket never
-// carries `fleetInput` and vice versa — so each handler dispatches on which field is present.
-type WSData = { user: string; memberId: string; isAgent?: boolean; fleetInput?: FleetInputState }
+// Three kinds of socket ride these handlers: the member↔central reverse channel (`isAgent`), the
+// browser's live-terminal WRITE channel onto a SESSION (`fleetInput`), and the same channel onto a
+// utility SHELL (`shellInput`). They are disjoint — a socket carries exactly one of the three — so
+// each handler dispatches on which field is present. The last two are separate fields rather than
+// one with a scope tag, because that is what makes it impossible for a shell id to be dispatched
+// into the fleet's handler: the two never share a code path at all.
+type WSData = {
+  user: string; memberId: string; isAgent?: boolean
+  fleetInput?: FleetInputState
+  shellInput?: ShellInputState
+}
 
 // Shared WS + request handlers, so the binary can bind the SAME logic to two ports below:
 // PORT (47291 = api + mcp) and WEB_PORT (47292 = the web dashboard you open).
 const _wsHandlers = {
   open(ws: ServerWebSocket<WSData>) {
     if (ws.data.fleetInput) { openInputSocket(ws); return }
+    if (ws.data.shellInput) { openShellInputSocket(ws); return }
     if (!ws.data.isAgent) return; registerAgent(ws)
   },
   message(ws: ServerWebSocket<WSData>, msg: string | Buffer) {
     if (ws.data.fleetInput) { onInputMessage(ws, msg); return }
+    if (ws.data.shellInput) { onShellInputMessage(ws, msg); return }
     if (!ws.data.isAgent) return; onAgentMessage(ws, msg)
   },
   pong(ws: ServerWebSocket<WSData>) { if (!ws.data.isAgent) return; onAgentPong(ws) },
   close(ws: ServerWebSocket<WSData>) {
     if (ws.data.fleetInput) { closeInputSocket(ws); return }
+    if (ws.data.shellInput) { closeShellInputSocket(ws); return }
     if (!ws.data.isAgent) return; unregisterAgent(ws)
   },
 }
@@ -784,6 +802,27 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         console.error(safe.logLine)
         return json(safe.body, 500)
       }
+    }
+
+    /**
+     * WHERE THIS DASHBOARD IS ALREADY REACHABLE OVER HTTPS, if anywhere.
+     *
+     * Notifications, service workers and installability all need a secure origin, and a machine's
+     * dashboard is plain http — so on a phone the settings screen could only name `tailscale serve`
+     * as a rule. It could not say WHERE, because the page cannot learn the machine's name on the
+     * tailnet. This can: `secure-origin.ts` reads a configuration that ALREADY EXISTS and reports
+     * the origin only when it provably serves this very port.
+     *
+     * It configures nothing. Publishing a dashboard to a tailnet is the user's decision, exactly as
+     * `autostart.ts` only ever SUGGESTS the line it would add. Guarded as `localShell` in
+     * `capability-guard.ts` because it spawns a process, and authenticated like every other route.
+     */
+    if (url.pathname === '/api/secure-origin' && req.method === 'GET') {
+      const { readSecureOrigin } = await import('./secure-origin')
+      const origin = await readSecureOrigin(WEB_PORT)
+      return new Response(JSON.stringify({ ...(origin ? { origin } : {}) }), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
     }
 
     if (url.pathname === '/api/preferences' && req.method === 'GET') {
@@ -1333,6 +1372,102 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       })
     }
 
+    /**
+     * DOES THIS SERVER ANSWER? — the question the MCP tab could not ask.
+     *
+     * It listed CONFIGURATION and nothing else, so a server that had never worked looked exactly
+     * like one that worked perfectly, and the only way to find out was to start a session and see
+     * whether the tools were there. Reported as "fico no escuro e não sei os que estão disponíveis".
+     *
+     * It is a CHECK, never a connection. agentistics does not run MCP servers — Claude Code does,
+     * once, when a session starts — so a server "connected" from here would be connected to nothing
+     * an assistant can use. See `mcp-check.ts`.
+     *
+     * Guarded as `localShell` in `capability-guard.ts`: it starts the configured command. Only ever
+     * on an explicit press, never while merely listing — a page that spawned every configured
+     * server on load would be starting processes nobody asked for.
+     */
+    if (url.pathname === '/api/mcp/check' && req.method === 'POST') {
+      const read = await readJsonLimited<{
+        name?: string; scope?: string; projectPath?: string
+      }>(req, LIMITS.bodyBytes)
+      if (!read.ok) {
+        return new Response(JSON.stringify({ ok: false, message: read.error }), {
+          status: read.error === 'too_large' ? 413 : 400,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      try {
+        const { listMcp } = await import('./mcp-admin')
+        const { checkStdio, checkUrl } = await import('./mcp-check')
+        // The server is looked up in the CONFIGURATION, never taken from the request: a body that
+        // could name a command would be an arbitrary-exec route wearing an MCP label.
+        //
+        // `run` beside it already says whether a process is UP, and that is a different question:
+        // `idle` is the normal state of a perfectly good server nothing is using right now, and it
+        // is also what a broken one looks like. This is what tells those two apart.
+        const all = (await listMcp(read.value.projectPath ?? null)).servers
+        const found = all.find(m => m.name === read.value.name && m.scope === read.value.scope)
+        if (!found) {
+          return new Response(JSON.stringify({ ok: false, message: 'unknown server' }), {
+            status: 404, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const result = found.command
+          ? await checkStdio(found.command, found.args ?? [], found.projectPath)
+          : found.url
+            ? await checkUrl(found.url)
+            : { outcome: 'uncheckable' as const }
+        return new Response(JSON.stringify({ ok: true, ...result }), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify(safeError(err, { verbose: PROFILE === 'local' }).body), {
+          status: 500, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
+    /**
+     * WHAT TOOLS DOES EACH CONFIGURED SERVER OFFER? — what the web composer's `@<server>` /
+     * `@<server>:<tool>` references need before either half can be offered.
+     *
+     * Reuses the SAME `initialize` handshake `/api/mcp/check` performs and extends it with
+     * `tools/list` over the same connection — see `mcp-tools.ts`. Answers are CACHED per server for
+     * a few minutes: the composer can open on every keystroke, and spawning a
+     * language-server-backed MCP server that often is its own outage. A server that could not be
+     * reached is reported unreachable with a reason, never as a server with zero tools — the
+     * confident-zero error this repo forbids everywhere.
+     *
+     * Guarded as `localShell`, like `/api/mcp/check`: it starts every configured server's command.
+     */
+    if (url.pathname === '/api/mcp/tools' && req.method === 'GET') {
+      try {
+        const { listMcp } = await import('./mcp-admin')
+        const { peekServerTools, toolsView } = await import('./mcp-tools')
+        const { servers } = await listMcp(url.searchParams.get('projectPath'))
+        /*
+         * NEVER AWAIT THE PROBE HERE. Measured on one machine's five configured servers: the one
+         * running from `bun` answered in 236ms with 19 tools, and the other four — three spawned
+         * through `npx`, one an HTTP/SSE endpoint — did not answer inside three minutes between
+         * them. The composer opens on a keystroke and cannot wait for that.
+         *
+         * It does not need to. `@<server>` only needs the NAMES, which the config knows instantly;
+         * only the tool list behind `:` needs a probe. So each server comes back with whatever is
+         * already known, `peekServerTools` starts the fetch for what is not, and a server that has
+         * not answered yet is reported as NOT ASKED — never as a server with no tools.
+         */
+        const views = servers.map(s => toolsView(s, peekServerTools(s)))
+        return new Response(JSON.stringify({ servers: views }), {
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      } catch (err) {
+        return new Response(JSON.stringify(safeError(err, { verbose: PROFILE === 'local' }).body), {
+          status: 500, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+    }
+
     if ((url.pathname === '/api/mcp/install' || url.pathname === '/api/mcp/remove'
       || url.pathname === '/api/mcp/replace') && req.method === 'POST') {
       try {
@@ -1404,6 +1539,259 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
       }
+    }
+
+    // The task board. `capability-guard.ts` has already refused these on an exposed profile; the
+    // handlers hold no arithmetic of their own (see `task-web.ts`).
+    // The page's own filters, read off the query string. The board is scoped exactly as every other
+    // surface is — see `task-filter.ts`.
+    const taskFilterOf = (u: URL) => {
+      const list = (k: string) => {
+        const v = u.searchParams.get(k)
+        return v ? v.split(',').filter(Boolean) : undefined
+      }
+      return {
+        ...(u.searchParams.get('from') ? { from: u.searchParams.get('from')! } : {}),
+        ...(u.searchParams.get('to') ? { to: u.searchParams.get('to')! } : {}),
+        ...(list('harnesses') ? { harnesses: list('harnesses') } : {}),
+        ...(list('projects') ? { projects: list('projects') } : {}),
+        // `repos` may legitimately name the empty bucket, so an explicit empty member survives.
+        ...(u.searchParams.has('repos')
+          ? { repos: (u.searchParams.get('repos') ?? '').split(',') }
+          : {}),
+      }
+    }
+
+    if (url.pathname === '/api/tasks' && req.method === 'GET') {
+      const { listTasks } = await import('./sessions/task-web')
+      return json(await listTasks(taskFilterOf(url)))
+    }
+    // The two ORCHESTRATION reads, matched before the generic `<ref>` GET below — otherwise
+    // `next` and `activity` resolve as task references and answer 404 for a board that has them.
+    if (url.pathname === '/api/tasks/next' && req.method === 'GET') {
+      const { nextTasks } = await import('./sessions/task-web')
+      const limit = Number(url.searchParams.get('limit'))
+      return json(await nextTasks({
+        ...(url.searchParams.get('actor') ? { actor: url.searchParams.get('actor')! } : {}),
+        ...(Number.isFinite(limit) && limit > 0 ? { limit } : {}),
+      }))
+    }
+    if (url.pathname === '/api/tasks/activity' && req.method === 'GET') {
+      const { taskActivity } = await import('./sessions/task-web')
+      const limit = Number(url.searchParams.get('limit'))
+      return json({
+        events: await taskActivity({
+          ...(url.searchParams.get('task') ? { ref: url.searchParams.get('task')! } : {}),
+          ...(Number.isFinite(limit) && limit > 0 ? { limit } : {}),
+        }),
+      })
+    }
+    if (url.pathname.startsWith('/api/tasks/') && req.method === 'GET') {
+      const ref = decodeURIComponent(url.pathname.slice('/api/tasks/'.length))
+      const { showTask } = await import('./sessions/task-web')
+      const found = await showTask(ref, taskFilterOf(url))
+      if (!found) return json({ error: 'no_such_task' }, 404)
+      return json(found)
+    }
+    if (url.pathname === '/api/tasks' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({})) as { title?: string; detail?: string }
+      const { createTask } = await import('./sessions/task-web')
+      const made = await createTask({ title: body.title ?? '', ...(body.detail !== undefined ? { detail: body.detail } : {}) })
+      if (!made) return json({ error: 'title_required' }, 400)
+      return json({ task: made })
+    }
+
+    // A task file, by its own id. Separate from the task routes because a download is addressed by
+    // the FILE and a caller holding a file id has no reason to know which task it hangs off.
+    if (url.pathname.startsWith('/api/task-files/')) {
+      const fileId = decodeURIComponent(url.pathname.slice('/api/task-files/'.length))
+      const mod = await import('./sessions/task-web')
+      if (req.method === 'DELETE') {
+        return json({ ok: await mod.removeFile(fileId) }, 200)
+      }
+      const got = await mod.fetchFile(fileId)
+      if (!got) return json({ error: 'no_such_file' }, 404)
+      // `.buffer` rather than the view: a Uint8Array is not a BodyInit in this lib target.
+      return new Response(got.bytes.buffer as ArrayBuffer, {
+        headers: {
+          ...CORS_HEADERS,
+          'Content-Type': 'application/octet-stream',
+          // The name is the one the user gave, quoted — it never reached the filesystem.
+          'Content-Disposition': `attachment; filename="${got.name.replace(/"/g, '')}"`,
+        },
+      })
+    }
+
+    if (url.pathname.startsWith('/api/tasks/') && req.method === 'DELETE') {
+      const ref = decodeURIComponent(url.pathname.slice('/api/tasks/'.length))
+      const { deleteTask } = await import('./sessions/task-web')
+      return json({ ok: await deleteTask(ref) })
+    }
+
+    if (url.pathname.startsWith('/api/tasks/') && req.method === 'POST') {
+      const rest = decodeURIComponent(url.pathname.slice('/api/tasks/'.length))
+      // `<ref>/comments`, `<ref>/subtasks`, `<ref>/files`, `<ref>` (status/edit). The ref may itself
+      // contain slashes only if someone named a task that way, so the VERB is taken from the tail.
+      const slash = rest.lastIndexOf('/')
+      const verb = slash === -1 ? '' : rest.slice(slash + 1)
+      const known = verb === 'comments' || verb === 'subtasks' || verb === 'files'
+        || verb === 'links' || verb === 'sessions' || verb === 'claim' || verb === 'move'
+      const ref = known ? rest.slice(0, slash) : rest
+      const mod = await import('./sessions/task-web')
+
+      if (verb === 'files') {
+        const form = await req.formData().catch(() => null)
+        const file = form?.get('file')
+        if (!(file instanceof File)) return json({ error: 'file_required' }, 400)
+        const fileId = await mod.attachFile(ref, {
+          name: file.name,
+          bytes: new Uint8Array(await file.arrayBuffer()),
+          ...(typeof form?.get('kind') === 'string' ? { kind: String(form.get('kind')) } : {}),
+          ...(typeof form?.get('author') === 'string' ? { author: String(form.get('author')) } : {}),
+        })
+        return json({ ok: fileId !== null, id: fileId }, fileId !== null ? 200 : 400)
+      }
+
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (verb === 'comments') {
+        // `id` present means an EDIT or a DELETE of that comment; absent means a new one.
+        if (typeof body.id === 'string') {
+          const ok = body.remove === true
+            ? await mod.removeComment(body.id)
+            : await mod.editComment(body.id, String(body.body ?? ''))
+          return json({ ok }, ok ? 200 : 400)
+        }
+        const ok = await mod.addComment(ref, {
+          author: String(body.author ?? 'unknown'),
+          body: String(body.body ?? ''),
+        })
+        return json({ ok }, ok ? 200 : 400)
+      }
+      if (verb === 'sessions') {
+        if (typeof body.detach === 'string') {
+          return json({ ok: await mod.detachSession(body.detach) })
+        }
+        // `subtaskId` files it under a SUBTASK of this delivery instead of under the delivery
+        // itself — a move, never an addition. `task-attach.ts` holds the exclusivity; a subtask
+        // belonging to another task is refused there, not repaired.
+        const result = await mod.attachSession(ref, String(body.sessionId ?? ''),
+          typeof body.subtaskId === 'string' && body.subtaskId
+            ? { subtaskId: body.subtaskId }
+            : {})
+        if (result.ok) return json({ ok: true })
+        // `blocked` is a 422, the same status `markTask`'s own `blocked_needs_reason` answers with
+        // — both name a piece of work this request cannot do YET, not a resource that is missing.
+        // Everything else stays 404: the ref, the session or the subtask named nothing.
+        return json(
+          { ok: false, reason: result.reason, ...(result.blockedBy ? { blockedBy: result.blockedBy } : {}) },
+          result.reason === 'blocked' ? 422 : 404,
+        )
+      }
+      if (verb === 'links') {
+        if (typeof body.remove === 'string') {
+          return json({ ok: await mod.removeLink(ref, body.remove) })
+        }
+        const ok = await mod.addLink(ref, {
+          url: String(body.url ?? ''),
+          ...(typeof body.label === 'string' ? { label: body.label } : {}),
+          ...(typeof body.kind === 'string' ? { kind: body.kind } : {}),
+        })
+        return json({ ok }, ok ? 200 : 400)
+      }
+      if (verb === 'subtasks') {
+        if (typeof body.id === 'string') {
+          if (body.remove === true) return json({ ok: await mod.removeSubtask(body.id) })
+          // A bare `{id, done}` is the tick; anything else is a column edit. Both land on
+          // `patchSubtask`, which derives `done` from `status` so the two cannot disagree.
+          if (typeof body.done === 'boolean' && Object.keys(body).length === 2) {
+            return json({ ok: await mod.setSubtaskDone(body.id, body.done) })
+          }
+          return json({ ok: await mod.patchSubtask(body.id, {
+            ...(typeof body.title === 'string' ? { title: body.title } : {}),
+            ...(typeof body.status === 'string' ? { status: body.status as never } : {}),
+            ...(typeof body.assignee === 'string' ? { assignee: body.assignee } : {}),
+            ...(typeof body.dueDate === 'string' ? { dueDate: body.dueDate } : {}),
+            ...(typeof body.startDate === 'string' ? { startDate: body.startDate } : {}),
+            ...(typeof body.sessionId === 'string' ? { sessionId: body.sessionId } : {}),
+            ...(typeof body.notes === 'string' ? { notes: body.notes } : {}),
+            // A subtask blocked by ANOTHER subtask, of the same delivery — see `task-attach.ts`.
+            // `patchSubtask` sanitizes it against the real sibling list; a bare array here would
+            // let a caller name a subtask outside this task and have it silently do nothing later.
+            ...(Array.isArray(body.blockedBy)
+              ? { blockedBy: body.blockedBy.filter((x): x is string => typeof x === 'string') }
+              : {}),
+          }) })
+        }
+        const ok = await mod.addSubtask(ref, String(body.title ?? ''))
+        return json({ ok }, ok ? 200 : 400)
+      }
+      if (verb === 'claim') {
+        // `release: true` gives it back; anything else takes it. One verb, because a caller holding
+        // a task reference thinks in terms of "mine / not mine", not two endpoints.
+        if (body.release === true) {
+          const out = await mod.releaseTask({
+            ref, by: String(body.by ?? ''), ...(body.force === true ? { force: true } : {}),
+          })
+          return json(out, out.ok ? 200 : 409)
+        }
+        const out = await mod.claimTask({
+          ref,
+          by: String(body.by ?? ''),
+          ...(typeof body.leaseMs === 'number' ? { leaseMs: body.leaseMs } : {}),
+          ...(typeof body.sessionId === 'string' ? { sessionId: body.sessionId } : {}),
+          ...(typeof body.note === 'string' ? { note: body.note } : {}),
+          ...(body.takeover === true ? { takeover: true } : {}),
+        })
+        // 409, not 400: the request was well formed and somebody else has it — the one status a
+        // caller can act on by waiting.
+        return json(out, out.ok ? 200 : out.reason === 'no_such_task' ? 404 : 409)
+      }
+      if (verb === 'move') {
+        const index = Number(body.index)
+        if (!Number.isFinite(index)) return json({ error: 'bad_index' }, 400)
+        const out = await mod.moveTask({
+          ref, index,
+          ...(typeof body.actor === 'string' ? { actor: body.actor } : {}),
+        })
+        return json(out, out.ok ? 200 : 404)
+      }
+      const FIELDS = ['title', 'detail', 'priority', 'assignee', 'dueDate', 'startDate'] as const
+      if (FIELDS.some(f => typeof body[f] === 'string') || Array.isArray(body.labels)) {
+        const ok = await mod.editTask(ref, {
+          ...Object.fromEntries(FIELDS.filter(f => typeof body[f] === 'string').map(f => [f, body[f] as string])),
+          ...(Array.isArray(body.labels)
+            ? { labels: body.labels.filter((v): v is string => typeof v === 'string') }
+            : {}),
+          ...(typeof body.actor === 'string' ? { actor: body.actor } : {}),
+        })
+        return json({ ok }, ok ? 200 : 404)
+      }
+      // Blockers ALONE. With a `status` beside them the two belong to one move — "this is blocked,
+      // and here is what by" — and answering it here would set the blockers and silently drop the
+      // status, which is what happened: the task kept its old column and the caller was told ok.
+      if (Array.isArray(body.blockedBy) && typeof body.status !== 'string') {
+        const ok = await mod.setBlockedBy(ref, body.blockedBy.filter((v): v is string => typeof v === 'string'))
+        return json({ ok }, ok ? 200 : 404)
+      }
+      const { TASK_STATUSES } = await import('./sessions/task-model')
+      const to = typeof body.status === 'string'
+        && (TASK_STATUSES as readonly string[]).includes(body.status)
+        ? body.status as import('./sessions/task-model').TaskStatus
+        : null
+      if (!to) return json({ error: 'bad_status' }, 400)
+      const out = await mod.markTask(
+        ref, to,
+        typeof body.actor === 'string' ? body.actor : undefined,
+        {
+          ...(typeof body.reason === 'string' ? { reason: body.reason } : {}),
+          ...(Array.isArray(body.blockedBy)
+            ? { blockedBy: body.blockedBy.filter((v): v is string => typeof v === 'string') }
+            : {}),
+        },
+      )
+      // 422, not 404: the task exists and the move is understood — it is missing the one thing
+      // `blocked` cannot be recorded without. A 4xx a caller can act on, with a code that says so.
+      return json(out, out.ok ? 200 : out.message === 'blocked_needs_reason' ? 422 : 404)
     }
 
     /**
@@ -1629,10 +2017,14 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
             headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
           })
         }
+        // The session this is attached to, so a `[Image #N]` marker can find the file again when the
+        // harness queues the message and substitutes markers for the paths it was given. Absent is
+        // fine — the attachment still works, it just cannot be drawn as a thumbnail in that case.
+        const attachedTo = typeof form.get('session') === 'string' ? String(form.get('session')) : ''
         const out = await storeAttachment(lang, {
           name: file.name,
           bytes: new Uint8Array(await file.arrayBuffer()),
-        })
+        }, attachedTo)
         return new Response(JSON.stringify(out), {
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
@@ -2117,6 +2509,80 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         status: 500,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
+    }
+
+    // THE PER-SESSION UTILITY SHELL. Two gates and a refusal, all of them enforced HERE and not
+    // only in the UI: a hidden button is not a closed door, and this endpoint is what actually
+    // spawns `$SHELL` on the host.
+    if (url.pathname === '/api/shell' || url.pathname.startsWith('/api/shell/')) {
+      // A CENTRAL NEVER OFFERS ONE. It aggregates other machines and has no host to serve — the
+      // same refusal, in the same shape, the `/api/fleet` block gives.
+      if (TEAM_CENTRAL) {
+        return new Response(JSON.stringify({ error: 'shell_central' }), {
+          status: 404,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      if (!shellAllowed(CAPS.localShell, (await readPreferences()).shellEnabled)) {
+        return new Response(JSON.stringify({ error: 'shell_disabled' }), {
+          status: 403,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      // The shell's WRITE channel, upgraded HERE because only this scope holds `server`. It rides
+      // the two gates just applied plus the two a WS upgrade needs of its own: SAME-ORIGIN (CSWSH —
+      // `localShell` being on does not stop a malicious page in the user's own browser opening a
+      // socket to localhost) and SCOPE (the id must be an OPEN SHELL, resolved against
+      // `shells.json` and never the session registry), plus the ceiling.
+      if (url.pathname === '/api/shell/input') {
+        const id = url.searchParams.get('id')
+        if (!id) {
+          return new Response(JSON.stringify({ error: 'bad_request' }), {
+            status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        if (!wsInputOriginOk({ origin: req.headers.get('origin'), host: url.host, allowlist: ALLOWED_ORIGINS, dev: !SERVE_STATIC })) {
+          void writeAudit({ action: 'shell.input.denied', ip: clientIp, meta: { id, reason: 'origin' } })
+          return new Response(JSON.stringify({ error: 'forbidden_origin' }), {
+            status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        if (!(await shellInputExists(id))) {
+          return new Response(JSON.stringify({ error: 'not_found' }), {
+            status: 404, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        if (shellInputAtCapacity()) {
+          return new Response(JSON.stringify({ error: 'too_many_streams' }), {
+            status: 503, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+          })
+        }
+        const upgraded = server.upgrade(req, {
+          // The shell id is fixed HERE — a message can never redirect a keystroke to another pane —
+          // and `shellInput` is its own field, so this socket can never reach the fleet's handler.
+          data: { user: '', memberId: '', shellInput: createShellInputState(id) },
+        })
+        if (upgraded) {
+          // ONE entry per channel opened — a keyboard was attached to a shell on this host — never
+          // one per keystroke, which would drown the log.
+          void writeAudit({ action: 'shell.input.open', ip: clientIp, meta: { id } })
+          return
+        }
+        return new Response(JSON.stringify({ error: 'upgrade_failed' }), {
+          status: 500, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+
+      // Dynamic, following the `/api/fleet` handler's own pattern: the session machinery stays out
+      // of a cold start that never touches it.
+      const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
+      const { handleShellRoute } = await import('./sessions/shell-web')
+      const shellLang = fleetLang(url.searchParams.get('lang'))
+      const res = await handleShellRoute(req, url, await hostForFleet(shellLang), shellLang)
+      if (res) {
+        for (const [k, v] of Object.entries(CORS_HEADERS)) res.headers.set(k, v)
+        return res
+      }
     }
 
     // Chat is opt-in. `capability-guard.ts` has already refused these paths where the exposure
