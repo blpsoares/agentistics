@@ -21,6 +21,7 @@ import {
 import { operatorId, recordPromptSend, resolveAuthor } from '../lib/promptAudit'
 import { getTerminalZoom, setTerminalZoom, subscribeTerminalZoom, ZOOM_STEP, ZOOM_MIN, ZOOM_MAX } from '../lib/terminalZoom'
 import { consentMode, keyStripShown, type TerminalPlacement } from '../lib/terminalSurface'
+import { createPaneResizer } from '../lib/paneResizeRequest'
 import { KEY_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from '../lib/keyStrip'
 import { getPinnedIds, isSessionPinned, togglePinnedSession, subscribePinnedSessions, pinnedServerSnapshot, MAX_PINNED } from '../lib/pinnedSessions'
 import { getOpenModalSession, setOpenModalSession, subscribeOpenModalSession } from '../lib/openModalSession'
@@ -1831,6 +1832,14 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
   const [ctrlArmed, setCtrlArmed] = useState(false)
   const [stripNote, setStripNote] = useState<string | null>(null)
   const showStrip = keyStripShown(placement, isMobile)
+  /**
+   * MAKE THE PANE FIT THE BOX. The emulator scales rather than reflows, so a 120-column pane in a
+   * 1500px band leaves dead margin — reported as "a largura não tá indo até o final". The server
+   * decides what it may actually do: this pane may GROW and never shrink below the floor every
+   * dialog reader depends on (`server/sessions/pane-resize.ts`).
+   */
+  const resizer = useMemo(() => createPaneResizer({ scope: 'fleet', id }), [id])
+  useEffect(() => () => resizer.cancel(), [resizer])
   /** One send path for everything: a strip press and a real keypress are judged by one allowlist. */
   const sendKeys = (data: string) => {
     if (!ctrlArmed) { write.send(data); return }
@@ -1909,7 +1918,7 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
       >
         <Suspense fallback={<div style={{ padding: 16, fontSize: 12, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>{lang === 'pt' ? 'Carregando o emulador…' : 'Loading the emulator…'}</div>}>
           {/* key={id}: a new session gets a brand-new emulator, so no content leaks across. */}
-          <SessionTerminal key={id} frame={state.frame} theme={theme} showCursor={status.showCursor} zoom={zoom} interactive={interactive} onInput={sendKeys} />
+          <SessionTerminal key={id} frame={state.frame} theme={theme} showCursor={status.showCursor} zoom={zoom} interactive={interactive} onInput={sendKeys} onGeometry={resizer.request} />
         </Suspense>
       </div>
       {/* THE KEY STRIP — mobile only, and never in a dashboard card (`keyStripShown`). Without it a

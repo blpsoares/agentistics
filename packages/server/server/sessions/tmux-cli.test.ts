@@ -7,7 +7,7 @@ import {
   tmuxName,
   serverOptionsArgs, HISTORY_LIMIT, PANE_COLS, PANE_ROWS,
   resolveDefaultTerminal, resolveTruecolorTerm, spawnArgs,
-  type TerminalProfile, tmuxListIsEmptyState, SHELL_SOCKET, TMUX_SOCKET, listSessionsArgs,
+  type TerminalProfile, tmuxListIsEmptyState, SHELL_SOCKET, TMUX_SOCKET, listSessionsArgs, resizeWindowArgs,
 } from './tmux-cli'
 
 /** A colour-neutral profile: neither a 256-colour terminfo entry nor a truecolor invoker. */
@@ -420,5 +420,20 @@ describe('the socket is a PARAMETER — the utility shell runs on its own', () =
     // through would otherwise produce `['-L', undefined, …]` and tmux would be handed a nonsense
     // argv that fails at runtime rather than at the type checker.
     expect(killSessionArgs('a', undefined)).toEqual(['-L', TMUX_SOCKET, 'kill-session', '-t', 'agentop-a'])
+  })
+})
+
+describe('resizeWindowArgs', () => {
+  it('names the window, the size and the socket', () => {
+    expect(resizeWindowArgs('abc', { cols: 200, rows: 60 })).toEqual([
+      '-L', TMUX_SOCKET, 'resize-window', '-t', 'agentop-abc', '-x', '200', '-y', '60',
+    ])
+  })
+
+  it('takes the SHELL socket when it is given one', () => {
+    // A shell resized on the fleet socket would resize whatever happened to share its name there —
+    // the same reason every other builder takes this argument.
+    expect(resizeWindowArgs('abc', { cols: 80, rows: 24 }, SHELL_SOCKET).slice(0, 2))
+      .toEqual(['-L', SHELL_SOCKET])
   })
 })
