@@ -2633,7 +2633,7 @@ export function createControlHost(initialLang: CliLang, altScreen: Suspendable):
       // The SCHEDULE asks when one last RAN, which a pruned file still answers — see `lastBackupRun`.
       const st = scheduleStatus({
         schedule: prefs.schedule, customHours: prefs.customHours,
-        atHour: prefs.atHour, tzOffsetMinutes: new Date().getTimezoneOffset(),
+        atHour: prefs.atHour, days: prefs.days, tzOffsetMinutes: new Date().getTimezoneOffset(),
         lastAt: lastBackupRun(entries)?.at ?? null, nowMs: Date.now(),
         serverRunning: existsSync(join(AGENTISTICS_DATA_DIR, 'events-producer.json')),
       })

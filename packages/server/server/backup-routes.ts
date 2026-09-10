@@ -68,9 +68,12 @@ export interface BackupStatusJson {
     scheduleActive: boolean
     /** Hours between runs when `schedule` is `'custom'`; null when it has never been set. */
     customHours: number | null
-    /** The local hour a daily/weekly run is anchored to; null when never chosen (reads as the
-     *  default in `schedule.ts`, which is the one place that decides it). */
+    /** The local hour a daily/weekly/custom run is anchored to; null when never chosen (reads as
+     *  the default in `schedule.ts`, which is the one place that decides it). */
     atHour: number | null
+    /** Which local weekdays (0=Sunday…6=Saturday) `daily`/`custom` may run on; null/empty means
+     *  every day. `weekly` ignores this — see `schedule.ts`'s `ScheduleInput.days`. */
+    days: number[] | null
     keep: number
     /** What EVERY retained backup occupies together, already formatted. */
     retainedLabel: string
@@ -107,8 +110,12 @@ export interface BackupConfigPatch {
   schedule?: ScheduleId
   /** Hours between runs, when `schedule` is `'custom'`. */
   customHours?: number
-  /** The local hour a daily/weekly run is anchored to. */
+  /** The local hour a daily/weekly/custom run is anchored to. */
   atHour?: number
+  /** Which local weekdays (0=Sunday…6=Saturday) `daily`/`custom` may run on. An EMPTY array is a
+   *  meaningful value — it clears a previous restriction back to every day — distinct from leaving
+   *  the field out entirely, which changes nothing. `weekly` ignores this. */
+  days?: number[]
 }
 
 /**
@@ -169,7 +176,7 @@ export async function readBackupStatus(): Promise<BackupStatusJson> {
   const lastAt = lastBackupRun(entries)?.at ?? null
   const st = scheduleStatus({
     schedule: prefs.schedule,
-    customHours: prefs.customHours, atHour: prefs.atHour,
+    customHours: prefs.customHours, atHour: prefs.atHour, days: prefs.days,
     tzOffsetMinutes: new Date().getTimezoneOffset(),
     lastAt,
     nowMs: Date.now(),
@@ -187,6 +194,7 @@ export async function readBackupStatus(): Promise<BackupStatusJson> {
       // number the user last chose rather than an empty field.
       customHours: prefs.customHours ?? null,
       atHour: prefs.atHour ?? null,
+      days: prefs.days?.length ? prefs.days : null,
       scheduleActive: st.kind === 'next',
       keep: prefs.keep,
       retainedLabel: formatBytes(retainedTotal(entries.filter(e => e.present))),
@@ -270,7 +278,12 @@ export async function updateBackupConfig(
     if (patch.atHour !== undefined && !Number.isFinite(patch.atHour)) {
       return { ok: false, reason: 'the hour of day must be a number' }
     }
-    await writeBackupSchedule(patch.schedule, patch.customHours, patch.atHour)
+    // Validated for MEMBERSHIP here — `dayAllowed` (schedule.ts) only ever tests membership, never
+    // the shape of the array it is given, so a bad value here would sail through silently otherwise.
+    if (patch.days !== undefined && patch.days.some(d => !Number.isInteger(d) || d < 0 || d > 6)) {
+      return { ok: false, reason: 'days must be 0-6 (0 = Sunday)' }
+    }
+    await writeBackupSchedule(patch.schedule, patch.customHours, patch.atHour, patch.days)
   }
   return { ok: true, status: await readBackupStatus() }
 }
