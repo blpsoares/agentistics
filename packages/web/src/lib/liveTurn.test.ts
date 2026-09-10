@@ -1,5 +1,5 @@
 import { expect, test, describe } from 'bun:test'
-import { liveTurnText, stripAnsi } from './liveTurn'
+import { detectCompacting, liveTurnText, stripAnsi } from './liveTurn'
 
 describe('stripAnsi', () => {
   test('strips a CSI sequence, ESC byte included', () => {
@@ -103,5 +103,27 @@ describe('liveTurnText', () => {
       working: true,
       lines: ['Entering the directory now.'],
     })).toBe('Entering the directory now.')
+  })
+})
+
+describe('detectCompacting', () => {
+  test('reads the caption and the percent off the bar line below it', () => {
+    expect(detectCompacting([
+      '· Compacting conversation… (3m 43s)',
+      '  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░ 92%',
+      '  └ Tip: Run /ultrareview for a cloud-based multi-agent review',
+    ])).toEqual({ percent: 92 })
+  })
+
+  test('an ordinary working frame is not compaction', () => {
+    expect(detectCompacting(['Let me check the config first.', 'Reading package.json…'])).toBeNull()
+  })
+
+  test('the caption with no percent found nearby reports it absent, never a fake 0', () => {
+    expect(detectCompacting(['Compacting conversation…'])).toEqual({ percent: null })
+  })
+
+  test('is case-insensitive, since a harness could capitalise it differently', () => {
+    expect(detectCompacting(['COMPACTING CONVERSATION… (1s)', '0%'])).toEqual({ percent: 0 })
   })
 })

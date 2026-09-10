@@ -111,3 +111,33 @@ export function liveTurnText(input: LiveTurnInput): string | null {
 function collapse(s: string): string {
   return s.replace(/\s+/g, ' ').trim()
 }
+
+/** Matches Claude Code's own compaction line — "Compacting conversation… (3m 43s)". */
+const COMPACTING_LINE = /compacting conversation/i
+/** The progress figure on the bar line just under it — "▓▓▓░░░ 92%". */
+const COMPACTING_PERCENT = /(\d{1,3})\s*%/
+
+/**
+ * Whether the frame is showing Claude Code's OWN compaction screen right now, and how far along it
+ * is — read off the raw terminal frame, because compaction is not a turn: nothing is written to the
+ * transcript while it runs (the `compact_boundary` line lands only once it FINISHES), so the chat
+ * transcript has no signal for it at all and `WorkingNote` fell back to its generic "working",
+ * reported as "o compacting fica sendo mostrado como working invés de mostrar o compacting mesmo".
+ *
+ * Deliberately over the UNFILTERED lines, not `liveTurnText`'s kept text: the progress bar is drawn
+ * with block-drawing characters that `NOTHING`/`CHROME` exist to strip out of ordinary speech, which
+ * is exactly the line this needs to read. `null` when the frame is not on this screen at all — never
+ * a `percent: 0`, which would claim a reading this function has not made.
+ */
+export function detectCompacting(lines: readonly string[]): { percent: number | null } | null {
+  const at = lines.findIndex(l => COMPACTING_LINE.test(l))
+  if (at === -1) return null
+  // The percent sits on the bar line just below the caption, not on the caption's own line — but
+  // read a few lines forward rather than exactly one, so a frame wrapped differently by a narrower
+  // pane still finds it.
+  for (const line of lines.slice(at, at + 4)) {
+    const m = COMPACTING_PERCENT.exec(line)
+    if (m) return { percent: Math.min(100, Number(m[1])) }
+  }
+  return { percent: null }
+}
