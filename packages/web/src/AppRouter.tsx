@@ -64,6 +64,12 @@ export default function AppRouter() {
               the list does not flash on every selection. */}
           <Route path="sessions" element={<Suspense fallback={<PageFallback />}><SessionsPage /></Suspense>} />
           <Route path="sessions/:sessionId" element={<Suspense fallback={<PageFallback />}><SessionsPage /></Suspense>} />
+          {/* The DEDICATED terminal — its own place rather than a mode of the page above. A route
+              survives a reload, is a link somebody can send, gives a phone the router's own back
+              gesture, and cannot be lost by a re-render; `?pane=` carries which screen it shows, or
+              a shared link would open on whichever pane the recipient last used. See
+              `lib/terminalSurface.ts`. */}
+          <Route path="sessions/:sessionId/terminal" element={<Suspense fallback={<PageFallback />}><SessionsPage /></Suspense>} />
           <Route path="workflows" element={<Suspense fallback={<PageFallback />}><WorkflowsPage /></Suspense>} />
           {/* GONE, and redirected rather than 404'd. Its two panels — top projects and
               languages — are on Home, and the dimension the page was really asked for is the

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  TERMINAL_PLACEMENTS, consentMode, dockedAllowed, keyStripShown, type TerminalPlacement,
+  TERMINAL_PLACEMENTS, consentMode, dedicatedTerminalPath, dockedAllowed, keyStripShown,
+  readTerminalPane, type TerminalPlacement,
 } from './terminalSurface'
 
 describe('consent follows the SURFACE, never the session', () => {
@@ -56,5 +57,35 @@ describe('there is no docked placement on a phone', () => {
 
   test('on desktop it can', () => {
     expect(dockedAllowed(false)).toBe(true)
+  })
+})
+
+describe('the dedicated terminal is a PLACE, not a mode', () => {
+  test('its path carries the session and the pane it is showing', () => {
+    // A route rather than a piece of component state: it survives a reload, it is a link somebody
+    // can send, and the router already gives a phone a back gesture for it. The TARGET goes in the
+    // URL or a shared link opens on the wrong pane.
+    expect(dedicatedTerminalPath('abc')).toBe('/sessions/abc/terminal')
+    expect(dedicatedTerminalPath('abc', 'shell')).toBe('/sessions/abc/terminal?pane=shell')
+  })
+
+  test('the id is encoded, so it can never smuggle a second segment', () => {
+    expect(dedicatedTerminalPath('a/b')).toBe('/sessions/a%2Fb/terminal')
+  })
+
+  test('the assistant is the default and is left out of the URL', () => {
+    // A bare `/sessions/x/terminal` has to mean something, and the assistant's own pane is what the
+    // Terminal tab has always shown — so a link written by hand lands where a reader expects.
+    expect(dedicatedTerminalPath('abc', 'assistant')).toBe('/sessions/abc/terminal')
+    expect(readTerminalPane(null)).toBe('assistant')
+    expect(readTerminalPane('assistant')).toBe('assistant')
+  })
+
+  test('a pane nobody offers reads as the assistant rather than as nothing', () => {
+    // The value comes off a query string a person can type. An unknown one must not blank the
+    // screen — it lands on the pane the bare path already means.
+    expect(readTerminalPane('shell')).toBe('shell')
+    expect(readTerminalPane('banana')).toBe('assistant')
+    expect(readTerminalPane('')).toBe('assistant')
   })
 })

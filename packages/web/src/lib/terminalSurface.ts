@@ -73,3 +73,38 @@ export function keyStripShown(placement: TerminalPlacement, isMobile: boolean): 
 export function dockedAllowed(isMobile: boolean): boolean {
   return !isMobile
 }
+
+/**
+ * WHICH pane the dedicated screen is showing.
+ *
+ * `assistant` is the session's own tmux pane — what the Chat|Terminal toggle has always meant —
+ * and `shell` is the utility PTY the person opened. They are different processes on different
+ * sockets, so this is a target, never a mode of one thing.
+ */
+export type TerminalPane = 'assistant' | 'shell'
+
+/**
+ * The dedicated terminal's own route.
+ *
+ * A ROUTE and not a piece of component state, deliberately: it survives a reload, it is a link
+ * somebody can send, the router already gives a phone the back gesture for it, and a re-render
+ * cannot lose it. The TARGET travels in the URL for the same reason — a shared link that opened on
+ * whichever pane the recipient last used would be a link to the wrong screen.
+ *
+ * `assistant` is omitted because it is what a bare path already means: the Terminal tab has always
+ * shown the session's own pane, so a URL somebody types by hand lands where they expect.
+ */
+export function dedicatedTerminalPath(sessionId: string, pane: TerminalPane = 'assistant'): string {
+  const base = `/sessions/${encodeURIComponent(sessionId)}/terminal`
+  return pane === 'shell' ? `${base}?pane=shell` : base
+}
+
+/**
+ * Read the pane off the query string — which a person can type, so this never blanks a screen.
+ *
+ * Anything unrecognised (absent, empty, misspelled) resolves to `assistant`, the pane the bare path
+ * already means. A refusal here would be a dead screen produced by a typo.
+ */
+export function readTerminalPane(raw: string | null | undefined): TerminalPane {
+  return raw === 'shell' ? 'shell' : 'assistant'
+}
