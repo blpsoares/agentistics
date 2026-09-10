@@ -59,7 +59,7 @@ export function stripKeyLabel(id: string): string {
  * ASK for what will be refused.
  */
 const CTRL: Record<string, NamedKey> = {
-  a: 'C-a', c: 'C-c', d: 'C-d', e: 'C-e', k: 'C-k', u: 'C-u', w: 'C-w',
+  a: 'C-a', c: 'C-c', d: 'C-d', e: 'C-e', k: 'C-k', l: 'C-l', u: 'C-u', w: 'C-w',
 }
 
 /** The named key `ctrl` + this character makes, or `null` when the channel would refuse it. */
@@ -92,6 +92,7 @@ const BYTES: Record<NamedKey, string> = {
   'C-u': '\x15',
   'C-w': '\x17',
   'C-k': '\x0b',
+  'C-l': '\x0c',
 }
 
 export function keyBytes(key: NamedKey): string {
