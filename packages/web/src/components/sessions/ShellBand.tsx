@@ -54,7 +54,7 @@ import {
 import {
   INITIAL_SHELL_BAND, shellBandReducer, shellResolveWanted, type OpenShell,
 } from '../../lib/shellBandState'
-import { SHELL_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from '../../lib/shellKeys'
+import { KEY_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from '../../lib/keyStrip'
 import { terminalStatus } from '../../lib/terminalStream'
 
 const SessionTerminal = lazy(() => import('../SessionTerminal'))
@@ -225,7 +225,7 @@ export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
   }, [ctrlArmed, write, t])
 
   const pressStrip = useCallback((id: string) => {
-    const entry = SHELL_STRIP.find(e => e.id === id)
+    const entry = KEY_STRIP.find(e => e.id === id)
     if (!entry) return
     if (entry.kind === 'modifier') { setCtrlNote(null); setCtrlArmed(a => !a); return }
     setCtrlArmed(false)
@@ -333,7 +333,7 @@ export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
       display: 'flex', gap: 6, flexShrink: 0, overflowX: 'auto',
       paddingBottom: 'var(--safe-bottom)',
     }}>
-      {SHELL_STRIP.map(entry => {
+      {KEY_STRIP.map(entry => {
         const armed = entry.kind === 'modifier' && ctrlArmed
         return (
           <button

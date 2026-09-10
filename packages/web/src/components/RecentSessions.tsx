@@ -20,6 +20,8 @@ import {
 } from '../lib/terminalInput'
 import { operatorId, recordPromptSend, resolveAuthor } from '../lib/promptAudit'
 import { getTerminalZoom, setTerminalZoom, subscribeTerminalZoom, ZOOM_STEP, ZOOM_MIN, ZOOM_MAX } from '../lib/terminalZoom'
+import { consentMode, keyStripShown, type TerminalPlacement } from '../lib/terminalSurface'
+import { KEY_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from '../lib/keyStrip'
 import { getPinnedIds, isSessionPinned, togglePinnedSession, subscribePinnedSessions, pinnedServerSnapshot, MAX_PINNED } from '../lib/pinnedSessions'
 import { getOpenModalSession, setOpenModalSession, subscribeOpenModalSession } from '../lib/openModalSession'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -1739,8 +1741,14 @@ const TYPING_T = {
  * about reconnects, stall reporting, zoom and the consent gate on typing into a live session, and
  * two assemblies is two chances for them not to.
  */
-export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, authorName }: {
+export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, authorName, placement = 'card' }: {
   id: string; theme: 'dark' | 'light'; lang: 'pt' | 'en'
+  /**
+   * WHERE this terminal is being drawn, which is what decides who may type into it and whether a
+   * phone gets the key strip — see `lib/terminalSurface.ts`. Defaults to `card`, the most cautious
+   * of the four: a terminal inside a row of a list somebody is scrolling keeps its arm button.
+   */
+  placement?: TerminalPlacement
   /** Fill the available height (in the modal) instead of a fixed card-sized box. */
   fill?: boolean
   /** When set, a maximize button opens the modal — where the box is wide enough to read a wide pane
@@ -1770,6 +1778,17 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
   // keyboard: "a digitação fica especificamente NO input do type into this session ao invés de me
   // permitir digitar direto no terminal renderizado". One owner, one surface at a time.
   const [composer, dispatchComposer] = useReducer(composerReducer, INITIAL_COMPOSER)
+  /**
+   * CONSENT FOLLOWS THE SURFACE (`lib/terminalSurface.ts`). In every placement inside the sessions
+   * workspace the terminal IS the thing you asked for, so focus is the gate — the way every
+   * terminal on every platform works, and the way the VS Code extension in this repo already
+   * shipped it. Only a `card` keeps the arm button, because that terminal appears in a row somebody
+   * is scrolling past.
+   *
+   * It arms the EXISTING machine rather than bypassing it, so the channel, the acks and the
+   * honesty line downstream are untouched: what changes is who was asked, not what is promised.
+   */
+  const consent = consentMode(placement)
   const rowBlock = row ? interactionBlock(row.state) : 'external'
   const canType = !!row && !!act && rowBlock !== 'external' && rowBlock !== 'not-running'
   // A row with no live process cannot be typed into either way — revoke rather than leave a consent
@@ -1780,6 +1799,13 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
     if (hardBlocked && composer.armed) dispatchComposer({ type: 'disarm' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hardBlocked])
+  // The focus gate, applied. A row with no live process is still refused — `canType` is the same
+  // check the button path makes, so the two modes differ in who is ASKED and in nothing else.
+  const autoArm = consent === 'focus' && canType && !composer.armed && !hardBlocked
+  useEffect(() => {
+    if (autoArm) dispatchComposer({ type: 'arm' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoArm])
   const write = useTerminalWrite(id, composer.armed && canType, lang === 'pt' ? 'pt' : 'en')
   // The emulator accepts keys only once the channel is actually OPEN — so a captured keystroke can
   // always be delivered (no local echo; a key you can see was typed is a key that landed) — AND only
@@ -1796,6 +1822,29 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
   // xterm's own textarea is enough — and this is the difference between "armed" and "your next
   // keystroke lands", which is the one thing a person cannot tell by looking at a terminal.
   const [termFocused, setTermFocused] = useState(false)
+  /**
+   * THE KEY STRIP's sticky `ctrl`. A soft keyboard has no chord to hold, so `ctrl` arms and the
+   * next single character becomes the control key instead. A letter the channel would refuse
+   * answers `null` and is SAID — composing one earns a `bad_key` ack for a keystroke the person had
+   * every reason to expect to work.
+   */
+  const [ctrlArmed, setCtrlArmed] = useState(false)
+  const [stripNote, setStripNote] = useState<string | null>(null)
+  const showStrip = keyStripShown(placement, isMobile)
+  /** One send path for everything: a strip press and a real keypress are judged by one allowlist. */
+  const sendKeys = (data: string) => {
+    if (!ctrlArmed) { write.send(data); return }
+    setCtrlArmed(false)
+    const key = ctrlKeyFor(data)
+    if (!key) {
+      setStripNote(lang === 'pt'
+        ? `ctrl+${data} não é uma das teclas que este canal envia.`
+        : `ctrl+${data} is not one of the keys this channel sends.`)
+      return
+    }
+    setStripNote(null)
+    write.send(keyBytes(key))
+  }
   const tw = TYPING_T[lang]
   // The one honest status for the keystroke channel: connecting → live, a drop, or a not-delivered.
   const typingNotice: { tone: 'live' | 'wait' | 'bad'; text: string } | null =
@@ -1860,9 +1909,52 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
       >
         <Suspense fallback={<div style={{ padding: 16, fontSize: 12, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>{lang === 'pt' ? 'Carregando o emulador…' : 'Loading the emulator…'}</div>}>
           {/* key={id}: a new session gets a brand-new emulator, so no content leaks across. */}
-          <SessionTerminal key={id} frame={state.frame} theme={theme} showCursor={status.showCursor} zoom={zoom} interactive={interactive} onInput={write.send} />
+          <SessionTerminal key={id} frame={state.frame} theme={theme} showCursor={status.showCursor} zoom={zoom} interactive={interactive} onInput={sendKeys} />
         </Suspense>
       </div>
+      {/* THE KEY STRIP — mobile only, and never in a dashboard card (`keyStripShown`). Without it a
+          phone has no `esc`, no `tab`, no arrows and no Ctrl+C, so a permission dialog whose own
+          footer says `Esc to cancel` is unanswerable. A press produces the same bytes a real
+          keypress would (`keyBytes`) and goes through the same `send`, so `splitInput`'s allowlist
+          judges both identically — a key it would refuse cannot reach the wire by a side door. */}
+      {showStrip && write.ready && (
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0, overflowX: 'auto' }}>
+          {KEY_STRIP.map(entry => {
+            const armed = entry.kind === 'modifier' && ctrlArmed
+            return (
+              <button
+                key={entry.id}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (entry.kind === 'modifier') { setStripNote(null); setCtrlArmed(a => !a); return }
+                  setCtrlArmed(false)
+                  write.send(keyBytes(entry.key))
+                }}
+                aria-pressed={entry.kind === 'modifier' ? ctrlArmed : undefined}
+                style={{
+                  // 44px is the MOBILE figure, and this strip exists only on mobile.
+                  minWidth: 44, minHeight: 44, flexShrink: 0,
+                  borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 14, fontWeight: 600,
+                  border: `1px solid ${armed ? 'var(--anthropic-orange)' : 'var(--border-subtle)'}`,
+                  background: armed ? 'var(--anthropic-orange)' : 'var(--bg-elevated)',
+                  color: armed ? '#fff' : 'var(--text-secondary)',
+                }}
+              >
+                {stripKeyLabel(entry.id)}
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {showStrip && (ctrlArmed || stripNote) && (
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+          {ctrlArmed
+            ? (lang === 'pt' ? 'ctrl armado — pressione uma letra' : 'ctrl is armed — press a letter')
+            : stripNote}
+        </div>
+      )}
+
       {/* Phase 2b — the keystroke channel's honest status. It never echoes a key; this line is the one
           place a drop or a not-delivered is reported (A6), and where "you are typing live" is stated. */}
       {typingNotice && (
@@ -1903,6 +1995,9 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
           row={row} act={act} authorName={authorName} lang={lang} isMobile={isMobile}
           state={composer} dispatch={dispatchComposer}
           channelDead={write.state.phase === 'closed'}
+          /* Where consent IS the focus there is nothing to revoke: looking away already does it,
+             and a "stop typing" button would re-arm itself on the next render. */
+          consent={consent}
         />
       )}
       <style>{`@keyframes ag-term-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }`}</style>
@@ -1921,7 +2016,7 @@ export function TerminalRegion({ id, theme, lang, fill, onMaximize, row, act, au
  *    then lost — nothing is delivered per key, and the one line's outcome is always on screen.
  *  - AUDIT: the delivered-or-failed line is recorded through `recordPromptSend`; keystrokes are not.
  */
-function TerminalComposer({ row, act, authorName, lang, isMobile, state: composer, dispatch, channelDead }: {
+function TerminalComposer({ row, act, authorName, lang, isMobile, state: composer, dispatch, channelDead, consent = 'button' }: {
   row: FleetRow
   act: (req: { id: string; action: FleetActionId; text?: string; choice?: number })
     => Promise<{ ok: boolean; message: string; id?: string }>
@@ -1939,6 +2034,8 @@ function TerminalComposer({ row, act, authorName, lang, isMobile, state: compose
   dispatch: React.Dispatch<ComposerAction>
   /** The keystroke channel could not be opened — the line editor is then the only way in, and says so. */
   channelDead: boolean
+  /** `focus` where the surface itself is the consent — see `lib/terminalSurface.ts`. */
+  consent?: 'focus' | 'button'
 }) {
   // A brief "delivered" confirmation; the durable record lives in the audit panel below the card.
   const [flash, setFlash] = useState(false)
@@ -2036,6 +2133,8 @@ function TerminalComposer({ row, act, authorName, lang, isMobile, state: compose
       <Hand size={13} /> <span>{t.stop}</span>
     </button>
   )
+  /** Absent under the focus gate: looking away already revokes it, and the button would re-arm. */
+  const revoke = consent === 'focus' ? null : stopButton
 
   /**
    * ARMED, KEYBOARD ON THE TERMINAL — the default, and the whole point of the button that got here.
@@ -2067,7 +2166,7 @@ function TerminalComposer({ row, act, authorName, lang, isMobile, state: compose
         >
           <Send size={13} /> <span>{t.openLine}</span>
         </button>
-        {stopButton}
+        {revoke}
       </div>
     )
   }
@@ -2144,7 +2243,7 @@ function TerminalComposer({ row, act, authorName, lang, isMobile, state: compose
             <Terminal size={13} /> <span>{t.backToTerminal}</span>
           </button>
         )}
-        {stopButton}
+        {revoke}
       </form>
       {channelDead && (
         <div style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>{t.lineOnly}</div>
@@ -2456,7 +2555,7 @@ function LiveSessionCard({ s, lang, onSelect, isPinned, state, fleetRow, onFleet
   // where nothing else can reach a stored conversation.
   const body = (large: boolean) => (
     <>
-      {watchable && <TerminalRegion id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} fill={large} onMaximize={large ? undefined : () => setModalOpen(true)} row={fleetRow} act={onFleetAction} authorName={authorName} />}
+      {watchable && <TerminalRegion placement="card" id={fleetRow.id} theme={theme ?? 'dark'} lang={lang} fill={large} onMaximize={large ? undefined : () => setModalOpen(true)} row={fleetRow} act={onFleetAction} authorName={authorName} />}
       <SessionActionsPanel ctrl={ctrl} />
       <CardChips s={s} lang={lang} />
     </>

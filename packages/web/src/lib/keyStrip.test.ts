@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { SHELL_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from './shellKeys'
+import { KEY_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from './keyStrip'
 import { classifyInput, type NamedKey } from './terminalKeys'
 
 /** Every named key the strip claims to send must survive the client allowlist. */
@@ -12,18 +12,18 @@ describe('the mobile key strip', () => {
   it('carries exactly the keys the design names, in that order', () => {
     // `esc tab ctrl ↑ ↓ ← →` — without it there is no Ctrl+C on a phone, and a soft keyboard has
     // no arrow keys at all.
-    expect(SHELL_STRIP.map(k => k.id)).toEqual(['esc', 'tab', 'ctrl', 'up', 'down', 'left', 'right'])
+    expect(KEY_STRIP.map(k => k.id)).toEqual(['esc', 'tab', 'ctrl', 'up', 'down', 'left', 'right'])
   })
 
   it('every direct key of the strip is one the channel actually accepts', () => {
-    for (const entry of SHELL_STRIP) {
+    for (const entry of KEY_STRIP) {
       if (entry.kind !== 'key') continue
       expect(sendable(entry.key)).toBe(true)
     }
   })
 
   it('ctrl is a MODIFIER, not a key — it has nothing to send on its own', () => {
-    const ctrl = SHELL_STRIP.find(k => k.id === 'ctrl')
+    const ctrl = KEY_STRIP.find(k => k.id === 'ctrl')
     expect(ctrl?.kind).toBe('modifier')
   })
 

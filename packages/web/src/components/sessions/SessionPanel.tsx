@@ -205,6 +205,9 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
                 hook, the emulator and a composer would be three things that must agree about
                 reconnects, stalls, zoom and the consent gate on typing into a live session. */}
             <TerminalRegion
+              /* REPLACING the conversation, and inside the workspace — so focus is the consent and
+                 a phone gets the key strip. See `lib/terminalSurface.ts`. */
+              placement="replacing"
               id={session.id}
               theme={theme}
               lang={lang}
