@@ -144,7 +144,7 @@ export function RepoTasksTab(p: RepoTasksTabProps) {
             <th style={th}>Status</th>
             <th style={th}>{pt ? 'Progresso' : 'Progress'}</th>
             <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Sessões' : 'Sessions'}</th>
-            <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Rodadas' : 'Rounds'}</th>
+            <th style={{ ...th, textAlign: 'right' }}>Prompts</th>
             <th style={{ ...th, textAlign: 'right' }}>Tokens</th>
             <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Custo' : 'Cost'}</th>
             <th style={th}>Harnesses</th>
