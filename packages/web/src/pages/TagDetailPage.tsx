@@ -6,7 +6,7 @@ import {
 import { format, parseISO } from 'date-fns'
 import { ArrowLeft, Pencil, Trash2, CalendarRange } from 'lucide-react'
 import {
-  fmt, fmtCost, formatModel, formatProjectName, repoShortName,
+  fmt, fmtCost, formatModel, formatProjectName, planAllocation, repoShortName,
   totalTokens as totalTokensOf, totalTokensExplained,
 } from '@agentistics/core'
 import { TokenBreakdownLine } from '../components/TokenBreakdownLine'
@@ -130,11 +130,17 @@ const OVERLAY_COLORS: Record<Metric, string> = {
 }
 
 export default function TagDetailPage() {
-  const { lang, currency, brlRate, me, isCentral } = useOutletContext<AppContext>()
+  const { lang, currency, brlRate, me, isCentral, costBasis, planBasis } = useOutletContext<AppContext>()
   const { id } = useParams()
   const navigate = useNavigate()
   const pt = lang === 'pt'
   const isMobile = useIsMobile()
+
+  // Same fix as TagsPage: a tag's sources are not per-harness, so the AGGREGATE factor applies —
+  // toggling the header's API/Plan switch used to change nothing here at all.
+  const planFactor = (costBasis === 'plan' && planBasis.basis
+    ? planAllocation(planBasis.basis).aggregateFactor
+    : null) ?? 1
 
   const [detail, setDetail] = useState<TagDetail | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -331,7 +337,7 @@ export default function TagDetailPage() {
     tokens: 'Tokens',
   }
   const metricValue = (v: number) =>
-    metric === 'costUSD' ? fmtCost(v, currency, brlRate) : metric === 'sessions' ? v.toLocaleString() : fmt(v)
+    metric === 'costUSD' ? fmtCost(v * planFactor, currency, brlRate) : metric === 'sessions' ? v.toLocaleString() : fmt(v)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minWidth: 0 }}>
@@ -406,7 +412,7 @@ export default function TagDetailPage() {
             the overlap is explained, which is the only place it can surprise anyone. */}
         <SectionHeader label={pt ? 'Total' : 'Total'} />
         <div style={{ display: 'grid', gridTemplateColumns: STAT_TILE_GRID, gap: 10 }}>
-          <StatTile label={pt ? 'Custo' : 'Cost'} value={fmtCost(tag.aggregate.costUSD, currency, brlRate)} accent />
+          <StatTile label={pt ? 'Custo' : 'Cost'} value={fmtCost(tag.aggregate.costUSD * planFactor, currency, brlRate)} accent />
           <StatTile label={pt ? 'Sessões' : 'Sessions'} value={tag.aggregate.sessions.toLocaleString()} />
           {/* ONE tokens tile, with the four counters on the line below the strip. It was the total
               plus input and output as three tiles, under a note explaining why two of them did not
@@ -513,7 +519,7 @@ export default function TagDetailPage() {
               />
               <YAxis hide />
               <Tooltip
-                content={<DayTooltip currency={currency} brlRate={brlRate} pt={pt} />}
+                content={<DayTooltip currency={currency} brlRate={brlRate} planFactor={planFactor} pt={pt} />}
                 cursor={{ stroke: 'var(--border)' }}
               />
               {overlay ? (
@@ -562,13 +568,13 @@ export default function TagDetailPage() {
       {/* Bare `.ag-grid` is the 2-column utility, collapsing to one column below 420px. */}
       <div className="ag-grid">
         <Ranked title={pt ? 'Projetos' : 'Projects'} buckets={stats.projects} color={color} pt={pt}
-          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          currency={currency} brlRate={brlRate} planFactor={planFactor} otherLabel={otherLabel}
           labelOf={b => formatProjectName(b.key)} />
         <Ranked title={pt ? 'Repositórios' : 'Repositories'} buckets={stats.repos} color={color} pt={pt}
-          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          currency={currency} brlRate={brlRate} planFactor={planFactor} otherLabel={otherLabel}
           labelOf={b => repoShortName(b.key) || b.key} />
         <Ranked title={pt ? 'Modelos' : 'Models'} buckets={stats.models} color={color} pt={pt}
-          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          currency={currency} brlRate={brlRate} planFactor={planFactor} otherLabel={otherLabel}
           labelOf={b => formatModel(b.key)}
           footnote={stats.sessionsWithoutModel > 0
             ? (pt
@@ -576,15 +582,15 @@ export default function TagDetailPage() {
               : `${stats.sessionsWithoutModel} session(s) carry no model id — they count in the total but not here.`)
             : undefined} />
         <Ranked title="Harnesses" buckets={stats.harnesses} color={color} pt={pt}
-          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          currency={currency} brlRate={brlRate} planFactor={planFactor} otherLabel={otherLabel}
           labelOf={b => HARNESS_LABELS[b.key as keyof typeof HARNESS_LABELS] ?? b.key} />
         {/* People first, then the machines they used: "who worked on this" is the question a
             reader asks before "from where". A person on two machines is one row here and two below. */}
         <Ranked title={pt ? 'Membros' : 'Members'} buckets={stats.users} color={color} pt={pt}
-          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          currency={currency} brlRate={brlRate} planFactor={planFactor} otherLabel={otherLabel}
           labelOf={b => b.key} />
         <Ranked title={pt ? 'Máquinas' : 'Machines'} buckets={stats.members} color={color} pt={pt}
-          currency={currency} brlRate={brlRate} otherLabel={otherLabel}
+          currency={currency} brlRate={brlRate} planFactor={planFactor} otherLabel={otherLabel}
           labelOf={b => b.label ?? b.key} />
       </div>
 
@@ -660,7 +666,7 @@ export default function TagDetailPage() {
                     {sourceValueLabel(b.source)}
                   </span>
                   <span style={{ textAlign: 'right', color: 'var(--anthropic-orange)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-                    {fmtCost(b.aggregate.costUSD, currency, brlRate)}
+                    {fmtCost(b.aggregate.costUSD * planFactor, currency, brlRate)}
                   </span>
                   <span style={{ textAlign: 'right', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
                     {b.aggregate.sessions.toLocaleString()}
@@ -823,13 +829,15 @@ function AccessChip({ text, muted }: { text: string; muted?: boolean }) {
 /** One ranked distribution: name, share-of-total bar, then sessions / cost / tokens.
  *  The share is computed on cost, falling back to sessions when nothing in the list cost anything
  *  (Gemini/Copilot sessions carry no token data, so a cost-only bar would render flat at zero). */
-function Ranked({ title, buckets, color, pt, currency, brlRate, otherLabel, labelOf, footnote }: {
+function Ranked({ title, buckets, color, pt, currency, brlRate, planFactor, otherLabel, labelOf, footnote }: {
   title: string
   buckets: Bucket[]
   color: string
   pt: boolean
   currency: 'USD' | 'BRL'
   brlRate: number
+  /** `1` when the API basis is selected or no plan is registered — see the page-level comment. */
+  planFactor: number
   otherLabel: string
   labelOf: (b: Bucket) => string
   footnote?: string
@@ -870,7 +878,7 @@ function Ranked({ title, buckets, color, pt, currency, brlRate, otherLabel, labe
                   <span style={{
                     fontSize: 12, fontWeight: 700, color: 'var(--anthropic-orange)',
                     fontVariantNumeric: 'tabular-nums', flexShrink: 0,
-                  }}>{fmtCost(b.costUSD, currency, brlRate)}</span>
+                  }}>{fmtCost(b.costUSD * planFactor, currency, brlRate)}</span>
                 </div>
                 <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-elevated)', margin: '5px 0 4px', overflow: 'hidden' }}>
                   <div style={{
@@ -910,12 +918,14 @@ function Ranked({ title, buckets, color, pt, currency, brlRate, otherLabel, labe
 }
 
 /** Recharts tooltip for the daily series — all three metrics at once, same chrome as ActivityChart. */
-function DayTooltip({ active, payload, label, currency, brlRate, pt }: {
+function DayTooltip({ active, payload, label, currency, brlRate, planFactor, pt }: {
   active?: boolean
   payload?: { payload?: DayPoint }[]
   label?: string | number
   currency: 'USD' | 'BRL'
   brlRate: number
+  /** `1` when the API basis is selected or no plan is registered — see the page-level comment. */
+  planFactor: number
   pt: boolean
 }) {
   const point = active ? payload?.[0]?.payload : undefined
@@ -928,7 +938,7 @@ function DayTooltip({ active, payload, label, currency, brlRate, pt }: {
       <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6 }}>
         {niceDate(String(label ?? point.date))}
       </div>
-      <Row label={pt ? 'Custo' : 'Cost'} value={fmtCost(point.costUSD, currency, brlRate)} />
+      <Row label={pt ? 'Custo' : 'Cost'} value={fmtCost(point.costUSD * planFactor, currency, brlRate)} />
       <Row label={pt ? 'Sessões' : 'Sessions'} value={point.sessions.toLocaleString()} />
       <Row label="Tokens" value={fmt(point.tokens)} />
     </div>
