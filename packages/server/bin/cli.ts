@@ -754,6 +754,34 @@ if (command === 'start') {
 }
 
 if (command === 'server' || command === 'start' || !command) {
+  // WSL2 CAN HAVE OUR PORTS EXCLUDED BY WINDOWS BEFORE WE EVER BIND THEM. Windows' WinNAT reserves
+  // a port range for itself every time the Hyper-V/WSL network stack comes up (reboot, `wsl
+  // --shutdown`, Docker or a VPN reconnecting), and it is not the same range twice. When it lands
+  // on 47291/47292 the server binds fine INSIDE the VM — reachable over the LAN, over Tailscale —
+  // while `localhost` from Windows gets a bare connection refused, with nothing anywhere saying
+  // why. This runs BEFORE anything downstream reads PORT/WEB_PORT (the banner below, the MCP
+  // bridge, config.ts's own constants) so they all agree on where the server actually ends up; see
+  // wsl-ports-io.ts for the read-only detection and wsl-ports.ts for why the parser trusts no
+  // locale. A read-only query needs no elevation, so this runs unconditionally on every WSL2 boot
+  // — the actual fix (`net stop winnat && net start winnat`) needs an elevated PowerShell and stays
+  // a human's decision, never something this process does for them.
+  {
+    const { resolveWslPorts } = await import('../server/wsl-ports-io.ts')
+    const defaultPort = parseInt(process.env.PORT ?? '47291', 10)
+    const resolved = resolveWslPorts(defaultPort)
+    if (resolved.status === 'resolved') {
+      process.env.PORT = String(resolved.port)
+      process.env.WEB_PORT = String(resolved.webPort)
+      console.log(`\n  ⚠ Windows has excluded port ${defaultPort} (and ${defaultPort + 1}) from WSL2's`)
+      console.log(`    localhost forwarding — using ${resolved.port}/${resolved.webPort} instead.`)
+      console.log('    Fix on Windows (Admin PowerShell): net stop winnat && net start winnat\n')
+    } else if (resolved.status === 'unresolved') {
+      console.log(`\n  ⚠ Windows appears to exclude port ${defaultPort} from WSL2's localhost forwarding,`)
+      console.log('    and no free replacement turned up nearby — localhost may not reach this server.')
+      console.log('    Fix on Windows (Admin PowerShell): net stop winnat && net start winnat\n')
+    }
+  }
+
   // `--port` is already in the environment — see the note above the command dispatch. The index is
   // still needed here to forward the flag to a detached copy.
   const portIdx = args.indexOf('--port')
