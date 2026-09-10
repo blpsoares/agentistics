@@ -755,6 +755,10 @@ export default function SessionsPage() {
                 costBasis={ctx.costBasis}
                 planFactor={sessionPlanFactor(ctx.planBasis.basis, selected.harness)}
                 touch
+                // THE DELIVERY, one tap away. The name IS the ref the board resolves, so this
+                // costs no id lookup — see `lib/sessionTaskLink.ts`.
+                {...(selected.task ? { task: selected.task } : {})}
+                onOpenTask={ref => navigate(`/tasks/${encodeURIComponent(ref)}`)}
                 // The full reading is a TAB in the aside, not a second dialog over the session —
                 // withheld when there is no record, exactly as the tab is.
                 {...(sessionMetrics ? { onOpenFull: () => openArtifacts('metrics') } : {})}

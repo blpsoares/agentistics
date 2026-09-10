@@ -271,7 +271,18 @@ export function buildTaskDetail(o: {
       createdAt: o.task.createdAt,
       ...(o.task.deliveredAt ? { deliveredAt: o.task.deliveredAt } : {}),
     }),
-    sessions: mine.map(r => {
+    // ONE ROW PER CONVERSATION, the same rule the rollup two lines above already applies.
+    //
+    // This mapped over every registry row while `rollupSessionsFor` deduped, so the LIST and the
+    // NUMBERS beside it disagreed: a delivery whose rollup correctly said `2 sessions` drew five
+    // rows, one conversation repeated four times, each carrying that conversation's full cost —
+    // three `finished` predecessors and the live one. Every attach, reopen and restart mints a new
+    // managedId for the same conversation, so the repetition is ordinary rather than exotic, and
+    // the tab's own label (`sessions.length`) lied with it.
+    //
+    // It is the twin of the 2026-09-08 defect recorded on `rollupSessionsFor`, which was fixed in
+    // the figures and left in the list standing next to them.
+    sessions: distinctConversations(mine).map(r => {
       const meta = r.conversationId ? o.metas.get(r.conversationId) ?? null : null
       return {
         id: r.id,

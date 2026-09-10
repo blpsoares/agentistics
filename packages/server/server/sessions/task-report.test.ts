@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'bun:test'
 import type { SessionMeta } from '@agentistics/core'
-import { buildTaskList, reposOfRows } from './task-report'
+import { buildTaskDetail, buildTaskList, reposOfRows } from './task-report'
 import type { Task } from './task-model'
 import type { ManagedSession } from './types'
 
@@ -138,5 +138,68 @@ describe('distinctConversations', () => {
       row({ id: 'r5', conversationId: undefined }),
     ]
     expect(distinctConversations(rows).map(r => r.id)).toEqual(['r1', 'r3', 'r4', 'r5'])
+  })
+})
+
+/**
+ * THE LIST MUST COUNT A CONVERSATION ONCE, exactly as the ROLLUP beside it already does.
+ *
+ * `rollupSessionsFor` was taught this on 2026-09-08, after the "ALM board" delivery reported
+ * 13.072.988.605 tokens and $7.477,50 against a true 2.456.546.185 and $1.402,92 — five times over
+ * on the headline figure of the whole feature. The fix went into the numbers and NOT into the list
+ * beside them, which kept mapping over every registry row.
+ *
+ * Reported with a screenshot on 2026-09-09: a delivery whose rollup correctly said `2 sessions`
+ * drew FIVE rows under its "Sessions" tab — one conversation repeated four times, each row carrying
+ * that conversation's full R$384,89, three marked `finished` and one `working`. That is the exact
+ * signature of the retired predecessors every attach/reopen/restart mints, and the same cost read
+ * four times is the most expensive thing this screen can say wrongly, because reading cost is what
+ * the screen is for.
+ */
+describe('buildTaskDetail — one row per conversation', () => {
+  const detailOf = (rows: ManagedSession[]) =>
+    buildTaskDetail({
+      task: task(), attempts: [], rows, metas: metasOf(meta()), costOf: () => 1,
+      comments: [], subtasks: [], files: [],
+    })
+
+  it('collapses the reopenings of ONE conversation into one row', () => {
+    const detail = detailOf([
+      row({ id: 'r1', conversationId: 'c1', endedAt: '2026-09-05T11:00:00.000Z' }),
+      row({ id: 'r2', conversationId: 'c1', endedAt: '2026-09-05T12:00:00.000Z' }),
+      row({ id: 'r3', conversationId: 'c1' }),
+    ])
+    expect(detail.sessions.length).toBe(1)
+    // FIRST-SEEN order, the same rule `distinctConversations` states for every other surface.
+    expect(detail.sessions[0]!.id).toBe('r1')
+  })
+
+  it('agrees with the rollup drawn beside it', () => {
+    const rows = [
+      row({ id: 'r1', conversationId: 'c1' }),
+      row({ id: 'r2', conversationId: 'c1' }),
+    ]
+    const detail = detailOf(rows)
+    // The tab's own count is `sessions.length`, so a list that disagrees with the rollup makes the
+    // TAB LABEL lie too — "Sessions 5" over a delivery that used two.
+    expect(detail.sessions.length).toBe(detail.rollup.sessionsUsed)
+  })
+
+  it('keeps DISTINCT conversations apart', () => {
+    const detail = detailOf([
+      row({ id: 'r1', conversationId: 'c1' }),
+      row({ id: 'r2', conversationId: 'c2' }),
+    ])
+    expect(detail.sessions.map(s => s.id)).toEqual(['r1', 'r2'])
+  })
+
+  it('keeps every row that carries NO conversation link', () => {
+    // It cannot be shown to be a duplicate of anything, and it contributes no numbers anyway —
+    // the same rule `usage-dedupe.ts` applies to a usage record with no message id.
+    const detail = detailOf([
+      row({ id: 'r1', conversationId: undefined }),
+      row({ id: 'r2', conversationId: undefined }),
+    ])
+    expect(detail.sessions.map(s => s.id)).toEqual(['r1', 'r2'])
   })
 })

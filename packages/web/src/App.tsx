@@ -3212,6 +3212,11 @@ export default function AppLayout() {
           {...(headerSessionMeta ? { onOpenFull: () => openArtifacts('metrics') } : {})}
           {...(selectedFleetSession.model ? { startedModel: selectedFleetSession.model } : {})}
           {...(selectedFleetSession.effort ? { startedEffort: selectedFleetSession.effort } : {})}
+          /* THE DELIVERY this session is filed under, one click from the figures it spent. The
+             fleet row carries the NAME, and the name is a ref the board resolves — see
+             `lib/sessionTaskLink.ts`, which is why this costs no id lookup. */
+          {...(selectedFleetSession.task ? { task: selectedFleetSession.task } : {})}
+          onOpenTask={ref => navigate(`/tasks/${encodeURIComponent(ref)}`)}
         />
       )}
 
