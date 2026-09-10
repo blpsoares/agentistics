@@ -39,6 +39,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { xtermTheme, type TerminalFrame } from '../lib/terminalStream'
+import { shortcutDecision } from '../lib/terminalShortcuts'
 
 interface Props {
   frame: TerminalFrame | null
@@ -55,6 +56,17 @@ interface Props {
   interactive?: boolean
   /** Receives each raw `onData` chunk while `interactive`. Wired to the write channel by the parent. */
   onInput?: (data: string) => void
+  /**
+   * HOW MANY CELLS THIS BOX COULD SHOW at natural size — reported whenever it changes, so the
+   * parent can ask the server to resize the PANE to match.
+   *
+   * The pane is what has to change, not the rendering: the capture is already hard-broken at the
+   * pane's own width, so reflowing it scatters the text (see this file's header), and the fit
+   * therefore SCALES — which is why a 120-column pane leaves dead margin in a 1500px band. What the
+   * server does with these numbers is not symmetric between a shell and an assistant's pane; that
+   * asymmetry is `server/sessions/pane-resize.ts`'s.
+   */
+  onGeometry?: (g: { cols: number; rows: number }) => void
 }
 
 const FONT_SIZE = 13
@@ -108,7 +120,7 @@ function naturalSize(term: Terminal): { w: number; h: number } | null {
   return null
 }
 
-export default function SessionTerminal({ frame, theme, showCursor, zoom = 1, interactive = false, onInput }: Props) {
+export default function SessionTerminal({ frame, theme, showCursor, zoom = 1, interactive = false, onInput, onGeometry }: Props) {
   // boxRef is the fixed viewport the parent sizes; scaleRef takes the SCALED footprint so the page
   // lays out correctly; hostRef holds the emulator at its natural cols×rows pixels and is the thing
   // the transform shrinks.
@@ -132,6 +144,15 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1, in
   // latest one without re-subscribing (and never captures a stale closure).
   const onInputRef = useRef<Props['onInput']>(onInput)
   onInputRef.current = onInput
+  // Read through a ref for the same reason `onInput` is: the key handler is attached ONCE for the
+  // emulator's life, so a value captured in its closure would be the one from the first render —
+  // a terminal that went interactive later would keep leaving every shortcut to the browser.
+  const interactiveRef = useRef(interactive)
+  interactiveRef.current = interactive
+  const onGeometryRef = useRef<Props['onGeometry']>(onGeometry)
+  onGeometryRef.current = onGeometry
+  /** The last geometry REPORTED, so a steady stream of identical fits says nothing. */
+  const reportedRef = useRef<{ cols: number; rows: number } | null>(null)
 
   /**
    * Fit the natural cols×rows grid into the box by scaling the PIXELS — never by resizing the
@@ -171,6 +192,23 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1, in
     host.style.transformOrigin = 'top left'
     scale.style.width = `${Math.ceil(natW * s)}px`
     scale.style.height = `${Math.ceil(natH * s)}px`
+
+    // WHAT THIS BOX COULD SHOW at natural size. Measured off the cell the renderer actually
+    // reports — `naturalSize` divided by the current grid — never guessed from a font size.
+    // Reported only on a CHANGE: `fit` runs on every ResizeObserver tick, and a drag would
+    // otherwise be one request per animation frame.
+    const cellW = natW / term.cols
+    const cellH = natH / term.rows
+    if (cellW > 0 && cellH > 0) {
+      const cols = Math.max(1, Math.floor(availW / cellW))
+      const availH = box.clientHeight
+      const rows = availH > 0 ? Math.max(1, Math.floor(availH / cellH)) : term.rows
+      const last = reportedRef.current
+      if (!last || last.cols !== cols || last.rows !== rows) {
+        reportedRef.current = { cols, rows }
+        onGeometryRef.current?.({ cols, rows })
+      }
+    }
   }
 
   function paint() {
@@ -291,6 +329,28 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1, in
       })
       termRef.current = term
       disposeRender = term.onRender(onRender)
+      /**
+       * THE SHORTCUTS THE TERMINAL OWNS, and only while it owns the keyboard.
+       *
+       * `ctrl+w` closed the tab and `ctrl+l` went to the address bar, so neither ever reached the
+       * pane — reported as "quero que os atalhos funcionem ... sem afetar o navegador", which is
+       * two requirements, not one. `terminalShortcuts.ts` holds the whole rule: only the letters
+       * the channel can actually deliver, never `ctrl+shift+*`, never Cmd/Win, never Alt.
+       *
+       * It is gated on `interactive`, so a read-only terminal — and any terminal that merely EXISTS
+       * on a page somebody is scrolling — swallows nothing. A page-level handler eating `ctrl+w`
+       * whenever a terminal was on screen would be a browser the person cannot close.
+       *
+       * Returning `true` lets xterm handle the key as usual; the `preventDefault` beside it is what
+       * stops the browser doing its own thing with the same press.
+       */
+      term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+        if (e.type !== 'keydown') return true
+        if (!interactiveRef.current) return true
+        if (shortcutDecision(e) === 'take') e.preventDefault()
+        return true
+      })
+
       // One input listener for the emulator's life; it forwards to the LATEST handler through the ref.
       // xterm only fires `onData` while stdin is enabled, so a read-only terminal delivers nothing.
       disposeData = term.onData((d: string) => onInputRef.current?.(d))

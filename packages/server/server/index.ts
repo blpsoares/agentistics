@@ -2428,6 +2428,32 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
       }
     }
 
+    // The viewer's geometry, applied to the ASSISTANT's pane — and this is the half with a floor.
+    // `PANE_COLS`/`PANE_ROWS` exist because a 24-row pane redrew the top of an `AskUserQuestion`
+    // off the screen and broke `readDialog`/`approvalTail`, invisible from an attached terminal.
+    // So the pane may GROW for a wide viewer and may never shrink for a narrow one: a phone must
+    // not degrade approval detection in the cockpit, the VS Code panel and the web at once.
+    // `pane-resize.ts` holds that rule; this route only carries the request.
+    if (url.pathname === '/api/fleet/resize' && req.method === 'POST') {
+      const body = await readJsonLimited<{ id?: string; cols?: number; rows?: number }>(req, LIMITS.bodyBytes)
+      if (!body.ok || !body.value.id || typeof body.value.cols !== 'number' || typeof body.value.rows !== 'number') {
+        return new Response(JSON.stringify({ error: 'bad_request' }), {
+          status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { terminalSessionExists } = await import('./sessions/terminal-web')
+      if (!(await terminalSessionExists(body.value.id))) {
+        return new Response(JSON.stringify({ error: 'not_found' }), {
+          status: 404, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { resizeFleetPane } = await import('./sessions/fleet-resize')
+      const out = await resizeFleetPane(body.value.id, { cols: body.value.cols, rows: body.value.rows })
+      return new Response(JSON.stringify(out), {
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/fleet/stream' && req.method === 'GET') {
       const id = url.searchParams.get('id')
       if (!id) {

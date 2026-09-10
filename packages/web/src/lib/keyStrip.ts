@@ -1,5 +1,11 @@
 /**
- * shellKeys.ts — PURE. The mobile key strip, and what `ctrl` does on a phone.
+ * keyStrip.ts — PURE. The mobile key strip, and what `ctrl` does on a phone.
+ *
+ * It was `shellKeys.ts` and belonged to the utility shell alone, which is why the ASSISTANT's own
+ * terminal had no `esc`, no arrows and no Ctrl+C on a phone at all — the larger gap of the two,
+ * since a permission dialog's own footer says `Esc to cancel`. The strip is a property of the
+ * SURFACE (see `terminalSurface.ts`'s `keyStripShown`), never of which process is on the other end,
+ * so the name no longer claims otherwise.
  *
  * A soft keyboard has no `esc`, no `tab` and no arrow keys at all — the cockpit already records the
  * last of those — so without this strip there is no way to leave `vim`, complete a path, or reach
@@ -27,7 +33,7 @@ export type StripEntry =
   | { id: string; kind: 'modifier' }
 
 /** The strip, in the order the design names it. */
-export const SHELL_STRIP: readonly StripEntry[] = [
+export const KEY_STRIP: readonly StripEntry[] = [
   { id: 'esc', kind: 'key', key: 'Escape' },
   { id: 'tab', kind: 'key', key: 'Tab' },
   { id: 'ctrl', kind: 'modifier' },
@@ -53,7 +59,7 @@ export function stripKeyLabel(id: string): string {
  * ASK for what will be refused.
  */
 const CTRL: Record<string, NamedKey> = {
-  a: 'C-a', c: 'C-c', d: 'C-d', e: 'C-e', k: 'C-k', u: 'C-u', w: 'C-w',
+  a: 'C-a', c: 'C-c', d: 'C-d', e: 'C-e', k: 'C-k', l: 'C-l', u: 'C-u', w: 'C-w',
 }
 
 /** The named key `ctrl` + this character makes, or `null` when the channel would refuse it. */
@@ -86,6 +92,7 @@ const BYTES: Record<NamedKey, string> = {
   'C-u': '\x15',
   'C-w': '\x17',
   'C-k': '\x0b',
+  'C-l': '\x0c',
 }
 
 export function keyBytes(key: NamedKey): string {

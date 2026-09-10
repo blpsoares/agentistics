@@ -62,6 +62,14 @@ export interface SessionPanelProps {
   /** Passed straight to `SessionChat` — see its own `onArtifacts`. This panel reads none of it. */
   onArtifacts?: SessionChatProps['onArtifacts']
   /**
+   * OPEN THE TERMINAL ON ITS OWN SCREEN.
+   *
+   * A callback and not a path, for the reason `onOpenFull` is one on the metrics card: this panel
+   * does not know how the surface around it navigates. Absent where there is nowhere to go, and
+   * then the enlarge control is ABSENT too rather than inert.
+   */
+  onOpenTerminal?: () => void
+  /**
    * May this machine serve a per-session utility SHELL right now — `CAPS.localShell` AND the
    * user's own switch, as `/api/team/session` reports it.
    *
@@ -73,7 +81,7 @@ export interface SessionPanelProps {
   shellEnabled?: boolean
 }
 
-export function SessionPanel({ session, row, lang, theme, act, authorName, onGone, onOpened, view: viewProp, onViewChange, onArtifacts, shellEnabled }: SessionPanelProps) {
+export function SessionPanel({ session, row, lang, theme, act, authorName, onGone, onOpened, view: viewProp, onViewChange, onArtifacts, shellEnabled, onOpenTerminal }: SessionPanelProps) {
   /**
    * Is this a session of ANOTHER machine, reached through the relay?
    *
@@ -205,6 +213,10 @@ export function SessionPanel({ session, row, lang, theme, act, authorName, onGon
                 hook, the emulator and a composer would be three things that must agree about
                 reconnects, stalls, zoom and the consent gate on typing into a live session. */}
             <TerminalRegion
+              /* REPLACING the conversation, and inside the workspace — so focus is the consent and
+                 a phone gets the key strip. See `lib/terminalSurface.ts`. */
+              placement="replacing"
+              {...(onOpenTerminal ? { onMaximize: onOpenTerminal } : {})}
               id={session.id}
               theme={theme}
               lang={lang}

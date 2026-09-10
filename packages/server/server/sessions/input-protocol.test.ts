@@ -89,6 +89,14 @@ describe('parseInputMessage', () => {
       .toEqual({ ok: true, msg: { seq: 9, kind: 'key', key: 'Escape' } })
   })
 
+  test('C-l is IN the set, and the server already knew what to do with it', () => {
+    // `backend-tmux.ts` clears the pane's scrollback after a successful `C-l` — written before the
+    // key could arrive from a browser at all, because this allowlist refused it as `bad_key`. It
+    // CLEARS, it controls no process, and it is the shortcut people reach for most.
+    expect(parseInputMessage(JSON.stringify({ seq: 9, kind: 'key', name: 'C-l' })))
+      .toEqual({ ok: true, msg: { seq: 9, kind: 'key', key: 'C-l' } })
+  })
+
   test('rejects a non-string key name', () => {
     expect(parseInputMessage(JSON.stringify({ seq: 6, kind: 'key', name: 3 })))
       .toEqual({ ok: false, seq: 6, reason: 'bad_key' })
@@ -96,7 +104,7 @@ describe('parseInputMessage', () => {
 
   test('KEY_ALLOWLIST is exactly the agreed closed set', () => {
     expect([...KEY_ALLOWLIST].sort()).toEqual(
-      ['BSpace', 'C-a', 'C-c', 'C-d', 'C-e', 'C-k', 'C-u', 'C-w', 'Down', 'Enter', 'Escape', 'Left', 'Right', 'Tab', 'Up'],
+      ['BSpace', 'C-a', 'C-c', 'C-d', 'C-e', 'C-k', 'C-l', 'C-u', 'C-w', 'Down', 'Enter', 'Escape', 'Left', 'Right', 'Tab', 'Up'],
     )
     for (const k of KEY_ALLOWLIST) {
       expect(parseInputMessage(JSON.stringify({ seq: 1, kind: 'key', name: k })).ok).toBe(true)

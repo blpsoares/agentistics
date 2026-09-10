@@ -35,6 +35,7 @@ export type NamedKey =
   | 'Enter' | 'BSpace' | 'Tab' | 'Escape' | 'Up' | 'Down' | 'Left' | 'Right'
   | 'C-c' | 'C-d' // process control — explicitly requested (A7 / EOF)
   | 'C-a' | 'C-e' | 'C-u' | 'C-w' | 'C-k' // line editing — "edits the line" passes
+  | 'C-l' // clears the screen — see `input-protocol.ts`'s note on why it arrived late
 
 /** Why an input chunk was refused. `empty` is a no-op; `unsupported-sequence` is "not in the allowlist". */
 export type BlockReason = 'empty' | 'unsupported-sequence' | 'too-long'
@@ -76,6 +77,7 @@ const NAMED: Readonly<Record<string, NamedKey>> = {
   '\x15': 'C-u', // kill whole line
   '\x17': 'C-w', // kill previous word
   '\x0b': 'C-k', // kill to end of line
+  '\x0c': 'C-l', // clear the screen (form feed)
   // CSI cursor keys (normal mode)
   '\x1b[A': 'Up',
   '\x1b[B': 'Down',
