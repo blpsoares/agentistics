@@ -88,7 +88,7 @@ export const COLUMNS: ColumnDef[] = [
   { id: 'progress', label: 'Progress', width: 132, sort: 'subtasks' },
   { id: 'due', label: 'Due', width: 96, sort: 'due' },
   { id: 'sessions', label: 'Sessions', numeric: true, width: 84, sort: 'sessions' },
-  { id: 'rounds', label: 'Rounds', numeric: true, width: 76, sort: 'rounds' },
+  { id: 'rounds', label: 'Prompts', numeric: true, width: 84, sort: 'rounds' },
   { id: 'cost', label: 'Cost', numeric: true, width: 88, sort: 'cost' },
   { id: 'tokens', label: 'Tokens', numeric: true, width: 84, sort: 'tokens' },
   { id: 'harnesses', label: 'Harnesses', width: 150, sort: 'harnesses' },
