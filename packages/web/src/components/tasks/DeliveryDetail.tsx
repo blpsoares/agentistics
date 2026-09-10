@@ -127,6 +127,7 @@ function PlanCard({ task, busy, lang, onPatch, onStatus, onClaim }: {
     return () => clearInterval(t)
   }, [])
   const lease = task.claim ? claimLeft(task.claim.expiresAt, nowMs) : null
+  const copy = boardCopy(lang)
 
   return (
     <div style={{ ...surface, padding: 14, display: 'grid', gap: 11 }}>
@@ -152,7 +153,7 @@ function PlanCard({ task, busy, lang, onPatch, onStatus, onClaim }: {
           />
         </div>
         <div style={{ flex: '1 1 120px', display: 'grid', gap: 5, minWidth: 0 }}>
-          <span style={{ ...microLabel, fontSize: 9 }}>Priority</span>
+          <span style={{ ...microLabel, fontSize: 9 }}>{copy.priority}</span>
           <ChipSelect
             value={task.priority ?? 'none'}
             disabled={busy}
@@ -165,7 +166,7 @@ function PlanCard({ task, busy, lang, onPatch, onStatus, onClaim }: {
       </div>
 
       <div style={{ display: 'grid', gap: 5 }}>
-        <span style={{ ...microLabel, fontSize: 9 }}>Owner</span>
+        <span style={{ ...microLabel, fontSize: 9 }}>{copy.owner}</span>
         <input
           defaultValue={task.assignee ?? ''} placeholder="a person, or an agent"
           onBlur={e => {
@@ -184,11 +185,11 @@ function PlanCard({ task, busy, lang, onPatch, onStatus, onClaim }: {
        */}
       <div style={{ display: 'grid', gap: 5 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ ...microLabel, fontSize: 9, flex: 1 }}>Dates</span>
+          <span style={{ ...microLabel, fontSize: 9, flex: 1 }}>{copy.dates}</span>
           {(task.startDate || task.dueDate) && (
             <button
               onClick={() => void onPatch({ startDate: '', dueDate: '' })}
-              title="Clear both dates"
+              title={copy.clearDates}
               style={{
                 background: 'none', border: 'none', cursor: 'pointer', display: 'flex',
                 color: 'var(--text-tertiary)', padding: 0,
@@ -202,10 +203,17 @@ function PlanCard({ task, busy, lang, onPatch, onStatus, onClaim }: {
          * The pair fits the filter bar, which is as wide as the page; in a 280px rail they came out
          * 9px over the card and the second one hung into the gutter. Stacking also lets each keep
          * its own label, which is what a person reads when the two are a month apart.
+         *
+         * `key` is the picker's own English identifier ('Start'/'Due'), used below to decide which
+         * date field a change patches — `DatePicker` never sees it, only the already-translated
+         * word from `copy`, since it prints whatever `label` it is handed verbatim.
          */}
-        {([['Start', task.startDate ?? ''], ['Due', task.dueDate ?? '']] as const).map(([label, value]) => (
+        {([
+          ['Start', copy.start, task.startDate ?? ''],
+          ['Due', copy.due, task.dueDate ?? ''],
+        ] as const).map(([key, label, value]) => (
           <div
-            key={label}
+            key={key}
             style={{
               display: 'flex', alignItems: 'center', ...surface,
               background: 'var(--bg-elevated)', borderRadius: 7, padding: '1px 4px',
@@ -216,8 +224,8 @@ function PlanCard({ task, busy, lang, onPatch, onStatus, onClaim }: {
               label={label}
               placeholder="DD/MM/YY"
               lang={lang}
-              {...(label === 'Due' && task.startDate ? { min: task.startDate } : {})}
-              onChange={v => void onPatch(label === 'Start' ? { startDate: v } : { dueDate: v })}
+              {...(key === 'Due' && task.startDate ? { min: task.startDate } : {})}
+              onChange={v => void onPatch(key === 'Start' ? { startDate: v } : { dueDate: v })}
             />
           </div>
         ))}
@@ -232,14 +240,14 @@ function PlanCard({ task, busy, lang, onPatch, onStatus, onClaim }: {
           border: `1px solid ${STATUS.blocked.color}`,
         }}>
           <span style={{ ...microLabel, fontSize: 9, display: 'block', marginBottom: 3, color: STATUS.blocked.color }}>
-            Waiting on
+            {copy.waitingOn}
           </span>
           {task.blockedReason}
         </div>
       )}
 
       <div style={{ display: 'grid', gap: 6, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
-        <span style={{ ...microLabel, fontSize: 9 }}>Working on it</span>
+        <span style={{ ...microLabel, fontSize: 9 }}>{copy.workingOnIt}</span>
         {task.claim
           ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -254,22 +262,20 @@ function PlanCard({ task, busy, lang, onPatch, onStatus, onClaim }: {
               <button
                 disabled={busy} onClick={() => void onClaim(true)}
                 style={{ ...button(isMobile), height: isMobile ? 44 : 26 }}
-                title={lease!.expired
-                  ? 'The lease has run out — clear the holder'
-                  : 'Give the task back to the board'}
-              >Release</button>
+                title={lease!.expired ? copy.releaseTitleExpired : copy.releaseTitle}
+              >{copy.release}</button>
             </div>
           )
           : (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)', flex: 1 }}>
-                Free — nobody has taken it.
+                {copy.free}
               </span>
               <button
                 disabled={busy} onClick={() => void onClaim(false)}
                 style={{ ...button(isMobile), height: isMobile ? 44 : 26 }}
-                title="Take it, so an agent asking what to work on is told somebody has this"
-              >Take it</button>
+                title={copy.takeItTitle}
+              >{copy.takeIt}</button>
             </div>
           )}
       </div>
@@ -371,22 +377,20 @@ function Caveats({ r }: { r: AttemptRollup }) {
   )
 }
 
-function Rollup({ r }: { r: AttemptRollup }) {
+function Rollup({ r, lang }: { r: AttemptRollup; lang: Lang }) {
   const fmt = useMoney()
+  const copy = boardCopy(lang)
   const money = r.mixedCurrency || (r.credits !== null && r.costUSD === null)
     ? `${r.credits!.premiumRequests} req`
     : fmt(r.costUSD)
   return (
     <>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-        <Stat label="Cost" value={money} accent />
-        <Stat
-          label="Prompts" value={fmtInt(r.rounds)}
-          title="How many times you prompted, across every session filed here"
-        />
-        <Stat label="Sessions" value={String(r.sessionsUsed)} />
-        <Stat label="Tokens" value={fmtTokens(r.tokens)} />
-        <Stat label="Active" value={r.activeMinutes === null ? NA : `${r.activeMinutes}m`} />
+        <Stat label={copy.cost} value={money} accent />
+        <Stat label={copy.yourPrompts} value={fmtInt(r.rounds)} title={copy.yourPromptsTitle} />
+        <Stat label={copy.sessions} value={String(r.sessionsUsed)} />
+        <Stat label={copy.tokens} value={fmtTokens(r.tokens)} />
+        <Stat label={copy.active} value={r.activeMinutes === null ? NA : `${r.activeMinutes}m`} />
       </div>
       <Caveats r={r} />
     </>
@@ -407,19 +411,26 @@ function Bar({ label, value, of, color }: { label: string; value: number | null;
   )
 }
 
-function AttemptCard({ a }: { a: AttemptView }) {
+function AttemptCard({ a, lang }: { a: AttemptView; lang: Lang }) {
+  const copy = boardCopy(lang)
   const cfg = a.config
     ? [a.config.model, a.config.effort, a.config.method].filter(Boolean).join(' · ')
     : ''
+  // `a.label` is a real, user-typed configuration name EXCEPT for the server's own sentinel for
+  // a session filed with no named attempt at all — that one sentence is the one attempt label
+  // this file may translate, the same way `statusLabel` translates a closed set of status ids
+  // and leaves anything else exactly as the server sent it.
+  const label = a.label === 'no attempt named' ? copy.noAttemptNamed : a.label
+  const status = a.status === 'unattributed' ? copy.unattributed : a.status
   return (
     <div style={{ ...surface, padding: 13, minWidth: 0, display: 'grid', gap: 9 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>{a.label}</span>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
         {a.config && <span style={pill(harnessColor(a.config.harness))}>{a.config.harness}</span>}
-        <span style={pill()}>{a.status}</span>
+        <span style={pill()}>{status}</span>
       </div>
       {cfg && <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{cfg}</div>}
-      <Rollup r={a.rollup} />
+      <Rollup r={a.rollup} lang={lang} />
     </div>
   )
 }
@@ -596,7 +607,7 @@ function SessionsTab({ detail }: { detail: TaskDetail }) {
     <div style={{ ...surface, overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
         <thead>
-          <tr>{['Session', 'State', 'Harness', 'Where', 'Prompts', 'Tokens', 'Cost', ''].map((h, i) => (
+          <tr>{['Session', 'State', 'Harness', 'Where', 'Your prompts', 'Tokens', 'Cost', ''].map((h, i) => (
             <th key={i} style={{ ...microLabel, textAlign: 'left', padding: '8px 10px', fontWeight: 600 }}>{h}</th>
           ))}</tr>
         </thead>
@@ -1162,36 +1173,60 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
             onSaved={next => run(() => editTask(id, { detail: next }))}
           />
 
-          <div style={{ display: 'flex', gap: 2, overflowX: 'auto', borderBottom: '1px solid var(--border)' }}>
-            {TABS.map(([key, label, count]) => (
-              <button
-                key={key} onClick={() => setTab(key)}
-                style={{
-                  height: isMobile ? 44 : 34, padding: '0 12px', border: 'none', background: 'transparent',
-                  color: tab === key ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                  borderBottom: `2px solid ${tab === key ? 'var(--anthropic-orange)' : 'transparent'}`,
-                  cursor: 'pointer', fontSize: 12.5, fontWeight: tab === key ? 600 : 500, whiteSpace: 'nowrap',
-                }}
-              >
-                {label}{count > 0 ? ` ${count}` : ''}
-              </button>
-            ))}
+          {/*
+           * A TAB-MENU, not an underline row — a filled pill for the active tab (the same
+           * segmented-control shape the Chat/Terminal toggle uses elsewhere in the app), except the
+           * active fill is the brand accent rather than a neutral one: this is the ONE place on the
+           * board a person picks which part of a delivery they are looking at, so it earns the
+           * loudest state in the app's palette. The text on it is the same near-black
+           * `button(mobile, 'primary')` already uses on orange, not white — that pairing is the
+           * app's own answer to "what reads best on this orange" and a second one here would be a
+           * second answer to the same question.
+           */}
+          <div
+            role="tablist"
+            style={{
+              display: 'flex', gap: 3, padding: 3, borderRadius: 10, overflowX: 'auto',
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+            }}
+          >
+            {TABS.map(([key, label, count]) => {
+              const active = tab === key
+              return (
+                <button
+                  key={key} role="tab" aria-selected={active} onClick={() => setTab(key)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
+                    height: isMobile ? 44 : 32, padding: '0 12px', border: 'none', borderRadius: 8,
+                    cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5,
+                    fontWeight: active ? 700 : 500, whiteSpace: 'nowrap',
+                    background: active ? 'var(--anthropic-orange)' : 'transparent',
+                    color: active ? '#1a1008' : 'var(--text-tertiary)',
+                    transition: 'background 0.15s, color 0.15s',
+                  }}
+                >
+                  {label}{count > 0 ? ` ${count}` : ''}
+                </button>
+              )
+            })}
           </div>
 
           {tab === 'overview' && (
             <>
               <div style={{ ...surface, padding: 14 }}>
                 <div style={{ ...microLabel, marginBottom: 9 }}>{copy.wholeDelivery}</div>
-                <Rollup r={detail.rollup} />
+                <Rollup r={detail.rollup} lang={lang} />
               </div>
               <div style={{ display: 'grid', gap: 12, gridTemplateColumns: oneColumn ? '1fr' : 'repeat(auto-fit, minmax(230px, 1fr))' }}>
                 <div style={{ ...surface, padding: 14, display: 'grid', gap: 9 }}>
-                  <div style={microLabel}>Models</div>
+                  <div style={microLabel}>{copy.models}</div>
                   {stats.models.length === 0
-                    ? <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>No session reported a model.</div>
+                    ? <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>{copy.noModelReported}</div>
                     : stats.models.map(m => <Bar key={m.key} label={m.key} value={m.tokens} of={topTokens} color="var(--anthropic-orange)" />)}
                 </div>
                 <div style={{ ...surface, padding: 14, display: 'grid', gap: 9 }}>
+                  {/* "Harnesses" is kept untranslated in PT throughout the app (e.g. BackupSettings) — a
+                      technical term, not an English leftover. */}
                   <div style={microLabel}>Harnesses</div>
                   {stats.harnesses.map(h => (
                     <Bar key={h.key} label={h.key} value={h.tokens} of={topTokens} color={harnessColor(h.key)} />
@@ -1199,9 +1234,9 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
                 </div>
               </div>
               <div>
-                <div style={{ ...microLabel, marginBottom: 8 }}>Attempts — one card per configuration</div>
+                <div style={{ ...microLabel, marginBottom: 8 }}>{copy.attemptsHeader}</div>
                 <div style={{ display: 'grid', gap: 12, gridTemplateColumns: oneColumn ? '1fr' : 'repeat(auto-fit, minmax(260px, 1fr))' }}>
-                  {detail.attempts.map(a => <AttemptCard key={a.id ?? 'loose'} a={a} />)}
+                  {detail.attempts.map(a => <AttemptCard key={a.id ?? 'loose'} a={a} lang={lang} />)}
                 </div>
               </div>
             </>
@@ -1270,22 +1305,22 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
             }}
           />
 
-          <RailSection id="details" title="Delivery" badge={duration ?? NA} defaultOpen>
+          <RailSection id="details" title={copy.delivery} badge={duration ?? NA} defaultOpen>
             <div style={{ display: 'grid', gap: 10 }}>
-              <Stat label="Delivery time" value={duration ?? NA} />
+              <Stat label={copy.deliveryTime} value={duration ?? NA} />
               {duration === null && (
-                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: -8 }}>still open</div>
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: -8 }}>{copy.stillOpen}</div>
               )}
               <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
-                <Stat label="Agent runs" value={fmtInt(stats.agentRuns)} />
-                <Stat label="Commits" value={fmtInt(stats.commits)} />
+                <Stat label={copy.agentRuns} value={fmtInt(stats.agentRuns)} />
+                <Stat label={copy.commits} value={fmtInt(stats.commits)} />
               </div>
               <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
-                <Stat label="Files" value={fmtInt(stats.filesModified)} />
-                <Stat label="Errors" value={fmtInt(stats.toolErrors)} />
+                <Stat label={copy.files} value={fmtInt(stats.filesModified)} />
+                <Stat label={copy.errors} value={fmtInt(stats.toolErrors)} />
               </div>
               <Stat
-                label="Lines"
+                label={copy.lines}
                 value={stats.linesAdded === null && stats.linesRemoved === null
                   ? NA : `+${stats.linesAdded ?? 0} / −${stats.linesRemoved ?? 0}`}
               />
@@ -1294,22 +1329,23 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
 
           {stats.tokens && (
             <RailSection id="tokens" title="Tokens" badge={fmtTokens(detail.rollup.tokens)}>
-              {([['Input', stats.tokens.input], ['Output', stats.tokens.output],
-                 ['Cache read', stats.tokens.cacheRead], ['Cache write', stats.tokens.cacheWrite]] as const)
-                .map(([k, v]) => (
-                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
-                    <span style={{ color: 'var(--text-tertiary)' }}>{k}</span>
+              {([['Input', copy.tokenInput, stats.tokens.input], ['Output', copy.tokenOutput, stats.tokens.output],
+                 ['Cache read', copy.tokenCacheRead, stats.tokens.cacheRead],
+                 ['Cache write', copy.tokenCacheWrite, stats.tokens.cacheWrite]] as const)
+                .map(([key, label, v]) => (
+                  <div key={key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
+                    <span style={{ color: 'var(--text-tertiary)' }}>{label}</span>
                     <span style={numeric}>{v.toLocaleString()}</span>
                   </div>
                 ))}
             </RailSection>
           )}
 
-          <RailSection id="links" title="Links" badge={detail.task.links?.length ?? 0}>
+          <RailSection id="links" title={copy.links} badge={detail.task.links?.length ?? 0}>
             <LinksPanel id={id} task={detail.task} onChanged={reload} bare />
           </RailSection>
 
-          <RailSection id="blocked" title="Blocked by" badge={detail.task.blockedBy?.length ?? 0}>
+          <RailSection id="blocked" title={copy.blockedBy} badge={detail.task.blockedBy?.length ?? 0}>
             <BlockedBy id={id} task={detail.task} lang={lang} onChanged={reload} bare />
           </RailSection>
 

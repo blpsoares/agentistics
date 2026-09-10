@@ -112,7 +112,7 @@ export function RepoTasksTab(p: RepoTasksTabProps) {
               )}
               <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', ...numeric, fontSize: 11.5 }}>
                 <span>{fmtInt(r.rollup.sessionsLinked)} <span style={microLabel}>{pt ? 'sessões' : 'sessions'}</span></span>
-                <span>{fmtInt(r.rollup.rounds)} <span style={microLabel}>{pt ? 'rodadas' : 'rounds'}</span></span>
+                <span>{fmtInt(r.rollup.rounds)} <span style={microLabel}>{pt ? 'seus prompts' : 'your prompts'}</span></span>
                 <span>{fmtTokens(r.rollup.tokens)} <span style={microLabel}>tokens</span></span>
                 <span style={{ color: 'var(--anthropic-orange)' }}>{cost(r.rollup.costUSD)}</span>
               </div>
@@ -144,7 +144,7 @@ export function RepoTasksTab(p: RepoTasksTabProps) {
             <th style={th}>Status</th>
             <th style={th}>{pt ? 'Progresso' : 'Progress'}</th>
             <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Sessões' : 'Sessions'}</th>
-            <th style={{ ...th, textAlign: 'right' }}>Prompts</th>
+            <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Seus prompts' : 'Your prompts'}</th>
             <th style={{ ...th, textAlign: 'right' }}>Tokens</th>
             <th style={{ ...th, textAlign: 'right' }}>{pt ? 'Custo' : 'Cost'}</th>
             <th style={th}>Harnesses</th>

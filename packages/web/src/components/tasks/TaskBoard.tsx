@@ -36,7 +36,7 @@ function Facts({ row }: { row: TaskListRow }) {
         </span>
       </span>
       <span title="How many times you prompted, across every session filed here">
-        <span style={{ ...microLabel, display: 'block' }}>Prompts</span>
+        <span style={{ ...microLabel, display: 'block' }}>Your prompts</span>
         <span style={{ ...numeric, display: 'block' }}>{fmtInt(r.rounds)}</span>
       </span>
       <span>
