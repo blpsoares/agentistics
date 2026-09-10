@@ -17,11 +17,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { sessionTime } from '../../lib/sessionTime'
 import { asideCache, asideKey } from '../../lib/asideCache'
-import { BarChart3, ChevronRight, PanelRight, X } from 'lucide-react'
+import { BarChart3, ChevronRight, ListChecks, PanelRight, X } from 'lucide-react'
 import { fmt, fmtCost, type CostBasis, type HarnessId, type SessionMeta } from '@agentistics/core'
 import { HARNESS_LABELS } from '../../lib/harness'
 import { sessionStats, statReason } from '../../lib/sessionStats'
 import { costBasisLabel, viewCost } from '../../lib/costBasis'
+import { sessionTaskLink } from '../../lib/sessionTaskLink'
 
 export interface SessionStatsMenuProps {
   harness: string
@@ -81,11 +82,26 @@ export interface SessionStatsMenuProps {
    * which is the same fact that decides whether the tab exists at all.
    */
   onOpenFull?: () => void
+  /**
+   * The DELIVERY this session is filed under — its NAME, straight off the fleet row.
+   *
+   * A name and not an id because that is what the row carries: the id lives on the session record
+   * the server holds and never reaches the wire. `findTask` resolves a ref by title, so the name IS
+   * a ref the board accepts — see `lib/sessionTaskLink.ts`. Absent when the session is filed under
+   * nothing, and then NOTHING is drawn: no dash, no empty row.
+   */
+  task?: string
+  /**
+   * Open that delivery. A CALLBACK for the same reason `onOpenFull` is one — this card does not
+   * know how the surface around it navigates. Absent where there is nowhere to go, and then the
+   * delivery is NAMED rather than offered as a control that does nothing.
+   */
+  onOpenTask?: (ref: string) => void
 }
 
 export function SessionStatsMenu({
   harness, sessionId, meta, lang, currency, brlRate, startedModel, startedEffort, touch = false,
-  costBasis = 'api', planFactor = null, onOpenFull,
+  costBasis = 'api', planFactor = null, onOpenFull, task, onOpenTask,
 }: SessionStatsMenuProps) {
   const pt = lang === 'pt'
   const [open, setOpen] = useState(false)
@@ -210,6 +226,48 @@ export function SessionStatsMenu({
               }}
             ><X size={13} /></button>
           </div>
+
+          {/* WHICH DELIVERY THIS SESSION BELONGS TO — first, because it is the only line here that
+              is about the WORK rather than about the spend, and it is the one you follow out of
+              this card. Absent entirely for a session filed under nothing: the alternative is a row
+              saying "—", which is the confident zero in another costume. */}
+          {(() => {
+            const link = sessionTaskLink(task, Boolean(onOpenTask))
+            if (link.kind === 'none') return null
+            return (
+              <Block title={pt ? 'Entrega' : 'Delivery'}>
+                {link.kind === 'link' ? (
+                  <button
+                    onClick={() => { onOpenTask?.(link.title); setOpen(false) }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+                      // 44px is the MOBILE number, and this is a control, not a read-only line.
+                      minHeight: touch ? 44 : 0, padding: 0,
+                      border: 'none', background: 'transparent', color: 'var(--anthropic-orange)',
+                      fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600,
+                      cursor: 'pointer', textAlign: 'left',
+                    }}
+                  >
+                    <ListChecks size={12} style={{ flexShrink: 0 }} />
+                    <span style={{
+                      minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>{link.title}</span>
+                    <ChevronRight size={12} style={{ marginLeft: 'auto', flexShrink: 0 }} />
+                  </button>
+                ) : (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    fontSize: 11.5, lineHeight: 1.7, color: 'var(--text-primary)', fontWeight: 600,
+                  }}>
+                    <ListChecks size={12} style={{ flexShrink: 0, color: 'var(--text-tertiary)' }} />
+                    <span style={{
+                      minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>{link.title}</span>
+                  </div>
+                )}
+              </Block>
+            )
+          })()}
 
           {/* HOW THIS SESSION IS RUNNING — before the numbers, because it is what the numbers are
               OF. `model` has two sources and they are not the same claim: what agentop was asked to
