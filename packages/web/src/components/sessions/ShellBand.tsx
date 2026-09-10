@@ -39,7 +39,7 @@
  * one place that turns those into sentences. A blank band is never an answer.
  */
 
-import { Suspense, lazy, useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import {
   ChevronDown, ChevronUp, ChevronLeft, Loader2, RotateCcw, TerminalSquare, Trash2,
 } from 'lucide-react'
@@ -54,8 +54,9 @@ import {
 import {
   INITIAL_SHELL_BAND, shellBandReducer, shellResolveWanted, type OpenShell,
 } from '../../lib/shellBandState'
-import { SHELL_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from '../../lib/shellKeys'
+import { KEY_STRIP, ctrlKeyFor, keyBytes, stripKeyLabel } from '../../lib/keyStrip'
 import { terminalStatus } from '../../lib/terminalStream'
+import { createPaneResizer } from '../../lib/paneResizeRequest'
 
 const SessionTerminal = lazy(() => import('../SessionTerminal'))
 
@@ -203,6 +204,12 @@ export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
   // `'shell'`: the honesty line must say whose screen this is. The default subject calls it "the
   // agent's current screen", which over a shell the person opened themselves is simply false.
   const status = terminalStatus(state, lang, 'shell')
+  /** A shell follows its box in BOTH directions — nothing in this product reads its screen. */
+  const resizer = useMemo(
+    () => createPaneResizer({ scope: 'shell', id: shell?.id ?? '' }),
+    [shell?.id],
+  )
+  useEffect(() => () => resizer.cancel(), [resizer])
 
   /**
    * One send path for everything.
@@ -225,7 +232,7 @@ export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
   }, [ctrlArmed, write, t])
 
   const pressStrip = useCallback((id: string) => {
-    const entry = SHELL_STRIP.find(e => e.id === id)
+    const entry = KEY_STRIP.find(e => e.id === id)
     if (!entry) return
     if (entry.kind === 'modifier') { setCtrlNote(null); setCtrlArmed(a => !a); return }
     setCtrlArmed(false)
@@ -289,6 +296,7 @@ export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
           showCursor={status.showCursor}
           interactive={write.ready}
           onInput={send}
+          onGeometry={shell ? resizer.request : undefined}
         />
       </Suspense>
     </div>
@@ -333,7 +341,7 @@ export function ShellBand({ sessionId, cwd, lang, theme }: ShellBandProps) {
       display: 'flex', gap: 6, flexShrink: 0, overflowX: 'auto',
       paddingBottom: 'var(--safe-bottom)',
     }}>
-      {SHELL_STRIP.map(entry => {
+      {KEY_STRIP.map(entry => {
         const armed = entry.kind === 'modifier' && ctrlArmed
         return (
           <button

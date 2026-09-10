@@ -56,11 +56,16 @@ export const MAX_INPUT_TEXT = 8192
  * all — the cockpit already records that it has no arrow keys either — so without it there is no way
  * to leave `vim` from a phone; and a Claude Code permission dialog's own footer says `Esc to
  * cancel`, which this channel could not reach for as long as the set excluded it.
+ *
+ * `C-l` was added for the same shape of reason and is the odder story: `backend-tmux.ts` ALREADY
+ * clears the pane's scrollback after a successful `C-l`, written before the key could arrive from a
+ * browser at all — this set refused it as `bad_key`, so that handling was unreachable from the web.
+ * It CLEARS the screen and controls no process, which is the line this set draws.
  */
 export const KEY_ALLOWLIST: ReadonlySet<string> = new Set([
   'Enter', 'BSpace', 'Tab', 'Escape',
   'Up', 'Down', 'Left', 'Right',
-  'C-c', 'C-d', 'C-a', 'C-e', 'C-u', 'C-w', 'C-k',
+  'C-c', 'C-d', 'C-a', 'C-e', 'C-u', 'C-w', 'C-k', 'C-l',
 ])
 
 export type InputMessage =

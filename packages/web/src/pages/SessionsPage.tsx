@@ -51,6 +51,8 @@ import { FiltersSheet } from '../components/sessions/FiltersSheet'
 import {
   arrivalFor, reopenedSessionRoute, sessionPath, stillArriving, type SessionArrival,
 } from '../lib/sessionRoute'
+import { dedicatedTerminalPath, readTerminalPane } from '../lib/terminalSurface'
+import { TerminalRegion } from '../components/RecentSessions'
 import { sessionPlanFactor } from '../lib/costBasis'
 
 /** The dimensions a live fleet row can be narrowed by — the same set on both layouts. */
@@ -111,6 +113,17 @@ export default function SessionsPage() {
   const selected = sessionId === undefined
     ? undefined
     : fleet.rows.find(r => r.id === sessionId || r.conversationId === sessionId)
+
+  /**
+   * THE DEDICATED TERMINAL — the same page at its own route, showing one screen and nothing else.
+   *
+   * Detected off the path rather than carried in state, which is the whole reason it is a route:
+   * a reload lands back here, the link can be sent, and on a phone the router's own back gesture
+   * already means "leave the terminal". `?pane=` says which screen; an unrecognised value resolves
+   * to the assistant rather than blanking one (`readTerminalPane`).
+   */
+  const dedicatedTerminal = useLocation().pathname.endsWith('/terminal')
+  const dedicatedPane = readTerminalPane(useSearchParams()[0].get('pane'))
 
   /**
    * WHERE A REOPEN LANDS — one place, for all three controls on this page that can perform one.
@@ -538,6 +551,8 @@ export default function SessionsPage() {
       onArtifacts={onArtifacts}
       // The capability AND the user's switch, as the server reports them. Absent reads as OFF.
       shellEnabled={ctx.shellEnabled === true}
+      // The terminal's own screen. A route, so it survives a reload and can be sent to somebody.
+      onOpenTerminal={() => navigate(dedicatedTerminalPath(selected.id))}
     />
   )
 
@@ -658,6 +673,74 @@ export default function SessionsPage() {
       />
     </FiltersSheet>
   )
+
+  // ---------------------------------------------------------------------------
+  // The DEDICATED terminal — one screen, one pane, both layouts. Before the mobile branch because
+  // it is the SAME screen at 390px and at 1440px: a terminal that fills what it is given needs no
+  // second version, and the key strip it gets on a phone is decided by `keyStripShown`.
+  // ---------------------------------------------------------------------------
+  if (dedicatedTerminal && selected) {
+    const back = () => navigate(sessionPath(selected.id))
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, minHeight: 44, padding: '0 10px',
+          flexShrink: 0, paddingTop: 'var(--safe-top)',
+          borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
+        }}>
+          <button
+            onClick={back}
+            aria-label={pt ? 'Voltar para a sessão' : 'Back to the session'}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              // 44px is the mobile figure, and this is the only way back from a full screen.
+              width: 44, height: 44, flexShrink: 0, marginLeft: -6,
+              border: 'none', background: 'transparent', color: 'var(--text-secondary)',
+              cursor: 'pointer',
+            }}
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{
+              fontSize: 13, fontWeight: 650, color: 'var(--text-primary)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{selected.title}</div>
+            <div style={{
+              fontSize: 10.5, color: 'var(--text-tertiary)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {selected.stateLabel}
+              {selected.project ? ` · ${selected.project}` : ''}
+            </div>
+          </div>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: 10 }}>
+          {/* The SHELL's own dedicated screen is not built yet, and this says so rather than
+              drawing the assistant's pane under a shell's name. Nothing links here today — the
+              selector is what will make it reachable. */}
+          {dedicatedPane === 'shell' && (
+            <div role="status" style={{ fontSize: 11, color: 'var(--accent-red)', marginBottom: 8 }}>
+              {pt
+                ? 'A tela dedicada do shell ainda não existe — abaixo está o terminal do assistente.'
+                : 'The shell’s own dedicated screen does not exist yet — below is the assistant’s terminal.'}
+            </div>
+          )}
+          <TerminalRegion
+            /* DEDICATED: you asked for this screen, so focus is the consent and there is no arm
+               button; on a phone it carries the key strip. */
+            placement="dedicated"
+            id={selected.id}
+            theme={theme === 'light' ? 'light' : 'dark'}
+            lang={pt ? 'pt' : 'en'}
+            fill
+            {...(rowIndex.get(selected.id) ? { row: rowIndex.get(selected.id)! } : {})}
+            act={act}
+          />
+        </div>
+      </div>
+    )
+  }
 
   // ---------------------------------------------------------------------------
   // Mobile: one column at a time.

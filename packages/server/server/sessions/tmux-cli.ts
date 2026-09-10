@@ -146,6 +146,25 @@ export function newSessionArgs(
   ], o.socket)
 }
 
+/**
+ * Resize a session's window — the pane behind it follows.
+ *
+ * `resize-window` and not `resize-pane`: these sessions hold ONE window with ONE pane, and the
+ * window is what a client's size is negotiated against. Which geometry may be asked for is
+ * `pane-resize.ts`'s decision, and it is NOT the same answer for a shell and for an assistant —
+ * see that module's header for why the assistant has a floor.
+ */
+export function resizeWindowArgs(
+  id: string,
+  size: { cols: number; rows: number },
+  socket?: string,
+): string[] {
+  return sock(
+    ['resize-window', '-t', tmuxName(id), '-x', String(size.cols), '-y', String(size.rows)],
+    socket,
+  )
+}
+
 export function killSessionArgs(id: string, socket?: string): string[] {
   return sock(['kill-session', '-t', tmuxName(id)], socket)
 }

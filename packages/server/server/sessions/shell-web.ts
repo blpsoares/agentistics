@@ -12,6 +12,7 @@ import type { StartHost } from '../cli-start'
 import type { CliLang } from '../cli-lang'
 import { closeShells, listShells, openShell } from './shell-backend'
 import { openShellStream, shellStreamAtCapacity, shellStreamExists } from './shell-stream-web'
+import { createPaneResizer } from './pane-resize-web'
 import { SHELL_CAP, type ShellRefusal } from './shell-spec'
 
 /** One sentence per refusal code. The module that decides never writes prose; this one never decides. */
@@ -33,6 +34,21 @@ const REFUSAL: Record<ShellRefusal, { en: string; pt: string }> = {
     pt: `Já há ${SHELL_CAP} terminais abertos. Feche um para abrir outro.`,
   },
 }
+
+/** One tmux runner for this module's own calls — the same shape `shell-terminal.ts` is given. */
+async function tmux(args: string[]): Promise<{ code: number; out: string; err: string }> {
+  try {
+    const p = Bun.spawn(['tmux', ...args], { stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' })
+    const [out, err] = await Promise.all([
+      new Response(p.stdout).text(),
+      new Response(p.stderr).text(),
+    ])
+    return { code: await p.exited, out, err }
+  } catch {
+    return { code: 127, out: '', err: '' }
+  }
+}
+const resizeShellPane = createPaneResizer(tmux)
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -61,6 +77,18 @@ export async function handleShellRoute(
         'X-Accel-Buffering': 'no',
       },
     })
+  }
+
+  // The viewer's geometry, applied to the pane. A shell follows its box in both directions —
+  // nothing in this product reads its screen — which is exactly what an ASSISTANT's pane may not
+  // do; that asymmetry is `pane-resize.ts`'s and is the reason it is a module.
+  if (url.pathname === '/api/shell/resize' && req.method === 'POST') {
+    const body = await req.json().catch(() => ({})) as { id?: string; cols?: number; rows?: number }
+    if (!body.id || typeof body.cols !== 'number' || typeof body.rows !== 'number') {
+      return json({ error: 'bad_request' }, 400)
+    }
+    if (!(await shellStreamExists(body.id))) return json({ error: 'not_found' }, 404)
+    return json(await resizeShellPane('shell', body.id, { cols: body.cols, rows: body.rows }))
   }
 
   if (url.pathname === '/api/shell/list' && req.method === 'GET') {
