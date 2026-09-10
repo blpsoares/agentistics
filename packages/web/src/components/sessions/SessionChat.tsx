@@ -42,7 +42,7 @@ import { promptCountLabel } from '../../lib/promptCount'
 import { splitImageAttachments } from '../../lib/attachmentPreview'
 import { attachmentUrl } from '../../lib/attachmentUrl'
 import { AttachmentLightbox } from './AttachmentLightbox'
-import { liveTurnText, stripAnsi } from '../../lib/liveTurn'
+import { detectCompacting, liveTurnText, stripAnsi } from '../../lib/liveTurn'
 import { scratchKey, sessionScratch } from '../../lib/sessionScratch'
 import { chatReadAt, firstFrameStale, refreshChat, subscribeChat } from '../../lib/chatFeed'
 import { composerMaxHeight } from '../../lib/composerHeight'
@@ -971,6 +971,17 @@ export function SessionChat({ session, row, lang, act, onArtifacts, onReopened }
     })
   }, [term.frame, lastAssistant, working])
 
+  /**
+   * Whether the frame is showing Claude Code's OWN compaction screen right now — see
+   * `detectCompacting`. Read over the RAW frame lines rather than `live`'s filtered text: the
+   * progress bar is exactly the kind of line `liveTurnText` strips out as chrome, and compaction
+   * writes nothing to the transcript while it runs, so this is the only signal there is.
+   */
+  const compacting = useMemo(() => {
+    if (!working || !term.frame) return null
+    return detectCompacting(stripAnsi(term.frame.content).split('\n'))
+  }, [term.frame, working])
+
   const toTail = useCallback((smooth = true) => {
     const el = scrollRef.current
     if (!el) return
@@ -1550,6 +1561,7 @@ export function SessionChat({ session, row, lang, act, onArtifacts, onReopened }
               lang={lang}
               {...(newestAssistant?.tools ? { tools: newestAssistant.tools } : {})}
               thinking={Boolean(newestAssistant?.thinking)}
+              {...(compacting ? { compacting } : {})}
             />
           )}
 

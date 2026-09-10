@@ -19,13 +19,25 @@ export interface WorkingNoteProps {
   tools?: Array<{ name: string; detail?: string }>
   /** True when the assistant recorded reasoning but no text on the newest turn. */
   thinking?: boolean
+  /**
+   * Claude Code is running its OWN compaction right now — read off the live terminal frame (see
+   * `detectCompacting`), because nothing about it reaches the transcript until it finishes. It
+   * outranks `tools`/`thinking`: those describe the newest COMMITTED turn, which is necessarily the
+   * one before compaction started, so a caller that also has tools from that stale turn must not
+   * have them win. `percent` is `null` when the frame shows the caption but not yet a number.
+   */
+  compacting?: { percent: number | null } | null
 }
 
-export function WorkingNote({ lang, tools, thinking }: WorkingNoteProps) {
+export function WorkingNote({ lang, tools, thinking, compacting }: WorkingNoteProps) {
   const pt = lang === 'pt'
   const names = (tools ?? []).map(t => t.name)
 
-  const what = names.length > 0
+  const what = compacting
+    ? (compacting.percent === null
+        ? (pt ? 'compactando a conversa' : 'compacting the conversation')
+        : (pt ? `compactando a conversa · ${compacting.percent}%` : `compacting the conversation · ${compacting.percent}%`))
+    : names.length > 0
     // Named, but only up to two: a turn can invoke eight tools and the line is not a manifest.
     ? (names.length <= 2
         ? names.join(', ')
@@ -49,8 +61,10 @@ export function WorkingNote({ lang, tools, thinking }: WorkingNoteProps) {
         {what}
       </span>
       {/* The first tool's own detail, when there is one and there is room. The line stays one line:
-          a command is routinely longer than the pane and this is a status, not content. */}
-      {tools?.[0]?.detail && (
+          a command is routinely longer than the pane and this is a status, not content. Withheld
+          while compacting: `tools` here is still the PREVIOUS turn's, and a stale command sitting
+          next to "compacting the conversation" reads as something happening right now. */}
+      {!compacting && tools?.[0]?.detail && (
         <code style={{
           minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           fontFamily: "'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace",
