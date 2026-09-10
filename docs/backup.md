@@ -93,8 +93,9 @@ rule deleted in a refactor fails the build instead of shipping a leak, and
 ```bash
 agentop backup [--with-archive] [--with-raw] [--harness a,b] [--dest DIR]
                [--max-bundle MB] [--plan]
-agentop backup schedule <off|daily|weekly>
-agentop backup config [--layers a,b] [--schedule <off|daily|weekly>] [--schedule-layers a,b]
+agentop backup schedule <off|daily|weekly|custom [hours]> [--at HOUR] [--days mon,wed,fri]
+agentop backup config [--layers a,b] [--schedule <off|daily|weekly|custom>] [--schedule-layers a,b]
+               [--at HOUR] [--days mon,wed,fri]
 agentop backup status
 
 agentop restore <archive> [--repos] [--only <repo>]
@@ -113,13 +114,27 @@ partially fail, and a count of successes without the list of what did not come b
 
 ## The schedule
 
-`agentop backup schedule daily|weekly|off`, or `--schedule` on `backup config` (a `custom` interval
-exists with a floor of `MIN_CUSTOM_HOURS`; the raw value is carried unclamped into preferences and
-`intervalMs` is the ONE place that clamps it, so a hand-edited file cannot smuggle a five-minute
-backup past a validation living elsewhere).
+`agentop backup schedule daily|weekly|custom [hours]|off`, or `--schedule` on `backup config` (a
+`custom` interval exists with a floor of `MIN_CUSTOM_HOURS`; the raw value is carried unclamped into
+preferences and `intervalMs` is the ONE place that clamps it, so a hand-edited file cannot smuggle a
+five-minute backup past a validation living elsewhere).
 
 **Absent reads as OFF.** A machine must never start writing gigabytes because it was upgraded — the
 same rule `chat-gate.ts` applies to the local shell.
+
+**`custom` anchors to `--at HOUR` just like `daily`/`weekly` do — a fixed grid, not a rolling
+interval off the last run.** `every 8h from 09h` is 09/17/01, every day, forever: reconnecting late
+never slides the grid to the reconnect time, it only decides whether the ONE missed run is worth
+catching up on right now (see below). `--days mon,wed,fri` (or `0-6`, Sunday first) restricts
+`daily`/`custom` to those weekdays — absent or empty means every day; `weekly` ignores it, since it
+is already pinned to a single day (whichever `lastAt` fell on).
+
+**Catch-up after being off is bounded to ONE run, and only when it is actually worth it.** If the
+machine reconnects with the next normal slot still **more than 2h away**, the missed one runs
+immediately and the grid then continues exactly where it always was (09/17/01, unaffected by when
+the catch-up actually ran). If the next slot is **2h away or less**, nothing runs early — it just
+waits for that slot, so two backups never land within an hour of each other. However many slots
+were missed while the machine was off, at most one catch-up ever fires per reconnect.
 
 **A schedule never carries the `repos` layer.** Rebuilding the manifest means shelling out to git
 across every candidate directory; that is a thing a person asks for (`agentop backup`, or `b` in the

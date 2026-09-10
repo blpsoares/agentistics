@@ -76,8 +76,11 @@ interface BackupStatusJson {
     scheduleActive: boolean
     /** Hours between runs when `schedule` is `'custom'`; null when never set. */
     customHours: number | null
-    /** The local hour a daily/weekly run is anchored to; null when never chosen. */
+    /** The local hour a daily/weekly/custom run is anchored to; null when never chosen. */
     atHour: number | null
+    /** Which local weekdays (0=Sunday…6=Saturday) `daily`/`custom` may run on; null/empty means
+     *  every day. `weekly` ignores this. */
+    days: number[] | null
     keep: number
     retainedLabel: string
     secretsCount: number
@@ -105,8 +108,12 @@ interface BackupConfigPatch {
   schedule?: BackupScheduleId
   /** Hours between runs, when `schedule` is `'custom'`. */
   customHours?: number
-  /** The local hour a daily/weekly run is anchored to. */
+  /** The local hour a daily/weekly/custom run is anchored to. */
   atHour?: number
+  /** Which local weekdays (0=Sunday…6=Saturday) `daily`/`custom` may run on. An EMPTY array is a
+   *  meaningful value (clears a restriction back to every day) distinct from leaving the field out
+   *  (changes nothing). `weekly` ignores this. */
+  days?: number[]
 }
 
 type RunOutcome = { ok: true; bytesLabel: string; skipped?: number } | { ok: false; reason: string }
@@ -296,6 +303,13 @@ const SCHEDULE_WORD: Record<string, { en: string; pt: string }> = {
   weekly: { en: 'weekly', pt: 'semanal' },
   custom: { en: 'custom', pt: 'personalizado' },
 }
+
+/** 0=Sunday…6=Saturday — matches `schedule.ts`'s `dayOfWeek` convention exactly, so a day picked
+ *  here is the same day the engine reads back. */
+const DAY_WORD: { en: string; pt: string }[] = [
+  { en: 'Sun', pt: 'Dom' }, { en: 'Mon', pt: 'Seg' }, { en: 'Tue', pt: 'Ter' },
+  { en: 'Wed', pt: 'Qua' }, { en: 'Thu', pt: 'Qui' }, { en: 'Fri', pt: 'Sex' }, { en: 'Sat', pt: 'Sáb' },
+]
 
 /** The floor the server clamps to (`MIN_CUSTOM_HOURS`). Mirrored, never imported — the web bundle
  *  may not import from `packages/server`. */
@@ -1192,7 +1206,8 @@ export default function BackupSettings() {
             disabled={savingConfig}
             customHours={status.config.customHours ?? null}
             atHour={status.config.atHour ?? null}
-            onChange={(schedule, customHours, atHour) => void patchConfig({ schedule, customHours, atHour })}
+            days={status.config.days ?? null}
+            onChange={(schedule, customHours, atHour, days) => void patchConfig({ schedule, customHours, atHour, days })}
           />
           <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', margin: '18px 0 4px' }}>
             {pt ? 'O que uma execução agendada grava' : 'What a scheduled run carries'}
@@ -1556,7 +1571,7 @@ function LayerPicker({ layers, sizes, archiveMode, pt, disabled, onToggle }: {
  */
 const DEFAULT_BACKUP_HOUR = 10
 
-function SchedulePicker({ value, active, pt, disabled, customHours, atHour, onChange }: {
+function SchedulePicker({ value, active, pt, disabled, customHours, atHour, days, onChange }: {
   value: BackupScheduleId
   active: boolean
   pt: boolean
@@ -1565,7 +1580,9 @@ function SchedulePicker({ value, active, pt, disabled, customHours, atHour, onCh
   customHours: number | null
   /** The local hour chosen, or null when never chosen — rendered as the default, not as blank. */
   atHour: number | null
-  onChange: (schedule: BackupScheduleId, customHours?: number, atHour?: number) => void
+  /** Which weekdays `daily`/`custom` may run on, or null/empty for every day. Ignored for `weekly`. */
+  days: number[] | null
+  onChange: (schedule: BackupScheduleId, customHours?: number, atHour?: number, days?: number[]) => void
 }) {
   const isMobile = useIsMobile()
   // Local, so typing a two-digit number does not fire a save on the first digit — `6` would be a
@@ -1574,6 +1591,14 @@ function SchedulePicker({ value, active, pt, disabled, customHours, atHour, onCh
   const parsed = Number(draft)
   const canSave = Number.isFinite(parsed) && parsed >= MIN_CUSTOM_HOURS
     && parsed !== customHours && !disabled
+  const daySet = new Set(days ?? [])
+  const toggleDay = (d: number) => {
+    const next = new Set(daySet)
+    if (next.has(d)) next.delete(d); else next.add(d)
+    // An empty selection is sent as `[]`, not omitted — that is what CLEARS a restriction back to
+    // every day rather than leaving the previous one untouched. See `BackupConfigPatch.days`.
+    onChange(value, undefined, undefined, [...next].sort((a, b) => a - b))
+  }
   return (
     <div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1602,17 +1627,18 @@ function SchedulePicker({ value, active, pt, disabled, customHours, atHour, onCh
         })}
       </div>
       {/* A cadence with no time of day is anchored to whenever the machine last happened to run
-          one, which drifts across the day. `custom` is deliberately excluded: "every 6 hours" has
-          no single time of day, and forcing one on it would turn it into a different schedule. */}
-      {(value === 'daily' || value === 'weekly') && (
+          one, which drifts across the day. `custom` anchors to it too — every N hours FROM this
+          time, on a fixed grid that never resets, so `8` from `09:00` always reads 09/17/01, never
+          whatever hour a late reconnect happens to land on. */}
+      {(value === 'daily' || value === 'weekly' || value === 'custom') && (
         <div style={{ marginTop: 10 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 2 }}>
             {pt ? 'A que horas' : 'At what time'}
           </div>
           <p style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.45, margin: '0 0 6px' }}>
             {pt
-              ? 'No relógio desta máquina. Se ela estiver desligada nesse horário, o backup roda assim que você ligar e o próximo volta a ser no horário marcado.'
-              : 'On this machine’s clock. If it is off at that time the backup runs as soon as you turn it on, and the next one goes back to the chosen time.'}
+              ? 'No relógio desta máquina. Se ela estava desligada num horário perdido: com 2h ou mais até o próximo horário normal, o backup roda assim que você ligar; com menos de 2h, ele só espera o próximo horário — nunca dois backups colados.'
+              : 'On this machine’s clock. If it was off through a scheduled time: with 2h or more until the next normal time, the backup runs as soon as you turn it on; with less than 2h, it just waits for that next time instead — never two backups back to back.'}
           </p>
           <select
             value={String(atHour ?? DEFAULT_BACKUP_HOUR)}
@@ -1632,6 +1658,47 @@ function SchedulePicker({ value, active, pt, disabled, customHours, atHour, onCh
               <option key={h} value={String(h)}>{`${String(h).padStart(2, '0')}:00`}</option>
             ))}
           </select>
+        </div>
+      )}
+      {/* Weekdays — `weekly` is already pinned to a single day (whichever `lastAt` fell on), so a
+          second day-of-week filter on top of that would just be a more confusing way to say the
+          same thing. Empty (no chip pressed) means every day — the same default as never touching
+          this at all. */}
+      {(value === 'daily' || value === 'custom') && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 2 }}>
+            {pt ? 'Em quais dias' : 'On which days'}
+          </div>
+          <p style={{ fontSize: 11, color: 'var(--text-tertiary)', lineHeight: 1.45, margin: '0 0 6px' }}>
+            {pt ? 'Nenhum selecionado = todo dia.' : 'None selected = every day.'}
+          </p>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {DAY_WORD.map((word, d) => {
+              const on = daySet.has(d)
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => toggleDay(d)}
+                  disabled={disabled}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    padding: isMobile ? '0 14px' : '6px 12px', minHeight: isMobile ? 44 : undefined,
+                    // Not a 44x44 painted square (`touchTarget.lint.test.ts`) — the 44px comes from
+                    // height alone; width grows with the label instead of being forced to match it.
+                    flex: isMobile ? '1 1 auto' : undefined, minWidth: isMobile ? 0 : 48,
+                    borderRadius: 7, border: `1px solid ${on ? 'var(--anthropic-orange)' : 'var(--border)'}`,
+                    background: on ? 'var(--anthropic-orange-dim)' : 'transparent',
+                    color: on ? 'var(--anthropic-orange)' : 'var(--text-secondary)',
+                    fontSize: 12, fontWeight: on ? 700 : 500, fontFamily: 'inherit',
+                    cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.6 : 1,
+                  }}
+                >
+                  {pt ? word.pt : word.en}
+                </button>
+              )
+            })}
+          </div>
         </div>
       )}
       {value === 'custom' && (

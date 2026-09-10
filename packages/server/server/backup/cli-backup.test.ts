@@ -129,3 +129,53 @@ test('a stored schedule that names `raw` is honoured, but the default never does
     .toEqual(['metrics', 'raw'])
   expect(readBackupPrefs({}).scheduleLayers).toEqual(['metrics', 'repos'])
 })
+
+// -----------------------------------------------------------------------------
+// `--at` / `--days` — the grid anchor and the weekday filter, on `schedule` and `config`
+// -----------------------------------------------------------------------------
+
+test('`schedule custom` takes the hours right after it, and `--at`/`--days` anywhere after that', () => {
+  const a = parseBackupArgs(['schedule', 'custom', '8', '--at', '9', '--days', 'mon,wed,fri'])
+  if (a.kind !== 'schedule') throw new Error('expected schedule')
+  expect(a.schedule).toBe('custom')
+  expect(a.customHours).toBe(8)
+  expect(a.atHour).toBe(9)
+  expect(a.days).toEqual([1, 3, 5])
+})
+
+test('`schedule custom` with no hours still reads `--at`/`--days` (a flag never starts with a digit)', () => {
+  const a = parseBackupArgs(['schedule', 'custom', '--at', '9'])
+  if (a.kind !== 'schedule') throw new Error('expected schedule')
+  expect(a.customHours).toBeUndefined()
+  expect(a.atHour).toBe(9)
+})
+
+test('`--days` accepts weekday names, digits, or a mix, sorted and deduplicated', () => {
+  const a = parseBackupArgs(['schedule', 'daily', '--days', 'fri,1,mon,1'])
+  if (a.kind !== 'schedule') throw new Error('expected schedule')
+  expect(a.days).toEqual([1, 5])
+})
+
+test('`--days` refuses an unknown token, naming it', () => {
+  const a = parseBackupArgs(['schedule', 'daily', '--days', 'mon,someday'])
+  expect(a.kind).toBe('error')
+  if (a.kind !== 'error') return
+  expect(a.message).toContain('someday')
+})
+
+test('`--at` refuses an hour outside 0-23', () => {
+  expect(parseBackupArgs(['schedule', 'daily', '--at', '24']).kind).toBe('error')
+  expect(parseBackupArgs(['schedule', 'daily', '--at', 'noon']).kind).toBe('error')
+})
+
+test('`config --at`/`--days` parse the same way as `schedule`\'s', () => {
+  const a = parseBackupArgs(['config', '--at', '14', '--days', 'sat,sun'])
+  if (a.kind !== 'config') throw new Error('expected config')
+  expect(a.atHour).toBe(14)
+  expect(a.days).toEqual([0, 6])
+})
+
+test('`readBackupPrefs` filters `days` to valid 0-6 integers rather than trusting a hand-edited file', () => {
+  expect(readBackupPrefs({ backup: { days: [1, 3, 99, -1, 2.5] } } as never).days).toEqual([1, 3])
+  expect(readBackupPrefs({}).days).toBeUndefined()
+})

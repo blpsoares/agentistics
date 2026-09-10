@@ -26,7 +26,8 @@ import { probeAll, candidatePaths, createBundle, capturePatch, listUntracked } f
 import { groupRepos, expandHome, assetRel, type RepoEntry } from './backup/repo-manifest'
 import { planRepos } from './backup/restore-plan'
 import { readManifestOf, restoreMetrics, restoreRepos, readRestoreState, restoreStateFile } from './backup/restore'
-import { MIN_CUSTOM_HOURS, SCHEDULE_IDS, scheduleStatus, type ScheduleId } from './backup/schedule'
+import { MIN_CUSTOM_HOURS, SCHEDULE_IDS, scheduleStatus, normalizeHour, type ScheduleId } from './backup/schedule'
+import { parseDaysArg, DAY_NAMES } from './backup/days-arg'
 import { loadConsolidated } from './consolidate'
 import { confirm, maskedInput } from './cli-ui'
 import { parseRepoUrl, repoUrlHost } from './backup/github-api'
@@ -50,9 +51,12 @@ export interface BackupPrefs {
   schedule: ScheduleId
   /** Hours between runs when `schedule` is `'custom'`. Undefined otherwise. */
   customHours?: number
-  /** The local hour a `daily`/`weekly` run is anchored to. Undefined reads as `DEFAULT_HOUR`
-   *  in `schedule.ts`, which is the one place that clamps and defaults it. */
+  /** The local hour a `daily`/`weekly`/`custom` run is anchored to. Undefined reads as
+   *  `DEFAULT_HOUR` in `schedule.ts`, which is the one place that clamps and defaults it. */
   atHour?: number
+  /** Which local weekdays (0=Sunday…6=Saturday) `daily`/`custom` may run on. Undefined or empty
+   *  means every day — see `schedule.ts`'s `ScheduleInput.days`. `weekly` ignores this. */
+  days?: number[]
   layers: BackupLayer[]
   scheduleLayers: BackupLayer[]
   harnesses: HarnessId[]
@@ -74,6 +78,11 @@ export function readBackupPrefs(p: Preferences): BackupPrefs {
     // Carried raw for the same reason as `customHours`: `normalizeHour` is the one place that
     // clamps it, so a hand-edited file cannot smuggle an hour past a validation living elsewhere.
     atHour: typeof b.atHour === 'number' ? b.atHour : undefined,
+    // Filtered rather than trusted whole: a hand-edited file could hold anything, and `schedule.ts`
+    // itself only ever validates membership (`dayAllowed`), never the shape of the array it is given.
+    days: Array.isArray(b.days)
+      ? b.days.filter((d): d is number => Number.isInteger(d) && d >= 0 && d <= 6)
+      : undefined,
     layers,
     scheduleLayers: (b.scheduleLayers as BackupLayer[] | undefined) ?? DEFAULT_LAYERS,
     harnesses: (b.harnesses as HarnessId[] | undefined)?.filter(h => HARNESS_ORDER.includes(h)) ?? [...HARNESS_ORDER],
@@ -163,11 +172,14 @@ export async function writeBackupScheduleLayers(layers: BackupLayer[]): Promise<
 }
 
 export async function writeBackupSchedule(
-  schedule: ScheduleId, customHours?: number, atHour?: number,
+  schedule: ScheduleId, customHours?: number, atHour?: number, days?: number[],
 ): Promise<void> {
   const p = await readPreferences()
-  // `customHours` and `atHour` are written only when given, so switching to `weekly` and back to
-  // `custom` returns to the number the user had chosen rather than to a default they never picked.
+  // `customHours`, `atHour` and `days` are written only when GIVEN, so switching to `weekly` and
+  // back to `custom` returns to the number/days the user had chosen rather than to a default they
+  // never picked. `days` is the one of the three that can be meaningfully "given" as an EMPTY
+  // array — that is how a picker clears a previous weekday restriction back to every day, and it
+  // must be distinguished from not touching the field at all (`undefined`).
   await writePreferences({
     ...p,
     backup: {
@@ -175,6 +187,7 @@ export async function writeBackupSchedule(
       schedule,
       ...(customHours === undefined ? null : { customHours }),
       ...(atHour === undefined ? null : { atHour }),
+      ...(days === undefined ? null : { days }),
     },
   })
 }
@@ -190,7 +203,7 @@ export type BackupArgs =
       maxBundleBytes?: number
       planOnly: boolean
     }
-  | { kind: 'schedule'; schedule: ScheduleId; customHours?: number }
+  | { kind: 'schedule'; schedule: ScheduleId; customHours?: number; atHour?: number; days?: number[] }
   | {
       kind: 'config'
       /** Each field present only when the matching flag was given. All absent means "print the
@@ -198,6 +211,8 @@ export type BackupArgs =
       layers?: BackupLayer[]
       schedule?: ScheduleId
       scheduleLayers?: BackupLayer[]
+      atHour?: number
+      days?: number[]
     }
   | { kind: 'status' }
   | { kind: 'github-status' }
@@ -242,22 +257,49 @@ export function parseBackupArgs(argv: string[]): BackupArgs {
     if (!id || !SCHEDULE_IDS.includes(id as ScheduleId)) {
       return { kind: 'error', message: `schedule takes one of: ${SCHEDULE_IDS.join(', ')}` }
     }
+
+    // `--at`/`--days` are read regardless of position, and apply to `daily`/`custom`/`weekly` alike
+    // (`weekly` simply ignores `days` — see `schedule.ts`). Neither is an error to omit: an absent
+    // `--at` reads as `DEFAULT_HOUR` and an absent `--days` as every day, exactly as a hand-edited
+    // preferences file would.
+    let atHour: number | undefined
+    const ai = rest.indexOf('--at')
+    if (ai !== -1) {
+      const hour = Number(rest[ai + 1])
+      if (!Number.isFinite(hour) || hour < 0 || hour > 23) {
+        return { kind: 'error', message: '--at takes an hour of the day, 0-23' }
+      }
+      atHour = hour
+    }
+    let days: number[] | undefined
+    const di = rest.indexOf('--days')
+    if (di !== -1) {
+      const parsed = parseDaysArg(rest[di + 1] ?? '')
+      if ('error' in parsed) return { kind: 'error', message: parsed.error }
+      days = parsed
+    }
+
     if (id === 'custom') {
       // `schedule custom` with no number is not an error — `intervalMs` defaults it to daily and
-      // says so. Refusing here would make the CLI stricter than the rule it is enforcing.
+      // says so. Refusing here would make the CLI stricter than the rule it is enforcing. The
+      // number, when given, is always the token right after `custom` — `--at`/`--days` never sit
+      // there, since a flag never starts with a digit.
       const raw = rest[1]
-      if (raw === undefined) return { kind: 'schedule', schedule: 'custom' }
+      if (raw === undefined || raw.startsWith('--')) return { kind: 'schedule', schedule: 'custom', atHour, days }
       const hours = Number(raw)
       if (!Number.isFinite(hours) || hours <= 0) {
         return { kind: 'error', message: 'schedule custom takes a number of hours, e.g. `schedule custom 6`' }
       }
-      return { kind: 'schedule', schedule: 'custom', customHours: hours }
+      return { kind: 'schedule', schedule: 'custom', customHours: hours, atHour, days }
     }
-    return { kind: 'schedule', schedule: id as ScheduleId }
+    return { kind: 'schedule', schedule: id as ScheduleId, atHour, days }
   }
 
   if (first === 'config') {
-    const out: { layers?: BackupLayer[]; schedule?: ScheduleId; scheduleLayers?: BackupLayer[] } = {}
+    const out: {
+      layers?: BackupLayer[]; schedule?: ScheduleId; scheduleLayers?: BackupLayer[]
+      atHour?: number; days?: number[]
+    } = {}
 
     const li = rest.indexOf('--layers')
     if (li !== -1) {
@@ -280,6 +322,22 @@ export function parseBackupArgs(argv: string[]): BackupArgs {
         return { kind: 'error', message: `--schedule takes one of: ${SCHEDULE_IDS.join(', ')}` }
       }
       out.schedule = id as ScheduleId
+    }
+
+    const ai = rest.indexOf('--at')
+    if (ai !== -1) {
+      const hour = Number(rest[ai + 1])
+      if (!Number.isFinite(hour) || hour < 0 || hour > 23) {
+        return { kind: 'error', message: '--at takes an hour of the day, 0-23' }
+      }
+      out.atHour = hour
+    }
+
+    const dwi = rest.indexOf('--days')
+    if (dwi !== -1) {
+      const parsed = parseDaysArg(rest[dwi + 1] ?? '')
+      if ('error' in parsed) return { kind: 'error', message: parsed.error }
+      out.days = parsed
     }
 
     return { kind: 'config', ...out }
@@ -328,8 +386,9 @@ export function parseBackupArgs(argv: string[]): BackupArgs {
 const USAGE = `Usage:
   agentop backup [--with-archive] [--with-raw] [--harness a,b] [--dest DIR]
                  [--max-bundle MB] [--plan]
-  agentop backup schedule <off|daily|weekly>
-  agentop backup config [--layers a,b] [--schedule <off|daily|weekly>] [--schedule-layers a,b]
+  agentop backup schedule <off|daily|weekly|custom [hours]> [--at HOUR] [--days mon,wed,fri]
+  agentop backup config [--layers a,b] [--schedule <off|daily|weekly|custom>] [--schedule-layers a,b]
+                 [--at HOUR] [--days mon,wed,fri]
   agentop backup status
   agentop backup github setup <url>
   agentop backup github status
@@ -347,6 +406,14 @@ Carry this machine's whole agentistics history to another one.
   Layers are metrics,repos,archive,raw — metrics is always included even if you leave it out.
   A schedule never carries the repos layer; \`agentop backup\` (or the cockpit's \`b\`) is what
   rebuilds the repository manifest.
+
+  \`--at HOUR\` anchors a \`daily\`/\`custom\` (also \`weekly\`) run to a fixed local hour — for
+  \`custom\` this is the GRID's anchor, e.g. \`schedule custom 8 --at 9\` runs every 8h at
+  09/17/01, forever, never drifting to whatever time the machine happens to reconnect at.
+  \`--days mon,wed,fri\` (or \`0-6\`, Sunday first) restricts \`daily\`/\`custom\` to those weekdays;
+  absent or empty means every day. If the machine was off through a scheduled time, it catches up
+  immediately when the NEXT normal slot is still more than 2h away, and otherwise just waits for it
+  — never more than one catch-up run, however many slots were missed while it was off.
 
   Live credentials are NEVER included. \`restore\` prints each one and the command that
   re-establishes it.
@@ -546,10 +613,16 @@ export async function runBackupCli(argv: string[]): Promise<number> {
   const prefs = readBackupPrefs(await readPreferences())
 
   if (parsed.kind === 'schedule') {
-    await writeBackupSchedule(parsed.schedule, parsed.customHours)
+    await writeBackupSchedule(parsed.schedule, parsed.customHours, parsed.atHour, parsed.days)
     log(parsed.schedule === 'custom'
       ? `schedule: every ${Math.max(MIN_CUSTOM_HOURS, parsed.customHours ?? 24)}h`
       : `schedule: ${parsed.schedule}`)
+    if (parsed.schedule === 'daily' || parsed.schedule === 'custom') {
+      if (parsed.atHour !== undefined) log(`  anchored at ${parsed.atHour}:00`)
+      log(parsed.days?.length
+        ? `  days: ${parsed.days.map(d => DAY_NAMES[d]).join(', ')}`
+        : '  days: every day')
+    }
     if (parsed.schedule !== 'off') {
       log('Scheduled backups run inside `agentop server`. With the server stopped, none run.')
     }
@@ -621,6 +694,10 @@ export async function runBackupCli(argv: string[]): Promise<number> {
       log(`layers:          ${prefs.layers.join(', ')}`)
       for (const l of BACKUP_LAYERS) log(`  ${l.padEnd(9)} ${prefs.layers.includes(l) ? 'on ' : 'off'}  ${sizeLabel(l)}`)
       log(`schedule:        ${prefs.schedule}`)
+      if (prefs.schedule === 'daily' || prefs.schedule === 'custom') {
+        log(`  anchored at:   ${normalizeHour(prefs.atHour)}:00`)
+        log(`  days:          ${prefs.days?.length ? prefs.days.map(d => DAY_NAMES[d]).join(', ') : 'every day'}`)
+      }
       log(`schedule-layers: ${prefs.scheduleLayers.join(', ')}`)
       if (prefs.schedule !== 'off' && prefs.scheduleLayers.includes('repos')) {
         log('  note: a scheduled run never carries the repos layer — `agentop backup` builds it, not a schedule.')
@@ -641,9 +718,13 @@ export async function runBackupCli(argv: string[]): Promise<number> {
         log('  note: a scheduled run never carries the repos layer — `agentop backup` builds it, not a schedule.')
       }
     }
-    if (parsed.schedule) {
-      await writeBackupSchedule(parsed.schedule)
-      log(`schedule: ${parsed.schedule}`)
+    if (parsed.schedule || parsed.atHour !== undefined || parsed.days !== undefined) {
+      await writeBackupSchedule(parsed.schedule ?? prefs.schedule, undefined, parsed.atHour, parsed.days)
+      if (parsed.schedule) log(`schedule: ${parsed.schedule}`)
+      if (parsed.atHour !== undefined) log(`  anchored at ${parsed.atHour}:00`)
+      if (parsed.days !== undefined) {
+        log(`  days: ${parsed.days.length ? parsed.days.map(d => DAY_NAMES[d]).join(', ') : 'every day'}`)
+      }
     }
     return 0
   }
@@ -667,6 +748,7 @@ export async function runBackupCli(argv: string[]): Promise<number> {
     // pruned backup still answers that. See `lastBackupRun`.
     const st = scheduleStatus({
       schedule: prefs.schedule, customHours: prefs.customHours,
+      atHour: prefs.atHour, days: prefs.days, tzOffsetMinutes: new Date().getTimezoneOffset(),
       lastAt: lastBackupRun(entries)?.at ?? null, nowMs: Date.now(),
       serverRunning: existsSync(join(AGENTISTICS_DATA_DIR, 'events-producer.json')),
     })

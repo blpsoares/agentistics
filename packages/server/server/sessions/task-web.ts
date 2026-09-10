@@ -15,7 +15,7 @@ import { getCommitsInWindow } from '../git'
 import { readPreferences, writePreferences } from '../preferences'
 import {
   legacyTaskId, migratePriority, newCommentId, newEventId, newFileId, newLinkId, newSubtaskId,
-  newTaskId, subtaskDone,
+  newTaskId, statusAfterAttach, subtaskDone,
   type Task, type TaskEvent, type TaskStatus,
 } from './task-model'
 import { boardProgress, DEFAULT_LEASE_MS, planNext } from './task-next'
@@ -618,6 +618,14 @@ export async function attachSession(
     subtaskId: plan.subtaskId,
   })
   if (!ok) return { ok: false, reason: 'no_such_session' }
+
+  // See `statusAfterAttach` — a session actually filed under this delivery is real progress, and a
+  // status still reading "backlog"/"todo" beside it is exactly the confusion this fixes ("não faz
+  // sentido ter sessão working ou waiting e status estarem em todo"). `task.status` here is read
+  // from the SAME `task` object resolved from `ref` above: attaching never renames or moves the
+  // task itself, so it is still that task's current status.
+  const advanced = statusAfterAttach(task.status)
+  if (advanced) await markTask(task.id, advanced, row.label || sessionId)
 
   // The record first, then LIVE git. Every row written before `ManagedSession.repo` existed carries
   // nothing, which is most of the fleet on a machine that has been running a while — and reading
