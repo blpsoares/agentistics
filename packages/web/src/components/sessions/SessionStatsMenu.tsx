@@ -23,6 +23,19 @@ import { HARNESS_LABELS } from '../../lib/harness'
 import { sessionStats, statReason } from '../../lib/sessionStats'
 import { costBasisLabel, viewCost } from '../../lib/costBasis'
 
+/**
+ * The trigger button's own percentage colour — a THREE-tier ramp, deliberately not the same as the
+ * expanded bar's two (see the bar's own comment for why they may not share one). The button sat
+ * fixed and neutral at 96% no matter what, which is the one figure on this whole panel that says
+ * what to do next (finish up, rather than keep extending a conversation about to be compacted) —
+ * reported as "a % não muda de cor de acordo com quanto de contexto já foi consumido". `>= 0.85`
+ * matches the bar's own red threshold; `>= 0.6` gives the badge a step before the window is
+ * actually a problem, since it is read constantly rather than only once the menu is opened.
+ */
+function contextTone(fraction: number): string {
+  return fraction >= 0.85 ? 'var(--accent-red)' : fraction >= 0.6 ? 'var(--anthropic-orange)' : 'var(--text-secondary)'
+}
+
 export interface SessionStatsMenuProps {
   harness: string
   sessionId: string
@@ -177,11 +190,21 @@ export function SessionStatsMenu({
           fontFamily: 'inherit', fontSize: 12,
         }}
       >
-        <BarChart3 size={touch ? 18 : 14} />
+        <BarChart3
+          size={touch ? 18 : 14}
+          {...(s.context && !open ? { color: contextTone(s.context.fraction) } : {})}
+        />
         {/* The context percentage rides the BUTTON, because it is the one figure that changes what
             you do next — a conversation near its window is one to finish rather than extend. It is
-            absent, not zero, when it cannot be known. */}
-        {s.context && <span style={{ fontWeight: 650 }}>{Math.floor(s.context.fraction * 100)}%</span>}
+            absent, not zero, when it cannot be known. Its OWN colour follows how full the window
+            is (`contextTone`, the same ramp the bar inside uses) rather than the button's open/
+            closed state — that state still wins while the menu is open, where the accent border
+            already says "this is active" and a red 96% fighting it for attention reads as a fault. */}
+        {s.context && (
+          <span style={{ fontWeight: 650, ...(open ? {} : { color: contextTone(s.context.fraction) }) }}>
+            {Math.floor(s.context.fraction * 100)}%
+          </span>
+        )}
       </button>
 
       {open && (
@@ -247,6 +270,11 @@ export function SessionStatsMenu({
                 }}>
                   <div style={{
                     height: '100%', width: `${Math.min(100, s.context.fraction * 100)}%`,
+                    // Deliberately its OWN two-tier rule, not `contextTone`: a FILLED bar reads fine
+                    // starting orange at any size (that is just "how much is used"), while the badge
+                    // above stays neutral until there is something worth noticing — sharing one scale
+                    // would either paint this bar grey at low usage (looks broken) or paint the badge
+                    // orange from the first token (a colour that means nothing once it never changes).
                     background: s.context.fraction >= 0.85 ? 'var(--accent-red)' : 'var(--anthropic-orange)',
                     transition: 'width 0.3s',
                   }} />
