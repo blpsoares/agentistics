@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   TASK_STATUSES, isClosed, legacyTaskId, migrateLegacyTasks, migrateStatus, newAttemptId, newTaskId,
+  statusAfterAttach,
 } from './task-model'
 
 describe('legacyTaskId', () => {
@@ -78,5 +79,18 @@ describe('migrateStatus', () => {
 describe('isClosed', () => {
   it('is true only for the two that mean the work stopped', () => {
     expect(TASK_STATUSES.filter(isClosed)).toEqual(['done', 'abandoned'])
+  })
+})
+
+describe('statusAfterAttach', () => {
+  it('advances the two "nothing started" statuses to in_progress', () => {
+    expect(statusAfterAttach('backlog')).toBe('in_progress')
+    expect(statusAfterAttach('todo')).toBe('in_progress')
+  })
+
+  it('never overwrites a status that already means something more specific', () => {
+    for (const s of ['in_progress', 'blocked', 'in_review', 'done', 'abandoned'] as const) {
+      expect(statusAfterAttach(s)).toBeNull()
+    }
   })
 })
