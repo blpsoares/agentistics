@@ -63,3 +63,8 @@ export function parseCommentBody(body: string): CommentPart[] {
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i
 
 export const looksLikeImage = (name: string) => IMAGE.test(name)
+
+/** For the video icon on a chip — the description accepts these alongside images and PDFs. */
+const VIDEO = /\.(mp4|mov|webm|mkv|avi|m4v)$/i
+
+export const looksLikeVideo = (name: string) => VIDEO.test(name)

@@ -22,8 +22,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import {
-  Bot, ChevronDown, ClipboardList, ExternalLink, FileText, Link2, MessageSquare, Paperclip, Pencil,
+  Bot, ChevronDown, ExternalLink, FileText, FileVideo, Link2, MessageSquare, Paperclip, Pencil,
   Plus, Trash2, X, XCircle,
 } from 'lucide-react'
 import { PRIORITY_ORDER, type TaskPriorityId } from '@agentistics/core'
@@ -31,7 +34,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { useFleet } from '../../lib/fleet'
 import { sessionPath } from '../../lib/sessionRoute'
 import {
-  bodyWithAttachments, looksLikeImage, parseCommentBody,
+  bodyWithAttachments, looksLikeImage, looksLikeVideo, parseCommentBody,
   type CommentAttachment, type CommentPart,
 } from '../../lib/commentBody'
 import {
@@ -658,9 +661,17 @@ function CommentBody({ body, files }: { body: string; files: TaskFile[] }) {
 
   return (
     <div style={{ display: 'grid', gap: 8 }}>
-      <div style={{ fontSize: 12.5, whiteSpace: 'pre-wrap', lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+      {/* `.ag-chat-md` is the same markdown stylesheet ChatBubble uses — one set of rules for
+          headings/lists/links/emphasis rather than a second copy for board text. Font size and
+          colour are overridden inline (a description reads smaller than a chat bubble); the class
+          supplies everything else (paragraph/list spacing, link colour, bold/italic/quote/rule). */}
+      <div className="ag-chat-md" style={{ fontSize: 12.5, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
         {parts.map((part, i) => {
-          if (part.kind === 'text') return <span key={i}>{part.text}</span>
+          if (part.kind === 'text') {
+            return part.text.trim() === ''
+              ? null
+              : <ReactMarkdown key={i} remarkPlugins={[remarkGfm, remarkBreaks]}>{part.text}</ReactMarkdown>
+          }
           if (!known.has(part.id)) {
             return (
               <span key={i} style={{ ...microLabel, textTransform: 'none', letterSpacing: 0 }}>
@@ -672,8 +683,8 @@ function CommentBody({ body, files }: { body: string; files: TaskFile[] }) {
           return (
             <a
               key={i} href={fileUrl(part.id)}
-              style={{ color: 'var(--accent-blue)', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-            ><FileText size={12} /> {part.name}</a>
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            >{looksLikeVideo(part.name) ? <FileVideo size={12} /> : <FileText size={12} />} {part.name}</a>
           )
         })}
       </div>
@@ -703,6 +714,220 @@ function CommentBody({ body, files }: { body: string; files: TaskFile[] }) {
         </div>,
         document.body,
       )}
+    </div>
+  )
+}
+
+/**
+ * The explicit "attach a file" control — beside paste and drag-and-drop, never a replacement for
+ * them. Not every input device can paste a file (a phone's on-screen keyboard has no
+ * clipboard-file gesture), so the button is the one path that always works.
+ */
+function AttachButton({ onFiles, disabled, accept }: {
+  onFiles: (files: File[]) => void
+  disabled?: boolean
+  /** Same shape as the native `accept` attribute — narrows the OS file picker, not a guarantee:
+      drag-and-drop and paste bypass it, so the real filter still runs in `onFiles`. */
+  accept?: string
+}) {
+  const isMobile = useIsMobile()
+  const inputRef = useRef<HTMLInputElement>(null)
+  return (
+    <>
+      <input
+        ref={inputRef} type="file" multiple disabled={disabled} accept={accept}
+        style={{ display: 'none' }}
+        onChange={e => {
+          const files = Array.from(e.target.files ?? [])
+          // Reset so picking the SAME file twice in a row still fires `onChange`.
+          e.target.value = ''
+          if (files.length > 0) onFiles(files)
+        }}
+      />
+      <button
+        type="button" disabled={disabled} onClick={() => inputRef.current?.click()}
+        title="Attach a file"
+        style={{ ...button(isMobile), padding: isMobile ? undefined : '0 10px', flexShrink: 0 }}
+      ><Paperclip size={13} /></button>
+    </>
+  )
+}
+
+/** A pending attachment, shown as a chip — the same shape a comment draft and the description
+    editor both need, so the row is drawn once. */
+function AttachmentChips({ attached, onRemove }: {
+  attached: readonly CommentAttachment[]
+  onRemove: (id: string) => void
+}) {
+  if (attached.length === 0) return null
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      {attached.map(a => (
+        <span
+          key={a.id}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 6px',
+            ...surface, background: 'var(--bg-base)',
+          }}
+        >
+          {looksLikeImage(a.name)
+            ? <img src={fileUrl(a.id)} alt={a.name} style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4 }} />
+            : looksLikeVideo(a.name)
+              ? <FileVideo size={14} style={{ color: 'var(--text-tertiary)' }} />
+              : <FileText size={14} style={{ color: 'var(--text-tertiary)' }} />}
+          <span style={{ fontSize: 11.5, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {a.name}
+          </span>
+          <button
+            // Unpicking the REFERENCE only: the file stays on the task, where the Files tab can
+            // delete it. Removing bytes because a draft changed its mind is a surprise.
+            onClick={() => onRemove(a.id)} title="Not on this comment"
+            style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex' }}
+          ><X size={12} /></button>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * A description is read far more than it is written — one card at the top of every tab — so it is
+ * bounded on both axes a chat message is not: a length (prose stays a description and never
+ * becomes the story of the delivery, which belongs in comments/subtasks/activity) and a small,
+ * named set of attachment kinds (one representative screenshot, recording and document, not an
+ * evidence dump — that is what the Files tab is for).
+ */
+const DESCRIPTION_MAX_LENGTH = 4000
+const DESCRIPTION_MAX_FILES = 3
+const DESCRIPTION_ACCEPT = 'image/*,video/*,application/pdf'
+
+/** Mirrors `DESCRIPTION_ACCEPT` for paste/drop, which never consult the input's `accept` filter. */
+function isDescriptionFile(f: File): boolean {
+  if (f.type) return f.type.startsWith('image/') || f.type.startsWith('video/') || f.type === 'application/pdf'
+  // A dropped file can arrive with an empty `type` (some OS/browser combinations); fall back to
+  // the extension rather than rejecting it outright.
+  return looksLikeImage(f.name) || looksLikeVideo(f.name) || /\.pdf$/i.test(f.name)
+}
+
+/**
+ * The delivery's DESCRIPTION — what the whole thing is for, editable the same way a comment is
+ * written: plain text plus files pasted, dropped or attached into it. `Task.detail` already carried
+ * this shape (see `commentBody.ts`); it just had no editor, so the field could be set once at
+ * creation and never touched again.
+ */
+function DescriptionEditor({ id, task, files, onSaved }: {
+  id: string
+  task: TaskListRow['task']
+  files: TaskFile[]
+  onSaved: (detail: string) => void | Promise<void>
+}) {
+  const isMobile = useIsMobile()
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(task.detail ?? '')
+  const [attached, setAttached] = useState<CommentAttachment[]>([])
+  const [dropping, setDropping] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const room = DESCRIPTION_MAX_FILES - attached.length
+
+  const take = (fl: File[]) => {
+    // Silently DROP what does not fit rather than refuse the whole batch — pasting a screenshot
+    // alongside a stray text selection should keep the screenshot, and a caller cannot be expected
+    // to pre-filter to exactly what this one field accepts.
+    const accepted = fl.filter(isDescriptionFile).slice(0, room)
+    if (accepted.length === 0) return
+    setBusy(true)
+    void (async () => {
+      const minted: CommentAttachment[] = []
+      for (const f of accepted) {
+        // A screenshot on the clipboard has no filename; mint one from the moment so the record
+        // never carries an empty name, which renders as a blank you cannot tell from a broken one.
+        const named = f.name && f.name !== 'image.png'
+          ? f
+          : new File([f], `paste-${new Date().toISOString().replace(/[:.]/g, '-')}.${(f.type.split('/')[1] || 'bin')}`, { type: f.type })
+        const fileId = await uploadFile(id, named, 'you')
+        if (fileId) minted.push({ id: fileId, name: named.name })
+      }
+      if (minted.length > 0) setAttached(a => [...a, ...minted])
+      setBusy(false)
+    })()
+  }
+
+  if (!editing) {
+    return task.detail
+      ? (
+        <div style={{ ...surface, padding: 14, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <CommentBody body={task.detail} files={files} />
+          </div>
+          <button
+            onClick={() => { setText(task.detail ?? ''); setAttached([]); setEditing(true) }}
+            title="Edit description"
+            style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex', flexShrink: 0 }}
+          ><Pencil size={13} /></button>
+        </div>
+      )
+      : (
+        <button
+          style={{ ...button(isMobile), justifySelf: 'start' }}
+          onClick={() => { setText(''); setAttached([]); setEditing(true) }}
+        ><Plus size={13} /> Add a description</button>
+      )
+  }
+
+  return (
+    <div
+      style={{
+        ...surface, padding: 13, display: 'grid', gap: 9,
+        outline: dropping ? '1px dashed var(--anthropic-orange)' : 'none',
+      }}
+      onDragOver={e => { e.preventDefault(); setDropping(true) }}
+      onDragLeave={() => setDropping(false)}
+      onDrop={e => {
+        e.preventDefault(); setDropping(false)
+        const fl = Array.from(e.dataTransfer?.files ?? [])
+        if (fl.length > 0) take(fl)
+      }}
+    >
+      <textarea
+        autoFocus
+        maxLength={DESCRIPTION_MAX_LENGTH}
+        style={{ ...field(isMobile), minHeight: 90, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.6 }}
+        value={text}
+        placeholder="What is this delivery for? Markdown works. Paste a file, or attach one."
+        onChange={e => setText(e.target.value)}
+        onPaste={e => {
+          const fl = Array.from(e.clipboardData?.files ?? [])
+          if (fl.length === 0) return
+          e.preventDefault()
+          take(fl)
+        }}
+      />
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: -4 }}>
+        <span style={{ fontSize: 10.5, color: 'var(--text-tertiary)' }}>
+          Markdown · up to {DESCRIPTION_MAX_FILES} files (image, video or PDF)
+        </span>
+        {/* Read as a countdown once it starts to matter — a bare running total nobody is close to
+            is one more number on the screen, not information. */}
+        <span style={{
+          fontSize: 10.5, fontVariantNumeric: 'tabular-nums', flexShrink: 0,
+          color: text.length >= DESCRIPTION_MAX_LENGTH
+            ? 'var(--accent-red)'
+            : text.length >= DESCRIPTION_MAX_LENGTH * 0.9 ? 'var(--anthropic-orange)' : 'var(--text-tertiary)',
+        }}>{text.length} / {DESCRIPTION_MAX_LENGTH}</span>
+      </div>
+      <AttachmentChips attached={attached} onRemove={fid => setAttached(a => a.filter(x => x.id !== fid))} />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <AttachButton disabled={busy || room <= 0} onFiles={take} accept={DESCRIPTION_ACCEPT} />
+        <span style={{ flex: 1 }} />
+        <button
+          style={button(isMobile, 'primary')} disabled={busy}
+          onClick={() => void (async () => {
+            await onSaved(bodyWithAttachments(text, attached))
+            setEditing(false)
+          })()}
+        >Save</button>
+        <button style={button(isMobile)} onClick={() => setEditing(false)}>Cancel</button>
+      </div>
     </div>
   )
 }
@@ -837,32 +1062,7 @@ function CommentsTab({ id, detail, onChanged }: {
             void take(files)
           }}
         />
-        {attached.length > 0 && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {attached.map(a => (
-              <span
-                key={a.id}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 6px',
-                  ...surface, background: 'var(--bg-base)',
-                }}
-              >
-                {looksLikeImage(a.name)
-                  ? <img src={fileUrl(a.id)} alt={a.name} style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4 }} />
-                  : <FileText size={14} style={{ color: 'var(--text-tertiary)' }} />}
-                <span style={{ fontSize: 11.5, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {a.name}
-                </span>
-                <button
-                  // Unpicking the REFERENCE only: the file stays on the task, where the Files tab
-                  // can delete it. Removing bytes because a draft changed its mind is a surprise.
-                  onClick={() => setAttached(v => v.filter(x => x.id !== a.id))} title="Not on this comment"
-                  style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex' }}
-                ><X size={12} /></button>
-              </span>
-            ))}
-          </div>
-        )}
+        <AttachmentChips attached={attached} onRemove={fid => setAttached(v => v.filter(x => x.id !== fid))} />
         <ConfirmModal
           open={removing !== null}
           title="Delete this comment?"
@@ -876,16 +1076,20 @@ function CommentsTab({ id, detail, onChanged }: {
             if (target) void run(() => removeComment(id, target))
           }}
         />
-        <button
-          style={{ ...button(isMobile, 'primary'), justifySelf: 'start' }}
-          disabled={busy || (!draft.trim() && attached.length === 0)}
-          onClick={() => void run(async () => {
-            await addComment(id, 'you', bodyWithAttachments(draft, attached))
-            setDraft(''); setAttached([])
-          })}
-        >
-          <MessageSquare size={14} /> Comment
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <AttachButton disabled={busy} onFiles={take} />
+          <span style={{ flex: 1 }} />
+          <button
+            style={button(isMobile, 'primary')}
+            disabled={busy || (!draft.trim() && attached.length === 0)}
+            onClick={() => void run(async () => {
+              await addComment(id, 'you', bodyWithAttachments(draft, attached))
+              setDraft(''); setAttached([])
+            })}
+          >
+            <MessageSquare size={14} /> Comment
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -948,11 +1152,12 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
         alignItems: 'start',
       }}>
         <div style={{ display: 'grid', gap: 12, minWidth: 0 }}>
-          {detail.task.detail && (
-            <div style={{ ...surface, padding: 14, fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-              {detail.task.detail}
-            </div>
-          )}
+          <DescriptionEditor
+            id={id}
+            task={detail.task}
+            files={detail.files}
+            onSaved={next => run(() => editTask(id, { detail: next }))}
+          />
 
           <div style={{ display: 'flex', gap: 2, overflowX: 'auto', borderBottom: '1px solid var(--border)' }}>
             {TABS.map(([key, label, count]) => (
