@@ -34,7 +34,7 @@ const BOARD_SORTS: Array<{ key: SortKey; label: string }> = [
   { key: 'updated', label: 'Last touched' },
   { key: 'created', label: 'Newest' },
   { key: 'cost', label: 'Cost' },
-  { key: 'rounds', label: 'Rounds' },
+  { key: 'rounds', label: 'Prompts' },
   { key: 'title', label: 'Title' },
 ]
 

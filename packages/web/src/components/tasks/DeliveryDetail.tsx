@@ -341,10 +341,10 @@ function ChipSelect({ value, options, disabled, onPick }: {
   )
 }
 
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Stat({ label, value, accent, title }: { label: string; value: string; accent?: boolean; title?: string }) {
   const absent = value === NA
   return (
-    <div style={{ minWidth: 76 }}>
+    <div style={{ minWidth: 76 }} title={title}>
       <div style={microLabel}>{label}</div>
       <div style={{
         fontSize: 17, fontWeight: 650, fontVariantNumeric: 'tabular-nums',
@@ -380,7 +380,10 @@ function Rollup({ r }: { r: AttemptRollup }) {
     <>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
         <Stat label="Cost" value={money} accent />
-        <Stat label="Rounds" value={fmtInt(r.rounds)} />
+        <Stat
+          label="Prompts" value={fmtInt(r.rounds)}
+          title="How many times you prompted, across every session filed here"
+        />
         <Stat label="Sessions" value={String(r.sessionsUsed)} />
         <Stat label="Tokens" value={fmtTokens(r.tokens)} />
         <Stat label="Active" value={r.activeMinutes === null ? NA : `${r.activeMinutes}m`} />
@@ -593,7 +596,7 @@ function SessionsTab({ detail }: { detail: TaskDetail }) {
     <div style={{ ...surface, overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 680 }}>
         <thead>
-          <tr>{['Session', 'State', 'Harness', 'Where', 'Rounds', 'Tokens', 'Cost', ''].map((h, i) => (
+          <tr>{['Session', 'State', 'Harness', 'Where', 'Prompts', 'Tokens', 'Cost', ''].map((h, i) => (
             <th key={i} style={{ ...microLabel, textAlign: 'left', padding: '8px 10px', fontWeight: 600 }}>{h}</th>
           ))}</tr>
         </thead>
