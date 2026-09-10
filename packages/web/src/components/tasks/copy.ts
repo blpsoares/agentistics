@@ -82,6 +82,50 @@ export interface BoardCopy {
   tabs: Record<'overview' | 'sessions' | 'comments' | 'subtasks' | 'files' | 'activity', string>
   wholeDelivery: string
   deleteDelivery: string
+  /**
+   * `PlanCard`'s own fields — status/priority/owner/dates/claim — and the `Rollup` stat row beside
+   * it. These were the last English left on an otherwise-translated delivery page: the tab bar
+   * above them and the rail sections around them already read Portuguese, so a plain "Cost" /
+   * "Working on it" sitting between two Portuguese headings read as broken rather than untranslated.
+   */
+  priority: string
+  dates: string
+  clearDates: string
+  waitingOn: string
+  workingOnIt: string
+  free: string
+  takeIt: string
+  takeItTitle: string
+  release: string
+  releaseTitleExpired: string
+  releaseTitle: string
+  cost: string
+  yourPrompts: string
+  yourPromptsTitle: string
+  tokens: string
+  active: string
+  /** The attempts rail — one card per (harness, model, effort) configuration. */
+  attemptsHeader: string
+  /** The server's own sentinel for a session nobody filed under a named attempt — never a real
+   *  attempt name, so it is the one attempt label this file may translate. */
+  noAttemptNamed: string
+  unattributed: string
+  models: string
+  noModelReported: string
+  /** The "Delivery" rail section's own git/agent figures. */
+  deliveryTime: string
+  stillOpen: string
+  agentRuns: string
+  commits: string
+  files: string
+  errors: string
+  lines: string
+  tokenInput: string
+  tokenOutput: string
+  tokenCacheRead: string
+  tokenCacheWrite: string
+  links: string
+  blockedBy: string
 }
 
 const EN: BoardCopy = {
@@ -142,6 +186,40 @@ const EN: BoardCopy = {
   },
   wholeDelivery: 'The whole delivery',
   deleteDelivery: 'Delete this delivery',
+  priority: 'Priority',
+  dates: 'Dates',
+  clearDates: 'Clear both dates',
+  waitingOn: 'Waiting on',
+  workingOnIt: 'Working on it',
+  free: 'Free — nobody has taken it.',
+  takeIt: 'Take it',
+  takeItTitle: 'Take it, so an agent asking what to work on is told somebody has this',
+  release: 'Release',
+  releaseTitleExpired: 'The lease has run out — clear the holder',
+  releaseTitle: 'Give the task back to the board',
+  cost: 'Cost',
+  yourPrompts: 'Your prompts',
+  yourPromptsTitle: 'How many times you prompted, across every session filed here',
+  tokens: 'Tokens',
+  active: 'Active',
+  attemptsHeader: 'Attempts — one card per configuration',
+  noAttemptNamed: 'no attempt named',
+  unattributed: 'unattributed',
+  models: 'Models',
+  noModelReported: 'No session reported a model.',
+  deliveryTime: 'Delivery time',
+  stillOpen: 'still open',
+  agentRuns: 'Agent runs',
+  commits: 'Commits',
+  files: 'Files',
+  errors: 'Errors',
+  lines: 'Lines',
+  tokenInput: 'Input',
+  tokenOutput: 'Output',
+  tokenCacheRead: 'Cache read',
+  tokenCacheWrite: 'Cache write',
+  links: 'Links',
+  blockedBy: 'Blocked by',
 }
 
 const PT: BoardCopy = {
@@ -204,6 +282,40 @@ const PT: BoardCopy = {
   },
   wholeDelivery: 'A entrega inteira',
   deleteDelivery: 'Excluir esta entrega',
+  priority: 'Prioridade',
+  dates: 'Datas',
+  clearDates: 'Limpar as duas datas',
+  waitingOn: 'Aguardando',
+  workingOnIt: 'Em andamento',
+  free: 'Livre — ninguém pegou ainda.',
+  takeIt: 'Pegar',
+  takeItTitle: 'Pegar, para dizer a um agente perguntando o que fazer que alguém já está nisso',
+  release: 'Liberar',
+  releaseTitleExpired: 'O prazo da posse expirou — limpar o responsável',
+  releaseTitle: 'Devolver a tarefa para o quadro',
+  cost: 'Custo',
+  yourPrompts: 'Seus prompts',
+  yourPromptsTitle: 'Quantas vezes você fez um prompt, em todas as sessões filiadas aqui',
+  tokens: 'Tokens',
+  active: 'Ativo',
+  attemptsHeader: 'Tentativas — um cartão por configuração',
+  noAttemptNamed: 'sem tentativa nomeada',
+  unattributed: 'não atribuída',
+  models: 'Modelos',
+  noModelReported: 'Nenhuma sessão informou um modelo.',
+  deliveryTime: 'Tempo de entrega',
+  stillOpen: 'ainda aberta',
+  agentRuns: 'Execuções de agente',
+  commits: 'Commits',
+  files: 'Arquivos',
+  errors: 'Erros',
+  lines: 'Linhas',
+  tokenInput: 'Entrada',
+  tokenOutput: 'Saída',
+  tokenCacheRead: 'Leitura de cache',
+  tokenCacheWrite: 'Escrita de cache',
+  links: 'Links',
+  blockedBy: 'Bloqueada por',
 }
 
 export function boardCopy(lang: Lang): BoardCopy {

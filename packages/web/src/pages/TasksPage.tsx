@@ -485,7 +485,9 @@ function TaskDetailView({ id }: { id: string }) {
       />
 
       <p style={{ margin: 0, fontSize: 11, color: 'var(--text-tertiary)' }}>
-        These are cost, prompts and time. Whether the work is any good is not measured here.
+        {lang === 'pt'
+          ? 'Isso é custo, prompts e tempo. Se o trabalho ficou bom não é medido aqui.'
+          : 'These are cost, prompts and time. Whether the work is any good is not measured here.'}
       </p>
 
     </div>
