@@ -56,6 +56,22 @@ export function isClosed(s: TaskStatus): boolean {
 }
 
 /**
+ * The status a task should move to the moment a session is actually filed under it, or `null` when
+ * this session changes nothing about where the work stands.
+ *
+ * A session `working`/`waiting` on a delivery still sitting in `backlog`/`todo` is exactly the
+ * confusion this exists to fix — reported as "não faz sentido ter sessão working ou waiting e
+ * status estarem em todo". It moves FORWARD ONLY, out of the two statuses that mean "nothing
+ * started" and into `in_progress`: `blocked`, `in_review`, `done` and `abandoned` all name
+ * something more specific than "somebody attached a session", and a session filing must never
+ * overwrite one of them — the same one-directional rule `isClosed` already protects elsewhere on
+ * this board (an overdue date is never red on a closed task; a claim is not a session).
+ */
+export function statusAfterAttach(current: TaskStatus): TaskStatus | null {
+  return current === 'backlog' || current === 'todo' ? 'in_progress' : null
+}
+
+/**
  * `abandoned` is first-class on purpose. An attempt that was given up on is the most informative
  * row in a comparison; treating it as merely "still open" quietly inflates every average.
  */
