@@ -243,7 +243,7 @@ const TOOLS: Tool[] = [
   {
     name: "agentistics_task_subtask",
     description:
-      "BETA — the task board is new and still changing; its shapes may move between releases. Add a subtask, or change one. Pass `title` to add; pass `id` with `done`, `status`, `assignee`, `dueDate` or `startDate` to edit one. A subtask carries the same columns its parent does, but no cost of its own: cost is measured per SESSION and rolls up to the task. To put a session ON a subtask use agentistics_task_session with `subtaskId` — a subtask holds ANY NUMBER of sessions, so the link lives on the session, not in a field here.",
+      "BETA — the task board is new and still changing; its shapes may move between releases. Add a subtask, or change one. Pass `title` to add; pass `id` with `done`, `status`, `assignee`, `dueDate`, `startDate` or `blockedBy` to edit one. A subtask carries the same columns its parent does, but no cost of its own: cost is measured per SESSION and rolls up to the task — the PARENT task is only the group the subtasks are delivered under. A subtask CAN be blocked by another subtask of the SAME parent (pass `blockedBy` as the full list of sibling subtask ids that must be `done` first; a sibling outside this task, or the subtask itself, is dropped rather than accepted) — this is separate from agentistics_task_blocked_by, which blocks a whole TASK on other tasks. To put a session ON a subtask use agentistics_task_session with `subtaskId` — a subtask holds ANY NUMBER of sessions, so the link lives on the session, not in a field here.",
     inputSchema: {
       type: "object",
       properties: {
@@ -258,6 +258,12 @@ const TOOLS: Tool[] = [
         assignee: { type: "string" },
         dueDate: { type: "string" },
         startDate: { type: "string" },
+        blockedBy: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Full replacement list of SIBLING subtask ids (same parent task) that must be done before this one. Requires `id` — a subtask being created has no siblings to name yet.",
+        },
       },
       required: ["ref"],
     },
@@ -647,9 +653,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         // one-session field beside that would be a second, unreconciled answer to the same question.
         const cols = ["status", "assignee", "dueDate", "startDate", "title"] as const;
         const named = cols.filter(c => typeof a?.[c] === "string");
+        // `blockedBy` is an ARRAY, so it never matches the string-valued `cols` filter above and
+        // was silently dropped — a subtask genuinely can be blocked by a sibling (`Subtask.blockedBy`,
+        // enforced server-side in `patchSubtask`/`task-attach.ts`), this tool just never offered it.
+        const blockedBy = Array.isArray(a?.blockedBy) ? { blockedBy: a.blockedBy } : {};
         const payload = a?.id !== undefined
-          ? (named.length > 0
-            ? { id: a.id, ...Object.fromEntries(named.map(c => [c, a[c]])) }
+          ? (named.length > 0 || Array.isArray(a?.blockedBy)
+            ? { id: a.id, ...Object.fromEntries(named.map(c => [c, a[c]])), ...blockedBy }
             : { id: a.id, done: a?.done === true })
           : { title: a?.title };
         const body = await apiSend("POST", `/api/tasks/${encodeURIComponent(String(a?.ref))}/subtasks`, payload);
