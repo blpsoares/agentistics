@@ -19,10 +19,11 @@ import { fmtCost, sortRows, type SortSpec } from '@agentistics/core'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import type { TaskListRow } from '../../lib/tasks'
 import {
-  NA, PRIORITY, STATUS, fmtInt, fmtTokens, harnessColor, microLabel, numeric, pill, surface,
+  NA, PRIORITY, STATUS, fmtInt, fmtTokens, microLabel, numeric, pill, surface,
   type BoardStatus,
 } from './board'
 import { TaskProgressBar } from './TaskProgressBar'
+import { HarnessBadges } from './HarnessBadges'
 
 /**
  * Most recently touched first.
@@ -56,17 +57,6 @@ function fmtDay(iso: string | undefined, lang: 'pt' | 'en'): string | null {
 function StatusPill({ status }: { status: string }) {
   const s = STATUS[status as BoardStatus] ?? STATUS.backlog
   return <span style={{ ...pill(s.color), background: s.dim }}>{s.label}</span>
-}
-
-function Harnesses({ harnesses }: { harnesses: string[] }) {
-  if (harnesses.length === 0) return <span style={{ color: 'var(--text-tertiary)' }}>{NA}</span>
-  return (
-    <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
-      {harnesses.map(h => (
-        <span key={h} style={{ ...pill(harnessColor(h)), fontSize: 10 }}>{h}</span>
-      ))}
-    </span>
-  )
 }
 
 export function RepoTasksTab(p: RepoTasksTabProps) {
@@ -116,7 +106,7 @@ export function RepoTasksTab(p: RepoTasksTabProps) {
                 <span>{fmtTokens(r.rollup.tokens)} <span style={microLabel}>tokens</span></span>
                 <span style={{ color: 'var(--anthropic-orange)' }}>{cost(r.rollup.costUSD)}</span>
               </div>
-              <Harnesses harnesses={r.harnesses} />
+              <HarnessBadges harnesses={r.harnesses} max={3} fontSize={10} />
             </button>
           )
         })}
@@ -186,7 +176,7 @@ export function RepoTasksTab(p: RepoTasksTabProps) {
                 <td style={tdNum}>{fmtInt(r.rollup.rounds)}</td>
                 <td style={tdNum}>{fmtTokens(r.rollup.tokens)}</td>
                 <td style={{ ...tdNum, color: 'var(--anthropic-orange)' }}>{cost(r.rollup.costUSD)}</td>
-                <td style={td}><Harnesses harnesses={r.harnesses} /></td>
+                <td style={td}><HarnessBadges harnesses={r.harnesses} fontSize={10} /></td>
                 {/* An open task has no delivery date — "still running" is not a date, and a
                     duration "so far" beside a delivered one reads as the same measurement. */}
                 <td style={{ ...td, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>

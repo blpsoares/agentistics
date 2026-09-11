@@ -203,6 +203,18 @@ export const fmtInt = (n: number | null | undefined): string =>
 export const fmtBytes = (n: number): string =>
   (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`)
 
+/**
+ * Cap a list for display, truthfully: `shown` is what fits, `extra` is what does not — never
+ * silently dropped. A row filed under many harnesses (or any other unbounded per-row list) grows
+ * without limit otherwise, one badge at a time, and a table column stops being a column.
+ */
+export function capList<T>(items: readonly T[], max: number): { shown: T[]; extra: number } {
+  const limit = Math.max(1, Math.floor(max))
+  if (items.length <= limit) return { shown: [...items], extra: 0 }
+  const shown = items.slice(0, limit)
+  return { shown, extra: items.length - shown.length }
+}
+
 /** Compact token counts, because these reach the billions and a full number breaks every column. */
 export function fmtTokens(n: number | null): string {
   if (n === null) return NA

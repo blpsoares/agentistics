@@ -13,10 +13,11 @@ import { Bot, CalendarClock, MessageSquare, Paperclip, Terminal } from 'lucide-r
 import { sortRows, type SortSpec } from '@agentistics/core'
 import {
   COLUMN_ORDER, PRIORITY, SESSION_STATE, STATUS, cardStyle, claimLeft, fmtInt, fmtTokens,
-  harnessColor, microLabel, numeric, pill, surface, type BoardStatus,
+  microLabel, numeric, pill, surface, type BoardStatus,
 } from './board'
 import type { LaneKey } from './boardPrefs'
 import { TaskProgressBar } from './TaskProgressBar'
+import { HarnessBadges } from './HarnessBadges'
 import { statusLabel } from './copy'
 import { useMoney } from './money'
 import type { TaskListRow } from '../../lib/tasks'
@@ -113,9 +114,7 @@ function Card({ row, onOpen, live, nowMs }: {
         <Facts row={row} />
 
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          {row.harnesses.map(h => (
-            <span key={h} style={pill(harnessColor(h))}>{h}</span>
-          ))}
+          {row.harnesses.length > 0 && <HarnessBadges harnesses={row.harnesses} max={3} />}
           {row.attempts > 0 && (
             <span style={pill()}>{row.attempts} attempt{row.attempts === 1 ? '' : 's'}</span>
           )}
