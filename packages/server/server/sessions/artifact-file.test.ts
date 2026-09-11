@@ -83,7 +83,7 @@ describe('planArtifactRead', () => {
 })
 
 describe('artifactPathsFromTurns', () => {
-  const turn = (tools: { name: string; detail?: string }[]) => ({ tools })
+  const turn = (tools: { name: string; canonical?: string; detail?: string }[]) => ({ tools })
 
   it('collects the paths of the file tools, deduped', () => {
     expect(artifactPathsFromTurns([
@@ -110,5 +110,26 @@ describe('artifactPathsFromTurns', () => {
     expect(artifactPathsFromTurns([turn([{ name: 'Write' }])])).toEqual([])
     expect(artifactPathsFromTurns([])).toEqual([])
     expect(artifactPathsFromTurns([{} as never])).toEqual([])
+  })
+
+  /**
+   * THE BUG THIS FILE EXISTS TO FIX. A non-Claude harness's own tool name (agy's `write_to_file`)
+   * never equals a Claude name, so a caller that only checked `call.name` refused every path a
+   * non-Claude session ever wrote — reported as the file panel LISTING a session's files (the
+   * browser's `sessionArtifacts.ts` already read `canonical ?? name`) and refusing to open a single
+   * one, "só funciona no claude". This must select on the SAME field the browser does.
+   */
+  it('selects by the CANONICAL name, not the harness\'s own — the cross-harness case', () => {
+    expect(artifactPathsFromTurns([
+      turn([{ name: 'write_to_file', canonical: 'Write', detail: '/p/a.ts' }]),
+      turn([{ name: 'replace_file_content', canonical: 'Edit', detail: '/p/b.ts' }]),
+    ])).toEqual(['/p/a.ts', '/p/b.ts'])
+  })
+
+  it('a canonical name that is not a file tool is still excluded, same as the raw-name case', () => {
+    // agy's `run_command` canonicalizes to `Bash` — never a path, whichever field named it.
+    expect(artifactPathsFromTurns([
+      turn([{ name: 'run_command', canonical: 'Bash', detail: 'rm -rf build/' }]),
+    ])).toEqual([])
   })
 })

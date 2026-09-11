@@ -107,12 +107,21 @@ export function planArtifactRead({ path, cwd, allowed }: ArtifactReadRequest): A
  * names, kinds and counts, while the ALLOWLIST needs only the paths. This is the copy that guards
  * the disk, so it selects by the same tool NAMES and never by the shape of `detail` — `toolDetail`
  * reads `command` first, and a `Bash` line is not a path.
+ *
+ * These are the SHARED-VOCABULARY names (`canonicalTool`'s output), the same ones
+ * `sessionArtifacts.ts` matches on via `canonical ?? name` — never the harness's own name. A non-
+ * Claude harness's raw tool name (agy's `write_to_file`, say) never equals one of these, so a
+ * caller that checked `call.name` alone refused every file a non-Claude session ever wrote: the
+ * panel LISTED them (the browser reads `canonical ?? name` correctly) and then refused to open a
+ * single one (this allowlist did not), reported as "só funciona no claude".
  */
 export const ARTIFACT_TOOL_NAMES = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'] as const
 
 /** PURE: just the paths, for the server's allowlist. */
 export function artifactPathsFromTurns(
-  turns: readonly { tools?: { name: string; detail?: string; writes?: string[] }[] }[],
+  turns: readonly {
+    tools?: { name: string; canonical?: string; detail?: string; writes?: string[] }[]
+  }[],
 ): string[] {
   const out = new Set<string>()
   for (const t of turns) {
@@ -125,7 +134,9 @@ export function artifactPathsFromTurns(
         const t = w.trim()
         if (t !== '' && !t.endsWith('…')) out.add(t)
       }
-      if (!(ARTIFACT_TOOL_NAMES as readonly string[]).includes(call.name)) continue
+      // `canonical ?? name` — see the doc comment above. Selecting on the raw `name` alone is what
+      // made this allowlist Claude-only.
+      if (!(ARTIFACT_TOOL_NAMES as readonly string[]).includes(call.canonical ?? call.name)) continue
       const p = call.detail?.trim()
       // A truncated detail (`toolDetail` ellipsises past 200 chars) names no file. Admitting one
       // would put a path into the allowlist that resolves to nothing — or, worse, to something else.
