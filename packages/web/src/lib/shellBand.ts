@@ -144,6 +144,15 @@ export interface BandPrefs {
    * snap this memory exists to remove, from the other side.
    */
   geometry?: Partial<Record<ShellPlacement, PaneGeometry>>
+  /**
+   * WHICH terminal the band was last showing — the session's CLI pane or its shell.
+   *
+   * It is a preference and not a route because the band is a place you glance at while reading the
+   * conversation beside it; the ROUTE belongs to the dedicated screen, where the target is the
+   * whole page and a shared link must open on the right one. Read through `readTarget`, which
+   * treats absent and unreadable alike as the shell — what this band has been since phase 2.
+   */
+  target?: string
 }
 
 /** Where a shell is drawn. `docked` is the band under the composer; `dedicated` is its own screen. */
@@ -172,6 +181,9 @@ export function readBandPrefs(storage?: Storage): BandPrefs {
       // geometry is worse than none — it would be sent, refused, and the reader would never learn
       // why — and one unreadable placement must not cost the other.
       ...(readGeometries(r.geometry) ? { geometry: readGeometries(r.geometry)! } : {}),
+      // Kept as the RAW string: `readTarget` is the one place that decides what an unreadable
+      // value means, and duplicating that rule here would be a second answer to one question.
+      ...(typeof r.target === 'string' ? { target: r.target } : {}),
     }
   } catch {
     return DEFAULT_BAND_PREFS
