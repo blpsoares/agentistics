@@ -1,9 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { listChildren, readTreeFile, resolveSessionDirectory, writeTreeFile } from './editor-fs'
+import {
+  createTreeEntry, deleteTreeEntry, listChildren, readTreeFile, renameTreeEntry, resolveSessionDirectory,
+  writeTreeFile,
+} from './editor-fs'
 import type { StartHost } from '../cli-start'
 
 // Same reason repo-probe.test.ts strips these: a pre-commit hook running from a linked worktree
@@ -201,6 +204,110 @@ describe('writeTreeFile', () => {
 
   test('a .. escape is refused before any write is attempted', async () => {
     const out = await writeTreeFile(gitRepo, '../../etc/passwd', 'x', 0)
+    expect(out).toEqual({ ok: false, reason: 'escaped' })
+  })
+})
+
+describe('createTreeEntry', () => {
+  test('creates an empty file', async () => {
+    const out = await createTreeEntry(plainDir, 'created.txt', 'file')
+    expect(out).toEqual({ ok: true })
+    expect(existsSync(join(plainDir, 'created.txt'))).toBe(true)
+  })
+
+  test('creates a folder', async () => {
+    const out = await createTreeEntry(plainDir, 'created-dir', 'dir')
+    expect(out).toEqual({ ok: true })
+    expect(statSync(join(plainDir, 'created-dir')).isDirectory()).toBe(true)
+  })
+
+  test('refuses to overwrite something that already exists', async () => {
+    const out = await createTreeEntry(plainDir, 'x.txt', 'file')
+    expect(out).toEqual({ ok: false, reason: 'already-exists' })
+  })
+
+  test('a .. escape is refused', async () => {
+    const out = await createTreeEntry(plainDir, '../escaped.txt', 'file')
+    expect(out).toEqual({ ok: false, reason: 'escaped' })
+  })
+
+  test('creating inside a directory that does not exist yet fails not-found — no implicit mkdir -p', async () => {
+    const out = await createTreeEntry(plainDir, 'nosuch/child.txt', 'file')
+    expect(out).toEqual({ ok: false, reason: 'not-found' })
+  })
+})
+
+describe('renameTreeEntry', () => {
+  test('renames a file within the tree', async () => {
+    writeFileSync(join(plainDir, 'to-rename.txt'), 'x')
+    const out = await renameTreeEntry(plainDir, 'to-rename.txt', 'renamed.txt')
+    expect(out).toEqual({ ok: true })
+    expect(existsSync(join(plainDir, 'renamed.txt'))).toBe(true)
+    expect(existsSync(join(plainDir, 'to-rename.txt'))).toBe(false)
+  })
+
+  test('refuses when the source does not exist', async () => {
+    const out = await renameTreeEntry(plainDir, 'nope.txt', 'somewhere.txt')
+    expect(out).toEqual({ ok: false, reason: 'not-found' })
+  })
+
+  test('refuses when the destination already exists', async () => {
+    writeFileSync(join(plainDir, 'src-a.txt'), 'a')
+    writeFileSync(join(plainDir, 'dst-b.txt'), 'b')
+    const out = await renameTreeEntry(plainDir, 'src-a.txt', 'dst-b.txt')
+    expect(out).toEqual({ ok: false, reason: 'already-exists' })
+  })
+
+  test('an escape on EITHER end is refused', async () => {
+    writeFileSync(join(plainDir, 'src-c.txt'), 'c')
+    expect(await renameTreeEntry(plainDir, 'src-c.txt', '../out.txt')).toEqual({ ok: false, reason: 'escaped' })
+    expect(await renameTreeEntry(plainDir, '../out.txt', 'src-c.txt')).toEqual({ ok: false, reason: 'escaped' })
+  })
+})
+
+describe('deleteTreeEntry', () => {
+  test('deletes a file', async () => {
+    writeFileSync(join(plainDir, 'to-delete.txt'), 'x')
+    const out = await deleteTreeEntry(plainDir, 'to-delete.txt', false)
+    expect(out).toEqual({ ok: true })
+    expect(existsSync(join(plainDir, 'to-delete.txt'))).toBe(false)
+  })
+
+  test('deletes an empty folder without needing recursive', async () => {
+    mkdirSync(join(plainDir, 'empty-to-delete'))
+    const out = await deleteTreeEntry(plainDir, 'empty-to-delete', false)
+    expect(out).toEqual({ ok: true })
+  })
+
+  test('refuses a non-empty folder without recursive', async () => {
+    mkdirSync(join(plainDir, 'full-to-delete'))
+    writeFileSync(join(plainDir, 'full-to-delete', 'inner.txt'), 'x')
+    const out = await deleteTreeEntry(plainDir, 'full-to-delete', false)
+    expect(out).toEqual({ ok: false, reason: 'not-empty' })
+    expect(existsSync(join(plainDir, 'full-to-delete', 'inner.txt'))).toBe(true)
+  })
+
+  test('recursive:true deletes a non-empty folder', async () => {
+    mkdirSync(join(plainDir, 'full-to-delete-2'))
+    writeFileSync(join(plainDir, 'full-to-delete-2', 'inner.txt'), 'x')
+    const out = await deleteTreeEntry(plainDir, 'full-to-delete-2', true)
+    expect(out).toEqual({ ok: true })
+    expect(existsSync(join(plainDir, 'full-to-delete-2'))).toBe(false)
+  })
+
+  test('refuses when the target does not exist', async () => {
+    const out = await deleteTreeEntry(plainDir, 'nope', false)
+    expect(out).toEqual({ ok: false, reason: 'not-found' })
+  })
+
+  test('an escape is refused before any delete is attempted', async () => {
+    // NOTE: not `'../plain'` as in the original brief — `plainDir` is `<root>/plain`, so
+    // `resolve(plainDir, '../plain')` collapses back to `plainDir` itself (a coincidence of this
+    // fixture's own directory name) rather than escaping it, and would have masqueraded as
+    // `not-empty` given the leftover fixtures from earlier tests. `../secret.txt` is genuinely
+    // outside `plainDir`, matching the non-colliding names every sibling escape test already uses
+    // (`'../escaped.txt'`, `'../out.txt'`, `'../../etc'`).
+    const out = await deleteTreeEntry(plainDir, '../secret.txt', false)
     expect(out).toEqual({ ok: false, reason: 'escaped' })
   })
 })

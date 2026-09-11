@@ -8,7 +8,8 @@
  * `resolveTreePath` only catches a LEXICAL `..` escape; this is the other half, the one that
  * catches a symlink INSIDE the tree pointing outside it.
  */
-import { readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import type { StartHost } from '../cli-start'
 import { gitEnv } from '../backup/repo-probe'
 import { planSessionDirectory, type SessionDirPlan } from './editor-directory'
@@ -212,4 +213,94 @@ export async function writeTreeFile(
   await writeFile(real, content, 'utf8')
   const after = await stat(real)
   return { ok: true, mtimeMs: after.mtimeMs }
+}
+
+/**
+ * A CREATE target has no real path of its own yet — `realContained` alone cannot check it, because
+ * `realpath` throws on something that does not exist. So the PARENT is checked instead: it must
+ * exist, be a real directory, and be contained in the real root. This is the one place in this
+ * module where "does not exist yet" is the SUCCESS case rather than a refusal.
+ */
+async function realContainedParent(root: string, abs: string): Promise<string | null> {
+  const parent = dirname(abs)
+  const realParent = await realContained(root, parent)
+  if (realParent === null) return null
+  // Recompose with the (still unresolved) basename — the child itself is not real yet.
+  return `${realParent}/${abs.slice(parent.length + 1)}`
+}
+
+export type CreateRefusal = 'escaped' | 'not-found' | 'already-exists'
+export type CreatePlan = { ok: true } | { ok: false; reason: CreateRefusal }
+
+export async function createTreeEntry(
+  root: string, requestedPath: string, kind: 'file' | 'dir',
+): Promise<CreatePlan> {
+  const planned = resolveTreePath(root, requestedPath)
+  if (!planned.ok) return { ok: false, reason: 'escaped' }
+  const target = await realContainedParent(root, planned.abs)
+  if (target === null) return { ok: false, reason: 'not-found' }
+
+  try {
+    await stat(target)
+    return { ok: false, reason: 'already-exists' }
+  } catch {
+    // Good — it must not exist yet.
+  }
+
+  if (kind === 'dir') await mkdir(target)
+  else await writeFile(target, '', 'utf8')
+  return { ok: true }
+}
+
+export type RenameRefusal = 'escaped' | 'not-found' | 'already-exists'
+export type RenamePlan = { ok: true } | { ok: false; reason: RenameRefusal }
+
+export async function renameTreeEntry(root: string, fromPath: string, toPath: string): Promise<RenamePlan> {
+  const from = resolveTreePath(root, fromPath)
+  if (!from.ok) return { ok: false, reason: 'escaped' }
+  const to = resolveTreePath(root, toPath)
+  if (!to.ok) return { ok: false, reason: 'escaped' }
+
+  const realFrom = await realContained(root, from.abs)
+  if (realFrom === null) return { ok: false, reason: 'not-found' }
+
+  const realToTarget = await realContainedParent(root, to.abs)
+  if (realToTarget === null) return { ok: false, reason: 'escaped' }
+
+  try {
+    await stat(realToTarget)
+    return { ok: false, reason: 'already-exists' }
+  } catch {
+    // Good — the destination must be free.
+  }
+
+  await rename(realFrom, realToTarget)
+  return { ok: true }
+}
+
+export type DeleteRefusal = 'escaped' | 'not-found' | 'not-empty'
+export type DeletePlan = { ok: true } | { ok: false; reason: DeleteRefusal }
+
+export async function deleteTreeEntry(
+  root: string, requestedPath: string, recursive: boolean,
+): Promise<DeletePlan> {
+  const planned = resolveTreePath(root, requestedPath)
+  if (!planned.ok) return { ok: false, reason: 'escaped' }
+  const real = await realContained(root, planned.abs)
+  if (real === null) return { ok: false, reason: 'not-found' }
+
+  let st
+  try {
+    st = await stat(real)
+  } catch {
+    return { ok: false, reason: 'not-found' }
+  }
+
+  if (st.isDirectory() && !recursive) {
+    const entries = await readdir(real)
+    if (entries.length > 0) return { ok: false, reason: 'not-empty' }
+  }
+
+  await rm(real, { recursive: true, force: false })
+  return { ok: true }
 }
