@@ -24,12 +24,24 @@
  * server's own sentence under it — not a silently missing folder, which is indistinguishable from
  * one the gitignore filtered out.
  *
+ * A LIST, NOT AN ARIA `tree`. The role was `tree`/`treeitem` and it claimed two things that are
+ * not true here: arrow-key tree navigation (only `Tab` moves between these rows — nothing
+ * implements Left/Right/Home/End), and, worse, ownership. ARIA's `tree` owns `treeitem` and `group`
+ * children and NOTHING else, so the two error regions — the root-level banner and the sentence under
+ * a row whose listing was refused — were plain `div`s sitting directly inside it, which an assistive
+ * technology walking the tree may drop: exactly the text the invariant above says is never
+ * swallowed. So the rows are a `list` of `listitem`s, each row's failure sentence lives INSIDE its
+ * own item (a `listitem` owns arbitrary content, which is the whole reason it is the right
+ * container), and the root banner sits OUTSIDE the list, because it is a statement about the whole
+ * listing rather than one of its items. Depth rides on the item as `aria-level`, which `listitem`
+ * supports and the `button` role does not; `aria-expanded` stays on the button, which does.
+ *
  * `onTreeChange` takes an UPDATER, never a finished `TreeNode`: the state lives in the parent
  * (`RepositoryTab`), which passes its `setTree` straight in, so every model call runs against the
  * LATEST tree rather than one a closure captured before an `await`.
  */
 
-import { Fragment, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { AlertTriangle, ChevronDown, ChevronRight, File, Folder, FolderOpen, Loader } from 'lucide-react'
 import {
   applyChildren, applyError, flattenVisible, setLoading, toggleExpanded,
@@ -156,8 +168,6 @@ export function RepoTreeView({ sessionId, tree, onTreeChange, onOpenFile, lang }
 
   return (
     <div
-      role="tree"
-      aria-label={pt ? 'Arquivos da sessão' : 'Session files'}
       style={{
         flex: 1, minHeight: 0, minWidth: 0,
         overflowY: 'auto', overflowX: 'hidden', overscrollBehavior: 'contain',
@@ -165,7 +175,8 @@ export function RepoTreeView({ sessionId, tree, onTreeChange, onOpenFile, lang }
       }}
     >
       {/* The root itself can carry an error while its children are already on screen — a refresh
-          that failed over a tree that had loaded. Saying nothing there would drop a failure. */}
+          that failed over a tree that had loaded. Saying nothing there would drop a failure. It is
+          a banner about the LISTING and not one of its items, so it sits outside the list below. */}
       {tree.error !== undefined && (
         <div style={{
           display: 'flex', alignItems: 'flex-start', gap: 6,
@@ -176,26 +187,32 @@ export function RepoTreeView({ sessionId, tree, onTreeChange, onOpenFile, lang }
         </div>
       )}
 
-      {rows.map(row => (
-        <Fragment key={row.path}>
-          <Row
-            row={row}
-            indent={basePad + Math.min(row.depth, MAX_INDENT_LEVELS) * step}
-            isMobile={isMobile}
-            onActivate={() => (row.kind === 'dir' ? onToggle(row.path) : onOpenFile(row.path))}
-          />
-          {row.error !== undefined && (
-            <div
-              style={{
-                padding: `0 12px 6px ${basePad + Math.min(row.depth, MAX_INDENT_LEVELS) * step}px`,
-                fontSize: 11, lineHeight: 1.45, color: 'var(--accent-red)',
-              }}
-            >
-              {row.error}
+      <div role="list" aria-label={pt ? 'Arquivos da sessão' : 'Session files'}>
+        {rows.map(row => {
+          // One arithmetic per row: the row steps in by it, and so does the sentence under it.
+          const indent = basePad + Math.min(row.depth, MAX_INDENT_LEVELS) * step
+          return (
+            <div role="listitem" aria-level={row.depth + 1} key={row.path}>
+              <Row
+                row={row}
+                indent={indent}
+                isMobile={isMobile}
+                onActivate={() => (row.kind === 'dir' ? onToggle(row.path) : onOpenFile(row.path))}
+              />
+              {row.error !== undefined && (
+                <div
+                  style={{
+                    padding: `0 12px 6px ${indent}px`,
+                    fontSize: 11, lineHeight: 1.45, color: 'var(--accent-red)',
+                  }}
+                >
+                  {row.error}
+                </div>
+              )}
             </div>
-          )}
-        </Fragment>
-      ))}
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -218,8 +235,6 @@ function Row({ row, indent, isMobile, onActivate }: {
   return (
     <button
       type="button"
-      role="treeitem"
-      aria-level={row.depth + 1}
       {...(isDir ? { 'aria-expanded': row.expanded } : {})}
       title={row.path}
       onClick={onActivate}

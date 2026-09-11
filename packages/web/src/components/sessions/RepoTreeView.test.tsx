@@ -12,7 +12,7 @@
  * loader as an argument, and the "exactly once" fact is asserted by driving it directly — which is
  * what the component's `onClick` does with the same arguments.
  */
-import { describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { RepoTreeView, toggleDirectory, treeViewState } from './RepoTreeView'
 import {
@@ -26,9 +26,21 @@ import type { TreeListResult } from '../../lib/repoApi'
  * exist. `useEffect` (where `matchMedia` lives) never runs under `renderToStaticMarkup`.
  */
 const env = globalThis as unknown as { window?: { innerWidth: number } }
+const windowIsOurs = env.window === undefined
 env.window ??= { innerWidth: 1280 }
 const desktop = () => { env.window!.innerWidth = 1280 }
 const phone = () => { env.window!.innerWidth = 390 }
+
+/**
+ * The width is restored in HOOKS, never at the end of a test body. A `phone()` undone by hand is
+ * undone only when the test reaches that line, so a throw — or an early `expect` failure — leaves
+ * `innerWidth: 390` set for whatever runs next IN THE SAME PROCESS, which here is someone else's
+ * test file. `beforeEach` closes the other direction: the `??=` above adopts a `window` another file
+ * already created, width and all.
+ */
+beforeEach(desktop)
+afterEach(desktop)
+afterAll(() => { if (windowIsOurs) delete env.window })
 
 function noop() { /* the component never changes the tree in these renders */ }
 
@@ -69,18 +81,15 @@ describe('treeViewState', () => {
 
 describe('the empty states', () => {
   test('the root nobody has read draws NOTHING — the parent owns that loader', () => {
-    desktop()
     expect(render(makeRootNode())).toBe('')
   })
 
   test('a failed listing shows the sentence it was given, verbatim', () => {
-    desktop()
     const html = render(applyError(makeRootNode(), '', 'Esse caminho não existe mais.'))
     expect(html).toContain('Esse caminho não existe mais.')
   })
 
   test('a genuinely empty folder says so, in each language', () => {
-    desktop()
     const en = render(applyChildren(makeRootNode(), '', []), 'en')
     const pt = render(applyChildren(makeRootNode(), '', []), 'pt')
     expect(en).toContain('empty')
@@ -89,7 +98,6 @@ describe('the empty states', () => {
   })
 
   test('empty and failed are never the same box', () => {
-    desktop()
     const failed = render(applyError(makeRootNode(), '', 'The repository explorer is off on this machine.'))
     const empty = render(applyChildren(makeRootNode(), '', []))
     expect(failed).not.toBe(empty)
@@ -101,22 +109,19 @@ describe('the empty states', () => {
 
 describe('the rows it draws', () => {
   test('one row per visible node, directories before their children only when expanded', () => {
-    desktop()
     const html = render(loadedRoot())
     expect(html).toContain('src')
     expect(html).toContain('README.md')
-    expect((html.match(/role="treeitem"/g) ?? []).length).toBe(2)
+    expect((html.match(/role="listitem"/g) ?? []).length).toBe(2)
   })
 
   test('a collapsed directory reports aria-expanded="false"; a file carries none', () => {
-    desktop()
     const html = render(loadedRoot())
     expect(html).toContain('aria-expanded="false"')
     expect((html.match(/aria-expanded/g) ?? []).length).toBe(1)
   })
 
   test('expanding a loaded directory draws its children one level deeper', () => {
-    desktop()
     let tree = loadedRoot()
     tree = applyChildren(tree, 'src', [{ name: 'index.ts', kind: 'file' }])
     tree = toggleExpanded(tree, 'src')
@@ -127,7 +132,6 @@ describe('the rows it draws', () => {
   })
 
   test('depth steps the row in — and the step is left PADDING on a border-box row, so nothing widens', () => {
-    desktop()
     let tree = loadedRoot()
     tree = applyChildren(tree, 'src', [{ name: 'index.ts', kind: 'file' }])
     tree = toggleExpanded(tree, 'src')
@@ -138,20 +142,17 @@ describe('the rows it draws', () => {
   })
 
   test('a directory being read shows the spinning class, not a still glyph', () => {
-    desktop()
     const html = render(setLoading(loadedRoot(), 'src', true))
     expect(html).toContain('ag-working-spin')
   })
 
   test('a directory whose listing was refused KEEPS its row and states why under it', () => {
-    desktop()
     const html = render(applyError(loadedRoot(), 'src', 'Permissão negada.'))
     expect(html).toContain('src')
     expect(html).toContain('Permissão negada.')
   })
 
   test('a root error over rows that did load is still said, never swallowed', () => {
-    desktop()
     const tree: TreeNode = { ...loadedRoot(), error: 'The server did not answer.' }
     const html = render(tree)
     expect(html).toContain('The server did not answer.')
@@ -159,8 +160,87 @@ describe('the rows it draws', () => {
   })
 
   test('every scrolling region contains its overscroll, as this panel requires', () => {
-    desktop()
     expect(render(loadedRoot())).toContain('overscroll-behavior:contain')
+  })
+})
+
+// --- what the container claims, and what it therefore owns ---------------------------------------
+
+/**
+ * Where the `<div …>` that opens at `start` closes. These divs NEST — an item holds a row and, when
+ * that row's listing failed, the sentence saying so — and the whole point of the assertions below is
+ * telling a nested element from a sibling, which no `toContain` on a flat string can do.
+ */
+function divEnd(html: string, start: number): number {
+  let depth = 0
+  let i = start
+  for (;;) {
+    const open = html.indexOf('<div', i)
+    const close = html.indexOf('</div>', i)
+    if (close === -1) throw new Error('unclosed <div>')
+    if (open !== -1 && open < close) { depth++; i = open + 4; continue }
+    depth--
+    if (depth === 0) return close
+    i = close + 6
+  }
+}
+
+/** Each item's inner HTML, plus everything else the list contains — which must be nothing. */
+function listStructure(html: string): { items: string[]; outside: string } {
+  const at = html.indexOf('<div role="list"')
+  if (at === -1) throw new Error('no role="list" container')
+  const items: string[] = []
+  let rest = html.slice(html.indexOf('>', at) + 1, divEnd(html, at))
+  for (;;) {
+    const m = /<div role="listitem"[^>]*>/.exec(rest)
+    if (m === null) return { items, outside: rest }
+    const end = divEnd(rest, m.index)
+    items.push(rest.slice(m.index + m[0].length, end))
+    rest = rest.slice(0, m.index) + rest.slice(end + '</div>'.length)
+  }
+}
+
+describe('the ARIA container owns every child it has', () => {
+  test('no `tree` role is claimed — arrow-key tree navigation is not implemented here', () => {
+    const html = render(loadedRoot())
+    expect(html).not.toContain('role="tree"')
+    expect(html).not.toContain('role="treeitem"')
+    expect(html).toContain('<div role="list"')
+  })
+
+  test('a list holds ONLY listitems — nothing sits inside it that the role does not own', () => {
+    const { items, outside } = listStructure(render(loadedRoot()))
+    expect(items.length).toBe(2)
+    expect(outside.trim()).toBe('')
+  })
+
+  test('a row’s failure sentence lives INSIDE that row’s own item, never beside it', () => {
+    const { items, outside } = listStructure(render(applyError(loadedRoot(), 'src', 'Permissão negada.')))
+    const src = items.find(item => item.includes('>src<'))
+    expect(src).toContain('Permissão negada.')
+    // Not a stray child of the list, which is the defect the nesting above exists to prevent.
+    expect(outside).not.toContain('Permissão negada.')
+    expect(items.length).toBe(2)
+  })
+
+  test('the root-level banner is said, and is not a child of the list either', () => {
+    const tree: TreeNode = { ...loadedRoot(), error: 'The server did not answer.' }
+    const html = render(tree)
+    expect(html).toContain('The server did not answer.')
+    const { outside, items } = listStructure(html)
+    expect(outside.trim()).toBe('')
+    expect(items.some(item => item.includes('The server did not answer.'))).toBe(false)
+  })
+
+  test('depth is carried by the item, which may hold a level — the button may not', () => {
+    let tree = loadedRoot()
+    tree = applyChildren(tree, 'src', [{ name: 'index.ts', kind: 'file' }])
+    tree = toggleExpanded(tree, 'src')
+    const html = render(tree)
+    expect(/<div role="listitem" aria-level="2"/.test(html)).toBe(true)
+    // `aria-level` is not a property the `button` role supports; `aria-expanded` is.
+    expect(/<button[^>]*aria-level/.test(html)).toBe(false)
+    expect(/<button[^>]*aria-expanded="true"/.test(html)).toBe(true)
   })
 })
 
@@ -180,7 +260,6 @@ describe('mobile', () => {
     expect(html).toContain('width:100%')
     expect(html).toContain('box-sizing:border-box')
     expect(html).toContain('overflow-x:hidden')
-    desktop()
   })
 })
 
