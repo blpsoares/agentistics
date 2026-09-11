@@ -6,6 +6,7 @@ import type { Server, ServerWebSocket } from 'bun'
 import type { LiveProcess, LiveUnavailableReason, SessionMeta } from '@agentistics/core'
 import { getRates } from './rates'
 import { getVersionInfo, startVersionRecheck } from './version'
+import { handleUpgradeRoute } from './upgrade-web'
 import { buildApiResponse, buildApiResponseStream, invalidateCache } from './data'
 import { readPreferences, writePreferences, redactPreferences, guardTeamConnectionsWipe, PreferencesLockTimeoutError, type Preferences } from './preferences'
 import {
@@ -637,6 +638,12 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
         status: 200,
         headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       })
+    }
+
+    // "Update now" — see `upgrade-web.ts` for why the child must NOT be this process's child.
+    {
+      const res = await handleUpgradeRoute(req, url, url.searchParams.get('lang') === 'pt' ? 'pt' : 'en', clientIp)
+      if (res) return res
     }
 
     if (url.pathname === '/api/version' && req.method === 'GET') {
