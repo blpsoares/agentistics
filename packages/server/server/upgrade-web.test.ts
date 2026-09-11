@@ -39,3 +39,21 @@ describe('the upgrade must not be this process’s child', () => {
     expect(src).not.toContain("stdio: 'inherit'")
   })
 })
+
+/**
+ * The version the route judges must be read LIVE, not from the cache.
+ *
+ * MEASURED on a real machine: v2.32.0 was published, the machine was on v2.31.0, and the route
+ * answered `up-to-date` — `getVersionInfo` caches for hours and its entry had been minted before
+ * the release existed. Somebody pressing this button is acting on an update they are looking at
+ * right now; refusing them with a sentence that contradicts the modal above it is the worst answer
+ * available. `agentop upgrade` already forces the same check for the same reason.
+ */
+describe('the version the press is judged against', () => {
+  const src = readFileSync(new URL('./upgrade-web.ts', import.meta.url), 'utf8')
+
+  test('is fetched with force, never off the cache', () => {
+    expect(src).toContain('getVersionInfo({ force: true })')
+    expect(src).not.toContain('getVersionInfo()')
+  })
+})
