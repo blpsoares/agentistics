@@ -739,7 +739,9 @@ export default function SessionsPage() {
               outcome is a refusal is worse than no segment. */}
           {shellEnabled && (
             <div role="tablist" aria-label={pt ? 'Qual terminal' : 'Which terminal'} style={{
-              display: 'flex', gap: 4, flexShrink: 0, alignSelf: 'flex-start',
+              // RIGHT, like the band's. One control, one shape, one SIDE — a control that changes
+              // corner between the docked band and this screen is one the reader has to find again.
+              display: 'flex', gap: 4, flexShrink: 0, alignSelf: 'flex-end',
               padding: 3, borderRadius: 8, background: 'var(--bg-elevated)',
               border: '1px solid var(--border-subtle)',
             }}>
