@@ -130,4 +130,78 @@ describe('handleEditorTreeRoute', () => {
     expect(status).toBe(400)
     expect(body.ok).toBe(false)
   })
+
+  describe('containment/not-found refusals are 404 on every route, state conflicts are 409', () => {
+    test('POST /api/fleet/tree/entry with an escaping path is 404, not 409', async () => {
+      const req = new Request('http://x/api/fleet/tree/entry', {
+        method: 'POST', body: JSON.stringify({ id: 's1', path: '../escape.txt', kind: 'file' }),
+      })
+      const { status, body } = await call(req, hostWith('s1', repo))
+      expect(status).toBe(404)
+      expect(body).toMatchObject({ ok: false, reason: 'escaped' })
+    })
+
+    test('POST /api/fleet/tree/entry over an existing path is 409 (a real state conflict)', async () => {
+      const req = new Request('http://x/api/fleet/tree/entry', {
+        method: 'POST', body: JSON.stringify({ id: 's1', path: 'a.ts', kind: 'file' }),
+      })
+      const { status, body } = await call(req, hostWith('s1', repo))
+      expect(status).toBe(409)
+      expect(body).toMatchObject({ ok: false, reason: 'already-exists' })
+    })
+
+    test('PATCH /api/fleet/tree/entry renaming from an escaping path is 404, not 409', async () => {
+      const req = new Request('http://x/api/fleet/tree/entry', {
+        method: 'PATCH', body: JSON.stringify({ id: 's1', from: '../escape.txt', to: 'x.ts' }),
+      })
+      const { status, body } = await call(req, hostWith('s1', repo))
+      expect(status).toBe(404)
+      expect(body).toMatchObject({ ok: false, reason: 'escaped' })
+    })
+
+    test('PATCH /api/fleet/tree/entry onto an existing destination is 409 (a real state conflict)', async () => {
+      const req = new Request('http://x/api/fleet/tree/entry', {
+        method: 'PATCH', body: JSON.stringify({ id: 's1', from: 'a.ts', to: 'a.ts' }),
+      })
+      const { status, body } = await call(req, hostWith('s1', repo))
+      expect(status).toBe(409)
+      expect(body).toMatchObject({ ok: false, reason: 'already-exists' })
+    })
+
+    test('DELETE /api/fleet/tree/entry with an escaping path is 404, not 409', async () => {
+      const req = new Request('http://x/api/fleet/tree/entry?id=s1&path=../escape.txt', { method: 'DELETE' })
+      const { status, body } = await call(req, hostWith('s1', repo))
+      expect(status).toBe(404)
+      expect(body).toMatchObject({ ok: false, reason: 'escaped' })
+    })
+
+    test('DELETE /api/fleet/tree/entry on a non-empty folder without ?recursive=1 is 409 (a real state conflict)', async () => {
+      const dirReq = new Request('http://x/api/fleet/tree/entry', {
+        method: 'POST', body: JSON.stringify({ id: 's1', path: 'nonempty', kind: 'dir' }),
+      })
+      await call(dirReq, hostWith('s1', repo))
+      const fileReq = new Request('http://x/api/fleet/tree/entry', {
+        method: 'POST', body: JSON.stringify({ id: 's1', path: 'nonempty/inside.txt', kind: 'file' }),
+      })
+      await call(fileReq, hostWith('s1', repo))
+
+      const del = await call(
+        new Request('http://x/api/fleet/tree/entry?id=s1&path=nonempty', { method: 'DELETE' }),
+        hostWith('s1', repo),
+      )
+      expect(del.status).toBe(409)
+      expect(del.body).toMatchObject({ ok: false, reason: 'not-empty' })
+    })
+  })
+
+  test('a missing required parameter is localized, like every other refusal in this module', async () => {
+    const req = new Request('http://x/api/fleet/tree?path=x')
+    const res = await handleEditorTreeRoute(req, new URL(req.url), hostWith('s1', repo), 'pt')
+    expect(res).not.toBeNull()
+    const body = await res!.json()
+    expect(res!.status).toBe(400)
+    expect(body.message).not.toBe('id is required')
+    expect(typeof body.message).toBe('string')
+    expect(body.message.length).toBeGreaterThan(0)
+  })
 })

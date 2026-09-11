@@ -12,6 +12,8 @@ import type { CliLang } from '../cli-lang'
 import {
   createTreeEntry, deleteTreeEntry, listChildren, readTreeFile, renameTreeEntry,
   resolveSessionDirectory, searchTree, writeTreeFile,
+  type CreateRefusal, type DeleteRefusal, type EntryRefusal, type ReadFileRefusal,
+  type RenameRefusal, type WriteFileRefusal,
 } from './editor-fs'
 import type { SessionDirRefusal } from './editor-directory'
 
@@ -33,7 +35,18 @@ const DIR_REFUSAL: Record<SessionDirRefusal, { en: string; pt: string }> = {
   },
 }
 
-const GENERIC_REFUSAL: Record<string, { en: string; pt: string }> = {
+/**
+ * Everything `editor-fs.ts` can refuse with, across every route in this module, plus the write
+ * path's own `'conflict'`. Typed over the exact union (not `Record<string, …>`) so a refusal code
+ * added to any of those unions and left out here fails `bun tsc --noEmit` instead of silently
+ * surfacing as a raw code where a sentence belongs — the same guarantee `DIR_REFUSAL` above and
+ * `shell-web.ts`'s own `REFUSAL: Record<ShellRefusal, …>` already have.
+ */
+type GenericRefusal =
+  | EntryRefusal | ReadFileRefusal | WriteFileRefusal | CreateRefusal | RenameRefusal | DeleteRefusal
+  | 'conflict'
+
+const GENERIC_REFUSAL: Record<GenericRefusal, { en: string; pt: string }> = {
   escaped: {
     en: 'That path is outside this session’s folder.',
     pt: 'Esse caminho está fora da pasta desta sessão.',
@@ -64,12 +77,40 @@ const GENERIC_REFUSAL: Record<string, { en: string; pt: string }> = {
   },
 }
 
+/**
+ * A genuine STATE conflict — something already there, a non-empty folder, a write that lost the
+ * race with a change already on disk — is 409. Everything else here is 404: the path this request
+ * named could not be resolved to anything at all (it escaped the tree, or nothing is there, or it
+ * is the wrong kind of entry), which is true regardless of which route asked. Decided once, from
+ * the REASON CODE, so the same code can never mean 404 through one door and 409 through another.
+ */
+const CONFLICT_SHAPED: ReadonlySet<GenericRefusal> = new Set(['already-exists', 'not-empty', 'conflict'])
+const statusFor = (reason: GenericRefusal): number => (CONFLICT_SHAPED.has(reason) ? 409 : 404)
+
 function sentence(reason: string, lang: CliLang): string {
   const dir = DIR_REFUSAL[reason as SessionDirRefusal]
   if (dir) return dir[lang]
-  const generic = GENERIC_REFUSAL[reason]
+  const generic = GENERIC_REFUSAL[reason as GenericRefusal]
   return generic ? generic[lang] : reason
 }
+
+/**
+ * The `bad_request` messages, localized like every other refusal in this module. Keyed by which
+ * parameters a route needs rather than repeated per call site — several routes need exactly "id
+ * and path".
+ */
+type BadRequestKind = 'id' | 'id-and-path' | 'file-body' | 'entry-fields' | 'rename-fields'
+
+const BAD_REQUEST: Record<BadRequestKind, { en: string; pt: string }> = {
+  id: { en: 'id is required', pt: 'id é obrigatório' },
+  'id-and-path': { en: 'id and path are required', pt: 'id e path são obrigatórios' },
+  'file-body': { en: 'content and mtimeMs are required', pt: 'content e mtimeMs são obrigatórios' },
+  'entry-fields': { en: 'id, path and kind are required', pt: 'id, path e kind são obrigatórios' },
+  'rename-fields': { en: 'id, from and to are required', pt: 'id, from e to são obrigatórios' },
+}
+
+const badRequest = (kind: BadRequestKind, lang: CliLang): Response =>
+  json({ ok: false, reason: 'bad_request', message: BAD_REQUEST[kind][lang] }, 400)
 
 /** `null` when the path is not ours, so `index.ts` falls through to its next route. */
 export async function handleEditorTreeRoute(
@@ -79,17 +120,19 @@ export async function handleEditorTreeRoute(
 
   if (pathname === '/api/fleet/tree' && req.method === 'GET') {
     const id = url.searchParams.get('id')
-    if (!id) return json({ ok: false, reason: 'bad_request', message: 'id is required' }, 400)
+    if (!id) return badRequest('id', lang)
     const dir = await resolveSessionDirectory(host, id)
     if (!dir.ok) return json({ ok: false, reason: dir.reason, message: sentence(dir.reason, lang) }, 404)
     const listed = await listChildren(dir.dir, url.searchParams.get('path') ?? '')
-    if (!listed.ok) return json({ ok: false, reason: listed.reason, message: sentence(listed.reason, lang) }, 404)
+    if (!listed.ok) {
+      return json({ ok: false, reason: listed.reason, message: sentence(listed.reason, lang) }, statusFor(listed.reason))
+    }
     return json({ ok: true, children: listed.children })
   }
 
   if (pathname === '/api/fleet/tree/search' && req.method === 'GET') {
     const id = url.searchParams.get('id')
-    if (!id) return json({ ok: false, reason: 'bad_request', message: 'id is required' }, 400)
+    if (!id) return badRequest('id', lang)
     const dir = await resolveSessionDirectory(host, id)
     if (!dir.ok) return json({ ok: false, reason: dir.reason, message: sentence(dir.reason, lang) }, 404)
     const result = await searchTree(dir.dir, url.searchParams.get('q') ?? '')
@@ -99,65 +142,70 @@ export async function handleEditorTreeRoute(
   if (pathname === '/api/fleet/tree/file' && req.method === 'GET') {
     const id = url.searchParams.get('id')
     const path = url.searchParams.get('path')
-    if (!id || path === null) return json({ ok: false, reason: 'bad_request', message: 'id and path are required' }, 400)
+    if (!id || path === null) return badRequest('id-and-path', lang)
     const dir = await resolveSessionDirectory(host, id)
     if (!dir.ok) return json({ ok: false, reason: dir.reason, message: sentence(dir.reason, lang) }, 404)
     const file = await readTreeFile(dir.dir, path)
-    if (!file.ok) return json({ ok: false, reason: file.reason, message: sentence(file.reason, lang) }, 404)
+    if (!file.ok) {
+      return json({ ok: false, reason: file.reason, message: sentence(file.reason, lang) }, statusFor(file.reason))
+    }
     return json(file)
   }
 
   if (pathname === '/api/fleet/tree/file' && req.method === 'PUT') {
     const id = url.searchParams.get('id')
     const path = url.searchParams.get('path')
-    if (!id || path === null) return json({ ok: false, reason: 'bad_request', message: 'id and path are required' }, 400)
+    if (!id || path === null) return badRequest('id-and-path', lang)
     const body = await req.json().catch(() => null) as { content?: string; mtimeMs?: number } | null
     if (!body || typeof body.content !== 'string' || typeof body.mtimeMs !== 'number') {
-      return json({ ok: false, reason: 'bad_request', message: 'content and mtimeMs are required' }, 400)
+      return badRequest('file-body', lang)
     }
     const dir = await resolveSessionDirectory(host, id)
     if (!dir.ok) return json({ ok: false, reason: dir.reason, message: sentence(dir.reason, lang) }, 404)
     const out = await writeTreeFile(dir.dir, path, body.content, body.mtimeMs)
-    if (!out.ok) {
-      const status = out.reason === 'conflict' ? 409 : 404
-      return json({ ...out, message: sentence(out.reason, lang) }, status)
-    }
+    if (!out.ok) return json({ ...out, message: sentence(out.reason, lang) }, statusFor(out.reason))
     return json(out)
   }
 
   if (pathname === '/api/fleet/tree/entry' && req.method === 'POST') {
     const body = await req.json().catch(() => null) as { id?: string; path?: string; kind?: string } | null
     if (!body?.id || !body.path || (body.kind !== 'file' && body.kind !== 'dir')) {
-      return json({ ok: false, reason: 'bad_request', message: 'id, path and kind are required' }, 400)
+      return badRequest('entry-fields', lang)
     }
     const dir = await resolveSessionDirectory(host, body.id)
     if (!dir.ok) return json({ ok: false, reason: dir.reason, message: sentence(dir.reason, lang) }, 404)
     const out = await createTreeEntry(dir.dir, body.path, body.kind)
-    if (!out.ok) return json({ ok: false, reason: out.reason, message: sentence(out.reason, lang) }, 409)
+    if (!out.ok) {
+      return json({ ok: false, reason: out.reason, message: sentence(out.reason, lang) }, statusFor(out.reason))
+    }
     return json(out)
   }
 
   if (pathname === '/api/fleet/tree/entry' && req.method === 'PATCH') {
     const body = await req.json().catch(() => null) as { id?: string; from?: string; to?: string } | null
     if (!body?.id || !body.from || !body.to) {
-      return json({ ok: false, reason: 'bad_request', message: 'id, from and to are required' }, 400)
+      return badRequest('rename-fields', lang)
     }
     const dir = await resolveSessionDirectory(host, body.id)
     if (!dir.ok) return json({ ok: false, reason: dir.reason, message: sentence(dir.reason, lang) }, 404)
     const out = await renameTreeEntry(dir.dir, body.from, body.to)
-    if (!out.ok) return json({ ok: false, reason: out.reason, message: sentence(out.reason, lang) }, 409)
+    if (!out.ok) {
+      return json({ ok: false, reason: out.reason, message: sentence(out.reason, lang) }, statusFor(out.reason))
+    }
     return json(out)
   }
 
   if (pathname === '/api/fleet/tree/entry' && req.method === 'DELETE') {
     const id = url.searchParams.get('id')
     const path = url.searchParams.get('path')
-    if (!id || path === null) return json({ ok: false, reason: 'bad_request', message: 'id and path are required' }, 400)
+    if (!id || path === null) return badRequest('id-and-path', lang)
     const dir = await resolveSessionDirectory(host, id)
     if (!dir.ok) return json({ ok: false, reason: dir.reason, message: sentence(dir.reason, lang) }, 404)
     const recursive = url.searchParams.get('recursive') === '1'
     const out = await deleteTreeEntry(dir.dir, path, recursive)
-    if (!out.ok) return json({ ok: false, reason: out.reason, message: sentence(out.reason, lang) }, 409)
+    if (!out.ok) {
+      return json({ ok: false, reason: out.reason, message: sentence(out.reason, lang) }, statusFor(out.reason))
+    }
     return json(out)
   }
 
