@@ -52,7 +52,10 @@ async function readLocalLiveSnapshot(sessions: SessionMeta[]): Promise<{
     const { getLiveSnapshot } = await import('./live-sessions')
     return await getLiveSnapshot(sessions)
   } catch {
-    return { liveSessionIds: [], liveProcesses: [], liveUnavailable: 'no-proc' }
+    // getLiveSnapshot/scanProcesses are designed never to throw — this is a defensive backstop,
+    // and its reason should still name the platform's own mechanism rather than assume Linux.
+    const reason = process.platform === 'darwin' ? 'no-ps' : 'no-proc'
+    return { liveSessionIds: [], liveProcesses: [], liveUnavailable: reason }
   }
 }
 import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
