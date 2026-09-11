@@ -300,6 +300,12 @@ function sanitizeSubtask(raw: unknown): Subtask | null {
     ...(str(t.startDate) ? { startDate: str(t.startDate)! } : {}),
     ...(str(t.sessionId) ? { sessionId: str(t.sessionId)! } : {}),
     ...(str(t.notes) ? { notes: str(t.notes)! } : {}),
+    // The rollup group (spec 2026-09-11-alm-session-linking-ux.md §B.5). It has to be carried here
+    // or the write is a no-op: `patchSubtask` stamps it, the next `read()` drops it, and the group
+    // that `subtaskViews` buckets on never exists. A blank one is read as ABSENT rather than kept,
+    // for the same reason `patchSubtask` refuses to write one — `groupId ?? id` lets `''` through,
+    // and every subtask carrying it would collapse into one bucket.
+    ...(str(t.groupId) ? { groupId: str(t.groupId)! } : {}),
   }
 }
 
