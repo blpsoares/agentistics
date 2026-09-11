@@ -59,6 +59,7 @@ import { AUTH_PUBLIC, isAdminPath, MFA_EXEMPT } from './index-routes'
 import { CAPS, PROFILE } from './exposure'
 import { chatAllowed } from './chat-gate'
 import { shellAllowed } from './sessions/shell-gate'
+import { editorAllowed } from './sessions/editor-gate'
 import { limiter, RULES, rateRuleFor, tooManyRequests } from './rate-limit'
 import { resolveClientIp } from './client-ip'
 import { corsHeadersFor } from './cors'
@@ -1545,6 +1546,26 @@ async function handleRequestInner(req: Request, server: Server<WSData>): Promise
           status: 404,
           headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
         })
+      }
+    }
+
+    // THE REPOSITORY EXPLORER. Same shape as the utility shell's own gate a few lines up: two
+    // gates, enforced HERE and not only in the UI, because these routes read and write arbitrary
+    // files on the host — a hidden tab is not a closed door.
+    if (url.pathname === '/api/fleet/tree' || url.pathname.startsWith('/api/fleet/tree/')) {
+      if (!editorAllowed(CAPS.localShell, (await readPreferences()).editorEnabled)) {
+        return new Response(JSON.stringify({ error: 'editor_disabled' }), {
+          status: 403,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        })
+      }
+      const { handleEditorTreeRoute } = await import('./sessions/editor-web')
+      const { hostForFleet, fleetLang } = await import('./sessions/fleet-web')
+      const editorLang = fleetLang(url.searchParams.get('lang'))
+      const res = await handleEditorTreeRoute(req, url, await hostForFleet(editorLang), editorLang)
+      if (res) {
+        for (const [k, v] of Object.entries(CORS_HEADERS)) res.headers.set(k, v)
+        return res
       }
     }
 
