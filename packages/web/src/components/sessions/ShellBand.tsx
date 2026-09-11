@@ -46,6 +46,9 @@ import {
 import { useDocumentVisible } from '../../hooks/useDocumentVisible'
 import { keyStripShown } from '../../lib/terminalSurface'
 import {
+  TERMINAL_TARGETS, readTarget, targetLabel, targetScope, targetStreamId, type TerminalTarget,
+} from '../../lib/terminalTarget'
+import {
   atCap, ceilingRows, ceilingTitle, type CeilingRow, type CeilingShell,
 } from '../../lib/shellCeiling'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -79,6 +82,8 @@ interface T {
   retry: string
   fullscreen: string
   endThis: string
+  whichTerminal: string
+  openTerminal: string
 }
 
 const TXT: Record<'pt' | 'en', T> = {
@@ -97,6 +102,8 @@ const TXT: Record<'pt' | 'en', T> = {
     retry: 'Try again',
     fullscreen: 'Open the shell full screen',
     endThis: 'End this terminal',
+    whichTerminal: 'Which terminal',
+    openTerminal: 'Open a terminal',
   },
   pt: {
     title: 'Shell',
@@ -113,6 +120,8 @@ const TXT: Record<'pt' | 'en', T> = {
     retry: 'Tentar de novo',
     fullscreen: 'Abrir o shell em tela cheia',
     endThis: 'Encerrar este terminal',
+    whichTerminal: 'Qual terminal',
+    openTerminal: 'Abrir um terminal',
   },
 }
 
@@ -123,6 +132,10 @@ export interface ShellBandProps {
   cwd?: string
   lang: 'pt' | 'en'
   theme: 'dark' | 'light'
+  /** The harness running in this session, so the CLI target is named after what is on its screen
+   *  (`Claude Code`) rather than after a concept ("Assistente"). Absent, or one this build has no
+   *  label for, falls back to words — never to a blank segment. */
+  harness?: string
   /**
    * WHERE this shell is drawn. `docked` is the band under the composer — the placement whose whole
    * point is SIMULTANEITY, reading the conversation while a build runs beside it. `dedicated` is
@@ -137,13 +150,20 @@ export interface ShellBandProps {
   onOpenFullscreen?: () => void
 }
 
-export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', onOpenFullscreen }: ShellBandProps) {
+export function ShellBand({ sessionId, cwd, lang, theme, harness, placement = 'docked', onOpenFullscreen }: ShellBandProps) {
   const t = TXT[lang]
   const isMobile = useIsMobile()
   const documentVisible = useDocumentVisible()
 
   const dedicated = placement === 'dedicated'
   const [prefs, setPrefs] = useState(() => readBandPrefs())
+  /**
+   * WHICH terminal this band is showing. It is the band's own state and not the session's, because
+   * the band is now the door to BOTH panes: the header's `Conversa | Terminal` toggle is gone, a
+   * session opens on its conversation, and choosing a terminal is choosing which one.
+   */
+  const [target, setTarget] = useState<TerminalTarget>(() => readTarget(readBandPrefs().target))
+  const scope = targetScope(target)
   // A DEDICATED shell is open by definition — you navigated to a screen that is nothing else. The
   // stored `open` is the DOCKED band's state and must not decide it, or arriving here with the band
   // collapsed would show an empty screen with no way to fill it.
@@ -156,6 +176,12 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
   /** The open shells, fetched ONLY when the ceiling refuses — see `shellCeiling.ts`. */
   const [ceiling, setCeiling] = useState<{ rows: CeilingRow[]; cap: number } | null>(null)
   const [ctrlNote, setCtrlNote] = useState<string | null>(null)
+
+  /** Choosing a terminal is remembered, so the band comes back on the one you were using. */
+  const chooseTarget = useCallback((next: TerminalTarget) => {
+    setTarget(next)
+    try { writeBandPrefs({ ...readBandPrefs(), target: next }) } catch { /* storage blocked */ }
+  }, [])
 
   const setBand = useCallback((next: Partial<{ open: boolean; height: number }>) => {
     setPrefs(p => {
@@ -181,7 +207,9 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
   // DEPENDS ON `band.attempt` AND NOT ON `band`. The effect dispatches, and an effect that depends
   // on what it dispatches cancels its own request on the very next render — the loop that made this
   // band spin on "Abrindo…". `attempt` moves only when a PERSON opens or retries.
-  const wanted = shellResolveWanted(band)
+  // Only the SHELL has to be resolved: the CLI pane IS the session and is already there. Asking
+  // for one while the band is showing the other would mint a shell nobody opened.
+  const wanted = shellResolveWanted(band) && target === 'shell'
   const wantedRef = useRef(wanted)
   wantedRef.current = wanted
   useEffect(() => {
@@ -222,7 +250,11 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
     // An abandoned attempt is NOT a failure and NOT a silence: it returns to `wanted`, so the next
     // render asks again instead of leaving a spinner over nothing.
     return () => { cancelled = true; dispatch({ type: 'cancelled' }) }
-  }, [band.attempt, sessionId, lang])
+    // `target` IS a dependency, and leaving it out was a measured bug: a band opened on the CLI
+    // pane skips the resolve, and switching to the shell moved nothing the effect watches — so the
+    // request that had been skipped was never made and the shell never appeared. It is safe to
+    // depend on because a PERSON moves it, unlike the dispatches this effect makes itself.
+  }, [band.attempt, sessionId, lang, target])
 
   /**
    * THE CEILING IS THE ONE REFUSAL A PERSON CAN ACT ON, and until now it was the one with no
@@ -260,18 +292,21 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
     sessionSelected: Boolean(sessionId),
     documentVisible,
   })
+  /** The pane this band is watching: the session itself, or the shell it opened. `null` while a
+   *  shell has not been resolved yet, which is what keeps the stream from asking for a blank. */
+  const streamId = targetStreamId(target, { sessionId, shellId: shell?.id ?? null })
   // `null` is what DROPS the subscription — the client half of the unwatch discipline.
   // The remembered geometry rides the OPEN, so the pane is already this box's size on the first
   // frame instead of arriving at whatever width the last viewer left it — see `shellBand.ts`.
-  const { state } = useTerminalStream(watching && shell ? shell.id : null, 'shell', bandGeometry(placement))
-  const write = useTerminalWrite(shell?.id ?? '', watching && Boolean(shell), lang, 'shell')
-  // `'shell'`: the honesty line must say whose screen this is. The default subject calls it "the
-  // agent's current screen", which over a shell the person opened themselves is simply false.
-  const status = terminalStatus(state, lang, 'shell')
+  const { state } = useTerminalStream(watching ? streamId : null, scope, bandGeometry(placement))
+  const write = useTerminalWrite(streamId ?? '', watching && Boolean(streamId), lang, scope)
+  // The honesty line must say WHOSE screen this is: "the agent's current screen" over a shell the
+  // person opened themselves is simply false, and the reverse is just as wrong.
+  const status = terminalStatus(state, lang, target === 'shell' ? 'shell' : 'session')
   /** A shell follows its box in BOTH directions — nothing in this product reads its screen. */
   const resizer = useMemo(
-    () => createPaneResizer({ scope: 'shell', id: shell?.id ?? '' }),
-    [shell?.id],
+    () => createPaneResizer({ scope, id: streamId ?? '' }),
+    [scope, streamId],
   )
   useEffect(() => () => resizer.cancel(), [resizer])
   /**
@@ -351,6 +386,41 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
     }
   }, [isMobile, setBand])
 
+  /**
+   * THE ONE CONTROL THAT PICKS A TERMINAL. It replaced the header's `Conversa | Terminal` toggle —
+   * a session opens on its conversation, and this band is the door to both panes. The CLI segment
+   * is named after the HARNESS, so it names what is on the screen instead of a concept.
+   */
+  const targetSwitch = (
+    <div role="tablist" aria-label={t.whichTerminal} style={{
+      display: 'flex', gap: 3, padding: 3, borderRadius: 8, flexShrink: 0,
+      background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+    }}>
+      {TERMINAL_TARGETS.map(id => {
+        const on = target === id
+        return (
+          <button
+            key={id}
+            role="tab"
+            aria-selected={on}
+            onClick={e => { e.stopPropagation(); chooseTarget(id) }}
+            style={{
+              // 44px is the MOBILE figure; on a pointer it would turn a segmented control into a
+              // row of buttons.
+              minHeight: isMobile ? 44 : 22, padding: isMobile ? '0 14px' : '0 9px',
+              borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+              fontSize: 11, fontWeight: 650, border: 'none', whiteSpace: 'nowrap',
+              background: on ? 'var(--bg-surface)' : 'transparent',
+              color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
+            }}
+          >
+            {targetLabel(id, harness, lang)}
+          </button>
+        )
+      })}
+    </div>
+  )
+
   const where = shellWhere(cwd)
 
   const screen = (
@@ -364,13 +434,13 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
       </div>}>
         {/* key={shell.id}: a new shell gets a brand-new emulator, so no content leaks across. */}
         <SessionTerminal
-          key={shell?.id ?? 'none'}
+          key={streamId ?? 'none'}
           frame={state.frame}
           theme={theme}
           showCursor={status.showCursor}
           interactive={write.ready}
           onInput={send}
-          onGeometry={shell ? onGeometry : undefined}
+          onGeometry={streamId ? onGeometry : undefined}
         />
       </Suspense>
     </div>
@@ -416,7 +486,7 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
    * does not separate them — a repository's shells all sit in the same one) and carries the handle,
    * so two rows that still read alike are told apart by something.
    */
-  const ceilingList = ceiling && atCap(band.reason) ? (
+  const ceilingList = ceiling && atCap(band.reason) && target === 'shell' ? (
     <div style={{
       flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 6,
       maxHeight: isMobile ? 260 : 180, overflowY: 'auto',
@@ -498,7 +568,7 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
       <div style={{
         flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8,
       }}>
-        {shell ? screen : <div style={{ flex: 1 }} />}
+        {streamId ? screen : <div style={{ flex: 1 }} />}
         {notice}
         {ceilingList}
         {keyStripShown('dedicated', isMobile) && strip}
@@ -509,28 +579,33 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
   // ---- mobile: a full-screen sheet over the session --------------------------------------------
   if (isMobile) {
     if (!prefs.open) {
+      // The door to BOTH terminals, named. It is two buttons and not one bar plus a hidden state:
+      // on a phone the band IS the only way to a terminal now that the header toggle is gone.
       return (
-        <button
-          onClick={() => setBand({ open: true })}
-          aria-expanded={false}
-          // The desktop bar has carried this since phase 2 and the phone's had nothing: a screen
-          // reader met a button whose whole content was an icon, the word "Shell" and a path.
-          aria-label={t.toggleBar}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-            minHeight: 44, padding: '0 12px', flexShrink: 0,
-            borderTop: '1px solid var(--border)', border: 'none',
-            background: 'var(--bg-surface)', color: 'var(--text-secondary)',
-            fontFamily: 'inherit', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-          }}
-        >
-          <TerminalSquare size={16} />
-          <span>{t.title}</span>
-          {where && <span style={{
-            minWidth: 0, flex: 1, textAlign: 'right', fontSize: 11, color: 'var(--text-tertiary)',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>{where}</span>}
-        </button>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+          minHeight: 44, padding: '0 12px', flexShrink: 0,
+          borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
+        }}>
+          <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex', flexShrink: 0 }}>
+            <TerminalSquare size={16} />
+          </span>
+          {TERMINAL_TARGETS.map(id => (
+            <button
+              key={id}
+              onClick={() => { chooseTarget(id); setBand({ open: true }) }}
+              aria-label={`${t.openTerminal} — ${targetLabel(id, harness, lang)}`}
+              style={{
+                minHeight: 44, padding: '0 14px', borderRadius: 8, cursor: 'pointer',
+                fontFamily: 'inherit', fontSize: 13, fontWeight: 650, whiteSpace: 'nowrap',
+                border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              {targetLabel(id, harness, lang)}
+            </button>
+          ))}
+        </div>
       )
     }
     return (
@@ -556,13 +631,15 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
             <ChevronLeft size={20} />
           </button>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 650, color: 'var(--text-primary)' }}>{t.title}</div>
+            <div style={{ fontSize: 13, fontWeight: 650, color: 'var(--text-primary)' }}>
+              {targetLabel(target, harness, lang)}
+            </div>
             {where && <div style={{
               fontSize: 10.5, color: 'var(--text-tertiary)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>{where}</div>}
           </div>
-          {shell && (
+          {shell && target === 'shell' && (
             <button
               onClick={() => { void close() }}
               aria-label={t.close}
@@ -579,7 +656,8 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
         <div style={{
           flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 10,
         }}>
-          {shell ? screen : <div style={{ flex: 1 }} />}
+          {targetSwitch}
+          {streamId ? screen : <div style={{ flex: 1 }} />}
           {notice}
           {ceilingList}
           {strip}
@@ -633,20 +711,45 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
         }}
       >
         <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex' }}><TerminalSquare size={14} /></span>
-        <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)' }}>
-          {t.title.toUpperCase()}
-        </span>
+        {/* COLLAPSED, the bar is the door to BOTH terminals, so it offers both by name rather than
+            calling itself "SHELL" and hiding the other one behind a state nobody can see. Open, the
+            switch above says which you are in. */}
+        {prefs.open ? (
+          <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)' }}>
+            {targetLabel(target, harness, lang).toUpperCase()}
+          </span>
+        ) : (
+          <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+            {TERMINAL_TARGETS.map(id => (
+              <button
+                key={id}
+                onClick={e => { e.stopPropagation(); chooseTarget(id); setBand({ open: true }) }}
+                aria-label={`${t.openTerminal} — ${targetLabel(id, harness, lang)}`}
+                style={{
+                  minHeight: isMobile ? 44 : 22, padding: isMobile ? '0 14px' : '0 9px',
+                  borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 11, fontWeight: 650, whiteSpace: 'nowrap',
+                  border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                {targetLabel(id, harness, lang)}
+              </button>
+            ))}
+          </span>
+        )}
         {where && <span style={{
           minWidth: 0, flex: 1, fontSize: 11, color: 'var(--text-tertiary)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{where}</span>}
         {!where && <span style={{ flex: 1 }} />}
+        {prefs.open && targetSwitch}
         {busy && <Loader2 size={13} className="ag-spin" style={{ color: 'var(--text-tertiary)' }} />}
         {/* TAKE THE WHOLE SCREEN. Offered only with a shell open and somewhere to go, so the bar of
             a band nobody has opened carries nothing that cannot act. It is the only way to the
             shell's own screen — the route has accepted `?pane=shell` since phase 3b and nothing
             linked there. */}
-        {prefs.open && shell && onOpenFullscreen && (
+        {prefs.open && streamId && onOpenFullscreen && (
           <button className="ag-tap-icon"
             onClick={e => { e.stopPropagation(); onOpenFullscreen() }}
             title={t.fullscreen}
@@ -656,7 +759,9 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
             <Maximize2 size={13} />
           </button>
         )}
-        {prefs.open && shell && (
+        {/* A shell is something the person OPENED and can end; the CLI pane is the session itself
+            and ending it here would be a kill button wearing a wastebasket. */}
+        {prefs.open && shell && target === 'shell' && (
           <button className="ag-tap-icon"
             /* A TRASH CAN, not an ✕. The ✕ read as "close this panel" next to a chevron that
                actually closes the panel, and this one KILLS the shell — a different, irreversible
@@ -683,7 +788,7 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
           height: Math.max(BAND_MIN_PX, prefs.height),
           display: 'flex', flexDirection: 'column', gap: 6, padding: '0 12px 10px',
         }}>
-          {shell ? screen : <div style={{ flex: 1 }} />}
+          {streamId ? screen : <div style={{ flex: 1 }} />}
           {notice}
           {ceilingList}
         </div>
