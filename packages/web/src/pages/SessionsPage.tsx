@@ -54,6 +54,7 @@ import {
 } from '../lib/sessionRoute'
 import { dedicatedTerminalPath, readTerminalPane } from '../lib/terminalSurface'
 import { ShellBand } from '../components/sessions/ShellBand'
+import { targetLabel } from '../lib/terminalTarget'
 import { TerminalRegion } from '../components/RecentSessions'
 import { sessionPlanFactor } from '../lib/costBasis'
 
@@ -744,9 +745,14 @@ export default function SessionsPage() {
             }}>
               {(['assistant', 'shell'] as const).map(target => {
                 const on = dedicatedPane === target
-                const label = target === 'assistant'
-                  ? (pt ? 'Assistente' : 'Assistant')
-                  : 'Shell'
+                // ONE VOCABULARY. The band and this screen ask the same question, so they may not
+                // word it differently — and the CLI segment is named after the harness on the
+                // screen rather than after a concept.
+                const label = targetLabel(
+                  target === 'assistant' ? 'cli' : 'shell',
+                  selected.harness,
+                  pt ? 'pt' : 'en',
+                )
                 return (
                   <button
                     key={target}
@@ -789,6 +795,7 @@ export default function SessionsPage() {
               {...(selected.cwd ? { cwd: selected.cwd } : {})}
               lang={pt ? 'pt' : 'en'}
               theme={theme === 'light' ? 'light' : 'dark'}
+              {...(selected.harness ? { harness: selected.harness } : {})}
             />
           ) : (
             <TerminalRegion
