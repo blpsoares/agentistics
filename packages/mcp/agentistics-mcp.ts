@@ -359,7 +359,7 @@ const TOOLS: Tool[] = [
   {
     name: "agentistics_task_session",
     description:
-      "BETA — the task board is new and still changing; its shapes may move between releases. File a SESSION under a SUBTASK of a task, which is what makes the task measurable: its cost, tokens, rounds and harness all come from the sessions filed under its parts. **A session is NEVER filed under a task directly — always name a `subtaskId`.** A task is the unit of DELIVERY and a subtask is the unit of WORK; filing at both levels made 'does this cost include the subtasks' unanswerable, so the server refuses it. Use agentistics_task to read the subtasks, or agentistics_task_subtask to create one, then pass `ref` + `sessionId` (a managed session id or conversation id) + `subtaskId`. Pass `detach` with a session id to unfile one. The task inherits the session's repository when it has none.",
+      "BETA — the task board is new and still changing; its shapes may move between releases. File a SESSION under a task, which is what makes the task measurable: its cost, tokens, rounds and harness all come from the sessions filed under it. Pass `subtaskId` to file it under one of the task's subtasks (the unit of WORK, for a task broken into steps); omit it to file the session directly on the task itself (the unit of DELIVERY, for a task simple enough not to need subtasks). Both can be used on the same task — some sessions direct, some under subtasks — and each subtask's own rollup plus the directly-filed sessions' own rollup are both readable via agentistics_task's `subtaskRollups` (keyed by subtask id, with `id: null` for the direct ones), so the breakdown never disappears. Use agentistics_task to read the subtasks, or agentistics_task_subtask to create one, then pass `ref` + `sessionId` (a managed session id or conversation id) + optionally `subtaskId`. Pass `detach` with a session id to unfile one. The task inherits the session's repository when it has none.",
     inputSchema: {
       type: "object",
       properties: {
@@ -368,7 +368,7 @@ const TOOLS: Tool[] = [
         subtaskId: {
           type: "string",
           description:
-            "The subtask to file it under. REQUIRED to file — a task does not take sessions itself.",
+            "The subtask to file it under. Optional — omit to file the session directly on the task itself.",
         },
         detach: { type: "string" },
       },
@@ -730,24 +730,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }] };
         }
         const ref = encodeURIComponent(String(a?.ref ?? ""));
-        // REFUSED HERE, in a sentence, rather than by the server's bare `{ok:false}`. The rule is
-        // the server's (`task-attach.ts`) and this is not a second copy of it — it is the same
-        // refusal said in words the caller can act on, naming the two calls that get it unstuck.
-        // A tool that answers "false" to a reasonable request teaches a retry loop.
-        if (!a?.subtaskId) {
-          return {
-            content: [{
-              type: "text",
-              text: "A session is filed under a SUBTASK, never under the delivery itself — a task is the "
-                + "unit of delivery, a subtask the unit of work. Read the parts with agentistics_task, or "
-                + "create one with agentistics_task_subtask, then call this again with `subtaskId`.",
-            }],
-            isError: true,
-          };
-        }
+        // `subtaskId` is optional: omitted, the server (`task-attach.ts`) files the session
+        // directly on the task; named, it files under that subtask. Either way the server decides
+        // and refuses what it must (unknown task/subtask, a still-blocked subtask) — this is not a
+        // second copy of that rule, just the pass-through.
         const body = await apiSend("POST", `/api/tasks/${ref}/sessions`, {
           sessionId: a?.sessionId,
-          subtaskId: a.subtaskId,
+          ...(a?.subtaskId ? { subtaskId: a.subtaskId } : {}),
         });
         return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }] };
       }

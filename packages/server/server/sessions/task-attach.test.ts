@@ -9,16 +9,27 @@ const SUBS = [
 const TASKS = ['t1', 't2']
 
 describe('planAttach', () => {
-  it('REFUSES a delivery as a target — a delivery does not take sessions', () => {
-    // The delivery is the container; the subtask is the work. Allowing both left "does this cost
-    // include the subtasks" without an answer.
+  it('files directly under a delivery — the "not broken out" branch has its own bucket now', () => {
+    // See docs/superpowers/specs/2026-09-10-task-session-hierarchy-design.md §4.1/§4.2: the
+    // task-level total already summed direct rows regardless of subtaskId, and the per-subtask
+    // rollup gives the un-broken-out part its own answerable bucket (subtaskId: null) instead of
+    // an unaccounted-for gap.
     expect(planAttach({ target: { kind: 'task', id: 't1' }, taskIds: TASKS, subtasks: SUBS }))
-      .toEqual({ ok: false, reason: 'needs_subtask' })
+      .toEqual({ ok: true, taskId: 't1', subtaskId: null })
   })
 
   it('still refuses a delivery that does not exist, before anything else', () => {
     expect(planAttach({ target: { kind: 'task', id: 'gone' }, taskIds: TASKS, subtasks: SUBS }))
       .toEqual({ ok: false, reason: 'no_such_task' })
+  })
+
+  it('files directly under a delivery that ALREADY has subtasks — the two branches coexist (#3)', () => {
+    // A task is never forced into one shape: direct sessions and subtask-filed ones can both
+    // exist on the same delivery, and neither blocks the other.
+    expect(planAttach({ target: { kind: 'task', id: 't1' }, taskIds: TASKS, subtasks: SUBS }))
+      .toEqual({ ok: true, taskId: 't1', subtaskId: null })
+    expect(planAttach({ target: { kind: 'subtask', id: 's1' }, taskIds: TASKS, subtasks: SUBS }))
+      .toEqual({ ok: true, taskId: 't1', subtaskId: 's1' })
   })
 
   it('files under a subtask, and takes the parent FROM the subtask', () => {
