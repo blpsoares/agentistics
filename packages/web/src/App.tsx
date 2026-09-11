@@ -103,6 +103,7 @@ import { PAGE_INSET, PAGE_MAX_WIDTH } from './components/sessions/FleetOverview'
 import { setFleetSourceCentral } from './lib/fleet'
 import { reopenedSessionRoute, sessionPath } from './lib/sessionRoute'
 import { SessionStatsMenu } from './components/sessions/SessionStatsMenu'
+import { SessionTitleFlag } from './components/sessions/SessionTitleFlag'
 
 /**
  * What the SESSIONS filter bar may filter by — narrower than the dashboard's on purpose: a fleet
@@ -1899,7 +1900,7 @@ export default function AppLayout() {
   // A CENTRAL's fleet is the RELAY's, for the machine the aside's picker chose. Set once, here,
   // because the poller is module-scoped and every surface reads the same snapshot.
   useEffect(() => { setFleetSourceCentral(isCentral) }, [isCentral])
-  const { fleet: headerFleet, act: headerFleetAct, unsupported: headerFleetUnsupported } = useFleet(lang === 'pt' ? 'pt' : 'en')
+  const { fleet: headerFleet, act: headerFleetAct, unsupported: headerFleetUnsupported, refresh: headerFleetRefresh } = useFleet(lang === 'pt' ? 'pt' : 'en')
   /**
    * "Active only" needs a fleet to intersect against, on EITHER page. An exposed profile with no
    * host power, or a central with no machine chosen, both report `unsupported` here — offering the
@@ -3060,6 +3061,15 @@ export default function AppLayout() {
           }}>
             {selectedFleetSession.title}
           </span>
+          <SessionTitleFlag
+            session={{
+              id: selectedFleetSession.id, title: selectedFleetSession.title,
+              ...(selectedFleetSession.harness ? { harness: selectedFleetSession.harness } : {}),
+              ...(selectedFleetSession.task ? { task: selectedFleetSession.task } : {}),
+            }}
+            lang={lang === 'pt' ? 'pt' : 'en'}
+            onLinked={headerFleetRefresh}
+          />
           {/* Gives up before the title does: the name is what identifies the session, and the state
               is repeated on its own row in the aside two centimetres away. */}
           <span style={{
