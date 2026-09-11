@@ -7,7 +7,6 @@ set -euo pipefail
 
 REPO="blpsoares/agentistics"
 BINARY="agentop"
-RELEASE_URL="https://github.com/${REPO}/releases/latest/download/${BINARY}"
 
 # ── Determine install directory ────────────────────────────────────────────
 if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
@@ -30,11 +29,47 @@ if [[ "$ARCH" != "x86_64" ]]; then
   exit 1
 fi
 
+# ── libc: glibc vs musl ─────────────────────────────────────────────────────
+#
+# Two binaries are published: `agentop` (glibc) and `agentop-musl` (Alpine and other musl-based
+# distros — glibc's dynamic linker does not exist there, so the glibc binary fails with a bare
+# "not found" that names no missing library). `ldd --version` prints "musl libc" on a musl system
+# regardless of its own exit code (busybox's `ldd` does not fully support `--version`) — and this
+# script runs under `set -o pipefail`, under which the PIPELINE fails if ANY stage does, not only
+# the last, so ldd's own non-zero exit would sink the `if` even when grep matches. The `|| true`
+# neutralises that: only grep's result decides.
+IS_MUSL=0
+if (ldd --version 2>&1 || true) | grep -qi musl; then
+  IS_MUSL=1
+fi
+
+BINARY_ASSET="$BINARY"
+if [[ "$IS_MUSL" -eq 1 ]]; then
+  BINARY_ASSET="${BINARY}-musl"
+
+  # Bun's own runtime links libstdc++/libgcc even in its musl build, and Alpine's base image ships
+  # neither — without them the binary fails with "Error relocating ...: symbol not found" instead
+  # of running. `apk` is the only musl-distro package manager worth targeting here.
+  if command -v apk >/dev/null 2>&1; then
+    echo "musl libc detected — ensuring libstdc++/libgcc are present…"
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+      apk add --no-cache libstdc++ libgcc >/dev/null 2>&1 || true
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo apk add --no-cache libstdc++ libgcc >/dev/null 2>&1 || true
+    else
+      echo "  Not root and no sudo on PATH — if the binary fails to start, run:"
+      echo "    apk add libstdc++ libgcc"
+    fi
+  fi
+fi
+
+RELEASE_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_ASSET}"
+
 # ── Runtime dependency: tmux ────────────────────────────────────────────────
 #
-# agentop's session manager (`agentop session`, the cockpit's Sessions tab) is built on tmux —
-# there is no other backend (see packages/server/server/sessions/dependency-plan.ts, which the
-# already-installed binary uses to explain a MISSING tmux to someone who skipped this script or
+# agentop's session manager (`agentop session`, the cockpit's Sessions tab) is built entirely on
+# tmux — there is no other backend (see packages/server/server/sessions/dependency-plan.ts, which
+# the already-installed binary uses to explain a MISSING tmux to someone who skipped this script or
 # removed the package afterwards). Without it every session-related feature fails the moment it is
 # used, well after the install already reported success — a confusing place to first learn about a
 # missing dependency. So it is installed HERE, proactively, the same way any competent install
@@ -90,7 +125,7 @@ if ! command -v tmux >/dev/null 2>&1; then
 fi
 
 # ── Download ───────────────────────────────────────────────────────────────
-echo "Downloading ${BINARY} from ${RELEASE_URL} …"
+echo "Downloading ${BINARY_ASSET} from ${RELEASE_URL} …"
 mkdir -p "$INSTALL_DIR"
 curl -fsSL "$RELEASE_URL" -o "${INSTALL_DIR}/${BINARY}"
 chmod +x "${INSTALL_DIR}/${BINARY}"
