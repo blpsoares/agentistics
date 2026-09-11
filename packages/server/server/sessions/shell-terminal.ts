@@ -31,6 +31,9 @@ export interface ShellTerminal {
   sendKey(id: string, key: string): Promise<boolean>
 }
 
+/** The byte a terminal emits for ctrl+l. */
+const CLEAR_SCREEN = '\x0c'
+
 export function createShellTerminal(run: TmuxRun): ShellTerminal {
   return {
     async capture(id, lines) {
@@ -57,9 +60,14 @@ export function createShellTerminal(run: TmuxRun): ShellTerminal {
 
     async sendText(id, text) {
       const ok = (await run(sendKeysLiteralArgs(id, text, SHELL_SOCKET))).code === 0
-      if (ok && (text.trim() === 'clear' || text.includes('clear\r') || text.includes('clear\n') || text.includes('\x0c'))) {
-        await run(clearHistoryArgs(id, SHELL_SOCKET))
-      }
+      // A LONE form feed is the ctrl+l KEYSTROKE — xterm puts it on `onData`, so it arrives here as
+      // text rather than as a named key — and is treated exactly like `C-l` below. Nothing else is:
+      // matching the WORD `clear` inside a chunk was a guess about a PASTE (typing arrives one
+      // character at a time, so the word can never be assembled here), and it fired BEFORE the
+      // shell had run anything — throwing away scrollback the reader still had while leaving the
+      // screen exactly as it was. What makes a `clear` LOOK cleared is the viewport anchor in
+      // `web/src/lib/terminalScroll.ts`, which needs no guess and no tmux command.
+      if (ok && text === CLEAR_SCREEN) await run(clearHistoryArgs(id, SHELL_SOCKET))
       return ok
     },
 

@@ -100,3 +100,43 @@ describe('the writes report what actually happened', () => {
     expect(t.calls[1]).not.toContain('-l')
   })
 })
+
+describe('clearing the scrollback is a NAMED keystroke, never a guess about pasted text', () => {
+  const cleared = (calls: string[][]) => calls.some(a => a.includes('clear-history'))
+
+  test('the C-l key clears it', async () => {
+    const t = fakeTmux()
+    await createShellTerminal(t.run).sendKey('s1', 'C-l')
+    expect(cleared(t.calls)).toBe(true)
+  })
+
+  test('a lone form feed — what a physical ctrl+l puts on the wire — clears it too', async () => {
+    // xterm emits ctrl+l as `\x0c` through `onData`, so it arrives as TEXT and not as a named key.
+    const t = fakeTmux()
+    await createShellTerminal(t.run).sendText('s1', '\x0c')
+    expect(cleared(t.calls)).toBe(true)
+  })
+
+  test('the WORD `clear` does not, however it is pasted', async () => {
+    // Typing goes one character at a time, so this can only ever be a PASTE — and a paste is
+    // matched BEFORE the shell has run anything, so acting on it throws away the history the user
+    // still has while changing nothing about what is on screen.
+    for (const text of ['clear', ' clear ', 'echo hi; clear\n', 'clear\r']) {
+      const t = fakeTmux()
+      await createShellTerminal(t.run).sendText('s1', text)
+      expect(cleared(t.calls), JSON.stringify(text)).toBe(false)
+    }
+  })
+
+  test('a paste that merely CONTAINS a form feed is left alone', async () => {
+    const t = fakeTmux()
+    await createShellTerminal(t.run).sendText('s1', 'printf "a\x0cb"')
+    expect(cleared(t.calls)).toBe(false)
+  })
+
+  test('a send that failed clears nothing', async () => {
+    const t = fakeTmux({ 'send-keys': { code: 1, out: '', err: 'no such session' } })
+    await createShellTerminal(t.run).sendKey('s1', 'C-l')
+    expect(cleared(t.calls)).toBe(false)
+  })
+})

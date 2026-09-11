@@ -254,6 +254,59 @@ describe('readDialog — the two different empties', () => {
   })
 })
 
+describe('readDialog — a resolved dialog left sitting on screen', () => {
+  /**
+   * VERBATIM (index-for-index) from a live reproduction, codex 0.153.4, 2026-09-10: agentop's own
+   * `agentop session batch --harness codex` on a fresh directory, answered ("1. Yes, continue"),
+   * given one prompt, and read back a full 8s after the reply had already printed. This is what a
+   * first-time codex user hits on literally their first message — codex's directory-trust dialog is
+   * this exact numbered shape, and a short quiet session never pushes it out of `LAST_OPTION_LINES`
+   * on its own. Reported as "só aparecia a opção do terminal, o modo chat simplesmente não
+   * funcionou" — `attentionOf` read this frame as `waiting-approval` forever, which is what made
+   * `conversationBlind`'s sibling gate hide the chat tab down to terminal-only.
+   */
+  const RESOLVED_CODEX_TRUST_PROMPT = [
+    '› 1. Yes, continue',
+    '  2. No, quit',
+    '',
+    '  Press enter to continue',
+    '',
+    '',
+    '╭───────────────────────────────────────────────────╮',
+    '│ >_ OpenAI Codex (v0.153.4)                        │',
+    '│                                                   │',
+    '│ model:     gpt-5.6-luna medium   /model to change │',
+    '│ directory: /tmp/codex-chat-probe                  │',
+    '╰───────────────────────────────────────────────────╯',
+    '',
+    '  Tip: New For a limited time, Codex is included in your plan for free – let’s build together.',
+    '',
+    '',
+    '› diga apenas \'oi tudo bem\' e nada mais',
+    '',
+    '',
+    '⚠ Heads up, you have less than 10% of your monthly limit left. Run /status for a breakdown.',
+    '',
+    '• oi tudo bem',
+    '',
+    '',
+    '› Ask Codex to do anything',
+    '',
+    '  gpt-5.6-luna medium · /tmp/codex-chat-probe',
+  ]
+
+  it('reads as NO menu — the whole turn since answering it is real content, not a dialog', () => {
+    const out = readDialog(RESOLVED_CODEX_TRUST_PROMPT)
+    expect(out.kind).toBe('none')
+    expect(out.top).toBe(-1)
+  })
+
+  it('a genuinely still-open version of the same shape is unaffected', () => {
+    // Same anchor, nothing but its own footer beneath it — the legitimate case must still work.
+    expect(readDialog(RESOLVED_CODEX_TRUST_PROMPT.slice(0, 4)).kind).toBe('options')
+  })
+})
+
 describe('parseDialogOptions stays the thin reading', () => {
   it('agrees with readDialog on every fixture', () => {
     for (const f of [WRITE_PERMISSION, ASK_QUESTION, TALL_ASK]) {

@@ -473,3 +473,64 @@ describe('a QUEUED message pushes the dialog footer off the bottom', () => {
     ])).toBe('working')
   })
 })
+
+describe('a codex trust dialog that was already answered, and never scrolls away', () => {
+  const NOW3 = 1_700_000_000_000
+  const rules3 = rulesFor('codex')
+  const read3 = (frame: string[]) => attentionOf({
+    alive: true,
+    lastActivityMs: NOW3 - 30_000,
+    nowMs: NOW3,
+    frame,
+    frameDigest: 'same',
+    prevDigest: 'same',
+    rules: rules3,
+  })
+
+  /**
+   * VERBATIM, codex 0.153.4, from a live reproduction of the report "só aparecia a opção do
+   * terminal pra ele na conversa com o codex, o modo chat simplesmente não funcionou": a fresh
+   * `agentop session batch --harness codex` in a new directory hits codex's own trust-this-directory
+   * dialog on the FIRST message every time, `approval: [/Press enter to continue/]` matches its
+   * footer, the block is answered, and — because codex never clears the screen and a short quiet
+   * reply never pushes it past `LAST_OPTION_LINES` — the same "Press enter to continue" line was
+   * still being read 8s and a full completed turn later.
+   */
+  const ANSWERED_TRUST_PROMPT_THEN_A_WHOLE_TURN = [
+    '› 1. Yes, continue',
+    '  2. No, quit',
+    '',
+    '  Press enter to continue',
+    '',
+    '',
+    '╭───────────────────────────────────────────────────╮',
+    '│ >_ OpenAI Codex (v0.153.4)                        │',
+    '│                                                   │',
+    '│ model:     gpt-5.6-luna medium   /model to change │',
+    '│ directory: /tmp/codex-chat-probe                  │',
+    '╰───────────────────────────────────────────────────╯',
+    '',
+    '  Tip: New For a limited time, Codex is included in your plan for free – let’s build together.',
+    '',
+    '',
+    '› diga apenas \'oi tudo bem\' e nada mais',
+    '',
+    '',
+    '⚠ Heads up, you have less than 10% of your monthly limit left. Run /status for a breakdown.',
+    '',
+    '• oi tudo bem',
+    '',
+    '',
+    '› Ask Codex to do anything',
+    '',
+    '  gpt-5.6-luna medium · /tmp/codex-chat-probe',
+  ]
+
+  it('is NOT waiting-approval — the reply that followed it is proof it was answered', () => {
+    expect(read3(ANSWERED_TRUST_PROMPT_THEN_A_WHOLE_TURN)).not.toBe('waiting-approval')
+  })
+
+  it('the same dialog with nothing after it yet is still correctly blocked', () => {
+    expect(read3(ANSWERED_TRUST_PROMPT_THEN_A_WHOLE_TURN.slice(0, 4))).toBe('waiting-approval')
+  })
+})

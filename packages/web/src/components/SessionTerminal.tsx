@@ -26,6 +26,9 @@
  * so every shipped line lives on the grid and the fixed-height box scrolls through all of it (see
  * `paint`). Sizing it to the visible screen alone left the earlier lines in xterm's own scrollback,
  * which a per-frame `reset()` wiped — so scrolling up never reached the start of the conversation.
+ * WHERE that grid is scrolled to is `terminalScroll.ts`: the first row of the LIVE SCREEN, not the
+ * bottom of the grid. Pinning to the bottom opened a fresh shell below its own prompt and made
+ * `clear` look inert, because tmux keeps the history a `clear` never removes.
  *
  * Timing: `resize()` throws asynchronously inside xterm if it runs before the renderer has measured
  * its cell dimensions (an unmeasured `Viewport.syncScrollArea` reads `dimensions` off `undefined`),
@@ -40,6 +43,7 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { xtermTheme, type TerminalFrame } from '../lib/terminalStream'
 import { shortcutDecision } from '../lib/terminalShortcuts'
+import { terminalScrollTop, stillFollowing } from '../lib/terminalScroll'
 
 interface Props {
   frame: TerminalFrame | null
@@ -153,6 +157,12 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1, in
   onGeometryRef.current = onGeometry
   /** The last geometry REPORTED, so a steady stream of identical fits says nothing. */
   const reportedRef = useRef<{ cols: number; rows: number } | null>(null)
+  /** The `scrollTop` the last repaint anchored on — what "still watching the live screen" is
+   *  measured against. `terminalScroll.ts` holds the arithmetic and the why. */
+  const lastTopRef = useRef(0)
+  /** The LIVE SCREEN's row count from the last frame — the grid holds history above it. `fit` needs
+   *  it to leave the box exactly enough slack to scroll the screen's first row up to the top. */
+  const screenRowsRef = useRef(0)
 
   /**
    * Fit the natural cols×rows grid into the box by scaling the PIXELS — never by resizing the
@@ -191,7 +201,18 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1, in
     host.style.transform = `scale(${s})`
     host.style.transformOrigin = 'top left'
     scale.style.width = `${Math.ceil(natW * s)}px`
-    scale.style.height = `${Math.ceil(natH * s)}px`
+    // SLACK, so the live screen can reach the TOP of the box. The viewport is rarely a whole number
+    // of rows, so the anchor `terminalScroll.ts` computes is routinely one clamp away from being
+    // reachable and the screen's first row is drawn half-cut under the box's top edge. The grid is
+    // given exactly the leftover as empty tail — only when it already overflows, so a short capture
+    // never grows a scrollbar it does not need.
+    const shown = natH * s
+    const screenRows = screenRowsRef.current
+    const rowH = term.rows > 0 ? shown / term.rows : 0
+    const slack = shown > box.clientHeight && screenRows > 0 && rowH > 0
+      ? Math.max(0, box.clientHeight - screenRows * rowH)
+      : 0
+    scale.style.height = `${Math.ceil(shown + slack)}px`
 
     // WHAT THIS BOX COULD SHOW at natural size. Measured off the cell the renderer actually
     // reports — `naturalSize` divided by the current grid — never guessed from a font size.
@@ -227,11 +248,13 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1, in
     // EXACTLY `f.cols`, so nothing reflows — the fidelity fix is untouched. What is NOT in this 200
     // is disclosed by the status line's `truncated`; that ceiling is the server's, stated, not hidden.
     const bufRows = Math.max(f.rows, f.lines)
+    screenRowsRef.current = f.rows
 
-    // Stick-to-bottom: remember whether the reader was already at the live edge BEFORE the repaint,
-    // so a new frame follows the tail for someone watching live, but never yanks a reader who has
-    // scrolled up to read history. A small threshold absorbs sub-pixel rounding from the scale.
-    const wasAtBottom = !box || (box.scrollTop + box.clientHeight >= box.scrollHeight - 4)
+    // Follow the LIVE SCREEN, not the bottom of the grid — `terminalScroll.ts` carries the two
+    // defects that distinction fixes (a fresh shell opening past its own prompt, and a `clear` that
+    // looked like it did nothing). Read BEFORE the repaint: a reader who has scrolled up into the
+    // history is never yanked back.
+    const following = !box || stillFollowing(box.scrollTop, lastTopRef.current)
 
     // EXACTLY the pane's column count — the one width at which its lines do not reflow — with the row
     // count grown to the whole capture. Only when it CHANGED and the renderer has measured, so a
@@ -263,7 +286,17 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1, in
       // Re-fit AFTER the write settles — the grid's natural size is only final once the new geometry
       // has rendered — then re-pin to the live edge if that is where the reader was.
       fit()
-      if (wasAtBottom && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight
+      const b = boxRef.current
+      if (!b) return
+      const top = terminalScrollTop({
+        bufRows,
+        screenRows: f.rows,
+        cursorRow: f.cursor ? f.cursor.y : null,
+        scrollHeight: b.scrollHeight,
+        clientHeight: b.clientHeight,
+      })
+      lastTopRef.current = top
+      if (following) b.scrollTop = top
     })
   }
 
@@ -422,7 +455,9 @@ export default function SessionTerminal({ frame, theme, showCursor, zoom = 1, in
       // The box the parent sizes. At the default zoom the grid is fit to the box width, so it does
       // not scroll; zoomed in past the box it scrolls INSIDE here rather than pushing the page
       // sideways (the repo's responsive rule). The buffer is untouched, so scrolling never reflows.
-      style={{ width: '100%', height: '100%', overflow: 'auto' }}
+      // The terminal's own background, so a grid shorter than the box (a cleared screen, a fresh
+      // shell) reads as an empty terminal rather than as a hole in the page.
+      style={{ width: '100%', height: '100%', overflow: 'auto', background: xtermTheme(theme).background }}
     >
       <div ref={scaleRef}>
         <div ref={hostRef} />
