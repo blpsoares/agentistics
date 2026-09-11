@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronUp, GripVertical, SlidersHorizontal } from 'lucide-react'
+import { useIsMobile } from '../../hooks/useIsMobile'
 import {
   ASIDE_CARD_COLOR_VALUES, ASIDE_GROUP_BY_VALUES,
   type AsideCardColor, type AsideGroupBy,
@@ -48,6 +49,8 @@ export interface SessionsGroupMenuProps {
 
 export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
   const pt = p.lang === 'pt'
+  const isMobile = useIsMobile()
+  const tap = isMobile ? 44 : undefined
   const [open, setOpen] = useState(false)
   const [at, setAt] = useState<{ left: number; top: number } | null>(null)
   const [drag, setDrag] = useState<string | null>(null)
@@ -88,6 +91,7 @@ export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
   const rowStyle = (on: boolean): React.CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', textAlign: 'left',
     width: '100%', padding: '6px 8px', borderRadius: 6, fontSize: 12, fontFamily: 'inherit',
+    minHeight: tap,
     background: on ? 'var(--anthropic-orange-dim)' : 'transparent',
     color: on ? 'var(--text-primary)' : 'var(--text-secondary)',
     border: `1px solid ${on ? 'var(--anthropic-orange)' : 'transparent'}`,
@@ -113,7 +117,7 @@ export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
         title={pt ? 'Organizar lista' : 'Arrange list'}
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          width: 34, padding: 0, borderRadius: 9, cursor: 'pointer',
+          width: tap ?? 34, padding: 0, borderRadius: 9, cursor: 'pointer',
           border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
           color: open ? 'var(--anthropic-orange)' : 'var(--text-tertiary)', fontFamily: 'inherit',
         }}
@@ -151,6 +155,7 @@ export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
                     style={{
                       display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
                       borderRadius: 6, fontSize: 12, color: 'var(--text-secondary)',
+                      minHeight: tap,
                       opacity: drag === g.key ? 0.45 : 1,
                     }}
                   >
@@ -166,8 +171,8 @@ export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
                       onClick={() => step(g.key, -1)} disabled={i === 0}
                       aria-label={pt ? 'Mover para cima' : 'Move up'}
                       style={{
-                        background: 'none', border: 'none', padding: 0, width: 18, height: 18,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: 'none', border: 'none', padding: 0, width: tap ?? 18, height: tap ?? 18,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                         color: i === 0 ? 'var(--border)' : 'var(--text-tertiary)',
                         cursor: i === 0 ? 'default' : 'pointer',
                       }}
@@ -176,8 +181,8 @@ export function SessionsGroupMenu(p: SessionsGroupMenuProps) {
                       onClick={() => step(g.key, 1)} disabled={i === p.groups.length - 1}
                       aria-label={pt ? 'Mover para baixo' : 'Move down'}
                       style={{
-                        background: 'none', border: 'none', padding: 0, width: 18, height: 18,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: 'none', border: 'none', padding: 0, width: tap ?? 18, height: tap ?? 18,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                         color: i === p.groups.length - 1 ? 'var(--border)' : 'var(--text-tertiary)',
                         cursor: i === p.groups.length - 1 ? 'default' : 'pointer',
                       }}
