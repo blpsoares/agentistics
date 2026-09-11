@@ -83,7 +83,6 @@ interface T {
   fullscreen: string
   endThis: string
   whichTerminal: string
-  openTerminal: string
 }
 
 const TXT: Record<'pt' | 'en', T> = {
@@ -103,7 +102,6 @@ const TXT: Record<'pt' | 'en', T> = {
     fullscreen: 'Open the shell full screen',
     endThis: 'End this terminal',
     whichTerminal: 'Which terminal',
-    openTerminal: 'Open a terminal',
   },
   pt: {
     title: 'Shell',
@@ -121,7 +119,6 @@ const TXT: Record<'pt' | 'en', T> = {
     fullscreen: 'Abrir o shell em tela cheia',
     endThis: 'Encerrar este terminal',
     whichTerminal: 'Qual terminal',
-    openTerminal: 'Abrir um terminal',
   },
 }
 
@@ -403,7 +400,9 @@ export function ShellBand({ sessionId, cwd, lang, theme, harness, placement = 'd
             key={id}
             role="tab"
             aria-selected={on}
-            onClick={e => { e.stopPropagation(); chooseTarget(id) }}
+            // Collapsed, picking a target is also the gesture that OPENS the band — the segment is
+            // the door, so it must not need a second click on the bar behind it.
+            onClick={e => { e.stopPropagation(); chooseTarget(id); if (!bandOpen) setBand({ open: true }) }}
             style={{
               // 44px is the MOBILE figure; on a pointer it would turn a segmented control into a
               // row of buttons.
@@ -579,8 +578,9 @@ export function ShellBand({ sessionId, cwd, lang, theme, harness, placement = 'd
   // ---- mobile: a full-screen sheet over the session --------------------------------------------
   if (isMobile) {
     if (!prefs.open) {
-      // The door to BOTH terminals, named. It is two buttons and not one bar plus a hidden state:
-      // on a phone the band IS the only way to a terminal now that the header toggle is gone.
+      // The door to BOTH terminals, and the SAME control the open band carries — the segmented
+      // tablist, on the right. A phone has no header toggle to fall back on, so this bar is the
+      // only way to a terminal; it may not be a control that changes shape between states.
       return (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, width: '100%',
@@ -590,21 +590,12 @@ export function ShellBand({ sessionId, cwd, lang, theme, harness, placement = 'd
           <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex', flexShrink: 0 }}>
             <TerminalSquare size={16} />
           </span>
-          {TERMINAL_TARGETS.map(id => (
-            <button
-              key={id}
-              onClick={() => { chooseTarget(id); setBand({ open: true }) }}
-              aria-label={`${t.openTerminal} — ${targetLabel(id, harness, lang)}`}
-              style={{
-                minHeight: 44, padding: '0 14px', borderRadius: 8, cursor: 'pointer',
-                fontFamily: 'inherit', fontSize: 13, fontWeight: 650, whiteSpace: 'nowrap',
-                border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
-                color: 'var(--text-secondary)',
-              }}
-            >
-              {targetLabel(id, harness, lang)}
-            </button>
-          ))}
+          {where && <span style={{
+            minWidth: 0, flex: 1, fontSize: 11, color: 'var(--text-tertiary)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{where}</span>}
+          {!where && <span style={{ flex: 1 }} />}
+          {targetSwitch}
         </div>
       )
     }
@@ -656,7 +647,8 @@ export function ShellBand({ sessionId, cwd, lang, theme, harness, placement = 'd
         <div style={{
           flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 8, padding: 10,
         }}>
-          {targetSwitch}
+          {/* RIGHT, like every other placement's. */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>{targetSwitch}</div>
           {streamId ? screen : <div style={{ flex: 1 }} />}
           {notice}
           {ceilingList}
@@ -711,39 +703,19 @@ export function ShellBand({ sessionId, cwd, lang, theme, harness, placement = 'd
         }}
       >
         <span style={{ color: 'var(--anthropic-orange)', display: 'inline-flex' }}><TerminalSquare size={14} /></span>
-        {/* COLLAPSED, the bar is the door to BOTH terminals, so it offers both by name rather than
-            calling itself "SHELL" and hiding the other one behind a state nobody can see. Open, the
-            switch above says which you are in. */}
-        {prefs.open ? (
-          <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)' }}>
-            {targetLabel(target, harness, lang).toUpperCase()}
-          </span>
-        ) : (
-          <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-            {TERMINAL_TARGETS.map(id => (
-              <button
-                key={id}
-                onClick={e => { e.stopPropagation(); chooseTarget(id); setBand({ open: true }) }}
-                aria-label={`${t.openTerminal} — ${targetLabel(id, harness, lang)}`}
-                style={{
-                  minHeight: isMobile ? 44 : 22, padding: isMobile ? '0 14px' : '0 9px',
-                  borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                  fontSize: 11, fontWeight: 650, whiteSpace: 'nowrap',
-                  border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                {targetLabel(id, harness, lang)}
-              </button>
-            ))}
-          </span>
-        )}
+        {/* ONE CONTROL, ONE SHAPE, ONE PLACE. It used to be two buttons on the LEFT when collapsed
+            and a segmented control on the RIGHT when open — so choosing a terminal meant finding a
+            control that had moved and changed form between two states of the same bar, and moved
+            back again on maximize. It is the segmented control, on the right, always. */}
+        <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--text-secondary)' }}>
+          {targetLabel(target, harness, lang).toUpperCase()}
+        </span>
         {where && <span style={{
           minWidth: 0, flex: 1, fontSize: 11, color: 'var(--text-tertiary)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{where}</span>}
         {!where && <span style={{ flex: 1 }} />}
-        {prefs.open && targetSwitch}
+        {targetSwitch}
         {busy && <Loader2 size={13} className="ag-spin" style={{ color: 'var(--text-tertiary)' }} />}
         {/* TAKE THE WHOLE SCREEN. Offered only with a shell open and somewhere to go, so the bar of
             a band nobody has opened carries nothing that cannot act. It is the only way to the
