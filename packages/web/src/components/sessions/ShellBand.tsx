@@ -45,6 +45,9 @@ import {
 } from 'lucide-react'
 import { useDocumentVisible } from '../../hooks/useDocumentVisible'
 import { keyStripShown } from '../../lib/terminalSurface'
+import {
+  atCap, ceilingRows, ceilingTitle, type CeilingRow, type CeilingShell,
+} from '../../lib/shellCeiling'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTerminalStream } from '../../hooks/useTerminalStream'
 import { useTerminalWrite } from '../../hooks/useTerminalWrite'
@@ -75,6 +78,7 @@ interface T {
   resize: string
   retry: string
   fullscreen: string
+  endThis: string
 }
 
 const TXT: Record<'pt' | 'en', T> = {
@@ -92,6 +96,7 @@ const TXT: Record<'pt' | 'en', T> = {
     resize: 'Drag to resize the shell',
     retry: 'Try again',
     fullscreen: 'Open the shell full screen',
+    endThis: 'End this terminal',
   },
   pt: {
     title: 'Shell',
@@ -107,6 +112,7 @@ const TXT: Record<'pt' | 'en', T> = {
     resize: 'Arraste para redimensionar o shell',
     retry: 'Tentar de novo',
     fullscreen: 'Abrir o shell em tela cheia',
+    endThis: 'Encerrar este terminal',
   },
 }
 
@@ -147,6 +153,8 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
     dedicated || readBandPrefs().open ? shellBandReducer(init, { type: 'openBand' }) : init)
   const shell = band.shell
   const [ctrlArmed, setCtrlArmed] = useState(false)
+  /** The open shells, fetched ONLY when the ceiling refuses — see `shellCeiling.ts`. */
+  const [ceiling, setCeiling] = useState<{ rows: CeilingRow[]; cap: number } | null>(null)
   const [ctrlNote, setCtrlNote] = useState<string | null>(null)
 
   const setBand = useCallback((next: Partial<{ open: boolean; height: number }>) => {
@@ -197,13 +205,15 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
           body: JSON.stringify({ sessionId }),
         })
         const body = await res.json().catch(() => ({})) as {
-          ok?: boolean; shell?: OpenShell; message?: string; error?: string
+          ok?: boolean; shell?: OpenShell; message?: string; error?: string; reason?: string
         }
         if (cancelled) return
         // A REFUSAL arrives as a sentence the server composed; it is shown verbatim. A route-level
         // error carries only a code, and `shellErrorText` is the one place that words those.
         if (body.ok && body.shell) dispatch({ type: 'resolved', shell: body.shell })
-        else if (body.message) dispatch({ type: 'refused', message: body.message })
+        // The CODE travels with the sentence: only `at-cap` has anything to offer, and matching on
+        // a localized sentence would stop working the day somebody rewords it.
+        else if (body.message) dispatch({ type: 'refused', message: body.message, ...(body.reason ? { reason: body.reason } : {}) })
         else dispatch({ type: 'refused', message: shellErrorText(body.error ?? 'network', lang) })
       } catch {
         if (!cancelled) dispatch({ type: 'refused', message: shellErrorText('network', lang) })
@@ -213,6 +223,37 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
     // render asks again instead of leaving a spinner over nothing.
     return () => { cancelled = true; dispatch({ type: 'cancelled' }) }
   }, [band.attempt, sessionId, lang])
+
+  /**
+   * THE CEILING IS THE ONE REFUSAL A PERSON CAN ACT ON, and until now it was the one with no
+   * action: nothing in this product listed or closed a shell, so "close one to open another" sent
+   * you looking through eight other sessions. The list is fetched only on that refusal — `?titles=1`
+   * costs a fleet walk, and the names are what make the rows distinguishable when every shell of a
+   * repository sits in the same directory.
+   */
+  useEffect(() => {
+    if (!atCap(band.reason)) { setCeiling(null); return }
+    let gone = false
+    void (async () => {
+      const body = await fetch(shellApiUrl('/api/shell/list', lang) + '&titles=1')
+        .then(r => r.ok ? r.json() as Promise<{ shells?: CeilingShell[]; cap?: number }> : null)
+        .catch(() => null)
+      if (gone || !body) return
+      setCeiling({ rows: ceilingRows(body.shells ?? []), cap: body.cap ?? 0 })
+    })()
+    return () => { gone = true }
+  }, [band.reason, band.attempt, lang])
+
+  /** End one of the OTHER shells, then ask again — the retry is the whole point of the list. */
+  const closeOther = useCallback(async (id: string) => {
+    setCeiling(c => (c ? { ...c, rows: c.rows.filter(r => r.id !== id) } : c))
+    await fetch(shellApiUrl('/api/shell/close', lang), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [id] }),
+    }).catch(() => {})
+    dispatch({ type: 'retry' })
+  }, [lang])
 
   const watching = shellWatching({
     bandOpen,
@@ -351,7 +392,7 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
       {ctrlArmed ? t.ctrlHint : ctrlNote ?? line}
       {/* A refusal is a DEAD STOP by design — the band never retries a "no" on its own — so the way
           forward has to be on screen. Without it a refused band is a sentence and nothing else. */}
-      {band.phase === 'refused' && (
+      {band.phase === 'refused' && !atCap(band.reason) && (
         <button
           onClick={() => dispatch({ type: 'retry' })}
           style={{
@@ -368,6 +409,56 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
       )}
     </div>
   )
+
+  /**
+   * THE WAY OUT OF THE CEILING. `at-cap` used to be a sentence and nothing else; this is the list
+   * the sentence was telling you to go and find. Each row NAMES its session (the directory alone
+   * does not separate them — a repository's shells all sit in the same one) and carries the handle,
+   * so two rows that still read alike are told apart by something.
+   */
+  const ceilingList = ceiling && atCap(band.reason) ? (
+    <div style={{
+      flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 6,
+      maxHeight: isMobile ? 260 : 180, overflowY: 'auto',
+      padding: 8, borderRadius: 8,
+      border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)',
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>
+        {ceilingTitle(ceiling.cap, lang)}
+      </div>
+      {ceiling.rows.map(row => (
+        <div key={row.id} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{
+              fontSize: 12, fontWeight: 600, color: 'var(--text-primary)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{row.title}</div>
+            <div style={{
+              fontSize: 10.5, color: 'var(--text-tertiary)', fontFamily: 'monospace',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{row.short}{row.where ? ` · ${row.where}` : ''}</div>
+          </div>
+          <button className="ag-tap-icon"
+            onClick={() => { void closeOther(row.id) }}
+            title={t.endThis}
+            aria-label={`${t.endThis} — ${row.title}`}
+            style={{
+              // PAINTED small, TARGETED at 44px by `.ag-tap-icon` — the repo's rule, and the one
+              // this list must not break: a row of 44px squares turns a compact list into a column
+              // of boxes, while the finger still needs the 44.
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              width: 26, height: 26,
+              borderRadius: 6, cursor: 'pointer',
+              border: '1px solid var(--border-subtle)', background: 'transparent',
+              color: 'var(--text-tertiary)',
+            }}
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
+      ))}
+    </div>
+  ) : null
 
   const strip = (
     <div style={{
@@ -409,6 +500,7 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
       }}>
         {shell ? screen : <div style={{ flex: 1 }} />}
         {notice}
+        {ceilingList}
         {keyStripShown('dedicated', isMobile) && strip}
       </div>
     )
@@ -420,6 +512,10 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
       return (
         <button
           onClick={() => setBand({ open: true })}
+          aria-expanded={false}
+          // The desktop bar has carried this since phase 2 and the phone's had nothing: a screen
+          // reader met a button whose whole content was an icon, the word "Shell" and a path.
+          aria-label={t.toggleBar}
           style={{
             display: 'flex', alignItems: 'center', gap: 8, width: '100%',
             minHeight: 44, padding: '0 12px', flexShrink: 0,
@@ -485,6 +581,7 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
         }}>
           {shell ? screen : <div style={{ flex: 1 }} />}
           {notice}
+          {ceilingList}
           {strip}
         </div>
       </div>
@@ -588,6 +685,7 @@ export function ShellBand({ sessionId, cwd, lang, theme, placement = 'docked', o
         }}>
           {shell ? screen : <div style={{ flex: 1 }} />}
           {notice}
+          {ceilingList}
         </div>
       )}
     </div>

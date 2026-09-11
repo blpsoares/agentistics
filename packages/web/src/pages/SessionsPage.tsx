@@ -31,6 +31,7 @@ import { SessionCreating } from '../components/sessions/SessionCreating'
 // while creating was the only thing that could announce a session; a reopen announces one too, and
 // two constants for one budget is two answers.
 import { SessionStatsMenu } from '../components/sessions/SessionStatsMenu'
+import { SessionTitleFlag } from '../components/sessions/SessionTitleFlag'
 import { MagnifierButton } from '../components/a11y/MagnifierButton'
 import { HideLensesButton } from '../components/a11y/HideLensesButton'
 import { ArtifactsAside } from '../components/sessions/ArtifactsAside'
@@ -705,10 +706,21 @@ export default function SessionsPage() {
             <ChevronLeft size={20} />
           </button>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{
-              fontSize: 13, fontWeight: 650, color: 'var(--text-primary)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>{selected.title}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <div style={{
+                fontSize: 13, fontWeight: 650, color: 'var(--text-primary)', minWidth: 0,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{selected.title}</div>
+              <SessionTitleFlag
+                session={{
+                  id: selected.id, title: selected.title,
+                  ...(selected.harness ? { harness: selected.harness } : {}),
+                  ...(selected.task ? { task: selected.task } : {}),
+                }}
+                lang={pt ? 'pt' : 'en'}
+                onLinked={refresh}
+              />
+            </div>
             <div style={{
               fontSize: 10.5, color: 'var(--text-tertiary)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -848,11 +860,22 @@ export default function SessionsPage() {
             </button>
 
             <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column' }}>
-              <span style={{
-                fontSize: 13, fontWeight: 650, color: 'var(--text-primary)',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}>
-                {selected.title}
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                <span style={{
+                  fontSize: 13, fontWeight: 650, color: 'var(--text-primary)', minWidth: 0,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {selected.title}
+                </span>
+                <SessionTitleFlag
+                  session={{
+                    id: selected.id, title: selected.title,
+                    ...(selected.harness ? { harness: selected.harness } : {}),
+                    ...(selected.task ? { task: selected.task } : {}),
+                  }}
+                  lang={pt ? 'pt' : 'en'}
+                  onLinked={refresh}
+                />
               </span>
               {/* The state stays, on its own line: it is the one fact that changes while you read,
                   and the row below is a conversation that does not repeat it. */}
