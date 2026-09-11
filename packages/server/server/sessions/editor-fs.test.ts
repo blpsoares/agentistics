@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   createTreeEntry, deleteTreeEntry, listChildren, readTreeFile, renameTreeEntry, resolveSessionDirectory,
-  searchTree, writeTreeFile,
+  searchTree, walkPlain, writeTreeFile,
 } from './editor-fs'
 import type { StartHost } from '../cli-start'
 
@@ -341,5 +341,74 @@ describe('searchTree', () => {
   test('search works in a non-git directory too, bounded, without hanging', async () => {
     const out = await searchTree(plainDir, 'x')
     expect(out.hits.some(h => h.kind === 'name' && h.path === 'x.txt')).toBe(true)
+  })
+
+  test('a file above the plain-grep size cap is skipped, a smaller sibling still matches', async () => {
+    const heavyDir = join(plainDir, 'heavyfile')
+    mkdirSync(heavyDir)
+    // Comfortably above the module's 1 MiB cap regardless of its exact value.
+    writeFileSync(join(heavyDir, 'big.txt'), `${'x'.repeat(2_000_000)}findme-big\n`)
+    writeFileSync(join(heavyDir, 'small.txt'), 'findme-small\n')
+
+    const out = await searchTree(heavyDir, 'findme')
+    expect(out.hits.some(h => h.kind === 'content' && h.path === 'small.txt')).toBe(true)
+    expect(out.hits.some(h => h.kind === 'content' && h.path === 'big.txt')).toBe(false)
+  })
+
+  test('a genuine git grep failure falls back to a plain content read instead of reporting no matches', async () => {
+    // `[` is an invalid regex to `git grep -e` (unbalanced bracket) and exits >1 with empty
+    // stdout — a real failure, not the exit-1 "ran fine, found nothing" case. The plain fallback
+    // matches it as a literal substring instead.
+    mkdirSync(join(gitRepo, 'brackets'))
+    writeFileSync(join(gitRepo, 'brackets', 'arr.ts'), 'export const arr = [1, 2]\n')
+    git(gitRepo, 'add', 'brackets/arr.ts')
+    git(gitRepo, 'commit', '-q', '-m', 'add brackets fixture')
+
+    const out = await searchTree(gitRepo, '[')
+    expect(out.hits).toContainEqual({ kind: 'content', path: 'brackets/arr.ts', line: 1, text: 'export const arr = [1, 2]' })
+  })
+
+  test('exit 1 ("ran fine, no matches") is answered with no content hits, never a fallback', async () => {
+    // Reuses the existing gitignored-file fixture: `git grep` genuinely finds nothing for this
+    // query (the only file containing it is excluded by `.gitignore`), which is exit 1 — the
+    // plain fallback must NOT kick in and surface the ignored file's content.
+    const out = await searchTree(gitRepo, 'should not appear')
+    expect(out.hits.some(h => h.kind === 'content')).toBe(false)
+  })
+})
+
+describe('walkPlain', () => {
+  test('a directory-heavy, nearly file-free tree stops once the directory cap is hit', async () => {
+    const heavyRoot = join(root, 'dirheavy')
+    mkdirSync(heavyRoot)
+    const totalDirs = 12
+    for (let i = 0; i < totalDirs; i++) {
+      const d = join(heavyRoot, `d${i}`)
+      mkdirSync(d)
+      writeFileSync(join(d, 'marker.txt'), String(i))
+    }
+
+    const dirLimit = 5
+    const files = await walkPlain(heavyRoot, { dirLimit })
+
+    // The root itself is the first directory visited, leaving `dirLimit - 1` children walked —
+    // deterministic regardless of `readdir`'s own ordering, since every child holds exactly one
+    // file. This is the proof the FILE cap alone could never give: none of these directories
+    // holds more than one file each, so `PLAIN_WALK_FILE_LIMIT` (5000) would never fire here —
+    // only the independent directory cap stops the walk.
+    expect(files.length).toBe(dirLimit - 1)
+    expect(files.length).toBeLessThan(totalDirs)
+  })
+
+  test('a tree smaller than the directory cap is walked completely', async () => {
+    const smallRoot = join(root, 'dirsmall')
+    mkdirSync(smallRoot)
+    for (let i = 0; i < 3; i++) {
+      const d = join(smallRoot, `d${i}`)
+      mkdirSync(d)
+      writeFileSync(join(d, 'marker.txt'), String(i))
+    }
+    const files = await walkPlain(smallRoot, { dirLimit: 5 })
+    expect(files).toHaveLength(3)
   })
 })

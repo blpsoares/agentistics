@@ -17,7 +17,10 @@ import { containedInRoot, resolveTreePath } from './editor-path'
 import { childrenFromDirents, collapseToChildren, type TreeChild } from './editor-list'
 import { looksBinary } from './artifact-web'
 import { planFileWrite } from './editor-conflict'
-import { capHits, matchNames, parseGrepOutput, type SearchResult } from './editor-search'
+import {
+  capHits, decideGitGrepOutcome, matchNames, parseGrepOutput, SEARCH_LIMIT,
+  type ContentHit, type SearchResult,
+} from './editor-search'
 
 async function pathIsDirectory(p: string): Promise<boolean> {
   try { return (await stat(p)).isDirectory() } catch { return false }
@@ -138,17 +141,22 @@ async function gitListRecursive(root: string, relDir: string): Promise<string[] 
  * same variable set, one place to keep it right.
  */
 
-/** One `git` runner for this whole module — mirrors `shell-web.ts`'s own `tmux()` helper. */
-async function runGit(cwd: string, args: string[]): Promise<{ ok: boolean; out: string }> {
+/**
+ * One `git` runner for this whole module — mirrors `shell-web.ts`'s own `tmux()` helper.
+ * `code` is the real exit code; a spawn that threw before git ever ran (the binary missing, a
+ * permission error) has no exit code of its own and is given the sentinel `-1`, which must read
+ * the same as any other non-0/non-1 failure to a caller deciding whether to fall back.
+ */
+async function runGit(cwd: string, args: string[]): Promise<{ ok: boolean; out: string; code: number }> {
   try {
     const p = Bun.spawn(['git', '-C', cwd, ...args], {
       stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', env: gitEnv(),
     })
     const out = await new Response(p.stdout).text()
     const code = await p.exited
-    return { ok: code === 0, out }
+    return { ok: code === 0, out, code }
   } catch {
-    return { ok: false, out: '' }
+    return { ok: false, out: '', code: -1 }
   }
 }
 
@@ -319,31 +327,66 @@ export async function searchTree(root: string, q: string): Promise<SearchResult>
   if (!query) return { hits: [], truncated: false }
 
   const files = await gitListRecursive(root, '')
-  const nameHits = matchNames(files ?? await walkPlain(root), query)
+  // The git path must never walk: `walkPlain` only runs when `root` is not a git work tree at
+  // all. Walking once here and handing the SAME list to both the name match and (on fallback,
+  // below) the content grep is what fixes the double-walk this search used to do.
+  const walked = files === null ? await walkPlain(root) : null
+  const nameHits = matchNames(files ?? walked!, query)
 
-  const contentHits = files !== null
-    ? await gitGrepContent(root, query)
-    : await grepPlain(root, query)
+  let contentHits: ContentHit[]
+  if (files !== null) {
+    const gitHits = await gitGrepContent(root, query)
+    // `null` means `git grep` itself failed for a real reason (not "no matches") — fall back to
+    // a plain read of the very file list `git ls-files` already gave us, no second walk needed.
+    contentHits = gitHits ?? await grepPlain(root, files, query)
+  } else {
+    contentHits = await grepPlain(root, walked!, query)
+  }
 
   return capHits([...nameHits, ...contentHits])
 }
 
-async function gitGrepContent(root: string, query: string) {
+/**
+ * `null` signals the caller must fall back to a plain content read — see `decideGitGrepOutcome`
+ * for the exit-code reasoning. Exit 1 ("ran fine, found nothing") is answered with `[]` directly,
+ * never treated as a fallback case.
+ */
+async function gitGrepContent(root: string, query: string): Promise<ContentHit[] | null> {
   const res = await runGit(root, ['grep', '-n', '--untracked', '-I', '-e', query, '--', '.'])
-  // Exit code 1 from `git grep` means "ran fine, found nothing" — not a failure to fall back from.
-  if (!res.ok && res.out === '') return []
+  const outcome = decideGitGrepOutcome(res.code)
+  if (outcome === 'none') return []
+  if (outcome === 'fallback') return null
   return parseGrepOutput(res.out)
 }
 
 /** Bounded so a directory with no `.gitignore` to lean on cannot make search feel like it hangs. */
 const PLAIN_WALK_FILE_LIMIT = 5000
+/**
+ * Independent of the file cap above: `out.length` only grows when a FILE is pushed, so a tree of
+ * thousands of nested near-empty subdirectories would never trip `PLAIN_WALK_FILE_LIMIT` and
+ * `readdir` would run once per directory forever — exactly the hang this search must never
+ * produce. Same magnitude as the file cap, for the identical reason.
+ */
+const PLAIN_WALK_DIR_LIMIT = 5000
 
-async function walkPlain(root: string): Promise<string[]> {
+/**
+ * Exported, and the caps are overridable, only so tests can prove the directory cap terminates
+ * the walk without needing to build thousands of real directories on disk — every production
+ * caller relies on the two module-level defaults above.
+ */
+export async function walkPlain(
+  root: string,
+  limits: { fileLimit?: number; dirLimit?: number } = {},
+): Promise<string[]> {
+  const fileLimit = limits.fileLimit ?? PLAIN_WALK_FILE_LIMIT
+  const dirLimit = limits.dirLimit ?? PLAIN_WALK_DIR_LIMIT
   const out: string[] = []
   const stack = ['']
-  while (stack.length > 0 && out.length < PLAIN_WALK_FILE_LIMIT) {
+  let dirsVisited = 0
+  while (stack.length > 0 && out.length < fileLimit && dirsVisited < dirLimit) {
     const rel = stack.pop()!
     const abs = rel === '' ? root : `${root}/${rel}`
+    dirsVisited++
     let entries
     try {
       entries = await readdir(abs, { withFileTypes: true })
@@ -354,21 +397,37 @@ async function walkPlain(root: string): Promise<string[]> {
       const childRel = rel === '' ? e.name : `${rel}/${e.name}`
       if (e.isDirectory()) stack.push(childRel)
       else out.push(childRel)
-      if (out.length >= PLAIN_WALK_FILE_LIMIT) break
+      if (out.length >= fileLimit) break
     }
   }
   return out
 }
 
-async function grepPlain(root: string, query: string) {
-  const files = await walkPlain(root)
+/**
+ * A file above this size is skipped BEFORE it is ever read whole into memory — the same "search
+ * must never hang or exhaust memory" guarantee the walk's own caps exist for, applied to one huge
+ * file rather than a huge tree. 1 MiB comfortably covers any real source file while refusing a
+ * stray multi-megabyte log or data dump sitting in a directory with no git index to exclude it.
+ * A `stat` that throws skips the file too, the same posture the existing `readFile` catch takes.
+ */
+const GREP_MAX_FILE_BYTES = 1024 * 1024
+
+async function grepPlain(root: string, files: readonly string[], query: string): Promise<ContentHit[]> {
   const needle = query.toLowerCase()
-  const hits: ReturnType<typeof parseGrepOutput> = []
+  const hits: ContentHit[] = []
   for (const rel of files) {
-    if (hits.length >= 200) break
+    if (hits.length >= SEARCH_LIMIT) break
+    const abs = `${root}/${rel}`
+    let size: number
+    try {
+      size = (await stat(abs)).size
+    } catch {
+      continue
+    }
+    if (size > GREP_MAX_FILE_BYTES) continue
     let buf
     try {
-      buf = await readFile(`${root}/${rel}`)
+      buf = await readFile(abs)
     } catch {
       continue
     }

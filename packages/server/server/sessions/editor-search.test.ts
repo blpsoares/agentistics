@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { capHits, matchNames, parseGrepOutput, SEARCH_LIMIT } from './editor-search'
+import { capHits, decideGitGrepOutcome, matchNames, parseGrepOutput, SEARCH_LIMIT } from './editor-search'
 
 describe('parseGrepOutput', () => {
   test('parses "path:line:text" per line, git grep -n\'s own shape', () => {
@@ -47,5 +47,19 @@ describe('capHits', () => {
     const out = capHits(hits)
     expect(out.hits).toHaveLength(SEARCH_LIMIT)
     expect(out.truncated).toBe(true)
+  })
+})
+
+describe('decideGitGrepOutcome', () => {
+  test('exit 0 means the output should be parsed', () => {
+    expect(decideGitGrepOutcome(0)).toBe('parse')
+  })
+  test('exit 1 means "ran fine, no matches" — never a fallback', () => {
+    expect(decideGitGrepOutcome(1)).toBe('none')
+  })
+  test('any other exit code falls back to a plain read, including the spawn-threw sentinel', () => {
+    expect(decideGitGrepOutcome(2)).toBe('fallback')
+    expect(decideGitGrepOutcome(128)).toBe('fallback')
+    expect(decideGitGrepOutcome(-1)).toBe('fallback')
   })
 })

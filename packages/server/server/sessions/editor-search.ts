@@ -45,3 +45,19 @@ export function matchNames(relativePaths: readonly string[], q: string): NameHit
     .filter(p => (p.split('/').pop() ?? p).toLowerCase().includes(needle))
     .map(path => ({ kind: 'name' as const, path }))
 }
+
+export type GitGrepOutcome = 'parse' | 'none' | 'fallback'
+
+/**
+ * `git grep`'s own exit code is overloaded: 0 means it ran and found matches, 1 means it ran
+ * fine and found nothing at all — that is not a failure to recover from — and anything else
+ * (including the sentinel `-1` the caller uses when the process could not even be spawned) is a
+ * genuine failure. A genuine failure must fall back to a plain read rather than being reported as
+ * a confident empty result — the same shape `gitListRecursive` returning `null` already uses in
+ * this module for "not a git repo at all".
+ */
+export function decideGitGrepOutcome(code: number): GitGrepOutcome {
+  if (code === 0) return 'parse'
+  if (code === 1) return 'none'
+  return 'fallback'
+}
