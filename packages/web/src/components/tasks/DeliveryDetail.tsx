@@ -1250,6 +1250,7 @@ export function DeliveryDetail({ id, detail, lang, reload, dense, onDeleted }: D
             <SubtaskTable
               subtasks={detail.subtasks}
               sessions={detail.sessions}
+              subtaskRollups={detail.subtaskRollups}
               lang={lang}
               onAdd={title => run(() => addSubtask(id, title))}
               onPatch={(sid, patch) => run(() => patchSubtask(id, sid, patch))}
