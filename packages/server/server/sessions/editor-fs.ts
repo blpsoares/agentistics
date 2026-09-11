@@ -17,6 +17,7 @@ import { containedInRoot, resolveTreePath } from './editor-path'
 import { childrenFromDirents, collapseToChildren, type TreeChild } from './editor-list'
 import { looksBinary } from './artifact-web'
 import { planFileWrite } from './editor-conflict'
+import { capHits, matchNames, parseGrepOutput, type SearchResult } from './editor-search'
 
 async function pathIsDirectory(p: string): Promise<boolean> {
   try { return (await stat(p)).isDirectory() } catch { return false }
@@ -303,4 +304,81 @@ export async function deleteTreeEntry(
 
   await rm(real, { recursive: true, force: false })
   return { ok: true }
+}
+
+export type { SearchResult }
+
+/**
+ * Filename matches always run (fast, no process). Content matches run through `git grep` in a git
+ * repo; a NON-git directory gets a bounded plain walk instead — capped by FILE COUNT, not depth,
+ * so a huge `node_modules`-shaped folder with no git repo behind it cannot make this hang, which
+ * is the exact risk the spec calls out.
+ */
+export async function searchTree(root: string, q: string): Promise<SearchResult> {
+  const query = q.trim()
+  if (!query) return { hits: [], truncated: false }
+
+  const files = await gitListRecursive(root, '')
+  const nameHits = matchNames(files ?? await walkPlain(root), query)
+
+  const contentHits = files !== null
+    ? await gitGrepContent(root, query)
+    : await grepPlain(root, query)
+
+  return capHits([...nameHits, ...contentHits])
+}
+
+async function gitGrepContent(root: string, query: string) {
+  const res = await runGit(root, ['grep', '-n', '--untracked', '-I', '-e', query, '--', '.'])
+  // Exit code 1 from `git grep` means "ran fine, found nothing" — not a failure to fall back from.
+  if (!res.ok && res.out === '') return []
+  return parseGrepOutput(res.out)
+}
+
+/** Bounded so a directory with no `.gitignore` to lean on cannot make search feel like it hangs. */
+const PLAIN_WALK_FILE_LIMIT = 5000
+
+async function walkPlain(root: string): Promise<string[]> {
+  const out: string[] = []
+  const stack = ['']
+  while (stack.length > 0 && out.length < PLAIN_WALK_FILE_LIMIT) {
+    const rel = stack.pop()!
+    const abs = rel === '' ? root : `${root}/${rel}`
+    let entries
+    try {
+      entries = await readdir(abs, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const e of entries) {
+      const childRel = rel === '' ? e.name : `${rel}/${e.name}`
+      if (e.isDirectory()) stack.push(childRel)
+      else out.push(childRel)
+      if (out.length >= PLAIN_WALK_FILE_LIMIT) break
+    }
+  }
+  return out
+}
+
+async function grepPlain(root: string, query: string) {
+  const files = await walkPlain(root)
+  const needle = query.toLowerCase()
+  const hits: ReturnType<typeof parseGrepOutput> = []
+  for (const rel of files) {
+    if (hits.length >= 200) break
+    let buf
+    try {
+      buf = await readFile(`${root}/${rel}`)
+    } catch {
+      continue
+    }
+    if (looksBinary(buf)) continue
+    const lines = buf.toString('utf8').split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i]!.toLowerCase().includes(needle)) {
+        hits.push({ kind: 'content', path: rel, line: i + 1, text: lines[i]! })
+      }
+    }
+  }
+  return hits
 }

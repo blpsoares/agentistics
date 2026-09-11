@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   createTreeEntry, deleteTreeEntry, listChildren, readTreeFile, renameTreeEntry, resolveSessionDirectory,
-  writeTreeFile,
+  searchTree, writeTreeFile,
 } from './editor-fs'
 import type { StartHost } from '../cli-start'
 
@@ -309,5 +309,37 @@ describe('deleteTreeEntry', () => {
     // (`'../escaped.txt'`, `'../out.txt'`, `'../../etc'`).
     const out = await deleteTreeEntry(plainDir, '../secret.txt', false)
     expect(out).toEqual({ ok: false, reason: 'escaped' })
+  })
+})
+
+describe('searchTree', () => {
+  test('finds a filename match', async () => {
+    const out = await searchTree(gitRepo, 'README')
+    expect(out.hits).toContainEqual({ kind: 'name', path: 'README.md' })
+  })
+
+  test('finds a content match inside a git repo, and NEVER inside the gitignored file', async () => {
+    const out = await searchTree(gitRepo, 'should not appear')
+    expect(out.hits.some(h => h.kind === 'content')).toBe(false)
+  })
+
+  test('finds a content match in a TRACKED file', async () => {
+    const out = await searchTree(gitRepo, 'export const a')
+    expect(out.hits).toContainEqual({ kind: 'content', path: 'src/a.ts', line: 1, text: 'export const a = 1' })
+  })
+
+  test('finds a content match in an UNTRACKED (but not ignored) file too', async () => {
+    const out = await searchTree(gitRepo, 'export const b')
+    expect(out.hits).toContainEqual({ kind: 'content', path: 'src/untracked.ts', line: 1, text: 'export const b = 2' })
+  })
+
+  test('an empty query returns nothing rather than the whole tree', async () => {
+    const out = await searchTree(gitRepo, '  ')
+    expect(out.hits).toEqual([])
+  })
+
+  test('search works in a non-git directory too, bounded, without hanging', async () => {
+    const out = await searchTree(plainDir, 'x')
+    expect(out.hits.some(h => h.kind === 'name' && h.path === 'x.txt')).toBe(true)
   })
 })
