@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { listChildren, resolveSessionDirectory } from './editor-fs'
+import { listChildren, readTreeFile, resolveSessionDirectory, writeTreeFile } from './editor-fs'
 import type { StartHost } from '../cli-start'
 
 // Same reason repo-probe.test.ts strips these: a pre-commit hook running from a linked worktree
@@ -142,5 +142,65 @@ describe('listChildren', () => {
     symlinkSync(outside, join(plainDir, 'escape-link'))
     const r = await listChildren(plainDir, 'escape-link')
     expect(r).toEqual({ ok: false, reason: 'escaped' })
+  })
+})
+
+describe('readTreeFile', () => {
+  test('reads text content and the file\'s current mtime', async () => {
+    const r = await readTreeFile(gitRepo, 'README.md')
+    expect(r.ok).toBe(true)
+    if (r.ok && !r.binary) {
+      expect(r.content).toBe('# hi\n')
+      expect(r.mtimeMs).toBe(statSync(join(gitRepo, 'README.md')).mtimeMs)
+    }
+  })
+
+  test('a binary file is reported as such, never sent as text', async () => {
+    const binPath = join(plainDir, 'image.bin')
+    writeFileSync(binPath, Buffer.from([0, 1, 2, 3, 0, 5]))
+    const r = await readTreeFile(plainDir, 'image.bin')
+    expect(r).toEqual({ ok: true, binary: true, name: 'image.bin', size: 6 })
+  })
+
+  test('a directory is refused as not-a-file', async () => {
+    const r = await readTreeFile(gitRepo, 'src')
+    expect(r).toEqual({ ok: false, reason: 'not-a-file' })
+  })
+
+  test('a missing file is refused as not-found', async () => {
+    const r = await readTreeFile(gitRepo, 'nope.ts')
+    expect(r).toEqual({ ok: false, reason: 'not-found' })
+  })
+})
+
+describe('writeTreeFile', () => {
+  test('a matching mtime writes, and returns the NEW mtime', async () => {
+    const before = statSync(join(gitRepo, 'README.md')).mtimeMs
+    const out = await writeTreeFile(gitRepo, 'README.md', '# updated\n', before)
+    expect(out.ok).toBe(true)
+    expect(readFileSync(join(gitRepo, 'README.md'), 'utf8')).toBe('# updated\n')
+    if (out.ok) expect(out.mtimeMs).toBeGreaterThanOrEqual(before)
+  })
+
+  test('a stale mtime is refused as a conflict, and the CURRENT disk content is returned', async () => {
+    const target = join(gitRepo, 'README.md')
+    const current = statSync(target).mtimeMs
+    const out = await writeTreeFile(gitRepo, 'README.md', '# my edit\n', current - 999999)
+    expect(out).toMatchObject({ ok: false, reason: 'conflict' })
+    if (!out.ok && out.reason === 'conflict') {
+      expect(out.content).toBe('# updated\n')
+    }
+    // The file on disk must be UNTOUCHED — this is the whole safety guarantee.
+    expect(readFileSync(target, 'utf8')).toBe('# updated\n')
+  })
+
+  test('writing a new file under a path that does not exist yet fails not-found — this route never creates', async () => {
+    const out = await writeTreeFile(gitRepo, 'brand-new.ts', 'x', 0)
+    expect(out).toEqual({ ok: false, reason: 'not-found' })
+  })
+
+  test('a .. escape is refused before any write is attempted', async () => {
+    const out = await writeTreeFile(gitRepo, '../../etc/passwd', 'x', 0)
+    expect(out).toEqual({ ok: false, reason: 'escaped' })
   })
 })

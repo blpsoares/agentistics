@@ -8,12 +8,14 @@
  * `resolveTreePath` only catches a LEXICAL `..` escape; this is the other half, the one that
  * catches a symlink INSIDE the tree pointing outside it.
  */
-import { readdir, realpath, stat } from 'node:fs/promises'
+import { readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises'
 import type { StartHost } from '../cli-start'
 import { gitEnv } from '../backup/repo-probe'
 import { planSessionDirectory, type SessionDirPlan } from './editor-directory'
 import { containedInRoot, resolveTreePath } from './editor-path'
 import { childrenFromDirents, collapseToChildren, type TreeChild } from './editor-list'
+import { looksBinary } from './artifact-web'
+import { planFileWrite } from './editor-conflict'
 
 async function pathIsDirectory(p: string): Promise<boolean> {
   try { return (await stat(p)).isDirectory() } catch { return false }
@@ -146,4 +148,68 @@ async function runGit(cwd: string, args: string[]): Promise<{ ok: boolean; out: 
   } catch {
     return { ok: false, out: '' }
   }
+}
+
+export type ReadFileRefusal = EntryRefusal | 'not-a-file'
+
+export type ReadFilePlan =
+  | { ok: true; content: string; mtimeMs: number; binary?: false }
+  | { ok: true; binary: true; name: string; size: number }
+  | { ok: false; reason: ReadFileRefusal }
+
+export async function readTreeFile(root: string, requestedPath: string): Promise<ReadFilePlan> {
+  const planned = resolveTreePath(root, requestedPath)
+  if (!planned.ok) return { ok: false, reason: 'escaped' }
+  const real = await realContained(root, planned.abs)
+  if (real === null) return { ok: false, reason: 'not-found' }
+
+  let st
+  try {
+    st = await stat(real)
+  } catch {
+    return { ok: false, reason: 'not-found' }
+  }
+  if (!st.isFile()) return { ok: false, reason: 'not-a-file' }
+
+  const buf = await readFile(real)
+  if (looksBinary(buf)) {
+    return { ok: true, binary: true, name: real.split('/').pop() ?? real, size: st.size }
+  }
+  return { ok: true, content: buf.toString('utf8'), mtimeMs: st.mtimeMs }
+}
+
+export type WriteFileRefusal = EntryRefusal | 'not-a-file'
+
+export type WriteFilePlan =
+  | { ok: true; mtimeMs: number }
+  | { ok: false; reason: 'conflict'; content: string; mtimeMs: number }
+  | { ok: false; reason: WriteFileRefusal }
+
+export async function writeTreeFile(
+  root: string, requestedPath: string, content: string, expectedMtimeMs: number,
+): Promise<WriteFilePlan> {
+  const planned = resolveTreePath(root, requestedPath)
+  if (!planned.ok) return { ok: false, reason: 'escaped' }
+  const real = await realContained(root, planned.abs)
+  if (real === null) return { ok: false, reason: 'not-found' }
+
+  let st
+  try {
+    st = await stat(real)
+  } catch {
+    return { ok: false, reason: 'not-found' }
+  }
+  if (!st.isFile()) return { ok: false, reason: 'not-a-file' }
+
+  const plan = planFileWrite({ expectedMtimeMs, diskMtimeMs: st.mtimeMs })
+  if (!plan.ok) {
+    // The write is refused BEFORE it happens. What comes back is the CURRENT disk content, read
+    // fresh — the caller's editor shows it, and nothing here has touched the file.
+    const buf = await readFile(real)
+    return { ok: false, reason: 'conflict', content: buf.toString('utf8'), mtimeMs: plan.diskMtimeMs }
+  }
+
+  await writeFile(real, content, 'utf8')
+  const after = await stat(real)
+  return { ok: true, mtimeMs: after.mtimeMs }
 }
