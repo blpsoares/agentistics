@@ -210,6 +210,16 @@ jobs:
           mkdir -p release
           bun build --compile packages/server/bin/cli.ts --outfile ./release/agentop
 
+      # Alpine and other musl-based distros have no glibc dynamic linker at all — the glibc binary
+      # above fails there with a bare "not found" that names no missing library (the kernel is
+      # looking for /lib64/ld-linux-x86-64.so.2, which does not exist, and the shell reports that
+      # ENOENT as though the file itself were missing). install.sh picks between the two by
+      # checking `ldd --version` for "musl". Cross-compiled from this same glibc runner — Bun
+      # downloads the musl runtime for the target rather than needing one installed here.
+      - name: Compile musl binary (cross-compile)
+        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        run: bun build --compile --target=bun-linux-x64-musl packages/server/bin/cli.ts --outfile ./release/agentop-musl
+
       - name: Compile Windows binary (cross-compile)
         if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         run: bun build --compile --target=bun-windows-x64 packages/server/bin/cli.ts --outfile ./release/agentop.exe
@@ -225,6 +235,21 @@ jobs:
       - name: Smoke test
         if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
         run: ./release/agentop --help
+
+      # The runner itself is glibc, so the musl binary cannot be exec'd directly here — it needs an
+      # actual musl system. Alpine via Docker is the cheapest one, and it is also where the binary
+      # needs libstdc++/libgcc (verified by hand: Bun's own runtime links them even in its musl
+      # build, and Alpine's base image ships neither) — installing them here doubles as a check
+      # that install.sh's own musl branch names the right packages.
+      - name: Smoke test (musl)
+        if: steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
+        run: |
+          docker run --rm -v "$(pwd)/release:/release:ro" alpine:latest sh -c '
+            apk add --no-cache libstdc++ libgcc >/dev/null &&
+            cp /release/agentop-musl /tmp/agentop-musl &&
+            chmod +x /tmp/agentop-musl &&
+            /tmp/agentop-musl --help
+          '
 
       - name: Generate changelog
         if: github.ref == 'refs/heads/main' && steps.skip_check.outputs.skip != 'true' && steps.version.outputs.skip != 'true'
@@ -318,12 +343,13 @@ jobs:
           # failure at the first step. Upload into it instead when it is already there.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG already exists — uploading the binaries into it"
-            gh release upload "$TAG" ./release/agentop ./release/agentop.exe $VSIX --clobber
+            gh release upload "$TAG" ./release/agentop ./release/agentop-musl ./release/agentop.exe $VSIX --clobber
           else
             gh release create "$TAG" \
               --title "v${VERSION}" \
               --notes-file /tmp/release-notes.md \
               ./release/agentop \
+              ./release/agentop-musl \
               ./release/agentop.exe \
               $VSIX
           fi
@@ -347,6 +373,7 @@ jobs:
             --title "Latest build ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
             --notes-file /tmp/release-notes.md \
             ./release/agentop \
+            ./release/agentop-musl \
             ./release/agentop.exe \
             $VSIX
 
