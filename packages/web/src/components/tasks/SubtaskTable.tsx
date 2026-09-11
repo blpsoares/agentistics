@@ -5,10 +5,12 @@
  * and a checkbox on the detail page is two different records as far as the reader is concerned, and
  * the one with fewer columns teaches people the fields do not exist.
  *
- * What a subtask does NOT carry is cost, rounds or tokens. Those are measured per SESSION and roll
- * up to the task; a second, smaller rollup here would either count the same sessions twice or
- * invent a split nobody recorded. It carries a SESSION instead — which piece of work is being done
- * where — and that is the honest half.
+ * A subtask carries a SESSION — which piece of work is being done where — and now a ROLLUP of its
+ * own: cost, rounds and tokens are still measured per SESSION, never stored on the subtask itself,
+ * but the server's `subtaskViews()` (`task-report.ts`) sums a subtask's own sessions the same way
+ * `attemptViews()` sums an attempt's, as a partition of the task's rows rather than a second count
+ * of them — nothing here double-counts a session or invents a split the data does not record. See
+ * docs/superpowers/specs/2026-09-10-task-session-hierarchy-design.md §4.2.
  */
 
 import { useState } from 'react'

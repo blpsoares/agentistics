@@ -47,6 +47,7 @@ import { boardCopy, statusLabel, type Lang } from './copy'
 import { subtaskSessions } from './SubtaskSessions'
 import { PickerMenu } from './PickerMenu'
 import { TaskProgressBar } from './TaskProgressBar'
+import { HarnessBadges } from './HarnessBadges'
 import type {
   Subtask, TaskClaim, TaskDetail, TaskListRow, TaskSessionRow, TaskStatus,
 } from '../../lib/tasks'
@@ -229,13 +230,7 @@ function cellFor(
       ? <span style={{ ...numeric, fontSize: 12 }}>{r.credits!.premiumRequests} req</span>
       : <span style={{ ...numeric, fontSize: 12, color: r.costUSD === null ? 'var(--text-tertiary)' : 'var(--anthropic-orange)' }}>{money(r.costUSD)}</span>
     case 'tokens': return <span style={{ ...numeric, fontSize: 12, color: r.tokens === null ? 'var(--text-tertiary)' : undefined }}>{fmtTokens(r.tokens)}</span>
-    case 'harnesses': return (
-      <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
-        {row.harnesses.length === 0
-          ? <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{NA}</span>
-          : row.harnesses.map(h => <span key={h} style={pill(harnessColor(h))}>{h}</span>)}
-      </span>
-    )
+    case 'harnesses': return <HarnessBadges harnesses={row.harnesses} />
     case 'subtasks': return row.counts.subtasks === 0
       ? <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>—</span>
       : <span style={{ ...numeric, fontSize: 12 }}>{row.counts.subtasksDone}/{row.counts.subtasks}</span>

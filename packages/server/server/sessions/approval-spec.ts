@@ -149,10 +149,19 @@ export const APPROVAL_SPECS: Record<HarnessId, ApprovalSpec | null> = {
       probed: 'claude 2.1.263, 2026-09-08 (AskUserQuestion "Type something.")',
     },
   },
-  // No `choice` below this line, and that is a statement rather than a gap: each of these footers
-  // says `Enter` selects, and none of them says anything about typing a number. Nobody has driven
-  // one to find out, so a numbered dialog on these harnesses is refused with the reason.
-  codex: { key: 'Enter', probed: 'codex 0.113.0, 2026-08-13' },
+  // No `choice` below this line except codex, and that is a statement rather than a gap: each of
+  // these footers says `Enter` selects, and none of them says anything about typing a number.
+  // Nobody has driven one to find out, so a numbered dialog on these harnesses is refused with the
+  // reason.
+  codex: {
+    key: 'Enter',
+    probed: 'codex 0.113.0, 2026-08-13',
+    // VERIFIED by driving a live codex 0.153.4 session twice on 2026-09-10: its own
+    // directory-trust prompt (`1. Yes, continue` / `2. No, quit`, the dialog every first-time user
+    // meets on their very first message) accepted a bare `2` and quit cleanly — the pane exited —
+    // confirming the digit picks the option outright, exactly like claude's numbered dialogs.
+    choice: { kind: 'digit', probed: 'codex 0.153.4, 2026-09-10 (directory-trust prompt)' },
+  },
   kimi: { key: 'Enter', probed: 'kimi 0.35.0, 2026-08-13' },
   gemini: { key: 'Enter', probed: 'gemini 0.55.1, 2026-08-13' },
   copilot: { key: 'Enter', probed: 'GitHub Copilot CLI 1.0.79, 2026-08-13' },
